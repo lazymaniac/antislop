@@ -1,0 +1,17 @@
+{
+  "version": "0.63.0",
+  "acp_initialize": "observed",
+  "advertised_agent_capabilities": {
+    "loadSession": true,
+    "promptCapabilities": {
+      "image": true,
+      "audio": true,
+      "embeddedContext": true
+    },
+    "mcpCapabilities": {
+      "http": true,
+      "sse": true
+    }
+  },
+  "model_turn": "not_run; authentication unavailable"
+}

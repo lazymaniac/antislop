@@ -1,0 +1,12 @@
+{
+  "provider": "fake",
+  "seeded_rejection": true,
+  "status": "changes_requested",
+  "stages": [],
+  "artifacts": 1,
+  "reviews": 1,
+  "approvals": 1,
+  "independent_sessions": true,
+  "daemon_restart_observed": true,
+  "duplicate_advance_observed": true
+}

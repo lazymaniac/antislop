@@ -1,0 +1,114 @@
+# Explicit example assignments, not a provider recommendation or CLI probe.
+# Review actual installed capabilities before using native effort mappings.
+schema_version = 1
+
+[workspace]
+mode = "worktree"
+
+[policy]
+mode = "supervised"
+revision = 1
+local_write = true
+local_checks = true
+local_commits = true
+
+[providers.codex]
+binary = "codex"
+native_effort = true
+[providers.codex.effort_map]
+light = "low"
+standard = "medium"
+deep = "high"
+
+# Unsupported native effort is explicit; product effort still guides routing.
+[providers.claude]
+binary = "claude"
+native_effort = false
+
+[providers.gemini]
+binary = "gemini"
+native_effort = false
+
+[profiles.orchestrator]
+provider = "codex"
+effort = "deep"
+work_kinds = ["orchestration"]
+roles = ["orchestrator"]
+
+[profiles.reasoning]
+provider = "codex"
+effort = "deep"
+work_kinds = ["context", "requirements", "options", "planning", "architecture", "dependencies", "security", "performance", "analysis"]
+roles = ["executor"]
+
+[profiles.execution]
+provider = "gemini"
+effort = "standard"
+work_kinds = ["implementation", "refactoring", "static_analysis", "test_design", "testing", "integration", "research", "writing", "delivery"]
+roles = ["executor"]
+
+[profiles.review]
+provider = "claude"
+effort = "deep"
+work_kinds = ["context", "requirements", "options", "planning", "architecture", "dependencies", "implementation", "refactoring", "static_analysis", "test_design", "testing", "security", "performance", "integration", "research", "writing", "analysis", "delivery"]
+roles = ["verifier"]
+
+# Every task kind has a dedicated verifier assignment. Runtime creates separate
+# verifier agents/sessions; a shared profile never means a shared verifier agent.
+[routing.context]
+executor = "reasoning"
+verifier = "review"
+[routing.requirements]
+executor = "reasoning"
+verifier = "review"
+[routing.options]
+executor = "reasoning"
+verifier = "review"
+[routing.planning]
+executor = "reasoning"
+verifier = "review"
+[routing.architecture]
+executor = "reasoning"
+verifier = "review"
+[routing.dependencies]
+executor = "reasoning"
+verifier = "review"
+[routing.implementation]
+executor = "execution"
+verifier = "review"
+[routing.refactoring]
+executor = "execution"
+verifier = "review"
+[routing.static_analysis]
+executor = "execution"
+verifier = "review"
+[routing.test_design]
+executor = "execution"
+verifier = "review"
+[routing.testing]
+executor = "execution"
+verifier = "review"
+[routing.security]
+executor = "reasoning"
+verifier = "review"
+[routing.performance]
+executor = "reasoning"
+verifier = "review"
+[routing.integration]
+executor = "execution"
+verifier = "review"
+[routing.research]
+executor = "execution"
+verifier = "review"
+[routing.writing]
+executor = "execution"
+verifier = "review"
+[routing.analysis]
+executor = "reasoning"
+verifier = "review"
+[routing.delivery]
+executor = "execution"
+verifier = "review"
+
+[orchestrator]
+profile = "orchestrator"

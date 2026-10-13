@@ -1,0 +1,483 @@
+//! Explicit, versioned routing and autonomy policy. Parsing never authorizes an
+//! external effect. A caller must separately authenticate user grants before
+//! presenting them to `authorize_external`.
+use crate::{Error, Result, hash, require};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    Codex,
+    Claude,
+    Gemini,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Effort {
+    Light,
+    Standard,
+    Deep,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkKind {
+    Orchestration,
+    Context,
+    Requirements,
+    Options,
+    Planning,
+    Architecture,
+    Dependencies,
+    Implementation,
+    Refactoring,
+    StaticAnalysis,
+    TestDesign,
+    Testing,
+    Security,
+    Performance,
+    Integration,
+    Research,
+    Writing,
+    Analysis,
+    Delivery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleKind {
+    Executor,
+    Verifier,
+    Orchestrator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    Supervised,
+    Autonomous,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceMode {
+    Worktree,
+    InPlace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IsolationProfile {
+    #[default]
+    ToolFree,
+    ReadOnly,
+    WorkspaceWrite,
+    RestrictedExecution,
+    ExtendedAccess,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceConfig {
+    pub mode: WorkspaceMode,
+}
+
+impl Default for WorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            mode: WorkspaceMode::Worktree,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderConfig {
+    pub binary: PathBuf,
+    /// Path to a CLI-owned isolated home; credentials are never config values.
+    #[serde(default)]
+    pub managed_home: Option<PathBuf>,
+    #[serde(default)]
+    pub isolation: IsolationProfile,
+    /// Declared capability, checked against the actual CLI probe by the adapter.
+    /// False is an explicit unsupported mapping, not an ignored native request.
+    pub native_effort: bool,
+    #[serde(default)]
+    pub effort_map: BTreeMap<Effort, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Profile {
+    pub provider: ProviderKind,
+    pub model: Option<String>,
+    pub effort: Effort,
+    pub work_kinds: BTreeSet<WorkKind>,
+    pub roles: BTreeSet<RoleKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleRouting {
+    pub executor: String,
+    pub verifier: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestratorConfig {
+    pub profile: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Policy {
+    pub mode: Mode,
+    pub revision: u64,
+    pub local_write: bool,
+    pub local_checks: bool,
+    pub local_commits: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub workspace: WorkspaceConfig,
+    pub providers: BTreeMap<ProviderKind, ProviderConfig>,
+    pub profiles: BTreeMap<String, Profile>,
+    pub orchestrator: OrchestratorConfig,
+    pub routing: BTreeMap<WorkKind, RoleRouting>,
+    pub policy: Policy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedProfile {
+    pub profile: String,
+    pub provider: ProviderKind,
+    pub binary: PathBuf,
+    pub managed_home: Option<PathBuf>,
+    pub isolation: IsolationProfile,
+    pub model: Option<String>,
+    pub effort: Effort,
+    /// None explicitly means the configured CLI has no native effort control.
+    pub native_effort: Option<String>,
+    pub work_kind: WorkKind,
+    pub role: RoleKind,
+    pub requires_independent_session: bool,
+}
+
+/// Store this owned value in a run; subsequent global-file edits cannot change
+/// its assignments. The hash covers all provider/profile/policy fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PinnedConfig {
+    pub content_hash: String,
+    pub config: Config,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalAction {
+    Read,
+    Write,
+    Check,
+    Commit,
+    StartStage,
+    StartCorrectionRound,
+    AcceptStageResult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalAction {
+    Push,
+    Publish,
+    ExternalMessage,
+    Destructive,
+}
+
+/// A runtime-authenticated user decision, never an AI/configuration assertion.
+/// Runtime checks actor identity and persists issuance before this API is called.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalGrant {
+    pub id: String,
+    pub actor: String,
+    pub action: ExternalAction,
+    pub scope_hash: String,
+    pub policy_revision: u64,
+    pub approved: bool,
+}
+
+fn identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+fn nonempty_text(value: &str) -> bool {
+    !value.trim().is_empty() && !value.chars().any(char::is_control)
+}
+
+impl Config {
+    pub fn load(path: &Path) -> Result<Self> {
+        Self::from_toml(&std::fs::read_to_string(path)?)
+    }
+
+    pub fn from_toml(source: &str) -> Result<Self> {
+        // TOML errors can render the input and expose accidental credentials.
+        let config: Self = toml::from_str(source).map_err(|error: toml::de::Error| {
+            let location = error.span().map(|span| format!(" at bytes {}..{}", span.start, span.end)).unwrap_or_default();
+            Error::Invalid(format!("invalid TOML configuration{location}: check schema, syntax and duplicate/unknown fields"))
+        })?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        require(
+            self.schema_version == 1,
+            "unsupported configuration schema version",
+        )?;
+        require(self.policy.revision > 0, "policy revision must be positive")?;
+        require(
+            !self.providers.is_empty(),
+            "at least one explicit provider is required",
+        )?;
+        require(
+            !self.profiles.is_empty(),
+            "at least one explicit profile is required",
+        )?;
+        for provider in self.providers.values() {
+            require(
+                provider.binary.to_str().is_some_and(nonempty_text),
+                "provider binary must be a nonempty Unicode path without control characters",
+            )?;
+            require(
+                provider.managed_home.as_ref().is_none_or(|path| {
+                    path.is_absolute() && path.to_str().is_some_and(nonempty_text)
+                }),
+                "managed provider home must be an absolute Unicode path without control characters",
+            )?;
+            require(
+                provider.native_effort || provider.effort_map.is_empty(),
+                "native effort mappings require declared CLI support",
+            )?;
+            require(
+                provider
+                    .effort_map
+                    .values()
+                    .all(|value| nonempty_text(value)),
+                "native effort mapping must be nonempty and contain no control characters",
+            )?;
+        }
+        for (name, profile) in &self.profiles {
+            require(
+                identifier(name),
+                "profile name must contain only letters, digits, underscores or hyphens",
+            )?;
+            require(
+                !profile.work_kinds.is_empty() && !profile.roles.is_empty(),
+                "profile requires explicit work kinds and roles",
+            )?;
+            require(
+                profile
+                    .model
+                    .as_ref()
+                    .is_none_or(|model| nonempty_text(model)),
+                "model must be nonempty and contain no control characters",
+            )?;
+            let provider = self.providers.get(&profile.provider).ok_or_else(|| {
+                Error::Invalid("profile refers to an unconfigured provider".into())
+            })?;
+            require(
+                !provider.native_effort || provider.effort_map.contains_key(&profile.effort),
+                "profile effort has no native CLI mapping",
+            )?;
+            if profile.roles.contains(&RoleKind::Orchestrator) {
+                require(
+                    profile.work_kinds.contains(&WorkKind::Orchestration),
+                    "orchestrator profile must permit orchestration",
+                )?;
+            }
+        }
+        self.profile(
+            &self.orchestrator.profile,
+            WorkKind::Orchestration,
+            RoleKind::Orchestrator,
+        )?;
+        for (kind, route) in &self.routing {
+            require(
+                *kind != WorkKind::Orchestration,
+                "orchestration uses the explicit orchestrator profile",
+            )?;
+            self.profile(&route.executor, *kind, RoleKind::Executor)?;
+            self.profile(&route.verifier, *kind, RoleKind::Verifier)?;
+        }
+        Ok(())
+    }
+
+    fn profile(&self, name: &str, work_kind: WorkKind, role: RoleKind) -> Result<&Profile> {
+        let profile = self.profiles.get(name).ok_or_else(|| {
+            Error::Invalid("routing refers to a missing profile; no default is selected".into())
+        })?;
+        require(
+            profile.work_kinds.contains(&work_kind),
+            "profile does not allow the requested work kind",
+        )?;
+        require(
+            profile.roles.contains(&role),
+            "profile does not allow the requested role",
+        )?;
+        Ok(profile)
+    }
+
+    /// Resolve exact role/work assignments. A verifier always requires its own
+    /// session even when executor and verifier deliberately use the same CLI.
+    pub fn resolve(&self, work_kind: WorkKind, role: RoleKind) -> Result<ResolvedProfile> {
+        self.validate()?;
+        let name = match role {
+            RoleKind::Orchestrator => {
+                require(
+                    work_kind == WorkKind::Orchestration,
+                    "orchestrator role requires orchestration work",
+                )?;
+                &self.orchestrator.profile
+            }
+            RoleKind::Executor | RoleKind::Verifier => {
+                let route = self.routing.get(&work_kind).ok_or_else(|| {
+                    Error::Invalid(
+                        "no explicit route for requested work; provider fallback is forbidden"
+                            .into(),
+                    )
+                })?;
+                match role {
+                    RoleKind::Executor => &route.executor,
+                    _ => &route.verifier,
+                }
+            }
+        };
+        let profile = self.profile(name, work_kind, role)?;
+        let provider = self
+            .providers
+            .get(&profile.provider)
+            .ok_or_else(|| Error::Invalid("unconfigured provider".into()))?;
+        Ok(ResolvedProfile {
+            profile: name.clone(),
+            provider: profile.provider,
+            binary: provider.binary.clone(),
+            managed_home: provider.managed_home.clone(),
+            isolation: provider.isolation,
+            model: profile.model.clone(),
+            effort: profile.effort,
+            native_effort: provider.effort_map.get(&profile.effort).cloned(),
+            work_kind,
+            role,
+            requires_independent_session: role == RoleKind::Verifier,
+        })
+    }
+
+    /// Validate all kinds required by a planned team before starting any member.
+    pub fn validate_work_kinds(&self, kinds: &BTreeSet<WorkKind>) -> Result<()> {
+        self.validate()?;
+        self.resolve(WorkKind::Orchestration, RoleKind::Orchestrator)?;
+        for kind in kinds {
+            if *kind != WorkKind::Orchestration {
+                self.resolve(*kind, RoleKind::Executor)?;
+                self.resolve(*kind, RoleKind::Verifier)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn pin(&self) -> Result<PinnedConfig> {
+        self.validate()?;
+        Ok(PinnedConfig {
+            content_hash: hash(serde_json::to_vec(self)?),
+            config: self.clone(),
+        })
+    }
+}
+
+impl ResolvedProfile {
+    /// Call after probing the selected binary/version; configuration declarations
+    /// cannot establish that a native provider parameter is actually supported.
+    pub fn validate_native_effort(&self, supported_values: &BTreeSet<String>) -> Result<()> {
+        require(
+            self.native_effort
+                .as_ref()
+                .is_none_or(|effort| supported_values.contains(effort)),
+            "configured native effort is unsupported by the probed CLI",
+        )
+    }
+}
+
+impl PinnedConfig {
+    pub fn validate(&self) -> Result<()> {
+        self.config.validate()?;
+        require(
+            self.content_hash == hash(serde_json::to_vec(&self.config)?),
+            "pinned configuration hash mismatch",
+        )
+    }
+}
+
+impl Policy {
+    pub fn automatic_progression(&self) -> bool {
+        self.mode == Mode::Autonomous
+    }
+
+    /// `stage_approved` must come from runtime validation of the current scope
+    /// and policy revision, never from an unchecked boolean supplied by a model.
+    pub fn authorize_local(&self, action: LocalAction, stage_approved: bool) -> Result<()> {
+        require(self.revision > 0, "policy revision must be positive")?;
+        require(
+            self.mode == Mode::Autonomous || stage_approved,
+            "supervised action requires current explicit stage/round approval",
+        )?;
+        require(
+            match action {
+                LocalAction::Write => self.local_write,
+                LocalAction::Check => self.local_checks,
+                LocalAction::Commit => self.local_commits,
+                _ => true,
+            },
+            "local action is outside the configured policy",
+        )
+    }
+
+    /// Mode, local-write permission, and stage acceptance never grant external
+    /// effects. Each effect must match its own authenticated approval exactly.
+    pub fn authorize_external(
+        &self,
+        action: ExternalAction,
+        scope_hash: &str,
+        grant: Option<&ExternalGrant>,
+    ) -> Result<()> {
+        require(self.revision > 0, "policy revision must be positive")?;
+        require(
+            nonempty_text(scope_hash),
+            "external action requires a nonempty scope hash",
+        )?;
+        let grant = grant.ok_or_else(|| {
+            Error::Invalid("external or destructive action requires a separate user grant".into())
+        })?;
+        require(
+            grant.approved && nonempty_text(&grant.id) && nonempty_text(&grant.actor),
+            "external grant must be an explicit attributed approval",
+        )?;
+        require(
+            grant.action == action
+                && grant.scope_hash == scope_hash
+                && grant.policy_revision == self.revision,
+            "external grant action, scope or policy revision does not match",
+        )
+    }
+}

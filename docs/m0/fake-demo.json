@@ -1,0 +1,19 @@
+{
+  "provider": "fake",
+  "seeded_rejection": false,
+  "status": "completed",
+  "stages": [
+    "discovery",
+    "planning",
+    "execution",
+    "validation",
+    "integration",
+    "delivery"
+  ],
+  "artifacts": 6,
+  "reviews": 6,
+  "approvals": 12,
+  "independent_sessions": true,
+  "daemon_restart_observed": true,
+  "duplicate_advance_observed": true
+}

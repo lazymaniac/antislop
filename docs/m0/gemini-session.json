@@ -1,0 +1,8 @@
+{
+  "version": "0.63.0",
+  "exit_code": 41,
+  "auth": "unavailable in isolated CLI home",
+  "model_turn": "failed",
+  "capabilities": "unverified",
+  "raw_diagnostics": "not retained"
+}

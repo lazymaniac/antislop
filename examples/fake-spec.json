@@ -1,0 +1,11 @@
+{
+  "objective": "Demonstrate supervised orchestration using synthetic artifacts",
+  "workspace": ".",
+  "provider": "fake",
+  "model": null,
+  "requirements": [{"id": "REQ-1", "original_text": "Demonstrate stages and independent verification", "source_ref": "example:objective", "criteria": {"stages": "Every stage has executor and verifier sessions"}}],
+  "plan_items": [{"id": "PLAN-1", "requirement_ids": ["REQ-1"], "description": "Exercise the fake provider lifecycle"}],
+  "input_files": [],
+  "editable_files": [],
+  "check_command": []
+}

@@ -1,0 +1,17 @@
+{
+  "version": "2.1.296",
+  "structured_output": "observed",
+  "streaming": "observed",
+  "exact_id_resume": "observed",
+  "context_retained": "observed",
+  "tool_restrictions": "--tools empty; safe-mode; strict empty MCP config; dontAsk; no permissions prompts",
+  "mid_turn_steering": "unverified",
+  "cancel": "unverified",
+  "event_types": [
+    "assistant",
+    "rate_limit_event",
+    "result",
+    "system",
+    "user"
+  ]
+}

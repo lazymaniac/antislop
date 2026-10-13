@@ -1,0 +1,22 @@
+{
+  "provider": "codex",
+  "seeded_rejection": false,
+  "status": "completed",
+  "stages": [
+    "discovery",
+    "planning",
+    "execution",
+    "validation",
+    "integration",
+    "delivery"
+  ],
+  "artifacts": 7,
+  "reviews": 6,
+  "approvals": 13,
+  "independent_sessions": true,
+  "daemon_restart_observed": true,
+  "duplicate_advance_observed": true,
+  "final_tests_passed": true,
+  "fixed_source": "pub fn magnitude(value: i32) -> i64 { i64::from(value).abs() }\n",
+  "evidence_file": "docs/m0/live-evidence.json"
+}

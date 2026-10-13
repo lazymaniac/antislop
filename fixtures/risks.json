@@ -1,0 +1,1685 @@
+{
+  "version": "3340c6d9447efeadef21b0cbbbae8f581592f7d1f39581757e480b3bddf71eb7",
+  "risks": [
+    {
+      "id": "R001",
+      "problem": "Wykonanie innego zadania niż zlecone.",
+      "method": "Mapa wymagań i rezultatów.",
+      "mitigation": "Requirements verifier sprawdza cel przed wykonaniem i przy dostarczeniu.",
+      "source_line": 1068
+    },
+    {
+      "id": "R002",
+      "problem": "Pominięcie istotnego kontekstu.",
+      "method": "Lista przejrzanych modułów i nieznanych obszarów.",
+      "mitigation": "Context verifier uzupełnia brakujące zależności.",
+      "source_line": 1069
+    },
+    {
+      "id": "R003",
+      "problem": "Utrata ustaleń po kompakcji.",
+      "method": "Porównanie pakietu przekazania z trwałymi decyzjami.",
+      "mitigation": "Runtime odtwarza aktualne ograniczenia przed wznowieniem.",
+      "source_line": 1070
+    },
+    {
+      "id": "R004",
+      "problem": "Niewykorzystanie informacji w długim kontekście.",
+      "method": "Pytania kontrolne o ważne ograniczenia.",
+      "mitigation": "Context pair przygotowuje krótki pakiet z referencjami.",
+      "source_line": 1071
+    },
+    {
+      "id": "R005",
+      "problem": "Nieuzyskanie potrzebnego doprecyzowania.",
+      "method": "Niewiadome zmieniające kryteria akceptacji.",
+      "mitigation": "Requirements verifier kieruje konkretne pytanie do użytkownika.",
+      "source_line": 1072
+    },
+    {
+      "id": "R006",
+      "problem": "Założenia przedstawione jako wymagania.",
+      "method": "Odrębna ewidencja decyzji i hipotez.",
+      "mitigation": "Planner oznacza założenia i źródło ich akceptacji.",
+      "source_line": 1073
+    },
+    {
+      "id": "R007",
+      "problem": "Plan bez testów, integracji lub migracji.",
+      "method": "Rubric planu i mapa ryzyk.",
+      "mitigation": "Plan verifier blokuje niepełny plan.",
+      "source_line": 1074
+    },
+    {
+      "id": "R008",
+      "problem": "Zbyt duże lub zbyt rozdrobnione zadania.",
+      "method": "Wielkość wspólnego kontekstu i liczba przekazań.",
+      "mitigation": "Planner zmienia podział według spójnych rezultatów.",
+      "source_line": 1075
+    },
+    {
+      "id": "R009",
+      "problem": "Nierozpoznany konflikt instrukcji projektu.",
+      "method": "Indeks instrukcji z zakresem i pochodzeniem.",
+      "mitigation": "Context verifier wskazuje sprzeczność przed realizacją.",
+      "source_line": 1076
+    },
+    {
+      "id": "R010",
+      "problem": "Ślepe kopiowanie wzorców z innego projektu.",
+      "method": "Porównanie propozycji z istniejącą architekturą.",
+      "mitigation": "Architecture verifier wymaga uzasadnienia dopasowania.",
+      "source_line": 1077
+    },
+    {
+      "id": "R101",
+      "problem": "Zbadanie innego repozytorium, brancha lub snapshotu.",
+      "method": "Porównaj katalog, HEAD, status i hash wejść.",
+      "mitigation": "Context verifier przypina jednoznaczny snapshot do faktów.",
+      "source_line": 1086
+    },
+    {
+      "id": "R102",
+      "problem": "Wnioskowanie o zachowaniu wyłącznie z nazw, sygnatur lub stubów.",
+      "method": "Prześledź implementację i uruchom reprezentatywną ścieżkę.",
+      "mitigation": "Fakty behawioralne wymagają dowodu, nie intuicji nazewniczej.",
+      "source_line": 1087
+    },
+    {
+      "id": "R103",
+      "problem": "Uznanie nieaktualnej dokumentacji za stan rzeczywisty.",
+      "method": "Porównaj dokument z kodem, konfiguracją i uruchomieniem.",
+      "mitigation": "Rozbieżności trafiają do ContextModel przed planem.",
+      "source_line": 1088
+    },
+    {
+      "id": "R104",
+      "problem": "Pominięcie konsumenta zmienianego kontraktu.",
+      "method": "Znajdź wywołania, eksporty i użycia poza modułem.",
+      "mitigation": "Mapa wpływu obejmuje wszystkich istotnych konsumentów.",
+      "source_line": 1089
+    },
+    {
+      "id": "R105",
+      "problem": "Pominięcie zależności przechodniej lub pośredniego efektu.",
+      "method": "Prześledź graf wywołań, danych i zależności.",
+      "mitigation": "Context verifier sprawdza propagację zmiany poza pierwszy poziom.",
+      "source_line": 1090
+    },
+    {
+      "id": "R106",
+      "problem": "Pominięcie konfiguracji zmieniającej zachowanie.",
+      "method": "Sprawdź precedence plików, env, CLI i defaults.",
+      "mitigation": "Model zapisuje efektywną konfigurację i jej warianty.",
+      "source_line": 1091
+    },
+    {
+      "id": "R107",
+      "problem": "Błędne określenie źródła prawdy danych.",
+      "method": "Porównaj zapis, cache, projekcje i odtwarzanie.",
+      "mitigation": "Jednoznaczne kontrakty synchronizacji i właściciele stanu.",
+      "source_line": 1092
+    },
+    {
+      "id": "R108",
+      "problem": "Brak rozpoznania niezmiennika istniejących danych.",
+      "method": "Sprawdź schemat, walidację i rzeczywiste przypadki.",
+      "mitigation": "Niezmienniki wejściowe są potwierdzone, nie dopowiedziane.",
+      "source_line": 1093
+    },
+    {
+      "id": "R109",
+      "problem": "Pominięcie kontraktu błędów istniejącego API.",
+      "method": "Odczytaj typy błędów i reakcje wywołujących.",
+      "mitigation": "Plan zachowuje lub jawnie zmienia uzgodniony kontrakt.",
+      "source_line": 1094
+    },
+    {
+      "id": "R110",
+      "problem": "Pominięcie cyklu życia, zamykania lub anulowania.",
+      "method": "Prześledź start, stop, cleanup i restart.",
+      "mitigation": "ContextModel zawiera właścicieli zasobów i przejścia końcowe.",
+      "source_line": 1095
+    },
+    {
+      "id": "R111",
+      "problem": "Założenie sekwencyjności faktycznie współbieżnej ścieżki.",
+      "method": "Sprawdź taski, wątki, blokady i współdzielone dane.",
+      "mitigation": "Istotne interleavings stają się wejściem modelowania.",
+      "source_line": 1096
+    },
+    {
+      "id": "R112",
+      "problem": "Pominięcie semantyki czasu, kolejności lub powtórzeń.",
+      "method": "Sprawdź zegary, kolejki, retry i opóźnione odpowiedzi.",
+      "mitigation": "Jawne reguły czasu i dostarczenia w modelu.",
+      "source_line": 1097
+    },
+    {
+      "id": "R113",
+      "problem": "Odczyt tylko jednej platformy lub kombinacji features.",
+      "method": "Porównaj cfg, platformy i wspierane warianty.",
+      "mitigation": "Context verifier zatwierdza macierz środowisk projektu.",
+      "source_line": 1098
+    },
+    {
+      "id": "R114",
+      "problem": "Posługiwanie się API innej wersji niż zainstalowana.",
+      "method": "Porównaj lockfile, toolchain i dokumentację wersji.",
+      "mitigation": "Dowody odnoszą się do faktycznych wersji.",
+      "source_line": 1099
+    },
+    {
+      "id": "R115",
+      "problem": "Pominięcie formatu serializacji i kompatybilności danych.",
+      "method": "Sprawdź producentów, parsery i stare zapisane rekordy.",
+      "mitigation": "Kontrakty formatów i wersji trafiają do planu.",
+      "source_line": 1100
+    },
+    {
+      "id": "R116",
+      "problem": "Pominięcie stanu istniejących danych i migracji.",
+      "method": "Sprawdź historię schematu oraz odtwarzanie starego stanu.",
+      "mitigation": "Model obejmuje aktualizację, błąd migracji i odzyskanie.",
+      "source_line": 1101
+    },
+    {
+      "id": "R117",
+      "problem": "Brak rozpoznania granic zaufania i uprawnień.",
+      "method": "Prześledź pochodzenie danych i decyzje autoryzacji.",
+      "mitigation": "Threat model powstaje na rzeczywistych granicach.",
+      "source_line": 1102
+    },
+    {
+      "id": "R118",
+      "problem": "Brak wiarygodnego baseline zachowania i analiz.",
+      "method": "Uruchom właściwe sprawdzenia przed zmianą.",
+      "mitigation": "Utrwal baseline; nie używaj go do usprawiedliwienia findings.",
+      "source_line": 1103
+    },
+    {
+      "id": "R119",
+      "problem": "Pominięcie zakazów i wymagań negatywnych w kontekście.",
+      "method": "Porównaj pełne źródło z pakietami dla ról.",
+      "mitigation": "Zakazy mają ID i sprawdzalne kryteria.",
+      "source_line": 1104
+    },
+    {
+      "id": "R120",
+      "problem": "Uznanie złego istniejącego kodu za obowiązujący standard.",
+      "method": "Porównaj konwencję z regułami języka i kontraktem jakości.",
+      "mitigation": "Rozstrzygnij konflikt standardów przed implementacją.",
+      "source_line": 1105
+    },
+    {
+      "id": "R121",
+      "problem": "Niezauważenie dostępnego mechanizmu we własnym projekcie.",
+      "method": "Wyszukaj implementacje według zachowania, nie tylko nazwy.",
+      "mitigation": "Reuse map wskazuje wykorzystanie albo uzasadnione odrzucenie.",
+      "source_line": 1106
+    },
+    {
+      "id": "R122",
+      "problem": "Utrata kwalifikatorów i pochodzenia przy streszczeniu.",
+      "method": "Porównaj streszczenie z fragmentami źródłowymi.",
+      "mitigation": "Pakiety mają odsyłacze i nie zastępują pełnego źródła.",
+      "source_line": 1107
+    },
+    {
+      "id": "R123",
+      "problem": "Fakt staje się nieaktualny po równoległej zmianie.",
+      "method": "Porównaj hashe zależności faktu z bieżącym stanem.",
+      "mitigation": "Unieważnij zależne modele, decyzje i review.",
+      "source_line": 1108
+    },
+    {
+      "id": "R124",
+      "problem": "Wyszukiwanie wyłącznie danych potwierdzających pierwszy pomysł.",
+      "method": "Sprawdź zapytania, odrzucone źródła i kontrdowody.",
+      "mitigation": "Context verifier wykonuje niezależne poszukiwanie.",
+      "source_line": 1109
+    },
+    {
+      "id": "R125",
+      "problem": "Zamknięcie niewiadomej przez dopisanie wygodnego założenia.",
+      "method": "Sprawdź metodę rozstrzygnięcia każdej unknown.",
+      "mitigation": "Istotna niewiadoma bez dowodu blokuje context_ready.",
+      "source_line": 1110
+    },
+    {
+      "id": "R126",
+      "problem": "Brak preconditions lub postconditions operacji.",
+      "method": "Sprawdź każdą operację modelu.",
+      "mitigation": "Uzupełnij kontrakty przed plan_ready.",
+      "source_line": 1116
+    },
+    {
+      "id": "R127",
+      "problem": "Kontrakty modułów poprawne osobno, lecz nieskładalne.",
+      "method": "Zasymuluj przekazanie danych i błędów między modułami.",
+      "mitigation": "Plan verifier sprawdza zgodność granic.",
+      "source_line": 1117
+    },
+    {
+      "id": "R128",
+      "problem": "Nieokreślone przejście dla zdarzenia w danym stanie.",
+      "method": "Przejdź tabelę stan × zdarzenie.",
+      "mitigation": "Każdy przypadek ma wynik albo uzasadniony zakaz.",
+      "source_line": 1118
+    },
+    {
+      "id": "R129",
+      "problem": "Reprezentacja dopuszcza niemożliwy lub sprzeczny stan.",
+      "method": "Spróbuj skonstruować wszystkie kombinacje pól.",
+      "mitigation": "Wzmocnij typy lub jawne niezmienniki walidacji.",
+      "source_line": 1119
+    },
+    {
+      "id": "R130",
+      "problem": "Model opisuje wynik, lecz pomija efekty uboczne.",
+      "method": "Spisz zapisy, komunikaty i działania zewnętrzne.",
+      "mitigation": "Symulacje obejmują skutki, nie tylko return value.",
+      "source_line": 1120
+    },
+    {
+      "id": "R131",
+      "problem": "Brak analizy awarii pomiędzy dwoma zapisami.",
+      "method": "Wprowadź awarię po każdym istotnym efekcie.",
+      "mitigation": "Określ atomicity, recovery i brak utraty danych.",
+      "source_line": 1121
+    },
+    {
+      "id": "R132",
+      "problem": "Retry może podwoić efekt.",
+      "method": "Zasymuluj brak potwierdzenia po wykonaniu.",
+      "mitigation": "Idempotency lub uzgadnianie stanu ma dowód.",
+      "source_line": 1122
+    },
+    {
+      "id": "R133",
+      "problem": "Poprawność zależy od niegwarantowanej kolejności.",
+      "method": "Odwróć i opóźnij zdarzenia.",
+      "mitigation": "Model określa porządek albo obsługuje jego brak.",
+      "source_line": 1123
+    },
+    {
+      "id": "R134",
+      "problem": "Sprawdzenie safety bez sprawdzenia postępu.",
+      "method": "Poszukaj blokady, starvation i nieskończonej pętli.",
+      "mitigation": "Wymagania postępu mają osobne argumenty i testy.",
+      "source_line": 1124
+    },
+    {
+      "id": "R135",
+      "problem": "Nieokreślona własność zasobu i moment zwolnienia.",
+      "method": "Prześledź właściciela w każdej gałęzi.",
+      "mitigation": "Kontrakt obejmuje błąd, cancel i normalne zamknięcie.",
+      "source_line": 1125
+    },
+    {
+      "id": "R136",
+      "problem": "Anulowanie pozostawia niespójny stan pośredni.",
+      "method": "Przerwij każdą istotną fazę modelu.",
+      "mitigation": "Jawna semantyka anulowania i odtwarzania.",
+      "source_line": 1126
+    },
+    {
+      "id": "R137",
+      "problem": "Plan działa tylko dla małej skali danych.",
+      "method": "Oceń wzrost kosztu, kolejek i danych trwałych.",
+      "mitigation": "Wymagane skale mają model kosztu i pomiar.",
+      "source_line": 1127
+    },
+    {
+      "id": "R138",
+      "problem": "Założenie niegwarantowanego zachowania biblioteki.",
+      "method": "Porównaj kontrakt wersji i eksperyment.",
+      "mitigation": "Nieopisana własność zależności nie jest przesłanką poprawności.",
+      "source_line": 1128
+    },
+    {
+      "id": "R139",
+      "problem": "Kołowe uzasadnienie poprawności między komponentami.",
+      "method": "Sprawdź zależności przesłanek.",
+      "mitigation": "Argument ma sprawdzone podstawy, nie wzajemne deklaracje.",
+      "source_line": 1129
+    },
+    {
+      "id": "R140",
+      "problem": "Pseudokod ukrywa trudność pod 'obsłuż poprawnie'.",
+      "method": "Rozwiń kroki decydujące o kontrakcie.",
+      "mitigation": "Nieoperacyjny placeholder blokuje plan.",
+      "source_line": 1130
+    },
+    {
+      "id": "R141",
+      "problem": "Błędny podział wejść na klasy równoważności.",
+      "method": "Szukaj przypadków o różnym zachowaniu w jednej klasie.",
+      "mitigation": "Rozdziel klasy i uzupełnij granice.",
+      "source_line": 1131
+    },
+    {
+      "id": "R142",
+      "problem": "Symulacja powtarza rozumowanie autora bez kontrprzykładu.",
+      "method": "Porównaj scenariusze autora i verifiera.",
+      "mitigation": "Weryfikator niezależnie próbuje naruszyć niezmienniki.",
+      "source_line": 1132
+    },
+    {
+      "id": "R143",
+      "problem": "Brak modelu stanów częściowych i checkpointów.",
+      "method": "Zasymuluj wznowienie z każdego trwałego etapu.",
+      "mitigation": "Plan wyjaśnia, co jest już wykonane.",
+      "source_line": 1133
+    },
+    {
+      "id": "R144",
+      "problem": "Strategia testów wynika wyłącznie z planowanego kodu.",
+      "method": "Porównaj oracle z wymaganiami i modelem.",
+      "mitigation": "Test plan powstaje niezależnie od szczegółów implementacji.",
+      "source_line": 1134
+    },
+    {
+      "id": "R145",
+      "problem": "Kolejność refaktoru utrudnia kontrolę zmiany zachowania.",
+      "method": "Porównaj kroki transformacji i testy ochronne.",
+      "mitigation": "Oddziel małe transformacje i zmiany funkcjonalne.",
+      "source_line": 1135
+    },
+    {
+      "id": "R146",
+      "problem": "Pominięcie integracji, rollout lub kompatybilności.",
+      "method": "Prześledź całość dostarczanego rezultatu.",
+      "mitigation": "Plan obejmuje migracje i faktycznych konsumentów.",
+      "source_line": 1136
+    },
+    {
+      "id": "R147",
+      "problem": "Brak mapowania wstecz z elementu modelu do celu.",
+      "method": "Sprawdź uzasadnienie każdej operacji i bytu.",
+      "mitigation": "Usuń zbędny element albo wskaż potrzebę.",
+      "source_line": 1137
+    },
+    {
+      "id": "R148",
+      "problem": "Dopisana funkcja zwiększa zakres pod pozorem kompletności.",
+      "method": "Porównaj model z wymaganiami i Boy Scout Rule.",
+      "mitigation": "Code verifier egzekwuje scope_clean na modelu i rezultacie.",
+      "source_line": 1138
+    },
+    {
+      "id": "R149",
+      "problem": "Nieudowodnione założenie krytyczne dla wyniku symulacji.",
+      "method": "Podważ przesłanki każdego scenariusza.",
+      "mitigation": "Wykonaj sprawdzenie lub zablokuj plan.",
+      "source_line": 1139
+    },
+    {
+      "id": "R150",
+      "problem": "Implementacja odchodzi od modelu bez jego rewizji.",
+      "method": "Porównaj patch z kontraktami i symulacjami.",
+      "mitigation": "Zaktualizuj model i ponów zależną weryfikację.",
+      "source_line": 1140
+    },
+    {
+      "id": "R011",
+      "problem": "Naruszanie przydzielonej roli.",
+      "method": "Porównanie działań z kontraktem roli.",
+      "mitigation": "Dedykowany verifier zgłasza wyjście poza zakres.",
+      "source_line": 1148
+    },
+    {
+      "id": "R012",
+      "problem": "Powtarzanie tych samych kroków.",
+      "method": "Historia działań i brak nowego wyniku.",
+      "mitigation": "Orkiestrator proponuje inne podejście; użytkownik może przerwać.",
+      "source_line": 1149
+    },
+    {
+      "id": "R013",
+      "problem": "Brak rozpoznania końca pracy.",
+      "method": "Kryteria zakończenia zamiast liczby tur.",
+      "mitigation": "Runtime zamyka dopiero spełnione zadanie.",
+      "source_line": 1150
+    },
+    {
+      "id": "R014",
+      "problem": "Rozmowa odchodzi od celu.",
+      "method": "Powiązanie wątku z zadaniem.",
+      "mitigation": "Orkiestrator przywraca cel lub tworzy jawny nowy zakres.",
+      "source_line": 1151
+    },
+    {
+      "id": "R015",
+      "problem": "Nieprzekazanie ważnej informacji.",
+      "method": "Niezamknięte zależności w handoff.",
+      "mitigation": "Verifier wymaga brakującego artefaktu/odpowiedzi.",
+      "source_line": 1152
+    },
+    {
+      "id": "R016",
+      "problem": "Zignorowanie uwagi innego agenta.",
+      "method": "Findings i odpowiedzi mają trwały status.",
+      "mitigation": "Uwaga blokująca wymaga rozstrzygnięcia.",
+      "source_line": 1153
+    },
+    {
+      "id": "R017",
+      "problem": "Deklaracje nie odpowiadają działaniom.",
+      "method": "Porównanie raportu ze zdarzeniami narzędzi.",
+      "mitigation": "Verifier odrzuca twierdzenia bez dowodów.",
+      "source_line": 1154
+    },
+    {
+      "id": "R018",
+      "problem": "Duplikacja pracy i niepotrzebne role.",
+      "method": "Pokrywające się kontrakty i rezultaty.",
+      "mitigation": "Orkiestrator scala zakresy; każda pozostająca rola zachowuje parę.",
+      "source_line": 1155
+    },
+    {
+      "id": "R019",
+      "problem": "Deadlock lub cykl zależności.",
+      "method": "Walidacja DAG i graf oczekiwania.",
+      "mitigation": "Runtime odrzuca cykl, orkiestrator przeplanowuje.",
+      "source_line": 1156
+    },
+    {
+      "id": "R020",
+      "problem": "Burza wiadomości i utrata czytelności.",
+      "method": "Powtarzane statusy i kolejka dostarczenia.",
+      "mitigation": "Router agreguje statusy; treści merytoryczne zachowuje jako artefakty.",
+      "source_line": 1157
+    },
+    {
+      "id": "R021",
+      "problem": "Wymyślone symbole, API lub możliwości biblioteki.",
+      "method": "Build, typy, odczyt rzeczywistej dokumentacji.",
+      "mitigation": "Code verifier wskazuje poprawny kontrakt.",
+      "source_line": 1165
+    },
+    {
+      "id": "R022",
+      "problem": "Powtarzalny, redundantny kod.",
+      "method": "Analiza podobieństwa i przegląd diffu.",
+      "mitigation": "Code verifier wymaga usunięcia zbędnych powtórzeń.",
+      "source_line": 1166
+    },
+    {
+      "id": "R023",
+      "problem": "Rozbuchane abstrakcje i konfiguracja.",
+      "method": "Liczba nowych warstw względem potrzeby.",
+      "mitigation": "Architecture verifier żąda prostszego rozwiązania.",
+      "source_line": 1167
+    },
+    {
+      "id": "R024",
+      "problem": "Zaniechany potrzebny refaktor.",
+      "method": "Obejścia i duplikacja wymuszone starą strukturą.",
+      "mitigation": "Refactor pair usuwa przeszkodę w uzgodnionym zakresie.",
+      "source_line": 1168
+    },
+    {
+      "id": "R025",
+      "problem": "Nieuzasadniona przebudowa pod pretekstem refaktoru.",
+      "method": "Porównaj diff z problemem i RefactorReport.",
+      "mitigation": "Plan/code verifier sprawdza wymagania oraz uzasadnione Boy Scout improvements.",
+      "source_line": 1169
+    },
+    {
+      "id": "R026",
+      "problem": "Atrapy, TODO i hardcode zamiast funkcji.",
+      "method": "Scenariusz użytkownika i analiza ścieżek.",
+      "mitigation": "Code verifier odrzuca pozorne ukończenie.",
+      "source_line": 1170
+    },
+    {
+      "id": "R027",
+      "problem": "Ukrywanie błędów, puste catch i cichy fallback.",
+      "method": "Testy awarii i review obsługi błędów.",
+      "mitigation": "Implementer naprawia zgodnie z kontraktem błędów.",
+      "source_line": 1171
+    },
+    {
+      "id": "R028",
+      "problem": "Niezgodność wsteczna, schema/API drift.",
+      "method": "Contract tests i porównanie publicznych interfejsów.",
+      "mitigation": "Integration verifier wymaga migracji lub zgodności.",
+      "source_line": 1172
+    },
+    {
+      "id": "R029",
+      "problem": "Martwy kod, zbędne zależności i komentarze bez wartości.",
+      "method": "Użycia symboli, manifest i rubric czytelności.",
+      "mitigation": "Code verifier wymaga uzasadnienia lub usunięcia.",
+      "source_line": 1173
+    },
+    {
+      "id": "R030",
+      "problem": "Lokalnie poprawna zmiana psuje spójność systemu.",
+      "method": "Testy przepływu przez moduły.",
+      "mitigation": "Integration pair ocenia rezultat całościowo.",
+      "source_line": 1174
+    },
+    {
+      "id": "R151",
+      "problem": "Niespójne znaczenie tej samej reguły w wielu miejscach.",
+      "method": "Porównaj obliczenia i polityki w modułach.",
+      "mitigation": "Jedno źródło reguły z kontraktem i testami.",
+      "source_line": 1180
+    },
+    {
+      "id": "R152",
+      "problem": "Funkcja miesza odczyt, politykę, transformację i efekty.",
+      "method": "Prześledź odpowiedzialności i zależności.",
+      "mitigation": "Rozdziel tam, gdzie poprawia to spójność i kontrolę.",
+      "source_line": 1181
+    },
+    {
+      "id": "R153",
+      "problem": "Nazwa ukrywa jednostkę, zakres albo efekt uboczny.",
+      "method": "Porównaj nazwy z kontraktami i wywołaniami.",
+      "mitigation": "Nazwy i typy komunikują rzeczywiste znaczenie.",
+      "source_line": 1182
+    },
+    {
+      "id": "R154",
+      "problem": "Prymitywne typy pozwalają pomylić różne pojęcia.",
+      "method": "Zamień argumenty lub jednostki w kontrprzykładzie.",
+      "mitigation": "Typy domenowe i walidacja na właściwej granicy.",
+      "source_line": 1183
+    },
+    {
+      "id": "R155",
+      "problem": "Publiczny interfejs ujawnia zbędne szczegóły implementacji.",
+      "method": "Sprawdź eksporty i rzeczywistych odbiorców.",
+      "mitigation": "Minimalny kontrakt, potrzebna enkapsulacja.",
+      "source_line": 1184
+    },
+    {
+      "id": "R156",
+      "problem": "Niespójne konwencje błędów i obsługi rezultatów.",
+      "method": "Prześledź błędy od źródła do odbiorcy.",
+      "mitigation": "Spójne idiomy projektu bez utraty przyczyny.",
+      "source_line": 1185
+    },
+    {
+      "id": "R157",
+      "problem": "Ukryty wspólny stan komplikuje reasoning i testy.",
+      "method": "Znajdź mutable globals, singletony i niejawne zależności.",
+      "mitigation": "Jawna własność i kontrolowane zależności.",
+      "source_line": 1186
+    },
+    {
+      "id": "R158",
+      "problem": "Warstwa pośrednia nie dodaje kontraktu ani wartości.",
+      "method": "Prześledź forwarding i potrzeby konsumentów.",
+      "mitigation": "Usuń puste delegowanie z zachowaniem potrzebnych granic.",
+      "source_line": 1187
+    },
+    {
+      "id": "R159",
+      "problem": "Zbyt duży moduł łączy niezależne przyczyny zmiany.",
+      "method": "Porównaj obowiązki i historię zmian.",
+      "mitigation": "Wydziel spójne odpowiedzialności bez sztucznej fragmentacji.",
+      "source_line": 1188
+    },
+    {
+      "id": "R160",
+      "problem": "Komentarze zastępują poprawny model i czytelny kod.",
+      "method": "Porównaj komentarz z zachowaniem i typami.",
+      "mitigation": "Refaktor usuwa niejasność; komentarz opisuje potrzebne dlaczego.",
+      "source_line": 1189
+    },
+    {
+      "id": "R161",
+      "problem": "Obsługa błędu zwraca pozorny sukces lub pusty wynik.",
+      "method": "Wymuś błąd zależności i prześledź wynik.",
+      "mitigation": "Jawna semantyka błędu, brak cichego maskowania.",
+      "source_line": 1195
+    },
+    {
+      "id": "R162",
+      "problem": "Fallback osłabia wymagany kontrakt.",
+      "method": "Wymuś niedostępność podstawowej ścieżki.",
+      "mitigation": "Fallback spełnia wymagania albo jawnie blokuje.",
+      "source_line": 1196
+    },
+    {
+      "id": "R163",
+      "problem": "Panic/unwrap/exception występuje na osiągalnym błędnym wejściu.",
+      "method": "Prześledź preconditions i kontrprzykład.",
+      "mitigation": "Obsłuż dopuszczalne awarie zgodnie z kontraktem.",
+      "source_line": 1197
+    },
+    {
+      "id": "R164",
+      "problem": "Mutacja wejścia zaskakuje wywołującego.",
+      "method": "Sprawdź aliasy, użycia i stan po wywołaniu.",
+      "mitigation": "Własność i efekty są jawne i przetestowane.",
+      "source_line": 1198
+    },
+    {
+      "id": "R165",
+      "problem": "Zbędne kopie lub alokacje wynikają ze złego modelu własności.",
+      "method": "Prześledź cykl danych i profil pamięci.",
+      "mitigation": "Uprość własność bez pogorszenia czytelności i poprawności.",
+      "source_line": 1199
+    },
+    {
+      "id": "R166",
+      "problem": "Niedopasowany poziom abstrakcji rozprasza prostą operację.",
+      "method": "Odtwórz ścieżkę czytania i powód każdej warstwy.",
+      "mitigation": "Zredukuj strukturę do potrzeb zadania.",
+      "source_line": 1200
+    },
+    {
+      "id": "R167",
+      "problem": "Duplikacja semantyczna pozostaje mimo różnych nazw.",
+      "method": "Porównaj podobne reguły i transformacje.",
+      "mitigation": "Wspólne miejsce rzeczywiście wspólnej odpowiedzialności.",
+      "source_line": 1201
+    },
+    {
+      "id": "R168",
+      "problem": "Zbyt agresywne DRY łączy podobne, lecz niezależne reguły.",
+      "method": "Sprawdź różne powody zmiany.",
+      "mitigation": "Rozdziel odpowiedzialności zamiast mnożyć flagi.",
+      "source_line": 1202
+    },
+    {
+      "id": "R169",
+      "problem": "Rozwiązanie nie jest idiomatyczne dla języka/frameworka.",
+      "method": "Porównaj z właściwymi standardami i oficjalnym API.",
+      "mitigation": "Code verifier rozstrzyga odstępstwa dowodem.",
+      "source_line": 1203
+    },
+    {
+      "id": "R170",
+      "problem": "Tymczasowy spike, debug lub TODO trafia do produktu.",
+      "method": "Przejrzyj finalny patch i ścieżki wykonania.",
+      "mitigation": "Usuń pozostałości; koniecznej pracy nie odkładaj.",
+      "source_line": 1204
+    },
+    {
+      "id": "R171",
+      "problem": "Refaktor jest zaplanowany, ale nigdy wykonany.",
+      "method": "Porównaj RefactorPlan, patch i RefactorReport.",
+      "mitigation": "refactor_complete wymaga rzeczywistego rezultatu.",
+      "source_line": 1210
+    },
+    {
+      "id": "R172",
+      "problem": "Transformacja zmienia obserwowalne zachowanie niejawnie.",
+      "method": "Porównaj kontrakty i characterization tests przed/po.",
+      "mitigation": "Oddziel i zatwierdź zamierzoną zmianę zachowania.",
+      "source_line": 1211
+    },
+    {
+      "id": "R173",
+      "problem": "Nowa abstrakcja ma wyłącznie hipotetyczne użycie.",
+      "method": "Sprawdź obecnych konsumentów i wymagania.",
+      "mitigation": "Usuń speculative generality.",
+      "source_line": 1212
+    },
+    {
+      "id": "R174",
+      "problem": "Refaktor obejmuje tylko nowy kod mimo blokady w istniejącym.",
+      "method": "Prześledź cały zmieniony przepływ.",
+      "mitigation": "Popraw konieczny problem strukturalny istniejącego rozwiązania.",
+      "source_line": 1213
+    },
+    {
+      "id": "R175",
+      "problem": "Porządki rozlewają się na niezwiązany obszar.",
+      "method": "Porównaj problem, wpływ i zakres zadania.",
+      "mitigation": "Boy Scout improvement ma konkretny związek; reszta zmienia zakres.",
+      "source_line": 1214
+    },
+    {
+      "id": "R176",
+      "problem": "Brak testów zachowania przed ryzykowną transformacją.",
+      "method": "Sprawdź baseline i ochronę kontraktów.",
+      "mitigation": "Uzupełnij characterization tests przed przekształceniem.",
+      "source_line": 1215
+    },
+    {
+      "id": "R177",
+      "problem": "Duży jednorazowy rewrite uniemożliwia lokalizację regresji.",
+      "method": "Porównaj kroki refaktoru i dowody pośrednie.",
+      "mitigation": "Małe sprawdzalne transformacje w uzasadnionej kolejności.",
+      "source_line": 1216
+    },
+    {
+      "id": "R178",
+      "problem": "Pozostawione martwe ścieżki i stare mechanizmy.",
+      "method": "Sprawdź użycia, konfiguracje i kompatybilność.",
+      "mitigation": "Usuń faktycznie niepotrzebny kod i zweryfikuj odbiorców.",
+      "source_line": 1217
+    },
+    {
+      "id": "R179",
+      "problem": "Mechaniczne leczenie smell pogarsza rozwiązanie.",
+      "method": "Porównaj złożoność i kontrakty przed/po.",
+      "mitigation": "Uzasadnij efekt, nie samą nazwę techniki.",
+      "source_line": 1218
+    },
+    {
+      "id": "R180",
+      "problem": "Boy Scout Rule pominięta lub spełniona kosmetycznym commitem.",
+      "method": "Sprawdź napotkane problemy i efekt transformacji.",
+      "mitigation": "Ocena każdej pracy; brak potrzeb zmian może być uzasadniony.",
+      "source_line": 1219
+    },
+    {
+      "id": "R181",
+      "problem": "Analizowano tylko domyślny target lub część workspace.",
+      "method": "Porównaj zakres raportu z macierzą celów.",
+      "mitigation": "Analiza wszystkich uzgodnionych istotnych celów.",
+      "source_line": 1225
+    },
+    {
+      "id": "R182",
+      "problem": "Wykluczone features ukrywają błąd.",
+      "method": "Sprawdź konfiguracje kompilacji i pokrycie.",
+      "mitigation": "Analiza wspieranych kombinacji bez sprzecznych all-features.",
+      "source_line": 1226
+    },
+    {
+      "id": "R183",
+      "problem": "Exit code 0 ukrywa warnings lub findings.",
+      "method": "Odczytaj pełne wyjście, nie tylko kod procesu.",
+      "mitigation": "static_clean wymaga braku nierozstrzygniętych zastrzeżeń.",
+      "source_line": 1227
+    },
+    {
+      "id": "R184",
+      "problem": "Dodanie allow/suppression usuwa alarm zamiast przyczyny.",
+      "method": "Porównaj reguły i adnotacje przed/po.",
+      "mitigation": "Zmiana wyciszająca nie zastępuje naprawy.",
+      "source_line": 1228
+    },
+    {
+      "id": "R185",
+      "problem": "Zmiana baseline lub severity daje pozorną poprawę.",
+      "method": "Porównaj konfiguracje analizatorów i findings.",
+      "mitigation": "Zachowaj oryginalne wyniki i niezależne rozstrzygnięcie.",
+      "source_line": 1229
+    },
+    {
+      "id": "R186",
+      "problem": "Stare zastrzeżenie jest ignorowane jako preexisting.",
+      "method": "Porównaj baseline z finalnym zakresem analizy.",
+      "mitigation": "Rozwiąż finding; konflikt zakresu wymaga decyzji użytkownika.",
+      "source_line": 1230
+    },
+    {
+      "id": "R187",
+      "problem": "Analizator nie uruchomił się albo przerwał pracę.",
+      "method": "Sprawdź kompletność output i środowiska.",
+      "mitigation": "Błąd analizy blokuje bramkę, nie daje zielonego statusu.",
+      "source_line": 1231
+    },
+    {
+      "id": "R188",
+      "problem": "Analizowano wcześniejszy hash kodu.",
+      "method": "Porównaj wejścia dowodów z kandydatem dostarczenia.",
+      "mitigation": "Unieważnij wynik po istotnej zmianie.",
+      "source_line": 1232
+    },
+    {
+      "id": "R189",
+      "problem": "Bezmyślne włączenie każdej reguły tworzy sprzeczny standard.",
+      "method": "Sprawdź dokumentację i uzgodniony kontrakt reguł.",
+      "mitigation": "Dobierz adekwatny zestaw bez obniżania wymagań.",
+      "source_line": 1233
+    },
+    {
+      "id": "R190",
+      "problem": "Fałszywy alarm uznany bez reprodukcji i uzasadnienia.",
+      "method": "Sprawdź dowód triage i oryginalne finding.",
+      "mitigation": "Niezależna ocena rzeczywistego false positive.",
+      "source_line": 1234
+    },
+    {
+      "id": "R031",
+      "problem": "Brak lub niepełna weryfikacja.",
+      "method": "Kryteria bez dowodów.",
+      "mitigation": "Runtime nie nadaje statusu verified.",
+      "source_line": 1242
+    },
+    {
+      "id": "R032",
+      "problem": "Błędny werdykt recenzenta.",
+      "method": "Niezależna reprodukcja, kalibracja ocen.",
+      "mitigation": "Arbiter sprawdza konkretną sporną uwagę.",
+      "source_line": 1243
+    },
+    {
+      "id": "R033",
+      "problem": "Przedwczesne ogłoszenie ukończenia.",
+      "method": "Końcowa mapa wymagań i artefaktów.",
+      "mitigation": "Delivery verifier blokuje niepełny wynik.",
+      "source_line": 1244
+    },
+    {
+      "id": "R034",
+      "problem": "Test odtwarza implementację zamiast wymagania.",
+      "method": "Odczyt asercji i specyfikacji osobno.",
+      "mitigation": "Test verifier wymaga testu zachowania.",
+      "source_line": 1245
+    },
+    {
+      "id": "R035",
+      "problem": "Test przechodzi mimo złego wyniku.",
+      "method": "Kontrolowana zmiana/błąd, mutation gdy uzasadnione.",
+      "mitigation": "Test pair wzmacnia asercję.",
+      "source_line": 1246
+    },
+    {
+      "id": "R036",
+      "problem": "Nadmiar mocków ukrywa błędną integrację.",
+      "method": "Granice mocków i rzeczywiste contract/E2E tests.",
+      "mitigation": "Test verifier dodaje adekwatną ścieżkę integracyjną.",
+      "source_line": 1247
+    },
+    {
+      "id": "R037",
+      "problem": "Pominięte przypadki negatywne i graniczne.",
+      "method": "Mapa ryzyk oraz klasy wejść.",
+      "mitigation": "Test designer uzupełnia scenariusze.",
+      "source_line": 1248
+    },
+    {
+      "id": "R038",
+      "problem": "Osłabienie/usunięcie testów, żeby było zielono.",
+      "method": "Diff testów i baseline.",
+      "mitigation": "Verifier wymaga uzasadnienia każdej zmiany oczekiwań.",
+      "source_line": 1249
+    },
+    {
+      "id": "R039",
+      "problem": "Flaky tests i mylenie regresji z błędem środowiska.",
+      "method": "Powtórzenie konkretnej awarii i kontrola środowiska.",
+      "mitigation": "Test verifier przypisuje przyczynę i nie maskuje wyniku.",
+      "source_line": 1250
+    },
+    {
+      "id": "R040",
+      "problem": "Zielone coverage lub exit code uznane za jakość.",
+      "method": "Ocena kryteriów niezależna od metryki.",
+      "mitigation": "Runtime oddziela wykonanie sprawdzenia od spełnienia zadania.",
+      "source_line": 1251
+    },
+    {
+      "id": "R041",
+      "problem": "Wykonawca i verifier podzielają błędne założenie.",
+      "method": "Nowa sesja, odrębne źródła i testy.",
+      "mitigation": "Preferowany inny profil/CLI; nie uznajemy różnorodności za gwarancję.",
+      "source_line": 1259
+    },
+    {
+      "id": "R042",
+      "problem": "Recenzent ulega uzasadnieniu wykonawcy.",
+      "method": "Ocena artefaktu przed lekturą uzasadnienia.",
+      "mitigation": "Verifier sam wyprowadza kluczowe sprawdzenia.",
+      "source_line": 1260
+    },
+    {
+      "id": "R043",
+      "problem": "Recenzent sam poprawia i zatwierdza.",
+      "method": "Pochodzenie artefaktu i autor zmian.",
+      "mitigation": "Runtime wymaga nowego niezależnego verifiera.",
+      "source_line": 1261
+    },
+    {
+      "id": "R044",
+      "problem": "Nieskończone spory o styl.",
+      "method": "Finding bez kryterium lub dowodu.",
+      "mitigation": "Arbiter stosuje standardy projektu; użytkownik rozstrzyga preferencję.",
+      "source_line": 1262
+    },
+    {
+      "id": "R045",
+      "problem": "Zatwierdzenie nieaktualnego diffu.",
+      "method": "Hash artefaktu i rewizji wejścia.",
+      "mitigation": "Zmiana unieważnia powiązany raport.",
+      "source_line": 1263
+    },
+    {
+      "id": "R046",
+      "problem": "Niezależne gałęzie psują się po połączeniu.",
+      "method": "Walidacja zintegrowanego kandydata.",
+      "mitigation": "Integration verifier wymaga nowych dowodów.",
+      "source_line": 1264
+    },
+    {
+      "id": "R047",
+      "problem": "Konflikt rozwiązany semantycznie błędnie.",
+      "method": "Review resolution diff i testy kontraktu.",
+      "mitigation": "Rozwiązanie konfliktu jest nową zmianą do oceny.",
+      "source_line": 1265
+    },
+    {
+      "id": "R048",
+      "problem": "Nadpisanie pracy użytkownika lub innego agenta.",
+      "method": "Snapshot, lease i kontrola zmian przed zapisem.",
+      "mitigation": "Runtime zatrzymuje konfliktujący zapis; integrator uzgadnia zmianę.",
+      "source_line": 1266
+    },
+    {
+      "id": "R049",
+      "problem": "Agent ocenia inną wersję niż test runner.",
+      "method": "Input hashes i przypięte środowisko.",
+      "mitigation": "Verification runner wiąże każdy wynik z wersją.",
+      "source_line": 1267
+    },
+    {
+      "id": "R050",
+      "problem": "Wyniki tests/logs zostały zmodyfikowane przez wykonawcę.",
+      "method": "Pochodzenie dowodu i zapis przez runner.",
+      "mitigation": "Verifier korzysta z niezależnie zebranych wyników.",
+      "source_line": 1268
+    },
+    {
+      "id": "R051",
+      "problem": "Błędna autoryzacja lub izolacja tenantów.",
+      "method": "Negatywne testy dostępu i model uprawnień.",
+      "mitigation": "Security pair sprawdza granice zaufania.",
+      "source_line": 1276
+    },
+    {
+      "id": "R052",
+      "problem": "SQL/command/template injection i XSS.",
+      "method": "Analiza przepływu danych i testy payloadów.",
+      "mitigation": "Implementer stosuje właściwe bezpieczne API; security verifier potwierdza.",
+      "source_line": 1277
+    },
+    {
+      "id": "R053",
+      "problem": "Path traversal, symlinki i niebezpieczne pliki tymczasowe.",
+      "method": "Testy ścieżek, praw i wyścigów.",
+      "mitigation": "Security verifier sprawdza rzeczywiste granice filesystemu.",
+      "source_line": 1278
+    },
+    {
+      "id": "R054",
+      "problem": "SSRF, niebezpieczna deserializacja lub parsowanie.",
+      "method": "Model wejść i kontrolowane testy ataku.",
+      "mitigation": "Security pair ogranicza możliwości zgodnie z potrzebą.",
+      "source_line": 1279
+    },
+    {
+      "id": "R055",
+      "problem": "Sekrety w kodzie, logach lub raportach.",
+      "method": "Secret scanning i kontrola przepływu danych.",
+      "mitigation": "Ograniczenie zbierania i usunięcie wycieku; raport incydentu.",
+      "source_line": 1280
+    },
+    {
+      "id": "R056",
+      "problem": "Niebezpieczna kryptografia, sesje i domyślne ustawienia.",
+      "method": "Review użytych bibliotek i konfiguracji.",
+      "mitigation": "Security verifier porównuje z wymaganiami domeny.",
+      "source_line": 1281
+    },
+    {
+      "id": "R057",
+      "problem": "Wymyślony pakiet i slopsquatting.",
+      "method": "Istnienie, pochodzenie i historia pakietu.",
+      "mitigation": "Dependency review przed instalacją; samo istnienie nie wystarcza.",
+      "source_line": 1282
+    },
+    {
+      "id": "R058",
+      "problem": "Podatna zależność lub niekontrolowany install script.",
+      "method": "Lockfile, advisory scan i zakres działania instalacji.",
+      "mitigation": "Security pair ocenia nowy łańcuch dostaw.",
+      "source_line": 1283
+    },
+    {
+      "id": "R059",
+      "problem": "Testy/skrypty wykonują nieoczekiwane działania.",
+      "method": "Review poleceń, izolacja i obserwacja skutków.",
+      "mitigation": "Runner uruchamia je w dozwolonym środowisku.",
+      "source_line": 1284
+    },
+    {
+      "id": "R060",
+      "problem": "Naruszenie licencji lub niejasne pochodzenie kodu.",
+      "method": "Ewidencja źródeł i licencji nowych materiałów.",
+      "mitigation": "Code/delivery verifier wymaga zgodności lub oznacza niewiadomą.",
+      "source_line": 1285
+    },
+    {
+      "id": "R061",
+      "problem": "Prompt injection przejmuje cel agenta.",
+      "method": "Pochodzenie treści i próby zmiany instrukcji.",
+      "mitigation": "Runtime egzekwuje politykę poza modelem; security pair bada payloady.",
+      "source_line": 1293
+    },
+    {
+      "id": "R062",
+      "problem": "Nadużycie dostępnego narzędzia.",
+      "method": "Zgodność operacji z rolą i zgodą.",
+      "mitigation": "Ograniczenia CLI/sandbox; blokada, gdy wymaganej kontroli brak.",
+      "source_line": 1294
+    },
+    {
+      "id": "R063",
+      "problem": "Eskalacja tożsamości i uprawnień.",
+      "method": "Każda zmiana polityki ma uprawnionego autora.",
+      "mitigation": "Agent nie może sam sobie przyznać dostępu.",
+      "source_line": 1295
+    },
+    {
+      "id": "R064",
+      "problem": "Złośliwy plugin/MCP lub element supply chain.",
+      "method": "Jawna lista integracji i ich wersji.",
+      "mitigation": "Tylko zatwierdzone integracje w danym run.",
+      "source_line": 1296
+    },
+    {
+      "id": "R065",
+      "problem": "Nieoczekiwane wykonanie kodu z danych.",
+      "method": "Analiza granicy dane–polecenie.",
+      "mitigation": "Bez ewaluacji tekstu modelu jako komendy runtime.",
+      "source_line": 1297
+    },
+    {
+      "id": "R066",
+      "problem": "Zatrucie pamięci lub pakietu przekazania.",
+      "method": "Pochodzenie decyzji i oryginalne źródła.",
+      "mitigation": "Nieufne podsumowanie nie zmienia zatwierdzonej specyfikacji.",
+      "source_line": 1298
+    },
+    {
+      "id": "R067",
+      "problem": "Podszywanie się w komunikacji agentów.",
+      "method": "Tożsamość nadawcy nadawana przez daemon.",
+      "mitigation": "Autoryzacja IPC, brak dowolnej podmiany sendera.",
+      "source_line": 1299
+    },
+    {
+      "id": "R068",
+      "problem": "Kaskadowe rozprzestrzenienie błędnej decyzji.",
+      "method": "Graf zależności od wersji artefaktu.",
+      "mitigation": "Unieważnienie wyników zależnych i ponowna ocena.",
+      "source_line": 1300
+    },
+    {
+      "id": "R069",
+      "problem": "Nadmierne zaufanie użytkownika do pozornej pewności.",
+      "method": "Dowody obok werdyktu i jawne niewiadome.",
+      "mitigation": "TUI rozróżnia deklarację agenta od potwierdzonego wyniku.",
+      "source_line": 1301
+    },
+    {
+      "id": "R070",
+      "problem": "Agent działa poza uzgodnionym zespołem/zakresem.",
+      "method": "Ewidencja procesów, narzędzi i natywnych subagentów.",
+      "mitigation": "Kontrola uprawnień i rejestracja potomków albo jawna utrata gwarancji.",
+      "source_line": 1302
+    },
+    {
+      "id": "R071",
+      "problem": "Zła złożoność algorytmu.",
+      "method": "Pomiar skalowania na rosnącym wejściu.",
+      "mitigation": "Performance pair wybiera uzasadniony algorytm.",
+      "source_line": 1310
+    },
+    {
+      "id": "R072",
+      "problem": "N+1, zbędne I/O i powtarzane wywołania sieci.",
+      "method": "Profilowanie i licznik operacji.",
+      "mitigation": "Performance verifier potwierdza redukcję kosztu.",
+      "source_line": 1311
+    },
+    {
+      "id": "R073",
+      "problem": "Nieograniczone alokacje, wycieki i brak streaming.",
+      "method": "Profil pamięci pod realistycznym obciążeniem.",
+      "mitigation": "Implementer usuwa przyczynę; verifier sprawdza długi przebieg.",
+      "source_line": 1312
+    },
+    {
+      "id": "R074",
+      "problem": "Race conditions, deadlock i zagłodzenie.",
+      "method": "Testy współbieżności oraz graf blokad.",
+      "mitigation": "Review własności stanu i modelu synchronizacji.",
+      "source_line": 1313
+    },
+    {
+      "id": "R075",
+      "problem": "Blokowanie event loop lub wątku TUI.",
+      "method": "Opóźnienia wejścia i ślady długich operacji.",
+      "mitigation": "Oddzielenie renderowania od pracy procesów.",
+      "source_line": 1314
+    },
+    {
+      "id": "R076",
+      "problem": "Nieprawidłowe retry, brak idempotencji i cancel.",
+      "method": "Fault injection i przerwanie w trakcie.",
+      "mitigation": "Runtime/check runner rozróżnia bezpieczne ponowienia.",
+      "source_line": 1315
+    },
+    {
+      "id": "R077",
+      "problem": "Niepoprawny cache i stale data.",
+      "method": "Zmiana wejścia z kontrolą unieważnienia.",
+      "mitigation": "Wersjonowane klucze; verifier sprawdza aktualność.",
+      "source_line": 1316
+    },
+    {
+      "id": "R078",
+      "problem": "Nieprawidłowa transakcja lub utrata danych.",
+      "method": "Awaria między zapisami i kontrola invariants.",
+      "mitigation": "Integration verifier sprawdza atomiczność i odzyskanie.",
+      "source_line": 1317
+    },
+    {
+      "id": "R079",
+      "problem": "Benchmark niereprezentatywny albo bez baseline.",
+      "method": "Review danych, środowiska i metodologii.",
+      "mitigation": "Performance verifier wymaga porównywalnego pomiaru.",
+      "source_line": 1318
+    },
+    {
+      "id": "R080",
+      "problem": "Optymalizacja psuje semantykę lub złożoność kodu.",
+      "method": "Testy zachowania oraz analiza trade-off.",
+      "mitigation": "Code i performance pair oceniają wspólny artefakt.",
+      "source_line": 1319
+    },
+    {
+      "id": "R081",
+      "problem": "Wymyślone źródło, cytat lub wynik pomiaru.",
+      "method": "Niezależne otwarcie źródła/odczyt evidence.",
+      "mitigation": "Research verifier usuwa niepoparte twierdzenie.",
+      "source_line": 1327
+    },
+    {
+      "id": "R082",
+      "problem": "Cytowanie nie wspiera przypisanego twierdzenia.",
+      "method": "Mapowanie claim → fragment źródła.",
+      "mitigation": "Weryfikator sprawdza treść, nie sam link.",
+      "source_line": 1328
+    },
+    {
+      "id": "R083",
+      "problem": "Nieaktualne dane i przeniesienie starych wyników na dziś.",
+      "method": "Daty zdarzeń, publikacji i odczytu.",
+      "mitigation": "Research verifier oznacza zakres czasowy i szuka aktualizacji.",
+      "source_line": 1329
+    },
+    {
+      "id": "R084",
+      "problem": "Cherry-picking i pozorna niezależność źródeł.",
+      "method": "Źródła pierwotne i graf ich zależności.",
+      "mitigation": "Research pair uwzględnia kontrdowody i wspólne pochodzenie.",
+      "source_line": 1330
+    },
+    {
+      "id": "R085",
+      "problem": "Korelacja przedstawiona jako przyczynowość.",
+      "method": "Review metody i siły wniosków.",
+      "mitigation": "Analysis verifier zawęża wniosek.",
+      "source_line": 1331
+    },
+    {
+      "id": "R086",
+      "problem": "Błąd jednostek, mianownika, arytmetyki lub transformacji.",
+      "method": "Niezależne przeliczenie i testy danych.",
+      "mitigation": "Analyst poprawia obliczenie; verifier odtwarza wynik.",
+      "source_line": 1332
+    },
+    {
+      "id": "R087",
+      "problem": "Brakujące dane i nieujawnione założenia.",
+      "method": "Data provenance i rejestr braków.",
+      "mitigation": "Analysis pair pokazuje ograniczenia i wrażliwość.",
+      "source_line": 1333
+    },
+    {
+      "id": "R088",
+      "problem": "Ogólniki, powtórzenia i tekst bez informacji.",
+      "method": "Rubric wartości treści i zgodności z briefem.",
+      "mitigation": "Editorial verifier żąda konkretów i skrócenia.",
+      "source_line": 1334
+    },
+    {
+      "id": "R089",
+      "problem": "Sprzeczne sekcje po scaleniu dokumentu.",
+      "method": "Wspólny słownik, wymagania i odwołania.",
+      "mitigation": "Integration/editorial pair kontroluje całość.",
+      "source_line": 1335
+    },
+    {
+      "id": "R090",
+      "problem": "Zbyt silny wniosek lub brak niepewności.",
+      "method": "Porównanie rekomendacji z zakresem dowodów.",
+      "mitigation": "Factual/analysis verifier ogranicza deklarowaną pewność.",
+      "source_line": 1336
+    },
+    {
+      "id": "R091",
+      "problem": "Niezgodna wersja CLI lub schema drift.",
+      "method": "Probe i fixtures wspieranych protokołów.",
+      "mitigation": "Adapter jawnie odmawia nieobsługiwanej funkcji.",
+      "source_line": 1344
+    },
+    {
+      "id": "R092",
+      "problem": "Brak logowania, sieci lub limit dostawcy.",
+      "method": "Kategoryzacja błędów provider-specific.",
+      "mitigation": "Zachowanie stanu i jasna czynność potrzebna do wznowienia.",
+      "source_line": 1345
+    },
+    {
+      "id": "R093",
+      "problem": "Resume niewłaściwej albo utraconej sesji.",
+      "method": "Trwały provider_session_id i zgodność workspace.",
+      "mitigation": "Nigdy nie używamy „ostatniej sesji” do automatycznego resume.",
+      "source_line": 1346
+    },
+    {
+      "id": "R094",
+      "problem": "Podwójne działanie po awarii.",
+      "method": "Idempotency key i uzgadnianie skutku.",
+      "mitigation": "Nie ponawiamy nieznanego skutku zewnętrznego w ciemno.",
+      "source_line": 1347
+    },
+    {
+      "id": "R095",
+      "problem": "Fałszywy status pracy lub dostarczenia wiadomości.",
+      "method": "Status wywiedziony z receipt/zdarzeń.",
+      "mitigation": "TUI pokazuje pending/unknown zamiast domyślnego sukcesu.",
+      "source_line": 1348
+    },
+    {
+      "id": "R096",
+      "problem": "Zgoda dotyczy starego zakresu.",
+      "method": "Scope hash i rewizja polityki.",
+      "mitigation": "Zmieniony zakres wymaga nowej zgody.",
+      "source_line": 1349
+    },
+    {
+      "id": "R097",
+      "problem": "Nieznany koszt przedstawiony jako zero.",
+      "method": "Pochodzenie i kompletność usage.",
+      "mitigation": "Metryki reported/estimated/unavailable, bez limitów MVP.",
+      "source_line": 1350
+    },
+    {
+      "id": "R098",
+      "problem": "Przeciążenie hosta bez limitów aplikacyjnych.",
+      "method": "Błędy OS, pamięć, liczba procesów i dostępność.",
+      "mitigation": "Widoczna diagnostyka, backpressure transportu, ręczne pause/cancel; brak ukrytego limitu agentów.",
+      "source_line": 1351
+    },
+    {
+      "id": "R099",
+      "problem": "Nadmierny narzut procesu względem jakości.",
+      "method": "Czas do akceptacji i porównanie baseline.",
+      "mitigation": "Kalibracja ról i routingu bez usuwania dedykowanej weryfikacji.",
+      "source_line": 1352
+    },
+    {
+      "id": "R100",
+      "problem": "Niebezpieczny lub nieczytelny output w terminalu.",
+      "method": "Kontrola escape sequences, rozmiaru i kodowania.",
+      "mitigation": "TUI renderuje bezpieczny tekst, filtry i stabilny widok.",
+      "source_line": 1353
+    },
+    {
+      "id": "R191",
+      "problem": "Wymaganie znika podczas ekstrakcji z długiego źródła.",
+      "method": "Porównaj niezależną ekstrakcję z ledgerem.",
+      "mitigation": "Requirements verifier ponownie czyta całe źródło.",
+      "source_line": 1361
+    },
+    {
+      "id": "R192",
+      "problem": "Wymaganie częściowe jest oznaczone jako spełnione.",
+      "method": "Sprawdź każde kryterium i kwalifikator osobno.",
+      "mitigation": "Parent verified dopiero po wszystkich częściach i integracji.",
+      "source_line": 1362
+    },
+    {
+      "id": "R193",
+      "problem": "Krok planu jest po cichu usunięty albo zastąpiony.",
+      "method": "Porównaj PlanItemLedger z oryginalnym planem.",
+      "mitigation": "Alternatywa ma uzasadnienie i właściwą decyzję zakresową.",
+      "source_line": 1363
+    },
+    {
+      "id": "R194",
+      "problem": "Test ma link do wymagania, lecz go nie sprawdza.",
+      "method": "Odczytaj oracle, asercje i ścieżkę.",
+      "mitigation": "Compliance verifier ocenia treść dowodu, nie obecność linku.",
+      "source_line": 1364
+    },
+    {
+      "id": "R195",
+      "problem": "Procent ukończenia ukrywa jedno krytyczne pominięcie.",
+      "method": "Porównaj finalny status wszystkich obowiązków.",
+      "mitigation": "requirements_complete jest koniunkcją, nie średnią.",
+      "source_line": 1365
+    },
+    {
+      "id": "R196",
+      "problem": "Ryzyko pozostaje bez odpowiedzialnego weryfikatora.",
+      "method": "Sprawdź pełny RiskCoverage wobec wersji katalogu.",
+      "mitigation": "Runtime odrzuca brakujące przypisanie.",
+      "source_line": 1366
+    },
+    {
+      "id": "R197",
+      "problem": "Zbiorczy checkbox ukrywa nieprzeanalizowane podpunkty.",
+      "method": "Sprawdź wyniki atomowych pozycji.",
+      "mitigation": "Każdy podpunkt wymaga własnego wyniku i dowodu.",
+      "source_line": 1367
+    },
+    {
+      "id": "R198",
+      "problem": "Not applicable jest wygodnym wyłączeniem trudnego ryzyka.",
+      "method": "Sprawdź związek uzasadnienia z rzeczywistym zakresem.",
+      "mitigation": "Niezależna ocena wyłączenia; brak podstaw blokuje.",
+      "source_line": 1368
+    },
+    {
+      "id": "R199",
+      "problem": "Zmiana checklisty usuwa finding w trakcie pracy.",
+      "method": "Porównaj przypięte wersje i historię.",
+      "mitigation": "Migracja checklisty jawna, zależne review ponawiane.",
+      "source_line": 1369
+    },
+    {
+      "id": "R200",
+      "problem": "Agent deklaruje wykonane sprawdzenie bez rzeczywistej czynności.",
+      "method": "Porównaj raport z evidence i historią narzędzi.",
+      "mitigation": "Nieudokumentowane twierdzenie nie stanowi dowodu.",
+      "source_line": 1370
+    },
+    {
+      "id": "R201",
+      "problem": "Cykl zależności uniemożliwia niezależną zmianę modułów.",
+      "method": "Zbuduj graf importów i zależności runtime.",
+      "mitigation": "Skoryguj granice i kierunki odpowiedzialności.",
+      "source_line": 1376
+    },
+    {
+      "id": "R202",
+      "problem": "Logika domeny przenika UI, transport i persystencję.",
+      "method": "Prześledź miejsce realizacji reguł.",
+      "mitigation": "Architecture verifier wymaga spójnych granic.",
+      "source_line": 1377
+    },
+    {
+      "id": "R203",
+      "problem": "Pomijany wzorzec powoduje powieloną, zawodną mechanikę.",
+      "method": "Porównaj problem z adekwatnymi wzorcami i idiomami.",
+      "mitigation": "PatternAssessment uzasadnia wybór lub odrzucenie.",
+      "source_line": 1378
+    },
+    {
+      "id": "R204",
+      "problem": "Wzorzec jest zastosowany dogmatycznie bez potrzeby.",
+      "method": "Porównaj prostszy wariant i koszt struktury.",
+      "mitigation": "Usuń nieuzasadnioną abstrakcję.",
+      "source_line": 1379
+    },
+    {
+      "id": "R205",
+      "problem": "Publiczne API utrwala szczegóły zewnętrznego dostawcy.",
+      "method": "Prześledź typy i błędy przez granice.",
+      "mitigation": "Adapter lub równoważny kontrakt izoluje potrzebne różnice.",
+      "source_line": 1380
+    },
+    {
+      "id": "R206",
+      "problem": "Stan jest powielony bez reguły spójności.",
+      "method": "Porównaj źródła prawdy i momenty aktualizacji.",
+      "mitigation": "Jednoznaczna własność, synchronizacja i recovery.",
+      "source_line": 1381
+    },
+    {
+      "id": "R207",
+      "problem": "Pozorna modularność ukrywa silne sprzężenie czasowe.",
+      "method": "Zmień kolejność inicjalizacji i wywołań.",
+      "mitigation": "Kontrakty jawnie określają lub eliminują zależność.",
+      "source_line": 1382
+    },
+    {
+      "id": "R208",
+      "problem": "Kod wprowadza ryzyko bez oceny zasięgu szkody.",
+      "method": "Prześledź awarię do danych i konsumentów.",
+      "mitigation": "ChangeRiskAssessment obejmuje blast radius i mitigations.",
+      "source_line": 1383
+    },
+    {
+      "id": "R209",
+      "problem": "Numeryczna ocena ryzyka zastępuje analizę scenariusza.",
+      "method": "Sprawdź uzasadnienie ocen i skuteczność zabezpieczeń.",
+      "mitigation": "Reviewer wymaga konkretnej przyczyny, skutku i dowodu.",
+      "source_line": 1384
+    },
+    {
+      "id": "R210",
+      "problem": "Ryzyko utrzymania lub odwrócenia zmiany jest pominięte.",
+      "method": "Przeanalizuj awarię migracji i przyszłą zmianę kontraktu.",
+      "mitigation": "Jawne koszty utrzymania, odwracalność i ograniczenia.",
+      "source_line": 1385
+    },
+    {
+      "id": "R211",
+      "problem": "Parametr, env lub stan trwały nie ma opisanego kontraktu.",
+      "method": "Porównaj interfejsy i odczyty z InputDomainMatrix.",
+      "mitigation": "Każde wejście ma dziedzinę i wynik.",
+      "source_line": 1391
+    },
+    {
+      "id": "R212",
+      "problem": "Brak, null i wartość pusta są mylone.",
+      "method": "Sprawdź każdą klasę osobno.",
+      "mitigation": "Jawna semantyka obecności i wartości.",
+      "source_line": 1392
+    },
+    {
+      "id": "R213",
+      "problem": "Zero, znaki i granice zakresu są pominięte.",
+      "method": "Sprawdź minimum, maksimum i sąsiednie wartości.",
+      "mitigation": "Boundary tests i odpowiednie typy.",
+      "source_line": 1393
+    },
+    {
+      "id": "R214",
+      "problem": "Overflow, NaN lub nieskończoność łamią niezmiennik.",
+      "method": "Wprowadź skrajne wartości właściwego typu.",
+      "mitigation": "Walidacja i arytmetyka zgodne z kontraktem.",
+      "source_line": 1394
+    },
+    {
+      "id": "R215",
+      "problem": "Unicode, kodowanie lub normalizacja zmieniają znaczenie.",
+      "method": "Sprawdź równoważne zapisy i niepoprawne bajty.",
+      "mitigation": "Jednoznaczna normalizacja i obsługa błędów.",
+      "source_line": 1395
+    },
+    {
+      "id": "R216",
+      "problem": "Nieprzeanalizowane kombinacje poprawnych osobno parametrów.",
+      "method": "Zbuduj constraints i scenariusze interakcji.",
+      "mitigation": "Testy kombinacji wynikają z zależności, nie wygody.",
+      "source_line": 1396
+    },
+    {
+      "id": "R217",
+      "problem": "Pairwise jest użyte dla reguły zależnej od wielu pól.",
+      "method": "Porównaj stopień interakcji z modelem reguły.",
+      "mitigation": "Sprawdź rzeczywiście istotne kombinacje wyższego rzędu.",
+      "source_line": 1397
+    },
+    {
+      "id": "R218",
+      "problem": "Fragmentacja, EOF lub duże wejście zmieniają parser.",
+      "method": "Przetestuj granice fragmentów i rozmiary.",
+      "mitigation": "Kontrakt strumienia i bezpieczne zachowanie zasobów.",
+      "source_line": 1398
+    },
+    {
+      "id": "R219",
+      "problem": "Duplikaty i zła kolejność zdarzeń nie mają semantyki.",
+      "method": "Podaj powtórzenia, opóźnienia i przestawienia.",
+      "mitigation": "Stanowy model wejść i testy przejść.",
+      "source_line": 1399
+    },
+    {
+      "id": "R220",
+      "problem": "Losowe przykłady są deklarowane jako pełna weryfikacja wejść.",
+      "method": "Sprawdź uzasadnienie klas i pokrycie niezmienników.",
+      "mitigation": "Jawna metoda pokrycia i pozostała niepewność.",
+      "source_line": 1400
+    },
+    {
+      "id": "R221",
+      "problem": "Agent pisze dostępny już mechanizm bez sprawdzenia alternatyw.",
+      "method": "Odtwórz wyszukiwanie i reuse map.",
+      "mitigation": "DependencyDecision poprzedza własną implementację.",
+      "source_line": 1406
+    },
+    {
+      "id": "R222",
+      "problem": "Popularność biblioteki zastępuje ocenę dopasowania.",
+      "method": "Porównaj API z wymaganym kontraktem.",
+      "mitigation": "Wybór na podstawie dowodów jakości i kosztów.",
+      "source_line": 1407
+    },
+    {
+      "id": "R223",
+      "problem": "Zależność bez licencji jest uznana za swobodnie dostępną.",
+      "method": "Odczytaj właściwe pliki i pochodzenie.",
+      "mitigation": "Brak warunków blokuje użycie do czasu rozstrzygnięcia.",
+      "source_line": 1408
+    },
+    {
+      "id": "R224",
+      "problem": "Sprawdzono tylko licencję bezpośredniej zależności.",
+      "method": "Prześledź lockfile, features i komponenty natywne.",
+      "mitigation": "LicenseReport obejmuje rzeczywisty graf i zasoby.",
+      "source_line": 1409
+    },
+    {
+      "id": "R225",
+      "problem": "AND, OR lub wyjątek WITH jest błędnie interpretowany.",
+      "method": "Porównaj expression z tekstami licencji.",
+      "mitigation": "Udokumentuj właściwą opcję i jej obowiązki.",
+      "source_line": 1410
+    },
+    {
+      "id": "R226",
+      "problem": "Licencja nie odpowiada sposobowi dostarczania projektu.",
+      "method": "Sprawdź docelową dystrybucję i zastosowanie.",
+      "mitigation": "Rozstrzygnij zgodność rzeczywistych warunków użycia.",
+      "source_line": 1411
+    },
+    {
+      "id": "R227",
+      "problem": "Noty, atrybucja lub wymagany kod nie trafiają do dostawy.",
+      "method": "Skontroluj finalny pakiet wobec obowiązków.",
+      "mitigation": "Dependencies verified wymaga rzeczywistego spełnienia.",
+      "source_line": 1412
+    },
+    {
+      "id": "R228",
+      "problem": "Kod skopiowany lub vendored omija kontrolę licencji.",
+      "method": "Porównaj pochodzenie fragmentów i plików.",
+      "mitigation": "Te same kontrole co dla menedżera pakietów.",
+      "source_line": 1413
+    },
+    {
+      "id": "R229",
+      "problem": "Zmiana wersji lub features nie otwiera ponownie oceny.",
+      "method": "Porównaj graf i hashe wejściowe raportu.",
+      "mitigation": "Unieważnij zależne decyzje i skany.",
+      "source_line": 1414
+    },
+    {
+      "id": "R230",
+      "problem": "Istnienie pakietu i brak znanych CVE daje fałszywe zaufanie.",
+      "method": "Sprawdź provenance, utrzymanie i zakres skanera.",
+      "mitigation": "Niezależne kontrole supply chain i jawna niepewność.",
+      "source_line": 1415
+    },
+    {
+      "id": "R231",
+      "problem": "Pierwszy poprawny pomysł wygrywa bez porównania.",
+      "method": "Sprawdź OptionsAnalysis i zakres poszukiwania.",
+      "mitigation": "Options verifier wymaga realnego badania alternatyw.",
+      "source_line": 1421
+    },
+    {
+      "id": "R232",
+      "problem": "Alternatywy są pozorne i celowo słabsze.",
+      "method": "Porównaj odrębność mechanizmów i realność użycia.",
+      "mitigation": "Niezależnie poszukaj mocniejszego konkurenta.",
+      "source_line": 1422
+    },
+    {
+      "id": "R233",
+      "problem": "Kryteria dopasowano po fakcie do preferowanego wariantu.",
+      "method": "Sprawdź historię kryteriów i decyzji.",
+      "mitigation": "Kryteria ustalone przed rankingiem; rewizja jest jawna.",
+      "source_line": 1423
+    },
+    {
+      "id": "R234",
+      "problem": "Warianty oceniono na innych danych lub warunkach.",
+      "method": "Porównaj benchmarki, kontrakty i konfiguracje.",
+      "mitigation": "Wspólna podstawa porównania.",
+      "source_line": 1424
+    },
+    {
+      "id": "R235",
+      "problem": "Średnia punktów kompensuje niespełnione wymaganie.",
+      "method": "Sprawdź filtr dopuszczalności przed rankingiem.",
+      "mitigation": "Niespełniający obowiązku wariant jest wykluczony.",
+      "source_line": 1425
+    },
+    {
+      "id": "R236",
+      "problem": "Ocena lub przewaga jest wymyślona bez dowodu.",
+      "method": "Odtwórz źródła, pomiary i eksperyment.",
+      "mitigation": "Istotna niepewność wymaga sprawdzenia.",
+      "source_line": 1426
+    },
+    {
+      "id": "R237",
+      "problem": "Pominięto istotną dostępną klasę rozwiązań.",
+      "method": "Porównaj przestrzeń problemu z poszukiwaniami.",
+      "mitigation": "Options verifier uzupełnia badanie, nie tylko ranking.",
+      "source_line": 1427
+    },
+    {
+      "id": "R238",
+      "problem": "Decyzja jest niestabilna przy małej zmianie przesłanek.",
+      "method": "Wykonaj analizę wrażliwości.",
+      "mitigation": "Uzupełnij dane lub uzyskaj potrzebną preferencję.",
+      "source_line": 1428
+    },
+    {
+      "id": "R239",
+      "problem": "Koszt już napisanej implementacji blokuje lepszy wybór.",
+      "method": "Porównaj aktualne dowody i przyszłe konsekwencje.",
+      "mitigation": "Nowe dane mogą ponownie otworzyć SolutionDecision.",
+      "source_line": 1429
+    },
+    {
+      "id": "R240",
+      "problem": "Zbadany zwycięzca jest reklamowany jako globalne optimum.",
+      "method": "Sprawdź zakres twierdzenia i granice badania.",
+      "mitigation": "Raport podaje kryteria, przestrzeń i niepewność.",
+      "source_line": 1430
+    }
+  ]
+}

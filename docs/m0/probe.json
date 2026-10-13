@@ -1,0 +1,57 @@
+{
+  "host": "Darwin",
+  "generated_utc": "2026-10-13T04:19:48Z",
+  "providers": {
+    "codex": {
+      "installed": true,
+      "version": "codex-cli 0.162.1",
+      "auth": "available",
+      "advertised_flags": [
+        "--sandbox"
+      ],
+      "live_resume": "unverified",
+      "live_cancel": "unverified",
+      "linux": "not_tested",
+      "app_server": {
+        "initialize": "observed",
+        "thread_start": "observed",
+        "sandbox": {
+          "type": "readOnly",
+          "networkAccess": false
+        },
+        "session_id_present": true,
+        "model_turn": "not_run",
+        "user_agent_present": true
+      }
+    },
+    "claude": {
+      "installed": true,
+      "version": "2.1.296 (Claude Code)",
+      "auth": "available",
+      "advertised_flags": [
+        "--resume",
+        "--json",
+        "--output-format",
+        "--input-format",
+        "--tools",
+        "--permission-mode"
+      ],
+      "live_resume": "unverified",
+      "live_cancel": "unverified",
+      "linux": "not_tested"
+    },
+    "gemini": {
+      "installed": true,
+      "version": "0.63.0",
+      "auth": "unverified",
+      "advertised_flags": [
+        "--resume",
+        "--output-format",
+        "--sandbox"
+      ],
+      "live_resume": "unverified",
+      "live_cancel": "unverified",
+      "linux": "not_tested"
+    }
+  }
+}

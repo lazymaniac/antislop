@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"fixture-session-id"}
+{"type":"turn.started"}
+{"type":"future.event","payload":{"text":"żółw"}}
+{"type":"item.completed","item":{"id":"fixture-item","type":"agent_message","text":"{\"answer\":42}"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
