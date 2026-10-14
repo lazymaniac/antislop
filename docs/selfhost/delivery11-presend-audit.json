@@ -1,0 +1,81 @@
+{
+  "artifact_hash": "4c364ddfb57a6ff863ee8f44b986313ee6861c1c547675a54b5d945740914d70",
+  "artifact_id": "723deada-aed0-4260-b265-9695f6a92cce",
+  "attempt": 11,
+  "authenticating_review_bodies": 5,
+  "backend_current_evidence_eligibility_exact": true,
+  "exact_hash_validated_documents": 1319,
+  "exact_persisted_presend_hashes_match": true,
+  "expected_checks": 31,
+  "frozen_orchestration_matches_presend_self_excluded_context": true,
+  "full_runner_sources_and_observations": [
+    {
+      "id": "a3aaa2d4-0541-4c81-9abc-024392a76905",
+      "output_hash": "393c4b87f37bf358472fc2778a7d22f39e5fe34ecc648deb293a2ae41e11d0db",
+      "source_hash": "8ad467443974b3953b3d42e9de9b9f110f975845ac00fcd0fe2580794c9c3b47"
+    },
+    {
+      "id": "312562f1-0250-4e81-bac5-2bc2ad6a99e5",
+      "output_hash": "520d7578341d577edaadf8aad46339fe3a7a8e243db72314e43a0cdd4a27c9b5",
+      "source_hash": "e2d78815ecec6a307ac21467b7c19a4f81221f9c53a14c18b026b2dcef0e64f2"
+    },
+    {
+      "id": "2375b7f3-e1e9-43a4-851b-54995094663a",
+      "output_hash": "bb406138c3ea9b3a17d5e1fe0ad6f1db8ad34d51b566532a85e1ac7278ea8d08",
+      "source_hash": "1cdbe645a6e770ad6e0decabe5e4fcb3cce5018669fc31550bf774cd6d0803e4"
+    },
+    {
+      "id": "cbff3b21-7de0-4f31-84b5-5ecc9f6e05cc",
+      "output_hash": "807a06645be242410d06365406e140c53522765b068c86740dbdd3f8996f7638",
+      "source_hash": "e2d78815ecec6a307ac21467b7c19a4f81221f9c53a14c18b026b2dcef0e64f2"
+    },
+    {
+      "id": "8661b288-5af5-4013-a01c-8e79804bf9a1",
+      "output_hash": "5e7a3aeda6da3e05e46a9926111e25ffd297b5dbad41356aecf78fccb420fa93",
+      "source_hash": "e2d78815ecec6a307ac21467b7c19a4f81221f9c53a14c18b026b2dcef0e64f2"
+    },
+    {
+      "id": "5157e37e-c9d8-465e-a7ae-c6fb3567af72",
+      "output_hash": "cd7f8dff7ba73bc84db97fcf79e4ea8cb950f377c43bf58267f4fa79765363db",
+      "source_hash": "abe636f544bf39bc94cd9919b3480891928a77a20b039e463532adccc8541f54"
+    },
+    {
+      "id": "ff734863-1eb5-4744-9ffd-ee361236ab3e",
+      "output_hash": "991a7188d6a18750f0dccfedbf2d2145c723428748c28e3d22a2a7fed87394ea",
+      "source_hash": "e2d78815ecec6a307ac21467b7c19a4f81221f9c53a14c18b026b2dcef0e64f2"
+    },
+    {
+      "id": "c4fa1172-ba95-41fd-84b3-7011bd0396ea",
+      "output_hash": "40163076a897d46a29dae4ca196d92e2f51f9ac0ae853e149df081277bf88108",
+      "source_hash": "e2d78815ecec6a307ac21467b7c19a4f81221f9c53a14c18b026b2dcef0e64f2"
+    }
+  ],
+  "hard_limit_headroom": 31315,
+  "historical_receipts": 12,
+  "historical_receipts_excluded_from_current_enum": true,
+  "literal_typed_sections_exact": true,
+  "native_session_id": null,
+  "projected_backend_expected_checks_unchanged": true,
+  "projected_backend_validity_unchanged": true,
+  "prompt_hash": "ce0b0fac86a07f89fb08fab02ba0d43ba87432f499e02a7cf734f9e37af9bfac",
+  "prompt_unicode_scalars": 1017261,
+  "prompt_utf8_bytes": 1018785,
+  "quality_gate_bodies": 15,
+  "reconciliation_required": true,
+  "retained_coordinator_binary_sha256": "e36e8da833a861fcd2d8b187dc5e5a3b0eab023630ebbac880bec0886689b62f",
+  "run_id": "c77f6677-f800-483d-bc8a-f04d43b89b10",
+  "schema_hash": "f64695c782fe1dc0247de688320398291deef026ab2a5490725e5bfe3342b9c0",
+  "schema_utf8_bytes": 21371,
+  "schema_version": 1,
+  "scope": "Exact pre-send data, identity and proof closure audit; not final acceptance or semantic approval.",
+  "selected_artifacts": 6,
+  "selected_current_receipts": 40,
+  "selected_graph_nodes": 264,
+  "soft_900k_target_met": false,
+  "spec_revision": 1,
+  "stage": "delivery",
+  "status_at_snapshot": "running",
+  "structural_ancestors_and_required_review_rows_present": true,
+  "turn_id": "3909e6b3-c371-43c4-8bea-3c688ea595bc",
+  "turn_state_at_snapshot": "pending_unknown"
+}

@@ -25,7 +25,7 @@ def main():
         for node in seen:active.setdefault(node,[]).append(target)
     packages=[]
     for package in metadata['packages']:
-        if package['name']=='architect':continue
+        if package['name']=='antislop':continue
         directory=pathlib.Path(package['manifest_path']).parent
         licenses=[]
         for path in sorted(directory.rglob('*')):

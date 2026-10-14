@@ -18,7 +18,7 @@ impl Drop for Daemon {
     }
 }
 fn start(state: &Path) -> Daemon {
-    let process = ProcessCommand::new(env!("CARGO_BIN_EXE_architect"))
+    let process = ProcessCommand::new(env!("CARGO_BIN_EXE_antislop"))
         .arg("daemon")
         .arg(state)
         .stdout(Stdio::null())
@@ -61,7 +61,10 @@ fn mutate(state: &Path, key: &str, command: Command) -> Run {
     assert!(response.error.is_none(), "{:?}", response.error);
     {
         let summary = response.data.unwrap();
-        serde_json::from_str(&architect::ipc::read_document(state, summary["id"].as_str().unwrap(), "run").unwrap()).unwrap()
+        serde_json::from_str(
+            &architect::ipc::read_document(state, summary["id"].as_str().unwrap(), "run").unwrap(),
+        )
+        .unwrap()
     }
 }
 #[test]
@@ -114,7 +117,9 @@ fn daemon_crash_after_check_effect_does_not_replay_and_keeps_approval() {
     )
     .unwrap();
     assert!(response.error.is_none());
-    let recovered: Run = serde_json::from_str(&architect::ipc::read_document(&state, &run.id, "run").unwrap()).unwrap();
+    let recovered: Run =
+        serde_json::from_str(&architect::ipc::read_document(&state, &run.id, "run").unwrap())
+            .unwrap();
     assert_eq!(recovered.status, architect::domain::Status::Blocked);
     assert_eq!(recovered.approvals.len(), 1);
     // A retry of the original request returns its durable receipt, without relaunch.
@@ -148,7 +153,7 @@ fn second_daemon_cannot_take_over_socket_or_database() {
     let root = tempfile::tempdir().unwrap();
     let state = root.path().join("state");
     let _daemon = start(&state);
-    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_architect"))
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_antislop"))
         .arg("daemon")
         .arg(&state)
         .output()
@@ -165,4 +170,94 @@ fn second_daemon_cannot_take_over_socket_or_database() {
     )
     .unwrap();
     assert!(response.error.is_none());
+}
+
+#[test]
+fn restart_of_a_worker_waiting_at_pause_preserves_pause_and_never_replays_the_check() {
+    use architect::domain::{RunSpec, Status};
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let mut spec: RunSpec =
+        serde_json::from_str(include_str!("../examples/fake-spec.json")).unwrap();
+    spec.workspace = root.path().to_string_lossy().into();
+    spec.check_command = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "printf x >> effect; while [ ! -f release ]; do sleep 0.01; done".into(),
+    ];
+    let daemon = start(&state);
+    let run = mutate(&state, "create", Command::Create { spec });
+    mutate(
+        &state,
+        "approve",
+        Command::ApproveStart {
+            run_id: run.id.clone(),
+            scope_hash: run.scope_hash("start"),
+        },
+    );
+    mutate(
+        &state,
+        "advance",
+        Command::Advance {
+            run_id: run.id.clone(),
+        },
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !root.path().join("effect").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    mutate(
+        &state,
+        "pause",
+        Command::Pause {
+            run_id: run.id.clone(),
+        },
+    );
+    std::fs::write(root.path().join("release"), "").unwrap();
+    loop {
+        let response = call(
+            &state,
+            &Request {
+                version: architect::ipc::PROTOCOL_VERSION,
+                request_id: id(),
+                idempotency_key: None,
+                operation: Operation::Events { after: 0 },
+            },
+        )
+        .unwrap();
+        if response.data.unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "work_waiting_paused")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(daemon);
+    let _replacement = start(&state);
+    let recovered: Run =
+        serde_json::from_str(&architect::ipc::read_document(&state, &run.id, "run").unwrap())
+            .unwrap();
+    assert_eq!(recovered.status, Status::Paused);
+    assert_eq!(recovered.paused_from, Some(Status::Blocked));
+    assert!(recovered.reconciliation_required);
+    assert!(recovered.session_ledger.sessions.is_empty());
+    let resumed = mutate(
+        &state,
+        "resume",
+        Command::Resume {
+            run_id: run.id.clone(),
+        },
+    );
+    assert_eq!(resumed.status, Status::Blocked);
+    assert_eq!(resumed.attempt, 1);
+    assert_eq!(resumed.approvals.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("effect")).unwrap(),
+        "x"
+    );
 }

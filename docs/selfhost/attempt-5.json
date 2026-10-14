@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "task": "antislop adds its own --version",
+  "provider": "codex",
+  "isolated_workspace": "/tmp/antislop-selfhost-00wizn49/source",
+  "run_id": "c77f6677-f800-483d-bc8a-f04d43b89b10",
+  "status": "blocked",
+  "driver_exit_code": 1,
+  "source_changed": true,
+  "elapsed_seconds": 2412.05,
+  "before_hash": "3dbe71e6bfe6952fa7ca332532e3d8fb12600b45b4e670e6b7decd061c6de2d4",
+  "after_hash": "1832819d2fbf83698375d586deb22466fe3fa261975f115989b6043e9b8c37c4",
+  "artifacts": 5,
+  "reviews": 4,
+  "attempts": 3,
+  "repair_approvals": 0,
+  "turn_usage": {
+    "051cfc43-d7c9-4e8e-aad8-e3771363fa47": {
+      "state": "reported",
+      "input_tokens": 180203,
+      "output_tokens": 7678,
+      "cached_tokens": 0,
+      "estimated_usd": null,
+      "cumulative": false
+    },
+    "08b1e686-5283-45ad-bd8e-31b68ee6a067": {
+      "state": "reported",
+      "input_tokens": 243396,
+      "output_tokens": 17121,
+      "cached_tokens": 0,
+      "estimated_usd": null,
+      "cumulative": false
+    },
+    "38dfeef0-3b5c-4ba6-a3f9-5a3b28c609ab": {
+      "state": "reported",
+      "input_tokens": 143513,
+      "output_tokens": 7975,
+      "cached_tokens": 143232,
+      "estimated_usd": null,
+      "cumulative": false
+    },
+    "4ca716e3-8c7a-4bae-91b1-1eed6c0a9dad": {
+      "state": "reported",
+      "input_tokens": 69711,
+      "output_tokens": 8371,
+      "cached_tokens": 0,
+      "estimated_usd": null,
+      "cumulative": false
+    },
+    "5dcd294a-0023-4775-ab41-5ffbef6f4c4b": {
+      "state": "unavailable"
+    },
+    "69ded623-3e40-4b75-b1cf-58ecb01132b4": {
+      "state": "reported",
+      "input_tokens": 48751,
+      "output_tokens": 3045,
+      "cached_tokens": 0,
+      "estimated_usd": null,
+      "cumulative": false
+    },
+    "6c64ce80-b8e9-46bb-80d1-c92c5a4a7c27": {
+      "state": "reported",
+      "input_tokens": 174810,
+      "output_tokens": 15110,
+      "cached_tokens": 0,
+      "estimated_usd": null,
+      "cumulative": false
+    },
+    "890dc66b-6c20-439d-8c7f-e41bc8920b57": {
+      "state": "reported",
+      "input_tokens": 136555,
+      "output_tokens": 3451,
+      "cached_tokens": 0,
+      "estimated_usd": null,
+      "cumulative": false
+    },
+    "faa6aced-4238-452d-8771-1677ea3e23af": {
+      "state": "reported",
+      "input_tokens": 106809,
+      "output_tokens": 6070,
+      "cached_tokens": 0,
+      "estimated_usd": null,
+      "cumulative": false
+    },
+    "fcd4b65a-8c2c-4120-b5bb-833f3f87f3b0": {
+      "state": "reported",
+      "input_tokens": 105403,
+      "output_tokens": 7274,
+      "cached_tokens": 0,
+      "estimated_usd": null,
+      "cumulative": false
+    }
+  },
+  "independent_sessions": true,
+  "native_session_pairs": [
+    {
+      "executor": [
+        "codex",
+        "01a134ba-a0b2-7351-b838-f539c6cdf95d"
+      ],
+      "verifier": [
+        "codex",
+        "01a134bc-0b51-7790-afe9-b4cf905a9ecc"
+      ]
+    },
+    {
+      "executor": [
+        "codex",
+        "01a134be-6321-7580-acc3-e765123e51af"
+      ],
+      "verifier": [
+        "codex",
+        "01a134c2-3e02-7fa1-bb74-2e9c019993c5"
+      ]
+    },
+    {
+      "executor": [
+        "codex",
+        "01a134cc-1fdc-7d01-b969-e3742efd9bc9"
+      ],
+      "verifier": [
+        "codex",
+        "01a134cd-8fcd-7752-bd69-5b0a45e9c400"
+      ]
+    },
+    {
+      "executor": [
+        "codex",
+        "01a134d0-870f-7f93-8cca-61bf4baf2f4a"
+      ],
+      "verifier": [
+        "codex",
+        "01a134d5-ebf9-78c2-9716-366682d7e0b8"
+      ]
+    }
+  ],
+  "real_quality": true,
+  "diagnostic": "Codex exited without a completed turn"
+}

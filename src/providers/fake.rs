@@ -4,6 +4,201 @@ use std::sync::atomic::Ordering;
 
 pub struct FakeProvider;
 impl Provider for FakeProvider {
+    fn execute_observed(
+        &self,
+        invocation: &ObservedInvocation<'_>,
+        cancelled: Arc<AtomicBool>,
+        events: &mut dyn FnMut(&ProviderEvent) -> Result<()>,
+    ) -> Result<TurnReceipt> {
+        require(
+            invocation.resume.is_none(),
+            "synthetic provider has no native resume",
+        )?;
+        events(&ProviderEvent::DeliveryPendingUnknown {
+            turn_id: invocation.turn_id.into(),
+        })?;
+        let (session_id, output) = self.execute(invocation.run, cancelled, &mut |session| {
+            events(&ProviderEvent::SessionObserved {
+                session_id: session.into(),
+            })
+        })?;
+        events(&ProviderEvent::DeliverySent {
+            turn_id: invocation.turn_id.into(),
+        })?;
+        events(&ProviderEvent::Completed {
+            turn_id: invocation.turn_id.into(),
+        })?;
+        Ok(TurnReceipt {
+            turn_id: invocation.turn_id.into(),
+            provider: "fake".into(),
+            session_id,
+            delivered: true,
+            completed: true,
+            stopped: true,
+            output,
+            usage: UsageReport::Unavailable,
+        })
+    }
+    fn verify_observed(
+        &self,
+        invocation: &ObservedInvocation<'_>,
+        artifact: &Artifact,
+        evidence: &Evidence,
+        cancelled: Arc<AtomicBool>,
+        events: &mut dyn FnMut(&ProviderEvent) -> Result<()>,
+    ) -> Result<TurnReceipt> {
+        require(
+            invocation.resume.is_none(),
+            "synthetic provider has no native resume",
+        )?;
+        events(&ProviderEvent::DeliveryPendingUnknown {
+            turn_id: invocation.turn_id.into(),
+        })?;
+        let review = self.verify(
+            invocation.run,
+            artifact,
+            evidence,
+            cancelled,
+            &mut |session| {
+                events(&ProviderEvent::SessionObserved {
+                    session_id: session.into(),
+                })
+            },
+        )?;
+        events(&ProviderEvent::DeliverySent {
+            turn_id: invocation.turn_id.into(),
+        })?;
+        events(&ProviderEvent::Completed {
+            turn_id: invocation.turn_id.into(),
+        })?;
+        let receipt = TurnReceipt {
+            turn_id: invocation.turn_id.into(),
+            provider: "fake".into(),
+            session_id: review.verifier_session.clone(),
+            delivered: true,
+            completed: true,
+            stopped: true,
+            output: serde_json::to_string(&review)?,
+            usage: UsageReport::Unavailable,
+        };
+        Ok(receipt)
+    }
+    fn turn_receipt(
+        &self,
+        request: &TurnRequest<'_>,
+        cancelled: Arc<AtomicBool>,
+        events: &mut dyn FnMut(&ProviderEvent) -> Result<()>,
+    ) -> Result<TurnReceipt> {
+        require(!cancelled.load(Ordering::SeqCst), "cancelled")?;
+        events(&ProviderEvent::DeliveryPendingUnknown {
+            turn_id: request.turn_id.into(),
+        })?;
+        let session_id = id();
+        events(&ProviderEvent::SessionObserved {
+            session_id: session_id.clone(),
+        })?;
+        events(&ProviderEvent::DeliverySent {
+            turn_id: request.turn_id.into(),
+        })?;
+        events(&ProviderEvent::Completed {
+            turn_id: request.turn_id.into(),
+        })?;
+        let output = if request
+            .schema
+            .get("properties")
+            .and_then(|p| p.get("team_plan_json"))
+            .is_some()
+        {
+            let team =
+                crate::team::TeamPlan::bootstrap(request.run.spec.task_family, &request.run.spec)?;
+            serde_json::to_string(&serde_json::json!({
+                "message": "Synthetic orchestration proposal",
+                "team_plan_json": serde_json::to_string(&team)?,
+                "risk_owners": request.run.risk_coverage.keys().map(|r| {
+                    serde_json::json!({
+                        "risk_id": r,
+                        "task_id": team.tasks.first().map(|t| t.id.clone()).unwrap_or_default(),
+                        "rationale": "Synthetic risk assignment"
+                    })
+                }).collect::<Vec<_>>(),
+                "agent_messages": []
+            }))?
+        } else if request
+            .schema
+            .get("properties")
+            .and_then(|p| p.get("contract_version"))
+            .is_some()
+        {
+            let checks: Vec<_> = (1..=8)
+                .map(|i| {
+                    serde_json::json!({
+                        "check_id": format!("V{i:02}"),
+                        "status": "pass",
+                        "method": "Synthetic check fixture",
+                        "evidence_ids": vec!["synthetic-evidence"],
+                        "rationale": "Synthetic passing review"
+                    })
+                })
+                .collect();
+            serde_json::to_string(&serde_json::json!({
+                "contract_version": "1.0",
+                "output_hash": crate::hash("fake-output"),
+                "spec_revision": request.run.spec_revision,
+                "input_hash": crate::hash("fake-input"),
+                "checks": checks,
+                "findings": [],
+                "agent_messages": []
+            }))?
+        } else if request
+            .schema
+            .get("properties")
+            .and_then(|p| p.get("criteria"))
+            .is_some()
+        {
+            let criteria_map: std::collections::BTreeMap<String, bool> =
+                if let Some(team) = &request.run.team {
+                    team.tasks
+                        .iter()
+                        .flat_map(|t| t.criterion_ids.iter().cloned().map(|c| (c, true)))
+                        .collect()
+                } else {
+                    std::collections::BTreeMap::new()
+                };
+            let reject = request.run.spec.objective.contains("[reject]");
+            serde_json::to_string(&serde_json::json!({
+                "accepted": !reject,
+                "criteria": criteria_map,
+                "findings": if reject { vec!["synthetic rejection".to_string()] } else { vec![] },
+                "checks": [],
+                "agent_messages": []
+            }))?
+        } else {
+            serde_json::to_string(&serde_json::json!({
+                "artifact": format!("Synthetic task artifact for turn {}", request.turn_id),
+                "edits": [],
+                "quality": null,
+                "agent_messages": []
+            }))?
+        };
+        Ok(TurnReceipt {
+            turn_id: request.turn_id.into(),
+            provider: "fake".into(),
+            session_id,
+            delivered: true,
+            completed: true,
+            stopped: true,
+            output,
+            usage: UsageReport::Unavailable,
+        })
+    }
+    fn parse_review(
+        &self,
+        _run: &Run,
+        _artifact: &Artifact,
+        receipt: &TurnReceipt,
+    ) -> Result<Review> {
+        crate::transport::decode(receipt.output.as_bytes())
+    }
     fn probe(&self) -> Result<Capabilities> {
         Ok(Capabilities {
             provider: "fake".into(),
@@ -33,15 +228,21 @@ impl Provider for FakeProvider {
         Ok((
             session_id,
             serde_json::to_string(&ExecutionOutput {
-                quality: None,
+                agent_messages: vec![],
+                quality: Some(crate::quality::synthetic_artifacts(run)),
                 artifact: content,
                 edits: vec![],
                 context: Some(ContextModel {
-                    facts: vec![ContextFact {
-                        claim: run.spec.objective.clone(),
-                        source_ref: "objective".into(),
-                        source_hash: crate::hash(&run.spec.objective),
-                    }],
+                    facts: run
+                        .source_hashes()
+                        .into_iter()
+                        .map(|(source_ref, source_hash)| ContextFact {
+                            claim: "Synthetic source-identity fixture; no product truth asserted."
+                                .into(),
+                            source_ref,
+                            source_hash,
+                        })
+                        .collect(),
                     unknowns: vec![],
                 }),
                 solution: Some(SolutionModel {
@@ -103,7 +304,7 @@ impl Provider for FakeProvider {
         session(&verifier_session)?;
         let reject = run.spec.objective.contains("[reject]");
         Ok(Review {
-            quality: None,
+            quality: Some(crate::quality::synthetic_artifacts(run)),
             artifact_hash: artifact.hash.clone(),
             spec_revision: run.spec_revision,
             checklist_version: checklist_version(),

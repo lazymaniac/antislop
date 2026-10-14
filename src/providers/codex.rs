@@ -2,11 +2,150 @@
 //! transport, but exec can ignore user configuration in the installed version.
 use super::*;
 use crate::{Error, id, require};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::Stdio;
 use std::sync::{atomic::Ordering, mpsc};
 use std::time::Duration;
+
+#[derive(Default)]
+struct StreamState {
+    session: bool,
+    started: bool,
+    message: bool,
+    terminal: bool,
+    items: std::collections::BTreeMap<String, bool>,
+}
+impl StreamState {
+    fn observe(&mut self, value: &Value) -> Result<()> {
+        let kind = value["type"]
+            .as_str()
+            .ok_or_else(|| failure("codex", FailureKind::Protocol, "event missing type"))?;
+        if self.terminal
+            && matches!(
+                kind,
+                "thread.started"
+                    | "turn.started"
+                    | "turn.completed"
+                    | "turn.failed"
+                    | "error"
+                    | "item.started"
+                    | "item.updated"
+                    | "item.completed"
+            )
+        {
+            return Err(failure(
+                "codex",
+                FailureKind::Protocol,
+                "known event after terminal result",
+            ));
+        }
+        match kind {
+            "thread.started" => {
+                if self.session {
+                    return Err(failure(
+                        "codex",
+                        FailureKind::Protocol,
+                        "duplicate native thread identity",
+                    ));
+                }
+                self.session = true;
+            }
+            "turn.started" => {
+                if !self.session || self.started {
+                    return Err(failure(
+                        "codex",
+                        FailureKind::Protocol,
+                        "turn start missing session or duplicated",
+                    ));
+                }
+                self.started = true;
+            }
+            "item.started" | "item.updated" | "item.completed" => {
+                if !self.session {
+                    return Err(failure(
+                        "codex",
+                        FailureKind::Protocol,
+                        "item before native session",
+                    ));
+                }
+                let item = value["item"]["type"]
+                    .as_str()
+                    .ok_or_else(|| failure("codex", FailureKind::Protocol, "item missing type"))?;
+                if item == "error" {
+                    return Err(failure(
+                        "codex",
+                        FailureKind::Process,
+                        "native item reported an error",
+                    ));
+                }
+                if matches!(
+                    item,
+                    "command_execution"
+                        | "file_change"
+                        | "mcp_tool_call"
+                        | "collab_tool_call"
+                        | "agent_spawn"
+                        | "subagent"
+                        | "web_search"
+                        | "web_search_call"
+                        | "image_generation"
+                        | "computer"
+                        | "browser"
+                        | "app_tool_call"
+                ) {
+                    return Err(failure(
+                        "codex",
+                        FailureKind::Policy,
+                        "native tool/subagent event violates restricted read-only execution",
+                    ));
+                }
+                if let Some(id) = value["item"].get("id") {
+                    let id = id.as_str().filter(|id| !id.is_empty()).ok_or_else(|| {
+                        failure(
+                            "codex",
+                            FailureKind::Protocol,
+                            "invalid native item identity",
+                        )
+                    })?;
+                    if self.items.get(id) == Some(&true)
+                        || (kind == "item.started" && self.items.contains_key(id))
+                    {
+                        return Err(failure(
+                            "codex",
+                            FailureKind::Protocol,
+                            "duplicate completed or started native item identity",
+                        ));
+                    }
+                    self.items.insert(id.into(), kind == "item.completed");
+                }
+                self.message |= kind == "item.completed" && item == "agent_message";
+            }
+            "turn.completed" => {
+                if !self.session || !self.message {
+                    return Err(failure(
+                        "codex",
+                        FailureKind::Protocol,
+                        "terminal result before native session or artifact",
+                    ));
+                }
+                self.terminal = true;
+            }
+            "turn.failed" | "error" => self.terminal = true,
+            _ => (),
+        }
+        Ok(())
+    }
+}
+
+fn controlled_workspace(run: &Run) -> Result<std::path::PathBuf> {
+    let base = std::env::temp_dir().join(format!("architect-codex-{}", unsafe { libc::geteuid() }));
+    crate::ipc::private_directory(&base)?;
+    let workspace = std::path::Path::new(&run.spec.workspace).canonicalize()?;
+    let cwd = base.join(crate::hash(workspace.to_string_lossy().as_bytes()));
+    crate::ipc::private_directory(&cwd)?;
+    Ok(cwd)
+}
 
 pub const MAX_FRAME: usize = crate::transport::MAX_FRAME;
 #[derive(Debug, PartialEq, Eq)]
@@ -54,7 +193,7 @@ impl CodexProvider {
         self.binary.as_deref().unwrap_or("codex")
     }
     fn version(&self, cancelled: Option<&AtomicBool>) -> Result<String> {
-        let mut command = crate::process::command(self.binary())?;
+        let mut command = shared_cli::command("codex", self.binary())?;
         command
             .arg("--version")
             .stdin(Stdio::null())
@@ -107,6 +246,14 @@ impl CodexProvider {
             .trim()
             .into())
     }
+    fn validated_version(&self, cancelled: Option<&AtomicBool>) -> Result<String> {
+        let version = self.version(cancelled)?;
+        require(
+            version == "codex-cli 0.162.1",
+            "unsupported Codex version; rerun M0 before enabling it",
+        )?;
+        Ok(version)
+    }
     pub fn turn(
         &self,
         run: &Run,
@@ -116,11 +263,54 @@ impl CodexProvider {
         cancelled: Arc<AtomicBool>,
         session: &mut dyn FnMut(&str) -> Result<()>,
     ) -> Result<(String, String)> {
-        let version = self.version(Some(&cancelled))?;
-        require(
-            version == "codex-cli 0.162.1",
-            "unsupported Codex version; rerun M0 before enabling it",
-        )?;
+        let turn_id = crate::id();
+        self.turn_request(
+            &TurnRequest {
+                turn_id: &turn_id,
+                run,
+                prompt,
+                schema,
+                resume,
+            },
+            cancelled,
+            session,
+            &mut |_| Ok(()),
+        )
+    }
+    fn turn_request(
+        &self,
+        request: &TurnRequest<'_>,
+        cancelled: Arc<AtomicBool>,
+        session: &mut dyn FnMut(&str) -> Result<()>,
+        events: &mut dyn FnMut(&ProviderEvent) -> Result<()>,
+    ) -> Result<(String, String)> {
+        let (run, prompt, schema, resume) =
+            (request.run, request.prompt, request.schema, request.resume);
+        if resume.is_some_and(|id| uuid::Uuid::parse_str(id).is_err()) {
+            return Err(failure(
+                "codex",
+                FailureKind::InvalidSession,
+                "resume requires the exact durable provider session UUID; aliases and options are forbidden",
+            ));
+        }
+        // The pinned 0.162.1 CLI rejects turn/start above this Unicode scalar
+        // count before inference. Check before any probe, delivery or temp file.
+        const MAX_INPUT_CHARACTERS: usize = 1_048_576;
+        let input_characters = prompt.chars().count();
+        if input_characters > MAX_INPUT_CHARACTERS {
+            return Err(ProviderFailure {
+                provider: "codex".into(),
+                kind: FailureKind::Protocol,
+                message: format!(
+                    "input_too_large; input_characters={input_characters}; max_characters={MAX_INPUT_CHARACTERS}"
+                ),
+                session_id: None,
+                stopped: true,
+                partial_effects: false,
+            }
+            .into());
+        }
+        self.validated_version(Some(&cancelled))?;
         let schema_file = std::env::temp_dir().join(format!("architect-schema-{}.json", id()));
         let mut schema_handle = std::fs::OpenOptions::new()
             .write(true)
@@ -136,10 +326,12 @@ impl CodexProvider {
             }
         }
         let schema_file = SchemaFile(schema_file);
-        let mut command = crate::process::command(self.binary())?;
+        let cwd = controlled_workspace(run)?;
+        let mut command = shared_cli::command("codex", self.binary())?;
         command
             .args([
                 "exec",
+                "--skip-git-repo-check",
                 "--json",
                 "--color",
                 "never",
@@ -167,15 +359,22 @@ impl CodexProvider {
                 "web_search=\"disabled\"",
                 "-c",
                 "approval_policy=\"never\"",
+                "-c",
+                "project_doc_max_bytes=0",
             ])
             .arg("--cd")
-            .arg(&run.spec.workspace);
+            .arg(&cwd);
         if let Some(model) = &run.spec.model {
             command.arg("--model").arg(model);
         }
         if let Some(effort) = &self.native_effort {
-            require(matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh"), "unsupported Codex native effort")?;
-            command.arg("-c").arg(format!("model_reasoning_effort={effort:?}"));
+            require(
+                matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh"),
+                "unsupported Codex native effort",
+            )?;
+            command
+                .arg("-c")
+                .arg(format!("model_reasoning_effort={effort:?}"));
         }
         if let Some(session_id) = resume {
             require(!session_id.trim().is_empty(), "explicit resume ID required")?;
@@ -183,17 +382,23 @@ impl CodexProvider {
         }
         command
             .arg("-")
-            .current_dir(&run.spec.workspace)
+            .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        events(&match resume {
+            Some(id) => ProviderEvent::DeliveryPending {
+                turn_id: request.turn_id.into(),
+                session_id: id.into(),
+            },
+            None => ProviderEvent::DeliveryPendingUnknown {
+                turn_id: request.turn_id.into(),
+            },
+        })?;
         let mut child = crate::process::SupervisedChild::spawn(&mut command)?;
         let stdout = child.child.stdout.take().expect("stdout pipe");
         let stderr = child.child.stderr.take().expect("stderr pipe");
-        // Do not retain raw diagnostics, which can contain account and secret data.
-        let diagnostics = std::thread::spawn(move || {
-            let _ = std::io::copy(&mut BufReader::new(stderr), &mut std::io::sink());
-        });
+        let diagnostics = std::thread::spawn(move || shared_cli::classify_stderr(stderr));
         let (sender, receiver) = mpsc::sync_channel(16);
         let reader = std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
@@ -206,62 +411,213 @@ impl CodexProvider {
             }
         });
         let mut stdin = child.child.stdin.take().expect("stdin pipe");
-        stdin.write_all(prompt.as_bytes())?;
-        drop(stdin);
+        let prompt = prompt.to_owned();
+        let (sent_sender, sent_receiver) = mpsc::sync_channel(1);
+        let writer = std::thread::spawn(move || {
+            let result = stdin
+                .write_all(prompt.as_bytes())
+                .and_then(|_| stdin.flush());
+            drop(stdin);
+            let _ = sent_sender.send(result);
+        });
+        let mut delivered = false;
+        let mut write_finished = false;
+        let mut write_failed = false;
         let mut session_id = resume.map(String::from);
         let mut message = None;
         let mut completed = false;
-        loop {
-            require(
-                !cancelled.load(Ordering::SeqCst),
-                "provider cancellation requested; attempt may have partial effects",
-            )?;
-            let event = match receiver.recv_timeout(Duration::from_millis(100)) {
-                Ok(Ok(Some(value))) => normalize(&value)?,
-                Ok(Ok(None)) => break,
+        let mut native_failure = None;
+        let mut native_diagnosis = None;
+        let mut eof = false;
+        let mut status = None;
+        let mut stream_state = StreamState::default();
+        while !eof || status.is_none() || !write_finished {
+            if cancelled.load(Ordering::SeqCst) {
+                let callback = events(&ProviderEvent::CancellationRequested {
+                    turn_id: request.turn_id.into(),
+                });
+                child.cancel()?;
+                callback?;
+                events(&ProviderEvent::Stopped {
+                    turn_id: request.turn_id.into(),
+                })?;
+                return Err(ProviderFailure {
+                    provider: "codex".into(),
+                    kind: FailureKind::Cancelled,
+                    message: "process group stopped; prior effects require reconciliation".into(),
+                    session_id,
+                    stopped: true,
+                    partial_effects: true,
+                }
+                .into());
+            }
+            if !write_finished {
+                match sent_receiver.try_recv() {
+                    Ok(Ok(())) => {
+                        write_finished = true;
+                        delivered = true;
+                        events(&ProviderEvent::DeliverySent {
+                            turn_id: request.turn_id.into(),
+                        })?;
+                    }
+                    Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
+                        write_finished = true;
+                        write_failed = true;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => (),
+                }
+            }
+            status = status.or(child.child.try_wait()?);
+            if eof {
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            let event = match receiver.recv_timeout(Duration::from_millis(25)) {
+                Ok(Ok(Some(value))) => {
+                    stream_state.observe(&value)?;
+                    if let Some(usage) = value.get("usage") {
+                        events(&ProviderEvent::Usage {
+                            report: UsageReport::Reported {
+                                input_tokens: usage["input_tokens"].as_u64(),
+                                output_tokens: usage["output_tokens"].as_u64(),
+                                cached_tokens: usage["cached_input_tokens"].as_u64(),
+                                estimated_usd: None,
+                                cumulative: false,
+                            },
+                        })?;
+                    }
+                    if matches!(value["type"].as_str(), Some("turn.failed" | "error")) {
+                        native_diagnosis = shared_cli::diagnostic_category(&value);
+                        let kind = shared_cli::error_kind(&value["error"]);
+                        native_failure = Some(if kind == FailureKind::Process {
+                            shared_cli::error_kind(&value)
+                        } else {
+                            kind
+                        });
+                    }
+                    normalize(&value)?
+                }
+                Ok(Ok(None)) => {
+                    eof = true;
+                    continue;
+                }
                 Ok(Err(error)) => return Err(error),
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    eof = true;
+                    continue;
+                }
             };
             match event {
-                NormalizedEvent::Session(value) => { session(&value)?; session_id = Some(value); },
+                NormalizedEvent::Session(value) => {
+                    if session_id.as_ref().is_some_and(|id| id != &value) {
+                        return Err(failure(
+                            "codex",
+                            FailureKind::InvalidSession,
+                            "CLI returned a different session than requested",
+                        ));
+                    }
+                    session(&value)?;
+                    events(&ProviderEvent::SessionObserved {
+                        session_id: value.clone(),
+                    })?;
+                    session_id = Some(value);
+                }
                 NormalizedEvent::Message(value) => message = Some(value),
                 NormalizedEvent::Completed => completed = true,
-                NormalizedEvent::Failed => return Err(Error::Invalid("Codex reported a failed turn (auth/network/rate-limit details unavailable; run provider diagnostics locally)".into())),
+                NormalizedEvent::Failed => (),
                 NormalizedEvent::Unknown => (),
             }
         }
-        let status = child.child.wait()?;
+        let status = status.expect("observed guardian exit");
+        let _ = writer.join();
         let _ = reader.join();
-        let _ = diagnostics.join();
-        require(
-            status.success() && completed,
-            "Codex exited without a completed turn",
-        )?;
+        let diagnosis = native_diagnosis.or(diagnostics.join().ok().flatten());
+        if !status.success() || !completed || write_failed || native_failure.is_some() {
+            return Err(shared_cli::exit_failure(
+                "codex",
+                status,
+                diagnosis,
+                native_failure,
+                session_id,
+                delivered || write_failed,
+            ));
+        }
         let session_id =
             session_id.ok_or_else(|| Error::Invalid("provider session ID unavailable".into()))?;
         let message =
             message.ok_or_else(|| Error::Invalid("provider returned no artifact".into()))?;
-        let _: Value = serde_json::from_str(&message)?;
+        let _: Value = crate::transport::decode(message.as_bytes())?;
+        events(&ProviderEvent::Completed {
+            turn_id: request.turn_id.into(),
+        })?;
         Ok((session_id, message))
     }
 }
 impl Provider for CodexProvider {
+    fn turn_receipt(
+        &self,
+        request: &TurnRequest<'_>,
+        cancelled: Arc<AtomicBool>,
+        events: &mut dyn FnMut(&ProviderEvent) -> Result<()>,
+    ) -> Result<TurnReceipt> {
+        let mut usage = UsageReport::Unavailable;
+        let (session_id, output) =
+            self.turn_request(request, cancelled, &mut |_| Ok(()), &mut |event| {
+                if let ProviderEvent::Usage { report } = event {
+                    usage = report.clone();
+                }
+                events(event)
+            })?;
+        Ok(TurnReceipt {
+            turn_id: request.turn_id.into(),
+            provider: "codex".into(),
+            session_id,
+            delivered: true,
+            completed: true,
+            stopped: true,
+            output,
+            usage,
+        })
+    }
     fn probe(&self) -> Result<Capabilities> {
-        Ok(Capabilities { provider: "codex".into(), version: self.version(None)?,
+        self.probe_cancelled(&AtomicBool::new(false))
+    }
+    fn probe_cancelled(&self, cancelled: &AtomicBool) -> Result<Capabilities> {
+        Ok(Capabilities { provider: "codex".into(), version: self.validated_version(Some(cancelled))?,
             structured_output: true, streaming: true, resume: true, steering: false,
             cancellation: true, approvals: false, native_subagents_disabled: true,
-            sandbox: "read-only; user configuration/rules ignored; hooks/plugins/shell/subagents disabled".into(), usage: "unavailable (not yet normalized)".into() })
+            sandbox: "filesystem read-only in controlled cwd; project documents disabled; configured shell/hooks/plugins/subagents disabled; native user skills and other advertised tools remain outside a proven tool allowlist; tool_free unsupported".into(), usage: "reported tokens when present; USD unavailable".into() })
     }
-    fn execute(&self, run: &Run, cancelled: Arc<AtomicBool>, session: &mut dyn FnMut(&str) -> Result<()>) -> Result<(String,String)> {
+    fn execute(
+        &self,
+        run: &Run,
+        cancelled: Arc<AtomicBool>,
+        session: &mut dyn FnMut(&str) -> Result<()>,
+    ) -> Result<(String, String)> {
         super::prompts::execute(self, run, cancelled, session)
     }
-    fn verify(&self, run: &Run, artifact: &Artifact, evidence: &Evidence, cancelled: Arc<AtomicBool>, session: &mut dyn FnMut(&str) -> Result<()>) -> Result<Review> {
+    fn verify(
+        &self,
+        run: &Run,
+        artifact: &Artifact,
+        evidence: &Evidence,
+        cancelled: Arc<AtomicBool>,
+        session: &mut dyn FnMut(&str) -> Result<()>,
+    ) -> Result<Review> {
         super::prompts::verify(self, run, artifact, evidence, cancelled, session)
     }
 }
 impl super::prompts::JsonTurn for CodexProvider {
- fn json_turn(&self, run: &Run, prompt: &str, schema: &Value, resume: Option<&str>, cancelled: Arc<AtomicBool>, session: &mut dyn FnMut(&str) -> Result<()>) -> Result<(String,String)> {
-  self.turn(run, prompt, schema, resume, cancelled, session)
- }
+    fn json_turn(
+        &self,
+        run: &Run,
+        prompt: &str,
+        schema: &Value,
+        resume: Option<&str>,
+        cancelled: Arc<AtomicBool>,
+        session: &mut dyn FnMut(&str) -> Result<()>,
+    ) -> Result<(String, String)> {
+        self.turn(run, prompt, schema, resume, cancelled, session)
+    }
 }

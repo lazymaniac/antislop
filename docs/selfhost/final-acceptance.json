@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "run_id": "c77f6677-f800-483d-bc8a-f04d43b89b10",
+  "status": "completed",
+  "changed_files": [
+    "src/main.rs"
+  ],
+  "completion_required": true,
+  "unvalidated_stages": [],
+  "current_input_hash": "ab12b49db6afdc59a86ea1d280b961651b6ed63640833c699849ff39c807f297",
+  "current_runner_ids": [
+    "18888f0a-7b50-46ba-b453-4685b1664f87",
+    "312562f1-0250-4e81-bac5-2bc2ad6a99e5",
+    "8661b288-5af5-4013-a01c-8e79804bf9a1",
+    "c4fa1172-ba95-41fd-84b3-7011bd0396ea",
+    "cbff3b21-7de0-4f31-84b5-5ecc9f6e05cc",
+    "d0a443a7-c4de-460f-8b51-56e239247244",
+    "ff734863-1eb5-4744-9ffd-ee361236ab3e"
+  ],
+  "native_session_pairs": [
+    {
+      "stage": "discovery",
+      "executor": [
+        "codex",
+        "01a134cc-1fdc-7d01-b969-e3742efd9bc9"
+      ],
+      "verifier": [
+        "codex",
+        "01a134cd-8fcd-7752-bd69-5b0a45e9c400"
+      ]
+    },
+    {
+      "stage": "planning",
+      "executor": [
+        "codex",
+        "01a134d0-870f-7f93-8cca-61bf4baf2f4a"
+      ],
+      "verifier": [
+        "codex",
+        "01a134d5-ebf9-78c2-9716-366682d7e0b8"
+      ]
+    },
+    {
+      "stage": "execution",
+      "executor": [
+        "codex",
+        "01a13565-66c9-7ac1-a8ae-6edd3b3c2b1a"
+      ],
+      "verifier": [
+        "codex",
+        "01a135ac-97db-7763-babf-2268164d2e8c"
+      ]
+    },
+    {
+      "stage": "validation",
+      "executor": [
+        "codex",
+        "01a135b2-f03d-7882-a1d7-91a7b5420011"
+      ],
+      "verifier": [
+        "codex",
+        "01a135f4-7df1-7a81-8ad5-8f1279609823"
+      ]
+    },
+    {
+      "stage": "integration",
+      "executor": [
+        "codex",
+        "01a135f9-5eac-7671-88b7-b0742b2368b3"
+      ],
+      "verifier": [
+        "codex",
+        "01a1360b-16a9-7470-a54e-a0e4aee35bf9"
+      ]
+    },
+    {
+      "stage": "delivery",
+      "executor": [
+        "codex",
+        "01a1363d-5b95-7613-bd3e-3159ed5ebe13"
+      ],
+      "verifier": [
+        "codex",
+        "01a1363e-eae2-7af0-bd9f-1e865af77ecc"
+      ]
+    }
+  ],
+  "historical_noncompleted_turns": [
+    {
+      "id": "1e873fc8-7ea2-4de2-a232-56eb66a27b85",
+      "session_id": "228e5460-00e6-44ae-a99b-f52f33ef99d4",
+      "state": "failed",
+      "native_session_id": "01a135b8-85ab-7010-a696-e341545d5ff8",
+      "native_observed": true,
+      "stage": "validation",
+      "failure": "process",
+      "provider_completed": false,
+      "output_ref": null,
+      "usage": {
+        "state": "unavailable"
+      }
+    },
+    {
+      "id": "4d98facb-4996-4f55-a7b3-59a5dc02b06f",
+      "session_id": "1c4ee374-ee08-43f6-9890-c4e7fde9950b",
+      "state": "failed",
+      "native_session_id": "01a1351d-cc9a-75f2-9349-5bb3921eb5f0",
+      "native_observed": true,
+      "stage": "execution",
+      "failure": "process",
+      "provider_completed": false,
+      "output_ref": null,
+      "usage": {
+        "state": "unavailable"
+      }
+    },
+    {
+      "id": "5dcd294a-0023-4775-ab41-5ffbef6f4c4b",
+      "session_id": "20fddeb1-c0a8-49c0-b7b4-0b2c2bc9710b",
+      "state": "failed",
+      "native_session_id": "01a134dd-edc0-72a3-89ee-61cf48e71ce4",
+      "native_observed": true,
+      "stage": "execution",
+      "failure": "process",
+      "provider_completed": false,
+      "output_ref": null,
+      "usage": {
+        "state": "unavailable"
+      }
+    },
+    {
+      "id": "6e9a5869-ab7c-4c9a-8d63-0480c402b72b",
+      "session_id": "bb0fb062-bb50-488c-9dda-1b356953eb38",
+      "state": "failed",
+      "native_session_id": "01a13568-e123-7a93-9aec-05ee476ed0b8",
+      "native_observed": true,
+      "stage": "execution",
+      "failure": "process",
+      "provider_completed": false,
+      "output_ref": null,
+      "usage": {
+        "state": "unavailable"
+      }
+    },
+    {
+      "id": "726bd98a-59ab-473a-bd89-98c8ecc66b1d",
+      "session_id": "81f06bd6-3410-4421-a78d-2b7843acfb29",
+      "state": "failed",
+      "native_session_id": null,
+      "native_observed": false,
+      "stage": "integration",
+      "failure": "protocol",
+      "provider_completed": false,
+      "output_ref": null,
+      "usage": {
+        "state": "unavailable"
+      }
+    },
+    {
+      "id": "982e7d66-15d1-4701-8493-2ed8a938a0d2",
+      "session_id": "7336a536-c8a5-4443-81ab-094abf11b31f",
+      "state": "failed",
+      "native_session_id": "01a135bb-3dbe-7863-a034-fd4782254ab8",
+      "native_observed": true,
+      "stage": "validation",
+      "failure": "process",
+      "provider_completed": false,
+      "output_ref": null,
+      "usage": {
+        "state": "unavailable"
+      }
+    }
+  ],
+  "historical_reviews": 14,
+  "final_acceptance_passed": true,
+  "attestation": "Export/source consistency and executed immutable checker; no provider-signed attestation.",
+  "final_checker_exit_code": 0
+}

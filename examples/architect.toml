@@ -14,6 +14,7 @@ local_commits = true
 
 [providers.codex]
 binary = "codex"
+isolation = "read_only"
 native_effort = true
 [providers.codex.effort_map]
 light = "low"
@@ -28,6 +29,17 @@ native_effort = false
 [providers.gemini]
 binary = "gemini"
 native_effort = false
+
+# Optional Antigravity CLI 1.3.4 provider. Assign a profile to "agy" explicitly;
+# this declaration alone does not change the executor/verifier routes below.
+[providers.agy]
+binary = "agy"
+isolation = "tool_free"
+native_effort = true
+[providers.agy.effort_map]
+light = "low"
+standard = "medium"
+deep = "high"
 
 [profiles.orchestrator]
 provider = "codex"
@@ -50,7 +62,7 @@ roles = ["executor"]
 [profiles.review]
 provider = "claude"
 effort = "deep"
-work_kinds = ["context", "requirements", "options", "planning", "architecture", "dependencies", "implementation", "refactoring", "static_analysis", "test_design", "testing", "security", "performance", "integration", "research", "writing", "analysis", "delivery"]
+work_kinds = ["orchestration", "context", "requirements", "options", "planning", "architecture", "dependencies", "implementation", "refactoring", "static_analysis", "test_design", "testing", "security", "performance", "integration", "research", "writing", "analysis", "delivery"]
 roles = ["verifier"]
 
 # Every task kind has a dedicated verifier assignment. Runtime creates separate
@@ -112,3 +124,7 @@ verifier = "review"
 
 [orchestrator]
 profile = "orchestrator"
+
+[routing.orchestration]
+executor = "orchestrator"
+verifier = "review"

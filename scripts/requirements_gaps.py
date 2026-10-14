@@ -17,31 +17,31 @@ PACKAGES = {
         implementation_refs=['scripts/requirements.py', 'scripts/audit_requirements.py', 'tests/test_requirements.py'],
         acceptance='Review all remaining parents, preserve their qualifiers, and independently compare actual final behavior against the original source and all acceptance criteria.'),
     'runtime_recovery': dict(priority='P0', milestone='M1/M4', status='partial',
-        reason='Durable transactions, approvals, idempotency, pause/cancel and restart blocking exist. Process/partial-edit reconciliation is being strengthened; provider-specific native resume is not general automatic recovery.',
+        reason='Durable transactions, scoped approvals, idempotency, pause/cancel admission, workspace leases and partial-edit reconciliation exist. Concurrent native callbacks preserve the canonical session ledger. Exact-ID provider continuation after restart remains unconnected.',
         implementation_refs=['src/runtime.rs', 'src/storage.rs', 'src/process.rs', 'src/recovery.rs', 'tests/daemon.rs'],
         acceptance='Crash at each persisted effect boundary, reconcile child processes and workspace effects, preserve approvals, and resume the exact provider session or report the documented replacement path.'),
     'ipc_transport': dict(priority='P1', milestone='M1/M4', status='partial',
-        reason='Versioned local socket, request IDs, durable mutation deduplication and event polling exist. General push subscription, controlling-client arbitration and delivery receipts remain incomplete.',
+        reason='Versioned bounded local IPC, mutation deduplication, hash-consistent document reads and event polling exist. Authenticated next-turn direct/broadcast delivery receipts are recorded. Push subscriptions, controlling-client arbitration and active-turn hook transport remain open.',
         implementation_refs=['src/ipc.rs', 'src/transport.rs', 'src/storage.rs', 'tests/daemon.rs'],
         acceptance='Bounded snapshot/event/artifact reads work at required scale; reconnect replays exact sequence and concurrent control cannot silently overwrite decisions.'),
     'provider_adapters': dict(priority='P1', milestone='M0/M4', status='partial',
-        reason='Codex exec has the first real adapter; Claude and Gemini are researched/probed. General send/subscribe/interrupt receipts, provider version matrices and all required capabilities remain incomplete.',
-        implementation_refs=['src/providers/mod.rs', 'src/providers/codex.rs', 'scripts/probe.py', 'scripts/probe_claude.py'],
+        reason='Codex, Claude, Gemini and agy have process-backed structured adapters, capability checks, cancellation-aware probes and native session/turn receipts. Authenticated acceptance across all required versions/platforms, hook/live transport and exact-ID recovery remain incomplete.',
+        implementation_refs=['src/providers/mod.rs', 'src/providers/codex.rs', 'src/providers/claude.rs', 'src/providers/gemini.rs', 'src/providers/agy.rs', 'tests/providers.rs'],
         acceptance='Contract tests pass on explicitly supported versions of all three CLIs, including exact-session resume, partial payloads, cancellation, authentication errors and unsupported capabilities.'),
     'scheduler_roles': dict(priority='P1', milestone='M2Q/M3', status='partial',
-        reason='The runtime executes six sequential stages with executor/verifier sessions and validates a plan DAG; it does not yet schedule arbitrary DAG tasks, role expansion or the full template catalog.',
-        implementation_refs=['src/domain.rs', 'src/runtime.rs', 'src/providers/mod.rs'],
+        reason='Built-in team templates and a standalone concurrent DAG scheduler exist. The daemon independently reviews and installs orchestration proposals with all risk owners, but accepted team tasks remain planned; role-specific execution, gates and recovery still need the scheduler bridge.',
+        implementation_refs=['src/team.rs', 'src/runtime/orchestration.rs', 'src/orchestration/planning.rs', 'tests/team.rs', 'tests/orchestration_runtime.rs', 'src/runtime/team.rs', 'src/runtime/team/tasks.rs', 'tests/team_execution.rs'],
         acceptance='Execute independent DAG nodes concurrently, serialize collisions, preserve dedicated verifier pairs and all required competencies, and record every team change.'),
-    'tui': dict(priority='P2', milestone='M3', status='pending',
-        reason='Only a diagnostic CLI exists; Cargo.toml has no Ratatui/Crossterm dependency or TUI module.',
-        implementation_refs=['src/main.rs', 'Cargo.toml'],
+    'tui': dict(priority='P2', milestone='M3', status='partial',
+        reason='A Ratatui/Crossterm TUI provides stable keyboard navigation, team/relationship views, session/artifact/check/message inspection, explicit approvals, orchestration conversation and a broadcast composer. A spatial graph, progress overlay and version-bound element annotations with reviewed orchestration reactions are implemented. Full DAG/source recovery, intent translation and policy mode transitions remain open.',
+        implementation_refs=['src/tui/app.rs', 'src/tui/model.rs', 'src/tui/backend.rs', 'tests/tui.rs', 'tests/tui_sessions.rs', 'src/comments.rs', 'src/tui/graph.rs', 'tests/comments.rs'],
         acceptance='Two-panel TUI provides stable keyboard selection, chat, session/requirements/checks views, honest receipts and accessibility without color/Unicode.'),
-    'configuration_autonomy': dict(priority='P1', milestone='M4', status='pending',
-        reason='RunSpec currently supports the supervised diagnostic path. Persisted TOML profile assignment, explicit orchestrator selection, effort mapping and autonomous policy are not implemented.',
-        implementation_refs=['src/domain.rs', 'src/main.rs', 'Cargo.toml'],
+    'configuration_autonomy': dict(priority='P1', milestone='M4', status='partial',
+        reason='Pinned TOML profiles, explicit orchestrator selection, per-role provider/model/effort routing and policy types are implemented. Autonomous progression, run mode changes and enforcement across all task/workspace capabilities remain unconnected.',
+        implementation_refs=['src/config.rs', 'src/providers/mod.rs', 'src/runtime.rs', 'tests/config.rs'],
         acceptance='Persist per-run TOML-derived profiles and mode revisions; autonomous local work respects policy and separately approved external/destructive actions.'),
     'workspace_integration': dict(priority='P1', milestone='M4', status='partial',
-        reason='Pinned input reads, controlled full-file replacement and a worktree helper exist. General per-task worktree lifecycle, dirty-input ownership, conflict integration and resource leases remain incomplete.',
+        reason='Pinned input reads, runtime-mediated full-file replacement, write-ahead edit receipts, cross-daemon/nested workspace leases and worktree experiment helpers exist. RunSpec rejects managed worktrees; general task worktree lifecycle, dirty-input ownership and integrated candidate verification remain incomplete.',
         implementation_refs=['src/workspace.rs', 'src/runtime.rs', 'tests/core.rs'],
         acceptance='Exercise dirty/untracked files, concurrent user edits, overlapping tasks, partial edits and conflict resolutions; identify and reverify the integrated candidate without losing user changes.'),
     'security_isolation': dict(priority='P1', milestone='M0/M4', status='partial',
@@ -49,11 +49,11 @@ PACKAGES = {
         implementation_refs=['src/providers/codex.rs', 'src/workspace.rs', 'src/ipc.rs', 'src/process.rs'],
         acceptance='Enforce each configured restriction outside model text on macOS/Linux; reject unavailable enforcement, sanitize terminal output and preserve authenticated IPC and secret provenance.'),
     'dependencies_licenses': dict(priority='P1', milestone='M2Q/M4', status='partial',
-        reason='Dependency inventory and source/license checks exist. Product license/distribution is an open design decision; final obligations, complete vulnerability checks and general per-task reuse decisions remain incomplete.',
+        reason='Dependency inventory and source/license checks exist; the user selected private code with no public distribution. Complete source/license obligations, vulnerability checks and per-task alternative/reuse decisions remain incomplete.',
         implementation_refs=['scripts/dependencies.py', 'docs/dependencies.json', 'Cargo.toml'],
         acceptance='Document real alternatives and full final dependency graph, resolve license/distribution conditions, fulfill all notices/obligations and repeat relevant scans after graph changes.'),
     'research_documents_analysis': dict(priority='P1', milestone='M4', status='pending',
-        reason='The diagnostic slice demonstrates a software bugfix. General research/document/analysis templates, source access evidence, claim maps and independent calculations are not implemented.',
+        reason='Research/document/analysis templates and family-specific typed quality contracts exist. Complete task execution, authenticated source access, claim maps, independent calculations and representative final acceptance remain unproven.',
         implementation_refs=['src/domain.rs', 'src/providers/mod.rs', 'scripts/demo.py'],
         acceptance='Complete research with conflicting sources, an integrated document and an analysis with seeded unit/data errors, using independent source reads/calculations and all common quality gates.'),
     'observability_evals': dict(priority='P2', milestone='M5', status='partial',
@@ -67,7 +67,7 @@ def route(parent, requirement):
     section, text = parent['section'], parent['original_text'].casefold()
     obligation = requirement['obligation'].casefold()
     if section == '2':
-        if any(value in text for value in ('| główny interfejs |', '| graf |', '| sesje agentów |')) or 'ratatui' in obligation:
+        if any(value in text for value in ('| główny interfejs |', '| graf |', '| sesje agentów |', '| komunikacja agentów |', '| widok diff i recenzja |')) or 'ratatui' in obligation:
             return 'tui'
         if any(value in text for value in ('| konfiguracja |', '| routing cli |', '| autonomia |', '| pełny automat |', '| wybór orkiestratora |', '| personalizacja mvp |')):
             return 'configuration_autonomy'
@@ -81,7 +81,7 @@ def route(parent, requirement):
             return 'requirements_review'
         if '| biblioteki |' in text:
             return 'dependencies_licenses'
-        if '| dobór zespołu |' in text or '| pary ról |' in text:
+        if any(value in text for value in ('| dobór zespołu |', '| pary ról |', '| kontekst orkiestratora |')):
             return 'scheduler_roles'
         if '| zakres zadań |' in text:
             return 'research_documents_analysis'

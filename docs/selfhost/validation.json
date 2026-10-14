@@ -1,0 +1,143 @@
+{
+  "recorded_at": "2026-10-13T12:26:23.521704+00:00",
+  "coordinator_sha256": "b324ca12f4ec446ec5e29ffcbf74068a9be2708b0bbf0ac66355653e15cb3842",
+  "source_manifest": "/tmp/antislop-selfhost-00wizn49/coordinators/verification-v4/manifest.json",
+  "macos": {
+    "commands": [
+      "scripts/cargo.sh fmt --all -- --check",
+      "scripts/cargo.sh clippy --locked --all-targets -- -D warnings",
+      "scripts/cargo.sh test --locked --all-targets"
+    ],
+    "exit_code": 0,
+    "test_log": "/tmp/antislop-macos-verification-v4.log"
+  },
+  "linux": {
+    "command": "cargo test --locked --all-targets",
+    "image": "docker.io/library/rust:1.98.1-bookworm",
+    "exit_code": 0,
+    "test_log": "/tmp/antislop-linux-verification-v4.log"
+  },
+  "known_ignored_test": "supervised_checks_do_not_leave_detached_descendants: process-group containment cannot contain setsid descendants",
+  "live_selfhost_completed": false,
+  "latest_verification_coordinator": {
+    "recorded_at": "2026-10-13T13:36:39.854286+00:00",
+    "source_manifest": "/tmp/antislop-selfhost-00wizn49/coordinators/verification-v5.1/manifest.json",
+    "coordinator_sha256": "1f9f6fbe0135351049ec9743079f6f10649fee8ba19f1cce79b0232309da3934",
+    "prompt_source_sha256": "56411271243183726651fccffecef8d1d1adf3ee7c17e2e12857d8636f3f011a",
+    "macos": {
+      "full_suite_exit_code": 0,
+      "full_suite_log": "/tmp/antislop-macos-v5.log",
+      "full_suite_note": "Full suite before final JSON-escaped citation closure fix; final fix separately passed own and independent prompt tests and Clippy.",
+      "latest_prompt_tests": "5 own, 7 temporal, 9 independent passed",
+      "latest_benchmark_tests": "3 own Rust; 6 independent Python and 1 guardian regression passed",
+      "clippy_all_targets_exit_code": 0,
+      "clippy_log": "/tmp/antislop-clippy-benchmark-final.log"
+    },
+    "linux": {
+      "full_suite_exit_code": 0,
+      "full_suite_log": "/tmp/antislop-linux-v5.1.log",
+      "own_benchmark_tests_exit_code": 0,
+      "own_benchmark_log": "/tmp/antislop-linux-benchmark.log",
+      "independent_benchmark_tests_exit_code": 0,
+      "independent_benchmark_log": "/tmp/antislop-linux-independent-benchmark.log"
+    },
+    "live_selfhost_completed": false
+  },
+  "latest_typed_report_coordinator": {
+    "recorded_at": "2026-10-13T14:35:31.428083+00:00",
+    "source_manifest": "/tmp/antislop-selfhost-00wizn49/coordinators/verification-v6/manifest.json",
+    "coordinator_sha256": "ea697dabb2746e5b810835f6efc1754f730dce774485ec89af8e94fabe1b0716",
+    "macos": {
+      "fmt_exit_code": 0,
+      "clippy_exit_code": 0,
+      "clippy_log": "/tmp/antislop-clippy-v6.log",
+      "full_test_exit_code": 0,
+      "full_test_log": "/tmp/antislop-macos-v6-final.log"
+    },
+    "linux": {
+      "full_test_exit_code": 0,
+      "full_test_log": "/tmp/antislop-linux-v6.log"
+    },
+    "independent_checks": "20/20 schema, retry and raw context/history tests passed; strict Clippy passed.",
+    "live_selfhost_completed": false
+  },
+  "latest_combined_coordinator": {
+    "recorded_at": "2026-10-13T16:16:17.918489+00:00",
+    "source_manifest": "/tmp/antislop-selfhost-00wizn49/coordinators/verification-v8/manifest.json",
+    "coordinator_sha256": "5b70de4344e17def179d093d90d5cbccdd8674e98ea7a167c33558626f5c61db",
+    "macos": {
+      "fmt_exit_code": 0,
+      "clippy_exit_code": 0,
+      "clippy_log": "/tmp/antislop-clippy-v8.log",
+      "full_test_log": "/tmp/antislop-macos-v8.log",
+      "full_test_exit_code": 0
+    },
+    "linux": {
+      "full_test_exit_code": 0,
+      "full_test_log": "/tmp/antislop-linux-v8.log"
+    },
+    "targeted_checks": "54 codec/core/retry own;25 independent proof/schema/retry;47 AGY/config/provider tests; actual AGY adapter fresh JSON smoke passed; native AGY resume disabled after real protocol failure.",
+    "ignored_tests": "One known setsid containment gap; three explicit saved-snapshot audit fixtures excluded from default suite and separately executed with supplied real exports.",
+    "live_selfhost_completed": false
+  },
+  "latest_recovery_coordinator": {
+    "recorded_at": "2026-10-13T16:49:15.426850+00:00",
+    "source_manifest": "/tmp/antislop-selfhost-00wizn49/coordinators/verification-v9/manifest.json",
+    "coordinator_sha256": "e36e8da833a861fcd2d8b187dc5e5a3b0eab023630ebbac880bec0886689b62f",
+    "verification_source_sha256": "ca80402c6281bfa79f501332eade4a6b6d78f4fd3a7c09aed9104bca55e318ff",
+    "macos": {
+      "fmt_exit_code": 0,
+      "clippy_exit_code": 0,
+      "clippy_log": "/tmp/antislop-clippy-v9.log",
+      "full_test_log": "/tmp/antislop-macos-v9.log",
+      "full_test_exit_code": 0
+    },
+    "linux": {
+      "full_test_exit_code": 0,
+      "full_test_log": "/tmp/antislop-linux-v9.log"
+    },
+    "independent_negative_cases": 47,
+    "actual_saved_delivery_full_validator_passed_offline": true,
+    "live_selfhost_completed": false
+  },
+  "latest_binding_observation_coordinator": {
+    "recorded_at": "2026-10-13T17:10:01.735072+00:00",
+    "source_manifest": "/tmp/antislop-selfhost-00wizn49/coordinators/verification-v10/manifest.json",
+    "coordinator_sha256": "d23eadb8f886f020c5fefd8dad3acd7ac22a3662f560b29510d61ce1540c913a",
+    "targeted_tests": {
+      "own_pass": 19,
+      "independent_pass": 3,
+      "actual_saved_prior_bindings_current": 232,
+      "actual_saved_prior_bindings_stale": 0
+    },
+    "macos": {
+      "build": {
+        "status": "complete",
+        "log": "/tmp/antislop-build-v10.log",
+        "exit_code": 0
+      },
+      "fmt": {
+        "status": "complete",
+        "log": "/tmp/antislop-fmt-v10.log",
+        "exit_code": 0
+      },
+      "clippy": {
+        "status": "complete",
+        "log": "/tmp/antislop-clippy-v10.log",
+        "exit_code": 0
+      },
+      "macos": {
+        "status": "complete",
+        "log": "/tmp/antislop-macos-v10.log",
+        "exit_code": 0
+      }
+    },
+    "linux": {
+      "full_test_exit_code": 0,
+      "full_test_log": "/tmp/antislop-linux-v10.log"
+    },
+    "live_selfhost_completed": true,
+    "final_checker_exit_code": 0,
+    "final_acceptance_report": "docs/selfhost/final-acceptance.json"
+  }
+}

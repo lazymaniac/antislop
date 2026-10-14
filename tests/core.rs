@@ -18,10 +18,8 @@ use std::{
 };
 
 fn spec(root: &std::path::Path) -> RunSpec {
-            task_family: architect::quality::TaskFamily::Software,
-        config: None,
     RunSpec {
-            task_family: architect::quality::TaskFamily::Software,
+        task_family: architect::quality::TaskFamily::Software,
         config: None,
         objective: "Fix the documented behavior".into(),
         workspace: root.to_string_lossy().into(),
@@ -85,7 +83,17 @@ fn wait(runtime: &Arc<Runtime>, run_id: &str) -> Run {
         if run.status != Status::Running {
             return run;
         }
-        assert!(Instant::now() < deadline, "worker did not finish");
+        assert!(
+            Instant::now() < deadline,
+            "worker did not finish: stage {:?}, attempt {}, sessions {:?}",
+            run.stage,
+            run.attempt,
+            run.session_ledger
+                .sessions
+                .values()
+                .map(|s| (&s.scope.agent_id, &s.state))
+                .collect::<Vec<_>>()
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -805,6 +813,7 @@ fn runtime_diff_preserves_original_sources_and_identifies_changed_files() {
     ]);
     let output = serde_json::to_string(&before).unwrap();
     run.evidence.push(Evidence {
+        input_hash: Some(hash(serde_json::to_vec(&run.input_snapshot).unwrap())),
         id: id(),
         artifact_hash: hash(&output),
         spec_revision: 1,
@@ -828,6 +837,7 @@ fn earlier_runner_receipt_requires_a_matching_current_input_snapshot() {
     run.input_snapshot = BTreeMap::from([("source".into(), "fixed".into())]);
     let output = serde_json::to_string(&run.input_snapshot).unwrap();
     let runner = Evidence {
+        input_hash: Some(hash(serde_json::to_vec(&run.input_snapshot).unwrap())),
         id: id(),
         artifact_hash: "earlier-artifact".into(),
         spec_revision: 1,
@@ -838,6 +848,7 @@ fn earlier_runner_receipt_requires_a_matching_current_input_snapshot() {
     };
     assert!(!verification::evidence_is_current(&run, &artifact, &runner));
     run.evidence.push(Evidence {
+        input_hash: Some(hash(serde_json::to_vec(&run.input_snapshot).unwrap())),
         id: id(),
         artifact_hash: "earlier-artifact".into(),
         spec_revision: 1,

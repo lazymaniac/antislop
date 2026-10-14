@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "task": "antislop adds its own --version",
+  "provider": "codex",
+  "isolated_workspace": "/tmp/antislop-selfhost-b7fu9c9d/source",
+  "run_id": "eeb50991-5b2f-4a72-a4a5-a060b51bef11",
+  "status": "cancelled",
+  "driver_exit_code": 1,
+  "source_changed": false,
+  "elapsed_seconds": 661.18,
+  "before_hash": "3dbe71e6bfe6952fa7ca332532e3d8fb12600b45b4e670e6b7decd061c6de2d4",
+  "after_hash": "3dbe71e6bfe6952fa7ca332532e3d8fb12600b45b4e670e6b7decd061c6de2d4",
+  "artifacts": 3,
+  "reviews": 1,
+  "independent_sessions": true,
+  "native_session_pairs": [
+    {
+      "executor": [
+        "codex",
+        "01a1349f-f0f8-71e2-9da1-6ee0109ec2b4"
+      ],
+      "verifier": [
+        "codex",
+        "01a134a1-0b79-7ae0-81b7-4f61359a51c0"
+      ]
+    }
+  ],
+  "real_quality": true,
+  "diagnostic": "context audit lacks actual contracts/consumers/standards or has unresolved material unknowns",
+  "interpretation": "Discovery verifier correctly rejected absent runtime orchestration evidence (risk ownership, approvals and dedicated-session records were not supplied to the model). Coordinator stopped after the missing context could not be repaired in artifact text. No source changed. Runtime evidence bridge added afterward."
+}

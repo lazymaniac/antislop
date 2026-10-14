@@ -6,7 +6,10 @@ use std::{
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
-        unix::{net::UnixStream, process::CommandExt},
+        unix::{
+            net::UnixStream,
+            process::{CommandExt, ExitStatusExt},
+        },
     },
     process::{Child, Command, ExitStatus},
     time::Duration,
@@ -53,7 +56,7 @@ pub struct SupervisedChild {
 /// Never fall back to spawning the external command without supervision.
 pub fn command(program: impl AsRef<OsStr>) -> Result<Command> {
     let current = std::env::current_exe()?;
-    let companion = if current.file_name() == Some(OsStr::new("architect")) {
+    let companion = if current.file_name() == Some(OsStr::new("antislop")) {
         current
     } else {
         let directory = current
@@ -69,11 +72,11 @@ pub fn command(program: impl AsRef<OsStr>) -> Result<Command> {
         } else {
             directory
         };
-        directory.join("architect")
+        directory.join("antislop")
     };
     require(
         companion.is_file(),
-        "architect supervisor binary unavailable; build the companion binary first",
+        "antislop supervisor binary unavailable; build the companion binary first",
     )?;
     let mut command = Command::new(companion);
     command.arg("__supervise").arg(program);
@@ -245,7 +248,22 @@ pub fn supervise(args: &[String]) -> Result<()> {
                 libc::kill(-pid, libc::SIGKILL);
             }
             let status = child.wait()?;
-            // Closing stdout/stderr only after group cleanup allows readers to finish.
+            // Cleanup is complete before reproducing the leader's actual termination.
+            // Converting a signal to exit 1 could falsely satisfy a failing baseline.
+            if let Some(signal) = status.signal() {
+                // SAFETY: restore the default disposition and unblock this observed signal
+                // in the guardian only; no children or shared parent state remain affected.
+                unsafe {
+                    libc::signal(signal, libc::SIG_DFL);
+                    let mut mask = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+                    libc::sigemptyset(mask.as_mut_ptr());
+                    libc::sigaddset(mask.as_mut_ptr(), signal);
+                    libc::sigprocmask(libc::SIG_UNBLOCK, mask.as_ptr(), std::ptr::null_mut());
+                    libc::raise(signal);
+                }
+                // A failed re-raise must remain abnormal, never an expected exit 1.
+                std::process::abort();
+            }
             std::process::exit(status.code().unwrap_or(1));
         }
         std::thread::sleep(Duration::from_millis(10));

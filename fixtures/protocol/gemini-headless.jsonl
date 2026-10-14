@@ -1,0 +1,5 @@
+{"type":"init","session_id":"00000000-0000-4000-8000-000000000001","model":"fixture-model"}
+{"type":"message","role":"user","content":"ignored user echo"}
+{"type":"message","role":"assistant","content":"{\"answer\":","delta":true}
+{"type":"message","role":"assistant","content":"42}","delta":true}
+{"type":"result","status":"success","stats":{"input_tokens":12,"output_tokens":5,"cached":3}}

@@ -11,6 +11,7 @@ use std::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
+    Agy,
     Codex,
     Claude,
     Gemini,
@@ -152,6 +153,10 @@ pub struct Config {
     pub workspace: WorkspaceConfig,
     pub providers: BTreeMap<ProviderKind, ProviderConfig>,
     pub profiles: BTreeMap<String, Profile>,
+    /// Explicit user limits retained when the orchestrator proposes new profiles.
+    /// An absent role is unrestricted; a present role needs a nonempty set.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_providers: BTreeMap<RoleKind, BTreeSet<ProviderKind>>,
     pub orchestrator: OrchestratorConfig,
     pub routing: BTreeMap<WorkKind, RoleRouting>,
     pub policy: Policy,
@@ -278,6 +283,12 @@ impl Config {
                 "native effort mapping must be nonempty and contain no control characters",
             )?;
         }
+        for providers in self.role_providers.values() {
+            require(
+                !providers.is_empty() && providers.iter().all(|p| self.providers.contains_key(p)),
+                "role provider limits require nonempty configured provider choices",
+            )?;
+        }
         for (name, profile) in &self.profiles {
             require(
                 identifier(name),
@@ -293,6 +304,14 @@ impl Config {
                     .as_ref()
                     .is_none_or(|model| nonempty_text(model)),
                 "model must be nonempty and contain no control characters",
+            )?;
+            require(
+                profile.roles.iter().all(|role| {
+                    self.role_providers
+                        .get(role)
+                        .is_none_or(|allowed| allowed.contains(&profile.provider))
+                }),
+                "profile provider violates the user-configured role provider limit",
             )?;
             let provider = self.providers.get(&profile.provider).ok_or_else(|| {
                 Error::Invalid("profile refers to an unconfigured provider".into())
@@ -314,11 +333,15 @@ impl Config {
             RoleKind::Orchestrator,
         )?;
         for (kind, route) in &self.routing {
-            require(
-                *kind != WorkKind::Orchestration,
-                "orchestration uses the explicit orchestrator profile",
-            )?;
-            self.profile(&route.executor, *kind, RoleKind::Executor)?;
+            if *kind == WorkKind::Orchestration {
+                require(
+                    route.executor == self.orchestrator.profile,
+                    "orchestration routing must match the explicit orchestrator profile",
+                )?;
+                self.profile(&route.executor, *kind, RoleKind::Orchestrator)?;
+            } else {
+                self.profile(&route.executor, *kind, RoleKind::Executor)?;
+            }
             self.profile(&route.verifier, *kind, RoleKind::Verifier)?;
         }
         Ok(())
@@ -364,6 +387,10 @@ impl Config {
                 }
             }
         };
+        require(
+            !(work_kind == WorkKind::Orchestration && role == RoleKind::Executor),
+            "orchestration execution uses the explicit Orchestrator role",
+        )?;
         let profile = self.profile(name, work_kind, role)?;
         let provider = self
             .providers
@@ -388,6 +415,7 @@ impl Config {
     pub fn validate_work_kinds(&self, kinds: &BTreeSet<WorkKind>) -> Result<()> {
         self.validate()?;
         self.resolve(WorkKind::Orchestration, RoleKind::Orchestrator)?;
+        self.resolve(WorkKind::Orchestration, RoleKind::Verifier)?;
         for kind in kinds {
             if *kind != WorkKind::Orchestration {
                 self.resolve(*kind, RoleKind::Executor)?;

@@ -16,7 +16,7 @@ fn fixture() -> (tempfile::TempDir, Run) {
         id(),
         RunSpec {
             task_family: architect::quality::TaskFamily::Software,
-        config: None,
+            config: None,
             objective: "Preserve the documented input contract".into(),
             workspace: root.path().to_string_lossy().into_owned(),
             provider: "fake".into(),
@@ -78,6 +78,7 @@ fn artifact(run: &mut Run, stage: Stage) -> (Artifact, Evidence) {
 fn snapshot(run: &mut Run, artifact: &Artifact) {
     let output = serde_json::to_string(&run.input_snapshot).unwrap();
     run.evidence.push(Evidence {
+        input_hash: Some(hash(serde_json::to_vec(&run.input_snapshot).unwrap())),
         id: id(),
         artifact_hash: artifact.hash.clone(),
         spec_revision: run.spec_revision,
@@ -108,6 +109,60 @@ fn accept(run: &mut Run, artifact: &Artifact, evidence: &Evidence) -> Review {
     // This is the same validation the runtime performs at explicit acceptance.
     verification::validate_review(run, artifact, &review).unwrap();
     review
+}
+
+fn refresh(run: &mut Run, stage: Stage) {
+    let mut execution = run.clone();
+    execution.stage = stage;
+    let (session_id, content) = FakeProvider
+        .execute(
+            &execution,
+            Arc::new(AtomicBool::new(false)),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+    let mut output: ExecutionOutput = serde_json::from_str(&content).unwrap();
+    if stage == Stage::Discovery
+        && !output
+            .context
+            .as_ref()
+            .unwrap()
+            .facts
+            .iter()
+            .any(|fact| fact.source_ref == "file:source")
+    {
+        output.context.as_mut().unwrap().facts.push(ContextFact {
+            claim: "Synthetic refreshed source contract fixture".into(),
+            source_ref: "file:source".into(),
+            source_hash: run.source_hashes()["file:source"].clone(),
+        });
+    }
+    let content = serde_json::to_string(&output).unwrap();
+    let artifact = Artifact {
+        id: id(),
+        stage,
+        attempt: run.attempt,
+        spec_revision: run.spec_revision,
+        session_id,
+        hash: hash(&content),
+        content,
+    };
+    verification::register_refresh(run, artifact.clone(), &output).unwrap();
+    let scope = verification::refresh_review_scope(run, &artifact);
+    let evidence = scope
+        .evidence
+        .iter()
+        .find(|evidence| {
+            evidence.artifact_hash == artifact.hash && evidence.source == "runtime:artifact-read"
+        })
+        .unwrap();
+    let reviewed = review(&scope, &artifact, evidence);
+    let mut self_review = reviewed.clone();
+    self_review.verifier_session = artifact.session_id.clone();
+    assert!(
+        verification::accept_refresh_review(&mut run.clone(), &artifact, &self_review).is_err()
+    );
+    verification::accept_refresh_review(run, &artifact, &reviewed).unwrap();
 }
 
 #[test]
@@ -192,9 +247,29 @@ fn code_change_needs_complete_current_revalidation_and_can_then_finish_delivery(
         .unwrap()
         .status = CheckStatus::Fail;
     assert!(verification::validate_review(&run, &execution, &refused).is_err());
+    assert!(verification::validate_review(&run, &execution, &complete).is_err());
+    refresh(&mut run, Stage::Discovery);
+    refresh(&mut run, Stage::Planning);
     accept(&mut run, &execution, &evidence);
-    assert!(run.provenance.values().all(|node| node.valid));
+    assert!(
+        run.provenance
+            .values()
+            .filter(|node| node.superseded_by.is_none())
+            .all(|node| node.valid)
+    );
     assert_eq!(run.stage, Stage::Execution);
+    assert!(
+        run.provenance
+            .iter()
+            .filter(|(_, node)| node.superseded_by.is_some()
+                && matches!(
+                    node.kind,
+                    ProvenanceKind::ContextFact
+                        | ProvenanceKind::SolutionModel
+                        | ProvenanceKind::Simulation
+                ))
+            .all(|(id, _)| !verification::provenance_node_current(&run, id))
+    );
     for stage in [Stage::Validation, Stage::Integration, Stage::Delivery] {
         let (artifact, evidence) = artifact(&mut run, stage);
         accept(&mut run, &artifact, &evidence);
@@ -211,6 +286,73 @@ fn code_change_needs_complete_current_revalidation_and_can_then_finish_delivery(
                 !binding.evidence_ids.is_empty() && !binding.review_hash.is_empty()
             }))
     );
+}
+
+#[test]
+fn refresh_rejects_missing_or_stale_fact_sources_and_orphaned_review_bindings() {
+    let (_root, mut run) = fixture();
+    let (discovery, evidence) = artifact(&mut run, Stage::Discovery);
+    accept(&mut run, &discovery, &evidence);
+    run.input_snapshot.insert("source".into(), "after".into());
+    verification::refresh_provenance(&mut run);
+    let (primary, _) = artifact(&mut run, Stage::Execution);
+    let mut scope = run.clone();
+    scope.stage = Stage::Discovery;
+    let (session_id, content) = FakeProvider
+        .execute(&scope, Arc::new(AtomicBool::new(false)), &mut |_| Ok(()))
+        .unwrap();
+    let mut output: ExecutionOutput = serde_json::from_str(&content).unwrap();
+    output
+        .context
+        .as_mut()
+        .unwrap()
+        .facts
+        .retain(|fact| fact.source_ref != "file:source");
+    let content = serde_json::to_string(&output).unwrap();
+    let missing = Artifact {
+        id: id(),
+        stage: Stage::Discovery,
+        attempt: run.attempt,
+        spec_revision: run.spec_revision,
+        session_id: session_id.clone(),
+        hash: hash(&content),
+        content,
+    };
+    assert!(verification::register_refresh(&mut run.clone(), missing, &output).is_err());
+    output.context.as_mut().unwrap().facts.push(ContextFact {
+        claim: "Actual refreshed source identity".into(),
+        source_ref: "file:source".into(),
+        source_hash: hash("before"),
+    });
+    let content = serde_json::to_string(&output).unwrap();
+    let stale = Artifact {
+        id: id(),
+        stage: Stage::Discovery,
+        attempt: run.attempt,
+        spec_revision: run.spec_revision,
+        session_id,
+        hash: hash(&content),
+        content,
+    };
+    assert!(verification::register_refresh(&mut run.clone(), stale, &output).is_err());
+    refresh(&mut run, Stage::Discovery);
+    let node_id = run
+        .provenance
+        .iter()
+        .find(|(_, node)| node.refresh && node.kind == ProvenanceKind::ContextFact)
+        .unwrap()
+        .0
+        .clone();
+    assert!(verification::provenance_node_current(&run, &node_id));
+    run.provenance
+        .get_mut(&node_id)
+        .unwrap()
+        .revalidation
+        .as_mut()
+        .unwrap()
+        .review_hash = "orphaned-review".into();
+    assert!(!verification::provenance_node_current(&run, &node_id));
+    assert_eq!(run.artifacts.last().unwrap().id, primary.id);
 }
 
 #[test]

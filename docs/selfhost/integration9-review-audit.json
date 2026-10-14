@@ -1,0 +1,28 @@
+{
+  "artifact_hash": "ed0b0ff86860edf956ce74562b376de65cf64f4a19c73cb642717dd83932a8ef",
+  "artifact_id": "7dc09159-96f8-4dce-98a4-0e766292406f",
+  "attempt": 9,
+  "check_statuses": {
+    "not_applicable": 3,
+    "pass": 122
+  },
+  "durable_completed_output_bindings_exact": true,
+  "executor_logical_session": "da65560f-96ce-4030-a3dc-ea9785642683",
+  "executor_native_session": "01a135f9-5eac-7671-88b7-b0742b2368b3",
+  "findings": [],
+  "full_backend_validate_review_against_exact_presend_view": true,
+  "native_authors_distinct": true,
+  "native_raw_parsed_and_logical_normalized_matches_stored_review": true,
+  "registered_review_body_hash_exact": true,
+  "review_hash": "968b10c25c68134e4f63a4c6f3c5b6efb94fb51a0f640011d8c9052543a677cb",
+  "schema_version": 1,
+  "scope": "Completed Integration9 review only; subsequent stages may still be active, no full-run completion claim",
+  "spec_revision": 1,
+  "stage": "integration",
+  "typed_context_present": false,
+  "typed_software_present": true,
+  "verifier_logical_session": "a60abd5b-72e7-47d7-b77e-05373c3fad25",
+  "verifier_native_session": "01a1360b-16a9-7470-a54e-a0e4aee35bf9",
+  "verifier_output_hash": "4da3f41595e8aeb341f82975312e6874532ab0a019466c480c43887db9b4fbfe",
+  "verifier_turn": "4ac7ab45-26cb-40c2-ab11-857e7f888186"
+}

@@ -1,5 +1,7 @@
 /target/
 /.architect/
+/.antislop/
 __pycache__/
 *.db-wal
 *.db-shm
+/.superdesign/tmp/

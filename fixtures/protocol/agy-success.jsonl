@@ -1,0 +1,5 @@
+{"event":"init","conversation_id":"00000000-0000-4000-8000-000000000001","init":{"cwd":"/owned/control","agent":"antislop-stdio","model":"gemini-3.8-flash-low","permission_mode":"always-proceed","tools":["finish","run_command","write_to_file","invoke_subagent"]}}
+{"event":"step_update","step_update":{"conversation_id":"00000000-0000-4000-8000-000000000001","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"00000000-0000-4000-8000-000000000001","step_index":1,"state":"DONE","step_type":"agent_response"}}
+{"event":"step_update","step_update":{"conversation_id":"00000000-0000-4000-8000-000000000001","step_index":2,"state":"DONE","step_type":"finish"}}
+{"event":"result","result":{"conversation_id":"00000000-0000-4000-8000-000000000001","status":"SUCCESS","structured_output":{"ok":true},"json_schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false},"usage":{"input_tokens":795,"output_tokens":136,"thinking_tokens":107,"cache_read_tokens":0,"total_tokens":931}}}

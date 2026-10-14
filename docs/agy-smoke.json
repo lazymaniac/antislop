@@ -1,0 +1,44 @@
+{
+  "provider": "agy",
+  "version": "1.3.4",
+  "actual_adapter": true,
+  "profile": "finish-only; excluded defaults and inheritance; read-only startup audit; current CLI-owned authenticated HOME",
+  "task_source_or_RunLedger_mutation": false,
+  "raw_planner_or_diagnostics_retained": false,
+  "records": [
+    {
+      "completed": true,
+      "delivered": true,
+      "stopped": true,
+      "native_id": "3d9c72da-7395-450d-9daf-497ae85966e2",
+      "output_ok": true,
+      "output_sha256": "4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93",
+      "input_tokens": 795,
+      "output_tokens": 29,
+      "cached_tokens": 0,
+      "cumulative": true,
+      "event_count": 5,
+      "usage_event_count": 1,
+      "completed_event_count": 1,
+      "kind": "fresh",
+      "elapsed_seconds": 7.18,
+      "stderr_bytes": 0
+    }
+  ],
+  "source_sha256": "5afd6f248f1db1a4bdd241d370b0f08199a248fb704de3cd970f2c4dc63e9e7f",
+  "resume_probe": {
+    "requested_native_id": "3d9c72da-7395-450d-9daf-497ae85966e2",
+    "outcome": "failed_closed",
+    "failure_kind": "protocol",
+    "safe_message": "unknown native step type",
+    "raw_event_or_planner_retained": false,
+    "metadata_only_followup": [
+      "new USER_INPUT",
+      "SYSTEM_MESSAGE"
+    ],
+    "exact_unknown_stdout_type": "not retained; no guessed interpretation",
+    "automatic_retry_or_fallback": false,
+    "adapter_resume_capability": "disabled; explicit UUID requests rejected before probes/delivery"
+  },
+  "current_source_sha256_after_resume_disable": "d02f094b72fa7fec787ac7872570613f59aa406a1f2c0ac482510b61e49b9c8a"
+}

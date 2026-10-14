@@ -29,17 +29,25 @@ pub struct Request {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
-    Mutate { command: Box<Command> },
-    Snapshot { run_id: String },
+    Mutate {
+        command: Box<Command>,
+    },
+    Snapshot {
+        run_id: String,
+    },
     List,
-    ListPage { after: String },
+    ListPage {
+        after: String,
+    },
     Read {
         run_id: String,
         document: String,
         offset: usize,
         expected_hash: Option<String>,
     },
-    Events { after: u64 },
+    Events {
+        after: u64,
+    },
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
@@ -111,6 +119,47 @@ fn lock(state: &Path) -> Result<DaemonLock> {
         socket,
     })
 }
+struct PendingSocket {
+    path: PathBuf,
+    identity: (u64, u64),
+}
+impl Drop for PendingSocket {
+    fn drop(&mut self) {
+        if let Ok(metadata) = self.path.symlink_metadata()
+            && metadata.file_type().is_socket()
+            && (metadata.dev(), metadata.ino()) == self.identity
+        {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+fn prepare_listener(socket: &Path) -> Result<(UnixListener, PendingSocket)> {
+    // Keep the temporary basename as short as architect.sock for Unix path limits.
+    let pending_path = socket.with_file_name(format!(".s{}", &crate::id()[..12]));
+    let listener = UnixListener::bind(&pending_path)?;
+    let metadata = pending_path.symlink_metadata()?;
+    let pending = PendingSocket {
+        path: pending_path,
+        identity: (metadata.dev(), metadata.ino()),
+    };
+    std::fs::set_permissions(&pending.path, std::fs::Permissions::from_mode(0o600))?;
+    Ok((listener, pending))
+}
+fn publish_listener(pending: &PendingSocket, socket: &Path) -> Result<()> {
+    match socket.symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {
+            return Err(crate::Error::Invalid(
+                "socket path appeared before publication".into(),
+            ));
+        }
+    }
+    // The state lock is held and its directory is private. Publish only the
+    // already-private socket, so clients never observe bind-before-chmod.
+    std::fs::rename(&pending.path, socket)?;
+    Ok(())
+}
 pub fn serve(state: &Path) -> Result<()> {
     let guard = lock(state)?;
     // All database and journal files inherit private permissions, including on restart.
@@ -125,8 +174,8 @@ pub fn serve(state: &Path) -> Result<()> {
         .open(&db)?;
     file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     let runtime = Arc::new(Runtime::new(Store::open(&db)?)?);
-    let listener = UnixListener::bind(&guard.socket)?;
-    std::fs::set_permissions(&guard.socket, std::fs::Permissions::from_mode(0o600))?;
+    let (listener, pending) = prepare_listener(&guard.socket)?;
+    publish_listener(&pending, &guard.socket)?;
     eprintln!("Architect daemon ready at {:?}", guard.socket);
     for stream in listener.incoming() {
         let mut stream = stream?;
@@ -146,9 +195,14 @@ pub fn serve(state: &Path) -> Result<()> {
             if let Ok(mut bytes) = serde_json::to_vec(&response) {
                 if bytes.len() + 1 > crate::transport::MAX_FRAME {
                     bytes = serde_json::to_vec(&Response {
-                        version: PROTOCOL_VERSION, request_id: response.request_id.chars().take(256).collect(),
-                        data: None, error: Some("response exceeds frame limit; use paginated document reads".into()),
-                    }).expect("serializable error");
+                        version: PROTOCOL_VERSION,
+                        request_id: response.request_id.chars().take(256).collect(),
+                        data: None,
+                        error: Some(
+                            "response exceeds frame limit; use paginated document reads".into(),
+                        ),
+                    })
+                    .expect("serializable error");
                 }
                 bytes.push(b'\n');
                 let _ = stream.write_all(&bytes);
@@ -167,7 +221,10 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
             request.version == PROTOCOL_VERSION,
             "unsupported IPC version",
         )?;
-        require(!request.request_id.trim().is_empty() && request.request_id.len() <= 256, "request ID must contain 1 to 256 bytes")?;
+        require(
+            !request.request_id.trim().is_empty() && request.request_id.len() <= 256,
+            "request ID must contain 1 to 256 bytes",
+        )?;
         match request.operation {
             Operation::Mutate { command } => {
                 let key = request
@@ -178,33 +235,114 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
             Operation::Snapshot { run_id } => {
                 let store = runtime.store.lock().expect("store mutex");
                 let run = store.get(&run_id)?;
+                let (document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
+                let reviewed = run.orchestration_rounds.last().filter(|round| {
+                    round.status == crate::orchestration::planning::RoundStatus::Reviewed
+                        && round
+                            .output
+                            .as_ref()
+                            .and_then(|raw| {
+                                serde_json::from_str::<crate::orchestration::planning::Response>(
+                                    raw,
+                                )
+                                .ok()
+                            })
+                            .is_some_and(|r| r.team_plan_json.is_some())
+                });
+                let intake = crate::runtime::intake::pending(&run);
                 Ok(
-                    json!({"scope_hashes":{"start":run.scope_hash("start"),"accept":run.scope_hash("accept"),"repair":run.scope_hash("repair"),"reconcile":run.scope_hash("reconcile")},
+                    json!({"reviewed_intake_proposal":intake,"document_hash":document_hash,"scope_hashes":{"start":run.scope_hash("start"),"accept":run.scope_hash("accept"),"repair":run.scope_hash("repair"),"reconcile":run.scope_hash("reconcile"),
+                        "orchestrate":crate::orchestration::planning::start_scope(&run)?,"accept_team":reviewed.map(|r|crate::orchestration::planning::accept_scope(&run,r)).transpose()?,
+                        "review_diff":run.diff_review_scope().unwrap_or_default(),
+                        "step_team":run.team_step_scope().unwrap_or_default()},
+                    "team_stage_results":stage_result_summary(&crate::runtime::team::stage::pending(&run)),
+                    "task_result_restore_count":crate::runtime::team::restore::scopes(&run).len(),
+                    "task_effect_reconciliation_count":crate::runtime::team::adjudicate::scopes(&run).len(),
+                    "wave_effect_reconciliation_count":crate::runtime::team::adjudicate::pending_waves(&run).len(),
+                    "task_source_refreshes":run.team.as_ref().map(|team| team.tasks.iter()
+                        .filter(|task| task.state == crate::team::TaskState::Stale)
+                        .filter_map(|task|run.task_source_refresh_scope(&task.id).ok().map(|scope|(task.id.clone(),scope)))
+                        .collect::<std::collections::BTreeMap<_,_>>()).unwrap_or_default(),
+                    "task_verification_retries":run.team.as_ref().map(|team| team.tasks.iter()
+                        .filter(|task| task.state == crate::team::TaskState::Blocked)
+                        .filter_map(|task| run.task_verification_retry_scope(&task.id).ok().map(|scope|(task.id.clone(),scope)))
+                        .collect::<std::collections::BTreeMap<_,_>>()).unwrap_or_default(),
+                    "task_session_resume_count":crate::runtime::team::resume::pending(&run).len(),
+                    "task_session_replacement_count":crate::runtime::team::replacement::pending(&run).len(),
+                    "task_check_restore_count":crate::runtime::team::check_recovery::pending(&run).len(),
+                    "orchestration_recovery_count":crate::runtime::orchestration_recovery::pending(&run).len(),
+                    "reviewed_team_round":reviewed.map(|r|&r.id),
                     "run":summary(&run),"recovery":recovery_snapshot(&run),"sequence":store.sequence()?}),
                 )
             }
             Operation::List => list_page(runtime, ""),
             Operation::ListPage { after } => list_page(runtime, &after),
-            Operation::Read { run_id, document, offset, expected_hash } => {
+            Operation::Read {
+                run_id,
+                document,
+                offset,
+                expected_hash,
+            } => {
                 let store = runtime.store.lock().expect("store mutex");
                 if document == "run" {
-                    let (digest, total, chunk) = store.run_chunk(&run_id, offset, DOCUMENT_CHUNK)?;
-                    require(expected_hash.as_ref().is_none_or(|h| h == &digest), "document changed; restart from offset zero")?;
-                    require(offset == 0 || expected_hash.is_some(), "continuation requires document hash")?;
+                    let (digest, total, chunk) = store.run_chunk_bound(
+                        &run_id,
+                        offset,
+                        DOCUMENT_CHUNK,
+                        expected_hash.as_deref(),
+                    )?;
+                    require(
+                        expected_hash.as_ref().is_none_or(|h| h == &digest),
+                        "document changed; restart from offset zero",
+                    )?;
+                    require(
+                        offset == 0 || expected_hash.is_some(),
+                        "continuation requires document hash",
+                    )?;
                     let end = offset + chunk.len();
                     return Ok(json!({"hash":digest,"total_bytes":total,"offset":offset,
                         "next_offset":if end < total { Some(end) } else { None },"chunk":chunk}));
                 }
                 let run = store.get(&run_id)?;
-                let text = document_text(&run, &document)?;
+                let text = if document == "stage-results" {
+                    let (run_document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
+                    serde_json::to_string(
+                        &json!({"run_document_hash":run_document_hash,"packages":crate::runtime::team::stage::pending(&run)}),
+                    )?
+                } else if document == "orchestration-recovery" {
+                    let (run_document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
+                    serde_json::to_string(
+                        &json!({"run_document_hash":run_document_hash,"packages":crate::runtime::orchestration_recovery::pending(&run)}),
+                    )?
+                } else if document == "task-recovery" {
+                    let (run_document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
+                    serde_json::to_string(
+                        &json!({"run_document_hash":run_document_hash,"result_restores":crate::runtime::team::restore::scopes(&run),"effect_reconciliations":crate::runtime::team::adjudicate::scopes(&run),"wave_effect_reconciliations":crate::runtime::team::adjudicate::pending_waves(&run),"native_resumes":crate::runtime::team::resume::pending(&run),"replacements":crate::runtime::team::replacement::pending(&run),"check_restores":crate::runtime::team::check_recovery::pending(&run)}),
+                    )?
+                } else {
+                    document_text(&run, &document)?
+                };
                 let digest = crate::hash(&text);
-                require(expected_hash.as_ref().is_none_or(|h| h == &digest), "document changed; restart from offset zero")?;
-                require(offset == 0 || expected_hash.is_some(), "continuation requires document hash")?;
-                require(offset <= text.len() && text.is_char_boundary(offset), "invalid document offset")?;
+                require(
+                    expected_hash.as_ref().is_none_or(|h| h == &digest),
+                    "document changed; restart from offset zero",
+                )?;
+                require(
+                    offset == 0 || expected_hash.is_some(),
+                    "continuation requires document hash",
+                )?;
+                require(
+                    offset <= text.len() && text.is_char_boundary(offset),
+                    "invalid document offset",
+                )?;
                 let mut end = offset.saturating_add(DOCUMENT_CHUNK).min(text.len());
-                while !text.is_char_boundary(end) { end -= 1; }
-                Ok(json!({"hash":digest,"total_bytes":text.len(),"offset":offset,
-                    "next_offset":if end < text.len() { Some(end) } else { None },"chunk":&text[offset..end]}))
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                Ok(
+                    json!({"hash":digest,"total_bytes":text.len(),"offset":offset,
+                    "next_offset":if end < text.len() { Some(end) } else { None },"chunk":&text[offset..end]}),
+                )
             }
             Operation::Events { after } => {
                 let store = runtime.store.lock().expect("store mutex");
@@ -241,7 +379,10 @@ pub fn call(state: &Path, request: &Request) -> Result<Response> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
     stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
     let mut bytes = serde_json::to_vec(request)?;
-    require(bytes.len() < crate::transport::MAX_FRAME, "request exceeds transport limit")?;
+    require(
+        bytes.len() < crate::transport::MAX_FRAME,
+        "request exceeds transport limit",
+    )?;
     bytes.push(b'\n');
     stream.write_all(&bytes)?;
     let response: Response = crate::transport::read(&mut BufReader::new(stream))?
@@ -263,14 +404,21 @@ fn summary(run: &crate::domain::Run) -> Value {
         "input_hash":crate::hash(serde_json::to_vec(&run.input_snapshot).expect("input serialization")),
         "counts":{"artifacts":run.artifacts.len(),"reviews":run.reviews.len(),
             "evidence":run.evidence.len(),"approvals":run.approvals.len(),
-            "requirements":run.spec.requirements.len(),"input_files":run.input_snapshot.len()},
+            "messages":run.communication_ledger.messages.len(),
+            "orchestration_rounds":run.orchestration_rounds.len(),
+            "requirements":run.spec.requirements.len(),"input_files":run.input_snapshot.len(),
+            "diff_comments":run.diff_comments.len()},
         "latest_artifact":run.artifacts.last().map(|a| json!({"id":a.id,"hash":a.hash,"document":format!("artifact:{}",a.id)})),
         "document":"run"})
 }
 fn recovery_snapshot(run: &crate::domain::Run) -> Value {
-    if !run.reconciliation_required { return Value::Null; }
+    if !run.reconciliation_required {
+        return Value::Null;
+    }
     match crate::recovery::observe(run) {
-        Ok(observed) => json!({"observed_input_hash":observed.hash,"inputs_readable":observed.readable.is_some(),"pending_edits":run.pending_edits.len()}),
+        Ok(observed) => {
+            json!({"observed_input_hash":observed.hash,"inputs_readable":observed.readable.is_some(),"pending_edits":run.pending_edits.len()})
+        }
         Err(error) => json!({"error":error.to_string()}),
     }
 }
@@ -279,18 +427,65 @@ fn list_page(runtime: &Arc<Runtime>, after: &str) -> Result<Value> {
     let mut runs = store.page(after, 101)?;
     let more = runs.len() > 100;
     runs.truncate(100);
-    let cursor = if more { runs.last().map(|r| &r.id) } else { None };
-    Ok(json!({"runs":runs.iter().map(summary).collect::<Vec<_>>(),"next_cursor":cursor,"sequence":store.sequence()?}))
+    let cursor = if more {
+        runs.last().map(|r| &r.id)
+    } else {
+        None
+    };
+    Ok(
+        json!({"runs":runs.iter().map(summary).collect::<Vec<_>>(),"next_cursor":cursor,"sequence":store.sequence()?}),
+    )
 }
+fn stage_result_summary(
+    packages: &std::collections::BTreeMap<String, crate::runtime::team::stage::PendingResult>,
+) -> serde_json::Value {
+    json!(packages.iter().map(|(key, package)| (key.clone(), json!({"stage":package.stage,"task_count":package.task_ids.len(),"scope_hash":package.scope_hash}))).collect::<std::collections::BTreeMap<_,_>>())
+}
+
 fn document_text(run: &crate::domain::Run, name: &str) -> Result<String> {
-    if name == "run" { return Ok(serde_json::to_string(run)?); }
-    if name == "spec" { return Ok(serde_json::to_string(&run.spec)?); }
+    if name == "run" {
+        return Ok(serde_json::to_string(run)?);
+    }
+    if name == "spec" {
+        return Ok(serde_json::to_string(&run.spec)?);
+    }
+    if name == "diff" {
+        let diff = crate::workspace::compute_diff(
+            std::path::Path::new(&run.spec.workspace),
+            &run.input_snapshot,
+        )?;
+        return Ok(serde_json::to_string(&diff)?);
+    }
+    if let Some(id) = name.strip_prefix("message:") {
+        let message = run
+            .communication_ledger
+            .messages
+            .get(id)
+            .ok_or_else(|| crate::Error::Invalid("unknown message document".into()))?;
+        let body = run
+            .message_bodies
+            .get(id)
+            .ok_or_else(|| crate::Error::Invalid("message body is missing".into()))?;
+        require(
+            message.content_ref.document == name && message.content_ref.hash == crate::hash(body),
+            "message body does not match its durable reference",
+        )?;
+        return Ok(body.clone());
+    }
     if let Some(id) = name.strip_prefix("artifact:") {
-        return run.artifacts.iter().find(|a| a.id == id).map(|a| a.content.clone())
+        return run
+            .artifacts
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| a.content.clone())
             .ok_or_else(|| crate::Error::Invalid("unknown artifact document".into()));
     }
     if let Some(id) = name.strip_prefix("evidence:") {
-        return run.evidence.iter().find(|e| e.id == id).map(|e| e.output.clone())
+        return run
+            .evidence
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.output.clone())
             .ok_or_else(|| crate::Error::Invalid("unknown evidence document".into()));
     }
     Err(crate::Error::Invalid("unknown document".into()))
@@ -302,17 +497,127 @@ pub fn read_document(state: &Path, run_id: &str, document: &str) -> Result<Strin
     let mut expected_hash = None;
     let mut output = String::new();
     loop {
-        let response = call(state, &Request { version: PROTOCOL_VERSION, request_id:crate::id(),
-            idempotency_key:None, operation:Operation::Read { run_id:run_id.into(), document:document.into(), offset, expected_hash:expected_hash.clone() } })?;
-        if let Some(error) = response.error { return Err(crate::Error::Invalid(error)); }
-        let data = response.data.ok_or_else(|| crate::Error::Invalid("missing document chunk".into()))?;
-        let chunk = data["chunk"].as_str().ok_or_else(|| crate::Error::Invalid("missing document bytes".into()))?;
-        expected_hash = Some(data["hash"].as_str().ok_or_else(|| crate::Error::Invalid("missing document hash".into()))?.to_owned());
+        let response = call(
+            state,
+            &Request {
+                version: PROTOCOL_VERSION,
+                request_id: crate::id(),
+                idempotency_key: None,
+                operation: Operation::Read {
+                    run_id: run_id.into(),
+                    document: document.into(),
+                    offset,
+                    expected_hash: expected_hash.clone(),
+                },
+            },
+        )?;
+        if let Some(error) = response.error {
+            return Err(crate::Error::Invalid(error));
+        }
+        let data = response
+            .data
+            .ok_or_else(|| crate::Error::Invalid("missing document chunk".into()))?;
+        let chunk = data["chunk"]
+            .as_str()
+            .ok_or_else(|| crate::Error::Invalid("missing document bytes".into()))?;
+        expected_hash = Some(
+            data["hash"]
+                .as_str()
+                .ok_or_else(|| crate::Error::Invalid("missing document hash".into()))?
+                .to_owned(),
+        );
         output.push_str(chunk);
-        if data["next_offset"].is_null() { break; }
-        offset = usize::try_from(data["next_offset"].as_u64().ok_or_else(|| crate::Error::Invalid("invalid chunk cursor".into()))?)
-            .map_err(|_| crate::Error::Invalid("invalid chunk cursor".into()))?;
+        if data["next_offset"].is_null() {
+            break;
+        }
+        offset = usize::try_from(
+            data["next_offset"]
+                .as_u64()
+                .ok_or_else(|| crate::Error::Invalid("invalid chunk cursor".into()))?,
+        )
+        .map_err(|_| crate::Error::Invalid("invalid chunk cursor".into()))?;
     }
-    require(expected_hash.as_ref() == Some(&crate::hash(&output)), "document hash mismatch")?;
+    require(
+        expected_hash.as_ref() == Some(&crate::hash(&output)),
+        "document hash mismatch",
+    )?;
     Ok(output)
+}
+
+#[cfg(test)]
+mod stage_result_tests {
+    use super::*;
+    use crate::runtime::team::stage::{PendingResult, ResultBinding};
+    use std::collections::BTreeMap;
+    #[test]
+    fn stage_result_control_summary_excludes_unbounded_result_and_dependency_bodies() {
+        let dependencies = (0..1000)
+            .map(|i| (format!("task-{i}"), "a".repeat(64)))
+            .collect::<BTreeMap<_, _>>();
+        let results = (0..100)
+            .map(|i| ResultBinding {
+                task_id: format!("task-{i}"),
+                task_attempt: 1,
+                task_hash: "b".repeat(64),
+                artifact_id: format!("artifact-{i}"),
+                artifact_hash: "c".repeat(64),
+                review_hash: "d".repeat(64),
+                dependency_hashes: dependencies.clone(),
+            })
+            .collect::<Vec<_>>();
+        let package = PendingResult {
+            stage: crate::team::TaskStage::Integration,
+            task_ids: results.iter().map(|r| r.task_id.clone()).collect(),
+            results,
+            scope_hash: "e".repeat(64),
+        };
+        let packages = BTreeMap::from([("integration".into(), package)]);
+        assert!(serde_json::to_vec(&packages).unwrap().len() > crate::transport::MAX_FRAME);
+        let summary = stage_result_summary(&packages);
+        assert!(serde_json::to_vec(&summary).unwrap().len() < 1024);
+        assert_eq!(summary["integration"]["task_count"], 100);
+        assert_eq!(
+            summary["integration"]["scope_hash"],
+            packages["integration"].scope_hash
+        );
+        assert!(summary["integration"].get("results").is_none());
+        assert!(summary["integration"].get("task_ids").is_none());
+    }
+}
+
+#[cfg(test)]
+mod socket_publication_tests {
+    use super::*;
+    #[test]
+    fn socket_publication_is_private_before_visibility_and_keeps_listener_reachable() {
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        private_directory(state.path()).unwrap();
+        let socket = state.path().join("architect.sock");
+        let (listener, pending) = prepare_listener(&socket).unwrap();
+        assert!(!socket.exists());
+        assert_eq!(
+            pending.path.symlink_metadata().unwrap().mode() & 0o777,
+            0o600
+        );
+        publish_listener(&pending, &socket).unwrap();
+        assert_eq!(socket.symlink_metadata().unwrap().mode() & 0o777, 0o600);
+        drop(pending);
+        let _client = UnixStream::connect(&socket).unwrap();
+        let _accepted = listener.accept().unwrap();
+        assert_eq!(std::fs::read_dir(state.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn socket_publication_refuses_an_unexpected_path_and_cleans_only_owned_pending_socket() {
+        let state = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = state.path().join("architect.sock");
+        let (_listener, pending) = prepare_listener(&socket).unwrap();
+        let pending_path = pending.path.clone();
+        std::fs::write(&socket, "keep user file").unwrap();
+        assert!(publish_listener(&pending, &socket).is_err());
+        drop(pending);
+        assert!(!pending_path.exists());
+        assert_eq!(std::fs::read_to_string(socket).unwrap(), "keep user file");
+    }
 }

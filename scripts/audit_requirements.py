@@ -20,6 +20,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 # cannot hide omission of an obligation. Conditions are additionally bound to
 # the full original parent and context.
 SEMANTIC_EXPECTATIONS = [
+    ('| Komunikacja agentów |', ['every agent', 'point-to-point', 'any current team agent', 'broadcast', 'other current team agents', 'authenticated message authorship', 'delivery state']),
+    ('| Kontekst orkiestratora |', ['task reports', 'verifier decisions', 'addressed messages', 'Do not require the orchestrator to read child agent session transcripts']),
     ('| Integracje AI |', ['existing provider CLIs only', 'Do not implement a model-provider API client']),
     ('| Jakość |', ['quality over cost', 'each started executor role, including small tasks']),
     ('| Niezależność |', ['separate session and context', 'same provider is allowed in a separate session']),

@@ -47,10 +47,15 @@ System ma ograniczać typowe błędy agentów: powierzchowne planowanie, utratę
 | Konfiguracja | TOML. |
 | Restart komputera | Po ponownym uruchomieniu Architect wykonuje resume zerwanych sesji, z kontrolą ich rzeczywistego stanu. |
 | Działanie w tle | Lokalny proces wykonawczy działa po zamknięciu TUI; możliwość ponownego podłączenia i odzyskiwania po awarii. |
-| Główny interfejs | Dwa panele: czat z orkiestratorem oraz graf/drzewo agentów. |
-| Graf | Nawigacja strzałkami, status pracy, widoczna komunikacja, szczegóły agenta. |
+| Główny interfejs | Dwa panele: czat z orkiestratorem oraz przestrzenny graf agentów. |
+| Graf | Przestrzenny graf węzłów i krawędzi w stylu MindNode lub wizualizacji zapytań Neo4j, a nie drzewo przeglądarki plików; nawigacja strzałkami, status pracy, widoczna komunikacja i szczegóły agenta. |
+| Nakładka postępu | W prawym górnym albo dolnym rogu panelu agentów nakładka pokazuje aktualnie wykonywany krok na podstawie trwałego stanu run i zadań; dla równoległych prac pokazuje ich rzeczywisty zestaw. |
+| Komentarze w panelu agentów | Każdy widoczny element panelu agentów można skomentować tak jak zmianę w diffie. Komentarz jest trwały, powiązany z elementem i jego wersją, dostępny po ponownym podłączeniu; orkiestrator musi odpowiedzieć lub zaproponować działanie i pokazać stan reakcji. |
 | Sesje agentów | Podgląd sesji i możliwość napisania bezpośrednio do wybranego agenta. |
+| Komunikacja agentów | Każdy agent może wysyłać wiadomości punktowe do dowolnego agenta zespołu oraz broadcast do pozostałych agentów; runtime utrwala nadawcę, odbiorców i stan dostarczenia. |
+| Kontekst orkiestratora | Zarządzanie przez raporty zadań, artefakty, decyzje weryfikatorów i wiadomości; bez konieczności czytania transkryptów sesji agentów. |
 | Język | TUI, kod, identyfikatory i dokumentacja produktu po angielsku; ten dokument po polsku. |
+| Widok diff i recenzja | Podgląd różnic (diff) plików ze statystykami zmian, komentarze do linii i plików z nasłuchiwaniem orkiestratora oraz uruchamianie recenzji kodu z poziomu diffa. |
 | Bieżący rezultat | Dokument projektowy `design.md`; implementacja jest kolejnym krokiem. |
 
 ## 3. Podstawowe zasady
@@ -398,23 +403,25 @@ Porównywalność wynika ze wspólnych definicji, metod i snapshotów. Raport za
 
 ```text
  Architect  project: example  run: R-42  mode: supervised  stage: Execution
-┌─ Orchestrator ───────────────────────┬─ Team: tree / relations ──────────┐
-│ Plan approved.                      │ O  Orchestrator                  │
-│ Implementing import validation.     │ ├─✓ Planner ── ✓ Plan verifier   │
-│                                     │ ├─▶ Implementer                  │
-│ Test verifier requested a case      │ │   └─○ Code verifier            │
-│ for duplicate records.              │ ├─▶ Test implementer             │
-│                                     │ │   └─○ Test verifier            │
-│ > Add a malformed UTF-8 case         │ └─○ Integrator ── ○ Int. verifier│
-├─────────────────────────────────────┤                                  │
-│ [Send]                              │ messages: Implementer → Tester   │
-└─────────────────────────────────────┴──────────────────────────────────┘
- Tab: focus  Arrows: select  Enter: inspect  ?: help  Ctrl+P: commands
+┌─ Orchestrator ───────────────────────┬─ Team: graph ──────────────────────┐
+│ Plan approved.                      │             [Orchestrator]         │
+│ Implementing import validation.     │               /        \           │
+│                                     │     [Planner] ───── [Implementer]  │
+│ Test verifier requested a case      │         │               │          │
+│ for duplicate records.              │  [Plan verifier]   [Code verifier] │
+│                                     │                \      /           │
+│ > Add a malformed UTF-8 case         │               [Integrator]         │
+├─────────────────────────────────────┤                  ┌─ Current step ┐ │
+│ [Send]                              │                  │ Execution     │ │
+└─────────────────────────────────────┴──────────────────┴───────────────┴─┘
+ Tab: focus  Arrows: select  Enter: inspect  c: comment  Ctrl+P: commands
 ```
 
-Makieta pokazuje strukturę informacji i fragment przewijanego drzewa. Wszystkie uruchomione role i ich weryfikatorzy są obecni w modelu grafu oraz dostępni przez nawigację i wyszukiwanie. Szczegóły agenta otwierają się w prawym panelu lub pełnoekranowym widoku z powrotem do grafu; główny ekran pozostaje dwupanelowy.
+Makieta pokazuje strukturę informacji i przestrzenny graf, którego węzły i krawędzie pozostają czytelne przy przewijaniu. Wszystkie uruchomione role i ich weryfikatorzy są obecni w modelu grafu oraz dostępni przez nawigację i wyszukiwanie. Szczegóły agenta otwierają się w prawym panelu lub pełnoekranowym widoku z powrotem do grafu; główny ekran pozostaje dwupanelowy.
 
 ### 8.2. Panel czatu
+
+**Ustalone:** `antislop ui` umożliwia rozpoczęcie nowego zadania przez wpisanie zapytania i `Ctrl+S`. Orkiestrator prowadzi wywiad z użytkownikiem i na jego podstawie dobiera agentów oraz ich konfiguracje. Predefiniowane są role i ich prompty systemowe. Przygotowanie `SPEC.json` ani ręczne przypisywanie konfiguracji każdego agenta nie jest warunkiem rozpoczęcia rozmowy. Rozmowa, doprecyzowanie wymagań i zatwierdzenie wykonania są widoczne w tym samym panelu czatu.
 
 - Zlecenie, kontekst, pytania, raporty etapów i polecenia do orkiestratora.
 - Wiadomości użytkownika mogą zawierać wiele linii; historia jest przewijalna i przeszukiwalna.
@@ -423,9 +430,9 @@ Makieta pokazuje strukturę informacji i fragment przewijanego drzewa. Wszystkie
 - Wyraźna różnica między wiadomością wysłaną, przyjętą przez runtime, dostarczoną do sesji i odpowiedzią agenta.
 - Zdarzenia sterujące mają formularze/komendy; tekst języka naturalnego może proponować takie samo działanie, ale musi zostać przetłumaczony na zwalidowany zamiar.
 
-### 8.3. Graf i drzewo
+### 8.3. Graf agentów i nakładka postępu
 
-Przechowujemy odrębne relacje: `supervises`, `depends_on`, `verifies`, `communicates_with`. Domyślnie czytelne drzewo delegacji z połączeniami do weryfikatorów; dodatkowy widok relacji pokazuje zależności i komunikację. Nie próbujemy zmieścić wszystkich krawędzi dużego swarma naraz.
+Przechowujemy odrębne relacje: `supervises`, `depends_on`, `verifies`, `communicates_with`. Panel przedstawia przestrzenny graf w stylu MindNode lub wizualizacji zapytań Neo4j: węzły są rozmieszczone w dwóch wymiarach, a krawędzie łączą rzeczywistych uczestników relacji. Lista wciętych wierszy jak w przeglądarce plików nie spełnia tego wymagania. Filtry relacji pokazują delegację, weryfikację, zależności lub komunikację. Nie próbujemy zmieścić wszystkich krawędzi dużego swarma naraz.
 
 Węzeł pokazuje rolę, CLI/model, status i aktualne zadanie. Status ma tekst/symbol oraz opcjonalny kolor: `queued`, `starting`, `running`, `waiting_agent`, `waiting_user`, `verifying`, `changes_requested`, `paused`, `blocked`, `failed`, `completed`, `cancelled`.
 
@@ -436,16 +443,19 @@ Propozycja klawiszy:
 | Klawisz | Zachowanie |
 | --- | --- |
 | `Tab` / `Shift+Tab` | Zmiana aktywnego panelu. |
-| `↑` / `↓` | Poprzedni/następny widoczny węzeł w drzewie; w grafie sąsiad w kierunku pionowym. |
-| `←` / `→` | Zwiń/rodzic i rozwiń/dziecko; w grafie sąsiad w kierunku poziomym. |
-| `Enter` | Szczegóły wybranego agenta. |
+| `↑` / `↓` | Wybór widocznego węzła w kierunku pionowym na grafie. |
+| `←` / `→` | Wybór widocznego węzła w kierunku poziomym na grafie. |
+| `Enter` | Szczegóły wybranego agenta lub elementu grafu. |
+| `c` poza edytorem | Komentarz do wybranego elementu panelu agentów; ten sam cykl dodania/usunięcia/rozwiązania co dla diffa. |
 | `Esc` | Powrót, zamknięcie widoku lub anulowanie edycji; nie zatrzymuje run. |
 | `/` | Szukanie/filtrowanie agentów w panelu zespołu. |
 | `Ctrl+P` | Paleta: pause/resume/cancel, tryb, zatwierdzenia, plan, artefakty. |
 | `?` | Pomoc dla aktywnego widoku. |
 | `q` poza edytorem | Odłączenie TUI; run działa dalej. |
 
-Strzałki w edytorze tekstu sterują kursorem. Wybór węzła jest stabilny mimo napływu zdarzeń; układ nie skacze przy każdej wiadomości. Dla dużych zespołów: grupowanie po etapach/modułach, zwijanie zakończonych gałęzi i filtry. Dla małego terminala: przełączane widoki paneli. Obsługa bez koloru i znaków Unicode; mysz opcjonalnie.
+Strzałki w edytorze tekstu sterują kursorem. Wybór węzła jest stabilny mimo napływu zdarzeń; układ nie skacze przy każdej wiadomości. Dla dużych zespołów: grupowanie po etapach/modułach, zwijanie zakończonych gałęzi i filtry. Nakładka w prawym górnym albo dolnym rogu panelu agentów pokazuje aktualnie wykonywany krok, aktywne zadanie i rolę. Przy równoległości pokazuje rzeczywiste aktywne kroki, a przy pauzie, oczekiwaniu lub blokadzie wskazuje ten stan bez pozorowanej aktywności. Aktualizuje się ze spójnego snapshotu po zmianie etapu, restartach i ponownym podłączeniu; nie zasłania wybranego węzła ani nie przejmuje fokusu.
+
+Dla małego terminala: przełączane widoki paneli. Obsługa bez koloru i znaków Unicode; mysz opcjonalnie.
 
 ### 8.4. Szczegóły i sesja agenta
 
@@ -458,6 +468,21 @@ Overview: kontrakt roli, zadanie, relacje, kontekst, uprawnienia, wersja CLI, cz
 Wiadomość do aktywnego agenta ma trzy możliwości zależne od adaptera: natywne sterowanie w bieżącej turze, kolejka na następną turę, przerwanie i wznowienie po jawnym wyborze użytkownika. UI pokazuje dostępny wariant; nie symuluje dostarczenia w trakcie, gdy adapter obsługuje tylko kolejną turę.
 
 Wiadomości użytkownika mają widocznego nadawcę i trafiają także do historii orkiestracji. Nie udajemy wiadomości systemowych ani nie edytujemy po cichu starej historii sesji.
+
+### 8.5. Komentarze do elementów panelu agentów
+
+Każdy widoczny element panelu agentów ma stabilne odniesienie umożliwiające komentarz: agent, zadanie, relacja, sesja, tura, artefakt, finding, wiadomość, dowód, pozycja checklisty i bramka, także w szczegółach. Komentarz zachowuje run, typ i ID elementu, wersję/hash, treść, autora, czas i stan rozwiązania. Zniknięcie elementu z filtra lub zmiana wersji nie usuwa historii; nieaktualny komentarz jest jawnie oznaczony. Dodawanie, usuwanie i rozwiązywanie są dostępne przez TUI i utrwalane przez daemon.
+
+Orkiestrator otrzymuje nowe i nierozwiązane komentarze z kontekstem elementu bez czytania transkryptów agentów. Reakcja jest widocznie powiązana z komentarzem: odpowiedź, prośba o wyjaśnienie albo propozycja zadania/poprawki z właścicielem. Samo dostarczenie komentarza nie oznacza jego rozwiązania. Komentarz nie zatwierdza zmiany zakresu ani nie zwiększa uprawnień; proponowana praca przechodzi istniejące zgody i niezależne review. Po restarcie zachowujemy komentarze, ich reakcje i niepewny stan dostarczenia bez automatycznego powtarzania skutków.
+
+### 8.6. Widok diff, komentarze i recenzja kodu
+
+Widok różnic (diff) w TUI oraz narzędziach CLI umożliwia inspekcję bieżących modyfikacji kandydata względem bazowego snapshotu workspace:
+- Lista zmienionych, dodanych i usuniętych plików wraz ze statystykami zmian (liczba linii dodanych i usuniętych per plik).
+- Podgląd różnic (unified diff) z podziałem na chunki, z wyraźnym mapowaniem numerów linii starej i nowej wersji.
+- Dodawanie i usuwanie komentarzy użytkownika do diffa (`DiffComment`): komentarze mogą być powiązane z całym plikiem lub konkretną linią w diffie.
+- Możliwość bezpośredniego uruchomienia dedykowanej recenzji kodu (code review) z poziomu widoku diff dla bieżącego zestawu zmian kandydata.
+- Zdarzenia dodania, usunięcia i rozwiązania komentarza oraz żądania recenzji diffa są utrwalane w rejestrze run i rozgłaszane przez IPC.
 
 ## 9. Architektura techniczna
 
@@ -500,6 +525,14 @@ Orkiestrator jest sesją wybranego CLI z rolą zarządczą. Zwraca ustrukturyzow
 Runtime sprawdza schemat, stan, rewizję planu i uprawnienia. Niepoprawny wynik wraca do naprawy lub powoduje jawny błąd protokołu; nie wykonujemy komendy powłoki wyczytanej bezpośrednio z odpowiedzi modelu. MVP nie ustanawia limitu liczby prób naprawy.
 
 Orkiestrator nie może sam usunąć bramki jakości, zwiększyć uprawnień, zmienić zaakceptowanych wymagań ani oznaczyć nieudokumentowanego wyniku jako zweryfikowanego. Plan ocenia dedykowany Plan verifier, a merytoryczne decyzje zarządcze Orchestration verifier; scheduler podlega testowanym regułom programu. Rutynowy routing zdarzeń i renderowanie postępu nie wymagają oddzielnej tury recenzenta.
+
+**Ustalone:** Orkiestrator zarządza na podstawie raportów zadań, artefaktów, decyzji weryfikatorów, findings i wiadomości skierowanych do niego. Nie musi czytać transkryptów sesji agentów; pełne sesje służą podglądowi i diagnostyce użytkownika. Brak potrzebnych informacji skutkuje pytaniem do odpowiedzialnego agenta, a nie przeglądaniem jego rozmowy.
+
+**Ustalone:** Wszyscy agenci, także weryfikatorzy i orkiestrator, mają wspólny kanał wiadomości punktowych oraz broadcast. Wiadomość punktowa wskazuje dowolnego agenta bieżącego zespołu; broadcast rozwija się do jawnej listy pozostałych agentów z chwili przyjęcia. Runtime wiąże nadawcę z rzeczywistą sesją i turą, zapisuje treść oraz osobne potwierdzenia dla odbiorców. Wiadomość nie nadaje uprawnień i nie zastępuje niezależnej weryfikacji. Bezpośrednia komunikacja nie wymaga pośrednictwa orkiestratora ani odczytu cudzej sesji.
+
+**Ustalone:** Orkiestrator nasłuchuje na komentarze do diffa (`DiffComment`) w pakiecie kontekstu orkiestracji. Niezałatwione komentarze użytkownika są uwzględniane w promptach orkiestratora i tłumaczone na zadania wdrożeniowe i naprawcze dla odpowiednich ról (np. `Implementer`, `Refactorer`) z ograniczonym zakresem `write_scopes`.
+
+Bazowy transport to trwałe skrzynki wejściowe runtime oraz ustrukturyzowany outbox w wyniku tury CLI. Adapter może użyć zweryfikowanego hooka lub kanału narzędzi do tego samego protokołu; hook wymaga tożsamości ograniczonej do konkretnego run, agenta i tury. Obsługa w aktywnej turze zależy od rzeczywistych możliwości adaptera. Przy braku potwierdzonego mechanizmu wiadomość czeka na następną turę; runtime nie udaje dostarczenia w czasie rzeczywistym. Przerwanie aktywnej pracy pozostaje odrębną jawną operacją.
 
 ### 9.3. Daemon i IPC
 
@@ -599,6 +632,7 @@ Finding: id, verifier_id, artifact_revision, severity, evidence, resolution
 Evidence: id, kind, command_or_source, input_hashes, environment, result,
           exit_code_if_applicable, started_at, finished_at, output_hash
 Message: id, sender, recipient, task_id, content_ref, delivery_state
+DiffComment: id, run_id, path, line_number, text, author, created_at, resolved
 Approval: id, actor, scope, scope_hash, policy_revision, decision, expires_if_any
 Event: seq, id, run_id, type, entity_id, causation_id, timestamp, payload_version
 Requirement: id, run_id, spec_revision, parent_id, source_ref, source_span,
@@ -988,7 +1022,7 @@ Wymagania produktowe obejmują wszystkich trzech dostawców i wszystkie ustalone
 | M1: runtime lokalny | Daemon, IPC, SQLite, zdarzenia, fake provider, start/stop/reattach. | Odzyskanie stanu bez zgubienia zgód i bez podwójnych działań. |
 | M2: pionowy wycinek | Jeden rzeczywisty adapter, plan → wykonawca → verifier → wynik, supervised. | Zadanie zakończone na dowodach, odrzucenie słabego wyniku działa. |
 | M2Q: kontrakty jakości | Ledger wymagań i kroków planu, ContextModel, model/symulacje, porównanie wariantów, checklisty i RiskCoverage, graf ważności dowodów. | Fake provider nie może zamknąć zadania z pominięciem wymagania, ryzyka lub bramki. To część MVP, nie rozszerzenie po premierze. |
-| M3: zespół i TUI | Dwa panele, drzewo/relacje, szczegóły, sesje, bezpośrednie wiadomości. | Rzeczywiste zdarzenia, poprawna nawigacja i uczciwe statusy dostarczenia. |
+| M3: zespół i TUI | Dwa panele, przestrzenny graf węzłów i krawędzi, nakładka bieżącego kroku, szczegóły, sesje, bezpośrednie wiadomości i komentarze do elementów. | Rzeczywiste zdarzenia, poprawna nawigacja, uczciwe statusy dostarczenia i niezależnie sprawdzone reakcje orkiestratora na komentarze. |
 | M4: pełny zestaw MVP | Trzy adaptery, profile effort/TOML, dwa tryby, worktree/in-place, integracja, resume po restarcie, szablony software/research/document/analysis. | Każda uruchomiona rola ma dedykowaną weryfikację; przechodzą scenariusze akceptacyjne. |
 | M5: kalibracja | Evals, duże zadania, recovery/bezpieczeństwo i tuning routingu. | Zmierzone ograniczenia oraz raport porównania z baseline. |
 

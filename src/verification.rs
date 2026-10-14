@@ -5,6 +5,60 @@ fn review_hash(review: &Review) -> String {
     hash(serde_json::to_vec(review).expect("review serialization"))
 }
 
+fn revalidation_is_authentic(
+    run: &Run,
+    node_id: &str,
+    binding: &ProvenanceValidation,
+    sources: &BTreeMap<String, String>,
+) -> bool {
+    let review = run
+        .provenance_reviews
+        .get(&binding.review_hash)
+        .or_else(|| {
+            run.reviews
+                .iter()
+                .find(|review| review_hash(review) == binding.review_hash)
+        });
+    let Some(review) = review else {
+        return false;
+    };
+    let Some(check) = review
+        .checks
+        .iter()
+        .find(|check| check.check_id == format!("REVALIDATE:{node_id}"))
+    else {
+        return false;
+    };
+    let snapshot_hash =
+        hash(serde_json::to_vec(&run.input_snapshot).expect("snapshot serialization"));
+    review_hash(review) == binding.review_hash
+        && review.spec_revision == run.spec_revision
+        && review.checklist_version == run.checklist_version
+        && review.findings.is_empty()
+        && review.verifier_session == binding.verifier_session
+        && review.verifier_session != review.executor_session
+        && !review.verifier_session.trim().is_empty()
+        && review.artifact_hash == binding.artifact_hash
+        && check.status == CheckStatus::Pass
+        && check.evidence_ids == binding.evidence_ids
+        && !check.evidence_ids.is_empty()
+        && binding
+            .source_hashes
+            .iter()
+            .all(|(reference, value)| sources.get(reference) == Some(value))
+        && check.evidence_ids.iter().any(|id| {
+            run.evidence.iter().any(|evidence| {
+                evidence.id == *id
+                    && evidence.source == "runtime:input-snapshot"
+                    && evidence.success
+                    && evidence.spec_revision == run.spec_revision
+                    && evidence.input_hash.as_deref() == Some(snapshot_hash.as_str())
+                    && evidence.output_hash == snapshot_hash
+                    && evidence.output_hash == hash(&evidence.output)
+            })
+        })
+}
+
 fn current_node(
     run: &Run,
     node_id: &str,
@@ -20,6 +74,12 @@ fn current_node(
     }
     let valid = run.provenance.get(node_id).is_some_and(|node| {
         node.spec_revision == run.spec_revision
+            && node.superseded_by.is_none()
+            && (!node.refresh || node.revalidation.is_some())
+            && node
+                .revalidation
+                .as_ref()
+                .is_none_or(|binding| revalidation_is_authentic(run, node_id, binding, sources))
             && match node.kind {
                 ProvenanceKind::Source => true,
                 ProvenanceKind::Artifact => run.artifacts.iter().any(|artifact| {
@@ -35,15 +95,24 @@ fn current_node(
                     .strip_prefix("source:")
                     .is_some_and(|reference| sources.get(reference) == Some(&node.content_hash)))
             && node
-                .source_hashes
+                .revalidation
+                .as_ref()
+                .map(|binding| &binding.source_hashes)
+                .unwrap_or(&node.source_hashes)
                 .iter()
                 .all(|(key, value)| sources.get(key) == Some(value))
-            && node.dependencies.iter().all(|(dependency, binding)| {
-                run.provenance.get(dependency).is_some_and(|upstream| {
-                    upstream.binding_hash() == *binding
-                        && current_node(run, dependency, sources, visiting, cache)
+            && node
+                .revalidation
+                .as_ref()
+                .map(|binding| &binding.dependencies)
+                .unwrap_or(&node.dependencies)
+                .iter()
+                .all(|(dependency, binding)| {
+                    run.provenance.get(dependency).is_some_and(|upstream| {
+                        upstream.binding_hash() == *binding
+                            && current_node(run, dependency, sources, visiting, cache)
+                    })
                 })
-            })
     });
     visiting.remove(node_id);
     cache.insert(node_id.to_owned(), valid);
@@ -85,6 +154,8 @@ pub fn refresh_provenance(run: &mut Run) {
                 dependencies: BTreeMap::new(),
                 valid: true,
                 revalidation: None,
+                superseded_by: None,
+                refresh: false,
             },
         );
     }
@@ -115,7 +186,8 @@ fn add_node(
             Ok((id, node.binding_hash()))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    run.provenance.insert(
+    insert_provenance(
+        run,
         node_id,
         ProvenanceNode {
             kind,
@@ -126,9 +198,24 @@ fn add_node(
             dependencies,
             valid: true,
             revalidation: None,
+            superseded_by: None,
+            refresh: false,
         },
     );
     Ok(())
+}
+
+fn insert_provenance(run: &mut Run, node_id: String, node: ProvenanceNode) {
+    if let Some(old) = run.provenance.get(&node_id)
+        && old.kind != ProvenanceKind::Source
+        && old.binding_hash() != node.binding_hash()
+    {
+        let history_id = format!("history:{node_id}:{}", old.binding_hash());
+        let mut archived = old.clone();
+        archived.superseded_by = Some(node_id.clone());
+        run.provenance.entry(history_id).or_insert(archived);
+    }
+    run.provenance.insert(node_id, node);
 }
 
 fn latest_node(run: &Run, stage: Stage, prefix: &str) -> Option<String> {
@@ -145,6 +232,12 @@ pub fn register_artifact(
     artifact: &Artifact,
     output: &ExecutionOutput,
 ) -> Result<()> {
+    let pinned: ExecutionOutput = serde_json::from_str(&artifact.content)?;
+    require(
+        artifact.hash == hash(&artifact.content)
+            && serde_json::to_value(&pinned)? == serde_json::to_value(output)?,
+        "provenance output differs from the pinned executor artifact",
+    )?;
     refresh_provenance(run);
     let mut dependencies = Vec::new();
     if artifact.stage == Stage::Discovery {
@@ -205,7 +298,9 @@ pub fn register_artifact(
             )?;
             dependencies.push(simulation_id);
         }
-    } else if let Some(model_id) = latest_node(run, Stage::Planning, "model") {
+    } else if artifact.stage != Stage::Discovery
+        && let Some(model_id) = latest_node(run, Stage::Planning, "model")
+    {
         dependencies.push(model_id);
     }
     add_node(
@@ -235,7 +330,239 @@ fn artifact_node_id(run: &Run, artifact_hash: &str) -> Option<String> {
         .filter(|node_id| run.provenance.contains_key(node_id))
 }
 
+fn typed_claim(kind: &ProvenanceKind) -> bool {
+    matches!(
+        kind,
+        ProvenanceKind::ContextFact
+            | ProvenanceKind::ContextModel
+            | ProvenanceKind::SolutionModel
+            | ProvenanceKind::Simulation
+    )
+}
+pub fn needs_context_refresh(run: &Run) -> bool {
+    run.provenance.iter().any(|(id, node)| {
+        node.spec_revision == run.spec_revision
+            && node.superseded_by.is_none()
+            && matches!(
+                node.kind,
+                ProvenanceKind::ContextFact | ProvenanceKind::ContextModel
+            )
+            && !provenance_node_current(run, id)
+    })
+}
+pub fn needs_solution_refresh(run: &Run) -> bool {
+    run.provenance.iter().any(|(id, node)| {
+        node.spec_revision == run.spec_revision
+            && node.superseded_by.is_none()
+            && matches!(
+                node.kind,
+                ProvenanceKind::SolutionModel | ProvenanceKind::Simulation
+            )
+            && !provenance_node_current(run, id)
+    })
+}
+fn resolved_node(run: &Run, node_id: &str) -> Result<String> {
+    let mut current = node_id.to_string();
+    let mut seen = BTreeSet::new();
+    while let Some(next) = run
+        .provenance
+        .get(&current)
+        .and_then(|node| node.superseded_by.clone())
+    {
+        require(
+            seen.insert(current.clone()),
+            "cyclic provenance supersession",
+        )?;
+        current = next;
+    }
+    Ok(current)
+}
+
+pub fn register_refresh(run: &mut Run, artifact: Artifact, output: &ExecutionOutput) -> Result<()> {
+    require(
+        matches!(artifact.stage, Stage::Discovery | Stage::Planning)
+            && artifact.spec_revision == run.spec_revision
+            && artifact.hash == hash(&artifact.content)
+            && output.edits.is_empty(),
+        "refresh must be a pinned executor context/model artifact without edits",
+    )?;
+    let mut scoped = run.clone();
+    scoped.stage = artifact.stage;
+    validate_output(&scoped, output)?;
+    let retired: Vec<_> = run
+        .provenance
+        .iter()
+        .filter(|(_, node)| {
+            node.spec_revision == run.spec_revision
+                && node.superseded_by.is_none()
+                && if artifact.stage == Stage::Discovery {
+                    matches!(
+                        node.kind,
+                        ProvenanceKind::ContextFact | ProvenanceKind::ContextModel
+                    )
+                } else {
+                    matches!(
+                        node.kind,
+                        ProvenanceKind::SolutionModel | ProvenanceKind::Simulation
+                    )
+                }
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    if artifact.stage == Stage::Discovery {
+        let expected: BTreeSet<_> = retired
+            .iter()
+            .filter_map(|id| run.provenance.get(id))
+            .filter(|node| node.kind == ProvenanceKind::ContextFact)
+            .filter_map(|node| serde_json::from_str::<ContextFact>(&node.content).ok())
+            .map(|fact| fact.source_ref)
+            .collect();
+        let actual: BTreeSet<_> = output
+            .context
+            .as_ref()
+            .expect("validated refresh context")
+            .facts
+            .iter()
+            .map(|fact| fact.source_ref.clone())
+            .collect();
+        require(
+            expected.is_subset(&actual),
+            "replacement context omits a previously tracked fact source",
+        )?;
+    } else {
+        let expected: BTreeSet<_> = retired
+            .iter()
+            .filter_map(|id| run.provenance.get(id))
+            .filter(|node| node.kind == ProvenanceKind::SolutionModel)
+            .filter_map(|node| serde_json::from_str::<SolutionModel>(&node.content).ok())
+            .flat_map(|model| model.invariants.into_iter().map(|invariant| invariant.id))
+            .collect();
+        let actual: BTreeSet<_> = output
+            .solution
+            .as_ref()
+            .expect("validated refresh model")
+            .invariants
+            .iter()
+            .map(|invariant| invariant.id.clone())
+            .collect();
+        require(
+            expected.is_subset(&actual),
+            "replacement solution omits a previously required invariant",
+        )?;
+    }
+    let old_artifacts: Vec<_> = run
+        .artifacts
+        .iter()
+        .filter(|old| old.stage == artifact.stage && old.spec_revision == run.spec_revision)
+        .map(|old| format!("artifact:{}", old.id))
+        .collect();
+    let insertion = run.artifacts.len().saturating_sub(1);
+    run.artifacts.insert(insertion, artifact.clone());
+    // register_artifact finds the latest stage node, so temporarily make fresh
+    // last while registering; restore the primary current-stage artifact last.
+    let primary = run.artifacts.pop();
+    run.artifacts.push(artifact.clone());
+    register_artifact(run, &artifact, output)?;
+    run.artifacts.pop();
+    if let Some(primary) = primary {
+        run.artifacts.push(primary);
+    }
+    let replacement = if artifact.stage == Stage::Discovery {
+        format!("context:{}", artifact.id)
+    } else {
+        format!("model:{}", artifact.id)
+    };
+    for id in retired {
+        run.provenance
+            .get_mut(&id)
+            .expect("retired claim")
+            .superseded_by = Some(replacement.clone());
+    }
+    let fresh_artifact_id = format!("artifact:{}", artifact.id);
+    for id in &old_artifacts {
+        if let Some(node) = run.provenance.get_mut(id) {
+            node.superseded_by = Some(fresh_artifact_id.clone());
+        }
+    }
+    for node in run.provenance.values_mut() {
+        if node.kind == ProvenanceKind::Review
+            && node
+                .dependencies
+                .keys()
+                .any(|id| old_artifacts.contains(id))
+        {
+            node.superseded_by = Some(fresh_artifact_id.clone());
+        }
+    }
+    for (id, node) in &mut run.provenance {
+        if id.contains(&artifact.id) {
+            node.refresh = true;
+        }
+    }
+    run.evidence.push(observe(&artifact));
+    refresh_provenance(run);
+    Ok(())
+}
+
+pub fn refresh_review_scope(run: &Run, artifact: &Artifact) -> Run {
+    let mut scoped = run.clone();
+    scoped.stage = artifact.stage;
+    scoped.quality_gates.clear();
+    scoped.risk_coverage = risk_coverage();
+    scoped
+        .artifacts
+        .retain(|candidate| candidate.id != artifact.id);
+    scoped.artifacts.push(artifact.clone());
+    let mut keep: BTreeSet<_> = scoped
+        .provenance
+        .keys()
+        .filter(|id| id.contains(&artifact.id) || id.starts_with("source:"))
+        .cloned()
+        .collect();
+    loop {
+        let before = keep.len();
+        for id in keep.clone() {
+            if let Some(node) = scoped.provenance.get(&id) {
+                keep.extend(node.dependencies.keys().cloned());
+            }
+        }
+        if before == keep.len() {
+            break;
+        }
+    }
+    scoped.provenance.retain(|id, _| keep.contains(id));
+    scoped
+}
+pub fn accept_refresh_review(run: &mut Run, artifact: &Artifact, review: &Review) -> Result<()> {
+    let mut scoped = refresh_review_scope(run, artifact);
+    validate_review(&scoped, artifact, review)?;
+    record_review(&mut scoped, artifact, review)?;
+    for (id, node) in scoped.provenance {
+        if id.contains(&artifact.id)
+            || node.kind == ProvenanceKind::RiskAssessment
+            || id == format!("review:{}", review_hash(review))
+        {
+            insert_provenance(run, id, node);
+        }
+    }
+    run.provenance_reviews.extend(scoped.provenance_reviews);
+    run.reviews.push(review.clone());
+    // Fresh role assessments replace stale risk assessments owned by that role.
+    for (id, entry) in scoped.risk_coverage {
+        if entry.stage == artifact.stage {
+            run.risk_coverage.insert(id, entry);
+        }
+    }
+    for (id, gate) in scoped.quality_gates {
+        run.quality_gates.insert(id, gate);
+    }
+    refresh_provenance(run);
+    Ok(())
+}
+
 fn apply_revalidations(run: &mut Run, artifact: &Artifact, review: &Review) -> Result<()> {
+    run.provenance_reviews
+        .insert(review_hash(review), review.clone());
     let mut pending: BTreeMap<_, _> = review
         .checks
         .iter()
@@ -256,20 +583,22 @@ fn apply_revalidations(run: &mut Run, artifact: &Artifact, review: &Review) -> R
             evidence.source == "runtime:input-snapshot"
                 && evidence.spec_revision == run.spec_revision
                 && evidence.success
+                && evidence.input_hash.as_deref() == Some(current_snapshot_hash.as_str())
                 && evidence.output_hash == current_snapshot_hash
                 && evidence.output_hash == hash(&evidence.output)
         })
         .map(|evidence| evidence.id.clone())
         .collect();
+    let mut dependency_cache = BTreeMap::new();
     while !pending.is_empty() {
         let before = pending.len();
         let ready: Vec<_> = pending
             .keys()
             .filter(|id| {
                 run.provenance.get(*id).is_some_and(|node| {
-                    node.dependencies
-                        .keys()
-                        .all(|dependency| !pending.contains_key(dependency))
+                    node.dependencies.keys().all(|dependency| {
+                        resolved_node(run, dependency).is_ok_and(|id| !pending.contains_key(&id))
+                    })
                 })
             })
             .cloned()
@@ -292,23 +621,39 @@ fn apply_revalidations(run: &mut Run, artifact: &Artifact, review: &Review) -> R
                 old.spec_revision == run.spec_revision && old.kind != ProvenanceKind::Source,
                 "historical revision or source cannot be revalidated",
             )?;
+            require(
+                !typed_claim(&old.kind)
+                    || (old.refresh
+                        && old
+                            .source_hashes
+                            .iter()
+                            .all(|(reference, digest)| sources.get(reference) == Some(digest))
+                        && old
+                            .revalidation
+                            .as_ref()
+                            .is_none_or(|binding| binding.review_hash == current_review_hash)),
+                &format!(
+                    "stale typed claim {id} requires a new executor-produced replacement, not source-hash rebinding"
+                ),
+            )?;
             let dependencies = old
                 .dependencies
                 .keys()
                 .map(|dependency| {
+                    let dependency = resolved_node(run, dependency)?;
                     require(
                         current_node(
                             run,
-                            dependency,
+                            &dependency,
                             &sources,
                             &mut BTreeSet::new(),
-                            &mut BTreeMap::new(),
+                            &mut dependency_cache,
                         ),
                         "revalidation dependency remains stale",
                     )?;
                     Ok((
                         dependency.clone(),
-                        run.provenance[dependency].binding_hash(),
+                        run.provenance[&dependency].binding_hash(),
                     ))
                 })
                 .collect::<Result<BTreeMap<_, _>>>()?;
@@ -332,15 +677,16 @@ fn apply_revalidations(run: &mut Run, artifact: &Artifact, review: &Review) -> R
                 )?;
             }
             let node = run.provenance.get_mut(&id).expect("revalidation node");
-            node.source_hashes = updated_sources;
-            node.dependencies = dependencies;
             node.revalidation = Some(ProvenanceValidation {
                 review_hash: current_review_hash.clone(),
                 verifier_session: review.verifier_session.clone(),
                 artifact_hash: artifact.hash.clone(),
                 evidence_ids: check.evidence_ids.clone(),
+                source_hashes: updated_sources,
+                dependencies,
             });
             node.valid = true;
+            dependency_cache.insert(id, true);
         }
         require(
             pending.len() != before,
@@ -436,6 +782,9 @@ pub fn record_review(run: &mut Run, artifact: &Artifact, review: &Review) -> Res
             }
         }
     }
+    if artifact_node_id(run, &artifact.hash).is_some() {
+        crate::quality::record_review(run, artifact, review)?;
+    }
     refresh_provenance(run);
     Ok(())
 }
@@ -443,6 +792,74 @@ pub fn record_review(run: &mut Run, artifact: &Artifact, review: &Review) -> Res
 pub fn risk_assessment_is_current(run: &Run, entry: &RiskCoverageEntry) -> bool {
     let context = AssessmentContext::new(run);
     risk_assessment_current(run, entry, &context)
+}
+
+/// An observation of binding authentication only, not a review or acceptance.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PriorRiskBindingSummary {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub spec_revision: u64,
+    pub attempt: u64,
+    pub invocation_stage: Stage,
+    pub checklist_version: String,
+    pub observation_scope_hash: String,
+    pub input_hash: String,
+    pub source_hashes_hash: String,
+    pub checked_prior_risk_count: usize,
+    pub current_prior_risk_count: usize,
+    pub stale_or_missing_prior_risk_ids: BTreeSet<String>,
+    pub all_checked_prior_bindings_current: bool,
+}
+
+/// Share the exact acceptance predicate's immutable indexes across all earlier
+/// stages. Current and future stage risks are outside this observation's scope.
+pub fn prior_risk_binding_summary(run: &Run) -> PriorRiskBindingSummary {
+    const STAGES: [Stage; 6] = [
+        Stage::Discovery,
+        Stage::Planning,
+        Stage::Execution,
+        Stage::Validation,
+        Stage::Integration,
+        Stage::Delivery,
+    ];
+    let earlier: Vec<_> = STAGES
+        .into_iter()
+        .take_while(|stage| *stage != run.stage)
+        .collect();
+    let context = AssessmentContext::new(run);
+    let mut checked = 0;
+    let mut current = 0;
+    let mut stale = BTreeSet::new();
+    for entry in run
+        .risk_coverage
+        .values()
+        .filter(|entry| earlier.contains(&entry.stage))
+    {
+        checked += 1;
+        if risk_assessment_current(run, entry, &context) {
+            current += 1;
+        } else {
+            stale.insert(entry.risk_id.clone());
+        }
+    }
+    PriorRiskBindingSummary {
+        schema_version: 1,
+        run_id: run.id.clone(),
+        spec_revision: run.spec_revision,
+        attempt: run.attempt,
+        invocation_stage: run.stage,
+        checklist_version: run.checklist_version.clone(),
+        observation_scope_hash: run.scope_hash("risk-binding-observation"),
+        input_hash: context.input_hash,
+        source_hashes_hash: hash(
+            serde_json::to_vec(&context.sources).expect("source hashes serialization"),
+        ),
+        checked_prior_risk_count: checked,
+        current_prior_risk_count: current,
+        all_checked_prior_bindings_current: stale.is_empty(),
+        stale_or_missing_prior_risk_ids: stale,
+    }
 }
 
 struct AssessmentContext<'a> {
@@ -553,11 +970,32 @@ fn risk_assessment_current(
                     && (evidence.success || evidence.source.starts_with("runner:baseline:"))
                     && if evidence.source == "runtime:input-snapshot" {
                         evidence.spec_revision == run.spec_revision
+                            && evidence.input_hash.as_deref() == Some(context.input_hash.as_str())
                             && evidence.output_hash == context.input_hash
+                    } else if evidence.source == "runtime:artifact-read" {
+                        historical_artifact_identity(run, evidence)
                     } else {
                         evidence_is_current(run, artifact, evidence)
                     }
             })
+        })
+}
+
+/// An already authenticated, source-current assessment may compare a replaced
+/// artifact with its replacement. The read still proves that immutable text's
+/// identity; it does not make the old artifact or its claims current. Fresh
+/// check validation deliberately continues to use evidence_is_current alone.
+fn historical_artifact_identity(run: &Run, evidence: &Evidence) -> bool {
+    evidence.source == "runtime:artifact-read"
+        && evidence.spec_revision == run.spec_revision
+        && evidence.success
+        && evidence.artifact_hash == evidence.output_hash
+        && evidence.output_hash == hash(&evidence.output)
+        && run.artifacts.iter().any(|artifact| {
+            artifact.spec_revision == run.spec_revision
+                && artifact.hash == evidence.artifact_hash
+                && artifact.hash == hash(&artifact.content)
+                && artifact.content == evidence.output
         })
 }
 
@@ -572,6 +1010,7 @@ pub fn observe(artifact: &Artifact) -> Evidence {
         output_hash: hash(&artifact.content),
         output: artifact.content.clone(),
         success: true,
+        input_hash: None,
     }
 }
 pub fn validate_review(run: &Run, artifact: &Artifact, review: &Review) -> Result<()> {
@@ -638,7 +1077,9 @@ pub fn validate_review(run: &Run, artifact: &Artifact, review: &Review) -> Resul
             "missing method or rationale",
         )?;
         require(
-            check.status != CheckStatus::NotApplicable || check.check_id.starts_with("RISK:"),
+            check.status != CheckStatus::NotApplicable
+                || (check.check_id.starts_with("RISK:")
+                    || crate::quality::allows_not_applicable(&check.check_id)),
             "mandatory obligation cannot be N/A",
         )?;
         require(!check.evidence_ids.is_empty(), "missing evidence")?;
@@ -655,6 +1096,9 @@ pub fn validate_review(run: &Run, artifact: &Artifact, review: &Review) -> Resul
             });
             require(*valid, "stale, failed or corrupted evidence")?;
         }
+    }
+    if artifact_node_id(run, &artifact.hash).is_some() {
+        crate::quality::validate_review(run, artifact, review)?;
     }
     // Simulate the independently reviewed refresh without changing persisted
     // history. Delivery may accept fresh revalidation of prior assessments.
@@ -680,101 +1124,129 @@ pub fn validate_review(run: &Run, artifact: &Artifact, review: &Review) -> Resul
 
 /// Structural completeness only. The independent reviewer judges the substance.
 pub fn validate_output(run: &Run, output: &ExecutionOutput) -> Result<()> {
+    if !run.artifacts.is_empty() {
+        crate::quality::validate_artifacts(run, output)?;
+    }
     require(!output.artifact.trim().is_empty(), "empty artifact")?;
     if run.stage == Stage::Discovery {
         let context = output
             .context
             .as_ref()
             .ok_or_else(|| crate::Error::Invalid("Discovery requires ContextModel".into()))?;
-        require(!context.facts.is_empty(), "context has no sourced facts")?;
-        for fact in &context.facts {
-            let sources = run.sources();
-            let source = sources.get(&fact.source_ref);
-            require(
-                !fact.claim.trim().is_empty()
-                    && source.is_some_and(|s| hash(s) == fact.source_hash),
-                "context source missing or stale",
-            )?;
-        }
-        for unknown in &context.unknowns {
-            if unknown.material {
-                require(
-                    unknown
-                        .resolution
-                        .as_ref()
-                        .is_some_and(|s| !s.trim().is_empty())
-                        && unknown
-                            .source_ref
-                            .as_ref()
-                            .is_some_and(|s| run.sources().contains_key(s)),
-                    "material unknown remains unresolved",
-                )?;
-            }
-        }
+        validate_context_model(run, context)?;
     }
     if run.stage == Stage::Planning {
         let model = output
             .solution
             .as_ref()
             .ok_or_else(|| crate::Error::Invalid("Planning requires SolutionModel".into()))?;
+        validate_solution_model(run, model)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_context_model(run: &Run, context: &ContextModel) -> Result<()> {
+    require(!context.facts.is_empty(), "context has no sourced facts")?;
+    for fact in &context.facts {
+        let sources = run.sources();
+        let source = sources.get(&fact.source_ref);
         require(
-            !model.criteria.is_empty() && model.criteria.iter().all(|c| !c.trim().is_empty()),
-            "comparison criteria missing",
+            !fact.claim.trim().is_empty() && source.is_some_and(|s| hash(s) == fact.source_hash),
+            "context source missing or stale",
         )?;
+    }
+    for unknown in &context.unknowns {
         require(
-            model.options.len() >= 2 && !model.rationale.trim().is_empty(),
-            "real options and decision rationale required",
+            !unknown.question.trim().is_empty()
+                && unknown
+                    .resolution
+                    .as_ref()
+                    .is_none_or(|v| !v.trim().is_empty())
+                && unknown
+                    .source_ref
+                    .as_ref()
+                    .is_none_or(|source| run.sources().contains_key(source)),
+            "context unknown has no question or claims a missing resolution source",
         )?;
-        let ids: BTreeSet<_> = model.options.iter().map(|o| &o.id).collect();
-        let mechanisms: BTreeSet<_> = model.options.iter().map(|o| &o.mechanism).collect();
-        require(
-            ids.len() == model.options.len() && mechanisms.len() == model.options.len(),
-            "duplicate options",
-        )?;
-        let chosen = model
-            .options
-            .iter()
-            .find(|o| o.id == model.chosen_option)
-            .ok_or_else(|| crate::Error::Invalid("chosen option missing".into()))?;
-        let requirements: BTreeSet<_> =
-            run.spec.requirements.iter().map(|r| r.id.clone()).collect();
-        require(
-            chosen.requirement_ids == requirements,
-            "chosen option omits a mandatory requirement",
-        )?;
-        for option in &model.options {
+        if unknown.material {
             require(
-                !option.id.trim().is_empty()
-                    && !option.mechanism.trim().is_empty()
-                    && !option.evidence.trim().is_empty(),
-                "unsubstantiated option",
+                unknown
+                    .resolution
+                    .as_ref()
+                    .is_some_and(|s| !s.trim().is_empty())
+                    && unknown
+                        .source_ref
+                        .as_ref()
+                        .is_some_and(|s| run.sources().contains_key(s)),
+                "material unknown remains unresolved",
             )?;
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_solution_model(run: &Run, model: &SolutionModel) -> Result<()> {
+    require(
+        !model.criteria.is_empty() && model.criteria.iter().all(|c| !c.trim().is_empty()),
+        "comparison criteria missing",
+    )?;
+    require(
+        model.options.len() >= 2 && !model.rationale.trim().is_empty(),
+        "real options and decision rationale required",
+    )?;
+    let ids: BTreeSet<_> = model.options.iter().map(|o| &o.id).collect();
+    let mechanisms: BTreeSet<_> = model.options.iter().map(|o| &o.mechanism).collect();
+    require(
+        ids.len() == model.options.len() && mechanisms.len() == model.options.len(),
+        "duplicate options",
+    )?;
+    let chosen = model
+        .options
+        .iter()
+        .find(|o| o.id == model.chosen_option)
+        .ok_or_else(|| crate::Error::Invalid("chosen option missing".into()))?;
+    let requirements: BTreeSet<_> = run.spec.requirements.iter().map(|r| r.id.clone()).collect();
+    require(
+        chosen.requirement_ids == requirements,
+        "chosen option omits a mandatory requirement",
+    )?;
+    for option in &model.options {
         require(
-            !model.invariants.is_empty()
-                && model
-                    .invariants
-                    .iter()
-                    .all(|i| !i.id.trim().is_empty() && !i.statement.trim().is_empty()),
-            "model invariants missing",
+            !option.id.trim().is_empty()
+                && !option.mechanism.trim().is_empty()
+                && !option.evidence.trim().is_empty(),
+            "unsubstantiated option",
         )?;
-        let kinds: BTreeSet<_> = model.simulations.iter().map(|s| s.kind.as_str()).collect();
-        require(
-            ["success", "failure", "counterexample"]
+    }
+    require(
+        !model.invariants.is_empty()
+            && model
+                .invariants
                 .iter()
-                .all(|k| kinds.contains(k)),
-            "missing simulation classes",
+                .all(|i| !i.id.trim().is_empty() && !i.statement.trim().is_empty()),
+        "model invariants missing",
+    )?;
+    let kinds: BTreeSet<_> = model.simulations.iter().map(|s| s.kind.as_str()).collect();
+    require(
+        ["success", "failure", "counterexample"]
+            .iter()
+            .all(|k| kinds.contains(k)),
+        "missing simulation classes",
+    )?;
+    let invariants: BTreeSet<_> = model.invariants.iter().map(|i| i.id.clone()).collect();
+    require(
+        invariants.len() == model.invariants.len(),
+        "duplicate model invariant identity",
+    )?;
+    for scenario in &model.simulations {
+        require(
+            !scenario.initial_state.trim().is_empty()
+                && !scenario.events.is_empty()
+                && scenario.events.iter().all(|event| !event.trim().is_empty())
+                && !scenario.expected_result.trim().is_empty()
+                && scenario.invariant_ids == invariants,
+            "incomplete simulation or invariant coverage",
         )?;
-        let invariants: BTreeSet<_> = model.invariants.iter().map(|i| i.id.clone()).collect();
-        for scenario in &model.simulations {
-            require(
-                !scenario.initial_state.trim().is_empty()
-                    && !scenario.events.is_empty()
-                    && !scenario.expected_result.trim().is_empty()
-                    && scenario.invariant_ids == invariants,
-                "incomplete simulation or invariant coverage",
-            )?;
-        }
     }
     Ok(())
 }
@@ -785,29 +1257,69 @@ pub fn evidence_is_current(run: &Run, artifact: &Artifact, evidence: &Evidence) 
     if evidence.spec_revision != run.spec_revision {
         return false;
     }
-    if evidence.source == "runtime:input-snapshot" {
-        return evidence.output_hash
-            == hash(serde_json::to_vec(&run.input_snapshot).expect("snapshot serialization"));
+    if evidence.source.starts_with("runner:baseline:") {
+        if run
+            .task_checks
+            .iter()
+            .any(|i| i.evidence_id.as_ref() == Some(&evidence.id))
+            || run.team.as_ref().is_some_and(|team| {
+                team.tasks.iter().any(|task| {
+                    task.artifact.as_ref().is_some_and(|a| a.id == artifact.id)
+                        || task
+                            .history
+                            .iter()
+                            .filter_map(|h| h.artifact.as_ref())
+                            .any(|a| a.id == artifact.id)
+                })
+            })
+        {
+            return crate::runtime::team::checks::baseline_for_artifact(run, artifact, evidence);
+        }
+        return true; // Legacy fixed-stage baseline; never a positive runner receipt.
     }
-    if evidence.artifact_hash == artifact.hash || evidence.source.starts_with("runner:baseline:") {
-        return true;
-    }
-    if artifact_node_id(run, &evidence.artifact_hash)
-        .is_some_and(|node_id| !provenance_node_current(run, &node_id))
-    {
-        return false;
+    if evidence.source == "runtime:artifact-read" {
+        // This immutable receipt proves only the identity of observed text.
+        return (evidence.artifact_hash == artifact.hash
+            || artifact_node_id(run, &evidence.artifact_hash)
+                .is_none_or(|node_id| provenance_node_current(run, &node_id)))
+            && evidence.success
+            && evidence.output_hash == hash(&evidence.output)
+            && evidence.artifact_hash == evidence.output_hash
+            && (evidence.artifact_hash == artifact.hash
+                || run
+                    .artifacts
+                    .iter()
+                    .any(|candidate| candidate.hash == evidence.artifact_hash));
     }
     let current_hash =
         hash(serde_json::to_vec(&run.input_snapshot).expect("snapshot serialization"));
-    evidence.success
-        && run.evidence.iter().any(|snapshot| {
-            snapshot.source == "runtime:input-snapshot"
-                && snapshot.spec_revision == run.spec_revision
-                && snapshot.artifact_hash == evidence.artifact_hash
-                && snapshot.success
-                && snapshot.output_hash == hash(&snapshot.output)
-                && snapshot.output_hash == current_hash
-        })
+    if evidence.source == "runtime:orchestration" {
+        let Ok(context) = crate::transport::decode::<serde_json::Value>(evidence.output.as_bytes())
+        else {
+            return false;
+        };
+        return evidence.success
+            && evidence.artifact_hash == artifact.hash
+            && evidence.output_hash == hash(&evidence.output)
+            && evidence.input_hash.as_deref() == Some(current_hash.as_str())
+            && context["run_id"].as_str() == Some(run.id.as_str())
+            && context["spec_revision"].as_u64() == Some(run.spec_revision)
+            && context["attempt"].as_u64() == Some(artifact.attempt)
+            && context["checklist_version"].as_str() == Some(run.checklist_version.as_str());
+    }
+    evidence.input_hash.as_deref() == Some(current_hash.as_str())
+        && if evidence.source == "runtime:input-snapshot" {
+            evidence.output_hash == current_hash
+        } else {
+            run.evidence.iter().any(|snapshot| {
+                snapshot.source == "runtime:input-snapshot"
+                    && snapshot.spec_revision == run.spec_revision
+                    && snapshot.success
+                    && snapshot.input_hash.as_deref() == Some(current_hash.as_str())
+                    && snapshot.output_hash == current_hash
+                    && snapshot.output_hash == hash(&snapshot.output)
+            })
+        }
 }
 
 pub fn workspace_diff(run: &Run, artifact: &Artifact) -> Result<Evidence> {
@@ -841,5 +1353,6 @@ pub fn workspace_diff(run: &Run, artifact: &Artifact) -> Result<Evidence> {
         output_hash: hash(&output),
         output,
         success: true,
+        input_hash: Some(hash(serde_json::to_vec(&run.input_snapshot)?)),
     })
 }

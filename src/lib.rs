@@ -1,13 +1,20 @@
+pub mod comments;
+pub mod communication;
 pub mod config;
 pub mod domain;
+pub mod drive;
 pub mod ipc;
+pub mod orchestration;
 pub mod process;
 pub mod providers;
 pub mod quality;
-pub mod runtime;
 pub mod recovery;
+pub mod runtime;
+pub mod sessions;
 pub mod storage;
+pub mod team;
 pub mod transport;
+pub mod tui;
 pub mod verification;
 pub mod workspace;
 

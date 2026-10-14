@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "task": "antislop adds its own --version",
+  "provider": "codex",
+  "isolated_workspace": "/tmp/antislop-selfhost-1ilz0ksu/source",
+  "run_id": "b0869f71-fb7c-49f2-8004-100c1214736d",
+  "status": "blocked",
+  "driver_exit_code": 1,
+  "source_changed": false,
+  "before_hash": "98cc6473557fca155b6ca125822def1b5327ccbd5656d7d0839725f5a586c457",
+  "after_hash": "98cc6473557fca155b6ca125822def1b5327ccbd5656d7d0839725f5a586c457",
+  "artifacts": 2,
+  "reviews": 1,
+  "independent_sessions": true,
+  "diagnostic": "analysis contract missing or duplicate",
+  "interpretation": "Failed first live self-host experiment. Discovery passed; Planning output omitted the mandatory analyzer contract. No source changed. This historical run predates the durable session ledger and stricter final checker."
+}

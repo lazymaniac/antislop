@@ -1,5 +1,7 @@
 # Implementation record
 
+This records the initial foundation and historical validation. See [the current implementation audit](development-status.md) for subsequent adapters, TUI, communication integration and the remaining runtime boundaries.
+
 This private local prototype implements the initial runtime and quality-contract foundation from `design.md`. Public distribution is not authorized; `Cargo.toml` sets `publish = false`.
 
 ## Decisions

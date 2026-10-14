@@ -1,0 +1,13 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -14,6 +14,10 @@
+ fn run() -> Result<()> {
+     let args: Vec<_> = std::env::args().collect();
+     let verb = args.get(1).map(String::as_str).unwrap_or("help");
++    if verb == "--version" {
++        println!("antislop {}", env!("CARGO_PKG_VERSION"));
++        return Ok(());
++    }
+     if verb == "__supervise" {
+         return architect::process::supervise(&args[2..]);
+     }

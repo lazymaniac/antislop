@@ -1,0 +1,16 @@
+# Managed workspace lifecycle
+
+Design §11.1 requires default worktree execution, explicit in-place choice, protected user changes, independently identified integration candidates and separate delivery operations. The implementation keeps worktree execution gated until the complete preparation and routing boundary exists.
+
+| Boundary | Current evidence | Remaining work |
+| --- | --- | --- |
+| Observe original source | `workspace::snapshot`, `workspace-snapshot` CLI and actual Git/filesystem fixtures. HEAD, index, current bytes/modes, missing tracked paths, untracked paths and explicitly requested ignored files; staged/working content distinguished. | Persist source observations and a stable workspace UUID in the runtime registry; bind the interview/contract to the observation. |
+| Select task-owned local changes | Working-copy/deletion inclusion digest binds the exact snapshot and selected paths; source revalidation refuses drift. | Reviewed configuration for alternative staged/hunk selections and durable user approval. Recursive submodule/nested-repository admission; complete symlink/materialization policy. |
+| Prepare isolated workspace | Source inspection changes neither index nor branch and starts no task. | Write-ahead preparation intent, owned destination, private initialization for projects without Git, exact selected input materialization, retained result/restart adjudication and lease binding. |
+| Execute and review tasks | Existing mediated task writes, actual checks/baselines, native receipts, independent reviews and source refresh. | Route them to identified managed task roots; preserve native cwd/session identity; supply separate resources/environments to executor and reviewer. |
+| Integrate candidate | Current task/stage quality packages are source-bound. | Compose approved task versions, resolve conflicts through the integrator, create a new artifact and run independent checks on the complete final candidate. |
+| Deliver result | Existing supervised result acceptance. | Separately authorized transfer to the user checkout, local commit, push/publication; compare original/current user state before applying anything. |
+
+Git observation uses NUL-separated `ls-files`/`ls-tree` output and raw `hash-object --no-filters` input, following the [ls-files](https://git-scm.com/docs/git-ls-files), [ls-tree](https://git-scm.com/docs/git-ls-tree) and [hash-object](https://git-scm.com/docs/git-hash-object) contracts. Optional locking is disabled to preserve the index during reads ([status background refresh](https://git-scm.com/docs/git-status#_background_refresh)). The source reader does not invoke checkout or commit. Future worktree creation must account for callback behavior: Git documents the post-checkout hook for worktree add unless `--no-checkout` is used ([hooks](https://git-scm.com/docs/githooks#_post_checkout)).
+
+A worktree isolates working files while Git administration and other machine resources remain shared. Environment isolation and resource allocation therefore retain their own acceptance requirements. A source scope digest and a Git checkout do not grant effect permissions; the runtime's actual approvals, observations and independent quality gates remain required.

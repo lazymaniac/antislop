@@ -36,7 +36,12 @@ def rpc(state, operation, key=None):
         raise RuntimeError(response['error'])
     data = response['data']
     if operation['type'] == 'snapshot':
-        data['run'] = read_run(state, operation['run_id'])
+        document = read_run(state, operation['run_id'])
+        # A worker may finish between summary and full-document reads. Approval
+        # hashes from Running cannot authorize a later AwaitingResult document.
+        if (data['run']['status'], data['run']['attempt']) != (document['status'], document['attempt']):
+            return rpc(state, operation, key)
+        data['run'] = document
     return data
 
 def read_run(state,run_id):
@@ -100,7 +105,7 @@ def main():
     parser.add_argument('--repair',action='store_true',help='Approve repair rounds only within this fixed disposable fixture')
     parser.add_argument('--reject',action='store_true',help='Seed a rejected fake artifact')
     args=parser.parse_args()
-    binary=ROOT/'target/debug/architect'
+    binary=ROOT/'target/debug/antislop'
     if not binary.exists(): raise SystemExit('Build first: scripts/cargo.sh build')
     with tempfile.TemporaryDirectory(prefix='architect-demo-') as temp:
         root=pathlib.Path(temp)

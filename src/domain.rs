@@ -77,10 +77,65 @@ pub struct RunSpec {
 }
 impl RunSpec {
     pub fn validate(&self) -> Result<()> {
+        self.validate_scope(false)
+    }
+    fn validate_scope(&self, intake: bool) -> Result<()> {
+        if intake {
+            require(
+                self.config.is_some(),
+                "intake requires an orchestrator configuration",
+            )?;
+            require(
+                self.input_files.is_empty()
+                    && self.editable_files.is_empty()
+                    && self.check_command.is_empty(),
+                "intake cannot declare task execution inputs, writes or checks",
+            )?;
+        }
         require(!self.objective.trim().is_empty(), "objective is required")?;
-        if let Some(config) = &self.config { config.validate()?; }
+        if let Some(pinned) = &self.config {
+            pinned.validate()?;
+            let config = &pinned.config;
+            if !self.check_command.is_empty() {
+                config
+                    .policy
+                    .authorize_local(crate::config::LocalAction::Check, true)?;
+                require(
+                    config.policy.mode == crate::config::Mode::Supervised,
+                    "autonomous project checks require a restricted runner; unsandboxed execution is not enabled",
+                )?;
+            }
+            if !self.editable_files.is_empty() {
+                config
+                    .policy
+                    .authorize_local(crate::config::LocalAction::Write, true)?;
+            }
+            let kinds = [
+                crate::config::WorkKind::Context,
+                crate::config::WorkKind::Planning,
+                match self.task_family {
+                    crate::quality::TaskFamily::Software => crate::config::WorkKind::Implementation,
+                    crate::quality::TaskFamily::Research => crate::config::WorkKind::Research,
+                    crate::quality::TaskFamily::Document => crate::config::WorkKind::Writing,
+                    crate::quality::TaskFamily::Analysis => crate::config::WorkKind::Analysis,
+                },
+                crate::config::WorkKind::Testing,
+                crate::config::WorkKind::Integration,
+                crate::config::WorkKind::Delivery,
+            ]
+            .into_iter()
+            .collect();
+            config.validate_work_kinds(&if intake {
+                std::collections::BTreeSet::from([crate::config::WorkKind::Orchestration])
+            } else {
+                kinds
+            })?;
+        }
         require(
-            matches!(self.provider.as_str(), "fake" | "codex"),
+            matches!(
+                self.provider.as_str(),
+                "fake" | "codex" | "claude" | "gemini" | "agy"
+            ),
             "unsupported provider",
         )?;
         require(
@@ -168,6 +223,10 @@ impl RunSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Run {
     pub id: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub intake: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub chat_origin: bool,
     pub spec: RunSpec,
     pub spec_revision: u64,
     pub stage: Stage,
@@ -179,6 +238,35 @@ pub struct Run {
     pub reviews: Vec<Review>,
     pub evidence: Vec<Evidence>,
     pub active_session: Option<String>,
+    #[serde(default)]
+    pub session_ledger: crate::sessions::SessionLedger,
+    #[serde(default)]
+    pub communication_ledger: crate::communication::CommunicationLedger,
+    #[serde(default)]
+    pub message_bodies: BTreeMap<String, String>,
+    /// Exact immutable packets retained for prompt/delivery audits.
+    #[serde(default)]
+    pub message_packets: BTreeMap<String, crate::communication::ContextPacket>,
+    #[serde(default)]
+    pub agent_outboxes: BTreeMap<String, crate::communication::outbox::Receipt>,
+    #[serde(default)]
+    pub orchestration_rounds: Vec<crate::orchestration::planning::Round>,
+    #[serde(default)]
+    pub team: Option<crate::team::TeamPlan>,
+    #[serde(default)]
+    pub team_risk_owners: Vec<crate::orchestration::planning::RiskOwner>,
+    #[serde(default)]
+    pub task_executions: Vec<crate::runtime::team::effects::ExecutionBinding>,
+    #[serde(default)]
+    pub task_checks: Vec<crate::runtime::team::checks::Invocation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_check_outcomes: Vec<crate::runtime::team::check_recovery::Outcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_workspace: Option<crate::workspace::managed::Workspace>,
+    #[serde(default)]
+    pub task_result_restorations: Vec<crate::runtime::team::restore::Restoration>,
+    #[serde(default)]
+    pub team_result_approvals: Vec<crate::runtime::team::stage::ResultApproval>,
     pub diagnostic: Option<String>,
     pub input_snapshot: BTreeMap<String, String>,
     #[serde(default)]
@@ -189,21 +277,53 @@ pub struct Run {
     #[serde(default)]
     pub provenance: BTreeMap<String, ProvenanceNode>,
     #[serde(default)]
+    pub provenance_reviews: BTreeMap<String, Review>,
+    #[serde(default)]
     pub quality_gates: BTreeMap<String, crate::quality::GateAssessment>,
+    #[serde(default)]
+    pub quality: Option<crate::quality::QualityArtifacts>,
+    #[serde(default)]
+    pub provider_failure: Option<crate::providers::ProviderFailure>,
     #[serde(default)]
     pub pending_edits: Vec<crate::recovery::EditReceipt>,
     #[serde(default)]
     pub reconciliation_required: bool,
+    #[serde(default)]
+    pub diff_comments: Vec<DiffComment>,
+    #[serde(default)]
+    pub element_comments: Vec<crate::comments::Comment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffComment {
+    pub id: String,
+    pub run_id: String,
+    pub path: String,
+    #[serde(default)]
+    pub line_number: Option<usize>,
+    pub text: String,
+    pub author: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub resolved: bool,
 }
 impl Run {
     pub fn new(id: String, spec: RunSpec) -> Result<Self> {
-        spec.validate()?;
+        Self::new_scoped(id, spec, false)
+    }
+    pub(crate) fn new_intake(id: String, spec: RunSpec) -> Result<Self> {
+        Self::new_scoped(id, spec, true)
+    }
+    fn new_scoped(id: String, spec: RunSpec, intake: bool) -> Result<Self> {
+        spec.validate_scope(intake)?;
         let input_snapshot = crate::workspace::read_inputs(
             std::path::Path::new(&spec.workspace),
             &spec.input_files,
         )?;
         Ok(Self {
             id,
+            intake,
+            chat_origin: intake,
             spec,
             spec_revision: 1,
             stage: Stage::Discovery,
@@ -215,14 +335,33 @@ impl Run {
             reviews: vec![],
             evidence: vec![],
             active_session: None,
+            session_ledger: crate::sessions::SessionLedger::default(),
+            communication_ledger: crate::communication::CommunicationLedger::default(),
+            message_bodies: BTreeMap::new(),
+            message_packets: BTreeMap::new(),
+            agent_outboxes: BTreeMap::new(),
+            orchestration_rounds: vec![],
+            team: None,
+            team_risk_owners: vec![],
+            task_executions: vec![],
+            task_checks: vec![],
+            task_check_outcomes: vec![],
+            managed_workspace: None,
+            task_result_restorations: vec![],
+            team_result_approvals: vec![],
             diagnostic: None,
             input_snapshot,
             checklist_version: checklist_version(),
             risk_coverage: risk_coverage(),
             provenance: BTreeMap::new(),
+            provenance_reviews: BTreeMap::new(),
             quality_gates: BTreeMap::new(),
+            quality: None,
+            provider_failure: None,
             pending_edits: vec![],
             reconciliation_required: false,
+            diff_comments: vec![],
+            element_comments: vec![],
         })
     }
     pub fn scope_hash(&self, action: &str) -> String {
@@ -242,6 +381,103 @@ impl Run {
             ))
             .expect("serializable scope"),
         )
+    }
+    /// Supplemental checks have a separate approval scope from the immutable
+    /// RunSpec check command; every argv byte is part of the approved action.
+    pub fn check_action(argv: &[String]) -> Result<String> {
+        require(
+            argv.first().is_some_and(|binary| !binary.trim().is_empty()),
+            "empty supplemental check command",
+        )?;
+        require(
+            argv.iter().all(|argument| !argument.contains('\0')),
+            "supplemental check argv contains NUL",
+        )?;
+        let bytes = serde_json::to_vec(argv)?;
+        require(
+            bytes.len() < crate::transport::MAX_FRAME,
+            "check argv exceeds transport limit",
+        )?;
+        Ok(format!("check:{}", hash(bytes)))
+    }
+    pub fn check_scope_hash(&self, argv: &[String]) -> Result<String> {
+        Ok(self.scope_hash(&Self::check_action(argv)?))
+    }
+    pub fn team_step_scope(&self) -> Result<String> {
+        let team = self
+            .team
+            .as_ref()
+            .ok_or_else(|| crate::Error::Invalid("no team installed".into()))?;
+        Ok(hash(serde_json::to_vec(&(
+            &self.id,
+            self.spec_revision,
+            self.attempt,
+            &self.input_snapshot,
+            &self.checklist_version,
+            &self.pending_edits,
+            self.reconciliation_required,
+            "step_team",
+            team.revision,
+            team.checkpoint_uncertain,
+            &team.tasks,
+            &self.team_result_approvals,
+            &self.spec.config,
+            self.source_hashes(),
+        ))?))
+    }
+    pub fn wave_effect_reconciliation_scope(&self, task_ids: &[String]) -> Result<String> {
+        crate::runtime::team::adjudicate::wave_scope(self, task_ids)
+    }
+    pub fn task_effect_reconciliation_scope(&self, task_id: &str) -> Result<String> {
+        crate::runtime::team::adjudicate::scope(self, task_id)
+    }
+    pub fn task_result_restore_scope(&self, task_id: &str) -> Result<String> {
+        crate::runtime::team::restore::scope(self, task_id)
+    }
+    pub fn task_source_refresh_scope(&self, task_id: &str) -> Result<String> {
+        crate::runtime::team::refresh::scope(self, task_id)
+    }
+    pub fn task_verification_retry_scope(&self, task_id: &str) -> Result<String> {
+        crate::runtime::team::retry::scope(self, task_id)
+    }
+    pub fn team_repair_scope(&self, task_id: &str, plan: &str) -> Result<String> {
+        let team = self
+            .team
+            .as_ref()
+            .ok_or_else(|| crate::Error::Invalid("no team installed".into()))?;
+        let task = team
+            .tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| crate::Error::Invalid("unknown task".into()))?;
+        Ok(hash(serde_json::to_vec(&(
+            &self.id,
+            self.spec_revision,
+            self.attempt,
+            &self.input_snapshot,
+            &self.checklist_version,
+            &self.pending_edits,
+            self.reconciliation_required,
+            "repair_task",
+            task_id,
+            plan,
+            team.revision,
+            &task.history,
+            &task.review,
+            self.source_hashes(),
+        ))?))
+    }
+    pub fn diff_review_scope(&self) -> Result<String> {
+        let diff = crate::workspace::compute_diff(
+            std::path::Path::new(&self.spec.workspace),
+            &self.input_snapshot,
+        )?;
+        Ok(hash(serde_json::to_vec(&(
+            self.scope_hash("review-diff"),
+            self.spec_revision,
+            &diff,
+            &self.diff_comments,
+        ))?))
     }
     pub fn sources(&self) -> BTreeMap<String, String> {
         let mut sources: BTreeMap<_, _> = self
@@ -265,13 +501,35 @@ impl Run {
         sources
     }
     pub fn source_hashes(&self) -> BTreeMap<String, String> {
-        self.sources()
-            .into_iter()
-            .map(|(key, text)| (key, hash(text)))
-            .collect()
+        self.source_hashes_for_inputs(&self.input_snapshot)
+    }
+    /// Canonical source hashes for retained historical inputs, without cloning the run ledger.
+    pub(crate) fn source_hashes_for_inputs(
+        &self,
+        inputs: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
+        let mut hashes: BTreeMap<_, _> = inputs
+            .iter()
+            .map(|(path, value)| (format!("file:{path}"), hash(value)))
+            .collect();
+        hashes.insert("objective".into(), hash(&self.spec.objective));
+        for requirement in &self.spec.requirements {
+            hashes.insert(
+                format!("requirement:{}", requirement.id),
+                hash(serde_json::to_string(requirement).expect("requirement serialization")),
+            );
+        }
+        for item in &self.spec.plan_items {
+            hashes.insert(
+                format!("plan:{}", item.id),
+                hash(serde_json::to_string(item).expect("plan serialization")),
+            );
+        }
+        hashes
     }
     pub fn expected_checks(&self) -> BTreeSet<String> {
         let mut ids: BTreeSet<_> = (1..=8).map(|i| format!("V{i:02}")).collect();
+        ids.extend(crate::quality::expected_checks(self));
         for r in &self.spec.requirements {
             for c in r.criteria.keys() {
                 ids.insert(format!("REQ:{}:{c}", r.id));
@@ -291,8 +549,10 @@ impl Run {
         let validity = crate::verification::provenance_validity(self);
         for (id, node) in &self.provenance {
             if node.spec_revision == self.spec_revision
+                && node.superseded_by.is_none()
                 && node.kind != ProvenanceKind::Source
                 && (!validity.get(id).copied().unwrap_or(false)
+                    || (node.refresh && node.revalidation.is_none())
                     || node.revalidation.as_ref().is_some_and(|binding| {
                         Some(binding.artifact_hash.as_str()) == artifact_hash
                     }))
@@ -329,6 +589,10 @@ pub struct Evidence {
     pub output_hash: String,
     pub output: String,
     pub success: bool,
+    /// Exact workspace snapshot at receipt creation. Missing legacy runner
+    /// bindings are historical and cannot authorize current behavior claims.
+    #[serde(default)]
+    pub input_hash: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -363,8 +627,10 @@ pub struct Review {
 pub fn checklist_version() -> String {
     hash(
         [
-            b"common-v2;stage-risk-ownership-v2;provenance-revalidation-v1;".as_slice(),
+            b"common-v2;stage-risk-ownership-v2;provenance-revalidation-v1;task-models-v1;task-source-refresh-v1;task-check-plan-v1;task-baseline-v1;task-change-proof-v1;team-stage-result-v1;"
+                .as_slice(),
             include_bytes!("../fixtures/risks.json"),
+            crate::quality::catalog_hash().as_bytes(),
         ]
         .concat(),
     )
@@ -380,6 +646,8 @@ pub struct FileEdit {
 #[serde(deny_unknown_fields)]
 pub struct ExecutionOutput {
     #[serde(default)]
+    pub agent_messages: Vec<crate::communication::outbox::Message>,
+    #[serde(default)]
     pub quality: Option<crate::quality::QualityArtifacts>,
     pub artifact: String,
     pub edits: Vec<FileEdit>,
@@ -387,14 +655,14 @@ pub struct ExecutionOutput {
     pub solution: Option<SolutionModel>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContextFact {
     pub claim: String,
     pub source_ref: String,
     pub source_hash: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Unknown {
     pub question: String,
@@ -402,13 +670,13 @@ pub struct Unknown {
     pub resolution: Option<String>,
     pub source_ref: Option<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContextModel {
     pub facts: Vec<ContextFact>,
     pub unknowns: Vec<Unknown>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SolutionOption {
     pub id: String,
@@ -416,7 +684,7 @@ pub struct SolutionOption {
     pub requirement_ids: BTreeSet<String>,
     pub evidence: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SimulationCase {
     pub kind: String,
@@ -425,7 +693,7 @@ pub struct SimulationCase {
     pub expected_result: String,
     pub invariant_ids: BTreeSet<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SolutionModel {
     pub criteria: Vec<String>,
@@ -436,7 +704,7 @@ pub struct SolutionModel {
     pub simulations: Vec<SimulationCase>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Invariant {
     pub id: String,
@@ -481,6 +749,10 @@ pub struct ProvenanceNode {
     pub dependencies: BTreeMap<String, String>,
     pub valid: bool,
     pub revalidation: Option<ProvenanceValidation>,
+    #[serde(default)]
+    pub superseded_by: Option<String>,
+    #[serde(default)]
+    pub refresh: bool,
 }
 impl ProvenanceNode {
     pub fn binding_hash(&self) -> String {
@@ -492,6 +764,8 @@ impl ProvenanceNode {
                 &self.source_hashes,
                 &self.dependencies,
                 &self.revalidation,
+                &self.superseded_by,
+                self.refresh,
             ))
             .expect("provenance serialization"),
         )
@@ -504,6 +778,10 @@ pub struct ProvenanceValidation {
     pub verifier_session: String,
     pub artifact_hash: String,
     pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub source_hashes: BTreeMap<String, String>,
+    #[serde(default)]
+    pub dependencies: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -574,4 +852,8 @@ fn unique_criteria<'de, D: serde::Deserializer<'de>>(
         }
     }
     deserializer.deserialize_map(Criteria)
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

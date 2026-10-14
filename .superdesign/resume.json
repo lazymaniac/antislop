@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "graphical-workspace": {
+      "targetKind": "new-target",
+      "projectId": "96e20f25-f411-488b-ac8e-8c0f98a67617",
+      "activeDraftId": "320531d2-e19e-4473-94b0-68db84ccbd67",
+      "designSystemPath": ".superdesign/design-system.md",
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        ".superdesign/init/theme.md",
+        "src/tui/render.rs",
+        "src/tui/graph.rs"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "5b30dc0f224f34b28d0b519baa4e6bb279a9ce52cd596e7fb5df26ca67746eb3",
+        ".superdesign/init/theme.md": "8bbb13ee6f37994ad7047f2e3618aac0fa82c4af7707590539a294f32560487a",
+        "src/tui/render.rs": "e050fdfd10fa7000f16317e047b06e4d2536841c7f114e5f5ddf309447e7e21e",
+        "src/tui/graph.rs": "6d35cf8542c57c9462e38ea39d6ba970fa73d5f62b724c235e3ff831b5f74732"
+      },
+      "components": [],
+      "drafts": {
+        "320531d2-e19e-4473-94b0-68db84ccbd67": {
+          "title": "Antislop Graphical Workspace",
+          "visualDirection": "Charcoal panels, lavender selection, spatial graph, contextual comments; graphical proposal awaiting user direction",
+          "currentVersion": 2
+        }
+      },
+      "updatedAt": "2026-10-14T16:44:28.212858+00:00"
+    }
+  }
+}

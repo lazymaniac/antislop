@@ -63,6 +63,8 @@ def extract(text):
 # Hand-authored interpretations for established compound decisions. Values are
 # independent acceptance obligations; full original row remains their parent.
 ESTABLISHED = {
+    'Komunikacja agentów': ['Allow every agent to send a point-to-point message to any current team agent.', 'Allow every agent to broadcast to the other current team agents.', 'Persist authenticated message authorship, recipients and delivery state.'],
+    'Kontekst orkiestratora': ['Manage through task reports, artifacts, verifier decisions and addressed messages.', 'Do not require the orchestrator to read child agent session transcripts.'],
     'Użytkownik': ['Serve programmers working locally.'],
     'Standard rezultatu': ['Use idiomatic code for the task and project.', 'Deliver readable and coherent code.', 'Complete required refactoring.', 'Do not add unnecessary features or mechanisms.', 'Resolve every applicable static-analysis concern.'],
     'Checklisty weryfikacji': ['Version mandatory verification checklists.', 'Define a method, evidence and rejection condition for every checklist item.', 'Account for the entire risk catalog.'],
@@ -97,6 +99,7 @@ ESTABLISHED = {
     'Główny interfejs': ['Provide an orchestrator chat panel.', 'Provide an agent graph or tree panel.'],
     'Graf': ['Support arrow-key graph navigation.', 'Display actual work status.', 'Display communication.', 'Provide agent details.'],
     'Sesje agentów': ['Allow inspecting agent sessions.', 'Allow writing directly to a selected agent.'],
+    'Widok diff i recenzja': ['Provide workspace diff inspection with file listing and change statistics.', 'Support adding and deleting diff comments on files and specific diff lines.', 'Orchestrator listens for unresolved diff comments and delegates targeted work.', 'Allow triggering on-demand code review directly from the diff view.'],
     'Język': ['Use English for TUI, code, identifiers and product documentation.', 'Keep this design document in Polish.'],
 }
 

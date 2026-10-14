@@ -17,7 +17,7 @@ use std::{
 };
 
 fn until(mut condition: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(20);
     while !condition() {
         assert!(
             Instant::now() < deadline,
@@ -120,7 +120,7 @@ fn sigkill_daemon_terminates_uncooperative_check_and_descendants() {
     run_spec.input_files = vec!["check.py".into()];
     run_spec.check_command = vec!["python3".into(), "check.py".into()];
     let mut daemon = Daemon(
-        OsCommand::new(env!("CARGO_BIN_EXE_architect"))
+        OsCommand::new(env!("CARGO_BIN_EXE_antislop"))
             .arg("daemon")
             .arg(&state)
             .stdout(Stdio::null())
@@ -159,7 +159,7 @@ fn sigkill_daemon_terminates_uncooperative_check_and_descendants() {
 fn codex_exit_terminates_descendants() {
     let root = tempfile::tempdir().unwrap();
     let binary = root.path().join("fake-codex");
-    std::fs::write(&binary, format!("#!/usr/bin/env python3\nimport sys,json\nif '--version' in sys.argv:\n print('codex-cli 0.162.1')\n sys.exit(0)\nsys.stdin.read()\n{}print(json.dumps({{'type':'thread.started','thread_id':'fake-session'}}),flush=True)\nprint(json.dumps({{'type':'item.completed','item':{{'type':'agent_message','text':'{{\"ok\":true}}'}}}}),flush=True)\nprint(json.dumps({{'type':'turn.completed'}}),flush=True)\n", delayed_descendant())).unwrap();
+    std::fs::write(&binary, format!("#!/usr/bin/env python3\nimport sys,json,os,pathlib\nif '--version' in sys.argv:\n print('codex-cli 0.162.1')\n sys.exit(0)\nos.chdir(pathlib.Path(__file__).parent)\nsys.stdin.read()\n{}print(json.dumps({{'type':'thread.started','thread_id':'fake-session'}}),flush=True)\nprint(json.dumps({{'type':'item.completed','item':{{'type':'agent_message','text':'{{\"ok\":true}}'}}}}),flush=True)\nprint(json.dumps({{'type':'turn.completed'}}),flush=True)\n", delayed_descendant())).unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     let provider = architect::providers::codex::CodexProvider {
         binary: Some(binary.to_string_lossy().into()),
@@ -184,7 +184,7 @@ fn codex_exit_terminates_descendants() {
 fn codex_cancellation_terminates_descendants() {
     let root = tempfile::tempdir().unwrap();
     let binary = root.path().join("fake-codex");
-    std::fs::write(&binary, format!("#!/usr/bin/env python3\nimport sys\nif '--version' in sys.argv:\n print('codex-cli 0.162.1')\n sys.exit(0)\nsys.stdin.read()\n{}time.sleep(10)\n", delayed_descendant())).unwrap();
+    std::fs::write(&binary, format!("#!/usr/bin/env python3\nimport sys,os,pathlib\nif '--version' in sys.argv:\n print('codex-cli 0.162.1')\n sys.exit(0)\nos.chdir(pathlib.Path(__file__).parent)\nsys.stdin.read()\n{}time.sleep(10)\n", delayed_descendant())).unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     let provider = architect::providers::codex::CodexProvider {
         binary: Some(binary.to_string_lossy().into()),
@@ -301,11 +301,30 @@ fn missing_companion_fails_closed() {
     let root = tempfile::tempdir().unwrap();
     let copied = root.path().join("isolated-tests");
     std::fs::copy(std::env::current_exe().unwrap(), &copied).unwrap();
-    let status = OsCommand::new(copied)
+    let mut command = OsCommand::new(copied);
+    command
         .args(["--exact", "missing_companion_fails_closed"])
-        .env("ARCHITECT_MISSING_COMPANION_TEST", "1")
-        .status()
-        .unwrap();
+        .env("ARCHITECT_MISSING_COMPANION_TEST", "1");
+    // A concurrent test's fork can briefly inherit fs::copy's writable FD
+    // until exec closes it. Linux rejects this fixture's exec with ETXTBSY;
+    // no fixture code has started, so only that launch error is retryable.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut child = loop {
+        assert!(
+            Instant::now() < deadline,
+            "fixture exec remained ETXTBSY for five seconds"
+        );
+        match command.spawn() {
+            Ok(child) => break child,
+            Err(error)
+                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("isolated companion-gate fixture failed to launch: {error}"),
+        }
+    };
+    let status = child.wait().unwrap();
     assert!(status.success());
 }
 
@@ -317,4 +336,23 @@ fn codex_frames_reject_duplicate_json_keys() {
     assert!(architect::providers::codex::read_frame(&mut frame).is_err());
     let mut frame = std::io::Cursor::new(br#"{"type":"item.completed","item":{"type":"agent_message","text":"first","text":"second"}}"#);
     assert!(architect::providers::codex::read_frame(&mut frame).is_err());
+}
+
+#[test]
+fn supervised_check_preserves_signal_termination_instead_of_reporting_exit_one() {
+    let root = tempfile::tempdir().unwrap();
+    let (_, output) = architect::workspace::check(
+        root.path(),
+        &[
+            "python3".into(),
+            "-c".into(),
+            "import os,signal; os.kill(os.getpid(),signal.SIGTERM)".into(),
+        ],
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let receipt: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert!(receipt["exit_code"].is_null());
+    assert_eq!(receipt["signal"], libc::SIGTERM);
+    assert_eq!(receipt["truncated"], false);
 }

@@ -380,3 +380,81 @@ fn invalid_binary_model_and_managed_home_are_rejected() {
         .managed_home = Some("relative-home".into());
     assert!(config.validate().is_err());
 }
+
+#[test]
+fn orchestration_verifier_route_is_explicit_and_executor_matches_orchestrator() {
+    let mut configured = config();
+    let review = configured
+        .resolve(WorkKind::Orchestration, RoleKind::Verifier)
+        .unwrap();
+    assert!(review.requires_independent_session);
+    assert_eq!(review.profile, "review");
+    assert!(
+        configured
+            .resolve(WorkKind::Orchestration, RoleKind::Executor)
+            .is_err()
+    );
+    configured
+        .routing
+        .get_mut(&WorkKind::Orchestration)
+        .unwrap()
+        .executor = "execution".into();
+    assert!(configured.validate().is_err());
+    let mut configured = config();
+    configured.routing.remove(&WorkKind::Orchestration);
+    assert!(configured.validate_work_kinds(&BTreeSet::new()).is_err());
+}
+
+#[test]
+fn explicit_role_provider_limits_keep_codex_in_orchestration_and_agy_in_task_roles() {
+    let mut config = config();
+    for profile in config.profiles.values_mut() {
+        if !profile.roles.contains(&RoleKind::Orchestrator) {
+            profile.provider = ProviderKind::Agy;
+        }
+    }
+    config.role_providers = [
+        (
+            RoleKind::Orchestrator,
+            BTreeSet::from([ProviderKind::Codex]),
+        ),
+        (RoleKind::Executor, BTreeSet::from([ProviderKind::Agy])),
+        (RoleKind::Verifier, BTreeSet::from([ProviderKind::Agy])),
+    ]
+    .into();
+    config.validate().unwrap();
+    for kind in config.routing.keys() {
+        let role = if *kind == WorkKind::Orchestration {
+            RoleKind::Orchestrator
+        } else {
+            RoleKind::Executor
+        };
+        let expected = if role == RoleKind::Orchestrator {
+            ProviderKind::Codex
+        } else {
+            ProviderKind::Agy
+        };
+        assert_eq!(config.resolve(*kind, role).unwrap().provider, expected);
+        assert_eq!(
+            config.resolve(*kind, RoleKind::Verifier).unwrap().provider,
+            ProviderKind::Agy
+        );
+    }
+    let mut invalid = config.clone();
+    invalid.profiles.get_mut("reasoning").unwrap().provider = ProviderKind::Codex;
+    assert!(
+        invalid
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("role provider limit")
+    );
+    let mut invalid = config.clone();
+    invalid.profiles.get_mut("review").unwrap().provider = ProviderKind::Claude;
+    assert!(invalid.validate().is_err());
+    let mut invalid = config;
+    invalid
+        .role_providers
+        .insert(RoleKind::Executor, BTreeSet::new());
+    assert!(invalid.validate().is_err());
+}

@@ -8,6 +8,8 @@ Protocol 1 is explicitly refused rather than silently changing response shapes. 
 
 Mutation responses and snapshots contain summaries, counts, hashes and document references. They do not copy source, artifact, evidence or report bodies. `list` returns up to 100 summaries and a `next_cursor`; use `list_page` to continue. Event polling retains its durable sequence cursor.
 
+Snapshots include the stored `document_hash` of the run alongside their controls. The TUI requires the downloaded run to match that hash before combining its data with approval/reconciliation controls. Concurrent mutation causes a read-only refresh error; no mutation is retried. Older daemons lacking this field require an update before this TUI can attach. The backend no longer retains unused full-document caches for previously selected runs.
+
 A `read` operation fetches a bounded UTF-8 chunk of `run`, `spec`, `artifact:ID` or `evidence:ID`. The first chunk returns the document SHA-256; every subsequent request must supply it as `expected_hash`. An intervening mutation fails the read explicitly. Readers restart the read-only download instead of combining revisions or replaying a mutation. Run chunks are read directly from SQLite's stored JSON bytes with a transactionally maintained hash; pagination does not deserialize the whole run for every chunk.
 
 ```
@@ -23,11 +25,17 @@ SQLite schema 2 adds the document hash and migrates schema 1 transactionally wit
 
 A separate internal guardian owns each check/provider process group. A private lifeline closes even after daemon SIGKILL. The guardian kills descendants before reaping the group leader, avoiding reuse of a stored PID. It also cleans remaining descendants after the leader exits, so inherited output pipes cannot keep a completed command blocked indefinitely. Cancellation applies to provider version probes as well as model turns.
 
+Managed runtime preflight uses the cancellation-aware provider probe, including the model-routing wrapper. This closes the gap before logical session reservation, where a hung initial version/help process previously received no runtime cancellation flag. Orchestration turns retain their own session history while restoring the primary session/failure checkpoint after a completed conversation; restart preserves that checkpoint and marks the interrupted orchestration round explicitly.
+
 Workspace leases are OS locks on canonical path ancestors: parents conflict with descendants, while independent sibling workspaces may proceed. A guardian inherits the complete lease set, retaining it until its process cleanup finishes after daemon death. Tool processes do not inherit the lease descriptors. Missing supervisor binaries fail closed.
 
 Process groups do not contain deliberately escaping programs that use `setsid` or change groups; these require an OS isolation boundary. No arbitrary-project sandbox guarantee is claimed.
 
 ## Partial edits and explicit reconciliation
+
+Pause holds new effect admission while allowing already admitted operations to finish. The store mutex is released while a worker waits, so resume/cancel and independent workspaces remain responsive. Session reservation uses that mutex to serialize admission with pause. Checks and file writes also stop at their next admission boundary; these boundaries do not revoke an already admitted operation or protect against arbitrary external filesystem races. Waiting retains the workspace lease and exact continuation. Cancellation is signaled and waiting workers are awakened only after its database commit succeeds. Restart preserves pause but marks the lost continuation for reconciliation. `work_waiting_paused` is a durable observation of a worker reaching its pause boundary.
+
+The session ledger records `turn_order` at each successful reservation, atomically with the session and packet. Failed saves and duplicate reservations cannot append or reorder it. Legacy ledgers deserialize without fabricated history; earlier turns absent from the list have unknown order. The frontend uses a persisted current session or reservation order, retains all owned session history and filters artifacts/findings/evidence to their actual authorship/review bindings. Ambiguous legacy session status is explicitly unknown.
 
 Before writing a batch the runtime validates the entire edit scope and persists receipts containing every path and before/after hash. Each successful rename updates the source snapshot and persists its checkpoint. A crash in the gap is classified from actual bytes on restart as applied, unapplied or conflicting; it never causes automatic write replay.
 
@@ -37,7 +45,7 @@ An interrupted attempt retains `reconciliation_required`. Repair/revision and ov
 {"version":2,"request_id":"reconcile-1","idempotency_key":"reconcile-1","operation":{"type":"mutate","command":{"type":"reconcile","run_id":"RUN","scope_hash":"RECONCILE_SCOPE","input_hash":"OBSERVED_INPUT_HASH"}}}
 ```
 
-Reconciliation records observed receipt states, preserves files and history, and starts fresh Discovery when inputs changed or the batch was incomplete. A stale observed hash is rejected. Cancellation remains terminal; reconciliation may clear its outstanding effects without reviving the run. Missing/unreadable pinned input files must be restored or handled by a future explicit workspace lifecycle operation; reconciliation does not silently invent their content.
+Reconciliation records observed receipt states, preserves files and history, and starts fresh Discovery when inputs changed or the batch was incomplete. A stale observed hash is rejected. Cancellation remains terminal; reconciliation may clear its outstanding effects without reviving the run. Missing or non-UTF8 input files are recorded as explicit observations, with byte hashes when readable as bytes. Reconciliation clears process uncertainty while leaving the run blocked; an explicit spec revision can select the new valid input set. It never invents file content. Restored runs are revalidated against current policy before effects.
 
 ## Provenance and source review
 
