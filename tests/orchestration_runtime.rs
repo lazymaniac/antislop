@@ -28,8 +28,9 @@ impl Fixture {
 import sys,json,pathlib,hashlib
 base=pathlib.Path(__BASE__)
 mode=__MODE__
+if mode.startswith('parts-') and (base/'parts-ready').exists():mode='parts-success'
 if (base/"management-ready").exists() and mode.startswith("management-"):mode="answer"
-if (base/"management-ready").exists() and mode=="intake-recover-review":mode="intake-proposal"
+if (base/"management-ready").exists() and mode in ("intake-recover-review","intake-bad-proof"):mode="intake-proposal"
 if mode=='hang-probe' and '--version' in sys.argv:
  import subprocess,time
  subprocess.Popen([sys.executable,'-c',"import time,pathlib;root=pathlib.Path("+repr(str(base))+ ");\nwhile not (root/'release-late').exists():time.sleep(.01)\n(root/'late-effect').write_text('orphan')"])
@@ -45,6 +46,9 @@ if prompt.startswith('You are the configured orchestrator.'):
   if mode=='management-executor-once':print(json.dumps(dict(type='system',subtype='init',session_id=native,tools=['StructuredOutput'])),flush=True)
   sys.exit(1)
  c=json.JSONDecoder().raw_decode(prompt.split('Immutable orchestration context: ',1)[1])[0]
+ if mode.startswith('intake-source-'):
+  sources=json.loads(c['interview_sources']['.']);assert sources['files']['source']['text']=='original'
+  if mode=='intake-source-drift':(base/'workspace/source').write_text('new user version')
  team=c['team_template'] or dict(agents=[],tasks=[])
  roles={a['id']:a['role'] for a in team['agents']}
  for task in team['tasks']:
@@ -55,6 +59,17 @@ if prompt.startswith('You are the configured orchestrator.'):
  if mode=='writes':team['tasks'][0]['write_scopes']=['source'];team['tasks'][0]['integration']='in_place'
  out=dict(message='Fixture proposal; no model reasoning or task execution asserted.',team_plan_json=json.dumps(team),risk_owners=[] if mode=='answer' or c.get('intake') else [dict(risk_id=r['id'],task_id=team['tasks'][0]['id'],rationale='Synthetic ownership fixture requiring semantic review') for r in c['risk_catalog']['risks']])
  if mode=='missing-risk':out['risk_owners'].pop()
+ if mode.startswith('amendment') and c['amendment_bases']:
+  prior=c['amendment_bases'][-1]
+  patch=dict(format='team-plan-amendment-v1',base_round_id=prior['round_id'],base_output_hash=prior['output_hash'],task_fields=[dict(id=team['tasks'][0]['id'],set=dict(description='Corrected native fixture description '+str(len(c['prior_rounds']))))])
+  if mode=='amendment-forged':patch['task_fields'][0]['set']['attempt']=1
+  if mode=='amendment-hash':patch['base_output_hash']='changed'
+  if mode=='amendment-self':patch['base_round_id']=c['round_id']
+  if mode=='amendment-missing-risk':patch['risk_updates']=[dict(risk_id='invented',task_id=team['tasks'][0]['id'],rationale='Not in the catalogue')]
+  if mode=='amendment-scope':patch['task_fields'][0]['set'].update(write_scopes=['source'],integration='in_place')
+  if mode=='amendment-repair-risk':patch['risk_updates']=[dict(risk_id=r['id'],task_id=team['tasks'][0]['id'],rationale='Explicit correction of missing ownership') for r in c['risk_catalog']['risks']]
+  out.update(team_plan_json=json.dumps(patch),risk_owners=[])
+ elif mode=='amendment-repair-risk':out['risk_owners'].pop()
  if mode=='answer':out.update(team_plan_json=None,risk_owners=[])
  if mode=='intake-guided' and not c['prior_rounds']:out.update(message='Jaki wynik chcesz otrzymać?',team_plan_json=None,risk_owners=[])
  if mode.startswith('intake-') and c.get('intake') and not (mode=='intake-guided' and not c['prior_rounds']):
@@ -73,6 +88,18 @@ if prompt.startswith('You are the configured orchestrator.'):
 
   configuration['profiles'][configuration['orchestrator']['profile']]['model']='interview-selected-orchestrator-model'
   task=dict(task_family='software',objective=c['spec']['objective'],requirements=[dict(id='R-CHAT',original_text=c['spec']['objective'],source_ref='user:chat',criteria=dict(result='Synthetic file-bound task criterion for transport validation'))],plan_items=[dict(id='P-CHAT',dependencies=[],requirement_ids=['R-CHAT'],description='Synthetic explicitly scoped plan')],input_files=['source'],editable_files=[],check_command=['python3','-c',"print('Synthetic scoped inspection')"])
+  if mode=='intake-directory':task['input_files']=[c['spec']['workspace']]
+  if mode=='intake-refactoring':
+   variant=next(t for t in c['team_template_contract']['choices'] if t['template']=='refactoring')
+   assert variant['family']=='software' and 'refactorer' in variant['competencies'] and 'characterization' in variant['description']
+   task.update(team_template='refactoring',editable_files=['source'])
+   task['requirements'][0]['criteria']['result']='Preserve observable behavior while restructuring the implementation'
+  if mode=='intake-source-instructions':
+   task['input_files']=['source','AGENTS.md']
+   instructions=c['project_instructions'];assert instructions['format']=='project-instructions-v1' and not instructions['exhaustive']
+   assert instructions['observation_hash']==c['interview_source_hash']
+   assert [(d['path'],d['directory_scope']) for d in instructions['documents']]==[('AGENTS.md','.'),('nested/CLAUDE.md','nested')]
+  if mode=='intake-outside':task['input_files']=['/etc']
   proposal=dict(task=task,configuration=configuration,rationale='Synthetic orchestrator decision; no semantic model quality asserted')
   if mode=='intake-binary':proposal['configuration']['providers']['claude']['binary']='/unapproved/model-supplied-cli'
   if mode=='intake-omission':proposal['task']['requirements'][0]['original_text']='lost original scope'
@@ -86,18 +113,49 @@ else:
   print(json.dumps(dict(type='system',subtype='init',session_id=native,tools=['StructuredOutput'])),flush=True)
   sys.exit(1)
  c=json.JSONDecoder().raw_decode(prompt[prompt.index('\n{')+1:])[0]
- ids=[e['id'] for e in c['receipts'] if e['output']==c['context'] or e['output']==c['output']]
+ if mode.startswith('parts-'):
+  count=base/'part-count';part_number=int(count.read_text())+1 if count.exists() else 1;count.write_text(str(part_number))
+  if (mode=='parts-interrupt' and part_number==2) or (mode=='parts-interrupt-late' and part_number==8) or (mode=='parts-resume-twice' and part_number in (2,3)):
+   print(json.dumps(dict(type='system',subtype='init',session_id=native,tools=['StructuredOutput'])),flush=True);sys.exit(1)
+ if mode.startswith('amendment'):
+  resolved=c['resolved_team_proposal'];assert resolved['team']['tasks'] and len(resolved['risk_owners'])==240
+ ids=[e['id'] for e in c['receipts'] if e['source'] in ('runtime:orchestrator-inputs','runtime:orchestrator-output')]
  if mode.startswith('intake-'):ids += [e['id'] for e in c['receipts'] if e['source']=='runtime:intake-sources']
  out=dict(contract_version=c['contract_version'],output_hash=c['output_hash'],spec_revision=c['spec_revision'],input_hash=c['input_hash'],checks=[dict(check_id=i,status='pass',method='Synthetic structured receipt fixture',evidence_ids=ids,rationale='Fixture only; no product quality assertion') for i in c['expected_checks']],findings=[])
  if mode=='reject' or mode=='intake-reject':out['checks'][0]['status']='fail';out['findings']=['Fixture rejection']
  if mode=='messages':out['agent_messages']=[dict(target=dict(type='agent',agent_id='orchestrator'),kind='answer',text='Independent review report is available as the task artifact.')]
- if mode=='bad-proof':out['checks'][0]['evidence_ids']=['invented']
+ if mode in ('bad-proof','intake-bad-proof'):out['checks'][0]['evidence_ids']=['invented']
+ if mode=='parts-reject' and part_number==2:out['checks'][0]['status']='fail';out['findings']=['Concrete synthetic rejection of this part']
+ if mode=='parts-incomplete' and part_number==2:out['checks'].pop()
+ if mode.startswith('amendment') or mode.startswith('shared-proof') or mode.startswith('parts-'):
+  proofs=[];compact=[]
+  for check in out['checks']:
+   proof=next((p for p in proofs if p['method']==check['method'] and p['evidence_ids']==check['evidence_ids']),None)
+   if proof is None:
+    proof=dict(id='inspection-'+str(len(proofs)),method=check['method'],evidence_ids=check['evidence_ids']);proofs.append(proof)
+   compact.append(dict(check_id=check['check_id'],status=check['status'],proof_id=proof['id'],rationale=check['rationale']))
+  out.update(proofs=proofs,checks=compact)
+  if mode=='shared-proof-unknown':out['checks'][0]['proof_id']='absent'
+  if mode=='shared-proof-invented':out['proofs'][0]['evidence_ids']=['invented']
+  if mode=='shared-proof-duplicate':out['proofs'].append(out['proofs'][0])
+  if mode=='shared-proof-empty':out['proofs'][0]['evidence_ids']=[]
 print(json.dumps(dict(type='system',subtype='init',session_id=native,tools=['StructuredOutput'])))
 print(json.dumps(dict(type='result',subtype='success',is_error=False,session_id=native,structured_output=out)))
 "#.replace("__BASE__",&serde_json::to_string(root.path().to_str().unwrap()).unwrap()).replace("__MODE__",&serde_json::to_string(mode).unwrap());
         std::fs::write(&binary, script).unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut config = Config::from_toml(include_str!("../examples/architect.toml")).unwrap();
+        config.orchestrator.review_checks_per_part = 0;
+        if mode.starts_with("parts-") {
+            config.orchestrator.review_checks_per_part =
+                if matches!(mode, "parts-default" | "parts-interrupt-late") {
+                    default_review_checks()
+                } else if mode == "parts-two" {
+                    180
+                } else {
+                    64
+                };
+        }
         config.workspace.mode = WorkspaceMode::InPlace;
         config
             .providers
@@ -181,13 +239,21 @@ print(json.dumps(dict(type='result',subtype='success',is_error=False,session_id=
                 },
             )
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let started = Instant::now();
         loop {
             let current = self.current();
             if current.status != Status::Running {
                 return current;
             }
-            assert!(Instant::now() < deadline, "{:?}", current.diagnostic);
+            let parts = current
+                .orchestration_rounds
+                .last()
+                .map_or(0, |r| r.review_parts.len());
+            assert!(
+                started.elapsed() < Duration::from_secs(15 + 3 * parts as u64),
+                "{:?}",
+                current.diagnostic
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -199,6 +265,787 @@ impl Drop for Fixture {
             Command::Cancel {
                 run_id: self.run.id.clone(),
             },
+        );
+    }
+}
+
+fn native_round_calls(run: &Run) -> usize {
+    run.orchestration_rounds
+        .iter()
+        .map(|r| {
+            usize::from(r.executor_session.is_some())
+                + if r.review_parts.is_empty() {
+                    usize::from(r.verifier_session.is_some())
+                } else {
+                    r.review_parts
+                        .iter()
+                        .filter(|p| p.session_id.is_some())
+                        .count()
+                }
+        })
+        .sum()
+}
+
+#[test]
+fn native_review_parts_preserve_all_checks_authorship_and_approval_binding() {
+    let f = Fixture::new("parts-default");
+    let run = f.execute();
+    let round = &run.orchestration_rounds[0];
+    assert_eq!(
+        round.status,
+        RoundStatus::Reviewed,
+        "{:?}",
+        round.diagnostic
+    );
+    assert!(round.review_parts.len() > 2);
+    let snapshot = architect::tui::model::Snapshot::from_document(
+        &serde_json::to_value(&run).unwrap(),
+        &serde_json::json!({"reviewed_team_round":round.id}),
+    );
+    assert!(
+        snapshot
+            .reviewed_team_details
+            .contains("individually authenticated native parts")
+    );
+    assert!(
+        snapshot
+            .reviewed_team_details
+            .contains(&round.review_parts[0].id)
+    );
+    let mut observed = serde_json::to_value(&run).unwrap();
+    observed["status"] = serde_json::json!("running");
+    observed["orchestration_rounds"][0]["status"] = serde_json::json!("running");
+    observed["orchestration_rounds"][0]["review_parts"][round.review_parts.len() - 1]["output"] =
+        serde_json::Value::Null;
+    let progress =
+        architect::tui::model::Snapshot::from_document(&observed, &serde_json::json!({}));
+    assert_eq!(
+        progress.review_progress,
+        Some((round.review_parts.len() - 1, round.review_parts.len()))
+    );
+    let response = planning::authenticate(&run, round).unwrap();
+    let review: planning::ReviewResponse =
+        serde_json::from_str(round.review.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        review
+            .checks
+            .iter()
+            .map(|c| c.check_id.clone())
+            .collect::<std::collections::BTreeSet<_>>(),
+        planning::expected_checks(&run, &response)
+    );
+    assert!(
+        round
+            .review_parts
+            .iter()
+            .all(|p| p.check_ids.len() <= default_review_checks() + 2
+                && p.session_id.is_some()
+                && p.output.is_some())
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        1 + round.review_parts.len()
+    );
+    for mutation in 0..6 {
+        let mut changed = run.clone();
+        let r = &mut changed.orchestration_rounds[0];
+        match mutation {
+            0 => {
+                r.review_parts.pop();
+            }
+            1 => {
+                r.review_parts[0].output.as_mut().unwrap().push(' ');
+            }
+            2 => {
+                r.review_parts[0].check_ids.remove("V04");
+            }
+            3 => {
+                r.review.as_mut().unwrap().push(' ');
+            }
+            4 => {
+                r.review_known_agents
+                    .as_mut()
+                    .unwrap()
+                    .insert("invented-recipient".into());
+            }
+            _ => {
+                let session = changed
+                    .session_ledger
+                    .sessions
+                    .get(r.review_parts[0].session_id.as_ref().unwrap())
+                    .unwrap();
+                let turn = session.current_turn_id.clone().unwrap();
+                changed
+                    .session_ledger
+                    .turns
+                    .get_mut(&turn)
+                    .unwrap()
+                    .prompt_hash = architect::hash("different native input");
+            }
+        }
+        assert!(
+            planning::authenticate(&changed, &changed.orchestration_rounds[0]).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    let accepted = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::AcceptTeam {
+                run_id: run.id.clone(),
+                round_id: round.id.clone(),
+                scope_hash: planning::accept_scope(&run, round).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(accepted.team_risk_owners.len(), 240);
+    planning::authenticate(&accepted, &accepted.orchestration_rounds[0]).unwrap();
+}
+
+#[test]
+fn native_review_parts_retain_completed_prefix_on_interruption_and_positive_report_repair() {
+    use architect::runtime::orchestration_recovery::{self, Kind};
+    for mode in ["parts-interrupt", "parts-incomplete"] {
+        let f = Fixture::new(mode);
+        let interrupted = f.execute();
+        let run = if interrupted.reconciliation_required {
+            reconciled_management(&f, &interrupted)
+        } else {
+            interrupted
+        };
+        let round = &run.orchestration_rounds[0];
+        let first = round.review_parts[0].clone();
+        assert!(first.output.is_some());
+        let p = orchestration_recovery::for_round(&run, &round.id, Kind::Replacement).unwrap();
+        if mode == "parts-interrupt" {
+            let calls = std::fs::read_to_string(f.root.path().join("calls")).unwrap();
+            let path = f.root.path().join("workspace/source");
+            std::fs::write(&path, "changed source").unwrap();
+            assert!(orchestration_recovery::for_round(&run, &round.id, Kind::Replacement).is_err());
+            std::fs::write(&path, "original").unwrap();
+            let db = rusqlite::Connection::open(f.root.path().join("state.db")).unwrap();
+            db.execute_batch("CREATE TRIGGER refuse_part_recovery BEFORE INSERT ON events WHEN NEW.kind='orchestration_recovery_started' BEGIN SELECT RAISE(ABORT, 'injected part approval failure'); END;").unwrap();
+            let command = Command::RecoverOrchestration {
+                run_id: run.id.clone(),
+                round_id: round.id.clone(),
+                kind: Kind::Replacement,
+                scope_hash: p.scope_hash.clone(),
+            };
+            assert!(f.runtime.dispatch(&id(), command).is_err());
+            assert_eq!(
+                std::fs::read_to_string(f.root.path().join("calls")).unwrap(),
+                calls
+            );
+            assert_eq!(
+                f.current().orchestration_rounds[0].review_parts[0].output,
+                first.output
+            );
+            db.execute_batch("DROP TRIGGER refuse_part_recovery;")
+                .unwrap();
+        }
+        assert_eq!(
+            p.review_part.as_deref(),
+            Some(round.review_parts[1].id.as_str())
+        );
+        std::fs::write(f.root.path().join("parts-ready"), "ready").unwrap();
+        f.runtime
+            .dispatch(
+                &id(),
+                Command::RecoverOrchestration {
+                    run_id: run.id.clone(),
+                    round_id: round.id.clone(),
+                    kind: Kind::Replacement,
+                    scope_hash: p.scope_hash,
+                },
+            )
+            .unwrap();
+        let after = management_idle(&f);
+        let r = &after.orchestration_rounds[0];
+        assert_eq!(
+            r.status,
+            RoundStatus::Reviewed,
+            "{mode}: {:?} {:?}",
+            r.diagnostic,
+            after.diagnostic
+        );
+        assert_eq!(r.review_parts[0].output, first.output);
+        assert_eq!(r.review_parts[0].session_id, first.session_id);
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            2 + r.review_parts.len()
+        );
+        planning::authenticate(&after, r).unwrap();
+    }
+}
+
+#[test]
+fn recovery_options_share_one_immutable_view_and_reject_changed_last_completed_part() {
+    use architect::runtime::orchestration_recovery::{self, Kind};
+    let f = Fixture::new("parts-interrupt-late");
+    let run = reconciled_management(&f, &f.execute());
+    let round = run.orchestration_rounds.last().unwrap();
+    assert_eq!(
+        round
+            .review_parts
+            .iter()
+            .filter(|p| p.output.is_some())
+            .count(),
+        7
+    );
+    let before = serde_json::to_value(&run).unwrap();
+    let options = orchestration_recovery::pending(&run);
+    assert!(options.values().any(|p| p.kind == Kind::Replacement));
+    for kind in [Kind::Resume, Kind::Replacement, Kind::Restore] {
+        let direct = orchestration_recovery::for_round(&run, &round.id, kind).ok();
+        let advertised = options.values().find(|p| p.kind == kind);
+        assert_eq!(
+            serde_json::to_value(direct).unwrap(),
+            serde_json::to_value(advertised).unwrap()
+        );
+    }
+    let mut forged = run.clone();
+    let session_id = round.review_parts[6].session_id.as_ref().unwrap();
+    let turn_id = run.session_ledger.sessions[session_id]
+        .current_turn_id
+        .as_ref()
+        .unwrap();
+    forged
+        .session_ledger
+        .turns
+        .get_mut(turn_id)
+        .unwrap()
+        .prompt_hash = architect::hash("altered seventh review input");
+    assert!(orchestration_recovery::pending(&forged).is_empty());
+    let source = f.root.path().join("workspace/source");
+    std::fs::write(&source, "changed after candidate publication").unwrap();
+    assert!(orchestration_recovery::pending(&run).is_empty());
+    std::fs::write(&source, "original").unwrap();
+    assert_eq!(
+        serde_json::to_value(orchestration_recovery::pending(&run)).unwrap(),
+        serde_json::to_value(options).unwrap()
+    );
+    assert_eq!(serde_json::to_value(&run).unwrap(), before);
+}
+
+#[test]
+fn native_review_part_rejection_never_runs_remaining_parts_or_shops_for_a_positive_review() {
+    let f = Fixture::new("parts-reject");
+    let run = f.execute();
+    let r = &run.orchestration_rounds[0];
+    assert_eq!(r.status, RoundStatus::Rejected, "{:?}", r.diagnostic);
+    assert_eq!(
+        r.review_parts.iter().filter(|p| p.output.is_some()).count(),
+        2
+    );
+    assert!(run.team.is_none());
+    assert!(architect::runtime::orchestration_recovery::pending(&run).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
+    // A newly requested planning turn receives the actual structured finding;
+    // it is not hidden merely because the aggregate never became acceptable.
+    let next = f.execute();
+    let context: serde_json::Value =
+        serde_json::from_str(&next.orchestration_rounds[1].request_context).unwrap();
+    let reports = &context["prior_rounds"][0]["review_parts"];
+    assert!(
+        reports
+            .to_string()
+            .contains("Concrete synthetic rejection of this part")
+    );
+    assert_eq!(
+        reports[1]["output_hash"],
+        architect::hash(
+            run.orchestration_rounds[0].review_parts[1]
+                .output
+                .as_ref()
+                .unwrap()
+        )
+    );
+}
+
+#[test]
+fn ipc_recovery_prepares_outside_the_store_and_pages_an_immutable_source_checked_document() {
+    use architect::ipc::{self, Operation, Request};
+    let f = Fixture::new("parts-interrupt-late");
+    let run = reconciled_management(&f, &f.execute());
+    let original = serde_json::to_value(&run).unwrap();
+    let calls = std::fs::read_to_string(f.root.path().join("calls")).unwrap();
+    let request = |operation| {
+        ipc::handle(
+            &f.runtime,
+            Request {
+                version: ipc::PROTOCOL_VERSION,
+                request_id: id(),
+                idempotency_key: None,
+                operation,
+            },
+        )
+    };
+    let snapshot = || {
+        request(Operation::Snapshot {
+            run_id: run.id.clone(),
+        })
+        .data
+        .unwrap()
+    };
+    let first = snapshot();
+    assert_eq!(first["orchestration_recovery_state"], "preparing");
+    assert_eq!(first["orchestration_recovery_count"], 0);
+    assert!(f.runtime.store.try_lock().is_ok());
+    assert!(request(Operation::Events { after: 0 }).error.is_none());
+    let started = Instant::now();
+    let ready = loop {
+        let next = snapshot();
+        if next["orchestration_recovery_state"] == "ready" {
+            break next;
+        }
+        assert!(started.elapsed() < Duration::from_secs(60), "{next}");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(ready["orchestration_recovery_count"].as_u64().unwrap() > 0);
+    let expected_hash = ready["orchestration_recovery_document_hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut text = String::new();
+    let mut offset = 0;
+    loop {
+        let page = request(Operation::Read {
+            run_id: run.id.clone(),
+            document: "orchestration-recovery".into(),
+            offset,
+            expected_hash: Some(expected_hash.clone()),
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let page = page.data.unwrap();
+        assert_eq!(page["hash"], expected_hash);
+        text.push_str(page["chunk"].as_str().unwrap());
+        let Some(next) = page["next_offset"].as_u64() else {
+            break;
+        };
+        offset = next as usize;
+    }
+    assert_eq!(architect::hash(&text), expected_hash);
+    let document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(document["run_document_hash"], ready["document_hash"]);
+    let expected = architect::runtime::orchestration_recovery::pending(&run);
+    assert_eq!(
+        document["packages"],
+        serde_json::to_value(&expected).unwrap()
+    );
+    let package = expected
+        .values()
+        .find(|p| p.kind == architect::runtime::orchestration_recovery::Kind::Replacement)
+        .unwrap();
+    std::fs::write(
+        f.root.path().join("workspace/source"),
+        "changed after publication",
+    )
+    .unwrap();
+    let changed = snapshot();
+    assert_eq!(changed["orchestration_recovery_state"], "unavailable");
+    assert_eq!(changed["orchestration_recovery_count"], 0);
+    assert!(
+        f.runtime
+            .dispatch(
+                &id(),
+                Command::RecoverOrchestration {
+                    run_id: run.id.clone(),
+                    round_id: package.round_id.clone(),
+                    kind: package.kind,
+                    scope_hash: package.scope_hash.clone()
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(f.current()).unwrap(), original);
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls")).unwrap(),
+        calls
+    );
+}
+
+#[test]
+fn native_review_part_exact_resume_keeps_identity_and_the_latest_handoff_across_repeated_interruptions()
+ {
+    use architect::runtime::orchestration_recovery::{self, Kind};
+    let f = Fixture::new("parts-resume-twice");
+    let mut run = reconciled_management(&f, &f.execute());
+    let first = run.orchestration_rounds[0].review_parts[0].clone();
+    let mut session = None;
+    for attempt in 0..2 {
+        let p =
+            orchestration_recovery::for_round(&run, &run.orchestration_rounds[0].id, Kind::Resume)
+                .unwrap();
+        if let Some(ref expected) = session {
+            assert_eq!(p.previous_session.as_ref(), Some(expected));
+        } else {
+            session = p.previous_session.clone();
+        }
+        f.runtime
+            .dispatch(
+                &id(),
+                Command::RecoverOrchestration {
+                    run_id: run.id.clone(),
+                    round_id: p.round_id,
+                    kind: Kind::Resume,
+                    scope_hash: p.scope_hash,
+                },
+            )
+            .unwrap();
+        run = management_idle(&f);
+        if attempt == 0 {
+            assert_eq!(run.orchestration_rounds[0].status, RoundStatus::Failed);
+            run = reconciled_management(&f, &run);
+        }
+    }
+    let r = &run.orchestration_rounds[0];
+    assert_eq!(r.status, RoundStatus::Reviewed, "{:?}", r.diagnostic);
+    assert_eq!(r.review_parts[1].session_id, session);
+    assert_eq!(r.review_parts[0].output, first.output);
+    planning::authenticate(&run, r).unwrap();
+}
+
+#[test]
+fn native_review_parts_restore_lost_last_part_and_aggregate_without_cli_replay() {
+    use architect::runtime::orchestration_recovery::{self, Kind};
+    let f = Fixture::new("parts-two");
+    let original = f.execute();
+    assert_eq!(
+        original.orchestration_rounds[0].status,
+        RoundStatus::Reviewed,
+        "{:?}",
+        original.diagnostic
+    );
+    assert_eq!(original.orchestration_rounds[0].review_parts.len(), 2);
+    let calls = std::fs::read_to_string(f.root.path().join("calls")).unwrap();
+    for last_lost in [true, false] {
+        let mut lost = original.clone();
+        let r = &mut lost.orchestration_rounds[0];
+        r.status = RoundStatus::Interrupted;
+        r.review = None;
+        if last_lost {
+            r.review_parts[1].output = None;
+            r.review_parts[1].session_id = None;
+        }
+        lost.status = Status::Blocked;
+        f.runtime
+            .store
+            .lock()
+            .unwrap()
+            .save(&lost, "test_review_checkpoint_lost", None)
+            .unwrap();
+        let p = orchestration_recovery::for_round(
+            &lost,
+            &lost.orchestration_rounds[0].id,
+            Kind::Restore,
+        )
+        .unwrap();
+        f.runtime
+            .dispatch(
+                &id(),
+                Command::RecoverOrchestration {
+                    run_id: lost.id.clone(),
+                    round_id: p.round_id,
+                    kind: Kind::Restore,
+                    scope_hash: p.scope_hash,
+                },
+            )
+            .unwrap();
+        let restored = management_idle(&f);
+        assert_eq!(
+            restored.orchestration_rounds[0].status,
+            RoundStatus::Reviewed,
+            "{:?}",
+            restored.diagnostic
+        );
+        assert_eq!(
+            restored.orchestration_rounds[0].review,
+            original.orchestration_rounds[0].review
+        );
+        assert_eq!(restored.session_ledger, original.session_ledger);
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("calls")).unwrap(),
+            calls
+        );
+    }
+}
+
+#[test]
+fn native_amendment_chain_reviews_and_installs_the_complete_result() {
+    let f = Fixture::new("amendment");
+    let original = f.execute();
+    let first = original.orchestration_rounds[0].clone();
+    assert_eq!(first.status, RoundStatus::Reviewed);
+    let second = f.execute();
+    assert_eq!(
+        second.orchestration_rounds[1].status,
+        RoundStatus::Reviewed,
+        "{:?}",
+        second.diagnostic
+    );
+    let reviewed = f.execute();
+    let round = reviewed.orchestration_rounds.last().unwrap();
+    assert_eq!(
+        round.status,
+        RoundStatus::Reviewed,
+        "{:?}",
+        round.diagnostic
+    );
+    assert_eq!(reviewed.orchestration_rounds[0].output, first.output);
+    let response = planning::authenticate(&reviewed, round).unwrap();
+    assert!(response.risk_owners.is_empty());
+    let resolved = planning::amendment::resolve(&reviewed, &response).unwrap();
+    assert_eq!(resolved.bases.len(), 2);
+    assert_eq!(resolved.risk_owners.len(), 240);
+    assert_eq!(
+        resolved.team.tasks[0].description,
+        "Corrected native fixture description 2"
+    );
+    let original_response: planning::Response =
+        serde_json::from_str(first.output.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        planning::expected_checks(&reviewed, &response),
+        planning::expected_checks(&reviewed, &original_response)
+    );
+    let snapshot = architect::tui::model::Snapshot::from_document(
+        &serde_json::to_value(&reviewed).unwrap(),
+        &serde_json::json!({"reviewed_team_round":round.id}),
+    );
+    assert!(
+        snapshot
+            .reviewed_team_details
+            .contains("Corrected native fixture description 2")
+    );
+    assert!(
+        snapshot
+            .reviewed_team_details
+            .contains(&resolved.risk_owners[239].risk_id)
+    );
+    let scope = planning::accept_scope(&reviewed, round).unwrap();
+    assert!(
+        f.runtime
+            .dispatch(
+                &id(),
+                Command::AcceptTeam {
+                    run_id: reviewed.id.clone(),
+                    round_id: first.id.clone(),
+                    scope_hash: planning::accept_scope(&reviewed, &first).unwrap(),
+                }
+            )
+            .is_err()
+    );
+    let accepted = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::AcceptTeam {
+                run_id: reviewed.id.clone(),
+                round_id: round.id.clone(),
+                scope_hash: scope,
+            },
+        )
+        .unwrap();
+    assert_eq!(accepted.team_risk_owners.len(), 240);
+    assert_eq!(
+        accepted.team.as_ref().unwrap().tasks[0].description,
+        resolved.team.tasks[0].description
+    );
+    assert!(
+        accepted
+            .team
+            .as_ref()
+            .unwrap()
+            .tasks
+            .iter()
+            .all(|t| t.attempt == 0)
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("workspace/source")).unwrap(),
+        "original"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        6
+    );
+
+    let mut changed = reviewed.clone();
+    changed.orchestration_rounds[0]
+        .output
+        .as_mut()
+        .unwrap()
+        .push(' ');
+    assert!(planning::validate_response(&changed, &response).is_err());
+    let mut stale = reviewed.clone();
+    stale.spec_revision += 1;
+    assert!(planning::validate_response(&stale, &response).is_err());
+    let mut ambiguous = response.clone();
+    ambiguous.risk_owners = resolved.risk_owners.clone();
+    assert!(planning::validate_response(&reviewed, &ambiguous).is_err());
+    let mut missing = response.clone();
+    let mut patch: serde_json::Value =
+        serde_json::from_str(missing.team_plan_json.as_ref().unwrap()).unwrap();
+    patch["remove_tasks"] = serde_json::json!([resolved.team.tasks[0].id]);
+    patch["task_fields"] = serde_json::json!([]);
+    missing.team_plan_json = Some(patch.to_string());
+    assert!(planning::validate_response(&reviewed, &missing).is_err());
+    let mut changed = reviewed.clone();
+    let base_session = first.executor_session.as_ref().unwrap();
+    changed
+        .session_ledger
+        .sessions
+        .get_mut(base_session)
+        .unwrap()
+        .native_observed = false;
+    assert!(planning::validate_response(&changed, &response).is_err());
+    let mut changed = reviewed;
+    changed
+        .approvals
+        .retain(|a| a.action != format!("orchestrate:{}", first.id));
+    assert!(planning::validate_response(&changed, &response).is_err());
+}
+
+#[test]
+fn native_amendment_repairs_rejected_base_without_treating_it_as_approved() {
+    let f = Fixture::new("amendment-repair-risk");
+    let rejected = f.execute();
+    assert_eq!(
+        rejected.orchestration_rounds[0].status,
+        RoundStatus::Rejected
+    );
+    let reviewed = f.execute();
+    let round = reviewed.orchestration_rounds.last().unwrap();
+    assert_eq!(
+        round.status,
+        RoundStatus::Reviewed,
+        "{:?}",
+        round.diagnostic
+    );
+    assert_eq!(
+        reviewed.orchestration_rounds[0].output,
+        rejected.orchestration_rounds[0].output
+    );
+    let response = planning::authenticate(&reviewed, round).unwrap();
+    assert_eq!(
+        planning::amendment::resolve(&reviewed, &response)
+            .unwrap()
+            .risk_owners
+            .len(),
+        240
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn native_shared_review_proofs_preserve_every_decision_and_fail_closed_on_bad_references() {
+    for mode in [
+        "shared-proof",
+        "shared-proof-unknown",
+        "shared-proof-invented",
+        "shared-proof-duplicate",
+        "shared-proof-empty",
+    ] {
+        let f = Fixture::new(mode);
+        let run = f.execute();
+        let round = run.orchestration_rounds.last().unwrap();
+        if mode == "shared-proof" {
+            assert_eq!(
+                round.status,
+                RoundStatus::Reviewed,
+                "{:?}",
+                round.diagnostic
+            );
+            let response = planning::authenticate(&run, round).unwrap();
+            let review: planning::ReviewResponse =
+                architect::transport::decode(round.review.as_ref().unwrap().as_bytes()).unwrap();
+            assert_eq!(
+                review.checks.len(),
+                planning::expected_checks(&run, &response).len()
+            );
+            assert!(
+                review
+                    .checks
+                    .iter()
+                    .all(|c| !c.method.is_empty() && c.evidence_ids.len() == 2)
+            );
+            let expanded = serde_json::to_string(&review).unwrap();
+            assert!(round.review.as_ref().unwrap().len() < expanded.len());
+            let scope_hash = planning::accept_scope(&run, round).unwrap();
+            let accepted = f
+                .runtime
+                .dispatch(
+                    &id(),
+                    Command::AcceptTeam {
+                        run_id: run.id.clone(),
+                        round_id: round.id.clone(),
+                        scope_hash,
+                    },
+                )
+                .unwrap();
+            assert_eq!(accepted.team_risk_owners.len(), 240);
+        } else {
+            assert_eq!(
+                round.status,
+                RoundStatus::Rejected,
+                "{mode}: {:?}",
+                round.diagnostic
+            );
+            assert!(run.team.is_none());
+        }
+    }
+}
+
+#[test]
+fn native_amendment_rejects_forged_history_hash_forward_base_risks_and_permissions() {
+    for mode in [
+        "amendment-forged",
+        "amendment-hash",
+        "amendment-self",
+        "amendment-missing-risk",
+        "amendment-scope",
+    ] {
+        let f = Fixture::new(mode);
+        assert_eq!(
+            f.execute().orchestration_rounds[0].status,
+            RoundStatus::Reviewed
+        );
+        let rejected = f.execute();
+        let round = rejected.orchestration_rounds.last().unwrap();
+        assert_eq!(
+            round.status,
+            RoundStatus::Rejected,
+            "{mode}: {:?}",
+            round.diagnostic
+        );
+        assert!(rejected.team.is_none());
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("calls"))
+                .unwrap()
+                .lines()
+                .count(),
+            3,
+            "invalid amendments must not reach review: {mode}"
         );
     }
 }
@@ -1193,13 +2040,18 @@ fn first_message_commit_failure_retains_one_intake_and_an_unaccepted_draft() {
 }
 
 fn reviewed_interview(f: &Fixture) -> Run {
+    reviewed_interview_prompt(
+        f,
+        "Build the requested synthetic feature; interview before execution.",
+    )
+}
+fn reviewed_interview_prompt(f: &Fixture, objective: &str) -> Run {
     let run = f
         .runtime
         .dispatch(
             &id(),
             Command::BeginIntake {
-                objective: "Build the requested synthetic feature; interview before execution."
-                    .into(),
+                objective: objective.into(),
                 workspace: f.run.spec.workspace.clone(),
                 config: f.run.spec.config.clone().unwrap(),
             },
@@ -1308,6 +2160,25 @@ fn interview_waits_without_verifier_spam_then_reviews_the_completed_proposal() {
     let response = planning::authenticate(&reviewed, round).unwrap();
     let review_request = planning::verifier_request(&reviewed, round, &response).unwrap();
     assert!(review_request.prompt.contains("Do not block V08"));
+    let allowed = review_request
+        .schema
+        .pointer("/properties/proofs/items/properties/evidence_ids/items/enum")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(allowed.len(), 3);
+    for id in [
+        &round.input_evidence_id,
+        &round.output_evidence_id,
+        &round.intake_evidence_id,
+    ] {
+        assert!(allowed.iter().any(|v| v.as_str() == id.as_deref()));
+    }
+    assert!(
+        review_request
+            .prompt
+            .contains("Copy exact receipt id UUID values, never source labels")
+    );
     assert!(
         review_request
             .prompt
@@ -1335,6 +2206,68 @@ fn interview_waits_without_verifier_spam_then_reviews_the_completed_proposal() {
         3,
         "one question, one proposal, one independent review; acceptance starts no executor"
     );
+}
+
+#[test]
+fn reviewed_interview_template_selection_reaches_the_refactoring_planning_path() {
+    use architect::team::{CatalogRole, TemplateKind, checks::CheckPhase};
+    let f = Fixture::new("intake-refactoring");
+    let reviewed = reviewed_interview_prompt(
+        &f,
+        "Refactor the existing implementation without changing its observable behavior; propose the appropriate predefined team.",
+    );
+    let (round_id, scope_hash) =
+        architect::runtime::intake::pending(&reviewed).expect("independently reviewed contract");
+    let snapshot = architect::tui::model::Snapshot::from_document(
+        &serde_json::to_value(&reviewed).unwrap(),
+        &serde_json::json!({
+            "reviewed_intake_proposal":[round_id.clone(),scope_hash.clone()]
+        }),
+    );
+    assert!(
+        snapshot
+            .intake_proposal_details
+            .contains("Selected team approach: refactoring")
+    );
+    let accepted = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::AcceptIntake {
+                run_id: reviewed.id.clone(),
+                round_id,
+                scope_hash,
+            },
+        )
+        .unwrap();
+    assert_eq!(accepted.spec.team_template, Some(TemplateKind::Refactoring));
+    assert!(accepted.team.is_none() && accepted.quality_gates.is_empty());
+    let candidate = planning::template(&accepted).unwrap();
+    assert_eq!(candidate.template, TemplateKind::Refactoring);
+    for task in candidate.tasks.iter().filter(|t| t.deliverable) {
+        let owner = candidate
+            .agents
+            .iter()
+            .find(|a| a.id == task.owner_id)
+            .unwrap();
+        assert_eq!(owner.role, CatalogRole::Refactorer);
+        assert!(
+            task.check_plan
+                .iter()
+                .any(|c| c.phase == CheckPhase::BeforeExecution)
+        );
+        assert!(
+            task.check_plan
+                .iter()
+                .any(|c| c.phase == CheckPhase::BeforeVerification)
+        );
+    }
+    let response: planning::Response =
+        serde_json::from_str(reviewed.orchestration_rounds[0].output.as_ref().unwrap()).unwrap();
+    let mut wrong: serde_json::Value =
+        serde_json::from_str(response.intake_proposal_json.as_ref().unwrap()).unwrap();
+    wrong["task"]["team_template"] = serde_json::json!("research");
+    assert!(architect::runtime::intake::proposed_spec(&reviewed, &wrong.to_string()).is_err());
 }
 
 #[test]
@@ -1533,13 +2466,25 @@ fn interview_acceptance_rejects_changed_sources_new_messages_and_forged_native_s
 
 #[test]
 fn daemon_ui_accepts_the_reviewed_interview_then_plans_and_installs_its_selected_team() {
+    chat_to_selected_team(false);
+}
+#[test]
+fn daemon_ui_worktree_interview_prepares_and_activates_before_planning_its_selected_team() {
+    chat_to_selected_team(true);
+}
+fn chat_to_selected_team(worktree: bool) {
     use architect::{
         ipc,
         tui::backend::{Action, Backend, IpcBackend},
     };
     let f = Fixture::new("intake-proposal");
     let workspace = f.root.path().join("workspace");
-    std::fs::write(workspace.join("architect.toml"), chat_project_config(&f)).unwrap();
+    let config = if worktree {
+        chat_project_config(&f).replace("mode = \"in-place\"", "mode = \"worktree\"")
+    } else {
+        chat_project_config(&f)
+    };
+    std::fs::write(workspace.join("architect.toml"), config).unwrap();
     let state = f.root.path().join("interview-to-team");
     let daemon = architect::tui::connect_or_start_daemon(
         &state,
@@ -1565,7 +2510,8 @@ fn daemon_ui_accepts_the_reviewed_interview_then_plans_and_installs_its_selected
     assert!(started.message_accepted);
     let rid = started.run_id;
     let wait = |backend: &mut IpcBackend, team: bool| {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let started = Instant::now();
+        let mut allowance = Duration::from_secs(15);
         loop {
             match backend.snapshot(&rid) {
                 Ok(snapshot)
@@ -1577,16 +2523,21 @@ fn daemon_ui_accepts_the_reviewed_interview_then_plans_and_installs_its_selected
                 {
                     return snapshot;
                 }
-                Ok(snapshot) => assert!(
-                    Instant::now() < deadline,
-                    "proposal unavailable: {}",
-                    snapshot.diagnostic
-                ),
+                Ok(snapshot) => {
+                    if let Some((_, total)) = snapshot.review_progress {
+                        allowance = Duration::from_secs(15 + 3 * total as u64);
+                    }
+                    assert!(
+                        started.elapsed() < allowance,
+                        "proposal unavailable: {}",
+                        snapshot.diagnostic
+                    );
+                }
                 Err(error)
                     if error.to_string().contains("document changed")
                         || error.to_string().contains("run changed between") =>
                 {
-                    assert!(Instant::now() < deadline, "snapshot did not stabilize")
+                    assert!(started.elapsed() < allowance, "snapshot did not stabilize")
                 }
                 Err(error) => panic!("snapshot failed: {error}"),
             }
@@ -1615,13 +2566,103 @@ fn daemon_ui_accepts_the_reviewed_interview_then_plans_and_installs_its_selected
             },
         )
         .unwrap();
-    assert!(notice.contains("turn started"), "{notice}");
+    if worktree {
+        assert!(notice.contains("observing inputs"), "{notice}");
+        for activate in [false, true] {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let snapshot = loop {
+                let snapshot = match backend.snapshot(&rid) {
+                    Ok(snapshot) => snapshot,
+                    Err(error)
+                        if error.to_string().contains("document changed")
+                            || error.to_string().contains("run changed between") =>
+                    {
+                        assert!(
+                            Instant::now() < deadline,
+                            "workspace snapshot did not stabilize"
+                        );
+                        std::thread::sleep(Duration::from_millis(20));
+                        continue;
+                    }
+                    Err(error) => panic!("workspace snapshot failed: {error}"),
+                };
+                if activate && snapshot.workspace_activation.is_some()
+                    || !activate && snapshot.workspace_preparation.is_some()
+                {
+                    break snapshot;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "workspace proposal unavailable: {}",
+                    snapshot.diagnostic
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            let action = if activate {
+                Action::ActivateWorkspace {
+                    scope_hash: snapshot.workspace_activation.unwrap(),
+                }
+            } else {
+                let (selected, scope_hash) = snapshot.workspace_preparation.unwrap();
+                Action::PrepareWorkspace {
+                    selected,
+                    scope_hash,
+                }
+            };
+            backend.act(&rid, action).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let ready = loop {
+            let snapshot = match backend.snapshot(&rid) {
+                Ok(snapshot) => snapshot,
+                Err(error)
+                    if error.to_string().contains("document changed")
+                        || error.to_string().contains("run changed between") =>
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "activation snapshot did not stabilize"
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
+                Err(error) => panic!("activation snapshot failed: {error}"),
+            };
+            if snapshot.queued_orchestrator_turn && !snapshot.workspace_required {
+                break snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "workspace activation unavailable: {}",
+                snapshot.diagnostic
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let raw = ipc::read_document(&state, &rid, "run").unwrap();
+        let active: Run = serde_json::from_str(&raw).unwrap();
+        assert_eq!(active.session_ledger.sessions.len(), 2);
+        assert!(active.team.is_none());
+        assert_eq!(
+            active.managed_workspace.as_ref().unwrap().state,
+            architect::workspace::managed::State::Active
+        );
+        backend
+            .act(
+                &rid,
+                Action::Orchestrate {
+                    scope_hash: ready.scope_hashes["orchestrate"].clone(),
+                },
+            )
+            .unwrap();
+    } else {
+        assert!(notice.contains("turn started"), "{notice}");
+    }
     let planning = wait(&mut backend, true);
     assert!(!planning.intake);
     assert!(planning.chat_origin);
     let raw = ipc::read_document(&state, &rid, "run").unwrap();
     let before: Run = serde_json::from_str(&raw).unwrap();
-    assert_eq!(before.spec_revision, 2);
+    assert_eq!(before.spec_revision, if worktree { 3 } else { 2 });
     assert!(before.team.is_none());
     assert!(before.artifacts.is_empty());
     assert!(before.quality_gates.is_empty());
@@ -1662,7 +2703,7 @@ fn daemon_ui_accepts_the_reviewed_interview_then_plans_and_installs_its_selected
             .unwrap()
             .lines()
             .count(),
-        4
+        native_round_calls(&installed)
     );
     let invocations: Vec<serde_json::Value> = std::fs::read_to_string(f.root.path().join("calls"))
         .unwrap()
@@ -1717,7 +2758,7 @@ fn daemon_ui_accepts_the_reviewed_interview_then_plans_and_installs_its_selected
             .unwrap()
             .lines()
             .count(),
-        4
+        native_round_calls(&installed)
     );
 }
 
@@ -1849,12 +2890,13 @@ def current():
  with sqlite3.connect(os.path.join(sys.argv[2],'state.db')) as db:row=db.execute('SELECT state FROM runs').fetchone()
  return json.loads(row[0]) if row else None
 def wait(predicate):
- deadline=time.monotonic()+15
+ started=time.monotonic()
  while True:
   assert p.poll() is None, ('frontend exited',p.returncode,output[-2000:])
   r=current()
   if r and predicate(r):return r
-  assert time.monotonic()<deadline, ('terminal flow timeout',r and r.get('diagnostic'),output[-2000:])
+  parts=len((r or {}).get('orchestration_rounds',[{}])[-1].get('review_parts',[])) if (r or {}).get('orchestration_rounds') else 0
+  assert time.monotonic()-started<15+3*parts, ('terminal flow timeout',r and r.get('diagnostic'),output[-2000:])
   drain()
 def discard_pending():
  global output
@@ -1922,12 +2964,18 @@ finally:
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    use architect::tui::backend::Backend;
+    let mut backend = architect::tui::backend::IpcBackend::new(&state);
+    let run_id = backend.list_runs().unwrap()[0].id.clone();
+    let observed: Run =
+        serde_json::from_str(&architect::ipc::read_document(&state, &run_id, "run").unwrap())
+            .unwrap();
     assert_eq!(
         std::fs::read_to_string(f.root.path().join("calls"))
             .unwrap()
             .lines()
             .count(),
-        4
+        native_round_calls(&observed)
     );
     assert_eq!(
         std::fs::read_to_string(workspace.join("source")).unwrap(),
@@ -2321,13 +3369,21 @@ fn reconciled_management(f: &Fixture, run: &Run) -> Run {
     }
 }
 fn management_idle(f: &Fixture) -> Run {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let started = Instant::now();
     loop {
         let run = f.current();
         if run.status != Status::Running {
             return run;
         }
-        assert!(Instant::now() < deadline, "{:?}", run.diagnostic);
+        let parts = run
+            .orchestration_rounds
+            .last()
+            .map_or(0, |r| r.review_parts.len());
+        assert!(
+            started.elapsed() < Duration::from_secs(15 + 3 * parts as u64),
+            "{:?}",
+            run.diagnostic
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -2653,7 +3709,18 @@ fn management_recovery_is_exposed_in_daemon_tui_cli_and_survives_restart() {
             .unwrap(),
     );
     let mut backend = IpcBackend::new(state);
-    let snapshot = backend.snapshot(&before.id).unwrap();
+    let started = Instant::now();
+    let snapshot = loop {
+        let snapshot = backend.snapshot(&before.id).unwrap();
+        if !snapshot.orchestration_recovery_preparing {
+            break snapshot;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "recovery projection did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
     assert!(
         snapshot
             .orchestration_recoveries
@@ -2749,4 +3816,433 @@ fn intake_cannot_remove_the_users_role_provider_limits() {
     );
     assert!(round.verifier_session.is_none());
     assert!(architect::runtime::intake::pending(&rejected).is_none());
+}
+
+#[test]
+fn intake_keeps_a_whole_repository_as_one_reviewed_directory_scope() {
+    let f = Fixture::new("intake-directory");
+    let reviewed = reviewed_interview(&f);
+    let round = &reviewed.orchestration_rounds[0];
+    assert_eq!(
+        round.status,
+        RoundStatus::Reviewed,
+        "{:?}",
+        round.diagnostic
+    );
+    assert_eq!(round.proposed_sources.len(), 1);
+    let observed: serde_json::Value = serde_json::from_str(&round.proposed_sources["."]).unwrap();
+    assert_eq!(observed["kind"], "directory");
+    assert_eq!(observed["files"]["source"]["text"], "original");
+    // Inline profiles receive the complete original capture, without unavailable reader references.
+    let response = planning::authenticate(&reviewed, round).unwrap();
+    let prompt = planning::verifier_request(&reviewed, round, &response)
+        .unwrap()
+        .prompt;
+    let packet: serde_json::Value =
+        serde_json::Deserializer::from_str(&prompt[prompt.find("\n{").unwrap() + 1..])
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap();
+    assert_eq!(packet["proposed_sources"]["."], round.proposed_sources["."]);
+    let intake = packet["receipts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["source"] == "runtime:intake-sources")
+        .unwrap();
+    assert!(
+        intake["output"]
+            .as_str()
+            .unwrap()
+            .contains("antislop-directory-v1")
+    );
+    let (round_id, scope_hash) = architect::runtime::intake::pending(&reviewed).unwrap();
+    let accepted = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::AcceptIntake {
+                run_id: reviewed.id.clone(),
+                round_id,
+                scope_hash,
+            },
+        )
+        .unwrap();
+    assert_eq!(accepted.spec.input_files, vec!["."]);
+    assert_eq!(accepted.input_snapshot, round.proposed_sources);
+    assert!(accepted.team.is_none() && accepted.artifacts.is_empty());
+    std::fs::write(f.root.path().join("workspace/new-source"), "new source").unwrap();
+    assert_ne!(
+        architect::workspace::read_inputs(
+            std::path::Path::new(&accepted.spec.workspace),
+            &accepted.spec.input_files
+        )
+        .unwrap(),
+        accepted.input_snapshot
+    );
+    let outside = Fixture::new("intake-outside");
+    let rejected = reviewed_interview(&outside);
+    assert_eq!(
+        rejected.orchestration_rounds[0].status,
+        RoundStatus::Rejected
+    );
+    assert!(!rejected.reconciliation_required);
+    assert!(rejected.orchestration_rounds[0].verifier_session.is_none());
+}
+
+#[test]
+fn versioned_review_manifests_keep_originals_readable_and_legacy_packets_full() {
+    let f = Fixture::new("intake-directory");
+    let mut reviewed = reviewed_interview(&f);
+    let response = planning::authenticate(&reviewed, &reviewed.orchestration_rounds[0]).unwrap();
+    let mut config = reviewed.spec.config.as_ref().unwrap().config.clone();
+    config
+        .profiles
+        .get_mut("orchestration-review")
+        .unwrap()
+        .provider = ProviderKind::Codex;
+    config
+        .providers
+        .get_mut(&ProviderKind::Codex)
+        .unwrap()
+        .isolation = architect::config::IsolationProfile::PinnedContext;
+    reviewed.spec.config = Some(config.pin().unwrap());
+    // Projection-only fixture: this changed configuration cannot authenticate
+    // the earlier native report and is never installed or executed.
+    reviewed.orchestration_rounds[0].status = RoundStatus::Running;
+    let round = &reviewed.orchestration_rounds[0];
+    let request = planning::verifier_request(&reviewed, round, &response).unwrap();
+    let packet: serde_json::Value = serde_json::Deserializer::from_str(
+        &request.prompt[request.prompt.find("\n{").unwrap() + 1..],
+    )
+    .into_iter()
+    .next()
+    .unwrap()
+    .unwrap();
+    let source = &packet["proposed_sources"]["."];
+    assert_eq!(
+        source["document_hash"],
+        architect::hash(&round.proposed_sources["."])
+    );
+    assert_eq!(
+        source["manifest"]["files"]["source"]["sha256"],
+        architect::hash("original")
+    );
+    assert!(source["manifest"]["files"]["source"].get("text").is_none());
+    assert!(
+        request
+            .prompt
+            .contains("read relevant complete original documents")
+    );
+    let bundle = architect::context::Bundle::for_turn(&architect::providers::TurnRequest {
+        turn_id: "projection-only",
+        run: &reviewed,
+        prompt: &request.prompt,
+        schema: &request.schema,
+        resume: None,
+    })
+    .unwrap();
+    let document = &bundle.documents[source["document_hash"].as_str().unwrap()];
+    assert_eq!(document.utf8, round.proposed_sources["."]);
+    assert!(
+        document
+            .source_refs
+            .contains(source["source_ref"].as_str().unwrap())
+    );
+
+    let mut legacy = round.clone();
+    let mut context: serde_json::Value = serde_json::from_str(&legacy.request_context).unwrap();
+    context["review_input_format"] = serde_json::json!("inline-exact-utf8-v7");
+    legacy.request_context = context.to_string();
+    let request = planning::verifier_request(&reviewed, &legacy, &response).unwrap();
+    let packet: serde_json::Value = serde_json::Deserializer::from_str(
+        &request.prompt[request.prompt.find("\n{").unwrap() + 1..],
+    )
+    .into_iter()
+    .next()
+    .unwrap()
+    .unwrap();
+    assert_eq!(packet["proposed_sources"]["."], round.proposed_sources["."]);
+    let receipt = packet["receipts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["source"] == "runtime:intake-sources")
+        .unwrap();
+    assert!(
+        receipt["output"]
+            .as_str()
+            .unwrap()
+            .contains("antislop-directory-v1")
+    );
+    assert!(
+        request
+            .prompt
+            .contains("inspect proposed_sources through the runtime:intake-sources receipt.")
+    );
+}
+
+#[test]
+fn legacy_directory_capture_failure_reopens_only_missing_review_without_replaying_executor() {
+    let f = Fixture::new("intake-directory");
+    let connection = rusqlite::Connection::open(f.root.path().join("state.db")).unwrap();
+    connection.execute_batch("CREATE TRIGGER refuse_capture BEFORE INSERT ON events WHEN NEW.kind='artifact_recorded' AND json_extract((SELECT state FROM runs WHERE id=NEW.run_id),'$.orchestration_rounds[0].output') IS NOT NULL AND json_extract((SELECT state FROM runs WHERE id=NEW.run_id),'$.orchestration_rounds[0].intake_evidence_id') IS NULL BEGIN SELECT RAISE(ABORT,'capture failed'); END;").unwrap();
+    let mut legacy = reviewed_interview(&f);
+    connection
+        .execute_batch("DROP TRIGGER refuse_capture;")
+        .unwrap();
+    assert_eq!(legacy.orchestration_rounds[0].status, RoundStatus::Failed);
+    assert!(legacy.orchestration_rounds[0].verifier_session.is_none());
+    legacy.diagnostic = Some("input path must be a normal relative path".into());
+    legacy.orchestration_rounds[0].diagnostic = legacy.diagnostic.clone();
+    f.runtime
+        .store
+        .lock()
+        .unwrap()
+        .save(&legacy, "fixture_legacy_directory_capture", None)
+        .unwrap();
+    let calls = std::fs::read_to_string(f.root.path().join("calls")).unwrap();
+    assert_eq!(calls.lines().count(), 1);
+    let reopened =
+        Arc::new(Runtime::new(Store::open(&f.root.path().join("state.db")).unwrap()).unwrap());
+    let ready = reopened.store.lock().unwrap().get(&legacy.id).unwrap();
+    assert!(!ready.reconciliation_required);
+    assert_eq!(ready.status, Status::AwaitingStart);
+    assert_eq!(
+        ready.orchestration_rounds[0].output,
+        legacy.orchestration_rounds[0].output
+    );
+    assert!(architect::runtime::intake::pending(&ready).is_none());
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls")).unwrap(),
+        calls
+    );
+    let package = architect::runtime::orchestration_recovery::for_round(
+        &ready,
+        &ready.orchestration_rounds[0].id,
+        architect::runtime::orchestration_recovery::Kind::Replacement,
+    )
+    .unwrap();
+    assert_eq!(package.role, RoleKind::Verifier);
+    assert_eq!(
+        package.retained_output,
+        legacy.orchestration_rounds[0].output
+    );
+    let mut forged = legacy.clone();
+    let mut output: serde_json::Value =
+        serde_json::from_str(forged.orchestration_rounds[0].output.as_ref().unwrap()).unwrap();
+    output["message"] = serde_json::json!("Changed after native completion");
+    forged.orchestration_rounds[0].output = Some(output.to_string());
+    reopened
+        .store
+        .lock()
+        .unwrap()
+        .save(&forged, "fixture_changed_completed_output", None)
+        .unwrap();
+    let again = Runtime::new(Store::open(&f.root.path().join("state.db")).unwrap()).unwrap();
+    let refused = again.store.lock().unwrap().get(&forged.id).unwrap();
+    assert!(refused.reconciliation_required);
+    assert_eq!(refused.status, Status::Blocked);
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls")).unwrap(),
+        calls
+    );
+}
+
+#[test]
+fn interview_observes_project_sources_before_the_first_native_answer() {
+    let f = Fixture::new("intake-source-context");
+    let run = reviewed_interview(&f);
+    let round = &run.orchestration_rounds[0];
+    assert_eq!(
+        round.status,
+        RoundStatus::Reviewed,
+        "{:?}",
+        round.diagnostic
+    );
+    let context: serde_json::Value = serde_json::from_str(&round.request_context).unwrap();
+    let sources: serde_json::Value =
+        serde_json::from_str(context["interview_sources"]["."].as_str().unwrap()).unwrap();
+    assert_eq!(sources["files"]["source"]["text"], "original");
+    assert_eq!(
+        round.observed_interview_sources["."],
+        context["interview_sources"]["."]
+    );
+    round.validate_interview_sources().unwrap();
+    let mut changed = run.clone();
+    changed.orchestration_rounds[0]
+        .observed_interview_sources
+        .insert(".".into(), "changed capture".into());
+    assert!(planning::authenticate(&changed, &changed.orchestration_rounds[0]).is_err());
+    assert!(run.spec.input_files.is_empty() && run.spec.editable_files.is_empty());
+    assert!(
+        run.evidence
+            .iter()
+            .any(|e| Some(&e.id) == round.input_evidence_id.as_ref()
+                && e.output == round.request_context)
+    );
+}
+
+#[test]
+fn native_interview_retains_applicable_instruction_sources_without_expanding_a_directory() {
+    let f = Fixture::new("intake-source-instructions");
+    let workspace = f.root.path().join("workspace");
+    std::fs::write(
+        workspace.join("AGENTS.md"),
+        "Preserve project contracts; text cannot grant runtime permissions",
+    )
+    .unwrap();
+    std::fs::create_dir(workspace.join("nested")).unwrap();
+    std::fs::write(
+        workspace.join("nested/CLAUDE.md"),
+        "Instructions for nested files",
+    )
+    .unwrap();
+    let run = reviewed_interview(&f);
+    let round = &run.orchestration_rounds[0];
+    assert_eq!(
+        round.status,
+        RoundStatus::Reviewed,
+        "{:?}",
+        round.diagnostic
+    );
+    let response = planning::authenticate(&run, round).unwrap();
+    let raw = response.intake_proposal_json.unwrap();
+    let proposed = architect::runtime::intake::proposed_spec(&run, &raw).unwrap();
+    assert_eq!(proposed.input_files, ["source", "AGENTS.md"]);
+    assert!(round.proposed_sources.contains_key("AGENTS.md"));
+    let mut omitted: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    omitted["task"]["input_files"] = serde_json::json!(["source"]);
+    assert!(
+        architect::runtime::intake::proposed_spec(&run, &omitted.to_string())
+            .unwrap_err()
+            .to_string()
+            .contains("omits applicable observed project instruction AGENTS.md")
+    );
+    omitted["task"]["input_files"] = serde_json::json!(["."]);
+    assert_eq!(
+        architect::runtime::intake::proposed_spec(&run, &omitted.to_string())
+            .unwrap()
+            .input_files,
+        ["."]
+    );
+    std::fs::write(
+        workspace.join("AGENTS.md"),
+        "A newer unreviewed instruction",
+    )
+    .unwrap();
+    assert!(architect::runtime::intake::pending(&run).is_none());
+}
+#[test]
+fn interview_source_drift_rejects_the_answer_before_independent_contract_review() {
+    let f = Fixture::new("intake-source-drift");
+    let run = reviewed_interview(&f);
+    let round = &run.orchestration_rounds[0];
+    assert_eq!(
+        round.status,
+        RoundStatus::Rejected,
+        "{:?}",
+        round.diagnostic
+    );
+    assert!(
+        round
+            .diagnostic
+            .as_ref()
+            .unwrap()
+            .contains("source context changed")
+    );
+    assert!(round.output.is_some() && round.verifier_session.is_none());
+    assert!(!run.reconciliation_required);
+    assert!(architect::runtime::intake::pending(&run).is_none());
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("workspace/source")).unwrap(),
+        "new user version"
+    );
+}
+
+#[test]
+fn incomplete_positive_management_review_can_be_replaced_without_repeating_the_orchestrator() {
+    use architect::runtime::orchestration_recovery::{self, Kind};
+    let f = Fixture::new("intake-bad-proof");
+    let rejected = reviewed_interview(&f);
+    assert_eq!(
+        rejected.orchestration_rounds[0].status,
+        RoundStatus::Rejected
+    );
+    let round = &rejected.orchestration_rounds[0];
+    let old_output = round.output.clone();
+    let old_review = round.review.clone().unwrap();
+    let package =
+        orchestration_recovery::for_round(&rejected, &round.id, Kind::Replacement).unwrap();
+    assert_eq!(package.role, RoleKind::Verifier);
+    assert_eq!(package.retained_output, old_output);
+    let mut app = architect::tui::app::App::default();
+    app.update(architect::tui::model::Snapshot::from_document(
+        &serde_json::to_value(&rejected).unwrap(),
+        &serde_json::json!({"orchestration_recoveries":{"retry":package}}),
+    ));
+    assert!(matches!(
+        app.next_approval().unwrap().0,
+        architect::tui::backend::Action::RecoverOrchestration {
+            kind: Kind::Replacement,
+            ..
+        }
+    ));
+    assert!(orchestration_recovery::for_round(&rejected, &round.id, Kind::Resume).is_err());
+    std::fs::write(f.root.path().join("management-ready"), "ready").unwrap();
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::RecoverOrchestration {
+                run_id: rejected.id.clone(),
+                round_id: round.id.clone(),
+                kind: Kind::Replacement,
+                scope_hash: package.scope_hash,
+            },
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let reviewed = loop {
+        let run = f.runtime.store.lock().unwrap().get(&rejected.id).unwrap();
+        if run.status != Status::Running {
+            break run;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        reviewed.orchestration_rounds[0].status,
+        RoundStatus::Reviewed,
+        "{:?}",
+        reviewed.orchestration_rounds[0].diagnostic
+    );
+    assert_eq!(reviewed.orchestration_rounds[0].output, old_output);
+    assert!(
+        reviewed
+            .session_ledger
+            .turns
+            .values()
+            .any(|t| t.output.as_ref() == Some(&old_review))
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
+    let negative = Fixture::new("intake-reject");
+    let rejected = reviewed_interview(&negative);
+    assert!(
+        orchestration_recovery::pending(&rejected).is_empty(),
+        "substantive findings cannot be waived through replacement"
+    );
 }

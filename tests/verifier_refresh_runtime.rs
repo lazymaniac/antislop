@@ -20,6 +20,7 @@ fn runtime_refreshes_changed_claims_in_separate_sessions_and_persists_their_revi
     let mut run = Run::new(
         id(),
         RunSpec {
+            team_template: None,
             task_family: architect::quality::TaskFamily::Software,
             config: None,
             objective: "Preserve the source contract".into(),

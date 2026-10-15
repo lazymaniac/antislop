@@ -128,7 +128,7 @@ fn binding<'a>(run: &'a Run, i: &Invocation) -> Result<&'a Outcome> {
             && i.before_hash == hash(serde_json::to_vec(inputs)?)
             && i.source_hashes == run.source_hashes_for_inputs(inputs)
             && i.spec_revision == run.spec_revision
-            && i.configuration_hash == checks::config_hash(run),
+            && run.mode_configuration_matches(&i.configuration_hash),
         "captured check intent/result/source binding changed",
     )?;
     let output: serde_json::Value = crate::transport::decode(o.output.as_bytes())?;
@@ -174,10 +174,9 @@ pub fn for_invocation(run: &Run, id: &str) -> Result<Pending> {
         run.checklist_version == crate::domain::checklist_version(),
         "task check restoration checklist changed; explicit revision required",
     )?;
-    run.session_ledger.validate()?;
+    run.session_ledger.validate_for_run(&run.id)?;
     require(
-        crate::workspace::read_inputs(Path::new(&run.spec.workspace), &run.spec.input_files)?
-            == run.input_snapshot,
+        crate::workspace::inputs_current(run)?,
         "check restoration workspace changed",
     )?;
     let i = run

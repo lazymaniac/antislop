@@ -34,6 +34,7 @@ fn missing_and_binary_inputs_can_be_reconciled_then_explicitly_revised() {
         run.pending_edits = recovery::prepare(
             &run,
             &[FileEdit {
+                operation: architect::domain::FileOperation::Write,
                 path: "b".into(),
                 content: "new b".into(),
             }],
@@ -126,7 +127,7 @@ fn missing_and_binary_inputs_can_be_reconciled_then_explicitly_revised() {
 }
 
 #[test]
-fn pinned_local_policy_and_unimplemented_workspace_modes_fail_before_work() {
+fn pinned_local_policy_and_unprepared_workspaces_fail_before_work() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(temp.path().join("a"), "original a").unwrap();
     std::fs::write(temp.path().join("b"), "original b").unwrap();
@@ -144,6 +145,44 @@ fn pinned_local_policy_and_unimplemented_workspace_modes_fail_before_work() {
             _ => denied.policy.mode = Mode::Autonomous,
         }
         candidate.config = Some(denied.pin().unwrap());
+        if variant == 2 {
+            // Worktree admission is implemented; execution still requires its
+            // separately prepared and activated candidate.
+            let state = tempfile::tempdir().unwrap();
+            let runtime = Arc::new(
+                Runtime::new(Store::open(&state.path().join("state.db")).unwrap()).unwrap(),
+            );
+            let run = runtime
+                .dispatch(
+                    &id(),
+                    Command::Create {
+                        spec: candidate.clone(),
+                    },
+                )
+                .unwrap();
+            let approved = runtime
+                .dispatch(
+                    &id(),
+                    Command::ApproveStart {
+                        run_id: run.id.clone(),
+                        scope_hash: run.scope_hash("start"),
+                    },
+                )
+                .unwrap();
+            assert!(
+                runtime
+                    .dispatch(
+                        &id(),
+                        Command::Advance {
+                            run_id: approved.id.clone()
+                        }
+                    )
+                    .is_err()
+            );
+            let stopped = runtime.store.lock().unwrap().get(&approved.id).unwrap();
+            assert!(stopped.artifacts.is_empty() && stopped.session_ledger.sessions.is_empty());
+            continue;
+        }
         assert!(
             Run::new(id(), candidate.clone()).is_err(),
             "variant {variant}"

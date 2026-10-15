@@ -3,7 +3,9 @@ use super::{CatalogRole, TaskRecord, checks::CheckPhase};
 use crate::{Result, domain::*, hash, quality::TaskFamily, require};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub const PLAN_CONTRACT: &str = "Bugfix proof and acceptance coverage are distinct. Each bugfix lists the assigned criteria that describe that original defect; BOTH referenced before_execution and before_verification checks must cover EVERY such criterion. The after check requires expected_exit_code 0. A pure bugfix task must account for every assigned criterion either through a bugfix or through non_defect_criteria: a map from an assigned criterion ID to a specific rationale explaining why it does not describe an original defect (for example an approval or delivery obligation). The sets must be disjoint and no criterion may be dropped. Do not classify a defect criterion as non-defect to avoid reproducing it. Non-defect classification never establishes fulfillment: all ordinary task, requirement, runner and quality checks still apply. TASK_CHANGE and NON_DEFECT_PLAN reviewers independently assess the rationale against original requirements. The task verifier must return non_defect_assessments for exactly those keys, with its own assessment and current evidence_ids already included in classification_evidence_ids; CHANGE:non_defect checks must pass with that evidence. Do not claim a test command proves policy approvals or other behavior outside its observations. Missing reproduction still requires a performed investigation and justified alternative proof.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +23,10 @@ pub struct ChangeContract {
     pub rationale: String,
     pub source_refs: BTreeSet<String>,
     pub bugfixes: Vec<Bugfix>,
+    /// Assigned acceptance obligations that do not describe an original defect.
+    /// This classification never waives their ordinary completion checks.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub non_defect_criteria: BTreeMap<String, String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -64,6 +70,17 @@ pub struct ChangeReview {
     pub classification_assessment: String,
     pub classification_evidence_ids: BTreeSet<String>,
     pub bugfixes: Vec<BugfixReview>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub non_defect_assessments: BTreeMap<String, NonDefectAssessment>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NonDefectAssessment {
+    /// Explain independently why this criterion does not describe an original
+    /// defect. This is classification, never proof of criterion fulfillment.
+    pub assessment: String,
+    /// Current source evidence also cited by classification_evidence_ids.
+    pub evidence_ids: BTreeSet<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +134,17 @@ pub fn validate_plan(
         has_bugfix != contract.bugfixes.is_empty(),
         "change classification contradicts its bugfix obligations",
     )?;
+    let non_defects = contract
+        .non_defect_criteria
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    require(
+        non_defects.is_subset(&task.criterion_ids)
+            && contract.non_defect_criteria.values().all(|r| text(r))
+            && (has_bugfix || non_defects.is_empty()),
+        "non-defect classification has foreign criteria, missing rationale or no bugfix",
+    )?;
     let mut ids = BTreeSet::new();
     let mut criteria = BTreeSet::new();
     for bugfix in &contract.bugfixes {
@@ -149,7 +177,24 @@ pub fn validate_plan(
                 && after.expected_exit_code == 0
                 && bugfix.criterion_ids.is_subset(&before.criterion_ids)
                 && bugfix.criterion_ids.is_subset(&after.criterion_ids),
-            "bugfix checks have wrong phase or omit assigned defect criteria",
+            &format!(
+                "task {} bugfix {}: before check {} phase {:?} (required BeforeExecution), after check {} phase {:?} exit {} (required BeforeVerification/0); missing before criteria {:?}; missing after criteria {:?}",
+                task.id,
+                bugfix.id,
+                before.id,
+                before.phase,
+                after.id,
+                after.phase,
+                after.expected_exit_code,
+                bugfix
+                    .criterion_ids
+                    .difference(&before.criterion_ids)
+                    .collect::<Vec<_>>(),
+                bugfix
+                    .criterion_ids
+                    .difference(&after.criterion_ids)
+                    .collect::<Vec<_>>()
+            ),
         )?;
         match &bugfix.before {
             BeforeProof::Reproduction { .. } => {}
@@ -168,10 +213,18 @@ pub fn validate_plan(
         }
         criteria.extend(bugfix.criterion_ids.iter().cloned());
     }
+    require(
+        criteria.is_disjoint(&non_defects),
+        "a criterion cannot be both a defect and classified as non-defect",
+    )?;
     if contract.kind == ChangeKind::Bugfix {
         require(
-            criteria == task.criterion_ids,
-            "bugfix classification leaves assigned criteria without before/after obligations",
+            criteria
+                .union(&non_defects)
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                == task.criterion_ids,
+            "bugfix classification leaves assigned criteria without before/after obligations or justified non-defect classification",
         )?;
     }
     Ok(())
@@ -247,6 +300,20 @@ pub(crate) fn validate_review(
                 .all(|id| classification.evidence_ids.contains(id)),
         "classification check omits the independently inspected source evidence",
     )?;
+    validate_non_defect_assessments(contract, review)?;
+    for (criterion, assessment) in &review.non_defect_assessments {
+        require(
+            checks.iter().any(|c| {
+                c.check_id == format!("CHANGE:non_defect:{criterion}")
+                    && c.status == CheckStatus::Pass
+                    && assessment
+                        .evidence_ids
+                        .iter()
+                        .all(|id| c.evidence_ids.contains(id))
+            }),
+            "non-defect classification check lacks its independent decision or evidence",
+        )?;
+    }
     let mut seen = BTreeSet::new();
     for inspected in &review.bugfixes {
         let bugfix = contract
@@ -333,6 +400,27 @@ pub(crate) fn validate_review(
         seen.len() == contract.bugfixes.len(),
         "independent review omits an assigned bugfix proof",
     )
+}
+
+fn validate_non_defect_assessments(contract: &ChangeContract, review: &ChangeReview) -> Result<()> {
+    require(
+        contract
+            .non_defect_criteria
+            .keys()
+            .eq(review.non_defect_assessments.keys()),
+        "independent review omits or invents non-defect classifications",
+    )?;
+    for assessment in review.non_defect_assessments.values() {
+        require(
+            text(&assessment.assessment)
+                && !assessment.evidence_ids.is_empty()
+                && assessment
+                    .evidence_ids
+                    .is_subset(&review.classification_evidence_ids),
+            "non-defect classification lacks an independent assessment with current inspected evidence",
+        )?;
+    }
+    Ok(())
 }
 
 /// A fresh format review may fill omissions, but cannot erase contradictory proof claims.

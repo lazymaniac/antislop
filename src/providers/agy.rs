@@ -3,6 +3,7 @@
 //! that component encodes structured output and has no filesystem/tool action.
 //! Global startup customizations are audited before every probe and invocation.
 use super::*;
+mod context;
 use crate::{config::IsolationProfile, process::SupervisedChild, require};
 use serde_json::{Value, json};
 use std::{
@@ -14,8 +15,11 @@ use std::{
     time::Duration,
 };
 
-const VERSION: &str = "1.3.4";
+const VERSIONS: &[&str] = &["1.3.4", "1.3.5"];
 const AGENT: &str = "antislop-stdio";
+/// Observed CLI user-content ceiling. Reject before delivery instead of letting
+/// native ingestion silently replace the tail with a truncation marker.
+pub const MAX_PROMPT_BYTES: usize = 192_000;
 const AGENT_SOURCE: &[u8] = b"---\nname: antislop-stdio\ndescription: Structured output transport without external tools.\ntools: [finish]\nexcludeDefaultComponents: true\ninheritCustomizations: false\ninheritMcp: false\nmainAgent: true\nsubagent: false\ncommandExecutionPolicy: \"off\"\nmcpServers: []\nskills: []\nplugins: []\n---\nReturn the requested structured result using finish. Never use any other tool or delegate.\n";
 const FLAGS: &[&str] = &[
     "--input-format",
@@ -102,11 +106,14 @@ impl AgyProvider {
     /// Read-only audit. In particular, never chmod or overwrite a user's home,
     /// settings, hooks, plugins or credentials to make a profile pass.
     fn home(&self) -> Result<PathBuf> {
-        if self.isolation != IsolationProfile::ToolFree {
+        if !matches!(
+            self.isolation,
+            IsolationProfile::ToolFree | IsolationProfile::PinnedContext
+        ) {
             return Err(failure(
                 "agy",
                 FailureKind::Unsupported,
-                "only the finish-only tool_free profile is implemented; OS sandbox guarantees are unavailable",
+                "only tool_free and scoped pinned_context profiles are implemented; OS sandbox guarantees are unavailable",
             ));
         }
         let home = self
@@ -177,6 +184,14 @@ impl AgyProvider {
                     | "enableTelemetry"
                     | "enableTerminalSandbox"
                     | "allowNonWorkspaceAccess" => value.is_boolean(),
+                    // Native default UI status-line shape has no executable
+                    // customization. Continue refusing any configured command.
+                    "statusLine" => value.as_object().is_some_and(|settings| {
+                        settings.len() == 3
+                            && settings.get("type") == Some(&json!(""))
+                            && settings.get("command") == Some(&json!(""))
+                            && settings.get("enabled").is_some_and(Value::is_boolean)
+                    }),
                     "toolPermission" => value.as_str().is_some_and(|s| {
                         matches!(
                             s,
@@ -212,11 +227,18 @@ impl AgyProvider {
                 .arg("--version"),
             cancelled,
         )?;
-        if version.trim() != VERSION {
+        if !VERSIONS.contains(&version.trim()) {
             return Err(failure(
                 "agy",
                 FailureKind::Unsupported,
-                "CLI version is outside the validated Antigravity 1.3.4 contract",
+                "CLI version is outside the validated Antigravity 1.3.4/1.3.5 contract",
+            ));
+        }
+        if self.isolation == IsolationProfile::PinnedContext && version.trim() != "1.3.5" {
+            return Err(failure(
+                "agy",
+                FailureKind::Unsupported,
+                "pinned_context requires the validated Antigravity 1.3.5 MCP contract; no profile downgrade",
             ));
         }
         let help = shared_cli::capture_help(
@@ -325,6 +347,62 @@ fn identity(value: &Value) -> Result<String> {
             )
         })
 }
+// Only call for a native error_message step, never an agent's artifact text.
+fn step_error(step: &Value) -> &Value {
+    step.get("error_message")
+        .or_else(|| step.get("errorMessage"))
+        .or_else(|| step.get("error"))
+        .unwrap_or(step)
+}
+
+// Never copy native text, arguments, arbitrary tool names or subagent bodies
+// into diagnostics. Known protocol identifiers suffice to diagnose a rejection.
+fn external_step_diagnostic(step: &Value) -> String {
+    let tool = |value: &Value| match value.as_str() {
+        Some("finish") => "finish",
+        Some("call_mcp_tool") => "call_mcp_tool",
+        Some("manage_task") => "manage_task",
+        Some("invoke_subagent") => "invoke_subagent",
+        Some("run_command") => "run_command",
+        Some("write_to_file") => "write_to_file",
+        Some("read_file") => "read_file",
+        None => "absent",
+        _ => "redacted",
+    };
+    let kind = match step["step_type"].as_str() {
+        Some("tool") => "tool",
+        Some("agent_response") => "agent_response",
+        Some("user_input") => "user_input",
+        Some("checkpoint") => "checkpoint",
+        Some("finish") => "finish",
+        Some("error_message") => "error_message",
+        _ => "other",
+    };
+    format!(
+        "external tool/subagent event violates the selected profile (step={kind}, tool={}, tool_info_name={}, tool_info={}, subagent_info={})",
+        tool(&step["tool_name"]),
+        tool(&step["tool_info"]["name"]),
+        step.get("tool_info").is_some_and(|v| !v.is_null()),
+        step.get("subagent_info").is_some_and(|v| !v.is_null()),
+    )
+}
+
+fn unknown_step_diagnostic(step: &Value) -> String {
+    // Native system-message names are useful for protocol diagnosis, but an
+    // unrecognized category is never made admissible by its diagnostic label.
+    let name = match step["step_type"].as_str() {
+        Some("system_message") => "system_message",
+        Some(_) => "redacted",
+        None => "non-string",
+    };
+    let fingerprint = crate::hash(serde_json::to_vec(&step["step_type"]).unwrap_or_default());
+    format!(
+        "unknown native step type (step={name}, type_sha256={fingerprint}, text_delta={}, system_message={}, error_message={})",
+        step.get("text_delta").is_some_and(|v| !v.is_null()),
+        step.get("system_message").is_some_and(|v| !v.is_null()),
+        step.get("error_message").is_some_and(|v| !v.is_null()),
+    )
+}
 
 /// Ignore planner text/reasoning; only the native finish result is an artifact.
 pub fn normalize(value: &Value) -> Result<NativeEvent> {
@@ -355,9 +433,7 @@ pub fn normalize(value: &Value) -> Result<NativeEvent> {
                 || step.get("tool_name").is_some_and(|v| !v.is_null())
                 || step["step_type"] == "tool"
             {
-                return Err(policy(
-                    "external tool/subagent event violates the finish-only profile",
-                ));
+                return Err(policy(&external_step_diagnostic(step)));
             }
             require(
                 matches!(step["state"].as_str(), Some("ACTIVE" | "DONE")),
@@ -374,12 +450,12 @@ pub fn normalize(value: &Value) -> Result<NativeEvent> {
                 }),
                 Some("error_message") => Ok(NativeEvent::Failed {
                     id: Some(id),
-                    kind: shared_cli::error_kind(step),
+                    kind: shared_cli::error_kind(step_error(step)),
                 }),
                 _ => Err(failure(
                     "agy",
                     FailureKind::Protocol,
-                    "unknown native step type",
+                    &unknown_step_diagnostic(step),
                 )),
             }
         }
@@ -451,7 +527,7 @@ impl Provider for AgyProvider {
         Ok(Capabilities { provider: "agy".into(), version: self.inspect(&home,&cwd,Some(cancelled))?,
             structured_output: true, streaming: true, resume: false, steering: false, cancellation: true,
             approvals: false, native_subagents_disabled: true,
-            sandbox: "CLI finish-only agent; audited startup; process-group cleanup; no OS containment claim".into(),
+            sandbox: if self.isolation==IsolationProfile::PinnedContext {"CLI finish plus owned immutable-context reader; audited startup; no OS containment claim"}else{"CLI finish-only agent; audited startup; process-group cleanup; no OS containment claim"}.into(),
             usage: "native cumulative session counters; terminal result only".into() })
     }
     fn probe_report(&self) -> Result<ProbeReport> {
@@ -462,7 +538,11 @@ impl Provider for AgyProvider {
             mid_turn_steering: Support::Unsupported,
             approvals: Support::Unsupported,
             os_sandbox: Support::Unverified,
-            tool_free: Support::Supported,
+            tool_free: if self.isolation == IsolationProfile::ToolFree {
+                Support::Supported
+            } else {
+                Support::Unsupported
+            },
             authentication: Support::Unverified,
         })
     }
@@ -476,6 +556,16 @@ impl Provider for AgyProvider {
             !request.turn_id.trim().is_empty(),
             "missing durable turn ID",
         )?;
+        if request.prompt.len() > MAX_PROMPT_BYTES
+            && self.isolation != IsolationProfile::PinnedContext
+        {
+            return Err(failure(
+                "agy",
+                FailureKind::Protocol,
+                "input_too_large: complete prompt exceeds the observed 192000-byte native user-message ceiling; no native turn was delivered; compact or partition the context without dropping evidence",
+            ));
+        }
+        shared_cli::require_prompt_size("agy", request.prompt)?;
         let resume = request
             .resume
             .map(|s| identity(&Value::String(s.into())))
@@ -488,8 +578,31 @@ impl Provider for AgyProvider {
             ));
         }
         let home = self.home()?;
-        let cwd = self.cwd(Path::new(&request.run.spec.workspace))?;
-        self.inspect(&home, &cwd, Some(&cancelled))?;
+        let probe_cwd = self.cwd(Path::new(&request.run.spec.workspace))?;
+        self.inspect(&home, &probe_cwd, Some(&cancelled))?;
+        let mut context = if self.isolation == IsolationProfile::PinnedContext {
+            Some(crate::context::transport::Transport::new(request)?)
+        } else {
+            None
+        };
+        let bridge = context
+            .as_ref()
+            .map(|c| c.reader().and_then(crate::context::bridge::Bridge::start))
+            .transpose()?;
+        let cwd = if let Some(bridge) = &bridge {
+            context::cwd(bridge)?
+        } else {
+            probe_cwd
+        };
+        let native_prompt = context
+            .as_ref()
+            .map(|c| c.native_prompt())
+            .transpose()?
+            .unwrap_or_else(|| request.prompt.into());
+        require(
+            native_prompt.len() <= MAX_PROMPT_BYTES,
+            "context transport native input exceeds validated ceiling",
+        )?;
         if let Some(effort) = &self.effort {
             require(
                 matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max"),
@@ -547,6 +660,19 @@ impl Provider for AgyProvider {
                 "turn cancelled before start",
             ));
         }
+        if let Some(context) = &context {
+            events(&ProviderEvent::ContextPrepared {
+                turn_id: request.turn_id.into(),
+                transport: Box::new(context.clone()),
+            })?;
+        }
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(failure(
+                "agy",
+                FailureKind::Cancelled,
+                "turn cancelled after context preparation; native delivery was not started",
+            ));
+        }
         events(&match &resume {
             Some(id) => ProviderEvent::DeliveryPending {
                 turn_id: request.turn_id.into(),
@@ -573,7 +699,7 @@ impl Provider for AgyProvider {
         });
         let mut stdin = child.child.stdin.take().expect("stdin pipe");
         let mut input =
-            serde_json::to_vec(&json!({"event":"user","message":{"content":request.prompt}}))?;
+            serde_json::to_vec(&json!({"event":"user","message":{"content":native_prompt}}))?;
         input.push(b'\n');
         let (sent_sender, sent_receiver) = mpsc::sync_channel(1);
         let writer = std::thread::spawn(move || {
@@ -593,6 +719,18 @@ impl Provider for AgyProvider {
         let mut usage = UsageReport::Unavailable;
         let mut failed = None;
         let mut native_diagnosis = None;
+        let mut context_tools = context::Tools::default();
+        #[cfg(test)]
+        let mut context_trace = std::env::var_os("ANTISLOP_CONTEXT_TOOL_TRACE")
+            .map(|name| {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(name)
+            })
+            .transpose()?;
         let stream_result = (|| -> Result<()> {
             while !eof || status.is_none() || !write_finished {
                 if cancelled.load(Ordering::SeqCst) {
@@ -614,6 +752,30 @@ impl Provider for AgyProvider {
                         partial_effects: sent || write_failed || !write_finished,
                     }
                     .into());
+                }
+                if sent
+                    && native.is_some()
+                    && let (Some(bridge), Some(context)) = (&bridge, &mut context)
+                {
+                    while let Some(commit) = bridge.pending() {
+                        let result = (|| {
+                            require(
+                                sent && native.is_some(),
+                                "context response before native delivery",
+                            )?;
+                            crate::context::transport::authenticate_receipt(
+                                &context.reader()?,
+                                &commit.receipt,
+                            )?;
+                            events(&ProviderEvent::ContextRead {
+                                turn_id: request.turn_id.into(),
+                                receipt: commit.receipt.clone(),
+                            })?;
+                            context.accept(commit.receipt.clone())
+                        })();
+                        commit.acknowledge(result.is_ok());
+                        result?;
+                    }
                 }
                 if !write_finished {
                     match sent_receiver.try_recv() {
@@ -652,6 +814,26 @@ impl Provider for AgyProvider {
                     }
                 };
                 require(!terminal, "native event after terminal result")?;
+                #[cfg(test)]
+                if frame["event"] == "step_update"
+                    && frame["step_update"]["tool_name"] == "call_mcp_tool"
+                    && let Some(trace) = &mut context_trace
+                {
+                    serde_json::to_writer(&mut *trace, &frame)?;
+                    trace.write_all(b"\n")?;
+                    trace.flush()?;
+                }
+                if let Some(context) = &mut context
+                    && context_tools.frame(
+                        &frame,
+                        context,
+                        native.as_deref(),
+                        request.turn_id,
+                        events,
+                    )?
+                {
+                    continue;
+                }
                 match normalize(&frame)? {
                     NativeEvent::Init {
                         id,
@@ -696,6 +878,15 @@ impl Provider for AgyProvider {
                             schema == *request.schema,
                             "native result schema differs from requested schema",
                         )?;
+                        if let Some(context) = &context
+                            && let Err(error) = context.complete()
+                        {
+                            events(&ProviderEvent::OutputRejected {
+                                turn_id: request.turn_id.into(),
+                                output: result.to_string(),
+                            })?;
+                            return Err(error);
+                        }
                         terminal = true;
                         output = Some(result.to_string());
                         usage = reported;
@@ -705,6 +896,23 @@ impl Provider for AgyProvider {
                             id.as_ref().is_none_or(|id| native.as_ref() == Some(id)),
                             "failure refers to another conversation",
                         )?;
+                        if frame["event"] == "step_update" {
+                            let diagnosis =
+                                shared_cli::diagnostic_category(step_error(&frame["step_update"]))
+                                    .map(|category| category.classification().1)
+                                    .unwrap_or("unknown");
+                            // A reported failed native step already makes this turn
+                            // inadmissible. Stop its internal retries immediately.
+                            // The outer error path reaps the owned process group.
+                            return Err(ProviderFailure {
+                                provider: "agy".into(),
+                                kind,
+                                message: format!("Native CLI reported a failed step; diagnosis={diagnosis}; internal retries stopped; raw diagnostics not retained"),
+                                session_id: native.clone(),
+                                stopped: false,
+                                partial_effects: sent,
+                            }.into());
+                        }
                         terminal = frame["event"] == "result";
                         failed = Some(kind);
                         native_diagnosis = shared_cli::diagnostic_category(&frame["result"]);

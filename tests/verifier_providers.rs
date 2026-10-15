@@ -218,14 +218,34 @@ fn real_installed_cli_probes_do_not_inherit_node_preloads() {
     const CHILD: &str = "ARCHITECT_INDEPENDENT_NODE_PROBE_CHILD";
     if std::env::var_os(CHILD).is_some() {
         use architect::providers::{claude::ClaudeProvider, gemini::GeminiProvider};
-        CodexProvider::default().probe().unwrap();
-        ClaudeProvider::default().probe().unwrap();
-        GeminiProvider {
-            binary: Some("/tmp/architect-provider-adapters/node_modules/.bin/gemini".into()),
-            ..Default::default()
+        let probes = [
+            CodexProvider::default().probe(),
+            ClaudeProvider::default().probe(),
+            GeminiProvider {
+                binary: Some("/tmp/architect-provider-adapters/node_modules/.bin/gemini".into()),
+                ..Default::default()
+            }
+            .probe(),
+        ];
+        for probe in probes {
+            match probe {
+                Ok(_) => {}
+                // Version rejection happens AFTER the actual --version probe.
+                // Keep checking all installed CLIs and the preload marker; this
+                // is an environment-isolation test, not a version admission.
+                Err(architect::Error::Provider(error))
+                    if error.kind == FailureKind::Unsupported
+                        && error.message == "CLI version is outside the validated contract" =>
+                {
+                    assert!(error.stopped && !error.partial_effects && error.session_id.is_none());
+                    eprintln!(
+                        "{}: installed version rejected before inference; preload guard still checked",
+                        error.provider
+                    );
+                }
+                Err(error) => panic!("installed CLI environment probe failed: {error}"),
+            }
         }
-        .probe()
-        .unwrap();
         return;
     }
     // This optional installed-binary smoke must not make the portable suite

@@ -3,6 +3,7 @@ pub mod app;
 pub mod backend;
 pub mod editor;
 pub mod graph;
+pub mod inspector;
 pub mod model;
 pub mod options;
 pub mod render;
@@ -148,8 +149,14 @@ pub fn connect_or_start_daemon(
                 Err(crate::Error::Io(error))
                     if matches!(
                         error.kind(),
-                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                        io::ErrorKind::ConnectionRefused
+                            | io::ErrorKind::NotFound
+                            | io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::ConnectionAborted
+                            | io::ErrorKind::UnexpectedEof
+                            | io::ErrorKind::BrokenPipe
                     ) => {}
+                Err(crate::Error::Invalid(message)) if message == "daemon disconnected" => {}
                 Err(error) => return Err(error),
             }
         }

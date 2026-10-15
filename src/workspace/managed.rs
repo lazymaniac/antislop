@@ -42,6 +42,12 @@ pub struct Plan {
     pub project_prefix: String,
     pub files: BTreeMap<String, File>,
     pub scope_hash: String,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub directory_inputs: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub selectors: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_identity: Option<super::delivery::Identity>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -111,6 +117,25 @@ fn quoted(path: &str) -> String {
     result
 }
 pub fn plan(run: &Run, state: &Path, selected: &BTreeSet<String>) -> Result<Plan> {
+    plan_cancelled(run, state, selected, &AtomicBool::new(false))
+}
+pub(crate) fn plan_cancelled(
+    run: &Run,
+    state: &Path,
+    selected: &BTreeSet<String>,
+    token: &AtomicBool,
+) -> Result<Plan> {
+    eligible(run)?;
+    let source_root = Path::new(&run.spec.workspace).canonicalize()?;
+    let state = state.canonicalize()?;
+    let preliminary = snapshot::repository(&source_root, token)?;
+    let root = preliminary
+        .as_ref()
+        .map_or(source_root.clone(), |r| PathBuf::from(&r.root));
+    plan_source(run, &source_root, &root, &state, selected, token)
+}
+
+pub fn eligible(run: &Run) -> Result<()> {
     require(
         !run.intake
             && run.team.is_none()
@@ -136,15 +161,19 @@ pub fn plan(run: &Run, state: &Path, selected: &BTreeSet<String>) -> Result<Plan
             .is_some_and(|c| c.config.workspace.mode == crate::config::WorkspaceMode::Worktree),
         "explicit worktree configuration is required",
     )?;
-    let source_root = Path::new(&run.spec.workspace).canonicalize()?;
-    let state = state.canonicalize()?;
-    let token = AtomicBool::new(false);
-    let preliminary = snapshot::repository(&source_root, &token)?;
-    let root = preliminary
-        .as_ref()
-        .map_or(source_root.clone(), |r| PathBuf::from(&r.root));
+    Ok(())
+}
+
+fn plan_source(
+    run: &Run,
+    source_root: &Path,
+    root: &Path,
+    state: &Path,
+    selected: &BTreeSet<String>,
+    token: &AtomicBool,
+) -> Result<Plan> {
     let prefix = source_root
-        .strip_prefix(&root)
+        .strip_prefix(root)
         .map_err(|_| crate::Error::Invalid("workspace root mapping failed".into()))?;
     let project_prefix = if prefix.as_os_str().is_empty() {
         String::new()
@@ -156,16 +185,18 @@ pub fn plan(run: &Run, state: &Path, selected: &BTreeSet<String>) -> Result<Plan
                 .ok_or_else(|| crate::Error::Invalid("non-UTF-8 project prefix".into()))?
         )
     };
-    let selected: BTreeSet<_> = selected
+    let selectors: BTreeSet<_> = selected
         .iter()
         .map(|p| {
-            path_valid(p)?;
-            Ok(format!("{project_prefix}{p}"))
+            let relative = super::inputs::relative(source_root, p)?;
+            if relative != "." {
+                path_valid(&relative)?;
+            }
+            Ok(relative)
         })
         .collect::<Result<_>>()?;
-    let additional: BTreeSet<_> = selected.iter().cloned().collect();
     let excluded = state
-        .strip_prefix(&root)
+        .strip_prefix(root)
         .ok()
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| {
@@ -177,7 +208,37 @@ pub fn plan(run: &Run, state: &Path, selected: &BTreeSet<String>) -> Result<Plan
         .into_iter()
         .collect::<BTreeSet<_>>();
     require(state != root, "daemon data root cannot be the source root")?;
-    let source = snapshot::observe_excluding(&root, &additional, &excluded, &token)?;
+    let (_, members) = snapshot::source_paths(root, &excluded, token)?;
+    let mut additional = BTreeSet::new();
+    let mut directories = BTreeSet::new();
+    for selector in &selectors {
+        if source_root.join(selector).is_dir() {
+            super::validate_inputs(source_root, std::slice::from_ref(selector))?;
+            let prefix = if selector == "." {
+                project_prefix.clone()
+            } else {
+                format!("{project_prefix}{selector}/")
+            };
+            directories.insert(prefix.clone());
+            additional.extend(
+                members
+                    .iter()
+                    .filter(|path| path.starts_with(&prefix))
+                    .cloned(),
+            );
+        } else {
+            additional.insert(format!("{project_prefix}{selector}"));
+        }
+    }
+    let source = snapshot::observe_excluding(root, &additional, &excluded, token)?;
+    let selected: BTreeSet<_> = additional
+        .iter()
+        .filter(|path| {
+            !directories.iter().any(|prefix| path.starts_with(prefix))
+                || source.local_changes.contains(*path)
+        })
+        .cloned()
+        .collect();
     if let Some(repo) = &source.repository {
         require(
             !repo
@@ -249,7 +310,7 @@ pub fn plan(run: &Run, state: &Path, selected: &BTreeSet<String>) -> Result<Plan
     }
     let mut files = BTreeMap::new();
     for (path, (mode, origin)) in recipes {
-        let bytes = data(&origin, &token)?;
+        let bytes = data(&origin, token)?;
         if mode == "120000" {
             require(
                 !Path::new(std::ffi::OsStr::new(std::str::from_utf8(&bytes).map_err(
@@ -291,35 +352,130 @@ pub fn plan(run: &Run, state: &Path, selected: &BTreeSet<String>) -> Result<Plan
             },
         );
     }
-    source.validate_current(&token)?;
-    for name in &run.spec.input_files {
-        let path = format!("{project_prefix}{name}");
-        let f = files.get(&path).ok_or_else(|| {
-            crate::Error::Invalid(
-                "task input is absent from selected candidate; include its local change".into(),
-            )
-        })?;
-        require(
-            f.content_hash == hash(&run.input_snapshot[name]),
-            "candidate task input differs from accepted contract; explicitly include its local change",
-        )?;
-    }
-    let scope_hash = hash(serde_json::to_vec(&(
-        "prepare_workspace_v1",
-        run,
-        &source,
-        &selected,
-        &files,
-        &project_prefix,
-        &state,
-    ))?);
-    Ok(Plan {
+    source.validate_current(token)?;
+    validate_candidate_inputs(run, &files, &project_prefix)?;
+    let directory_inputs = run
+        .spec
+        .input_files
+        .iter()
+        .filter(|name| source_root.join(name).is_dir())
+        .map(|name| super::inputs::relative(source_root, name))
+        .collect::<Result<BTreeSet<_>>>()?;
+    let mut plan = Plan {
         source,
         selected,
         project_prefix,
         files,
-        scope_hash,
-    })
+        scope_hash: String::new(),
+        directory_inputs,
+        selectors,
+        project_identity: Some(super::delivery::Identity::read(source_root)?),
+    };
+    plan.scope_hash = preparation_scope(run, &plan, state)?;
+    Ok(plan)
+}
+
+fn preparation_scope(run: &Run, plan: &Plan, state: &Path) -> Result<String> {
+    Ok(hash(serde_json::to_vec(&(
+        "prepare_workspace_v2",
+        &run.id,
+        &run.spec,
+        run.spec_revision,
+        &run.input_snapshot,
+        run.diff_baseline(),
+        &plan.source,
+        &plan.selected,
+        &plan.files,
+        &plan.project_prefix,
+        state,
+        &plan.selectors,
+        &plan.directory_inputs,
+        &plan.project_identity,
+    ))?))
+}
+
+/// A runtime-produced proposal can be authenticated without rerunning Git while
+/// the UI waits on IPC. Source drift is rechecked by the preparation worker.
+pub fn pending<'a>(run: &'a Run, state: &Path) -> Result<&'a Plan> {
+    eligible(run)?;
+    let plan = run.workspace_plan.as_ref().ok_or_else(|| {
+        crate::Error::Invalid("inspect workspace inputs before preparing the candidate".into())
+    })?;
+    require(
+        plan.scope_hash == preparation_scope(run, plan, &state.canonicalize()?)?,
+        "workspace preparation proposal no longer matches the task",
+    )?;
+    Ok(plan)
+}
+
+fn validate_candidate_inputs(
+    run: &Run,
+    files: &BTreeMap<String, File>,
+    prefix: &str,
+) -> Result<()> {
+    let root = Path::new(&run.spec.workspace);
+    require(
+        super::read_inputs(root, &run.spec.input_files)? == run.input_snapshot,
+        "task sources changed before candidate preparation",
+    )?;
+    for (name, text) in &run.input_snapshot {
+        let relative = super::inputs::relative(root, name)?;
+        let path = format!("{prefix}{relative}");
+        if root.join(&relative).is_dir() {
+            let entries =
+                super::inputs::directory_diff_entries(&relative, text)?.ok_or_else(|| {
+                    crate::Error::Invalid("directory input observation missing".into())
+                })?;
+            let scope = if relative == "." {
+                prefix.to_owned()
+            } else {
+                format!("{path}/")
+            };
+            require(
+                !files.contains_key(path.trim_end_matches("/.")),
+                "candidate directory became a file",
+            )?;
+            let candidate: BTreeMap<_, _> = files
+                .iter()
+                .filter(|(p, _)| p.starts_with(&scope))
+                .collect();
+            require(
+                candidate.len() == entries.len(),
+                "candidate directory membership differs from accepted input; include its local changes",
+            )?;
+            for (member, content) in entries {
+                let file = files.get(&format!("{prefix}{member}")).ok_or_else(|| {
+                    crate::Error::Invalid(
+                        "candidate directory member is absent; include its local change".into(),
+                    )
+                })?;
+                let (digest, link) = match content {
+                    super::inputs::DiffContent::Text(text) => (hash(text), false),
+                    super::inputs::DiffContent::Metadata(value) => (
+                        value["sha256"]
+                            .as_str()
+                            .ok_or_else(|| {
+                                crate::Error::Invalid("captured member hash missing".into())
+                            })?
+                            .to_owned(),
+                        value["kind"] == "symlink",
+                    ),
+                };
+                require(
+                    file.content_hash == digest && (file.mode == "120000") == link,
+                    "candidate directory content differs from accepted input; include its local change",
+                )?;
+            }
+        } else {
+            require(
+                files
+                    .get(&path)
+                    .is_some_and(|file| file.content_hash == hash(text)),
+                "candidate task input differs from accepted contract; explicitly include its local change",
+            )?;
+        }
+    }
+    Ok(())
 }
 fn command(
     root: &Path,
@@ -557,6 +713,24 @@ pub(crate) fn prepare(workspace: &Workspace, token: &AtomicBool) -> Result<Recei
     if !project_root.exists() {
         std::fs::create_dir_all(&project_root)?;
     }
+    for scope in &workspace.plan.directory_inputs {
+        let mut path = project_root.clone();
+        for part in Path::new(scope).components() {
+            if let Component::Normal(part) = part {
+                path.push(part);
+                match path.symlink_metadata() {
+                    Ok(metadata) => require(
+                        metadata.is_dir() && !metadata.file_type().is_symlink(),
+                        "prepared input directory contains a link or file",
+                    )?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        std::fs::DirBuilder::new().mode(0o700).create(&path)?;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+    }
     workspace.plan.source.validate_current(token)?;
     let observed = snapshot::observe(&candidate, &BTreeSet::new(), token)?;
     require(
@@ -663,17 +837,18 @@ pub fn activation_scope(run: &Run) -> Result<String> {
             ),
         "workspace is not captured and stopped",
     )?;
-    let receipt = observed_result(workspace)?;
-    require(
-        workspace
-            .receipt
-            .as_ref()
-            .is_some_and(|r| serde_json::to_value(r).ok() == serde_json::to_value(&receipt).ok()),
-        "captured workspace result changed",
-    )?;
+    let receipt = workspace
+        .receipt
+        .as_ref()
+        .ok_or_else(|| crate::Error::Invalid("captured workspace receipt missing".into()))?;
     Ok(hash(serde_json::to_vec(&(
-        "activate_workspace_v1",
-        run,
+        "activate_workspace_v2",
+        &run.id,
+        &run.spec,
+        run.spec_revision,
+        &run.input_snapshot,
+        &workspace.id,
+        &workspace.plan.scope_hash,
         receipt,
     ))?))
 }
@@ -683,6 +858,14 @@ pub(crate) fn activate(run: &mut Run, scope: &str) -> Result<()> {
         "workspace activation scope changed",
     )?;
     let workspace = run.managed_workspace.as_ref().unwrap();
+    let observed = observed_result(workspace)?;
+    require(
+        workspace
+            .receipt
+            .as_ref()
+            .is_some_and(|r| serde_json::to_value(r).ok() == serde_json::to_value(&observed).ok()),
+        "captured workspace result changed",
+    )?;
     require(
         run.team.is_none()
             && run.artifacts.is_empty()
@@ -691,11 +874,44 @@ pub(crate) fn activate(run: &mut Run, scope: &str) -> Result<()> {
         "task contract changed after workspace preparation",
     )?;
     let receipt = workspace.receipt.as_ref().unwrap();
+    let original_root = Path::new(&run.spec.workspace);
+    let inputs: Vec<_> = run
+        .spec
+        .input_files
+        .iter()
+        .map(|name| super::inputs::relative(original_root, name))
+        .collect::<Result<_>>()?;
+    let expected: BTreeMap<_, _> = run
+        .input_snapshot
+        .iter()
+        .map(|(name, text)| Ok((super::inputs::relative(original_root, name)?, text.clone())))
+        .collect::<Result<_>>()?;
+    let mut baseline: BTreeMap<_, _> = run
+        .diff_baseline()
+        .iter()
+        .map(|(name, text)| Ok((super::inputs::relative(original_root, name)?, text.clone())))
+        .collect::<Result<_>>()?;
+    let candidate_inputs = super::read_inputs(Path::new(&receipt.project_root), &inputs)?;
     require(
-        super::read_inputs(Path::new(&receipt.project_root), &run.spec.input_files)?
-            == run.input_snapshot,
+        super::inputs::equivalent_sources(&expected, &candidate_inputs)?,
         "prepared inputs differ from accepted task",
     )?;
+    // Before any task executes, cover the complete prepared project so unrelated
+    // unchanged HEAD files are not falsely reported as additions by the diff.
+    if !baseline.contains_key(".") {
+        let whole = super::read_inputs(Path::new(&receipt.project_root), &[".".into()])?;
+        baseline.insert(".".into(), whole["."].clone());
+    }
+    let editable = run
+        .spec
+        .editable_files
+        .iter()
+        .map(|name| super::inputs::relative(original_root, name))
+        .collect::<Result<_>>()?;
+    run.spec.input_files = inputs;
+    run.spec.editable_files = editable;
+    run.input_snapshot = candidate_inputs;
+    run.diff_baseline = Some(baseline);
     run.spec.workspace = receipt.project_root.clone();
     run.spec_revision = run
         .spec_revision

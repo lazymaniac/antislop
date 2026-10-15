@@ -16,6 +16,7 @@ pub fn spec(objective: &str, workspace: &str, config: &PinnedConfig) -> Result<R
         .to_owned();
     Ok(RunSpec {
         task_family: crate::quality::TaskFamily::Analysis,
+        team_template: None,
         config: Some(config.clone()),
         objective: objective.to_owned(), workspace: workspace.to_owned(), provider,
         model: profile.model,
@@ -62,9 +63,7 @@ pub fn bootstrap_for(kind: ProviderKind, binary: std::path::PathBuf) -> Result<P
     ]);
     Config {
         schema_version: 1,
-        workspace: WorkspaceConfig {
-            mode: WorkspaceMode::InPlace,
-        },
+        workspace: WorkspaceConfig::default(),
         providers: BTreeMap::from([(
             kind,
             crate::providers::discovery::default_configuration(kind, binary),
@@ -103,6 +102,7 @@ pub fn bootstrap_for(kind: ProviderKind, binary: std::path::PathBuf) -> Result<P
             ),
         ]),
         orchestrator: OrchestratorConfig {
+            review_checks_per_part: crate::config::default_review_checks(),
             profile: "orchestrator".into(),
         },
         routing: kinds
@@ -137,6 +137,8 @@ pub fn bootstrap_for(kind: ProviderKind, binary: std::path::PathBuf) -> Result<P
 #[serde(deny_unknown_fields)]
 pub struct TaskDefinition {
     pub task_family: crate::quality::TaskFamily,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_template: Option<crate::team::TemplateKind>,
     pub objective: String,
     pub requirements: Vec<Requirement>,
     pub plan_items: Vec<PlanItem>,
@@ -169,6 +171,10 @@ pub fn proposed_spec(run: &Run, raw: &str) -> Result<RunSpec> {
         .ok_or_else(|| crate::Error::Invalid("intake configuration missing".into()))?
         .config;
     let config = &proposal.configuration;
+    require(
+        config.orchestrator.review_checks_per_part == original.orchestrator.review_checks_per_part,
+        "task proposal cannot change runtime review pagination",
+    )?;
     require(
         config.role_providers == original.role_providers,
         "task proposal cannot change user-configured role provider limits",
@@ -212,6 +218,7 @@ pub fn proposed_spec(run: &Run, raw: &str) -> Result<RunSpec> {
     let profile = config.resolve(WorkKind::Context, RoleKind::Executor)?;
     let spec = RunSpec {
         task_family: proposal.task.task_family,
+        team_template: proposal.task.team_template,
         objective: proposal.task.objective,
         workspace: run.spec.workspace.clone(),
         provider: serde_json::to_value(profile.provider)?
@@ -222,11 +229,54 @@ pub fn proposed_spec(run: &Run, raw: &str) -> Result<RunSpec> {
         config: Some(config.pin()?),
         requirements: proposal.task.requirements,
         plan_items: proposal.task.plan_items,
-        input_files: proposal.task.input_files,
+        input_files: proposal
+            .task
+            .input_files
+            .iter()
+            .map(|path| {
+                crate::workspace::inputs::relative(std::path::Path::new(&run.spec.workspace), path)
+            })
+            .collect::<Result<_>>()?,
         editable_files: proposal.task.editable_files,
         check_command: proposal.task.check_command,
     };
     spec.validate()?;
+    // Resolve proposed source scopes before they can become native review work.
+    // Invalid/unreadable proposals are rejected as proposals, not uncertain effects.
+    crate::workspace::validate_inputs(std::path::Path::new(&spec.workspace), &spec.input_files)?;
+    if let Some(round) = run.orchestration_rounds.last() {
+        let context: serde_json::Value =
+            crate::transport::decode(round.request_context.as_bytes())?;
+        if let Some(value) = context.get("project_instructions") {
+            let index: crate::workspace::instructions::Index =
+                serde_json::from_value(value.clone())?;
+            // Initial preparation has an empty provisional index. Only the
+            // source-bound interview observation can require additional pins.
+            if let Some(observed) = context["interview_source_hash"].as_str() {
+                require(
+                    index.observation_hash == observed,
+                    "project instruction index differs from the interview observation",
+                )?;
+                for document in &index.documents {
+                    let applies = document.directory_scope == "."
+                        || spec.input_files.iter().any(|input| {
+                            std::path::Path::new(input).starts_with(&document.directory_scope)
+                        });
+                    require(
+                        !applies
+                            || spec.input_files.iter().any(|input| {
+                                input == "."
+                                    || std::path::Path::new(&document.path).starts_with(input)
+                            }),
+                        &format!(
+                            "task contract omits applicable observed project instruction {}; include its file or an existing containing directory without expanding directory inputs",
+                            document.path
+                        ),
+                    )?;
+                }
+            }
+        }
+    }
     if let Some(catalogue) = run
         .orchestration_rounds
         .last()
@@ -310,6 +360,7 @@ pub fn accept(run: &mut Run, round_id: &str, expected_scope: &str) -> Result<()>
         "proposed task inputs changed after review",
     )?;
     run.input_snapshot = round.proposed_sources.clone();
+    run.diff_baseline = Some(run.input_snapshot.clone());
     run.approvals.push(Approval {
         action: format!("intake:{round_id}"),
         scope_hash: expected_scope.into(),
@@ -329,4 +380,60 @@ pub fn accept(run: &mut Run, round_id: &str, expected_scope: &str) -> Result<()>
     run.diagnostic = Some("Interview contract and agent routing accepted; no task execution or quality gate approved.".into());
     crate::verification::refresh_provenance(run);
     Ok(())
+}
+
+/// Repair the legacy file-only reader's false effect uncertainty, retaining the
+/// authored answer and requiring a separate approval for its missing review.
+pub(crate) fn settle_legacy_directory_capture(run: &mut Run) -> Result<bool> {
+    use crate::{
+        config::IsolationProfile,
+        orchestration::planning::{self, RoundStatus},
+    };
+    if !run.intake
+        || run.status != Status::Blocked
+        || !run.reconciliation_required
+        || run.provider_failure.is_some()
+        || run.team.is_some()
+        || !run.artifacts.is_empty()
+        || !run.pending_edits.is_empty()
+    {
+        return Ok(false);
+    }
+    let Some(round) = run.orchestration_rounds.last() else {
+        return Ok(false);
+    };
+    if round.status != RoundStatus::Failed
+        || round.diagnostic.as_deref() != Some("input path must be a normal relative path")
+        || round.intake_evidence_id.is_some()
+        || !round.proposed_sources.is_empty()
+        || run.session_ledger.sessions.values().any(|s| {
+            s.scope.task_id.as_ref() == Some(&round.id) && s.scope.role == RoleKind::Verifier
+        })
+    {
+        return Ok(false);
+    }
+    let profile = run
+        .spec
+        .config
+        .as_ref()
+        .ok_or_else(|| crate::Error::Invalid("missing intake configuration".into()))?
+        .config
+        .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)?;
+    require(
+        matches!(
+            profile.isolation,
+            IsolationProfile::ReadOnly | IsolationProfile::ToolFree
+        ),
+        "intake source capture had unrestricted native access",
+    )?;
+    planning::authenticate_unreviewed_proposal(run, round)?;
+    let new_context = planning::new_context_after_round(run, round);
+    run.reconciliation_required = false;
+    run.status = Status::AwaitingStart;
+    run.diagnostic=Some(if new_context {
+        "The directory scope is now supported. Your queued update requires a fresh orchestrator reply; the earlier response remains in history. Approve the queued conversation turn. No project work or contract is approved."
+    } else {
+        "The directory scope is now supported. Completed orchestrator output is retained. Approve read-only management recovery to start its missing independent review; no contract or project work is approved."
+    }.into());
+    Ok(true)
 }

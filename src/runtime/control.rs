@@ -49,10 +49,7 @@ impl Runtime {
     pub(super) fn await_action(&self, captured: &Run) -> Result<()> {
         drop(self.active_store(captured)?);
         require(
-            crate::workspace::read_inputs(
-                std::path::Path::new(&captured.spec.workspace),
-                &captured.spec.input_files,
-            )? == captured.input_snapshot,
+            crate::workspace::inputs_current(captured)?,
             "workspace inputs changed while waiting; reconcile before continuing",
         )
     }

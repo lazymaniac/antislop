@@ -274,6 +274,9 @@ fn codex_receipts_use_observed_native_session_and_reported_tokens() {
     let script = r#"#!/usr/bin/env python3
 import sys,json
 if '--version' in sys.argv: print('codex-cli 0.162.1');sys.exit(0)
+for feature in ['multi_agent','hooks','plugins','apps','shell_tool','shell_snapshot']:
+ assert any(sys.argv[i:i+2]==['--disable',feature] for i in range(len(sys.argv)-1))
+assert any(a.startswith('developer_instructions=') and 'Do not invoke native tools' in a for a in sys.argv)
 sys.stdin.read()
 session=sys.argv[sys.argv.index('resume')+1] if 'resume' in sys.argv else '00000000-0000-4000-8000-000000000001'
 for value in [dict(type='thread.started',thread_id=session),dict(type='item.completed',item=dict(type='agent_message',text='{"answer":42}')),dict(type='turn.completed',usage=dict(input_tokens=12,output_tokens=5,cached_input_tokens=3))]: print(json.dumps(value),flush=True)
@@ -287,6 +290,7 @@ for value in [dict(type='thread.started',thread_id=session),dict(type='item.comp
     let provider = providers::codex::CodexProvider {
         binary: Some(binary.to_string_lossy().into()),
         native_effort: Some("high".into()),
+        ..Default::default()
     };
     let mut events = Vec::new();
     let receipt = provider

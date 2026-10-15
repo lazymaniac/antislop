@@ -12,6 +12,27 @@ pub mod stage;
 mod tasks;
 #[cfg(test)]
 mod tests;
+pub mod views;
+pub mod wave;
+
+pub(crate) fn delivery_owned_effects(run: &Run) -> Result<BTreeMap<String, Option<String>>> {
+    let mut owned = BTreeMap::new();
+    for execution in &run.task_executions {
+        if execution.scope.spec_revision == run.spec_revision
+            && execution.state == effects::ExecutionState::Committed
+        {
+            effects::authenticate(run, execution)?;
+            for receipt in &execution.receipts {
+                owned.insert(
+                    receipt.path.clone(),
+                    (receipt.operation != crate::domain::FileOperation::Delete)
+                        .then(|| receipt.after_hash.clone()),
+                );
+            }
+        }
+    }
+    Ok(owned)
+}
 use super::{ObservedWork, Runtime};
 use crate::{
     Result,
@@ -81,9 +102,11 @@ pub(crate) fn gate_context(run: &Run) -> GateContext {
         };
         if let Some(result) = owner {
             gate_tasks.insert(key.clone(), result.task_id.clone());
+            gate_tasks.insert(assessment.check_id.clone(), result.task_id.clone());
             gate_tasks.insert(assessment.gate_id.clone(), result.task_id.clone());
         }
         gates.insert(key.clone(), binding.clone());
+        gates.insert(assessment.check_id.clone(), binding.clone());
         gates.insert(assessment.gate_id.clone(), binding);
     }
     GateContext {
@@ -132,15 +155,17 @@ impl Runtime {
                 !token.load(Ordering::SeqCst),
                 "team step cancelled before write",
             )?;
-            crate::workspace::replace(
+            crate::workspace::apply_edit(
                 Path::new(&current.spec.workspace),
-                &edit.path,
+                edit,
                 &current.pending_edits[offset + index].before_hash,
-                &edit.content,
             )?;
-            current
-                .input_snapshot
-                .insert(edit.path.clone(), edit.content.clone());
+            crate::workspace::inputs::record_change(
+                std::path::Path::new(&current.spec.workspace),
+                &mut current.input_snapshot,
+                edit,
+                &current.pending_edits[offset + index].before_hash,
+            )?;
             current.pending_edits[offset + index].state = crate::recovery::EditState::Applied;
             crate::verification::refresh_provenance(&mut current);
             store.save(&current, "team_edit_applied", None)?;
@@ -217,6 +242,7 @@ impl Runtime {
                         let observed = self.store.lock().expect("store mutex").get(&view.id)?;
                         view.task_checks = observed.task_checks;
                         view.evidence = observed.evidence;
+                        view.task_views = observed.task_views;
                         match invocation.operation {
                             TaskOperation::Execute => self.execute_team_task(
                                 &view,
@@ -239,6 +265,7 @@ impl Runtime {
                         .checkpoint_team(&run, current_team, event, &shared)
                         .and_then(|()| {
                             if let SchedulerEvent::WaveStarted { task_ids } = event {
+                                self.prepare_task_views(&run, current_team, task_ids)?;
                                 // All baselines finish before the scheduler spawns any native worker.
                                 for task in current_team.tasks.iter().filter(|t| {
                                     task_ids.contains(&t.id) && t.state == TaskState::Running
@@ -272,12 +299,16 @@ impl Runtime {
                 let completed: Vec<CompletedTask> = wave_result?;
 
                 // Read authoritative task/artifact/edit checkpoints; never adopt unobserved external edits.
-                run = self.store.lock().expect("store mutex").get(&run.id)?;
+                run = self.integrate_task_results(&run)?;
+                // A successful wave checkpointed every event; integration may
+                // have sent a conflicting result back to its owner.
+                if views::enabled(&run)
+                    && let Some(current) = &run.team
+                {
+                    team = current.clone();
+                }
                 require(
-                    crate::workspace::read_inputs(
-                        Path::new(&run.spec.workspace),
-                        &run.spec.input_files,
-                    )? == run.input_snapshot,
+                    crate::workspace::inputs_current(&run)?,
                     "workspace changed during task wave; reconcile before continuing",
                 )?;
                 context = gate_context(&run);
@@ -465,6 +496,12 @@ fn task_checks(run: &Run, invocation: &TaskInvocation) -> BTreeSet<String> {
     checks.extend(invocation.task.check_plan.iter().map(|p| p.review_id()));
     if let Some(contract) = &invocation.task.change_contract {
         checks.insert("CHANGE:classification".into());
+        checks.extend(
+            contract
+                .non_defect_criteria
+                .keys()
+                .map(|c| format!("CHANGE:non_defect:{c}")),
+        );
         checks.extend(contract.bugfixes.iter().map(|b| format!("BUGFIX:{}", b.id)));
     }
     checks.extend(invocation.task.criterion_ids.iter().cloned());
@@ -560,7 +597,7 @@ fn authenticate_pair(
     output: &str,
 ) -> Result<()> {
     use crate::sessions::TurnState;
-    run.session_ledger.validate()?;
+    run.session_ledger.validate_for_run(&run.id)?;
     let task = run
         .team
         .as_ref()
@@ -627,15 +664,9 @@ fn authenticate_pair(
             author_scope.input_snapshot = execution.input_snapshot.clone();
         }
         require(
-            session.scope
-                == crate::sessions::SessionScope::for_run(
-                    &author_scope,
-                    agent.clone(),
-                    Some(task.id.clone()),
-                    role,
-                    session.scope.provider.clone(),
-                    session.scope.binary_version.clone(),
-                )?
+            session
+                .scope
+                .matches_run(&author_scope, agent.clone(), Some(task.id.clone()), role)?
                 && serde_json::to_value(configured)?.as_str()
                     == Some(session.scope.provider.as_str())
                 && session.scope.agent_id == *agent

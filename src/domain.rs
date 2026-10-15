@@ -60,6 +60,9 @@ pub struct PlanItem {
 pub struct RunSpec {
     #[serde(default)]
     pub task_family: crate::quality::TaskFamily,
+    /// Optional built-in template selected during the reviewed interview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_template: Option<crate::team::TemplateKind>,
     #[serde(default)]
     pub config: Option<crate::config::PinnedConfig>,
     pub objective: String,
@@ -80,6 +83,11 @@ impl RunSpec {
         self.validate_scope(false)
     }
     fn validate_scope(&self, intake: bool) -> Result<()> {
+        require(
+            self.team_template
+                .is_none_or(|template| template.family() == self.task_family),
+            "selected team template does not match the task family",
+        )?;
         if intake {
             require(
                 self.config.is_some(),
@@ -87,6 +95,7 @@ impl RunSpec {
             )?;
             require(
                 self.input_files.is_empty()
+                    && self.team_template.is_none()
                     && self.editable_files.is_empty()
                     && self.check_command.is_empty(),
                 "intake cannot declare task execution inputs, writes or checks",
@@ -97,13 +106,7 @@ impl RunSpec {
             pinned.validate()?;
             let config = &pinned.config;
             if !self.check_command.is_empty() {
-                config
-                    .policy
-                    .authorize_local(crate::config::LocalAction::Check, true)?;
-                require(
-                    config.policy.mode == crate::config::Mode::Supervised,
-                    "autonomous project checks require a restricted runner; unsandboxed execution is not enabled",
-                )?;
+                config.policy.authorize_project_check(true)?;
             }
             if !self.editable_files.is_empty() {
                 config
@@ -143,10 +146,22 @@ impl RunSpec {
             "requirements must not be empty",
         )?;
         require(
-            self.editable_files
-                .iter()
-                .all(|p| self.input_files.contains(p)),
-            "editable files must be pinned inputs",
+            self.editable_files.iter().all(|editable| {
+                self.input_files.iter().any(|input| {
+                    if input == editable {
+                        return true;
+                    }
+                    let root = std::path::Path::new(&self.workspace);
+                    crate::workspace::inputs::relative(root, input).is_ok_and(|relative| {
+                        root.join(relative)
+                            .symlink_metadata()
+                            .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+                            && crate::workspace::inputs::scope_contains(root, input, editable)
+                                .unwrap_or(false)
+                    })
+                })
+            }),
+            "editable files must be pinned inputs or lie within a pinned directory",
         )?;
         require(
             self.editable_files.is_empty() || !self.check_command.is_empty(),
@@ -263,12 +278,27 @@ pub struct Run {
     pub task_check_outcomes: Vec<crate::runtime::team::check_recovery::Outcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_workspace: Option<crate::workspace::managed::Workspace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<crate::runtime::delivery::Record>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_plan: Option<crate::workspace::managed::Plan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_inspection: Option<crate::runtime::workspace::Inspection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_activation_attempt: Option<crate::runtime::workspace::Inspection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_views: Option<crate::runtime::team::views::TeamViews>,
     #[serde(default)]
     pub task_result_restorations: Vec<crate::runtime::team::restore::Restoration>,
     #[serde(default)]
     pub team_result_approvals: Vec<crate::runtime::team::stage::ResultApproval>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mode_changes: Vec<crate::policy::ModeChange>,
     pub diagnostic: Option<String>,
     pub input_snapshot: BTreeMap<String, String>,
+    /// Accepted task source baseline; managed writes only advance input_snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_baseline: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub checklist_version: String,
     #[serde(default)]
@@ -290,6 +320,8 @@ pub struct Run {
     pub reconciliation_required: bool,
     #[serde(default)]
     pub diff_comments: Vec<DiffComment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diff_reviews: Vec<crate::runtime::diff_review::Record>,
     #[serde(default)]
     pub element_comments: Vec<crate::comments::Comment>,
 }
@@ -347,9 +379,16 @@ impl Run {
             task_checks: vec![],
             task_check_outcomes: vec![],
             managed_workspace: None,
+            delivery: None,
+            workspace_plan: None,
+            workspace_inspection: None,
+            workspace_activation_attempt: None,
+            task_views: None,
             task_result_restorations: vec![],
             team_result_approvals: vec![],
+            mode_changes: vec![],
             diagnostic: None,
+            diff_baseline: Some(input_snapshot.clone()),
             input_snapshot,
             checklist_version: checklist_version(),
             risk_coverage: risk_coverage(),
@@ -361,6 +400,7 @@ impl Run {
             pending_edits: vec![],
             reconciliation_required: false,
             diff_comments: vec![],
+            diff_reviews: vec![],
             element_comments: vec![],
         })
     }
@@ -467,10 +507,13 @@ impl Run {
             self.source_hashes(),
         ))?))
     }
+    pub fn diff_baseline(&self) -> &BTreeMap<String, String> {
+        self.diff_baseline.as_ref().unwrap_or(&self.input_snapshot)
+    }
     pub fn diff_review_scope(&self) -> Result<String> {
         let diff = crate::workspace::compute_diff(
             std::path::Path::new(&self.spec.workspace),
-            &self.input_snapshot,
+            self.diff_baseline(),
         )?;
         Ok(hash(serde_json::to_vec(&(
             self.scope_hash("review-diff"),
@@ -636,11 +679,26 @@ pub fn checklist_version() -> String {
     )
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileOperation {
+    #[default]
+    Write,
+    Create,
+    Delete,
+}
+impl FileOperation {
+    pub fn is_write(&self) -> bool {
+        *self == Self::Write
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileEdit {
     pub path: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "FileOperation::is_write")]
+    pub operation: FileOperation,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -15,6 +15,8 @@ pub enum EditState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditReceipt {
     pub path: String,
+    #[serde(default, skip_serializing_if = "FileOperation::is_write")]
+    pub operation: FileOperation,
     pub before_hash: String,
     pub after_hash: String,
     pub state: EditState,
@@ -43,22 +45,12 @@ pub fn observe(run: &Run) -> Result<Observation> {
     let mut readable = BTreeMap::new();
     let mut complete = true;
     for path in &run.spec.input_files {
-        let state = match crate::workspace::read_input_bytes(root, path) {
-            Ok(bytes) => {
-                let digest = hash(&bytes);
-                match String::from_utf8(bytes) {
-                    Ok(text) => {
-                        readable.insert(path.clone(), text);
-                        InputObservation::Readable { hash: digest }
-                    }
-                    Err(_) => {
-                        complete = false;
-                        InputObservation::Unreadable {
-                            hash: Some(digest),
-                            reason: "non-UTF8 input".into(),
-                        }
-                    }
-                }
+        let state = match crate::workspace::read_inputs(root, std::slice::from_ref(path)) {
+            Ok(mut captured) => {
+                let text = captured.remove(path).expect("selected input is captured");
+                let digest = hash(&text);
+                readable.insert(path.clone(), text);
+                InputObservation::Readable { hash: digest }
             }
             Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
                 complete = false;
@@ -67,7 +59,9 @@ pub fn observe(run: &Run) -> Result<Observation> {
             Err(error) => {
                 complete = false;
                 InputObservation::Unreadable {
-                    hash: None,
+                    hash: crate::workspace::read_input_bytes(root, path)
+                        .ok()
+                        .map(hash),
                     reason: error.to_string(),
                 }
             }
@@ -96,16 +90,31 @@ pub fn prepare(run: &Run, edits: &[FileEdit]) -> Result<Vec<EditReceipt>> {
         .iter()
         .map(|edit| {
             require(
-                run.spec.editable_files.contains(&edit.path) && seen.insert(&edit.path),
+                run.spec.editable_files.iter().any(|scope| {
+                    crate::workspace::inputs::scope_contains(
+                        std::path::Path::new(&run.spec.workspace),
+                        scope,
+                        &edit.path,
+                    )
+                    .unwrap_or(false)
+                }) && seen.insert(&edit.path),
                 "unauthorized or duplicate file edit",
             )?;
-            let before = current
-                .get(&edit.path)
-                .ok_or_else(|| crate::Error::Invalid("edit is not a pinned input".into()))?;
+            let root = std::path::Path::new(&run.spec.workspace);
+            let before = crate::workspace::inputs::captured_text(root, &current, &edit.path)?;
+            let before_hash = crate::workspace::inputs::version_hash(before.as_deref());
+            let mut preview = current.clone();
+            crate::workspace::inputs::record_change(root, &mut preview, edit, &before_hash)?;
+            if edit.operation == FileOperation::Create {
+                crate::workspace::inputs::validate_creation(root, &current, &edit.path)?;
+            }
             Ok(EditReceipt {
                 path: edit.path.clone(),
-                before_hash: hash(before),
-                after_hash: hash(&edit.content),
+                operation: edit.operation,
+                before_hash,
+                after_hash: crate::workspace::inputs::version_hash(
+                    crate::workspace::inputs::after_text(edit),
+                ),
                 state: EditState::Pending,
             })
         })
@@ -115,6 +124,36 @@ pub fn prepare(run: &Run, edits: &[FileEdit]) -> Result<Vec<EditReceipt>> {
 pub fn inspect(run: &mut Run) -> Result<()> {
     let current = observe(run)?;
     for receipt in &mut run.pending_edits {
+        if let Some(snapshot) = &current.readable {
+            let root = std::path::Path::new(&run.spec.workspace);
+            let physical_matches = (|| -> Result<bool> {
+                let path = crate::workspace::inputs::relative(root, &receipt.path)?;
+                let actual = crate::workspace::delivery::stamp(root, &path)?;
+                let captured =
+                    crate::workspace::inputs::captured_text(root, snapshot, &receipt.path)?;
+                Ok(match (actual, captured) {
+                    (None, None) => true,
+                    (Some(actual), Some(text)) => {
+                        actual.kind == crate::workspace::delivery::Kind::File
+                            && actual.sha256 == hash(text)
+                    }
+                    _ => false,
+                })
+            })()
+            .unwrap_or(false);
+            if !physical_matches {
+                receipt.state = EditState::Conflict;
+                continue;
+            }
+            receipt.state = if matches_version(root, snapshot, receipt, false).unwrap_or(false) {
+                EditState::Applied
+            } else if matches_version(root, snapshot, receipt, true).unwrap_or(false) {
+                EditState::Unapplied
+            } else {
+                EditState::Conflict
+            };
+            continue;
+        }
         let observed = match current.inputs.get(&receipt.path) {
             Some(InputObservation::Readable { hash }) => Some(hash),
             Some(InputObservation::Unreadable {
@@ -131,6 +170,27 @@ pub fn inspect(run: &mut Run) -> Result<()> {
         };
     }
     Ok(())
+}
+
+pub fn matches_version(
+    root: &std::path::Path,
+    snapshot: &BTreeMap<String, String>,
+    receipt: &EditReceipt,
+    before: bool,
+) -> Result<bool> {
+    let text = crate::workspace::inputs::captured_text(root, snapshot, &receipt.path)?;
+    let absent = if before {
+        receipt.operation == FileOperation::Create
+    } else {
+        receipt.operation == FileOperation::Delete
+    };
+    Ok(text.is_none() == absent
+        && crate::workspace::inputs::version_hash(text.as_deref())
+            == if before {
+                receipt.before_hash.clone()
+            } else {
+                receipt.after_hash.clone()
+            })
 }
 
 /// Shared ancestor locks allow siblings to run independently while serializing

@@ -52,12 +52,19 @@ pub fn context(run: &Run) -> Result<Value> {
     Ok(
         json!({"schema_version":1,"workflow":"fixed six-stage supervised pipeline",
         "run_id":run.id,"spec_revision":run.spec_revision,"invocation_stage":run.stage,"attempt":run.attempt,
+        "project_instructions":crate::workspace::instructions::from_snapshot(std::path::Path::new(&run.spec.workspace), &run.input_snapshot)?,
         "checklist_version":run.checklist_version,"risk_catalog_version":risk_catalog["version"],
         "stage_assignments":stages,"risk_coverage":risks,"approvals":run.approvals,
         "prior_risk_binding_status":crate::verification::prior_risk_binding_summary(run),
         "prior_risk_binding_status_scope":"Exact backend authentication of earlier-stage risk evidence bindings at the supplied scope and inputs only. This is not quality acceptance, independent semantic review, result acceptance, or a waiver of expected checks/gates. Current and future stage risks are excluded; zero checked risks means there are no earlier-stage obligations in this observation.",
         "sessions":sessions,"turns":turns,
         "diff_comments":run.diff_comments,
+        "diff_reviews":run.diff_reviews.iter().map(|r| serde_json::json!({
+            "id":r.id,"state":r.state,"spec_revision":r.spec_revision,
+            "diff_hash":r.diff_hash,"input_hash":r.input_hash,"profile":r.profile,
+            "session_id":r.session_id,"response":r.response,"diagnostic":r.diagnostic,
+            "scope":"Independent candidate advice; no task or stage acceptance"
+        })).collect::<Vec<_>>(),
         "unresolved_diff_comments":run.diff_comments.iter().filter(|c| !c.resolved).collect::<Vec<_>>(),
         "policy":{"configuration":run.spec.config,"executor_edits_only_in":"execution",
             "editable_files":run.spec.editable_files,"check_command":run.spec.check_command,

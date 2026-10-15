@@ -54,6 +54,127 @@ class RequirementsAuditTests(unittest.TestCase):
         child['obligation'] = 'Preserve some requirements.'
         self.assertTrue(any('semantic obligation/qualifier missing' in error for error in self.errors(ledger, atomic)))
 
+    def test_context_packet_qualifiers_cannot_be_lost_in_an_otherwise_preserved_source(self):
+        for phrase in [
+            'references to the complete source materials',
+            'prohibition on self-authorized permission changes',
+            'After compaction, verify',
+            'examples, not an exhaustive list',
+            'explicit decision',
+            'discovered document or webpage',
+        ]:
+            with self.subTest(phrase=phrase):
+                ledger, atomic = self.mutate()
+                child = next(c for c in atomic['requirements'] if phrase in c['obligation'])
+                child['obligation'] = 'Retain some context.'
+                self.assertTrue(any('semantic obligation/qualifier missing' in error for error in self.errors(ledger, atomic)))
+
+    def test_autonomy_interpretation_preserves_approvals_gate_conditions_and_no_retroactivity(self):
+        for phrase in [
+            'optional combined approval, not implicit authorization',
+            'do not automatically open a correction round after a verifier rejects',
+            'opens successive stages after their applicable gates are satisfied',
+            'opens correction rounds after their applicable gates are satisfied',
+            'local commits within the policy',
+            'necessary product decision may require the user',
+            'Do not retrospectively approve prior changes',
+            'Do not remove verifier concerns',
+            'scope invalidates the affected approvals',
+            'approval of a stage from approval of an action',
+            'must not include unrelated user changes',
+        ]:
+            with self.subTest(phrase=phrase):
+                ledger,atomic=self.mutate()
+                child=next(c for c in atomic['requirements'] if phrase in c['obligation'])
+                child['obligation']='A selected mode allows the workflow to proceed.'
+                self.assertTrue(any('semantic obligation/qualifier missing' in error for error in self.errors(ledger,atomic)))
+
+    def test_team_adaptation_preserves_mandatory_pairs_preparatory_exceptions_and_no_numeric_limits(self):
+        for phrase in [
+            'available CLIs', 'agents without a task', 'appropriate stage in supervised mode',
+            'Do not require a completed implementation plan', 'Do not waive implementation gates',
+            'code and final-integration evidence before delivery', 'management delegation graph is acyclic',
+            'Every active write has a defined integration method', 'no numerical round limit',
+            'no numerical agent limit', 'must not create an infinite execution loop',
+            'Every run includes a compliance pair', 'test-implementation pair',
+            'brief but remain mandatory', 'does not require fictitious compilation tests',
+            'Do not share one verifier agent', 'mandatory refactoring assessment',
+            'cannot remove required verification', 'composition change has a history event',
+        ]:
+            with self.subTest(phrase=phrase):
+                ledger,atomic=self.mutate()
+                child=next(c for c in atomic['requirements'] if phrase in c['obligation'])
+                child['obligation']='A generic team may do some work.'
+                self.assertTrue(any('semantic obligation/qualifier missing' in error for error in self.errors(ledger,atomic)))
+
+    def test_team_catalog_interpretation_retains_source_authority_without_claiming_implementation(self):
+        prefix='To katalog kompetencji. Każdy run obejmuje'
+        parent=next(p for p in self.atomic['parents'] if p['original_text'].startswith(prefix))
+        children=[c for c in self.atomic['requirements'] if c['parent_id']==parent['id']]
+        self.assertEqual(20,len(children))
+        self.assertTrue(all(c['authority']==parent['authority'] and c['atomicity']=='reviewed'
+                            and c['status']=='identified' and not c['evidence_refs'] for c in children))
+
+    def test_bugfix_requires_actual_before_after_proof_or_an_explicit_gap(self):
+        for phrase in ['reproduce the problem before changing', 'check the result after the change',
+                       'explicit gap requiring other evidence', 'inability to reproduce as implicit success']:
+            with self.subTest(phrase=phrase):
+                ledger,atomic=self.mutate()
+                child=next(c for c in atomic['requirements'] if phrase in c['obligation'])
+                child['obligation']='An assumed test result is enough.'
+                self.assertTrue(any('semantic obligation/qualifier missing' in error for error in self.errors(ledger,atomic)))
+
+    def test_role_catalog_review_retains_dimensions_and_illustrative_artifact_qualifiers(self):
+        for phrase in ['substantive strategy changes', 'closure of unknowns', 'acceptance-criteria completeness',
+                       'independent simulation', 'comparison fairness', 'reuse of existing solutions',
+                       'dependency maintenance cost', 'absence of unnecessary additions',
+                       'absence of speculative abstractions', 'absence of rule-weakening attempts',
+                       'absence of extraction gaps', 'scenarios detect probable defects', 'test resilience',
+                       'inspect false alarms', 'absence of semantic regression', 'entire change set',
+                       'facts from inferences', 'inspect units', 'alignment with the brief',
+                       'instructions with the actual result', 'ComplianceAudit and RequirementLedger accounting']:
+            with self.subTest(phrase=phrase):
+                ledger,atomic=self.mutate()
+                child=next(c for c in atomic['requirements'] if phrase in c['obligation'])
+                child['obligation']='Perform a generic role review.'
+                self.assertTrue(any('semantic obligation/qualifier missing' in error for error in self.errors(ledger,atomic)))
+        parents=[p for p in self.atomic['parents'] if p['section']=='7.2' and p['original_text'].startswith('|') and p['child_ids']]
+        self.assertEqual(20,len(parents))
+        for parent in parents:
+            children=[c for c in self.atomic['requirements'] if c['parent_id']==parent['id']]
+            self.assertTrue(all(c['atomicity']=='reviewed' and c['status']=='identified'
+                                and c['authority']==parent['authority'] and not c['evidence_refs'] for c in children))
+            examples=next(c for c in children if 'illustrative artifact form' in c['obligation'])
+            ledger,atomic=self.mutate()
+            next(c for c in atomic['requirements'] if c['id']==examples['id'])['obligation']='Require this exact artifact storage format for every task.'
+            self.assertTrue(any('semantic obligation/qualifier missing' in error for error in self.errors(ledger,atomic)))
+
+    def test_role_catalog_cannot_force_every_catalog_competency_into_every_run(self):
+        ledger,atomic=self.mutate()
+        child=next(c for c in atomic['requirements'] if c['obligation'].startswith('For the selected Security analyst competency, independently inspect the threat model.'))
+        child['obligation']=child['obligation'].replace('For the selected Security analyst competency,','For every run regardless of selected competencies,')
+        self.assertTrue(any('selected-competency applicability' in error for error in self.errors(ledger,atomic)))
+
+    def test_context_source_and_packet_fields_are_individually_traceable_without_claiming_implementation(self):
+        for prefix, count in [('Trwałe źródła: wymagania', 14), ('Pakiet zawiera obowiązkowo:', 14), ('Instrukcje projektu (np.', 3)]:
+            parent = next(p for p in self.atomic['parents'] if p['original_text'].startswith(prefix))
+            children = [c for c in self.atomic['requirements'] if c['parent_id'] == parent['id']]
+            self.assertEqual(count, len(children))
+            self.assertTrue(all(c['atomicity'] == 'reviewed' and c['status'] == 'identified' and not c['evidence_refs'] for c in children))
+
+    def test_communication_receipt_uncertainty_and_scope_qualifiers_survive_atomization(self):
+        parents = {p['id'] for p in self.atomic['parents'] if p['original_text'].startswith(
+            ('Wiadomości przechodzą przez daemon;', 'Nie udajemy gwarancji exactly-once', 'Zakresy komunikacji i subskrypcji'))}
+        for phrase in ['before delivery', 'backpressure', 'user_instruction message type',
+                       'provider exactly-once', 'uncertain delivery with the actual session',
+                       'external actions with unknown outcomes', 'subscription scopes',
+                       'Limit status storms', 'Limit copying complete transcripts']:
+            with self.subTest(phrase=phrase):
+                ledger, atomic = self.mutate()
+                child = next(c for c in atomic['requirements'] if c['parent_id'] in parents and phrase in c['obligation'])
+                child['obligation'] = 'Send some messages.'
+                self.assertTrue(any('semantic obligation/qualifier missing' in error for error in self.errors(ledger, atomic)))
+
     def test_small_task_qualifier_cannot_disappear_from_interpretation(self):
         ledger, atomic = self.mutate()
         child = next(c for c in atomic['requirements'] if 'including small tasks' in c['obligation'])

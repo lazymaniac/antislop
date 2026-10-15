@@ -170,6 +170,10 @@ fn explicit_bootstrap_preserves_read_only_intake_for_each_supported_cli() {
     ] {
         let binary = std::path::PathBuf::from("/explicit/conversation-cli");
         let pinned = intake::bootstrap_for(kind, binary.clone()).unwrap();
+        assert_eq!(
+            pinned.config.workspace.mode,
+            architect::config::WorkspaceMode::TaskWorktrees
+        );
         let config = &pinned.config;
         assert_eq!(config.providers.len(), 1);
         assert_eq!(config.providers[&kind].binary, binary);
@@ -392,4 +396,82 @@ fn ui_does_not_restart_a_listening_daemon_on_protocol_or_application_rejection()
             "must not start another daemon for a rejected live response"
         );
     }
+}
+
+#[test]
+fn interview_snapshot_never_prepares_an_unapproved_repository_diff() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("unselected.txt"),
+        "not an accepted task input",
+    )
+    .unwrap();
+    let runtime = std::sync::Arc::new(
+        Runtime::new(Store::open(&root.path().join("state.db")).unwrap()).unwrap(),
+    );
+    let run = runtime
+        .dispatch(
+            &id(),
+            Command::BeginIntake {
+                objective: "Interview only".into(),
+                workspace: root.path().to_string_lossy().into(),
+                config: intake::bootstrap("codex".into()).unwrap(),
+            },
+        )
+        .unwrap();
+    let response = architect::ipc::handle(
+        &runtime,
+        architect::ipc::Request {
+            version: architect::ipc::PROTOCOL_VERSION,
+            request_id: id(),
+            idempotency_key: None,
+            operation: architect::ipc::Operation::Snapshot {
+                run_id: run.id.clone(),
+            },
+        },
+    );
+    assert!(response.error.is_none());
+    let control = response.data.unwrap();
+    assert_eq!(control["scope_hashes"]["review_diff"], "");
+    let snapshot = architect::tui::model::Snapshot::from_document(
+        &serde_json::to_value(run).unwrap(),
+        &control,
+    );
+    assert!(snapshot.run_details["Diff"].contains("after the interview contract"));
+    assert!(!snapshot.run_details["Diff"].contains("unselected.txt"));
+}
+
+#[test]
+fn owned_startup_retries_a_disconnected_read_probe_without_spawning_a_second_daemon() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let binary = root.path().join("startup-server");
+    std::fs::write(&binary,r#"#!/usr/bin/env python3
+import sys,socket,pathlib,json,os
+state=pathlib.Path(sys.argv[2])
+with (state/'launches').open('a') as f:f.write('launch\n')
+s=socket.socket(socket.AF_UNIX);s.bind(str(state/'architect.sock'));os.chmod(state/'architect.sock',0o600);s.listen()
+for index in range(3):
+ c,_=s.accept()
+ with c:
+  (state/'probes').write_text(str(index+1))
+  if index == 0:
+   c.shutdown(socket.SHUT_RDWR)
+   continue
+  line=c.makefile('rb').readline();request=json.loads(line)
+  if index == 2: c.sendall((json.dumps(dict(version=request['version'],request_id=request['request_id'],data=[],error=None))+'\n').encode())
+import time;time.sleep(30)
+"#).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut child = architect::tui::connect_or_start_daemon(&state, &binary)
+        .unwrap()
+        .unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(
+        std::fs::read_to_string(state.join("launches")).unwrap(),
+        "launch\n"
+    );
+    assert_eq!(std::fs::read_to_string(state.join("probes")).unwrap(), "3");
 }

@@ -482,7 +482,10 @@ fn cancellation_during_partial_stdin_write_preserves_unknown_effects() {
             &TurnRequest {
                 turn_id: "partial-input-cancel",
                 run: &cli.run,
-                prompt: &"x".repeat(1_000_000),
+                // The decoded user content stays within the native ceiling.
+                // JSON escaping makes its wire frame exceed 1 MiB, keeping the
+                // blocked-stdin fixture a real partial-write cancellation case.
+                prompt: &"\0".repeat(architect::providers::agy::MAX_PROMPT_BYTES),
                 schema: &json!({}),
                 resume: None,
             },
@@ -514,6 +517,12 @@ fn cancellation_during_partial_stdin_write_preserves_unknown_effects() {
         !events
             .iter()
             .any(|e| matches!(e, ProviderEvent::Completed { .. }))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, ProviderEvent::DeliverySent { .. })),
+        "the fixture must keep the complete input write pending"
     );
 }
 

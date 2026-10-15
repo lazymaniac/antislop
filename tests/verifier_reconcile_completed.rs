@@ -31,10 +31,12 @@ fn fixture(root: &Path, applied: usize) -> Run {
         &run,
         &[
             FileEdit {
+                operation: architect::domain::FileOperation::Write,
                 path: "a".into(),
                 content: "new a".into(),
             },
             FileEdit {
+                operation: architect::domain::FileOperation::Write,
                 path: "b".into(),
                 content: "new b".into(),
             },

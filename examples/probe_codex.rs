@@ -9,6 +9,7 @@ fn main() -> Result<()> {
     let run = Run::new(
         architect::id(),
         RunSpec {
+            team_template: None,
             config: None,
             task_family: architect::quality::TaskFamily::Software,
             objective: "Protocol smoke".into(),

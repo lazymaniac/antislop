@@ -19,6 +19,7 @@ use std::{
 
 fn spec(root: &std::path::Path) -> RunSpec {
     RunSpec {
+        team_template: None,
         task_family: architect::quality::TaskFamily::Software,
         config: None,
         objective: "Fix the documented behavior".into(),

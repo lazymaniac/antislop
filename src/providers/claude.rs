@@ -165,6 +165,7 @@ impl Provider for ClaudeProvider {
         cancelled: Arc<AtomicBool>,
         events: &mut dyn FnMut(&ProviderEvent) -> Result<()>,
     ) -> Result<TurnReceipt> {
+        shared_cli::require_prompt_size("claude", request.prompt)?;
         self.inspect(Some(&cancelled))?;
         let session_id = shared_cli::exact_session("claude", request.resume)?;
         let mut command = shared_cli::command("claude", self.binary())?;

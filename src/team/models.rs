@@ -156,8 +156,8 @@ pub fn output_schema() -> serde_json::Value {
     serde_json::json!({"type":"object","properties":{
         "contract_version":{"type":"string","enum":[CONTRACT]},
         "artifact":{"type":"string"},"edits":{"type":"array","items":{
-            "type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},
-            "required":["path","content"],"additionalProperties":false}},
+            "type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"operation":{"type":"string","enum":["write","create","delete"]}},
+            "required":["path","content","operation"],"additionalProperties":false}},
         "agent_messages":crate::communication::outbox::schema(),
         "context":{"anyOf":[schema::<ContextArtifact>(),{"type":"null"}]},
         "solution":{"anyOf":[schema::<SolutionArtifact>(),{"type":"null"}]}

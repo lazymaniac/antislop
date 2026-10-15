@@ -15,6 +15,7 @@ fn fixture() -> (tempfile::TempDir, Run) {
     let run = Run::new(
         id(),
         RunSpec {
+            team_template: None,
             task_family: architect::quality::TaskFamily::Software,
             config: None,
             objective: "Preserve the documented input contract".into(),

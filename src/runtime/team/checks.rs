@@ -57,7 +57,7 @@ fn matches(
         && invocation.artifact_hash == artifact.hash
         && invocation.plan == *plan
         && invocation.spec_revision == run.spec_revision
-        && invocation.configuration_hash == config_hash(run)
+        && run.mode_configuration_matches(&invocation.configuration_hash)
         && invocation.source_hashes == run.source_hashes()
 }
 fn authenticate<'a>(run: &'a Run, invocation: &Invocation) -> Result<&'a Evidence> {
@@ -87,7 +87,7 @@ fn authenticate<'a>(run: &'a Run, invocation: &Invocation) -> Result<&'a Evidenc
             && (!baseline
                 || (invocation.artifact_id.is_none() && invocation.artifact_hash == input_hash))
             && invocation.spec_revision == run.spec_revision
-            && invocation.configuration_hash == config_hash(run)
+            && run.mode_configuration_matches(&invocation.configuration_hash)
             && run.approvals.iter().any(|a| {
                 a.actor == "local_user"
                     && a.spec_revision == invocation.spec_revision
@@ -158,7 +158,7 @@ fn baseline_record<'a>(
             && i.task_attempt == baseline_attempt(task)
             && i.plan == *plan
             && i.spec_revision == run.spec_revision
-            && i.configuration_hash == config_hash(run)
+            && run.mode_configuration_matches(&i.configuration_hash)
     })
 }
 pub(crate) fn baseline_for_artifact(run: &Run, artifact: &Artifact, evidence: &Evidence) -> bool {
@@ -483,12 +483,10 @@ impl Runtime {
             let _resources = self.acquire_check(&token)?;
             self.await_action(view)?;
             if let Some(config) = &view.spec.config {
-                config
-                    .config
-                    .policy
-                    .authorize_local(crate::config::LocalAction::Check, true)?;
+                config.config.policy.authorize_project_check(true)?;
             }
             let check_id;
+            let directory;
             {
                 let mut store = self.active_store(view)?;
                 let mut current = store.get(&view.id)?;
@@ -508,10 +506,17 @@ impl Runtime {
                     authenticate(&current, record)?;
                     continue;
                 }
-                let before = crate::workspace::read_inputs(
-                    Path::new(&view.spec.workspace),
-                    &view.spec.input_files,
-                )?;
+                let before = if super::views::enabled(&current) {
+                    // The task's own checkout; the project is not the task input.
+                    directory = super::views::task_directory(&current, task, phase)?;
+                    view.input_snapshot.clone()
+                } else {
+                    directory = std::path::PathBuf::from(&view.spec.workspace);
+                    crate::workspace::read_inputs(
+                        Path::new(&view.spec.workspace),
+                        &view.spec.input_files,
+                    )?
+                };
                 require(
                     before == view.input_snapshot,
                     "workspace changed before planned task check",
@@ -562,12 +567,17 @@ impl Runtime {
                 });
                 store.save(&current, "task_check_intent", None)?;
             }
-            let result =
-                crate::workspace::check(Path::new(&view.spec.workspace), &plan.argv, token.clone());
-            let after = crate::workspace::read_inputs(
-                Path::new(&view.spec.workspace),
-                &view.spec.input_files,
-            );
+            let result = crate::workspace::check(&directory, &plan.argv, token.clone());
+            let worktrees = super::views::enabled(view);
+            let after = if worktrees {
+                super::views::check_directory_unchanged(view, task, phase, &directory)
+                    .map(|()| view.input_snapshot.clone())
+            } else {
+                crate::workspace::read_inputs(
+                    Path::new(&view.spec.workspace),
+                    &view.spec.input_files,
+                )
+            };
             let unchanged = after.as_ref().is_ok_and(|s| s == &view.input_snapshot);
             let mut store = self.store.lock().expect("store mutex");
             let mut current = store.get(&view.id)?;
@@ -643,7 +653,8 @@ impl Runtime {
             } else {
                 record.state = CheckState::Unknown;
             }
-            if !unchanged || result.is_err() {
+            // A private task checkout was already restored; the project is untouched.
+            if (!unchanged && !worktrees) || result.is_err() {
                 current.reconciliation_required = true;
             }
             store.save(&current, "task_check_finished", None)?;

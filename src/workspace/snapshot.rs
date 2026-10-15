@@ -410,6 +410,13 @@ fn nongit_paths(
     for entry in std::fs::read_dir(root.join(relative))? {
         check_cancelled(cancelled)?;
         let entry = entry?;
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(".git")
+        {
+            continue;
+        }
         let path = relative.join(entry.file_name());
         let name = path
             .to_str()
@@ -429,6 +436,41 @@ fn nongit_paths(
     }
     Ok(())
 }
+/// Source membership for directory inputs without per-file Git object hashing.
+pub(crate) fn source_paths(
+    root: &Path,
+    excluded: &BTreeSet<String>,
+    cancelled: &AtomicBool,
+) -> Result<(bool, BTreeSet<String>)> {
+    let (repository, paths, _) = source_members(root, excluded, cancelled)?;
+    Ok((repository, paths))
+}
+pub(crate) fn source_members(
+    root: &Path,
+    excluded: &BTreeSet<String>,
+    cancelled: &AtomicBool,
+) -> Result<(bool, BTreeSet<String>, BTreeSet<String>)> {
+    let repo = repository(root, cancelled)?;
+    let mut paths = BTreeSet::new();
+    let mut tracked = BTreeSet::new();
+    if let Some(repo) = &repo {
+        paths.extend(repo.head_entries.keys().cloned());
+        paths.extend(repo.index_entries.keys().cloned());
+        paths.extend(repo.untracked.iter().cloned());
+        tracked.extend(repo.head_entries.keys().cloned());
+        tracked.extend(repo.index_entries.keys().cloned());
+    } else {
+        nongit_paths(root, Path::new(""), &mut paths, excluded, cancelled)?;
+    }
+    paths.retain(|path| {
+        !excluded
+            .iter()
+            .any(|prefix| path == prefix || path.starts_with(&format!("{prefix}/")))
+    });
+    tracked.retain(|path| paths.contains(path));
+    Ok((repo.is_some(), paths, tracked))
+}
+
 fn file(
     root: &Path,
     path: &str,
@@ -532,7 +574,14 @@ fn once(
     excluded: &BTreeSet<String>,
     cancelled: &AtomicBool,
 ) -> Result<Snapshot> {
-    let repo = repository(root, cancelled)?;
+    let mut repo = repository(root, cancelled)?;
+    if let Some(repo) = &mut repo {
+        repo.untracked.retain(|path| {
+            !excluded
+                .iter()
+                .any(|prefix| path == prefix || path.starts_with(&format!("{prefix}/")))
+        });
+    }
     let mut paths = additional.clone();
     if let Some(repo) = &repo {
         paths.extend(repo.head_entries.keys().cloned());

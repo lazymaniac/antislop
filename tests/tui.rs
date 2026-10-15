@@ -69,6 +69,86 @@ fn grapheme_editor_handles_combining_emoji_wide_lines_and_boundaries() {
     editor.insert("\nhello");
     assert!(editor.text.is_char_boundary(editor.cursor()));
 }
+
+#[test]
+fn editor_wraps_words_and_preserves_the_message() {
+    let mut editor = Editor::default();
+    let text = "hello world again\n\nlast line";
+    editor.set(text.into());
+    assert_eq!(
+        editor.viewport(12, 6),
+        ("hello world \nagain\n\nlast line".into(), 9, 3)
+    );
+    assert_eq!(editor.text, text);
+    assert_eq!(editor.viewport(20, 6).0, text);
+    editor.set("hello world".into());
+    assert_eq!(editor.viewport(5, 4), ("hello\nworld\n".into(), 0, 2));
+}
+
+#[test]
+fn editor_wraps_long_words_and_unicode_and_scrolls_to_the_cursor() {
+    let mut editor = Editor::default();
+    editor.set("abcdefghijk".into());
+    assert_eq!(editor.viewport(4, 2), ("efgh\nijk".into(), 3, 1));
+    editor.set("a\u{301}界👩‍💻z".into());
+    assert_eq!(editor.viewport(3, 3), ("a\u{301}界\n👩‍💻z\n".into(), 0, 2));
+    assert_eq!(editor.viewport(0, 3), (String::new(), 0, 0));
+    assert_eq!(editor.viewport(3, 0), (String::new(), 0, 0));
+}
+
+#[test]
+fn editor_arrows_move_between_wrapped_rows() {
+    let mut editor = Editor::default();
+    editor.set("hello world again".into());
+    editor.set_wrap_width(12);
+    editor.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(&editor.text[..editor.cursor()], "hello");
+    assert_eq!(editor.viewport(12, 3).1, 5);
+    editor.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(editor.cursor(), editor.text.len());
+    editor.set_wrap_width(20);
+    assert!(editor.on_first_row());
+    assert!(editor.on_last_row());
+}
+
+#[test]
+fn chat_arrows_navigate_wrapped_draft_before_recalling_history() {
+    let mut app = app();
+    app.handle(key(KeyCode::Char('i')));
+    app.history.push("older message".into());
+    app.editor.set("hello world again".into());
+    app.editor.set_wrap_width(12);
+    app.handle(key(KeyCode::Up));
+    assert_eq!(app.editor.text, "hello world again");
+    app.handle(key(KeyCode::Up));
+    assert_eq!(app.editor.text, "older message");
+    app.handle(key(KeyCode::Up));
+    app.handle(key(KeyCode::Down));
+    assert_eq!(app.editor.text, "older message");
+    app.handle(key(KeyCode::Down));
+    assert_eq!(app.editor.text, "hello world again");
+}
+
+#[test]
+fn chat_render_wraps_the_draft_and_keeps_cursor_after_visible_text() {
+    let mut app = app();
+    app.handle(key(KeyCode::Char('i')));
+    let draft = format!("{}end", "1234567890".repeat(5));
+    app.editor.set(draft.clone());
+    let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+    terminal.draw(|f| render::draw(f, &mut app)).unwrap();
+    let cursor = terminal.get_cursor_position().unwrap();
+    let buffer = terminal.backend().buffer();
+    let before_cursor = (0..cursor.x)
+        .map(|x| buffer[(x, cursor.y)].symbol())
+        .collect::<String>();
+    assert!(before_cursor.ends_with("end"), "{before_cursor:?}");
+    assert!(!app.editor.on_first_row());
+    app.handle(key(KeyCode::Up));
+    assert_eq!(app.editor.text, draft);
+    assert!(app.editor.on_first_row());
+}
+
 #[test]
 fn graph_arrows_follow_spatial_neighbors_and_filter_keeps_matching_nodes() {
     let mut app = app();
@@ -100,6 +180,42 @@ fn selection_is_identity_stable_across_reordered_events_and_new_agents() {
     assert_eq!(app.view, View::Agent { tab: 0 });
     app.handle(key(KeyCode::Esc));
     assert_eq!(app.view, View::Main);
+}
+#[test]
+fn chat_editor_recalls_sent_messages_with_up_and_down() {
+    let mut app = app();
+    app.handle(key(KeyCode::Char('i')));
+    let send = |app: &mut App, text: &str| {
+        app.handle(Event::Paste(text.into()));
+        app.handle(control('s'));
+        app.action_result(
+            &Action::SendMessage {
+                target_agent_id: "orchestrator".into(),
+                text: text.into(),
+            },
+            Ok("accepted".into()),
+        );
+    };
+    send(&mut app, "first");
+    send(&mut app, "second\nline");
+    send(&mut app, "second\nline");
+    assert_eq!(app.history, ["first", "second\nline"]);
+    app.handle(Event::Paste("draft".into()));
+    app.handle(key(KeyCode::Up));
+    assert_eq!(app.editor.text, "second\nline");
+    // Up inside a multi-line entry moves the cursor before recalling older.
+    app.handle(key(KeyCode::Up));
+    assert_eq!(app.editor.text, "second\nline");
+    app.handle(key(KeyCode::Up));
+    assert_eq!(app.editor.text, "first");
+    app.handle(key(KeyCode::Up));
+    assert_eq!(app.editor.text, "first");
+    app.handle(key(KeyCode::Down));
+    assert_eq!(app.editor.text, "second\nline");
+    app.handle(key(KeyCode::Down));
+    assert_eq!(app.editor.text, "draft");
+    app.handle(key(KeyCode::Down));
+    assert_eq!(app.editor.text, "draft");
 }
 #[test]
 fn editor_never_detaches_on_q_and_enter_is_multiline_send_is_explicit() {
@@ -716,6 +832,7 @@ fn native_resume_card_freezes_exact_session_checkpoint_and_scope_across_refresh(
         native_session_id: native.into(),
         scope_hash: scope.clone(),
     };
+
     app.snapshot
         .task_session_resumes
         .insert(package.task_id.clone(), package);
@@ -841,6 +958,7 @@ fn management_recovery_card_freezes_retained_answer_and_scoped_kind_across_refre
     let mut app = app();
     let scope = "f".repeat(64);
     let package = Pending {
+        review_part: None,
         round_id: "round-interview".into(),
         kind: Kind::Replacement,
         role: architect::config::RoleKind::Verifier,
@@ -854,6 +972,27 @@ fn management_recovery_card_freezes_retained_answer_and_scoped_kind_across_refre
         handoff_hash: "a".repeat(64),
         scope_hash: scope.clone(),
     };
+    for (kind, fragment) in [
+        (Kind::Replacement, "distinct session"),
+        (Kind::Restore, "without repeating"),
+    ] {
+        let mut guide = App::default();
+        let mut part = package.clone();
+        part.review_part = Some("review-part-2".into());
+        part.kind = kind;
+        guide
+            .snapshot
+            .orchestration_recoveries
+            .insert("part".into(), part);
+        guide.snapshot.orchestration_recovery_preparing = true;
+        assert!(guide.next_approval().is_none());
+        guide.snapshot.orchestration_recovery_preparing = false;
+        let (action, label) = guide
+            .next_approval()
+            .expect("a retained review part needs guided recovery");
+        assert!(label.contains(fragment));
+        assert!(matches!(action,Action::RecoverOrchestration{kind:actual,..} if actual==kind));
+    }
     app.snapshot.orchestration_recovery_details.insert(scope.clone(),"DISTINCT NEW SESSION for verifier only; preserve the already completed answer and original interview obligations".into());
     app.snapshot
         .orchestration_recoveries
@@ -1068,4 +1207,473 @@ fn interview_chat_guides_the_user_to_answer_and_clears_waiting_after_send() {
     next["status"] = json!("running");
     app.update(Snapshot::from_document(&next, &json!({})));
     assert!(app.snapshot.awaiting_user_reply.is_none());
+}
+
+#[test]
+fn recovery_preparation_is_visible_without_claiming_a_native_agent_is_running() {
+    let run = json!({"id":"retained-review","status":"blocked","stage":"discovery","orchestration_rounds":[{"id":"round","status":"failed"}]});
+    let mut app = App::default();
+    app.update(Snapshot::from_document(
+        &run,
+        &json!({"orchestration_recovery_state":"preparing","orchestration_recovery_count":0}),
+    ));
+    assert!(app.snapshot.orchestration_recovery_preparing);
+    assert!(app.next_approval().is_none());
+    assert!(app.snapshot.agents.iter().all(|a| a.status != "running"));
+    let rendered = screen(&mut app, 140, 40);
+    assert!(rendered.contains("Sprawdzanie zapisanych"), "{rendered}");
+    app.update(Snapshot::from_document(
+        &run,
+        &json!({"orchestration_recovery_state":"unavailable","orchestration_recovery_count":0}),
+    ));
+    assert!(app.snapshot.orchestration_recovery_unavailable);
+    assert!(!app.snapshot.orchestration_recovery_preparing);
+    assert!(screen(&mut app, 140, 40).contains("Nie można udostępnić"));
+    app.update(Snapshot::from_document(
+        &run,
+        &json!({"orchestration_recovery_state":"ready","orchestration_recovery_count":0}),
+    ));
+    assert!(!app.snapshot.orchestration_recovery_preparing);
+}
+
+#[test]
+fn chat_approval_shortcut_opens_current_verified_stage_results() {
+    let mut app = app();
+    let document =
+        json!({"id":"R1","status":"awaiting_result","stage":"discovery","team":{"tasks":[]}});
+    let control = json!({"team_stage_results":{"discovery":{"stage":"discovery","task_ids":["context"],"results":[],"scope_hash":"stage-scope"}}});
+    app.update(Snapshot::from_document(&document, &control));
+    let rendered = screen(&mut app, 160, 40);
+    assert!(
+        rendered.contains("results await your acceptance"),
+        "{rendered}"
+    );
+    app.handle(key(KeyCode::Char('a')));
+    assert!(matches!(
+        app.view,
+        View::Confirm {
+            action: Action::AcceptTeamStage { .. },
+            ..
+        }
+    ));
+    assert_eq!(
+        app.handle(key(KeyCode::Enter)),
+        vec![Effect::Action(Action::AcceptTeamStage {
+            stage: architect::team::TaskStage::Discovery,
+            task_ids: vec!["context".into()],
+            scope_hash: "stage-scope".into()
+        })]
+    );
+}
+
+#[test]
+fn diff_review_confirmation_freezes_candidate_and_profile_across_refresh() {
+    let mut app = app();
+    app.view = View::Run { tab: 4 };
+    app.snapshot
+        .scope_hashes
+        .insert("review_diff".into(), "original-diff-scope".into());
+    app.snapshot.run_details.insert(
+        "Diff".into(),
+        "Original candidate main.rs +1 -1; reviewer agy model-X".into(),
+    );
+    assert!(app.handle(key(KeyCode::Char('r'))).is_empty());
+    let frozen = app.view.clone();
+    assert!(
+        matches!(&frozen, View::Confirm {action:Action::ReviewDiff {scope_hash}, details,..}
+        if scope_hash=="original-diff-scope" && details.contains("Original candidate") && details.contains("agy model-X"))
+    );
+    let mut replacement = app.snapshot.clone();
+    replacement
+        .scope_hashes
+        .insert("review_diff".into(), "new-diff-scope".into());
+    replacement
+        .run_details
+        .insert("Diff".into(), "New candidate".into());
+    app.update(replacement);
+    assert_eq!(app.view, frozen);
+    assert_eq!(
+        app.handle(key(KeyCode::Enter)),
+        vec![Effect::Action(Action::ReviewDiff {
+            scope_hash: "original-diff-scope".into()
+        })]
+    );
+}
+
+#[test]
+fn queued_interview_answer_is_guided_without_requiring_duplicate_submission() {
+    let run = json!({"id":"waiting","intake":true,"status":"awaiting_start","reconciliation_required":false,
+        "communication_ledger":{"messages":{"answer":{"id":"answer","recipient_agent_id":"orchestrator","sender":{"kind":"user"},"state":"queued_next_turn"}}}});
+    let control = json!({"scope_hashes":{"orchestrate":"queued-scope"}});
+    let mut app = App::default();
+    app.update(Snapshot::from_document(&run, &control));
+    assert!(app.snapshot.queued_orchestrator_turn);
+    assert!(matches!(
+        app.next_approval().unwrap().0,
+        Action::Orchestrate { .. }
+    ));
+    app.handle(key(KeyCode::Char('a')));
+    assert_eq!(
+        app.handle(key(KeyCode::Enter)),
+        vec![Effect::Action(Action::Orchestrate {
+            scope_hash: "queued-scope".into()
+        })]
+    );
+    let mut blocked = run;
+    blocked["reconciliation_required"] = json!(true);
+    app.update(Snapshot::from_document(&blocked, &control));
+    assert!(!app.snapshot.queued_orchestrator_turn);
+}
+
+#[test]
+fn agent_inspector_wraps_every_tab_and_retains_reading_positions() {
+    use architect::tui::model::AGENT_TABS;
+    let mut app = app();
+    for (tab, name) in AGENT_TABS.iter().enumerate().take(7) {
+        app.snapshot.agents[0].details.insert((*name).into(), json!([
+            {"id":"record-1", "output":format!("{} END_OF_LONG_TEXT\nsecond paragraph", "界abc ".repeat(40))},
+            {"id":"record-2", "output":"last-record"}
+        ]).to_string());
+        if tab == 4 {
+            app.snapshot.messages.push(Message {
+                id: "message-1".into(),
+                target: "parent".into(),
+                text: format!("{} END_OF_LONG_TEXT\nsecond paragraph", "界abc ".repeat(40)),
+                ..Message::default()
+            });
+        }
+        app.view = View::Agent { tab };
+        let mut seen = String::new();
+        for _ in 0..40 {
+            seen.push_str(&screen(&mut app, 40, 12));
+            app.handle(key(KeyCode::PageDown));
+        }
+        assert!(
+            seen.contains("END_OF_LONG_TEXT"),
+            "missing long line tail in {name}"
+        );
+        assert!(
+            seen.contains("second paragraph"),
+            "missing multiline output in {name}"
+        );
+        let state = app.inspector_mut(tab);
+        assert_eq!(state.offset, state.max_offset());
+        app.handle(key(KeyCode::Home));
+        screen(&mut app, 40, 12);
+        app.handle(key(KeyCode::Down));
+        let offset = app.inspector_mut(tab).offset;
+        app.handle(key(KeyCode::Right));
+        screen(&mut app, 40, 12);
+        app.handle(key(KeyCode::Left));
+        screen(&mut app, 40, 12);
+        assert_eq!(app.inspector_mut(tab).offset, offset);
+    }
+}
+
+#[test]
+fn agent_inspector_search_keeps_complete_records_and_uses_its_own_filter() {
+    let mut app = app();
+    app.view = View::Agent { tab: 2 };
+    app.snapshot.agents[0].details.insert("Artifacts".into(), json!([
+        {"id":"artifact-A", "content":"ordinary output"},
+        {"id":"artifact-B", "content":"NEEDLE\ncontinued", "hash":"full-hash", "checks":[{"check_id":"C1", "status":"blocked"}]}
+    ]).to_string());
+    screen(&mut app, 80, 24);
+    app.handle(key(KeyCode::Char('/')));
+    for c in "needle".chars() {
+        app.handle(key(KeyCode::Char(c)));
+    }
+    app.handle(key(KeyCode::Enter));
+    let drawn = screen(&mut app, 80, 24);
+    assert!(
+        drawn.contains("artifact-B") && drawn.contains("full-hash") && drawn.contains("blocked")
+    );
+    assert!(!drawn.contains("artifact-A"));
+    assert!(app.team_filter.is_empty() && app.chat_filter.is_empty());
+    app.handle(key(KeyCode::Char('v')));
+    assert!(screen(&mut app, 80, 24).contains("Raw"));
+    app.handle(key(KeyCode::Esc));
+    assert_eq!(app.view, View::Agent { tab: 2 });
+    assert!(app.inspector_mut(2).query.is_empty());
+    app.handle(key(KeyCode::Char('/')));
+    for c in "no-such-output".chars() {
+        app.handle(key(KeyCode::Char(c)));
+    }
+    assert!(screen(&mut app, 80, 24).contains("No matching records"));
+    app.handle(key(KeyCode::Esc));
+    assert!(!app.searching);
+    assert!(app.inspector_mut(2).query.is_empty());
+}
+
+#[test]
+fn agent_inspector_clamps_on_resize_refresh_and_keeps_active_narrow_tab() {
+    let mut app = app();
+    app.view = View::Agent { tab: 6 };
+    app.snapshot.agents[0].details.insert(
+        "Checks".into(),
+        (0..100)
+            .map(|i| format!("row-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    assert!(screen(&mut app, 32, 10).contains("7/8 Checks"));
+    app.handle(key(KeyCode::End));
+    assert!(screen(&mut app, 32, 10).contains("row-99"));
+    screen(&mut app, 140, 50);
+    let state = app.inspector_mut(6);
+    assert_eq!(state.offset, state.max_offset());
+    let mut snapshot = app.snapshot.clone();
+    snapshot.agents[0]
+        .details
+        .insert("Checks".into(), "short result".into());
+    app.update(snapshot);
+    assert!(screen(&mut app, 32, 10).contains("short result"));
+    assert_eq!(app.inspector_mut(6).offset, 0);
+    for (w, h) in [(12, 5), (16, 7), (24, 10)] {
+        screen(&mut app, w, h);
+    }
+}
+
+#[test]
+fn agent_inspector_comments_show_scoped_text_reactions_and_version() {
+    use architect::comments::{Comment, Element, ElementKind, ElementRef};
+    let mut app = app();
+    let target = ElementRef {
+        kind: ElementKind::Task,
+        id: "task-parent".into(),
+        version_hash: "v2".into(),
+    };
+    app.snapshot.comment_targets.push(Element {
+        reference: target.clone(),
+        label: "Task".into(),
+        agent_ids: ["parent".into()].into(),
+        context: json!({}),
+    });
+    for (id, target_id, text) in [
+        ("C1", "task-parent", "scoped comment"),
+        ("C2", "other-task", "unrelated comment"),
+    ] {
+        app.snapshot.element_comments.push(Comment { id:id.into(), run_id:"R1".into(), spec_revision:1,
+            target:ElementRef { id:target_id.into(), version_hash:"v1".into(), ..target.clone() },
+            context:json!({}), text:text.into(), author:"user".into(), created_at:0, resolved:false, deleted:false,
+            reactions:vec![serde_json::from_value(json!({"round_id":"round-1", "response":{"comment_id":id, "kind":"answer", "text":"reviewed reaction", "task_id":null}})).unwrap()] });
+    }
+    app.view = View::Agent { tab: 7 };
+    let doc = architect::tui::inspector::document(&app, 7, false)
+        .into_iter()
+        .map(|l| l.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        doc.contains("scoped comment")
+            && doc.contains("reviewed reaction")
+            && doc.contains("stale or historical")
+    );
+    assert!(!doc.contains("unrelated comment"));
+    app.snapshot.element_comments[0].deleted = true;
+    assert!(screen(&mut app, 80, 24).contains("No recorded comments"));
+}
+
+#[test]
+fn agent_inspector_decodes_nested_output_and_preserves_raw_receipt_data() {
+    let mut app = app();
+    let output =
+        json!({"artifact":"first line\nsecond line", "checks":[{"status":"blocked"}]}).to_string();
+    let source = json!({"turns":[{"id":"turn-1", "output":output}]});
+    app.snapshot.agents[0]
+        .details
+        .insert("Session".into(), source.to_string());
+    let readable = architect::tui::inspector::document(&app, 1, false)
+        .into_iter()
+        .map(|l| l.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(readable.contains("first line") && readable.contains("second line"));
+    assert!(!readable.contains("\\n"));
+    let raw = architect::tui::inspector::document(&app, 1, true)
+        .into_iter()
+        .map(|l| l.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap(),
+        source
+    );
+    app.snapshot.agents[0].details.insert("Messages".into(), json!([
+        {"id":"M1", "content_ref":{"document":"body-M1","hash":"full-receipt-hash"}, "delivery_receipt":{"turn_id":"turn-1"}}
+    ]).to_string());
+    app.snapshot.messages.push(Message {
+        id: "M1".into(),
+        sender: "user".into(),
+        target: "parent".into(),
+        text: "actual body".into(),
+        state: "queued_next_turn".into(),
+        ..Message::default()
+    });
+    let raw = architect::tui::inspector::document(&app, 4, true)
+        .into_iter()
+        .map(|l| l.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let messages: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(messages[0]["content_ref"]["hash"], "full-receipt-hash");
+    assert_eq!(messages[0]["delivery_receipt"]["turn_id"], "turn-1");
+    assert_eq!(messages[0]["text"], "actual body");
+    assert_eq!(messages[0]["state"], "queued_next_turn");
+}
+
+#[test]
+fn workspace_approval_cards_freeze_selected_changes_and_destination_across_refresh() {
+    for activate in [false, true] {
+        let mut app = app();
+        app.snapshot.status = "awaiting_start".into();
+        app.snapshot.workspace_required = true;
+        if activate {
+            app.snapshot.workspace_activation = Some("activation-old".into());
+            app.snapshot.workspace_activation_details =
+                "Captured candidate /private/project, commit old-version".into();
+        } else {
+            app.snapshot.workspace_preparation = Some(([".".into()].into(), "prepare-old".into()));
+            app.snapshot.workspace_preparation_details = "Original source; selected working copy main.rs; leave unrelated.txt outside candidate".into();
+        }
+        let expected = app.next_approval().unwrap().0;
+        app.handle(key(KeyCode::Char('a')));
+        let frozen = app.view.clone();
+        assert!(
+            matches!(&frozen,View::Confirm {details,..} if if activate {details.contains("old-version")} else {details.contains("main.rs") && details.contains("unrelated.txt")})
+        );
+        let mut changed = app.snapshot.clone();
+        changed.workspace_preparation = Some((["new.rs".into()].into(), "prepare-new".into()));
+        changed.workspace_activation = Some("activation-new".into());
+        changed.workspace_preparation_details = "Different local changes".into();
+        changed.workspace_activation_details = "Different candidate".into();
+        app.update(changed);
+        assert_eq!(app.view, frozen);
+        assert_eq!(
+            app.handle(key(KeyCode::Enter)),
+            vec![Effect::Action(expected)]
+        );
+    }
+}
+
+#[test]
+fn workspace_overlay_identifies_actual_runtime_work_without_a_native_agent() {
+    let mut app = app();
+    app.snapshot.status = "running".into();
+    app.snapshot.workspace_phase = "Observe workspace inputs and local changes".into();
+    app.snapshot.agents.clear();
+    let rendered = screen(&mut app, 160, 40);
+    assert!(rendered.contains("Current step | Workspace"), "{rendered}");
+    assert!(rendered.contains("Observe workspace inputs"), "{rendered}");
+}
+
+#[test]
+fn completed_task_delivery_and_recovery_cards_pin_the_original_checkout_and_versions() {
+    for recovery in [false, true] {
+        let mut app = app();
+        app.snapshot.status = "completed".into();
+        app.snapshot.delivery_details =
+            "Original checkout /user/project; reviewed candidate v1; retain backup for main.rs"
+                .into();
+        if recovery {
+            app.snapshot.delivery_recovery = Some(architect::runtime::delivery::Recovery {
+                scope_hash: "observed-v1".into(),
+                observation_hash: "actual-v1".into(),
+                targets: Default::default(),
+                backups: Default::default(),
+                restorable: vec!["main.rs".into()],
+                desired_state_observed: false,
+            });
+        } else {
+            app.snapshot.delivery_scope = Some("delivery-v1".into());
+        }
+        let expected = app.next_approval().unwrap().0;
+        app.handle(key(KeyCode::Char('a')));
+        let frozen = app.view.clone();
+        assert!(
+            matches!(&frozen,View::Confirm {details,..} if details.contains("/user/project") && details.contains("v1"))
+        );
+        let mut changed = app.snapshot.clone();
+        changed.delivery_scope = Some("delivery-v2".into());
+        changed.delivery_recovery = None;
+        changed.delivery_details = "Different result".into();
+        app.update(changed);
+        assert_eq!(app.view, frozen);
+        assert_eq!(
+            app.handle(key(KeyCode::Enter)),
+            vec![Effect::Action(expected)]
+        );
+    }
+}
+
+#[test]
+fn interview_source_observation_overlay_is_runtime_work_without_a_native_agent() {
+    let document = json!({"id":"source-observation","intake":true,"status":"running","stage":"discovery","orchestration_rounds":[{"id":"round","status":"running","discovery_status":"observing_sources"}]});
+    let mut app = App::default();
+    app.update(Snapshot::from_document(&document, &json!({})));
+    let text = screen(&mut app, 140, 30);
+    assert!(text.contains("Observe project sources for the interview"));
+    assert!(!text.contains("Discover CLI capabilities"));
+    assert!(app.snapshot.agents.is_empty());
+}
+
+#[test]
+fn context_overlay_counts_unique_native_observed_bytes_and_hides_activity_when_paused() {
+    use architect::{
+        context::{Read, transport::Transport},
+        domain::{Run, RunSpec},
+        providers::TurnRequest,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let mut spec: RunSpec =
+        serde_json::from_str(include_str!("../examples/fake-spec.json")).unwrap();
+    spec.workspace = root.path().to_string_lossy().into();
+    let run = Run::new(architect::id(), spec).unwrap();
+    let prompt = "Complete original pinned source to read before answering";
+    let mut transport = Transport::new(&TurnRequest {
+        turn_id: "context-turn",
+        run: &run,
+        prompt,
+        schema: &json!({"type":"object"}),
+        resume: None,
+    })
+    .unwrap();
+    let reader = transport.reader().unwrap();
+    let source_hash = transport.bundle.scope.prompt_hash.clone();
+    for (sequence, doc, size) in [
+        (1, reader.index_hash(), 16384),
+        (2, source_hash.as_str(), 8),
+        (3, source_hash.as_str(), 8),
+    ] {
+        let page = reader
+            .read(
+                &Read {
+                    bundle_hash: reader.bundle_hash().into(),
+                    document_hash: doc.into(),
+                    offset: 0,
+                    max_bytes: size,
+                },
+                sequence,
+            )
+            .unwrap();
+        transport.accept(page.receipt).unwrap();
+        transport.observe(sequence).unwrap();
+    }
+    let (read, total) = transport.progress().unwrap();
+    assert_eq!(read, reader.index_bytes() + 8);
+    let mut document = json!({"id":run.id,"status":"running","stage":"discovery","session_ledger":{"sessions":{"context-agent":{"id":"context-agent","state":"sent","current_turn_id":"context-turn","scope":{"agent_id":"reader"}}},"turns":{"context-turn":{"context":transport}}}});
+    let mut app = App::default();
+    app.update(Snapshot::from_document(&document, &json!({})));
+    assert_eq!(
+        app.snapshot.context_progress,
+        vec![("reader".into(), read, total)]
+    );
+    let text = screen(&mut app, 160, 32);
+    assert!(text.contains("Current step | Context delivery"));
+    assert!(text.contains(&format!("read context {read} / {total} bytes")));
+    document["status"] = json!("paused");
+    app.update(Snapshot::from_document(&document, &json!({})));
+    let text = screen(&mut app, 160, 32);
+    assert!(!text.contains("Context delivery"));
+    assert!(!text.contains("read context"));
 }

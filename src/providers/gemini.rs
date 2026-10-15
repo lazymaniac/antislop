@@ -240,6 +240,7 @@ impl Provider for GeminiProvider {
         cancelled: Arc<AtomicBool>,
         events: &mut dyn FnMut(&ProviderEvent) -> Result<()>,
     ) -> Result<TurnReceipt> {
+        shared_cli::require_prompt_size("gemini", request.prompt)?;
         let (home, cwd, control) = self.environment(request.run)?;
         self.inspect(Some(&cancelled))?;
         let session_id = shared_cli::exact_session("gemini", request.resume)?;

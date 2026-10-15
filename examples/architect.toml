@@ -13,6 +13,8 @@ local_checks = true
 local_commits = true
 
 [providers.codex]
+# Optional immutable reader on validated Codex CLI 0.162.1:
+# isolation = "pinned_context"
 binary = "codex"
 isolation = "read_only"
 native_effort = true
@@ -35,6 +37,8 @@ native_effort = false
 [providers.agy]
 binary = "agy"
 isolation = "tool_free"
+# Optional, explicitly reviewed CLI 1.3.5 immutable-context reader:
+# isolation = "pinned_context"
 native_effort = true
 [providers.agy.effort_map]
 light = "low"

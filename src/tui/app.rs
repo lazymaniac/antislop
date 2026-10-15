@@ -60,6 +60,12 @@ pub struct App {
     pub editor: Editor,
     pub comment_editor: Editor,
     pub spec_editor: Editor,
+    /// Messages sent from the chat editor this session, oldest first.
+    pub history: Vec<String>,
+    /// Entry recalled with Up/Down; `None` while editing a fresh draft.
+    history_index: Option<usize>,
+    /// Draft stashed when history browsing starts, restored past the newest entry.
+    history_draft: String,
     pub comment_target: Option<crate::comments::ElementRef>,
     pub annotation_index: usize,
     pub annotation_targets: Vec<crate::comments::Element>,
@@ -72,6 +78,8 @@ pub struct App {
     pub grouped: bool,
     pub relations: bool,
     pub scroll: usize,
+    /// Reading position and query belong to an agent and tab, not the overlay.
+    pub agent_inspectors: BTreeMap<(String, usize), super::inspector::State>,
     pub chat_scroll: usize,
     pub list_offset: usize,
     /// Selected task while the task list has focus.
@@ -97,6 +105,9 @@ impl Default for App {
             editor: Editor::default(),
             comment_editor: Editor::default(),
             spec_editor: Editor::default(),
+            history: vec![],
+            history_index: None,
+            history_draft: String::new(),
             comment_target: None,
             annotation_index: 0,
             annotation_targets: vec![],
@@ -109,6 +120,7 @@ impl Default for App {
             grouped: false,
             relations: false,
             scroll: 0,
+            agent_inspectors: BTreeMap::new(),
             chat_scroll: 0,
             list_offset: 0,
             task_index: 0,
@@ -125,6 +137,12 @@ impl Default for App {
     }
 }
 impl App {
+    pub fn inspector_mut(&mut self, tab: usize) -> &mut super::inspector::State {
+        self.agent_inspectors
+            .entry((self.selected_agent_id.clone().unwrap_or_default(), tab))
+            .or_default()
+    }
+
     pub fn update(&mut self, snapshot: Snapshot) {
         let changed_run = self.snapshot.run_id != snapshot.run_id;
         let new_question = snapshot.awaiting_user_reply.is_some()
@@ -134,6 +152,7 @@ impl App {
             .palette_index
             .min(self.palette().len().saturating_sub(1));
         if changed_run {
+            self.agent_inspectors.clear();
             self.collapsed.clear();
             self.graph = super::graph::Layout::default();
             self.comment_target = None;
@@ -179,13 +198,42 @@ impl App {
             &self.editor
         }
     }
-    fn active_editor_mut(&mut self) -> &mut Editor {
+    pub(crate) fn active_editor_mut(&mut self) -> &mut Editor {
         if self.view == View::CreateRun {
             &mut self.spec_editor
         } else if self.comment_target.is_some() {
             &mut self.comment_editor
         } else {
             &mut self.editor
+        }
+    }
+    /// Shell-style recall of sent messages; comments and the spec path keep plain arrows.
+    fn history_applies(&self) -> bool {
+        self.view != View::CreateRun && self.comment_target.is_none()
+    }
+    fn recall_history(&mut self, older: bool) {
+        let index = match (self.history_index, older) {
+            (None, true) if !self.history.is_empty() => {
+                self.history_draft = self.editor.text.clone();
+                Some(self.history.len() - 1)
+            }
+            (None, _) => return,
+            (Some(i), true) => Some(i.saturating_sub(1)),
+            (Some(i), false) if i + 1 < self.history.len() => Some(i + 1),
+            (Some(_), false) => None,
+        };
+        self.history_index = index;
+        let text = match index {
+            Some(i) => self.history[i].clone(),
+            None => std::mem::take(&mut self.history_draft),
+        };
+        self.editor.set(text);
+    }
+    fn record_history(&mut self, text: &str) {
+        self.history_index = None;
+        self.history_draft.clear();
+        if self.history.last().map(String::as_str) != Some(text) {
+            self.history.push(text.to_owned());
         }
     }
     pub fn comment_targets(&self) -> Vec<&crate::comments::Element> {
@@ -403,9 +451,66 @@ impl App {
             ),
         ];
         items.push(("Create run from SPEC.json".into(), None));
+        if self.snapshot.delivery_inspect_available {
+            items.push((
+                "Inspect completed result for source delivery".into(),
+                Some(Action::InspectDelivery),
+            ));
+        }
+        if let Some(scope_hash) = &self.snapshot.delivery_scope {
+            items.push((
+                "Deliver approved changes to original checkout".into(),
+                Some(Action::DeliverSource {
+                    scope_hash: scope_hash.clone(),
+                }),
+            ));
+        }
+        if let Some(recovery) = &self.snapshot.delivery_recovery {
+            for path in &recovery.restorable {
+                items.push((
+                    format!("Restore missing source entry from backup: {path}"),
+                    Some(Action::RestoreSourceDeliveryBackup {
+                        path: path.clone(),
+                        scope_hash: recovery.scope_hash.clone(),
+                    }),
+                ));
+            }
+            if recovery.restorable.is_empty() {
+                items.push((
+                    "Acknowledge observed delivery state without replay".into(),
+                    Some(Action::ReconcileSourceDelivery {
+                        scope_hash: recovery.scope_hash.clone(),
+                        observation_hash: recovery.observation_hash.clone(),
+                    }),
+                ));
+            }
+        }
+        if self.snapshot.workspace_inspect_available {
+            items.push((
+                "Observe workspace inputs for private candidate".into(),
+                Some(Action::InspectWorkspace),
+            ));
+        }
+        if let Some((selected, scope_hash)) = &self.snapshot.workspace_preparation {
+            items.push((
+                "Prepare reviewed private workspace candidate".into(),
+                Some(Action::PrepareWorkspace {
+                    selected: selected.clone(),
+                    scope_hash: scope_hash.clone(),
+                }),
+            ));
+        }
+        if let Some(scope_hash) = &self.snapshot.workspace_activation {
+            items.push((
+                "Validate and activate captured private workspace".into(),
+                Some(Action::ActivateWorkspace {
+                    scope_hash: scope_hash.clone(),
+                }),
+            ));
+        }
         if let Some((round_id, scope_hash)) = &self.snapshot.reviewed_intake_proposal {
             items.push((
-                "Accept interview contract and agent routing; plan team".into(),
+                "Accept reviewed interview contract and agent routing".into(),
                 Some(Action::AcceptIntake {
                     round_id: round_id.clone(),
                     scope_hash: scope_hash.clone(),
@@ -426,22 +531,24 @@ impl App {
                 }),
             ));
         }
-        if let Some(scope_hash) = self.snapshot.scope_hashes.get("review_diff").cloned() {
+        if let Some(scope_hash) = self
+            .snapshot
+            .scope_hashes
+            .get("review_diff")
+            .filter(|s| !s.is_empty())
+            .cloned()
+        {
             items.push((
                 "Trigger code review on diff candidate".into(),
                 Some(Action::ReviewDiff { scope_hash }),
             ));
         }
-        if let Some(scope_hash) = self
-            .snapshot
-            .scope_hashes
-            .get("step_team")
-            .filter(|h| !h.is_empty())
-            .cloned()
-        {
+        if let Some(wave) = &self.snapshot.pending_wave {
             items.push((
-                "Step team execution (run next ready wave)".into(),
-                Some(Action::StepTeam { scope_hash }),
+                "Run next ready team wave".into(),
+                Some(Action::StepTeam {
+                    scope_hash: wave.scope_hash.clone(),
+                }),
             ));
         }
         for (key, package) in &self.snapshot.team_stage_results {
@@ -551,10 +658,186 @@ impl App {
         }
         items
     }
+    /// One explicit next step shared by the chat guide and its approval shortcut.
+    pub fn next_approval(&self) -> Option<(Action, String)> {
+        if let Some(recovery) = &self.snapshot.delivery_recovery {
+            if let Some(path) = recovery.restorable.first() {
+                return Some((
+                    Action::RestoreSourceDeliveryBackup {
+                        path: path.clone(),
+                        scope_hash: recovery.scope_hash.clone(),
+                    },
+                    "Restore a missing source entry from its retained backup".into(),
+                ));
+            }
+            return Some((
+                Action::ReconcileSourceDelivery {
+                    scope_hash: recovery.scope_hash.clone(),
+                    observation_hash: recovery.observation_hash.clone(),
+                },
+                "Acknowledge observed source delivery versions without replay".into(),
+            ));
+        }
+        if self.snapshot.status == "completed" {
+            if let Some(scope_hash) = &self.snapshot.delivery_scope {
+                return Some((
+                    Action::DeliverSource {
+                        scope_hash: scope_hash.clone(),
+                    },
+                    "Transfer separately approved changes to the original checkout".into(),
+                ));
+            }
+            if self.snapshot.delivery_inspect_available {
+                return Some((
+                    Action::InspectDelivery,
+                    "Inspect the verified candidate for source delivery".into(),
+                ));
+            }
+        }
+        if matches!(
+            self.snapshot.status.as_str(),
+            "running" | "paused" | "completed" | "cancelled"
+        ) {
+            return None;
+        }
+        if let Some((round_id, scope_hash)) = &self.snapshot.reviewed_intake_proposal {
+            return Some((
+                Action::AcceptIntake {
+                    round_id: round_id.clone(),
+                    scope_hash: scope_hash.clone(),
+                },
+                "Accept reviewed interview contract and agent routing".into(),
+            ));
+        }
+        if let Some(round_id) = &self.snapshot.reviewed_team_round
+            && !self.snapshot.workspace_required
+            && let Some(scope_hash) = self
+                .snapshot
+                .scope_hashes
+                .get("accept_team")
+                .filter(|h| !h.is_empty())
+        {
+            return Some((
+                Action::AcceptTeam {
+                    round_id: round_id.clone(),
+                    scope_hash: scope_hash.clone(),
+                },
+                "Accept reviewed agent team".into(),
+            ));
+        }
+        if self.snapshot.workspace_required {
+            if let Some(scope_hash) = &self.snapshot.workspace_activation {
+                return Some((
+                    Action::ActivateWorkspace {
+                        scope_hash: scope_hash.clone(),
+                    },
+                    "Validate and activate the captured private workspace".into(),
+                ));
+            }
+            if let Some((selected, scope_hash)) = &self.snapshot.workspace_preparation {
+                return Some((
+                    Action::PrepareWorkspace {
+                        selected: selected.clone(),
+                        scope_hash: scope_hash.clone(),
+                    },
+                    "Approve task-owned local changes and prepare the private workspace".into(),
+                ));
+            }
+            if self.snapshot.workspace_inspect_available {
+                return Some((
+                    Action::InspectWorkspace,
+                    "Observe inputs for a private workspace proposal".into(),
+                ));
+            }
+            return None;
+        }
+        if let Some(package) = self
+            .snapshot
+            .team_stage_results
+            .values()
+            .min_by_key(|p| p.stage)
+        {
+            return Some((
+                Action::AcceptTeamStage {
+                    stage: package.stage,
+                    task_ids: package.task_ids.clone(),
+                    scope_hash: package.scope_hash.clone(),
+                },
+                format!(
+                    "Accept verified {} results",
+                    crate::runtime::team::stage::stage_key(package.stage)
+                ),
+            ));
+        }
+        if self.snapshot.orchestration_recovery_preparing {
+            return None;
+        }
+        if let Some(package) = self.snapshot.orchestration_recoveries.values().find(|p| {
+            p.role == crate::config::RoleKind::Verifier
+                && (p.kind == crate::runtime::orchestration_recovery::Kind::Restore
+                    || (p.kind == crate::runtime::orchestration_recovery::Kind::Replacement
+                        && (p.previous_session.is_none()
+                            || p.review_part.is_some()
+                            || p.handoff["incomplete_positive_review"] == serde_json::json!(true))))
+                && p.retained_output.is_some()
+        }) {
+            return Some((
+                Action::RecoverOrchestration {
+                    round_id: package.round_id.clone(),
+                    kind: package.kind,
+                    scope_hash: package.scope_hash.clone(),
+                },
+                if package.kind == crate::runtime::orchestration_recovery::Kind::Restore {
+                    "Restore captured independent review reports without repeating a native turn"
+                } else if package.review_part.is_some() {
+                    "Continue the partitioned independent review in a distinct session"
+                } else if package.previous_session.is_some() {
+                    "Retry the incomplete independent review with its retained evidence"
+                } else {
+                    "Start the retained proposal's missing independent review"
+                }
+                .into(),
+            ));
+        }
+        if self.snapshot.queued_orchestrator_turn
+            && let Some(scope_hash) = self
+                .snapshot
+                .scope_hashes
+                .get("orchestrate")
+                .filter(|h| !h.is_empty())
+        {
+            return Some((
+                Action::Orchestrate {
+                    scope_hash: scope_hash.clone(),
+                },
+                "Continue the queued conversation with the orchestrator".into(),
+            ));
+        }
+        self.snapshot.pending_wave.as_ref().map(|wave| {
+            (
+                Action::StepTeam {
+                    scope_hash: wave.scope_hash.clone(),
+                },
+                format!("Run next wave: {} ready actions", wave.actions.len()),
+            )
+        })
+    }
     fn confirmation(&self, action: Action, label: String) -> View {
         let result = match &action {
+            Action::InspectDelivery => "Read-only inspection of the completed, independently verified candidate and the current original checkout.".into(),
+            Action::DeliverSource {..} | Action::ReconcileSourceDelivery {..} | Action::RestoreSourceDeliveryBackup {..} => self.snapshot.delivery_details.clone(),
+            Action::InspectWorkspace => "Read-only source observation in the background. No candidate, provider or task is started.".into(),
+            Action::PrepareWorkspace {..} => self.snapshot.workspace_preparation_details.clone(),
+            Action::ActivateWorkspace {..} => self.snapshot.workspace_activation_details.clone(),
             Action::AcceptIntake { .. } => self.snapshot.intake_proposal_details.clone(),
             Action::AcceptTeam { .. } => self.snapshot.reviewed_team_details.clone(),
+            Action::StepTeam { .. } => self.snapshot.pending_wave_details.clone(),
+            Action::ReviewDiff { .. } => self
+                .snapshot
+                .run_details
+                .get("Diff")
+                .cloned()
+                .unwrap_or_default(),
             Action::AcceptTeamStage { scope_hash, .. } => self
                 .snapshot
                 .team_stage_result_details
@@ -666,6 +949,26 @@ impl App {
                     return effects;
                 }
                 if self.searching {
+                    if let View::Agent { tab } = self.view {
+                        let state = self.inspector_mut(tab);
+                        match key.code {
+                            KeyCode::Esc => {
+                                state.query.clear();
+                                self.searching = false;
+                            }
+                            KeyCode::Enter => self.searching = false,
+                            KeyCode::Backspace => {
+                                state.query.pop();
+                                state.offset = 0;
+                            }
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                state.query.push(c);
+                                state.offset = 0;
+                            }
+                            _ => (),
+                        }
+                        return effects;
+                    }
                     let filter = if self.focus == Focus::Team {
                         &mut self.team_filter
                     } else {
@@ -701,7 +1004,9 @@ impl App {
                             } else if self.snapshot.run_id.is_empty() {
                                 self.sending = true;
                                 self.notice = "Starting conversation with the orchestrator…".into();
-                                effects.push(Effect::BeginConversation(self.editor.text.clone()));
+                                let text = self.editor.text.clone();
+                                self.record_history(&text);
+                                effects.push(Effect::BeginConversation(text));
                             } else {
                                 self.sending = true;
                                 self.notice = "Sending message to runtime…".into();
@@ -722,14 +1027,36 @@ impl App {
                                         text: self.editor.text.clone(),
                                     }
                                 };
+                                if self.comment_target.is_none() {
+                                    let text = self.editor.text.clone();
+                                    self.record_history(&text);
+                                }
                                 effects.push(Effect::Action(action));
                             }
+                        }
+                        KeyCode::Up if self.history_applies() && self.editor.on_first_row() => {
+                            self.recall_history(true)
+                        }
+                        KeyCode::Down
+                            if self.history_applies()
+                                && self.history_index.is_some()
+                                && self.editor.on_last_row() =>
+                        {
+                            self.recall_history(false)
                         }
                         _ => self.active_editor_mut().key(key),
                     }
                     return effects;
                 }
                 if key.code == KeyCode::Esc {
+                    if let View::Agent { tab } = self.view {
+                        let state = self.inspector_mut(tab);
+                        if !state.query.is_empty() {
+                            state.query.clear();
+                            state.offset = 0;
+                            return effects;
+                        }
+                    }
                     self.view = View::Main;
                     self.scroll = 0;
                     return effects;
@@ -758,7 +1085,49 @@ impl App {
                     self.annotation_index = 0;
                     return effects;
                 }
-                let agent_view = matches!(self.view, View::Agent { .. });
+                if let View::Agent { tab } = self.view {
+                    match key.code {
+                        KeyCode::Right | KeyCode::Tab | KeyCode::Char(']') => {
+                            self.view = View::Agent {
+                                tab: (tab + 1) % AGENT_TABS.len(),
+                            };
+                        }
+                        KeyCode::Left | KeyCode::BackTab | KeyCode::Char('[') => {
+                            self.view = View::Agent {
+                                tab: (tab + AGENT_TABS.len() - 1) % AGENT_TABS.len(),
+                            };
+                        }
+                        KeyCode::Char('/') => self.searching = true,
+                        KeyCode::Char('v') => {
+                            let state = self.inspector_mut(tab);
+                            state.raw = !state.raw;
+                            state.offset = 0;
+                        }
+                        KeyCode::Char('m') => {
+                            if let Some(id) = &self.selected_agent_id {
+                                self.comment_target = None;
+                                self.message_target = id.clone();
+                                self.editing = true;
+                                self.focus = Focus::Chat;
+                            }
+                        }
+                        _ => {
+                            let state = self.inspector_mut(tab);
+                            let page = state.page.max(1);
+                            state.offset = match key.code {
+                                KeyCode::Down => state.offset.saturating_add(1),
+                                KeyCode::Up => state.offset.saturating_sub(1),
+                                KeyCode::PageDown => state.offset.saturating_add(page),
+                                KeyCode::PageUp => state.offset.saturating_sub(page),
+                                KeyCode::Home => 0,
+                                KeyCode::End => state.max_offset(),
+                                _ => state.offset,
+                            }
+                            .min(state.max_offset());
+                        }
+                    }
+                    return effects;
+                }
                 match &mut self.view {
                     View::Confirm { action, .. } => match key.code {
                         KeyCode::Enter => {
@@ -884,23 +1253,18 @@ impl App {
                         }
                         _ => (),
                     },
-                    View::Agent { tab } | View::Run { tab } => {
-                        let count = if agent_view {
-                            AGENT_TABS.len()
-                        } else {
-                            RUN_TABS.len()
-                        };
-                        // Reborrow below because the enum determines the tab count.
-                        let _ = tab;
+                    View::Agent { .. } => unreachable!("handled above"),
+                    View::Run { .. } => {
+                        let count = RUN_TABS.len();
                         match key.code {
                             KeyCode::Right | KeyCode::Tab | KeyCode::Char(']') => {
-                                if let View::Agent { tab } | View::Run { tab } = &mut self.view {
+                                if let View::Run { tab } = &mut self.view {
                                     *tab = (*tab + 1) % count;
                                 }
                                 self.scroll = 0;
                             }
                             KeyCode::Left | KeyCode::BackTab | KeyCode::Char('[') => {
-                                if let View::Agent { tab } | View::Run { tab } = &mut self.view {
+                                if let View::Run { tab } = &mut self.view {
                                     *tab = (*tab + count - 1) % count;
                                 }
                                 self.scroll = 0;
@@ -917,20 +1281,13 @@ impl App {
                                     .scroll
                                     .saturating_sub(self.height.saturating_sub(8) as usize)
                             }
-                            KeyCode::Char('m') if matches!(self.view, View::Agent { .. }) => {
-                                if let Some(id) = &self.selected_agent_id {
-                                    self.comment_target = None;
-                                    self.message_target = id.clone();
-                                    self.editing = true;
-                                    self.focus = Focus::Chat;
-                                }
-                            }
-                            KeyCode::Char('r')
-                                if !agent_view
-                                    && matches!(self.view, View::Run { tab } if tab == 4) =>
-                            {
-                                if let Some(scope_hash) =
-                                    self.snapshot.scope_hashes.get("review_diff").cloned()
+                            KeyCode::Char('r') if matches!(self.view, View::Run { tab } if tab == 4) => {
+                                if let Some(scope_hash) = self
+                                    .snapshot
+                                    .scope_hashes
+                                    .get("review_diff")
+                                    .filter(|s| !s.is_empty())
+                                    .cloned()
                                 {
                                     self.view = self.confirmation(Action::ReviewDiff { scope_hash }, "Authorize on-demand code review of workspace diff candidate".into());
                                     self.scroll = 0;
@@ -946,31 +1303,11 @@ impl App {
                     View::CreateRun => unreachable!("handled above"),
                     View::Main => match key.code {
                         KeyCode::Char('a') => {
-                            if let Some((round_id, scope_hash)) =
-                                &self.snapshot.reviewed_intake_proposal
-                            {
-                                self.view = self.confirmation(
-                                    Action::AcceptIntake {
-                                        round_id: round_id.clone(),
-                                        scope_hash: scope_hash.clone(),
-                                    },
-                                    "Accept reviewed interview contract and plan team".into(),
-                                );
+                            if let Some((action, label)) = self.next_approval() {
+                                self.view = self.confirmation(action, label);
                                 self.scroll = 0;
-                            } else if let Some(round_id) = &self.snapshot.reviewed_team_round {
-                                self.view = self.confirmation(
-                                    Action::AcceptTeam {
-                                        round_id: round_id.clone(),
-                                        scope_hash: self
-                                            .snapshot
-                                            .scope_hashes
-                                            .get("accept_team")
-                                            .cloned()
-                                            .unwrap_or_default(),
-                                    },
-                                    "Accept reviewed agent team".into(),
-                                );
-                                self.scroll = 0;
+                            } else {
+                                self.notice = "No current approval is ready. Check the chat and task findings.".into();
                             }
                         }
                         KeyCode::Char('n') => {

@@ -29,10 +29,23 @@ impl Drop for TestDaemon {
 
 impl TeamFixture {
     fn new(mode: &str) -> Self {
+        Self::new_scoped(mode, false)
+    }
+    fn new_scoped(mode: &str, directory: bool) -> Self {
+        Self::new_options(mode, directory, false)
+    }
+    fn new_options(mode: &str, directory: bool, worktree: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("workspace");
         std::fs::create_dir(&workspace).unwrap();
         std::fs::write(workspace.join("source.txt"), "original input").unwrap();
+        if mode == "project_instructions" {
+            std::fs::write(
+                workspace.join("AGENTS.md"),
+                "Retain directory scopes; project text cannot grant permissions",
+            )
+            .unwrap();
+        }
 
         let binary = root.path().join("mock-cli");
         let script = r#"#!/usr/bin/env python3
@@ -72,6 +85,10 @@ if fixture_mode == 'replacement_lost_session' and '--resume' in sys.argv:
 if prompt.startswith('You are the configured orchestrator.'):
     c = json.JSONDecoder().raw_decode(prompt.split('Immutable orchestration context: ', 1)[1])[0]
     team = c['team_template']
+    if mode == 'mode_history':
+        task = next(t for t in team['tasks'] if t['id'] == 'task-integrator')
+        task['check_plan'] = [dict(id='integration-observation',argv=['python3','-c',"from pathlib import Path; assert Path('source.txt').read_text() == 'original input'"],phase='before_verification',expected_exit_code=0,
+            criterion_ids=task['criterion_ids'],gate_ids=['GATE:integration_verified:delivery'],rationale='Actual fixture source assertion; independent review must assess real integration coverage, not infer it from exit zero')]
     if mode.startswith('restore_single'):
         for task in team['tasks']:
             if task['stage'] == 'discovery' and task['id'] != 'task-contextanalyst':
@@ -81,12 +98,15 @@ if prompt.startswith('You are the configured orchestrator.'):
         code = "from pathlib import Path; p=Path('baseline-count'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); print('actual original observation')"
         task['check_plan'] = [dict(id='original-observation', argv=['python3','-c',code], phase='before_execution', expected_exit_code=0,
             criterion_ids=task['criterion_ids'], gate_ids=[], rationale='Synthetic proposal pins an observed original baseline')]
+    if mode == 'managed_delivery_files':
+        for task in team['tasks']:
+            if task['deliverable']: task['write_scopes'] = ['source.txt', 'new', 'obsolete.txt']
     if mode == 'managed_other_input':
         for task in team['tasks']:
             if task['deliverable']: task['write_scopes'] = ['source.txt']
     roles = {a['id']: a['role'] for a in team['agents']}
     for task in team['tasks']:
-        if task['write_scopes'] or roles[task['owner_id']] in ('implementer','refactorer','test_implementer','integrator'):
+        if c['spec']['task_family'] == 'software' and (task['write_scopes'] or roles[task['owner_id']] in ('implementer','refactorer','test_implementer','integrator')):
             task['change_contract'] = dict(kind='feature', rationale='Synthetic fixture requested new output; semantic classification is unproven', source_refs=task['source_dependencies'], bugfixes=[])
     if mode in ('managed_disjoint', 'managed_disjoint_baseline'):
         writers = [t for t in team['tasks'] if t['deliverable']]
@@ -134,6 +154,12 @@ if prompt.startswith('You are the configured orchestrator.'):
             if mode == 'managed_bugfix_bad_after': task['change_contract']['bugfixes'][0]['after_check_id'] = 'bug-original'
             if mode == 'managed_bugfix_incomplete_criteria': task['change_contract']['bugfixes'][0]['criterion_ids'] = []
             if mode == 'managed_bugfix_alternative_no_reason': before['unavailable_reason'] = ''
+            if mode.startswith('managed_bugfix_nondefect'):
+                process = next(c for c in task['criterion_ids'] if c.endswith(':approved_workflow'))
+                defects = [c for c in task['criterion_ids'] if c != process]
+                task['change_contract']['bugfixes'][0]['criterion_ids'] = defects
+                task['check_plan'][-1]['criterion_ids'] = defects
+                task['change_contract']['non_defect_criteria'] = {process:'An approval/workflow constraint remains required but is not the original value defect'}
     if mode == 'missing_change_classification':
         next(t for t in team['tasks'] if t['deliverable'])['change_contract'] = None
     if mode == 'task_check_missing_plan':
@@ -169,11 +195,23 @@ elif 'independently verifying task' in prompt:
             configuration=['fixture config'], standards=['fixture standards'], baseline='fixture baseline', unresolved_material_unknowns=[]),
         planning=None, software=None, research=None, analysis=None, editorial=None, delivery=None)
     if mode.startswith('managed_'): quality['software'] = json.loads((base / 'software-template.json').read_text())
+    if mode.startswith('managed_delivery'):
+        quality['delivery']=dict(requirement_ids=[r['id'] for r in c['spec']['requirements']],instructions=['Fixture result is inspected through the runtime'],demonstrated_results=['Actual local fixture command asserts managed source content'],limitations=['Protocol and filesystem test only; no substantive product-quality claim'],unsupported_claims=[])
+        sw=quality['software']
+        runner=[e['id'] for e in c['receipts'] if e['source'].startswith('runner:') and e.get('input_hash')==c['input_hash']]
+        analyzer=sw['contract']['analyzers'][0]
+        sw['static_analysis']=dict(analyses=[dict(analyzer_id=analyzer['id'],version=analyzer['version'],command=analyzer['command'],targets=analyzer['targets'],configurations=analyzer['configurations'],rules=analyzer['rules'],raw_evidence_ids=runner,diagnostics=[])],suppressions=[],unresolved_findings=[])
+        sw['behavior']=dict(requirement_scenarios=[dict(criterion_id='REQ:'+r['id']+':'+criterion,scenario_ids=['fixture-current']) for r in c['spec']['requirements'] for criterion in r['criteria']],invariant_scenarios=[dict(criterion_id='I1',scenario_ids=['fixture-current'])],oracle='Actual fixture command asserts the managed source value',scenario_evidence=[dict(scenario_id='fixture-current',evidence_ids=runner)],mutation_or_counterexample='Protocol fixture only; no substantive mutation-test claim',unchanged_test_contracts='Original fixture assertion retained',unresolved_findings=[])
+        sw['refactor']['behavior_evidence_ids']=runner
     if c['task'].get('change_contract'):
         quality['change_review'] = dict(contract_hash=c['change_contract_hash'], kind=c['task']['change_contract']['kind'],
             classification_assessment='Synthetic independent fixture classifies requested behavior from original requirements and actual output', classification_evidence_ids=ids + [e['id'] for e in c['receipts'] if e['source'] == 'runtime:input-snapshot' and e.get('input_hash') == c['input_hash']], bugfixes=[])
     if mode.startswith('managed_bugfix_') and c['task']['deliverable']:
         contract = c['task']['change_contract']
+        quality['change_review']['non_defect_assessments'] = {key:dict(assessment='Independent synthetic fixture distinguishes the original value defect from the separately mandatory process criterion',evidence_ids=ids) for key in contract.get('non_defect_criteria',{})}
+        if mode == 'managed_bugfix_nondefect_omit': quality['change_review']['non_defect_assessments'] = {}
+        if mode == 'managed_bugfix_nondefect_unbound':
+            for assessment in quality['change_review']['non_defect_assessments'].values(): assessment['evidence_ids'] = ['unobserved']
         for bug in contract['bugfixes']:
             before_id = bug['before'].get('check_id', bug['before'].get('investigation_check_id'))
             original = next(i for i in c['task_check_invocations'] if i['plan']['id'] == before_id)
@@ -304,13 +342,15 @@ elif 'Task ID:' in prompt:
     if mode.startswith('managed_') and c['task']['deliverable']:
         refreshing = bool(c['task']['history'] and c['task']['history'][-1].get('source_refresh'))
         if not refreshing or mode == 'managed_repeat_write': out['edits'] = [dict(path=c['task']['write_scopes'][0], content='managed result')]
+        if mode == 'managed_delivery_files' and not refreshing:
+            out['edits'] = [dict(path='source.txt',content='managed result',operation='write'), dict(path='new/sub.txt',content='created result',operation='create'), dict(path='obsolete.txt',content='',operation='delete')]
     if mode == 'escape_edit': out['edits'] = [dict(path='source.txt/../../escape.txt', content='unauthorized')]
     if mode == 'outside_scope': out['edits'] = [dict(path='source.txt', content='unauthorized')]
     if mode == 'empty_artifact': out['artifact'] = ''
 else:
     # Orchestrator review turn
     c = json.JSONDecoder().raw_decode(prompt[prompt.index('\n{') + 1:])[0]
-    ids = [e['id'] for e in c.get('receipts', []) if e['output'] == c.get('context') or e['output'] == c.get('output')]
+    ids = [e['id'] for e in c.get('receipts', []) if e['source'] in ('runtime:orchestrator-inputs', 'runtime:orchestrator-output')]
     if not ids:
         ids = ['synthetic-receipt']
     out = dict(
@@ -342,7 +382,12 @@ print(json.dumps(dict(type='result', subtype='success', is_error=False, session_
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         let mut config = Config::from_toml(include_str!("../examples/architect.toml")).unwrap();
-        config.workspace.mode = WorkspaceMode::InPlace;
+        config.orchestrator.review_checks_per_part = 0;
+        config.workspace.mode = if worktree {
+            WorkspaceMode::Worktree
+        } else {
+            WorkspaceMode::InPlace
+        };
         config
             .providers
             .get_mut(&ProviderKind::Claude)
@@ -369,6 +414,9 @@ print(json.dumps(dict(type='result', subtype='success', is_error=False, session_
         let mut spec: RunSpec =
             serde_json::from_str(include_str!("../examples/fake-spec.json")).unwrap();
         spec.workspace = workspace.to_string_lossy().into();
+        if mode.starts_with("managed_bugfix_nondefect") {
+            spec.requirements[0].criteria.insert("approved_workflow".into(),"Retain the approved process and verify it separately from the original value defect".into());
+        }
         spec.input_files = vec!["source.txt".into()];
         spec.check_command = vec![
             "python3".into(),
@@ -396,7 +444,20 @@ print(json.dumps(dict(type='result', subtype='success', is_error=False, session_
         if mode == "managed_runner_fail" {
             spec.check_command = vec!["python3".into(),"-c".into(),"from pathlib import Path; Path('check-invoked').write_text('observed'); raise SystemExit(1)".into()];
         }
+        if directory {
+            spec.input_files.push(".".into());
+        }
+        if mode == "managed_delivery_files" {
+            std::fs::write(workspace.join("obsolete.txt"), "original obsolete").unwrap();
+            spec.input_files = vec![".".into()];
+            spec.editable_files = spec.input_files.clone();
+            spec.check_command = vec!["python3".into(), "-c".into(), "from pathlib import Path; assert Path('source.txt').read_text() == 'managed result'; assert Path('new/sub.txt').read_text() == 'created result'; assert not Path('obsolete.txt').exists()".into()];
+        }
         spec.config = Some(config.pin().unwrap());
+        if mode.starts_with("mode_history") {
+            spec.task_family = architect::quality::TaskFamily::Research;
+            spec.check_command.clear();
+        }
 
         let runtime =
             Arc::new(Runtime::new(Store::open(&root.path().join("state.db")).unwrap()).unwrap());
@@ -448,7 +509,9 @@ print(json.dumps(dict(type='result', subtype='success', is_error=False, session_
         let deadline = Instant::now() + Duration::from_secs(15);
         let reviewed = loop {
             let cur = self.current();
-            if cur.status != Status::Running {
+            if cur.status != Status::Running
+                && architect::recovery::WorkspaceLease::acquire(&cur.spec.workspace).is_ok()
+            {
                 break cur;
             }
             assert!(
@@ -460,7 +523,12 @@ print(json.dumps(dict(type='result', subtype='success', is_error=False, session_
         };
 
         let round = &reviewed.orchestration_rounds[0];
-        assert_eq!(round.status, planning::RoundStatus::Reviewed);
+        assert_eq!(
+            round.status,
+            planning::RoundStatus::Reviewed,
+            "{:?}",
+            round.diagnostic
+        );
 
         // Accept team proposal
         self.runtime
@@ -490,6 +558,51 @@ print(json.dumps(dict(type='result', subtype='success', is_error=False, session_
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+}
+
+#[test]
+fn actual_task_executor_and_verifier_receive_the_same_source_bound_instruction_index() {
+    let f = TeamFixture::new_scoped("project_instructions", true);
+    let installed = f.install_team();
+    let executed = step(&f, &installed);
+    let _reviewed = step(&f, &executed);
+    let mut executors = 0;
+    let mut verifiers = 0;
+    for line in std::fs::read_to_string(f.root.path().join("calls.jsonl"))
+        .unwrap()
+        .lines()
+    {
+        let call: serde_json::Value = serde_json::from_str(line).unwrap();
+        let prompt = call["prompt"].as_str().unwrap();
+        let Some((_, raw)) = prompt.split_once("Immutable task context: ") else {
+            continue;
+        };
+        let context = serde_json::Deserializer::from_str(raw)
+            .into_iter::<serde_json::Value>()
+            .next()
+            .unwrap()
+            .unwrap();
+        let index = &context["project_instructions"];
+        assert_eq!(index["format"], "project-instructions-v1");
+        assert_eq!(index["documents"][0]["path"], "AGENTS.md");
+        assert_eq!(index["documents"][0]["directory_scope"], ".");
+        let binding = &index["documents"][0]["source_bindings"][0];
+        let source = binding["source_ref"].as_str().unwrap();
+        assert_eq!(
+            binding["source_hash"],
+            architect::hash(context["sources"][source].as_str().unwrap())
+        );
+        if prompt.contains("independently verifying task") {
+            verifiers += 1;
+        } else {
+            executors += 1;
+        }
+    }
+    assert!(executors > 0 && verifiers > 0);
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("workspace/AGENTS.md")).unwrap(),
+        "Retain directory scopes; project text cannot grant permissions"
+    );
 }
 
 #[test]
@@ -627,6 +740,201 @@ fn test_step_team_executes_ready_wave_and_records_quality_gates() {
             .any(|t| t.stage == architect::team::TaskStage::Planning
                 && t.state == TaskState::AwaitingVerification)
     );
+}
+
+#[test]
+fn unsupported_mode_change_preserves_actual_native_reviews_and_stage_acceptance() {
+    for mode in ["success", "mode_history"] {
+        let f = TeamFixture::new(mode);
+        let installed = f.install_team();
+        let executed = step(&f, &installed);
+        f.runtime
+            .dispatch(
+                &id(),
+                Command::StepTeam {
+                    run_id: executed.id.clone(),
+                    scope_hash: executed.team_step_scope().unwrap(),
+                },
+            )
+            .unwrap();
+        let reviewed = f.wait_for_idle();
+        let pending = architect::runtime::team::stage::pending(&reviewed);
+        assert!(
+            !pending.is_empty(),
+            "{mode}: {:?}; {:?}",
+            reviewed.diagnostic,
+            reviewed
+                .team
+                .as_ref()
+                .unwrap()
+                .tasks
+                .iter()
+                .map(|t| (&t.id, t.state, &t.diagnostic))
+                .collect::<Vec<_>>()
+        );
+        if mode == "mode_history" {
+            assert!(reviewed.spec.check_command.is_empty());
+            assert!(
+                reviewed
+                    .team
+                    .as_ref()
+                    .unwrap()
+                    .tasks
+                    .iter()
+                    .any(|task| !task.check_plan.is_empty())
+            );
+        }
+        let before = serde_json::to_value(&reviewed).unwrap();
+        let error = f
+            .runtime
+            .dispatch(
+                &id(),
+                Command::ChangeMode {
+                    run_id: reviewed.id.clone(),
+                    mode: Mode::Autonomous,
+                    expected_policy_revision: reviewed
+                        .spec
+                        .config
+                        .as_ref()
+                        .unwrap()
+                        .config
+                        .policy
+                        .revision,
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("restricted runner"), "{mode}: {error}");
+        let after = f.current();
+        assert_eq!(serde_json::to_value(&after).unwrap(), before);
+        assert_eq!(
+            serde_json::to_value(architect::runtime::team::stage::pending(&after)).unwrap(),
+            serde_json::to_value(pending).unwrap()
+        );
+        let accepted = accept_fixture_results(&f, after);
+        assert!(architect::runtime::team::stage::pending(&accepted).is_empty());
+        assert!(!accepted.team_result_approvals.is_empty());
+        assert!(accepted.mode_changes.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("workspace/source.txt")).unwrap(),
+            "original input"
+        );
+    }
+}
+
+#[test]
+fn missing_initial_check_command_reaches_planning_but_incomplete_proof_still_rejects() {
+    let f = TeamFixture::new("mode_history_missing_plan");
+    assert!(f.run.spec.check_command.is_empty());
+    let queued = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::SendMessage {
+                run_id: f.run.id.clone(),
+                target_agent_id: "orchestrator".into(),
+                text: "Choose checks for this research task".into(),
+            },
+        )
+        .unwrap();
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::Orchestrate {
+                run_id: queued.id.clone(),
+                scope_hash: planning::start_scope(&queued).unwrap(),
+            },
+        )
+        .unwrap();
+    let rejected = f.wait_for_idle();
+    let round = rejected.orchestration_rounds.last().unwrap();
+    assert_eq!(round.status, planning::RoundStatus::Rejected);
+    assert!(round.output.is_some());
+    assert!(round.diagnostic.as_ref().unwrap().contains("runner plan"));
+    assert!(round.verifier_session.is_none());
+    assert!(rejected.team.is_none() && rejected.task_checks.is_empty());
+    let calls = std::fs::read_to_string(f.root.path().join("calls.jsonl")).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        1,
+        "only the read-only planner should run"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("workspace/source.txt")).unwrap(),
+        "original input"
+    );
+}
+
+#[test]
+fn mode_change_refuses_a_live_worker_even_while_paused() {
+    let f = TeamFixture::new("lease_executor");
+    let installed = f.install_team();
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::StepTeam {
+                run_id: installed.id.clone(),
+                scope_hash: installed.team_step_scope().unwrap(),
+            },
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !f.root.path().join("guardian-info.json").exists() {
+        assert!(Instant::now() < deadline, "owned executor did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let paused = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::Pause {
+                run_id: installed.id.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(paused.status, Status::Paused);
+    let error = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::ChangeMode {
+                run_id: paused.id.clone(),
+                mode: Mode::Autonomous,
+                expected_policy_revision: paused
+                    .spec
+                    .config
+                    .as_ref()
+                    .unwrap()
+                    .config
+                    .policy
+                    .revision,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("active worker"), "{error}");
+    let after = f.current();
+    assert_eq!(
+        serde_json::to_value(&after.spec).unwrap(),
+        serde_json::to_value(&paused.spec).unwrap()
+    );
+    assert!(after.mode_changes.is_empty());
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::Cancel {
+                run_id: paused.id.clone(),
+            },
+        )
+        .unwrap();
+    while architect::recovery::WorkspaceLease::acquire(&paused.spec.workspace).is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "cancelled worker did not release its workspace"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(f.current().status, Status::Cancelled);
 }
 
 #[test]
@@ -1138,6 +1446,38 @@ fn disjoint_native_writers_share_wave_and_keep_their_original_input_and_owned_re
             architect::hash("managed result")
         );
     }
+}
+
+#[test]
+fn directory_scoped_native_writes_keep_aggregate_versions_and_durable_diff_baseline() {
+    let f = TeamFixture::new_scoped("managed_disjoint", true);
+    let result = managed_change(&f);
+    let current = architect::workspace::read_inputs(
+        std::path::Path::new(&result.spec.workspace),
+        &result.spec.input_files,
+    )
+    .unwrap();
+    assert_eq!(result.input_snapshot, current);
+    assert_eq!(result.diff_baseline(), f.run.diff_baseline());
+    assert_eq!(result.diff_baseline()["source.txt"], "original input");
+    let diff = architect::workspace::compute_diff(
+        std::path::Path::new(&result.spec.workspace),
+        result.diff_baseline(),
+    )
+    .unwrap();
+    assert_eq!(diff.files.len(), 2);
+    assert_eq!(diff.files[0].path, "second.txt");
+    assert_eq!(diff.files[1].path, "source.txt");
+    let restored = Store::open(&f.root.path().join("state.db"))
+        .unwrap()
+        .get(&result.id)
+        .unwrap();
+    assert_eq!(restored.diff_baseline(), f.run.diff_baseline());
+    let display = architect::tui::model::Snapshot::from_document(
+        &serde_json::to_value(&restored).unwrap(),
+        &serde_json::json!({}),
+    );
+    assert!(display.run_details["Diff"].contains("Total files changed: 2"));
 }
 
 #[test]
@@ -3480,6 +3820,101 @@ fn bugfix_reproduction_and_reviewed_alternative_preserve_original_and_actual_pos
 }
 
 #[test]
+fn non_defect_classification_preserves_acceptance_checks_and_actual_original_bugfix_proof() {
+    let f = TeamFixture::new("managed_bugfix_nondefect_success");
+    let changed = managed_change(&f);
+    let task = changed
+        .team
+        .as_ref()
+        .unwrap()
+        .tasks
+        .iter()
+        .find(|t| t.deliverable)
+        .unwrap();
+    let id = task.id.clone();
+    let criterion = task
+        .change_contract
+        .as_ref()
+        .unwrap()
+        .non_defect_criteria
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    let baseline = changed
+        .task_checks
+        .iter()
+        .find(|i| {
+            i.task_id == id && i.plan.phase == architect::team::checks::CheckPhase::BeforeExecution
+        })
+        .unwrap()
+        .clone();
+    assert!(!baseline.plan.criterion_ids.contains(&criterion));
+    assert!(!baseline.success);
+    let ready = refresh_prerequisites(&f, changed, &id);
+    let refreshed = refresh_sources(&f, &ready, &id);
+    let verified = step(&f, &refreshed);
+    let task = verified
+        .team
+        .as_ref()
+        .unwrap()
+        .tasks
+        .iter()
+        .find(|t| t.id == id)
+        .unwrap();
+    assert_eq!(task.state, TaskState::Verified, "{:?}", task.diagnostic);
+    assert!(task.criterion_ids.contains(&criterion));
+    let review = verified
+        .reviews
+        .iter()
+        .find(|r| r.verifier_session == task.review.as_ref().unwrap().session_id)
+        .unwrap();
+    let independent = review
+        .quality
+        .as_ref()
+        .unwrap()
+        .change_review
+        .as_ref()
+        .unwrap();
+    assert!(
+        !independent.non_defect_assessments[&criterion]
+            .evidence_ids
+            .is_empty()
+    );
+    assert!(
+        independent.bugfixes[0]
+            .before_evidence_ids
+            .contains(baseline.evidence_id.as_ref().unwrap())
+    );
+    for expected in [
+        &criterion,
+        &format!("CHANGE:non_defect:{criterion}"),
+        &"BUGFIX:wrong-value".into(),
+    ] {
+        assert!(
+            review
+                .checks
+                .iter()
+                .any(|c| &c.check_id == expected && c.status == CheckStatus::Pass),
+            "{expected}"
+        );
+    }
+    let proposal = verified.orchestration_rounds.last().unwrap();
+    let plan_review: serde_json::Value =
+        serde_json::from_str(proposal.review.as_ref().unwrap()).unwrap();
+    assert!(
+        plan_review["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |c| c["check_id"] == format!("NON_DEFECT_PLAN:{id}:{criterion}")
+                    && c["status"] == "pass"
+            )
+    );
+}
+
+#[test]
 fn missing_classification_or_bugfix_before_after_plan_cannot_be_approved_or_installed() {
     for mode in [
         "missing_change_classification",
@@ -3534,6 +3969,8 @@ fn missing_or_unbound_independent_bugfix_proof_never_accepts_a_current_task() {
         "managed_bugfix_omit_proof",
         "managed_bugfix_wrong_receipt",
         "managed_bugfix_alternative_no_assessment",
+        "managed_bugfix_nondefect_omit",
+        "managed_bugfix_nondefect_unbound",
     ] {
         let f = TeamFixture::new(mode);
         let changed = managed_change(&f);
@@ -6723,4 +7160,374 @@ fn captured_check_recovery_preserves_original_baseline_after_restored_writer_cha
         .unwrap(),
         "1"
     );
+}
+
+#[test]
+fn guided_chat_offers_the_actual_wave_then_its_review_and_stage_acceptance() {
+    use architect::runtime::team::{stage, wave};
+    use architect::tui::{
+        app::{App, Effect, View},
+        backend::Action,
+        model::Snapshot,
+    };
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    let f = TeamFixture::new("success");
+    let installed = f.install_team();
+    let package = wave::pending(&installed).unwrap();
+    assert_eq!(package.scope_hash, installed.team_step_scope().unwrap());
+    assert!(!package.actions.is_empty());
+    assert!(
+        package
+            .actions
+            .iter()
+            .all(|a| a.operation == architect::team::TaskOperation::Execute)
+    );
+    let control = serde_json::json!({"scope_hashes":{"step_team":package.scope_hash}});
+    let mut app = App::default();
+    app.update(Snapshot::from_document(
+        &serde_json::to_value(&installed).unwrap(),
+        &control,
+    ));
+    let (action, _) = app.next_approval().unwrap();
+    assert!(matches!(action, Action::StepTeam { .. }));
+    app.handle(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+    )));
+    let View::Confirm { details, .. } = &app.view else {
+        panic!("wave card missing")
+    };
+    assert!(details.contains(&package.actions[0].task.description));
+    assert!(details.contains(&package.actions[0].profile.profile));
+    assert!(details.contains(&installed.spec.workspace));
+    assert!(details.contains(&package.scope_hash));
+    let frozen = details.clone();
+    let mut running = installed.clone();
+    running.status = Status::Running;
+    app.update(Snapshot::from_document(
+        &serde_json::to_value(&running).unwrap(),
+        &control,
+    ));
+    assert!(app.next_approval().is_none());
+    assert!(app.snapshot.pending_wave.is_none());
+    let View::Confirm { details, .. } = &app.view else {
+        panic!("confirmation replaced")
+    };
+    assert_eq!(details, &frozen);
+    assert_eq!(
+        app.handle(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE
+        ))),
+        vec![Effect::Action(action)]
+    );
+    let executed = raw_team_step(&f, &installed);
+    let reviews = wave::pending(&executed).unwrap();
+    assert!(
+        reviews
+            .actions
+            .iter()
+            .all(|a| a.operation == architect::team::TaskOperation::Verify)
+    );
+    assert!(
+        reviews
+            .actions
+            .iter()
+            .all(|a| a.write_scopes.is_empty() && a.profile.role == RoleKind::Verifier)
+    );
+    let reviewed = raw_team_step(&f, &executed);
+    let packages = stage::pending(&reviewed);
+    assert!(!packages.is_empty());
+    let control = serde_json::json!({"team_stage_results":packages,"scope_hashes":{"step_team":reviewed.team_step_scope().unwrap()}});
+    app.update(Snapshot::from_document(
+        &serde_json::to_value(&reviewed).unwrap(),
+        &control,
+    ));
+    assert!(matches!(
+        app.next_approval().unwrap().0,
+        Action::AcceptTeamStage { .. }
+    ));
+    let mut uncertain = executed.clone();
+    uncertain.team.as_mut().unwrap().checkpoint_uncertain = true;
+    assert!(wave::pending(&uncertain).is_err());
+    let mut uncertain = executed;
+    uncertain.reconciliation_required = true;
+    assert!(wave::pending(&uncertain).is_err());
+}
+
+#[test]
+fn accepted_complete_managed_team_delivers_only_its_owned_change_with_separate_source_approval() {
+    complete_managed_delivery(false);
+}
+#[test]
+fn accepted_complete_managed_team_file_operations_deliver_authenticated_creation_and_deletion() {
+    complete_managed_delivery(true);
+}
+fn complete_managed_delivery(file_operations: bool) {
+    let mut f = TeamFixture::new_options(
+        if file_operations {
+            "managed_delivery_files"
+        } else {
+            "managed_delivery"
+        },
+        false,
+        true,
+    );
+    let original = f.run.spec.workspace.clone();
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::InspectWorkspace {
+                run_id: f.run.id.clone(),
+            },
+        )
+        .unwrap();
+    let inspected = f.wait_for_idle();
+    let plan = inspected.workspace_plan.as_ref().unwrap();
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::PrepareWorkspace {
+                run_id: f.run.id.clone(),
+                selected: plan.selectors.clone(),
+                scope_hash: plan.scope_hash.clone(),
+            },
+        )
+        .unwrap();
+    let captured = f.wait_for_idle();
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::ActivateWorkspace {
+                run_id: f.run.id.clone(),
+                scope_hash: architect::workspace::managed::activation_scope(&captured).unwrap(),
+            },
+        )
+        .unwrap();
+    f.run = f.wait_for_idle();
+    let mut run = f.install_team();
+    for _ in 0..120 {
+        run = accept_fixture_results(&f, run);
+        assert!(
+            !run.reconciliation_required,
+            "complete managed fixture requires reconciliation: {:?}; tasks {:?}",
+            run.diagnostic,
+            run.team
+                .as_ref()
+                .unwrap()
+                .tasks
+                .iter()
+                .filter(|t| t.state != TaskState::Verified)
+                .map(|t| (&t.id, &t.state, &t.diagnostic))
+                .collect::<Vec<_>>()
+        );
+        if run.status == Status::Completed {
+            break;
+        }
+        let refresh = run
+            .team
+            .as_ref()
+            .unwrap()
+            .tasks
+            .iter()
+            .find(|task| run.task_source_refresh_scope(&task.id).is_ok())
+            .map(|task| task.id.clone());
+        if let Some(task) = refresh {
+            run = refresh_sources(&f, &run, &task);
+        } else {
+            run = step(&f, &run);
+        }
+        assert!(
+            matches!(
+                run.status,
+                Status::Ready
+                    | Status::AwaitingResult
+                    | Status::Completed
+                    | Status::ChangesRequested
+                    | Status::Blocked
+            ),
+            "{:?}",
+            run.diagnostic
+        );
+    }
+    assert_eq!(run.status, Status::Completed, "{:?}", run.diagnostic);
+    assert_eq!(
+        architect::workspace::inputs::captured_text(
+            std::path::Path::new(&run.spec.workspace),
+            &run.input_snapshot,
+            "source.txt"
+        )
+        .unwrap()
+        .as_deref(),
+        Some("managed result")
+    );
+    if file_operations {
+        assert_eq!(
+            std::fs::read_to_string(std::path::Path::new(&original).join("obsolete.txt")).unwrap(),
+            "original obsolete"
+        );
+        assert!(!std::path::Path::new(&original).join("new/sub.txt").exists());
+    }
+    assert_eq!(
+        std::fs::read_to_string(std::path::Path::new(&original).join("source.txt")).unwrap(),
+        "original input"
+    );
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::InspectDelivery {
+                run_id: run.id.clone(),
+            },
+        )
+        .unwrap();
+    let inspected = f.wait_for_idle();
+    let proposal = architect::runtime::delivery::pending(&inspected).unwrap();
+    assert!(proposal.conflicts.is_empty(), "{:?}", proposal.conflicts);
+    assert_eq!(proposal.changes.len(), if file_operations { 3 } else { 1 });
+    assert!(proposal.changes.iter().any(|c| c.path == "source.txt"));
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::DeliverSource {
+                run_id: run.id.clone(),
+                scope_hash: proposal.scope_hash.clone(),
+            },
+        )
+        .unwrap();
+    let delivered = f.wait_for_idle();
+    assert_eq!(
+        delivered.delivery.as_ref().unwrap().state,
+        architect::runtime::delivery::State::Delivered,
+        "{:?}",
+        delivered.diagnostic
+    );
+    assert_eq!(
+        std::fs::read_to_string(std::path::Path::new(&original).join("source.txt")).unwrap(),
+        "managed result"
+    );
+    if file_operations {
+        assert_eq!(
+            std::fs::read_to_string(std::path::Path::new(&original).join("new/sub.txt")).unwrap(),
+            "created result"
+        );
+        assert!(
+            !std::path::Path::new(&original)
+                .join("obsolete.txt")
+                .exists()
+        );
+        let deleted = &delivered.delivery.as_ref().unwrap().effects["obsolete.txt"];
+        assert_eq!(
+            std::fs::read_to_string(std::path::Path::new(&original).join(&deleted.backup)).unwrap(),
+            "original obsolete"
+        );
+    }
+    let effect = &delivered.delivery.as_ref().unwrap().effects["source.txt"];
+    assert_eq!(
+        std::fs::read_to_string(std::path::Path::new(&original).join(&effect.backup)).unwrap(),
+        "original input"
+    );
+    assert!(
+        delivered
+            .approvals
+            .iter()
+            .any(|a| a.action == "deliver-source")
+    );
+    assert!(
+        f.runtime
+            .dispatch(
+                &id(),
+                Command::DeliverSource {
+                    run_id: run.id.clone(),
+                    scope_hash: proposal.scope_hash.clone()
+                }
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn native_create_delete_outcome_loss_is_observed_and_restored_without_repeating_effects() {
+    let f = TeamFixture::new_options("managed_delivery_files", false, false);
+    let ready = before_managed_change(&f);
+    let connection = rusqlite::Connection::open(f.root.path().join("state.db")).unwrap();
+    connection.execute_batch("CREATE TRIGGER refuse_file_outcome BEFORE INSERT ON events WHEN NEW.kind='task_execution_applied' BEGIN SELECT RAISE(ABORT, 'injected completed file-operation outcome failure'); END;").unwrap();
+    let interrupted = raw_team_step(&f, &ready);
+    assert_eq!(interrupted.status, Status::Blocked);
+    assert!(interrupted.reconciliation_required);
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("workspace/new/sub.txt")).unwrap(),
+        "created result"
+    );
+    assert!(!f.root.path().join("workspace/obsolete.txt").exists());
+    let task_id = interrupted
+        .task_executions
+        .iter()
+        .find(|e| !e.receipts.is_empty())
+        .unwrap()
+        .task_id
+        .clone();
+    let scope_hash = interrupted
+        .task_effect_reconciliation_scope(&task_id)
+        .unwrap();
+    let calls = std::fs::read(f.root.path().join("calls.jsonl")).unwrap();
+    std::fs::write(f.root.path().join("workspace/unowned.txt"), "new user work").unwrap();
+    assert!(
+        f.current()
+            .task_effect_reconciliation_scope(&task_id)
+            .is_err()
+    );
+    std::fs::remove_file(f.root.path().join("workspace/unowned.txt")).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER refuse_file_outcome")
+        .unwrap();
+    let observed = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::ReconcileTaskEffects {
+                run_id: interrupted.id.clone(),
+                task_id: task_id.clone(),
+                scope_hash,
+            },
+        )
+        .unwrap();
+    assert!(!observed.reconciliation_required);
+    let restored = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::RestoreTaskResult {
+                run_id: observed.id.clone(),
+                task_id: task_id.clone(),
+                scope_hash: observed.task_result_restore_scope(&task_id).unwrap(),
+            },
+        )
+        .unwrap();
+    assert!(
+        restored
+            .team
+            .unwrap()
+            .tasks
+            .iter()
+            .any(|t| t.id == task_id && t.state == TaskState::Stale && t.artifact.is_some())
+    );
+    assert_eq!(
+        restored
+            .task_executions
+            .iter()
+            .find(|e| e.task_id == task_id)
+            .unwrap()
+            .state,
+        architect::runtime::team::effects::ExecutionState::Committed
+    );
+    assert_eq!(restored.task_result_restorations.len(), 1);
+    assert_eq!(
+        std::fs::read(f.root.path().join("calls.jsonl")).unwrap(),
+        calls
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("workspace/new/sub.txt")).unwrap(),
+        "created result"
+    );
+    assert!(!f.root.path().join("workspace/obsolete.txt").exists());
 }

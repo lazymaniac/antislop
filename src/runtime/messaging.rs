@@ -14,8 +14,17 @@ use crate::{
 };
 
 pub(super) fn agents(run: &Run) -> std::collections::BTreeSet<String> {
+    let reviewers = run
+        .diff_reviews
+        .iter()
+        .map(|review| format!("diff-review:{}", review.id));
     if let Some(team) = &run.team {
-        return team.agents.iter().map(|agent| agent.id.clone()).collect();
+        return team
+            .agents
+            .iter()
+            .map(|agent| agent.id.clone())
+            .chain(reviewers)
+            .collect();
     }
     let mut agents: std::collections::BTreeSet<_> = [
         Stage::Discovery,
@@ -42,6 +51,7 @@ pub(super) fn agents(run: &Run) -> std::collections::BTreeSet<String> {
     }) {
         agents.extend(["orchestrator".into(), "orchestrator:verifier".into()]);
     }
+    agents.extend(reviewers);
     agents
 }
 fn validate_text(content: &str) -> Result<()> {
@@ -106,6 +116,20 @@ pub(super) fn accept(run: &mut Run, recipient: &str, content: &str) -> Result<()
         )?;
     }
     Ok(())
+}
+pub(super) fn runtime_status(run: &mut Run, recipient: &str, content: &str) -> Result<()> {
+    require(
+        agents(run).contains(recipient),
+        "unknown runtime status recipient",
+    )?;
+    queue(
+        run,
+        id(),
+        Sender::Runtime,
+        recipient.into(),
+        MessageKind::Status,
+        content,
+    )
 }
 
 pub(super) fn retire_recipients(run: &mut Run) -> Result<()> {

@@ -112,6 +112,117 @@ fn section(registry: &Value, name: &str) -> Value {
 }
 
 #[test]
+fn native_orchestration_registry_preserves_the_entire_review_packet_and_legacy_format() {
+    use architect::{
+        config::{Config, ProviderKind},
+        orchestration::planning,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let mut spec: RunSpec =
+        serde_json::from_str(include_str!("../examples/fake-spec.json")).unwrap();
+    spec.workspace = root.path().to_string_lossy().into();
+    let mut config = Config::from_toml(include_str!("../examples/architect.toml")).unwrap();
+    config.profiles.get_mut("review").unwrap().provider = ProviderKind::Agy;
+    spec.config = Some(config.pin().unwrap());
+    let mut run = Run::new(architect::id(), spec).unwrap();
+    let source = (0..1100)
+        .map(|n| format!("source {n}: Unicode ą🦀 \\\"literal\\\"\n"))
+        .collect::<String>();
+    let response = planning::Response {
+        agent_messages: vec![],
+        comment_reactions: vec![],
+        message: format!("Current candidate and source: {source}"),
+        team_plan_json: None,
+        intake_proposal_json: None,
+        risk_owners: vec![],
+    };
+    let output = serde_json::to_string(&response).unwrap();
+    let context = serde_json::to_string(&json!({
+        "review_input_format":"inline-exact-utf8-v7",
+        "sources":{"original":source},
+        "receipt_snapshot":{"output":source},
+        "literal_wrapper":{"json_value_ref":"literal user data, never a registry reference"}
+    }))
+    .unwrap();
+    let mut round: planning::Round = serde_json::from_value(json!({
+        "id":"round","spec_revision":run.spec_revision,"source_hashes":{},
+        "input_hash":architect::hash(&context),"approval_scope":"scope",
+        "previous_status":"awaiting_start","message_ids":[],"request_sequence":0,
+        "request_context":context,"status":"running","executor_session":null,
+        "verifier_session":null,"output":output,"review":null,"diagnostic":null,
+        "input_evidence_id":"input-receipt","output_evidence_id":"output-receipt"
+    }))
+    .unwrap();
+    for (id, source_kind, body) in [
+        (
+            "input-receipt",
+            "runtime:orchestrator-inputs",
+            context.clone(),
+        ),
+        (
+            "output-receipt",
+            "runtime:orchestrator-output",
+            output.clone(),
+        ),
+    ] {
+        run.evidence.push(Evidence {
+            id: id.into(),
+            artifact_hash: architect::hash(&output),
+            spec_revision: run.spec_revision,
+            input_hash: Some(round.input_hash.clone()),
+            source: source_kind.into(),
+            output_hash: architect::hash(&body),
+            output: body,
+            success: true,
+        });
+    }
+    let compact = planning::verifier_request(&run, &round, &response).unwrap();
+    let table = registry(&compact.prompt);
+    let packet = section(&table, "Orchestrator review packet");
+    assert_eq!(packet["context"], context);
+    assert_eq!(packet["output"], output);
+    assert_eq!(packet["output_hash"], architect::hash(&output));
+    assert_eq!(packet["input_hash"], round.input_hash);
+    assert_eq!(
+        packet["receipts"],
+        serde_json::to_value(&run.evidence).unwrap()
+    );
+    let restored_context: Value =
+        serde_json::from_str(packet["context"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        restored_context["literal_wrapper"]["json_value_ref"],
+        "literal user data, never a registry reference"
+    );
+    assert!(compact.prompt.len() < providers::agy::MAX_PROMPT_BYTES);
+
+    config.profiles.get_mut("review").unwrap().provider = ProviderKind::Claude;
+    run.spec.config = Some(config.pin().unwrap());
+    let plain = planning::verifier_request(&run, &round, &response).unwrap();
+    // Include the opening brace removed by split_once, then allow the instruction footer.
+    let raw = format!("{{{}", plain.prompt.split_once("\n{").unwrap().1);
+    let mut values = serde_json::Deserializer::from_str(&raw).into_iter::<Value>();
+    assert_eq!(values.next().unwrap().unwrap(), packet);
+    assert!(plain.prompt.len() > providers::agy::MAX_PROMPT_BYTES);
+
+    // Old Agy receipts keep their original plain request bytes when the marker is absent.
+    let mut legacy_context: Value = serde_json::from_str(&round.request_context).unwrap();
+    legacy_context
+        .as_object_mut()
+        .unwrap()
+        .remove("review_input_format");
+    round.request_context = serde_json::to_string(&legacy_context).unwrap();
+    let legacy_plain = planning::verifier_request(&run, &round, &response).unwrap();
+    config.profiles.get_mut("review").unwrap().provider = ProviderKind::Agy;
+    run.spec.config = Some(config.pin().unwrap());
+    let legacy_agy = planning::verifier_request(&run, &round, &response).unwrap();
+    assert_eq!(legacy_agy.prompt, legacy_plain.prompt);
+    assert_eq!(legacy_agy.schema, legacy_plain.schema);
+    legacy_context["review_input_format"] = json!("unknown-future-format");
+    round.request_context = serde_json::to_string(&legacy_context).unwrap();
+    assert!(planning::verifier_request(&run, &round, &response).is_err());
+}
+
+#[test]
 fn exact_registry_preserves_artifact_evidence_provenance_inputs_and_full_risk_catalog() {
     let root = tempfile::tempdir().unwrap();
     let source = "Źródło Unicode 🦀\\n literal escape\nactual newline\t\"quoted\"".repeat(20);

@@ -1,9 +1,6 @@
 //! User-confirmed observed after-state of uncertain mediated file edits. Never replay writes.
 use super::*;
-use crate::{
-    recovery::{EditReceipt, EditState},
-    sessions::SessionScope,
-};
+use crate::recovery::{EditReceipt, EditState};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +97,7 @@ fn approved(
                     && observed.original_receipts.iter().zip(&other.receipts).all(
                         |(original, current)| {
                             original.path == current.path
+                                && original.operation == current.operation
                                 && original.before_hash == current.before_hash
                                 && original.after_hash == current.after_hash
                                 && current.state == EditState::Applied
@@ -116,15 +114,24 @@ fn approved(
                         .zip(&other.receipts)
                         .all(|(edit, effect)| {
                             edit.path == effect.path
-                                && hash(&edit.content) == effect.after_hash
-                                && other
-                                    .input_snapshot
-                                    .get(&effect.path)
-                                    .is_some_and(|text| hash(text) == effect.before_hash)
-                                && observed
-                                    .observed_snapshot
-                                    .get(&effect.path)
-                                    .is_some_and(|text| hash(text) == effect.after_hash)
+                                && edit.operation == effect.operation
+                                && crate::workspace::inputs::version_hash(
+                                    crate::workspace::inputs::after_text(edit),
+                                ) == effect.after_hash
+                                && crate::recovery::matches_version(
+                                    Path::new(&run.spec.workspace),
+                                    &other.input_snapshot,
+                                    effect,
+                                    true,
+                                )
+                                .unwrap_or(false)
+                                && crate::recovery::matches_version(
+                                    Path::new(&run.spec.workspace),
+                                    &observed.observed_snapshot,
+                                    effect,
+                                    false,
+                                )
+                                .unwrap_or(false)
                         }),
                 "effect cohort native proposal/after-state changed",
             )?;
@@ -188,6 +195,7 @@ pub(super) fn authenticate_receipt(run: &Run, execution: &effects::ExecutionBind
                 .zip(&execution.receipts)
                 .all(|(original, current)| {
                     original.path == current.path
+                        && original.operation == current.operation
                         && original.before_hash == current.before_hash
                         && original.after_hash == current.after_hash
                 })
@@ -253,16 +261,12 @@ fn owned_candidate(
         .resolve(owner.role.work_kind(), owner.kind)?
         .provider;
     require(
-        execution.scope
-            == SessionScope::for_run(
-                &original,
-                owner.id.clone(),
-                Some(task.id.clone()),
-                owner.kind,
-                execution.scope.provider.clone(),
-                execution.scope.binary_version.clone(),
-            )?
-            && serde_json::to_value(provider)?.as_str() == Some(execution.scope.provider.as_str()),
+        execution.scope.matches_run(
+            &original,
+            owner.id.clone(),
+            Some(task.id.clone()),
+            owner.kind,
+        )? && serde_json::to_value(provider)?.as_str() == Some(execution.scope.provider.as_str()),
         "effect native scope/configuration changed",
     )?;
     crate::team::models::validate_output(&original, task, owner.role, &output)?;
@@ -276,24 +280,45 @@ fn owned_candidate(
         require(
             paths.insert(&receipt.path)
                 && edit.path == receipt.path
-                && run.spec.editable_files.contains(&edit.path)
-                && task.write_scopes.iter().any(|scope| {
-                    edit.path == *scope || edit.path.starts_with(&format!("{scope}/"))
+                && run.spec.editable_files.iter().any(|scope| {
+                    crate::workspace::inputs::scope_contains(
+                        Path::new(&run.spec.workspace),
+                        scope,
+                        &edit.path,
+                    )
+                    .unwrap_or(false)
                 })
-                && execution
-                    .input_snapshot
-                    .get(&receipt.path)
-                    .is_some_and(|text| hash(text) == receipt.before_hash)
-                && hash(&edit.content) == receipt.after_hash
-                && observed
-                    .get(&receipt.path)
-                    .is_some_and(|text| hash(text) == receipt.after_hash)
+                && task.write_scopes.iter().any(|scope| {
+                    crate::workspace::inputs::scope_contains(
+                        Path::new(&run.spec.workspace),
+                        scope,
+                        &edit.path,
+                    )
+                    .unwrap_or(false)
+                })
+                && crate::recovery::matches_version(
+                    Path::new(&run.spec.workspace),
+                    &execution.input_snapshot,
+                    receipt,
+                    true,
+                )?
+                && edit.operation == receipt.operation
+                && crate::workspace::inputs::version_hash(crate::workspace::inputs::after_text(
+                    edit,
+                )) == receipt.after_hash
+                && crate::recovery::matches_version(
+                    Path::new(&run.spec.workspace),
+                    observed,
+                    receipt,
+                    false,
+                )?
                 && matches!(receipt.state, EditState::Pending | EditState::Applied),
             "owned file is unapplied, conflicting or no longer matches the approved intent",
         )?;
         require(
             run.pending_edits.iter().any(|pending| {
                 pending.path == receipt.path
+                    && pending.operation == receipt.operation
                     && pending.before_hash == receipt.before_hash
                     && pending.after_hash == receipt.after_hash
             }),
@@ -363,29 +388,46 @@ fn candidates(
             )?;
         }
     }
-    for (path, text) in &observed {
-        if run.input_snapshot.get(path) == Some(text) || paths.contains(path) {
-            continue;
+    let mut proven = run.input_snapshot.clone();
+    for execution in run
+        .task_executions
+        .iter()
+        .filter(|e| e.wave_attempt == wave)
+    {
+        let chosen = selected.iter().any(|(e, _)| e.id == execution.id);
+        if !chosen {
+            if !matches!(
+                execution.state,
+                effects::ExecutionState::Applied
+                    | effects::ExecutionState::ObservedApplied
+                    | effects::ExecutionState::Committed
+            ) {
+                continue;
+            }
+            effects::authenticate(run, execution)?;
         }
-        require(
-            run.task_executions.iter().any(|other| {
-                other.wave_attempt == wave
-                    && matches!(
-                        other.state,
-                        effects::ExecutionState::Applied
-                            | effects::ExecutionState::ObservedApplied
-                            | effects::ExecutionState::Committed
-                    )
-                    && effects::authenticate(run, other).is_ok()
-                    && other.receipts.iter().any(|r| {
-                        r.path == *path
-                            && r.state == EditState::Applied
-                            && r.after_hash == hash(text)
-                    })
-            }),
-            "unselected or unowned workspace changes require complete cohort reconciliation",
-        )?;
+        let proposal = effects::proposal(run, execution)?;
+        for (edit, receipt) in proposal.edits.iter().zip(&execution.receipts) {
+            if crate::recovery::matches_version(
+                Path::new(&run.spec.workspace),
+                &proven,
+                receipt,
+                false,
+            )? {
+                continue;
+            }
+            crate::workspace::inputs::record_change(
+                Path::new(&run.spec.workspace),
+                &mut proven,
+                edit,
+                &receipt.before_hash,
+            )?;
+        }
     }
+    require(
+        proven == observed,
+        "unselected or unowned workspace changes require complete cohort reconciliation",
+    )?;
     Ok(selected)
 }
 fn candidate(run: &Run, task_id: &str) -> Result<(effects::ExecutionBinding, ObservationReceipt)> {
@@ -506,6 +548,7 @@ fn apply_observations(
         for pending in &mut run.pending_edits {
             if execution.receipts.iter().any(|e| {
                 e.path == pending.path
+                    && e.operation == pending.operation
                     && e.before_hash == pending.before_hash
                     && e.after_hash == pending.after_hash
             }) {

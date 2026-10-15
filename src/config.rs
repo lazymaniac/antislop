@@ -69,6 +69,9 @@ pub enum Mode {
 pub enum WorkspaceMode {
     Worktree,
     InPlace,
+    /// Each writing task works in a private Git worktree stacked on its
+    /// dependencies' results; verified results are merged into the project.
+    TaskWorktrees,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -76,6 +79,7 @@ pub enum WorkspaceMode {
 pub enum IsolationProfile {
     #[default]
     ToolFree,
+    PinnedContext,
     ReadOnly,
     WorkspaceWrite,
     RestrictedExecution,
@@ -91,7 +95,7 @@ pub struct WorkspaceConfig {
 impl Default for WorkspaceConfig {
     fn default() -> Self {
         Self {
-            mode: WorkspaceMode::Worktree,
+            mode: WorkspaceMode::TaskWorktrees,
         }
     }
 }
@@ -133,6 +137,19 @@ pub struct RoleRouting {
 #[serde(deny_unknown_fields)]
 pub struct OrchestratorConfig {
     pub profile: String,
+    /// Reply pagination, never a limit on the complete set of checks. Zero
+    /// retains the legacy single-report transport for compatibility/probes.
+    #[serde(
+        default = "default_review_checks",
+        skip_serializing_if = "default_review_page"
+    )]
+    pub review_checks_per_part: usize,
+}
+pub fn default_review_checks() -> usize {
+    24
+}
+fn default_review_page(value: &usize) -> bool {
+    *value == default_review_checks()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -458,6 +475,14 @@ impl PinnedConfig {
 }
 
 impl Policy {
+    pub fn authorize_project_check(&self, stage_approved: bool) -> Result<()> {
+        self.authorize_local(LocalAction::Check, stage_approved)?;
+        require(
+            self.mode == Mode::Supervised,
+            "autonomous project checks require a restricted runner; unsandboxed execution is not enabled",
+        )
+    }
+
     pub fn automatic_progression(&self) -> bool {
         self.mode == Mode::Autonomous
     }

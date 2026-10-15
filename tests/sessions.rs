@@ -49,6 +49,157 @@ fn ok(_: &SessionLedger, _: &str) -> Result<()> {
 }
 
 #[test]
+fn incomplete_context_keeps_authenticated_rejected_output_without_completing_or_replaying_the_turn()
+{
+    let (_root, run, mut session, mut turn) = fixture();
+    session.scope.provider = "agy".into();
+    session.scope.binary_version = "1.3.5".into();
+    session.scope.task_id = Some("owned-task".into());
+    let schema = serde_json::json!({"type":"object"});
+    let prompt = "Original prepared source requiring complete delivery";
+    turn.prompt_hash = architect::hash(prompt);
+    turn.schema_hash = architect::hash(serde_json::to_vec(&schema).unwrap());
+    let context = architect::context::transport::Transport::new(&providers::TurnRequest {
+        turn_id: &turn.id,
+        run: &run,
+        prompt,
+        schema: &schema,
+        resume: None,
+    })
+    .unwrap();
+    let mut ledger = SessionLedger::default();
+    ledger
+        .reserve(session.clone(), turn.clone(), &mut ok)
+        .unwrap();
+    ledger
+        .record_provider_event(
+            &turn.id,
+            &ProviderEvent::ContextPrepared {
+                turn_id: turn.id.clone(),
+                transport: Box::new(context),
+            },
+            &mut ok,
+        )
+        .unwrap();
+    ledger
+        .record_provider_event(
+            &turn.id,
+            &ProviderEvent::DeliveryPendingUnknown {
+                turn_id: turn.id.clone(),
+            },
+            &mut ok,
+        )
+        .unwrap();
+    ledger
+        .record_provider_event(
+            &turn.id,
+            &ProviderEvent::DeliverySent {
+                turn_id: turn.id.clone(),
+            },
+            &mut ok,
+        )
+        .unwrap();
+    ledger
+        .record_provider_event(
+            &turn.id,
+            &ProviderEvent::SessionObserved {
+                session_id: architect::id(),
+            },
+            &mut ok,
+        )
+        .unwrap();
+    let output = r#"{"findings":["Missing pinned source pages"],"agent_messages":[{"text":"PRIVATE_UNDELIVERED_OUTBOX"}]}"#;
+    ledger
+        .record_provider_event(
+            &turn.id,
+            &ProviderEvent::OutputRejected {
+                turn_id: turn.id.clone(),
+                output: output.into(),
+            },
+            &mut ok,
+        )
+        .unwrap();
+    let before = serde_json::to_value(&ledger).unwrap();
+    assert!(
+        ledger
+            .record_provider_event(
+                &turn.id,
+                &ProviderEvent::Completed {
+                    turn_id: turn.id.clone()
+                },
+                &mut ok
+            )
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(&ledger).unwrap(), before);
+    ledger
+        .fail(&turn.id, providers::FailureKind::Protocol, false, &mut ok)
+        .unwrap();
+    let restored: SessionLedger =
+        serde_json::from_value(serde_json::to_value(&ledger).unwrap()).unwrap();
+    restored.validate_for_run(&run.id).unwrap();
+    let rejected = restored.turns[&turn.id].rejected_output.as_ref().unwrap();
+    assert_eq!(rejected.output, output);
+    assert_eq!(rejected.hash, architect::hash(output));
+    assert!(restored.turns[&turn.id].output.is_none());
+    let mut report_run = run.clone();
+    report_run.session_ledger = restored.clone();
+    let reports =
+        architect::context::transport::rejected_reports(&report_run, "orchestrator", None);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(
+        reports[0]["report_projection"]["findings"],
+        serde_json::json!(["Missing pinned source pages"])
+    );
+    assert!(
+        !serde_json::to_string(&reports)
+            .unwrap()
+            .contains("PRIVATE_UNDELIVERED_OUTBOX")
+    );
+    assert_eq!(reports[0]["original_output_hash"], architect::hash(output));
+    assert_eq!(
+        architect::context::transport::rejected_reports(
+            &report_run,
+            "task-reviewer",
+            Some("owned-task")
+        )
+        .len(),
+        1
+    );
+    assert!(
+        architect::context::transport::rejected_reports(
+            &report_run,
+            "unrelated",
+            Some("another-task")
+        )
+        .is_empty()
+    );
+    let mut changed = restored.clone();
+    changed
+        .turns
+        .get_mut(&turn.id)
+        .unwrap()
+        .rejected_output
+        .as_mut()
+        .unwrap()
+        .output
+        .push('!');
+    assert!(changed.validate().is_err());
+    let mut next = session;
+    next.id = "distinct-replacement".into();
+    let next_turn = TurnRecord::new(
+        "turn-2".into(),
+        next.id.clone(),
+        turn.prompt_hash,
+        turn.schema_hash,
+        None,
+    )
+    .unwrap();
+    ledger.reserve(next, next_turn, &mut ok).unwrap();
+    assert_eq!(ledger.turns[&turn.id], restored.turns[&turn.id]);
+}
+
+#[test]
 fn observed_fake_output_is_durable_before_completion_is_visible() {
     let (_root, run, session, turn) = fixture();
     let mut ledger = SessionLedger::default();

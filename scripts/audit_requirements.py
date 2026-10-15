@@ -20,6 +20,46 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 # cannot hide omission of an obligation. Conditions are additionally bound to
 # the full original parent and context.
 SEMANTIC_EXPECTATIONS = [
+    ('| `supervised` |', ['before starting each stage', 'every correction round', 'each final stage result', 'may also present and approve the explicit scope of the next stage', 'optional combined approval, not implicit authorization', 'do not automatically open a correction round after a verifier rejects']),
+    ('| `autonomous` |', ['opens successive stages after their applicable gates are satisfied', 'opens correction rounds after their applicable gates are satisfied', 'local work within the policy', 'local tests within the policy', 'local commits within the policy', 'separate approval for push', 'separate approval for publication', 'separate approval for external messages', 'separate approval for destructive operations', 'necessary product decision may require the user']),
+    ('Zmiana trybu jest jawna, zapisana', ['mode change explicit', 'Persist every autonomy-mode change', 'future actions', 'Do not retrospectively approve prior changes', 'Do not remove verifier concerns', 'scope invalidates the affected approvals', 'scope requires reassessment']),
+    ('Oddzielamy zgodę na **etap**', ['approval of a stage from approval of an action', 'does not authorize push', 'does not authorize publication', 'does not authorize external messages', 'does not authorize destructive operations', 'only the specified task changes', 'must not include unrelated user changes']),
+    ('| Orchestrator | Orchestration verifier |', ['selected Orchestrator competency', 'substantive team changes', 'substantive scope changes', 'substantive strategy changes', 'decisions align with the objective', 'TeamPlan change proposal or a management decision', 'illustrative artifact forms']),
+    ('| Context analyst | Context verifier |', ['actual behavior', 'sources', 'dependency coverage', 'applicable standards', 'closure of unknowns', 'ContextModel', 'verified knowledge register', 'illustrative artifact forms']),
+    ('| Requirements analyst | Requirements verifier |', ['alignment with user intent', 'contradictions', 'acceptance-criteria completeness', 'specification and criteria map', 'illustrative artifact forms']),
+    ('| Planner | Plan verifier |', ['abstract model', 'invariants', 'independent simulation', 'counterexamples', 'scope', 'evidence completeness', 'SolutionModel, SimulationReport and a task DAG', 'illustrative artifact forms']),
+    ('| Options analyst | Options verifier |', ['available alternatives', 'comparison fairness', 'evidence', 'uncertainty', 'selecting the best solution', 'OptionsAnalysis and SolutionDecision', 'illustrative artifact forms']),
+    ('| Architect | Architecture verifier |', ['fit with the project', 'simplicity', 'reuse of existing solutions', 'ADRs and module contracts', 'illustrative artifact forms']),
+    ('| Dependency analyst | Dependency verifier |', ['alternatives to custom code', 'dependency provenance', 'licenses', 'dependency security', 'dependency maintenance cost', 'DependencyDecision and LicenseReport', 'illustrative artifact forms']),
+    ('| Implementer | Code verifier |', ['model conformance', 'standards conformance', 'requirements conformance', 'simplicity', 'responsibilities', 'absence of unnecessary additions', 'patch, TraceabilityMap and a standards report', 'illustrative artifact forms']),
+    ('| Refactorer | Refactor verifier |', ['closure of solution debt', 'preservation of contracts', 'structural improvement', 'absence of speculative abstractions', 'RefactorReport, a patch and behavior-preservation evidence', 'illustrative artifact forms']),
+    ('| Static analysis operator | Static analysis verifier |', ['analyzer coverage', 'configurations', 'absence of unresolved concerns', 'absence of rule-weakening attempts', 'StaticAnalysisReport and raw results', 'illustrative artifact forms']),
+    ('| Compliance auditor | Compliance verifier |', ['every requirement', 'every step of the full plan', 'realization quality', 'absence of extraction gaps', 'evidence is current', 'ComplianceAudit and RequirementLedger accounting', 'illustrative artifact forms']),
+    ('| Test designer | Test design verifier |', ['scenarios derive from requirements', 'scenarios detect probable defects', 'test plan and requirements map', 'illustrative artifact forms']),
+    ('| Test implementer | Test verifier |', ['assertions', 'actual execution paths', 'isolation', 'mocks', 'test resilience', 'tests and execution results', 'illustrative artifact forms']),
+    ('| Security analyst | Security verifier |', ['threat model', 'coverage', 'reproductions', 'false alarms', 'fixes', 'threat model and findings', 'illustrative artifact forms']),
+    ('| Performance engineer | Performance verifier |', ['benchmark representativeness', 'baseline', 'absence of semantic regression', 'measurements and recommendations or a patch', 'illustrative artifact forms']),
+    ('| Integrator | Integration verifier |', ['entire change set', 'inter-module contracts', 'regressions', 'delivery candidate', 'illustrative artifact form']),
+    ('| Researcher | Research verifier |', ['source reliability', 'source currency', 'source coverage', 'facts from inferences', 'linked report', 'illustrative artifact form']),
+    ('| Data analyst | Analysis verifier |', ['data', 'assumptions', 'calculations', 'units', 'reproducibility', 'analysis and script or notebook', 'illustrative artifact forms']),
+    ('| Writer | Editorial/factual verifier |', ['factual correctness', 'citations', 'coherence', 'alignment with the brief', 'document', 'illustrative artifact form']),
+    ('| Delivery author | Delivery verifier |', ['report with the actual result', 'instructions with the actual result', 'final report', 'illustrative artifact form']),
+    ('- Dla bugfixu: reprodukcja problemu', ['reproduce the problem before changing', 'check the result after the change', 'explicit gap requiring other evidence', 'Do not treat inability to reproduce as implicit success']),
+    ('Orkiestrator proponuje `TeamPlan` na podstawie:', ['kind of result', 'task complexity', 'actual risks', 'dependencies', 'context size', 'project modules', 'available CLIs', 'required tools', 'quality profile', 'before starting', 'justified responsibility', 'agents without a task']),
+    ('Bootstrap korzysta z wbudowanej bazy ról', ['built-in role base', 'explicitly selected orchestrator profile', 'Permit discovery before', 'Permit requirements analysis before', 'appropriate stage in supervised mode', 'context and RiskCoverage', 'gates apply to work on the solution', 'analyses needed to develop the plan', 'own criteria', 'Do not require a completed implementation plan']),
+    ('Obowiązkowe warunki:', ['every listed team-selection condition as mandatory']),
+    ('- Każde zadanie ma właściciela, rezultat', ['Every task has an owner', 'Every task has a result', 'verifiable completion criteria']),
+    ('- Zadanie implementacyjne ma aktualne', ['current context_ready', 'current plan_ready', 'relevant model fragment', 'Do not waive', 'small change']),
+    ('- Wybór wariantu ma `solution_selected`', ['alternative choice', 'solution_selected gate', 'architecture assessment before implementation', 'input assessment before implementation', 'dependency assessment before implementation', 'extent verifiable from the plan', 'those same gates', 'code and final-integration evidence before delivery']),
+    ('- Każda uruchomiona rola wykonawcza ma przypisanego', ['independent verifier', 'every started executor role']),
+    ('- Nie ma cykli w grafie zależności zadań', ['task dependency graph is acyclic', 'management delegation graph is acyclic']),
+    ('- Każdy aktywny zapis ma określony zakres', ['Every active write', 'explicit scope', 'defined integration method']),
+    ('- Są zdefiniowane warunki eskalacji', ['escalation conditions', 'stopping conditions', 'completion conditions']),
+    ('- Każda nowa runda wskazuje nierozwiązany problem', ['unresolved problem', 'action plan', 'no numerical round limit', 'no numerical agent limit']),
+    ('Graf komunikacji może zawierać cykle.', ['Permit cycles in the communication graph', 'must not create an infinite execution loop', 'specific task', 'artifact, a decision or escalation']),
+    ('To katalog kompetencji. Każdy run obejmuje', ['competency catalog', 'Every run includes a context pair', 'requirements pair', 'options pair', 'planning pair', 'compliance pair', 'delivery pair', 'substantive orchestrator decisions', 'architecture pair', 'dependency pair', 'implementation pair', 'refactor pair', 'static-analysis pair', 'test-design pair', 'test-implementation pair', 'integration pair', 'brief but remain mandatory', 'actual threats', 'separate security or performance pair', 'Research without code', 'does not require fictitious compilation tests']),
+    ('Każda uruchomiona rola ma własnego wykonawcę', ['own executor and dedicated verifier', 'shorter artifacts', 'fewer specialist roles', 'Do not share one verifier agent between several executor roles, including small tasks', 'execute sequentially', 'does not require a permanently running CLI process', 'Do not perform refactoring when no file transformations are needed', 'mandatory refactoring assessment', 'no transformations are needed']),
+    ('Wszystkie szablony dziedziczą wspólną bazę', ['common role base', 'applicable role pairs from section 7.2', 'specialization', 'required competencies', 'required gates', 'extend the template', 'shorten queues', 'change work partitioning', 'cannot remove required verification', 'Every team composition change has a rationale', 'Every team composition change has a history event']),
     ('| Komunikacja agentów |', ['every agent', 'point-to-point', 'any current team agent', 'broadcast', 'other current team agents', 'authenticated message authorship', 'delivery state']),
     ('| Kontekst orkiestratora |', ['task reports', 'verifier decisions', 'addressed messages', 'Do not require the orchestrator to read child agent session transcripts']),
     ('| Integracje AI |', ['existing provider CLIs only', 'Do not implement a model-provider API client']),
@@ -36,6 +76,12 @@ SEMANTIC_EXPECTATIONS = [
     ('`RiskCoverage` obejmuje', ['every risk ID', 'independently verify exclusions', 'dedicated verifier', 'missing role pair', 'Do not drop a risk', 'full responsibility map']),
     ('Runtime odrzuca raport', ['empty checklist', 'missing risks', 'stale evidence', 'disallowed author', 'do not establish honest reasoning', 'newly discovered risks']),
     ('Każde przekazanie utrwala', ['negative requirements', 'provenance', 'dependent facts', 'dependent models and simulations', 'current snapshot', 'Do not plan using knowledge marked stale']),
+    ('Trwałe źródła: wymagania', ['Persist the requirements', 'Persist ContextModel', 'Persist SolutionModel', 'Persist simulation results', 'Persist quality standards', 'Persist decisions', 'Persist the plan', 'Persist contracts', 'Persist accepted artifacts', 'Persist findings', 'Persist check results', 'Persist the source index', 'relevant to its own task', 'references to the complete source materials']),
+    ('Pakiet zawiera obowiązkowo:', ['Include the objective', 'Include the scope', 'Include acceptance criteria', 'Include project instructions', 'Include constraints', 'Include the current revision', 'Include inputs', 'prohibition on self-authorized permission changes', 'Include stopping conditions', 'author of each summary', 'source references for each summary', 'Do not substitute a summary for the original source', 'After compaction, supply the key constraints', 'After compaction, verify', 'artifacts are current']),
+    ('Instrukcje projektu (np.', ['project instructions with their directory scope', 'AGENTS.md, CLAUDE.md and GEMINI.md when present', 'examples, not an exhaustive list', 'conflicting project instructions', 'explicit decision', 'discovered document or webpage', 'increase runtime permissions']),
+    ('Wiadomości przechodzą przez daemon;', ['messages through the daemon', 'before delivery', 'identifier', 'delivery receipts', 'queue inflow into memory through backpressure', 'question message type', 'answer message type', 'handoff message type', 'finding message type', 'decision message type', 'status message type', 'user_instruction message type', 'large materials using references to artifacts', 'queued messages durably when the TUI disconnects']),
+    ('Nie udajemy gwarancji exactly-once', ['Do not claim a provider exactly-once', 'Deduplicate internal events', 'Deduplicate internal operations', 'uncertain delivery as delivery_unknown', 'uncertain delivery with the actual session', 'Do not automatically repeat external actions with unknown outcomes']),
+    ('Zakresy komunikacji i subskrypcji', ['explicit communication scopes', 'explicit subscription scopes', 'broadcast for changes to shared assumptions', 'substantive conversations to specific roles', 'Limit status storms', 'Limit copying complete transcripts']),
     ('Porównywalność wynika', ['every checklist result', 'Do not lower mandatory', 'average or coverage percentage', 'checklist, requirement or material-input revision']),
 ]
 
@@ -159,6 +205,12 @@ def audit(source, ledger, atomic):
                 if len(cells) == 3 and cells[0].endswith('verifier'):
                     if len(linked) != len(cells[1].split(';')):
                         errors.append(f'line {number}: aggregate role checkbox hides components')
+            if section == '7.2' and line.startswith('|'):
+                cells=[value.strip() for value in line.strip('|').split('|')]
+                if len(cells)==4 and linked and all(c.get('atomicity')=='reviewed' for c in linked):
+                    checks=[c['obligation'] for c in linked if 'illustrative artifact form' not in c['obligation']]
+                    if not checks or not all(c.startswith(f'For the selected {cells[0]} competency,') for c in checks):
+                        errors.append(f'line {number}: role catalog loses selected-competency applicability')
         if fence:
             code = not code
         if not line.startswith(('|', '#', '```')) and not code:

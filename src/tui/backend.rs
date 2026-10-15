@@ -8,6 +8,26 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    InspectDelivery,
+    DeliverSource {
+        scope_hash: String,
+    },
+    ReconcileSourceDelivery {
+        scope_hash: String,
+        observation_hash: String,
+    },
+    RestoreSourceDeliveryBackup {
+        path: String,
+        scope_hash: String,
+    },
+    InspectWorkspace,
+    PrepareWorkspace {
+        selected: std::collections::BTreeSet<String>,
+        scope_hash: String,
+    },
+    ActivateWorkspace {
+        scope_hash: String,
+    },
     ChatMessage {
         text: String,
     },
@@ -455,6 +475,12 @@ impl Backend for IpcBackend {
                 "management recovery snapshot changed",
             )?;
             crate::require(
+                control["orchestration_recovery_document_hash"]
+                    .as_str()
+                    .is_none_or(|expected| crate::hash(&text) == expected),
+                "management recovery document differs from control snapshot",
+            )?;
+            crate::require(
                 recovery["packages"].as_object().is_some_and(|p| {
                     Some(p.len() as u64) == control["orchestration_recovery_count"].as_u64()
                 }),
@@ -462,11 +488,8 @@ impl Backend for IpcBackend {
             )?;
             control["orchestration_recoveries"] = recovery["packages"].clone();
             let captured: crate::domain::Run = serde_json::from_value(document.clone())?;
-            for value in recovery["packages"].as_object().unwrap().values() {
-                let package: crate::runtime::orchestration_recovery::Pending =
-                    serde_json::from_value(value.clone())?;
-                package.validate_for_run(&captured)?;
-            }
+            let packages = serde_json::from_value(recovery["packages"].clone())?;
+            crate::runtime::orchestration_recovery::validate_pending_for_run(&captured, &packages)?;
         }
         let snapshot = Snapshot::from_document(&document, &control);
         Ok(snapshot)
@@ -487,6 +510,18 @@ impl Backend for IpcBackend {
                 },
                 true,
             )?;
+            let accepted: crate::domain::Run = crate::transport::decode(
+                ipc::read_document(&self.state, run_id, "run")?.as_bytes(),
+            )?;
+            if accepted
+                .spec
+                .config
+                .as_ref()
+                .is_some_and(|p| p.config.workspace.mode == crate::config::WorkspaceMode::Worktree)
+            {
+                return self.act(run_id,Action::InspectWorkspace)
+                    .map(|_| "Contract accepted; observing inputs for a private workspace. Review and approve preparation next.".into());
+            }
             let planning = self.act(run_id, Action::ChatMessage { text:
                 "The displayed task contract and routing have been approved. Propose the appropriate full team with predefined roles, dedicated verifiers, its task DAG and risk owners for this approved scope. This requests read-only planning and review, not task execution.".into() });
             return Ok(planning.unwrap_or_else(|e| format!("Contract accepted; team planning submission unconfirmed: {e}. Inspect status before retrying.")));
@@ -518,6 +553,37 @@ impl Backend for IpcBackend {
         }
         let mut command = json!({"run_id":run_id});
         let kind = match &action {
+            Action::InspectDelivery => "inspect_delivery",
+            Action::DeliverSource { scope_hash } => {
+                command["scope_hash"] = json!(scope_hash);
+                "deliver_source"
+            }
+            Action::ReconcileSourceDelivery {
+                scope_hash,
+                observation_hash,
+            } => {
+                command["scope_hash"] = json!(scope_hash);
+                command["observation_hash"] = json!(observation_hash);
+                "reconcile_source_delivery"
+            }
+            Action::RestoreSourceDeliveryBackup { path, scope_hash } => {
+                command["path"] = json!(path);
+                command["scope_hash"] = json!(scope_hash);
+                "restore_source_delivery_backup"
+            }
+            Action::InspectWorkspace => "inspect_workspace",
+            Action::PrepareWorkspace {
+                selected,
+                scope_hash,
+            } => {
+                command["selected"] = json!(selected);
+                command["scope_hash"] = json!(scope_hash);
+                "prepare_workspace"
+            }
+            Action::ActivateWorkspace { scope_hash } => {
+                command["scope_hash"] = json!(scope_hash);
+                "activate_workspace"
+            }
             Action::ChatMessage { .. } | Action::AcceptIntake { .. } => {
                 unreachable!("handled above")
             }

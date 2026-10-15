@@ -69,7 +69,16 @@ pub fn validate_plan(
                 && !check.criterion_ids.is_empty()
                 && check.criterion_ids.is_subset(&task.criterion_ids)
                 && check.gate_ids.is_subset(&allowed),
-            "task check has missing/duplicate identity, invalid scope or no coverage rationale",
+            &format!(
+                "task {} check {} has missing/duplicate identity, invalid scope or no coverage rationale; foreign criteria: {:?}; unknown gate IDs: {:?}",
+                task.id,
+                check.id,
+                check
+                    .criterion_ids
+                    .difference(&task.criterion_ids)
+                    .collect::<Vec<_>>(),
+                check.gate_ids.difference(&allowed).collect::<Vec<_>>()
+            ),
         )?;
         crate::domain::Run::check_action(&check.argv)?;
         require(
@@ -86,7 +95,16 @@ pub fn validate_plan(
         let mandatory = runner_gates(role, family);
         require(
             mandatory.is_subset(&gates) && (mandatory.is_empty() || criteria == task.criterion_ids),
-            "task runner plan omits a required gate or assigned criterion",
+            &format!(
+                "task {} runner plan omits required gates {:?} or assigned criteria {:?}",
+                task.id,
+                mandatory.difference(&gates).collect::<Vec<_>>(),
+                if mandatory.is_empty() {
+                    vec![]
+                } else {
+                    task.criterion_ids.difference(&criteria).collect::<Vec<_>>()
+                }
+            ),
         )?;
     }
     Ok(())

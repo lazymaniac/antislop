@@ -129,6 +129,37 @@ impl TemplateKind {
             _ => TaskFamily::Software,
         }
     }
+    pub fn competencies(self) -> BTreeSet<CatalogRole> {
+        required_roles(self.family(), self)
+    }
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::SmallChange => {
+                "Local correction with the common base and all mandatory software pairs; artifacts may be concise but complete."
+            }
+            Self::Feature => {
+                "Feature in an existing project: context, planning, implementation by module, tests and integration with independent verification."
+            }
+            Self::Refactoring => {
+                "Structural change: context/architecture, characterization of existing behavior, refactorer-led transformations and integration with independent verification. No artificial patch is required when assessment finds no necessary transformation."
+            }
+            Self::SecurityFix => {
+                "Security correction: threat analysis and reproduction, plan, fix, adversarial tests and integration with independent verification."
+            }
+            Self::Greenfield => {
+                "New project: requirements, architecture, a vertical slice, incremental implementation, validation and milestones."
+            }
+            Self::Research => {
+                "Research question: research plan, independent areas, synthesis, source verification and synthesis verification; no fictitious compilation tests for non-code research."
+            }
+            Self::Document => {
+                "Document, specification, instructions or report: brief/outline, research when needed, writing and independent factual/editorial review."
+            }
+            Self::Analysis => {
+                "Data or alternatives analysis: plan/method, analyst, independent recalculation and synthesis review."
+            }
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -227,6 +258,27 @@ pub struct AttemptRecord {
     pub repair: Option<RepairRound>,
     #[serde(default)]
     pub source_refresh: Option<SourceRefresh>,
+    /// A verified result whose integration into the project conflicted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_conflict: Option<IntegrationConflict>,
+}
+/// Merge conflict of a verified task result with the current project. The next
+/// attempt starts from `start`: the project state with conflict markers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationConflict {
+    pub paths: BTreeSet<String>,
+    pub result: String,
+    pub view: String,
+    pub start: String,
+}
+impl IntegrationConflict {
+    pub fn finding_ids(&self) -> BTreeSet<String> {
+        self.paths
+            .iter()
+            .map(|path| format!("INTEGRATION:{path}"))
+            .collect()
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -527,7 +579,7 @@ fn required_roles(family: TaskFamily, template: TemplateKind) -> BTreeSet<Catalo
     }
     roles
 }
-fn execution_gates(family: TaskFamily) -> BTreeSet<String> {
+pub(crate) fn execution_gates(family: TaskFamily) -> BTreeSet<String> {
     let mut gates = BTreeSet::from([
         "context_ready".into(),
         "solution_selected".into(),
@@ -590,19 +642,26 @@ pub fn role_quality_gates(
 
 impl TeamPlan {
     pub fn bootstrap(family: TaskFamily, spec: &RunSpec) -> Result<Self> {
-        let template = match family {
+        require(
+            family == spec.task_family,
+            "bootstrap family differs from the task contract",
+        )?;
+        let template = spec.team_template.unwrap_or(match family {
             TaskFamily::Software => TemplateKind::SmallChange,
             TaskFamily::Research => TemplateKind::Research,
             TaskFamily::Document => TemplateKind::Document,
             TaskFamily::Analysis => TemplateKind::Analysis,
-        };
+        });
         Self::bootstrap_template(template, spec)
     }
     pub fn bootstrap_template(template: TemplateKind, spec: &RunSpec) -> Result<Self> {
         let family = template.family();
         require(
-            family == spec.task_family,
-            "template does not match task family",
+            family == spec.task_family
+                && spec
+                    .team_template
+                    .is_none_or(|selected| selected == template),
+            "template does not match the task family or reviewed selection",
         )?;
         let mut team = Self {
             schema_version: 1,
@@ -622,11 +681,12 @@ impl TeamPlan {
             .map(|r| r.id.clone())
             .collect::<BTreeSet<_>>();
         let criteria = criterion_ids(spec);
-        let primary = match family {
-            TaskFamily::Software => CatalogRole::Implementer,
-            TaskFamily::Research => CatalogRole::Researcher,
-            TaskFamily::Document => CatalogRole::Writer,
-            TaskFamily::Analysis => CatalogRole::DataAnalyst,
+        let primary = match (family, template) {
+            (TaskFamily::Software, TemplateKind::Refactoring) => CatalogRole::Refactorer,
+            (TaskFamily::Software, _) => CatalogRole::Implementer,
+            (TaskFamily::Research, _) => CatalogRole::Researcher,
+            (TaskFamily::Document, _) => CatalogRole::Writer,
+            (TaskFamily::Analysis, _) => CatalogRole::DataAnalyst,
         };
         let roles = required_roles(family, template);
         for role in roles.iter().filter(|role| **role != primary) {
@@ -662,6 +722,28 @@ impl TeamPlan {
                 requirements.clone(),
                 criteria.clone(),
             ));
+        }
+        if template == TemplateKind::SecurityFix {
+            let security = team
+                .tasks
+                .iter_mut()
+                .find(|task| task.owner_id == "executor-securityanalyst")
+                .expect("security-fix competency");
+            security.description = "Independently verify the actual fix against the original threat model and reproduction; assess adversarial scenarios, bypasses and regressions against current evidence. Unexecuted checks or missing observations remain explicit gaps, never a passing security result.".into();
+            let mut threat = TaskRecord::new(
+                "task-security-threat".into(),
+                security.owner_id.clone(),
+                security.verifier_id.clone(),
+                "Establish the source-grounded threat model and original vulnerability reproduction before planning the fix. Distinguish observed findings from hypotheses and false positives, retain original-state evidence and define adversarial acceptance scenarios. Missing reproduction requires explicit investigation and justified alternative proof; do not invent a run or grant permissions.".into(),
+                TaskStage::Discovery,
+                requirements.clone(),
+                criteria.clone(),
+            );
+            threat.dependencies.extend([
+                "task-contextanalyst".into(),
+                "task-requirementsanalyst".into(),
+            ]);
+            team.tasks.push(threat);
         }
         let plan_tasks = spec
             .plan_items
@@ -769,7 +851,6 @@ impl TeamPlan {
         {
             delivery.required_gates.extend([
                 "requirements_complete".into(),
-                "review_complete".into(),
                 "integration_verified".into(),
             ]);
         }
@@ -842,6 +923,17 @@ impl TeamPlan {
                 .unwrap()
                 .role;
             let gates = checks::runner_gates(role, family);
+            if template == TemplateKind::Refactoring
+                && task.deliverable
+                && !spec.check_command.is_empty()
+            {
+                task.check_plan.push(checks::PlannedCheck {
+                    id:"characterization-baseline".into(), argv:spec.check_command.clone(),
+                    phase:checks::CheckPhase::BeforeExecution,expected_exit_code:0,
+                    criterion_ids:task.criterion_ids.clone(),gate_ids:BTreeSet::new(),
+                    rationale:"Observe existing behavior before refactoring with the configured characterization check. This is a historical baseline, not completion of assigned criteria or a successful current gate. Independent review must establish actual existing-contract coverage and compare the post-change result; process exit zero alone is insufficient.".into(),
+                });
+            }
             if !spec.check_command.is_empty() && !gates.is_empty() {
                 task.check_plan.push(checks::PlannedCheck { id: "configured-check".into(), argv: spec.check_command.clone(), phase: checks::CheckPhase::BeforeVerification, expected_exit_code: 0,
                     criterion_ids: task.criterion_ids.clone(), gate_ids: gates,
@@ -911,8 +1003,12 @@ impl TeamPlan {
             "invalid team revision",
         )?;
         require(
-            self.family == spec.task_family && self.template.family() == self.family,
-            "team family mismatch",
+            self.family == spec.task_family
+                && self.template.family() == self.family
+                && spec
+                    .team_template
+                    .is_none_or(|selected| selected == self.template),
+            "team family or reviewed template selection mismatch",
         )?;
         require(
             self.spec_hash == hash(serde_json::to_vec(spec)?),
@@ -1120,15 +1216,26 @@ impl TeamPlan {
                 owner.role,
                 CatalogRole::Implementer | CatalogRole::Refactorer
             );
-            if task.deliverable || code_role || !task.write_scopes.is_empty() {
+            let solution_deliverable = task.deliverable && task.stage >= TaskStage::Execution;
+            if solution_deliverable || code_role || !task.write_scopes.is_empty() {
                 let family = if code_role {
                     TaskFamily::Software
                 } else {
                     self.family
                 };
+                let missing = execution_gates(family)
+                    .difference(&task.required_gates)
+                    .cloned()
+                    .collect::<Vec<_>>();
                 require(
-                    execution_gates(family).is_subset(&task.required_gates),
-                    "implementation or solution-writing task lacks current implementation gates",
+                    missing.is_empty(),
+                    &format!(
+                        "implementation or solution-writing task {} ({:?}, {:?}) lacks current implementation gates: {}",
+                        task.id,
+                        owner.role,
+                        task.stage,
+                        missing.join(", ")
+                    ),
                 )?;
             }
             checks::validate_plan(task, false, owner.role, self.family)?;
@@ -1190,7 +1297,14 @@ impl TeamPlan {
             requirements == required_requirements
                 && criteria == required_criteria
                 && plans == required_plans,
-            "deliverable requirement, criterion or original-plan coverage incomplete",
+            &format!(
+                "deliverable requirement, criterion or original-plan coverage incomplete; missing requirements {:?}; missing criteria {:?}; missing plan items {:?}",
+                required_requirements
+                    .difference(&requirements)
+                    .collect::<Vec<_>>(),
+                required_criteria.difference(&criteria).collect::<Vec<_>>(),
+                required_plans.difference(&plans).collect::<Vec<_>>()
+            ),
         )?;
         require(
             owners.len()
@@ -1251,7 +1365,16 @@ impl TeamPlan {
             require(
                 item.requirement_ids.is_subset(&mapped_requirements)
                     && expected_criteria.is_subset(&mapped_criteria),
-                "original plan item requirement or criterion coverage incomplete",
+                &format!(
+                    "original plan item {} requirement or criterion coverage incomplete; missing requirements {:?}; missing criteria {:?}",
+                    item.id,
+                    item.requirement_ids
+                        .difference(&mapped_requirements)
+                        .collect::<Vec<_>>(),
+                    expected_criteria
+                        .difference(&mapped_criteria)
+                        .collect::<Vec<_>>()
+                ),
             )?;
         }
         // Original user-plan dependencies must survive expansion, even when
@@ -1281,6 +1404,9 @@ impl TeamPlan {
     }
     pub fn validate_all(&mut self, spec: &RunSpec, config: &Config) -> Result<()> {
         self.validate(spec)?;
+        if self.tasks.iter().any(|task| !task.check_plan.is_empty()) {
+            config.policy.authorize_project_check(true)?;
+        }
         let mut candidate = self.clone();
         for agent in &mut candidate.agents {
             agent.profile = Some(config.resolve(agent.role.work_kind(), agent.kind)?);
@@ -1376,7 +1502,17 @@ impl TeamPlan {
                 .artifact
                 .as_ref()
                 .ok_or_else(|| Error::Invalid("repair history lacks its pinned artifact".into()))?;
-            if let Some(refresh) = &historical.source_refresh {
+            if let Some(conflict) = &historical.integration_conflict {
+                require(
+                    historical.source_refresh.is_none()
+                        && historical.review.as_ref().is_some_and(|r| r.accepted)
+                        && !conflict.paths.is_empty()
+                        && historical.repair.as_ref().is_some_and(|r| {
+                            r.finding_ids == conflict.finding_ids() && text(&r.plan)
+                        }),
+                    "integration repair must preserve an accepted result and name its conflicts",
+                )?;
+            } else if let Some(refresh) = &historical.source_refresh {
                 require(
                     historical.repair.is_none()
                         && historical.review.as_ref().is_none_or(|r| r.accepted)
@@ -1621,6 +1757,7 @@ impl TeamPlan {
             review: task.review.take(),
             repair: None,
             source_refresh: Some(refresh),
+            integration_conflict: None,
         });
         task.repair = None;
         task.state = TaskState::Planned;
@@ -1816,11 +1953,53 @@ impl TeamPlan {
             review: task.review.take(),
             repair: Some(repair.clone()),
             source_refresh: None,
+            integration_conflict: None,
         });
         task.repair = Some(repair);
         task.state = TaskState::Planned;
         task.diagnostic = None;
         Ok(())
+    }
+    /// Send a verified result whose integration conflicted back to its owner.
+    /// The accepted review stays in history; the next attempt resolves the
+    /// conflict markers and is independently verified again.
+    pub fn request_integration_repair(
+        &mut self,
+        task_id: &str,
+        conflict: IntegrationConflict,
+    ) -> Result<()> {
+        let task = self
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| Error::Invalid("unknown task".into()))?;
+        require(
+            task.state == TaskState::Verified
+                && task.artifact.is_some()
+                && task.review.as_ref().is_some_and(|r| r.accepted)
+                && !conflict.paths.is_empty(),
+            "integration repair needs a verified result and its conflicts",
+        )?;
+        let repair = RepairRound {
+            finding_ids: conflict.finding_ids(),
+            plan: format!(
+                "Integrating the verified result into the project conflicted in {:?}. Your task worktree now holds the current project state with three-way conflict markers (<<<<<<< project / ||||||| base / >>>>>>> task) in those files. Resolve every marker so the files keep the project's newer changes and your task's intent, re-propose complete files and keep all assigned criteria satisfied.",
+                conflict.paths
+            ),
+        };
+        task.history.push(AttemptRecord {
+            attempt: task.attempt,
+            artifact: task.artifact.take(),
+            review: task.review.take(),
+            repair: Some(repair.clone()),
+            source_refresh: None,
+            integration_conflict: Some(conflict),
+        });
+        task.repair = Some(repair);
+        task.state = TaskState::Planned;
+        task.diagnostic = None;
+        let task = task.clone();
+        self.validate_history(&task)
     }
     /// Preserve unknown effects after a crash; caller reconciles before deciding
     /// whether a replacement attempt is authorized. No implicit replay/reset.

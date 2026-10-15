@@ -11,6 +11,7 @@ fn fixture(family: TaskFamily) -> (tempfile::TempDir, Run) {
     let run = Run::new(
         id(),
         RunSpec {
+            team_template: None,
             task_family: family,
             config: None,
             objective: "Verify the agreed contract".into(),
@@ -393,6 +394,7 @@ fn fixed_stage_review_cannot_assert_an_unapproved_native_task_change_contract() 
         contract_hash: "unapproved-contract".into(),
         kind: architect::team::changes::ChangeKind::Feature,
         classification_assessment: "Unsupported native task proof in a fixed stage".into(),
+        non_defect_assessments: Default::default(),
         classification_evidence_ids: BTreeSet::from([run.evidence[0].id.clone()]),
         bugfixes: vec![],
     });

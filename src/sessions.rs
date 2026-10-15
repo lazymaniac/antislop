@@ -27,6 +27,37 @@ pub struct SessionScope {
     pub configuration_hash: String,
 }
 impl SessionScope {
+    /// Authenticate completed work against its actual policy revision. Mode
+    /// transitions do not rewrite old sessions or authorize a new reservation.
+    pub(crate) fn matches_run(
+        &self,
+        run: &Run,
+        agent_id: String,
+        task_id: Option<String>,
+        role: RoleKind,
+    ) -> Result<bool> {
+        let mut expected = Self::for_run(
+            run,
+            agent_id,
+            task_id,
+            role,
+            self.provider.clone(),
+            self.binary_version.clone(),
+        )?;
+        if run.mode_changes.is_empty() {
+            return Ok(*self == expected);
+        }
+        let configurations = run.mode_configurations()?;
+        if let Some(config) = configurations.iter().find(|config| {
+            config.content_hash == self.configuration_hash
+                && config.config.policy.revision == self.policy_revision
+        }) {
+            expected.configuration_hash = config.content_hash.clone();
+            expected.policy_revision = config.config.policy.revision;
+        }
+        Ok(*self == expected)
+    }
+
     pub fn for_run(
         run: &Run,
         agent_id: String,
@@ -135,7 +166,18 @@ impl OutputRef {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+pub struct RejectedOutput {
+    pub reason: String,
+    pub hash: String,
+    pub output: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct TurnRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_output: Option<RejectedOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<crate::context::transport::Transport>,
     pub id: String,
     pub session_id: String,
     pub prompt_hash: String,
@@ -159,6 +201,8 @@ impl TurnRecord {
         context_packet_hash: Option<String>,
     ) -> Result<Self> {
         let turn = Self {
+            rejected_output: None,
+            context: None,
             id,
             session_id,
             prompt_hash,
@@ -176,6 +220,28 @@ impl TurnRecord {
         Ok(turn)
     }
     fn validate(&self) -> Result<()> {
+        if let Some(rejected) = &self.rejected_output {
+            require(
+                rejected.reason == "incomplete_context"
+                    && rejected.hash == hash(&rejected.output)
+                    && !self.provider_completed
+                    && self.state != TurnState::Completed
+                    && self.context.as_ref().is_some_and(|c| c.complete().is_err()),
+                "rejected native output changed or became an accepted turn",
+            )?;
+        }
+        if let Some(context) = &self.context {
+            context.validate()?;
+            require(
+                context.bundle.scope.turn_id == self.id
+                    && context.bundle.scope.prompt_hash == self.prompt_hash
+                    && context.bundle.scope.schema_hash == self.schema_hash,
+                "context does not belong to this prepared turn",
+            )?;
+            if self.provider_completed || self.state == TurnState::Completed {
+                context.complete()?;
+            }
+        }
         require(
             text(&self.id)
                 && text(&self.session_id)
@@ -216,6 +282,17 @@ pub struct SessionLedger {
 }
 pub type Persist<'a> = dyn FnMut(&SessionLedger, &str) -> Result<()> + 'a;
 impl SessionLedger {
+    pub fn validate_for_run(&self, run_id: &str) -> Result<()> {
+        self.validate()?;
+        require(
+            self.turns.values().all(|turn| {
+                turn.context
+                    .as_ref()
+                    .is_none_or(|c| c.bundle.scope.run_id == run_id)
+            }),
+            "context transport belongs to another run",
+        )
+    }
     pub fn validate(&self) -> Result<()> {
         let mut ordered = BTreeSet::new();
         for id in &self.turn_order {
@@ -261,6 +338,15 @@ impl SessionLedger {
                 "turn map or managed session mismatch",
             )?;
             turn.validate()?;
+            if let Some(context) = &turn.context {
+                let scope = &self.sessions[&turn.session_id].scope;
+                require(
+                    context.matches_provider(&scope.provider)
+                        && context.bundle.scope.spec_revision == scope.spec_revision
+                        && context.bundle.scope.input_hash == scope.input_hash,
+                    "persisted context differs from its session scope",
+                )?;
+            }
         }
         Ok(())
     }
@@ -389,6 +475,10 @@ impl SessionLedger {
         persist: &mut Persist<'_>,
     ) -> Result<()> {
         let event_turn = match event {
+            ProviderEvent::OutputRejected { turn_id, .. } => Some(turn_id.as_str()),
+            ProviderEvent::ContextPrepared { turn_id, .. }
+            | ProviderEvent::ContextRead { turn_id, .. }
+            | ProviderEvent::ContextObserved { turn_id, .. } => Some(turn_id.as_str()),
             ProviderEvent::DeliveryPendingUnknown { turn_id }
             | ProviderEvent::DeliveryPending { turn_id, .. }
             | ProviderEvent::DeliverySent { turn_id }
@@ -427,6 +517,59 @@ impl SessionLedger {
                     "callback after terminal/unknown turn state",
                 )?;
                 match event {
+                    ProviderEvent::OutputRejected { output, .. } => {
+                        require(
+                            turn.state == TurnState::Sent
+                                && session.native_observed
+                                && turn.rejected_output.is_none()
+                                && !turn.provider_completed
+                                && turn.context.as_ref().is_some_and(|c| c.complete().is_err()),
+                            "native rejection lacks an incomplete context turn",
+                        )?;
+                        turn.rejected_output = Some(RejectedOutput {
+                            reason: "incomplete_context".into(),
+                            hash: hash(output),
+                            output: output.clone(),
+                        });
+                    }
+                    ProviderEvent::ContextPrepared { transport, .. } => {
+                        require(
+                            turn.state == TurnState::PendingUnknown
+                                && turn.context.is_none()
+                                && transport.matches_provider(&session.scope.provider)
+                                && transport.bundle.scope.spec_revision
+                                    == session.scope.spec_revision
+                                && transport.bundle.scope.input_hash == session.scope.input_hash
+                                && transport.receipts.is_empty()
+                                && transport.observed.is_empty(),
+                            "context preparation is out of scope or after native delivery",
+                        )?;
+                        turn.context = Some(*transport.clone());
+                    }
+                    ProviderEvent::ContextRead { receipt, .. } => {
+                        require(
+                            turn.state == TurnState::Sent && session.native_observed,
+                            "context read before observed native delivery",
+                        )?;
+                        turn.context
+                            .as_mut()
+                            .ok_or_else(|| {
+                                crate::Error::Invalid("context was not prepared".into())
+                            })?
+                            .accept(receipt.clone())?;
+                    }
+                    ProviderEvent::ContextObserved { sequence, .. } => {
+                        require(
+                            turn.state == TurnState::Sent && session.native_observed,
+                            "context observation before native delivery",
+                        )?;
+                        turn.context
+                            .as_mut()
+                            .ok_or_else(|| {
+                                crate::Error::Invalid("context was not prepared".into())
+                            })?
+                            .observe(*sequence)?;
+                    }
                     ProviderEvent::DeliveryPendingUnknown { .. } => require(
                         turn.state == TurnState::PendingUnknown,
                         "unknown delivery intent out of order",

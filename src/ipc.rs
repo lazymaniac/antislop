@@ -16,6 +16,8 @@ use std::os::{
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub(crate) mod management_projection;
+
 pub const PROTOCOL_VERSION: u32 = 2;
 pub const DOCUMENT_CHUNK: usize = 256 * 1024;
 #[derive(Debug, Serialize, Deserialize)]
@@ -233,9 +235,21 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
                 Ok(summary(&runtime.dispatch(&key, *command)?))
             }
             Operation::Snapshot { run_id } => {
-                let store = runtime.store.lock().expect("store mutex");
-                let run = store.get(&run_id)?;
-                let (document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
+                let (run, document_hash, data_directory, sequence) = {
+                    let store = runtime.store.lock().expect("store mutex");
+                    let run = store.get(&run_id)?;
+                    let (document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
+                    (
+                        run,
+                        document_hash,
+                        store.data_directory()?,
+                        store.sequence()?,
+                    )
+                };
+                let management =
+                    runtime
+                        .management_projection
+                        .view(run.clone(), document_hash.clone(), true)?;
                 let reviewed = run.orchestration_rounds.last().filter(|round| {
                     round.status == crate::orchestration::planning::RoundStatus::Reviewed
                         && round
@@ -250,13 +264,21 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
                             .is_some_and(|r| r.team_plan_json.is_some())
                 });
                 let intake = crate::runtime::intake::pending(&run);
+                let prepare_workspace = crate::workspace::managed::pending(&run, &data_directory)
+                    .ok()
+                    .map(|p| p.scope_hash.clone());
                 Ok(
                     json!({"reviewed_intake_proposal":intake,"document_hash":document_hash,"scope_hashes":{"start":run.scope_hash("start"),"accept":run.scope_hash("accept"),"repair":run.scope_hash("repair"),"reconcile":run.scope_hash("reconcile"),
                         "orchestrate":crate::orchestration::planning::start_scope(&run)?,"accept_team":reviewed.map(|r|crate::orchestration::planning::accept_scope(&run,r)).transpose()?,
-                        "review_diff":run.diff_review_scope().unwrap_or_default(),
+                        "review_diff":crate::runtime::diff_review::scope(&run).unwrap_or_default(),
                         "step_team":run.team_step_scope().unwrap_or_default()},
                     "team_stage_results":stage_result_summary(&crate::runtime::team::stage::pending(&run)),
                     "task_result_restore_count":crate::runtime::team::restore::scopes(&run).len(),
+                    "workspace_preparation_scope":prepare_workspace,
+                    "workspace_activation_scope":crate::workspace::managed::activation_scope(&run).ok(),
+                    "source_delivery_scope":crate::runtime::delivery::pending(&run).ok().map(|p|&p.scope_hash),
+                    "source_delivery_inspection_available":crate::runtime::delivery::eligible(&run).is_ok(),
+                    "source_delivery_recovery":crate::runtime::delivery::recovery(&run).ok(),
                     "task_effect_reconciliation_count":crate::runtime::team::adjudicate::scopes(&run).len(),
                     "wave_effect_reconciliation_count":crate::runtime::team::adjudicate::pending_waves(&run).len(),
                     "task_source_refreshes":run.team.as_ref().map(|team| team.tasks.iter()
@@ -270,9 +292,11 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
                     "task_session_resume_count":crate::runtime::team::resume::pending(&run).len(),
                     "task_session_replacement_count":crate::runtime::team::replacement::pending(&run).len(),
                     "task_check_restore_count":crate::runtime::team::check_recovery::pending(&run).len(),
-                    "orchestration_recovery_count":crate::runtime::orchestration_recovery::pending(&run).len(),
+                    "orchestration_recovery_count":management.document().map_or(0, |d|d.count),
+                    "orchestration_recovery_state":management.state(),
+                    "orchestration_recovery_document_hash":management.document().map(|d|&d.hash),
                     "reviewed_team_round":reviewed.map(|r|&r.id),
-                    "run":summary(&run),"recovery":recovery_snapshot(&run),"sequence":store.sequence()?}),
+                    "run":summary(&run),"recovery":recovery_snapshot(&run),"sequence":sequence}),
                 )
             }
             Operation::List => list_page(runtime, ""),
@@ -304,18 +328,30 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
                         "next_offset":if end < total { Some(end) } else { None },"chunk":chunk}));
                 }
                 let run = store.get(&run_id)?;
+                let (run_document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
+                drop(store);
+                if document == "orchestration-recovery" {
+                    let view =
+                        runtime
+                            .management_projection
+                            .view(run, run_document_hash, offset == 0)?;
+                    let document = view.document().ok_or_else(|| {
+                        crate::Error::Invalid(
+                            "management recovery is being checked; refresh the snapshot".into(),
+                        )
+                    })?;
+                    return document_page(
+                        &document.text,
+                        &document.hash,
+                        offset,
+                        expected_hash.as_deref(),
+                    );
+                }
                 let text = if document == "stage-results" {
-                    let (run_document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
                     serde_json::to_string(
                         &json!({"run_document_hash":run_document_hash,"packages":crate::runtime::team::stage::pending(&run)}),
                     )?
-                } else if document == "orchestration-recovery" {
-                    let (run_document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
-                    serde_json::to_string(
-                        &json!({"run_document_hash":run_document_hash,"packages":crate::runtime::orchestration_recovery::pending(&run)}),
-                    )?
                 } else if document == "task-recovery" {
-                    let (run_document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
                     serde_json::to_string(
                         &json!({"run_document_hash":run_document_hash,"result_restores":crate::runtime::team::restore::scopes(&run),"effect_reconciliations":crate::runtime::team::adjudicate::scopes(&run),"wave_effect_reconciliations":crate::runtime::team::adjudicate::pending_waves(&run),"native_resumes":crate::runtime::team::resume::pending(&run),"replacements":crate::runtime::team::replacement::pending(&run),"check_restores":crate::runtime::team::check_recovery::pending(&run)}),
                     )?
@@ -323,26 +359,7 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
                     document_text(&run, &document)?
                 };
                 let digest = crate::hash(&text);
-                require(
-                    expected_hash.as_ref().is_none_or(|h| h == &digest),
-                    "document changed; restart from offset zero",
-                )?;
-                require(
-                    offset == 0 || expected_hash.is_some(),
-                    "continuation requires document hash",
-                )?;
-                require(
-                    offset <= text.len() && text.is_char_boundary(offset),
-                    "invalid document offset",
-                )?;
-                let mut end = offset.saturating_add(DOCUMENT_CHUNK).min(text.len());
-                while !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                Ok(
-                    json!({"hash":digest,"total_bytes":text.len(),"offset":offset,
-                    "next_offset":if end < text.len() { Some(end) } else { None },"chunk":&text[offset..end]}),
-                )
+                document_page(&text, &digest, offset, expected_hash.as_deref())
             }
             Operation::Events { after } => {
                 let store = runtime.store.lock().expect("store mutex");
@@ -366,6 +383,33 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
             error: Some(error.to_string()),
         },
     }
+}
+fn document_page(
+    text: &str,
+    digest: &str,
+    offset: usize,
+    expected_hash: Option<&str>,
+) -> Result<Value> {
+    require(
+        expected_hash.is_none_or(|h| h == digest),
+        "document changed; restart from offset zero",
+    )?;
+    require(
+        offset == 0 || expected_hash.is_some(),
+        "continuation requires document hash",
+    )?;
+    require(
+        offset <= text.len() && text.is_char_boundary(offset),
+        "invalid document offset",
+    )?;
+    let mut end = offset.saturating_add(DOCUMENT_CHUNK).min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Ok(
+        json!({"hash":digest,"total_bytes":text.len(),"offset":offset,
+        "next_offset":if end < text.len() { Some(end) } else { None },"chunk":&text[offset..end]}),
+    )
 }
 pub fn call(state: &Path, request: &Request) -> Result<Response> {
     private_directory(state)?;
@@ -452,7 +496,7 @@ fn document_text(run: &crate::domain::Run, name: &str) -> Result<String> {
     if name == "diff" {
         let diff = crate::workspace::compute_diff(
             std::path::Path::new(&run.spec.workspace),
-            &run.input_snapshot,
+            run.diff_baseline(),
         )?;
         return Ok(serde_json::to_string(&diff)?);
     }

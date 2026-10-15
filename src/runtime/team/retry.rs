@@ -1,6 +1,6 @@
 //! Explicit verifier-only recovery with current native authorship and immutable executor output.
 use super::*;
-use crate::sessions::{SessionScope, TurnRecord, TurnState};
+use crate::sessions::{TurnRecord, TurnState};
 use crate::team::{TaskRecord, VerificationRetry};
 
 fn scoped_turn<'a>(
@@ -39,15 +39,9 @@ fn scoped_turn<'a>(
         .resolve(agent.role.work_kind(), agent.kind)?
         .provider;
     require(
-        session.scope
-            == SessionScope::for_run(
-                &staged,
-                agent.id.clone(),
-                Some(task.id.clone()),
-                agent.kind,
-                session.scope.provider.clone(),
-                session.scope.binary_version.clone(),
-            )?
+        session
+            .scope
+            .matches_run(&staged, agent.id.clone(), Some(task.id.clone()), agent.kind)?
             && serde_json::to_value(configured)?.as_str() == Some(session.scope.provider.as_str()),
         "task recovery session scope is stale or belongs to another role",
     )?;
@@ -105,7 +99,7 @@ fn previous_session(run: &Run, task_id: &str) -> Result<Option<String>> {
         run.checklist_version == crate::domain::checklist_version(),
         "task checklist changed",
     )?;
-    run.session_ledger.validate()?;
+    run.session_ledger.validate_for_run(&run.id)?;
     let team = run
         .team
         .as_ref()

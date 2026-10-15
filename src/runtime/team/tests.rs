@@ -26,6 +26,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Runtime>, Run) {
 }
 fn edit() -> FileEdit {
     FileEdit {
+        operation: crate::domain::FileOperation::Write,
         path: "source.txt".into(),
         content: "after".into(),
     }
@@ -61,6 +62,7 @@ fn mediated_team_write_retains_real_before_after_receipts_and_respects_cancel() 
             .apply_task_edits(
                 &current,
                 &[FileEdit {
+                    operation: crate::domain::FileOperation::Write,
                     path: "source.txt".into(),
                     content: "late".into()
                 }],

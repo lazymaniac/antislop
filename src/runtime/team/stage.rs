@@ -85,7 +85,7 @@ fn record_current(run: &Run, approval: &ResultApproval) -> bool {
             .as_ref()
             .is_some_and(|t| approval.team_revision == t.revision)
         && approval.checklist_version == run.checklist_version
-        && approval.configuration_hash == configuration(run)
+        && run.mode_configuration_matches(&approval.configuration_hash)
         && approval.source_hashes == run.source_hashes()
         && approval.scope_hash == approval_scope(&run.id, approval)
         && run.approvals.iter().any(|a| {
@@ -311,23 +311,53 @@ pub(crate) fn accept(
 pub(super) fn require_final_gates(run: &Run) -> Result<()> {
     require_final_gates_in(run.spec.task_family, &gate_context(run))
 }
-pub(super) fn require_final_gates_in(family: TaskFamily, context: &GateContext) -> Result<()> {
+
+pub fn delivery_binding(run: &Run) -> Result<String> {
     require(
-        crate::quality::gate_definitions()
+        run.status == Status::Completed && !run.reconciliation_required,
+        "delivery requires a completed reconciled task",
+    )?;
+    let results = current_results(run)?;
+    let accepted = accepted_ids_for(run, &results);
+    require(
+        run.team
+            .as_ref()
+            .unwrap()
+            .tasks
             .iter()
-            .filter(|g| !g.software_only || family == TaskFamily::Software)
-            .all(|g| {
-                context
-                    .gates
-                    .get(&crate::quality::gate_check_id(&g.gate_id, g.phase))
-                    .is_some_and(|gate| {
-                        gate.passed
-                            && gate.spec_revision == context.spec_revision
-                            && gate.source_hashes == context.source_hashes
-                            && !gate.evidence_refs.is_empty()
-                    })
-            }),
-        "final quality gates are incomplete or stale",
+            .all(|task| results.contains_key(&task.id) && accepted.contains(&task.id)),
+        "delivery requires independently authenticated and accepted results for the entire team",
+    )?;
+    require_final_gates(run)?;
+    Ok(hash(serde_json::to_vec(&(
+        &run.id,
+        run.spec_revision,
+        run.source_hashes(),
+        results,
+        &run.team_result_approvals,
+    ))?))
+}
+pub(super) fn require_final_gates_in(family: TaskFamily, context: &GateContext) -> Result<()> {
+    let missing = crate::quality::gate_definitions()
+        .iter()
+        .filter(|g| !g.software_only || family == TaskFamily::Software)
+        .filter_map(|g| {
+            let key = crate::quality::gate_check_id(&g.gate_id, g.phase);
+            let current = context.gates.get(&key).is_some_and(|gate| {
+                gate.passed
+                    && gate.spec_revision == context.spec_revision
+                    && gate.source_hashes == context.source_hashes
+                    && !gate.evidence_refs.is_empty()
+            });
+            (!current).then_some(key)
+        })
+        .collect::<Vec<_>>();
+    require(
+        missing.is_empty(),
+        &format!(
+            "final quality gates are incomplete or stale: {}",
+            missing.join(", ")
+        ),
     )
 }
 
@@ -364,7 +394,10 @@ mod tests {
         context.gates.remove(&qualified);
         assert!(context.gates.contains_key("architecture_verified"));
         assert!(
-            require_final_gates_in(TaskFamily::Software, &context).is_err(),
+            require_final_gates_in(TaskFamily::Software, &context)
+                .unwrap_err()
+                .to_string()
+                .contains(&qualified),
             "design evidence cannot replace delivery evidence through a short alias"
         );
         context.gates.insert(qualified.clone(), binding.clone());

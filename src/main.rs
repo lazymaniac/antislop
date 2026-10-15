@@ -21,6 +21,18 @@ fn run() -> Result<()> {
     if verb == "__supervise" {
         return architect::process::supervise(&args[2..]);
     }
+    if verb == "__context" {
+        architect::require(args.len() == 5, "__context requires BUNDLE HASH RECEIPTS")?;
+        return architect::context::stdio::serve_file(
+            std::path::Path::new(&args[2]),
+            &args[3],
+            std::path::Path::new(&args[4]),
+        );
+    }
+    if verb == "__context-connect" {
+        architect::require(args.len() == 3, "__context-connect requires SOCKET")?;
+        return architect::context::bridge::connect(std::path::Path::new(&args[2]));
+    }
     if verb == "ui" {
         return architect::tui::run_options(architect::tui::options::Options::parse(&args[2..])?);
     }
@@ -402,6 +414,9 @@ fn run() -> Result<()> {
                 "\n--- {} [{:?}] (+{} / -{}) ---",
                 file.path, file.status, file.additions, file.deletions
             );
+            if let Some(change) = &file.metadata_change {
+                println!("{change}");
+            }
             let file_comments: Vec<_> = run
                 .diff_comments
                 .iter()
@@ -429,6 +444,26 @@ fn run() -> Result<()> {
                         }
                     }
                 }
+            }
+        }
+        for review in &run.diff_reviews {
+            println!(
+                "\nIndependent candidate review {} [{:?}] — {}",
+                review.id, review.state, review.diff_hash
+            );
+            if let Some(response) = &review.response {
+                println!(
+                    "{:?}: {}\n{}",
+                    response.status,
+                    architect::tui::sanitize::sanitize(&response.method),
+                    architect::tui::sanitize::sanitize(&response.rationale)
+                );
+                for finding in &response.findings {
+                    println!("  - {}", architect::tui::sanitize::sanitize(finding));
+                }
+            }
+            if let Some(diagnostic) = &review.diagnostic {
+                println!("{}", architect::tui::sanitize::sanitize(diagnostic));
             }
         }
         return Ok(());
@@ -493,6 +528,47 @@ fn run() -> Result<()> {
         }
         return Ok(());
     }
+    if matches!(verb, "inspect-delivery" | "deliver-source") {
+        architect::require(
+            if verb == "inspect-delivery" {
+                args.len() == 4
+            } else {
+                args.len() == 5 && args[4] == "--approve-scoped"
+            },
+            "inspect-delivery requires STATE RUN_ID; deliver-source requires STATE RUN_ID --approve-scoped",
+        )?;
+        let run: architect::domain::Run = architect::transport::decode(
+            ipc::read_document(&state, arg(&args, 3)?, "run")?.as_bytes(),
+        )?;
+        let command = if verb == "inspect-delivery" {
+            Command::InspectDelivery {
+                run_id: run.id.clone(),
+            }
+        } else {
+            Command::DeliverSource {
+                run_id: run.id.clone(),
+                scope_hash: architect::runtime::delivery::pending(&run)?
+                    .scope_hash
+                    .clone(),
+            }
+        };
+        let response = ipc::call(
+            &state,
+            &Request {
+                version: ipc::PROTOCOL_VERSION,
+                request_id: architect::id(),
+                idempotency_key: Some(architect::id()),
+                operation: Operation::Mutate {
+                    command: Box::new(command),
+                },
+            },
+        )?;
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        if let Some(error) = response.error {
+            return Err(architect::Error::Invalid(error));
+        }
+        return Ok(());
+    }
     if verb == "review-diff" {
         architect::require(
             args.len() == 5 && args.get(4).map(String::as_str) == Some("--approve-scoped"),
@@ -502,7 +578,7 @@ fn run() -> Result<()> {
             ipc::read_document(&state, arg(&args, 3)?, "run")?.as_bytes(),
         )?;
         architect::require(run.id == arg(&args, 3)?, "mismatched run document")?;
-        let scope_hash = run.diff_review_scope()?;
+        let scope_hash = architect::runtime::diff_review::scope(&run)?;
         let command = Command::ReviewDiff {
             run_id: run.id.clone(),
             scope_hash,
@@ -526,7 +602,7 @@ fn run() -> Result<()> {
     }
     if verb == "help" || verb == "--help" {
         println!(
-            "antislop resume-orchestration STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop replace-orchestration STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop restore-orchestration STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop orchestrate STATE_DIR RUN_ID --approve-scoped\nantislop accept-intake STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop accept-team STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop step-team STATE_DIR RUN_ID --approve-scoped\nantislop accept-team-stage STATE_DIR RUN_ID STAGE --approve-scoped\nantislop repair-task STATE_DIR RUN_ID TASK_ID PLAN --approve-scoped\nantislop replace-task-session STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop resume-task-session STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop retry-task-verification STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop refresh-task-sources STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop restore-task-check-result STATE_DIR RUN_ID INVOCATION_ID --approve-scoped\nantislop restore-task-result STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop reconcile-task-effects STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop reconcile-wave-effects STATE_DIR RUN_ID WAVE_ATTEMPT --approve-scoped\nantislop diff STATE_DIR RUN_ID\nantislop comment STATE_DIR RUN_ID PATH [--line N] TEXT\nantislop delete-comment STATE_DIR RUN_ID COMMENT_ID\nantislop review-diff STATE_DIR RUN_ID --approve-scoped\n"
+            "antislop resume-orchestration STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop replace-orchestration STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop restore-orchestration STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop orchestrate STATE_DIR RUN_ID --approve-scoped\nantislop accept-intake STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop accept-team STATE_DIR RUN_ID ROUND_ID --approve-scoped\nantislop step-team STATE_DIR RUN_ID --approve-scoped\nantislop accept-team-stage STATE_DIR RUN_ID STAGE --approve-scoped\nantislop repair-task STATE_DIR RUN_ID TASK_ID PLAN --approve-scoped\nantislop replace-task-session STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop resume-task-session STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop retry-task-verification STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop refresh-task-sources STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop restore-task-check-result STATE_DIR RUN_ID INVOCATION_ID --approve-scoped\nantislop restore-task-result STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop reconcile-task-effects STATE_DIR RUN_ID TASK_ID --approve-scoped\nantislop reconcile-wave-effects STATE_DIR RUN_ID WAVE_ATTEMPT --approve-scoped\nantislop diff STATE_DIR RUN_ID\nantislop comment STATE_DIR RUN_ID PATH [--line N] TEXT\nantislop delete-comment STATE_DIR RUN_ID COMMENT_ID\nantislop review-diff STATE_DIR RUN_ID --approve-scoped\nantislop inspect-delivery STATE_DIR RUN_ID\nantislop deliver-source STATE_DIR RUN_ID --approve-scoped\n"
         );
         println!(
             "antislop local prototype\n\nantislop daemon STATE_DIR\nantislop ui [STATE_DIR] [RUN_ID] [--orchestrator codex|claude|gemini|agy]\nantislop run STATE_DIR SPEC.json --approve-scoped [MAX_REPAIRS] [TIMEOUT_SECONDS]\nantislop follow STATE_DIR RUN_ID SPEC.json --approve-scoped [MAX_REPAIRS] [TIMEOUT_SECONDS]\nantislop check STATE_DIR RUN_ID ARGV.json --approve-scoped\nantislop verify STATE_DIR RUN_ID --approve-scoped\nantislop request STATE_DIR < request.json\nantislop create STATE_DIR SPEC.json\nantislop snapshot STATE_DIR RUN_ID\nantislop workspace-snapshot DIRECTORY [ADDITIONAL_PATH ...]\nantislop list STATE_DIR\nantislop export STATE_DIR RUN_ID\nantislop events STATE_DIR CURSOR\n\nrun/follow delegate approvals only for the immutable supplied spec and its local check argv.\nMAX_REPAIRS is the total persisted repair budget; time is unlimited unless explicitly bounded.\nOther mutations require explicit idempotency keys via request. Stage approvals use scope_hashes from snapshot."

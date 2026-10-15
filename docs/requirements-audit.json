@@ -8,13 +8,550 @@
   "scope": {
     "source_fragments": 1146,
     "obligation_or_proposal_fragments": 814,
-    "interpretation_units": 1443,
-    "reviewed_atomic_units": 513,
-    "semantic_anchor_count": 17,
-    "remaining_parent_reviews": 474
+    "interpretation_units": 1638,
+    "reviewed_atomic_units": 795,
+    "semantic_anchor_count": 63,
+    "remaining_parent_reviews": 428
   },
   "errors": [],
   "semantic_checks": [
+    {
+      "source_line": 139,
+      "anchor": "| `supervised` |",
+      "checks": [
+        "before starting each stage",
+        "every correction round",
+        "each final stage result",
+        "may also present and approve the explicit scope of the next stage",
+        "optional combined approval, not implicit authorization",
+        "do not automatically open a correction round after a verifier rejects"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 140,
+      "anchor": "| `autonomous` |",
+      "checks": [
+        "opens successive stages after their applicable gates are satisfied",
+        "opens correction rounds after their applicable gates are satisfied",
+        "local work within the policy",
+        "local tests within the policy",
+        "local commits within the policy",
+        "separate approval for push",
+        "separate approval for publication",
+        "separate approval for external messages",
+        "separate approval for destructive operations",
+        "necessary product decision may require the user"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 142,
+      "anchor": "Zmiana trybu jest jawna, zapisana",
+      "checks": [
+        "mode change explicit",
+        "Persist every autonomy-mode change",
+        "future actions",
+        "Do not retrospectively approve prior changes",
+        "Do not remove verifier concerns",
+        "scope invalidates the affected approvals",
+        "scope requires reassessment"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 144,
+      "anchor": "Oddzielamy zgodę na **etap**",
+      "checks": [
+        "approval of a stage from approval of an action",
+        "does not authorize push",
+        "does not authorize publication",
+        "does not authorize external messages",
+        "does not authorize destructive operations",
+        "only the specified task changes",
+        "must not include unrelated user changes"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 279,
+      "anchor": "| Orchestrator | Orchestration verifier |",
+      "checks": [
+        "selected Orchestrator competency",
+        "substantive team changes",
+        "substantive scope changes",
+        "substantive strategy changes",
+        "decisions align with the objective",
+        "TeamPlan change proposal or a management decision",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 280,
+      "anchor": "| Context analyst | Context verifier |",
+      "checks": [
+        "actual behavior",
+        "sources",
+        "dependency coverage",
+        "applicable standards",
+        "closure of unknowns",
+        "ContextModel",
+        "verified knowledge register",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 281,
+      "anchor": "| Requirements analyst | Requirements verifier |",
+      "checks": [
+        "alignment with user intent",
+        "contradictions",
+        "acceptance-criteria completeness",
+        "specification and criteria map",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 282,
+      "anchor": "| Planner | Plan verifier |",
+      "checks": [
+        "abstract model",
+        "invariants",
+        "independent simulation",
+        "counterexamples",
+        "scope",
+        "evidence completeness",
+        "SolutionModel, SimulationReport and a task DAG",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 283,
+      "anchor": "| Options analyst | Options verifier |",
+      "checks": [
+        "available alternatives",
+        "comparison fairness",
+        "evidence",
+        "uncertainty",
+        "selecting the best solution",
+        "OptionsAnalysis and SolutionDecision",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 284,
+      "anchor": "| Architect | Architecture verifier |",
+      "checks": [
+        "fit with the project",
+        "simplicity",
+        "reuse of existing solutions",
+        "ADRs and module contracts",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 285,
+      "anchor": "| Dependency analyst | Dependency verifier |",
+      "checks": [
+        "alternatives to custom code",
+        "dependency provenance",
+        "licenses",
+        "dependency security",
+        "dependency maintenance cost",
+        "DependencyDecision and LicenseReport",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 286,
+      "anchor": "| Implementer | Code verifier |",
+      "checks": [
+        "model conformance",
+        "standards conformance",
+        "requirements conformance",
+        "simplicity",
+        "responsibilities",
+        "absence of unnecessary additions",
+        "patch, TraceabilityMap and a standards report",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 287,
+      "anchor": "| Refactorer | Refactor verifier |",
+      "checks": [
+        "closure of solution debt",
+        "preservation of contracts",
+        "structural improvement",
+        "absence of speculative abstractions",
+        "RefactorReport, a patch and behavior-preservation evidence",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 288,
+      "anchor": "| Static analysis operator | Static analysis verifier |",
+      "checks": [
+        "analyzer coverage",
+        "configurations",
+        "absence of unresolved concerns",
+        "absence of rule-weakening attempts",
+        "StaticAnalysisReport and raw results",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 289,
+      "anchor": "| Compliance auditor | Compliance verifier |",
+      "checks": [
+        "every requirement",
+        "every step of the full plan",
+        "realization quality",
+        "absence of extraction gaps",
+        "evidence is current",
+        "ComplianceAudit and RequirementLedger accounting",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 290,
+      "anchor": "| Test designer | Test design verifier |",
+      "checks": [
+        "scenarios derive from requirements",
+        "scenarios detect probable defects",
+        "test plan and requirements map",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 291,
+      "anchor": "| Test implementer | Test verifier |",
+      "checks": [
+        "assertions",
+        "actual execution paths",
+        "isolation",
+        "mocks",
+        "test resilience",
+        "tests and execution results",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 292,
+      "anchor": "| Security analyst | Security verifier |",
+      "checks": [
+        "threat model",
+        "coverage",
+        "reproductions",
+        "false alarms",
+        "fixes",
+        "threat model and findings",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 293,
+      "anchor": "| Performance engineer | Performance verifier |",
+      "checks": [
+        "benchmark representativeness",
+        "baseline",
+        "absence of semantic regression",
+        "measurements and recommendations or a patch",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 294,
+      "anchor": "| Integrator | Integration verifier |",
+      "checks": [
+        "entire change set",
+        "inter-module contracts",
+        "regressions",
+        "delivery candidate",
+        "illustrative artifact form"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 295,
+      "anchor": "| Researcher | Research verifier |",
+      "checks": [
+        "source reliability",
+        "source currency",
+        "source coverage",
+        "facts from inferences",
+        "linked report",
+        "illustrative artifact form"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 296,
+      "anchor": "| Data analyst | Analysis verifier |",
+      "checks": [
+        "data",
+        "assumptions",
+        "calculations",
+        "units",
+        "reproducibility",
+        "analysis and script or notebook",
+        "illustrative artifact forms"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 297,
+      "anchor": "| Writer | Editorial/factual verifier |",
+      "checks": [
+        "factual correctness",
+        "citations",
+        "coherence",
+        "alignment with the brief",
+        "document",
+        "illustrative artifact form"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 298,
+      "anchor": "| Delivery author | Delivery verifier |",
+      "checks": [
+        "report with the actual result",
+        "instructions with the actual result",
+        "final report",
+        "illustrative artifact form"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 794,
+      "anchor": "- Dla bugfixu: reprodukcja problemu",
+      "checks": [
+        "reproduce the problem before changing",
+        "check the result after the change",
+        "explicit gap requiring other evidence",
+        "Do not treat inability to reproduce as implicit success"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 258,
+      "anchor": "Orkiestrator proponuje `TeamPlan` na podstawie:",
+      "checks": [
+        "kind of result",
+        "task complexity",
+        "actual risks",
+        "dependencies",
+        "context size",
+        "project modules",
+        "available CLIs",
+        "required tools",
+        "quality profile",
+        "before starting",
+        "justified responsibility",
+        "agents without a task"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 260,
+      "anchor": "Bootstrap korzysta z wbudowanej bazy ról",
+      "checks": [
+        "built-in role base",
+        "explicitly selected orchestrator profile",
+        "Permit discovery before",
+        "Permit requirements analysis before",
+        "appropriate stage in supervised mode",
+        "context and RiskCoverage",
+        "gates apply to work on the solution",
+        "analyses needed to develop the plan",
+        "own criteria",
+        "Do not require a completed implementation plan"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 262,
+      "anchor": "Obowiązkowe warunki:",
+      "checks": [
+        "every listed team-selection condition as mandatory"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 264,
+      "anchor": "- Każde zadanie ma właściciela, rezultat",
+      "checks": [
+        "Every task has an owner",
+        "Every task has a result",
+        "verifiable completion criteria"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 265,
+      "anchor": "- Zadanie implementacyjne ma aktualne",
+      "checks": [
+        "current context_ready",
+        "current plan_ready",
+        "relevant model fragment",
+        "Do not waive",
+        "small change"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 266,
+      "anchor": "- Wybór wariantu ma `solution_selected`",
+      "checks": [
+        "alternative choice",
+        "solution_selected gate",
+        "architecture assessment before implementation",
+        "input assessment before implementation",
+        "dependency assessment before implementation",
+        "extent verifiable from the plan",
+        "those same gates",
+        "code and final-integration evidence before delivery"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 267,
+      "anchor": "- Każda uruchomiona rola wykonawcza ma przypisanego",
+      "checks": [
+        "independent verifier",
+        "every started executor role"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 268,
+      "anchor": "- Nie ma cykli w grafie zależności zadań",
+      "checks": [
+        "task dependency graph is acyclic",
+        "management delegation graph is acyclic"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 269,
+      "anchor": "- Każdy aktywny zapis ma określony zakres",
+      "checks": [
+        "Every active write",
+        "explicit scope",
+        "defined integration method"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 270,
+      "anchor": "- Są zdefiniowane warunki eskalacji",
+      "checks": [
+        "escalation conditions",
+        "stopping conditions",
+        "completion conditions"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 271,
+      "anchor": "- Każda nowa runda wskazuje nierozwiązany problem",
+      "checks": [
+        "unresolved problem",
+        "action plan",
+        "no numerical round limit",
+        "no numerical agent limit"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 273,
+      "anchor": "Graf komunikacji może zawierać cykle.",
+      "checks": [
+        "Permit cycles in the communication graph",
+        "must not create an infinite execution loop",
+        "specific task",
+        "artifact, a decision or escalation"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 300,
+      "anchor": "To katalog kompetencji. Każdy run obejmuje",
+      "checks": [
+        "competency catalog",
+        "Every run includes a context pair",
+        "requirements pair",
+        "options pair",
+        "planning pair",
+        "compliance pair",
+        "delivery pair",
+        "substantive orchestrator decisions",
+        "architecture pair",
+        "dependency pair",
+        "implementation pair",
+        "refactor pair",
+        "static-analysis pair",
+        "test-design pair",
+        "test-implementation pair",
+        "integration pair",
+        "brief but remain mandatory",
+        "actual threats",
+        "separate security or performance pair",
+        "Research without code",
+        "does not require fictitious compilation tests"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 302,
+      "anchor": "Każda uruchomiona rola ma własnego wykonawcę",
+      "checks": [
+        "own executor and dedicated verifier",
+        "shorter artifacts",
+        "fewer specialist roles",
+        "Do not share one verifier agent between several executor roles, including small tasks",
+        "execute sequentially",
+        "does not require a permanently running CLI process",
+        "Do not perform refactoring when no file transformations are needed",
+        "mandatory refactoring assessment",
+        "no transformations are needed"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 317,
+      "anchor": "Wszystkie szablony dziedziczą wspólną bazę",
+      "checks": [
+        "common role base",
+        "applicable role pairs from section 7.2",
+        "specialization",
+        "required competencies",
+        "required gates",
+        "extend the template",
+        "shorten queues",
+        "change work partitioning",
+        "cannot remove required verification",
+        "Every team composition change has a rationale",
+        "Every team composition change has a history event"
+      ],
+      "result": "pass"
+    },
     {
       "source_line": 55,
       "anchor": "| Komunikacja agentów |",
@@ -207,6 +744,110 @@
         "dependent models and simulations",
         "current snapshot",
         "Do not plan using knowledge marked stale"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 683,
+      "anchor": "Trwałe źródła: wymagania",
+      "checks": [
+        "Persist the requirements",
+        "Persist ContextModel",
+        "Persist SolutionModel",
+        "Persist simulation results",
+        "Persist quality standards",
+        "Persist decisions",
+        "Persist the plan",
+        "Persist contracts",
+        "Persist accepted artifacts",
+        "Persist findings",
+        "Persist check results",
+        "Persist the source index",
+        "relevant to its own task",
+        "references to the complete source materials"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 685,
+      "anchor": "Pakiet zawiera obowiązkowo:",
+      "checks": [
+        "Include the objective",
+        "Include the scope",
+        "Include acceptance criteria",
+        "Include project instructions",
+        "Include constraints",
+        "Include the current revision",
+        "Include inputs",
+        "prohibition on self-authorized permission changes",
+        "Include stopping conditions",
+        "author of each summary",
+        "source references for each summary",
+        "Do not substitute a summary for the original source",
+        "After compaction, supply the key constraints",
+        "After compaction, verify",
+        "artifacts are current"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 687,
+      "anchor": "Instrukcje projektu (np.",
+      "checks": [
+        "project instructions with their directory scope",
+        "AGENTS.md, CLAUDE.md and GEMINI.md when present",
+        "examples, not an exhaustive list",
+        "conflicting project instructions",
+        "explicit decision",
+        "discovered document or webpage",
+        "increase runtime permissions"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 693,
+      "anchor": "Wiadomości przechodzą przez daemon;",
+      "checks": [
+        "messages through the daemon",
+        "before delivery",
+        "identifier",
+        "delivery receipts",
+        "queue inflow into memory through backpressure",
+        "question message type",
+        "answer message type",
+        "handoff message type",
+        "finding message type",
+        "decision message type",
+        "status message type",
+        "user_instruction message type",
+        "large materials using references to artifacts",
+        "queued messages durably when the TUI disconnects"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 695,
+      "anchor": "Nie udajemy gwarancji exactly-once",
+      "checks": [
+        "Do not claim a provider exactly-once",
+        "Deduplicate internal events",
+        "Deduplicate internal operations",
+        "uncertain delivery as delivery_unknown",
+        "uncertain delivery with the actual session",
+        "Do not automatically repeat external actions with unknown outcomes"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 697,
+      "anchor": "Zakresy komunikacji i subskrypcji",
+      "checks": [
+        "explicit communication scopes",
+        "explicit subscription scopes",
+        "broadcast for changes to shared assumptions",
+        "substantive conversations to specific roles",
+        "Limit status storms",
+        "Limit copying complete transcripts"
       ],
       "result": "pass"
     },
@@ -740,59 +1381,6 @@
         "R-c44ef2553bf71e42b943"
       ],
       "reason": "This single candidate has not yet received a source-to-interpretation review and a concrete independently testable acceptance oracle.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-6.2-94c677885af6-1",
-      "source_line": 139,
-      "section": "6.2",
-      "original_text": "| `supervised` | Użytkownik zatwierdza rozpoczęcie każdego etapu, każdą rundę poprawek i końcowy wynik etapu. Karta akceptacji wyniku może jednocześnie przedstawiać i zatwierdzać zakres następnego etapu. Nie otwieramy automatycznie rundy poprawek po odrzuceniu wyniku przez verifiera. |",
-      "candidate_ids": [
-        "R-d0d7daf7ee1dbb59280d",
-        "R-c8dd832ecab0ae33b4c0",
-        "R-f9b91a4ec7bdbe2e6599"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-6.2-8167cb21db8b-1",
-      "source_line": 140,
-      "section": "6.2",
-      "original_text": "| `autonomous` | Runtime otwiera kolejne etapy i rundy poprawek po spełnieniu bramek. Dopuszczalne są praca lokalna, testy i lokalne commity. Push, publikacja, wiadomości zewnętrzne i operacje destrukcyjne wymagają osobnej zgody. Brak niezbędnej decyzji produktowej może wymagać użytkownika. |",
-      "candidate_ids": [
-        "R-c8e6e60cd7b6fd3f0e8a",
-        "R-79dc8c603fe543f03cf0",
-        "R-4284d3196f1bb9428cf8",
-        "R-c60a979060439442f537"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-6.2-f92c0f419598-1",
-      "source_line": 142,
-      "section": "6.2",
-      "original_text": "Zmiana trybu jest jawna, zapisana i obowiązuje dla kolejnych działań. Nie zatwierdza wstecz zmian ani nie usuwa uwag weryfikatorów. Zmiana zaakceptowanego zakresu unieważnia odpowiednie zgody i wymaga ponownej oceny.",
-      "candidate_ids": [
-        "R-c257386f7ed9c632a183",
-        "R-c21373ec69fd553944d3",
-        "R-3d74b35a6000dbfad301"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-6.2-52c9d479fe7f-1",
-      "source_line": 144,
-      "section": "6.2",
-      "original_text": "Oddzielamy zgodę na **etap** od zgody na **działanie**. Zgoda na lokalną implementację nie oznacza zgody na push, publikację, zewnętrzną wiadomość lub destrukcyjną operację. Lokalny commit obejmuje wyłącznie wskazane zmiany zadania; nie dołącza przypadkowych zmian użytkownika.",
-      "candidate_ids": [
-        "R-1701d64afd53e07fc9b2",
-        "R-60bf38c906d959aefc09",
-        "R-661542c1e0fc21646ef7"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
       "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
     },
     {
@@ -1502,396 +2090,6 @@
       "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
     },
     {
-      "parent_id": "D-7.1-e20f5bcb8b83-1",
-      "source_line": 258,
-      "section": "7.1",
-      "original_text": "Orkiestrator proponuje `TeamPlan` na podstawie: rodzaju rezultatu, złożoności, ryzyka, zależności, wielkości kontekstu, modułów projektu, dostępnych CLI, potrzebnych narzędzi i profilu jakości. Runtime waliduje plan przed uruchomieniem. Każdy dodany agent ma uzasadnioną odpowiedzialność; brak limitów nie oznacza uruchamiania agentów bez zadania.",
-      "candidate_ids": [
-        "R-e061728c3f3d7b595e7a",
-        "R-6f8fb7b9470acd5897f7",
-        "R-5c04d8dec621e494d9a3"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-9c6ce6b87839-1",
-      "source_line": 260,
-      "section": "7.1",
-      "original_text": "Bootstrap korzysta z wbudowanej bazy ról i jawnie wybranego profilu orkiestratora. Może uruchomić discovery i analizę wymagań przed powstaniem pełnego planu implementacji; w supervised wymaga zgody na właściwy etap. Orkiestrator rozszerza skład po zebraniu kontekstu i RiskCoverage. Bramki implementacji dotyczą pracy nad rozwiązaniem; analizy niezbędne do opracowania planu mają własne kryteria i nie wymagają gotowego planu implementacji.",
-      "candidate_ids": [
-        "R-23927b3ee9a969103b97",
-        "R-358699e0e81b6eb6c0f6",
-        "R-7ece6492209145a4aa49",
-        "R-3168f1c5d2a6e6783a37"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-f863a9decbdc-1",
-      "source_line": 262,
-      "section": "7.1",
-      "original_text": "Obowiązkowe warunki:",
-      "candidate_ids": [
-        "R-68a0494e734b5aca0a98"
-      ],
-      "reason": "This single candidate has not yet received a source-to-interpretation review and a concrete independently testable acceptance oracle.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-1bfa5726696d-1",
-      "source_line": 264,
-      "section": "7.1",
-      "original_text": "- Każde zadanie ma właściciela, rezultat i sprawdzalne kryteria zakończenia.",
-      "candidate_ids": [
-        "R-a2b2b6aecb6eb690be1e"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-49727312bcec-1",
-      "source_line": 265,
-      "section": "7.1",
-      "original_text": "- Zadanie implementacyjne ma aktualne `context_ready` i `plan_ready` oraz powiązany fragment modelu; bramka nie jest pomijana dla małej zmiany.",
-      "candidate_ids": [
-        "R-94ffdde2d5c1a616e078"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-b7da43f6be23-1",
-      "source_line": 266,
-      "section": "7.1",
-      "original_text": "- Wybór wariantu ma `solution_selected`; ocena architektury, wejść i zależności jest gotowa przed implementacją w zakresie możliwym do sprawdzenia na planie. Dowody z kodu i finalnej integracji domykają te same bramki przed dostarczeniem.",
-      "candidate_ids": [
-        "R-ee910deaed0ab52a439b",
-        "R-f9fcb80afda270622f30"
-      ],
-      "reason": "Multiple candidate sentences share one parent; antecedents and integration obligations have not been independently reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-38e46b6f80c2-1",
-      "source_line": 267,
-      "section": "7.1",
-      "original_text": "- Każda uruchomiona rola wykonawcza ma przypisanego niezależnego weryfikatora.",
-      "candidate_ids": [
-        "R-0ed34c726448777290c1"
-      ],
-      "reason": "This single candidate has not yet received a source-to-interpretation review and a concrete independently testable acceptance oracle.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-06e268c880d8-1",
-      "source_line": 268,
-      "section": "7.1",
-      "original_text": "- Nie ma cykli w grafie zależności zadań ani w delegacji zarządczej.",
-      "candidate_ids": [
-        "R-94f14422401f8fdfc25c"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-a1393ebfc0db-1",
-      "source_line": 269,
-      "section": "7.1",
-      "original_text": "- Każdy aktywny zapis ma określony zakres i sposób integracji.",
-      "candidate_ids": [
-        "R-5454987ac5908d92bd29"
-      ],
-      "reason": "This candidate contains a list or conjunction that may conceal separately testable obligations; automatic punctuation splitting would risk losing scope.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-5b99e8a4fe79-1",
-      "source_line": 270,
-      "section": "7.1",
-      "original_text": "- Są zdefiniowane warunki eskalacji, zatrzymania i zakończenia.",
-      "candidate_ids": [
-        "R-d8d9bf6b9c81e7df4063"
-      ],
-      "reason": "This candidate contains a list or conjunction that may conceal separately testable obligations; automatic punctuation splitting would risk losing scope.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-d862603bcbad-1",
-      "source_line": 271,
-      "section": "7.1",
-      "original_text": "- Każda nowa runda wskazuje nierozwiązany problem i plan działania. MVP nie narzuca liczbowego limitu rund ani agentów.",
-      "candidate_ids": [
-        "R-148cbf4a23f9193b36a5",
-        "R-887575d0f7dfa6e291e7"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.1-59056c1bdf29-1",
-      "source_line": 273,
-      "section": "7.1",
-      "original_text": "Graf komunikacji może zawierać cykle. Cykle rozmowy nie mogą tworzyć nieskończonej pętli wykonawczej. Rozmowy dotyczą konkretnego zadania i kończą się artefaktem, decyzją albo eskalacją.",
-      "candidate_ids": [
-        "R-b3978df612cfb77b1142",
-        "R-b391ab2101e7559460ae",
-        "R-f89477972c9c341bf483"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-5d3f21822d72-1",
-      "source_line": 279,
-      "section": "7.2",
-      "original_text": "| Orchestrator | Orchestration verifier | Merytoryczne zmiany zespołu, zakresu i strategii oraz zgodność decyzji z celem. | Propozycja zmiany TeamPlan lub decyzja zarządcza. |",
-      "candidate_ids": [
-        "R-20aeeb7269e7f04e8b03"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-8b48443fd50f-1",
-      "source_line": 280,
-      "section": "7.2",
-      "original_text": "| Context analyst | Context verifier | Faktyczne zachowanie, źródła, pokrycie zależności, standardy i zamknięcie niewiadomych. | ContextModel i rejestr sprawdzonej wiedzy. |",
-      "candidate_ids": [
-        "R-1de6cced2357c7139733"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-7ddbec41e45f-1",
-      "source_line": 281,
-      "section": "7.2",
-      "original_text": "| Requirements analyst | Requirements verifier | Zgodność z intencją, sprzeczności, kompletność kryteriów. | Specyfikacja i mapa kryteriów. |",
-      "candidate_ids": [
-        "R-e709998d93defb8d0d0a"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-a05b1dd4fca5-1",
-      "source_line": 282,
-      "section": "7.2",
-      "original_text": "| Planner | Plan verifier | Model abstrakcyjny, niezmienniki, niezależna symulacja, kontrprzykłady, zakres i kompletność dowodów. | SolutionModel, SimulationReport i DAG zadań. |",
-      "candidate_ids": [
-        "R-a05037f8933d5e7b7914"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-fdff6acd50ec-1",
-      "source_line": 283,
-      "section": "7.2",
-      "original_text": "| Options analyst | Options verifier | Pokrycie dostępnych wariantów, uczciwość porównania, dowody, niepewność i zasadność wyboru najlepszego rozwiązania. | OptionsAnalysis i SolutionDecision. |",
-      "candidate_ids": [
-        "R-f64046a836a5a99863ea"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-a726182c016a-1",
-      "source_line": 284,
-      "section": "7.2",
-      "original_text": "| Architect | Architecture verifier | Dopasowanie do projektu, prostota, wykorzystanie istniejących rozwiązań. | ADR/kontrakty modułów. |",
-      "candidate_ids": [
-        "R-647762cd505523c69df2"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-e7b6e09c8325-1",
-      "source_line": 285,
-      "section": "7.2",
-      "original_text": "| Dependency analyst | Dependency verifier | Alternatywy dla własnego kodu, pochodzenie, licencje, bezpieczeństwo i koszt utrzymania zależności. | DependencyDecision i LicenseReport. |",
-      "candidate_ids": [
-        "R-0a08be4a9a9f01fec633"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-5827a0956799-1",
-      "source_line": 286,
-      "section": "7.2",
-      "original_text": "| Implementer | Code verifier | Zgodność z modelem, standardami i wymaganiami, prostota, odpowiedzialności i brak dodatków. | Patch, TraceabilityMap i raport standardów. |",
-      "candidate_ids": [
-        "R-670f44004e311fe26c9d"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-3650c2e330a1-1",
-      "source_line": 287,
-      "section": "7.2",
-      "original_text": "| Refactorer | Refactor verifier | Domknięcie długu w rozwiązaniu, zachowanie kontraktów, poprawa struktury i brak spekulacyjnych abstrakcji. | RefactorReport, patch i dowody zachowania. |",
-      "candidate_ids": [
-        "R-9c2ac662717cb78e526e"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-fe666c3c817b-1",
-      "source_line": 288,
-      "section": "7.2",
-      "original_text": "| Static analysis operator | Static analysis verifier | Pokrycie analizatorów, konfiguracje, brak zastrzeżeń i prób osłabienia reguł. | StaticAnalysisReport z surowymi wynikami. |",
-      "candidate_ids": [
-        "R-43d55347cbd640d0fe93"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-da76fdd04fef-1",
-      "source_line": 289,
-      "section": "7.2",
-      "original_text": "| Compliance auditor | Compliance verifier | Wszystkie wymagania i kroki pełnego planu, jakość realizacji, brak luk w ekstrakcji i aktualność dowodów. | ComplianceAudit i rozliczenie RequirementLedger. |",
-      "candidate_ids": [
-        "R-96358b1b810818fe6a98"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-32862e7cb7f9-1",
-      "source_line": 290,
-      "section": "7.2",
-      "original_text": "| Test designer | Test design verifier | Czy scenariusze wynikają z wymagań i wykrywają prawdopodobne błędy. | Plan testów i mapa wymagań. |",
-      "candidate_ids": [
-        "R-685c593958b17bb3f2db"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-e9cb77519de0-1",
-      "source_line": 291,
-      "section": "7.2",
-      "original_text": "| Test implementer | Test verifier | Asercje, rzeczywiste ścieżki, izolacja, mocki, odporność testów. | Testy i wyniki uruchomienia. |",
-      "candidate_ids": [
-        "R-eb09ed1b08743230ac13"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-3dad754a0448-1",
-      "source_line": 292,
-      "section": "7.2",
-      "original_text": "| Security analyst | Security verifier | Model zagrożeń, pokrycie, reprodukcje, fałszywe alarmy i naprawy. | Threat model i findings. |",
-      "candidate_ids": [
-        "R-ec9cb0e939f9a8fb0388"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-86b4f560e71e-1",
-      "source_line": 293,
-      "section": "7.2",
-      "original_text": "| Performance engineer | Performance verifier | Reprezentatywność benchmarku, baseline i brak regresji semantyki. | Pomiar i rekomendacje/patch. |",
-      "candidate_ids": [
-        "R-6519cdf012ba92a3bba1"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-ed96fd1afbe6-1",
-      "source_line": 294,
-      "section": "7.2",
-      "original_text": "| Integrator | Integration verifier | Cały zestaw zmian, kontrakty między modułami, regresje. | Kandydat do dostarczenia. |",
-      "candidate_ids": [
-        "R-53e09d73a506f4c18961"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-6c3aa016da63-1",
-      "source_line": 295,
-      "section": "7.2",
-      "original_text": "| Researcher | Research verifier | Wiarygodność, aktualność i pokrycie źródeł, fakty kontra wnioski. | Raport z odnośnikami. |",
-      "candidate_ids": [
-        "R-38e483a98f7533bf5f55"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-deea2e445d9a-1",
-      "source_line": 296,
-      "section": "7.2",
-      "original_text": "| Data analyst | Analysis verifier | Dane, założenia, obliczenia, jednostki, reprodukowalność. | Analiza i skrypt/notebook. |",
-      "candidate_ids": [
-        "R-c1b97dfc40faa101682a"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-f1876f8d649b-1",
-      "source_line": 297,
-      "section": "7.2",
-      "original_text": "| Writer | Editorial/factual verifier | Poprawność merytoryczna, cytowania, spójność, zgodność z briefem. | Dokument. |",
-      "candidate_ids": [
-        "R-de863253b5f1becb320e"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-2a19bdc53258-1",
-      "source_line": 298,
-      "section": "7.2",
-      "original_text": "| Delivery author | Delivery verifier | Czy raport i instrukcje odpowiadają faktycznemu rezultatowi. | Raport końcowy. |",
-      "candidate_ids": [
-        "R-fe14a85afe260d544917"
-      ],
-      "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-403958b5ac33-1",
-      "source_line": 300,
-      "section": "7.2",
-      "original_text": "To katalog kompetencji. Każdy run obejmuje pary context, requirements, options, planning, compliance i delivery oraz kontrolę merytorycznych decyzji orkiestratora. Zadanie programistyczne dodatkowo obejmuje architecture, dependency, implementation, refactor, static analysis, test design, test implementation i integration; ocena może być krótka, lecz obowiązkowa. Pozostałe pary dobieramy do rzeczywistych zagrożeń; RiskCoverage może wymusić np. osobną parę security lub performance. Research bez kodu nie wymaga fikcyjnych testów kompilacji.",
-      "candidate_ids": [
-        "R-a0d570d90072b8792558",
-        "R-32c231c10ee6f4583267",
-        "R-5e4426e901323c357363",
-        "R-bbd54e060e6e40ff92e6",
-        "R-f71d45e8381c20c178b0"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.2-7c0130625242-1",
-      "source_line": 302,
-      "section": "7.2",
-      "original_text": "Każda uruchomiona rola ma własnego wykonawcę i dedykowanego verifiera. Małe zadanie ma krótsze artefakty i może mieć mniej ról specjalistycznych, lecz nie współdzieli jednego agenta weryfikującego pomiędzy kilkoma rolami wykonawczymi. Agenci mogą działać kolejno; członek zespołu nie musi mieć stale uruchomionego procesu CLI. Nie wykonujemy refaktoru bez potrzeby zmiany plików; w takim przypadku wymagana ocena może wykazać brak potrzebnych transformacji.",
-      "candidate_ids": [
-        "R-e905d805129dff36a822",
-        "R-cdde15b6d61a22d00bde",
-        "R-d1c58a0d675d1810e3d9",
-        "R-a2ffa870eaa9527e2be0"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
       "parent_id": "D-7.3-153bdefe7e65-1",
       "source_line": 308,
       "section": "7.3",
@@ -1977,20 +2175,6 @@
         "R-9b233a1089069f48671a"
       ],
       "reason": "This table row combines a domain label with content/method/outcome cells; independent acceptance obligations inside the cells have not been individually reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-7.3-9c4d48ad1c90-1",
-      "source_line": 317,
-      "section": "7.3",
-      "original_text": "Wszystkie szablony dziedziczą wspólną bazę i właściwe pary z sekcji 7.2; tabela opisuje ich specjalizację. Szablon określa wymagane kompetencje i bramki. Orkiestrator może go rozszerzyć, skrócić kolejki lub zmienić podział pracy, ale nie usunąć wymaganej weryfikacji. Każda zmiana składu ma uzasadnienie i zdarzenie w historii.",
-      "candidate_ids": [
-        "R-d3571cd67e64837b1056",
-        "R-5f957e377a337fefb6ea",
-        "R-92ce884d3c5d690e6022",
-        "R-eb1c97e62b215364f2f9"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
       "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
     },
     {
@@ -3074,84 +3258,6 @@
       "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
     },
     {
-      "parent_id": "D-10.3-823227f1ca0a-1",
-      "source_line": 683,
-      "section": "10.3",
-      "original_text": "Trwałe źródła: wymagania, ContextModel, SolutionModel, wyniki symulacji, standardy jakości, decyzje, plan, kontrakty, zaakceptowane artefakty, findings, wyniki sprawdzeń i indeks źródeł. Agent otrzymuje pakiet związany z własnym zadaniem, z referencjami do pełnych materiałów.",
-      "candidate_ids": [
-        "R-879a7d12a3d12ff71bbd",
-        "R-cb3d80398fb990b91ae4"
-      ],
-      "reason": "Multiple candidate sentences share one parent; antecedents and integration obligations have not been independently reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-10.3-f213b8a52402-1",
-      "source_line": 685,
-      "section": "10.3",
-      "original_text": "Pakiet zawiera obowiązkowo: cel, zakres, kryteria, instrukcje projektu, ograniczenia, aktualną rewizję, inputy, zakaz samodzielnej zmiany uprawnień i warunki zatrzymania. Streszczenie ma autora i odnośniki; nie zastępuje oryginału. Po kompakcji agent ponownie otrzymuje kluczowe ograniczenia i sprawdza aktualność artefaktów.",
-      "candidate_ids": [
-        "R-69baf7786289da288eb2",
-        "R-048ccb270215e09d984b",
-        "R-28cb481604d512346a68"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-10.3-f56a2de17cbb-1",
-      "source_line": 687,
-      "section": "10.3",
-      "original_text": "Instrukcje projektu (np. AGENTS.md, CLAUDE.md, GEMINI.md) są ewidencjonowane z zakresem katalogów. Sprzeczności wymagają jawnej decyzji. Treść znalezionego dokumentu lub strony nie może zwiększyć uprawnień runtime.",
-      "candidate_ids": [
-        "R-61d1e420fb7b4e4037c6",
-        "R-f51595771a663264c46b",
-        "R-56ef1f29808e7610acb9",
-        "R-aad61d77c240b77c0aaa"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-10.4-46915d3de7a3-1",
-      "source_line": 693,
-      "section": "10.4",
-      "original_text": "Wiadomości przechodzą przez daemon; zapis przed dostarczeniem, identyfikator, receipt i kolejka z kontrolą napływu do pamięci. Typy: `question`, `answer`, `handoff`, `finding`, `decision`, `status`, `user_instruction`. Duże materiały są referencjami do artefaktów; kolejka trwała nie gubi ich po odłączeniu TUI.",
-      "candidate_ids": [
-        "R-8e448879fa3254c3f3c1",
-        "R-5ebc29e92952618676c0",
-        "R-cfafb71e240c26f38fc3"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-10.4-aa5ccd725f4e-1",
-      "source_line": 695,
-      "section": "10.4",
-      "original_text": "Nie udajemy gwarancji exactly-once u dostawcy. Wewnętrzne zdarzenia i operacje mają deduplikację; przy niepewnym dostarczeniu stan `delivery_unknown` wymaga uzgodnienia z sesją. Nie ponawiamy automatycznie działań zewnętrznych o nieznanym wyniku.",
-      "candidate_ids": [
-        "R-9f044afbb8f52bf0ffb4",
-        "R-a1a0bd6eae89cf0d9d5a",
-        "R-a81061840ddc121ff9f3"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-10.4-69ae2b935b45-1",
-      "source_line": 697,
-      "section": "10.4",
-      "original_text": "Zakresy komunikacji i subskrypcji są jawne. Broadcast służy zmianie wspólnych założeń; rozmowy merytoryczne są kierowane do konkretnych ról. Ograniczamy burze statusów i kopiowanie całych transkryptów.",
-      "candidate_ids": [
-        "R-6c91716fac54b986eca2",
-        "R-817cc875c69fd11c0ce4",
-        "R-964e058148b708e1a041"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
       "parent_id": "D-11.1-25a26ee664b0-1",
       "source_line": 703,
       "section": "11.1",
@@ -3699,18 +3805,6 @@
       "original_text": "- Każde wymaganie i istotny niezmiennik ma właściwą metodę weryfikacji; testy zachowania są wyprowadzane z modelu i kontraktów, bez kopiowania algorytmu implementacji.",
       "candidate_ids": [
         "R-406459c8512ab6e45bc7"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-12.2.5-8f6cd94cb021-1",
-      "source_line": 794,
-      "section": "12.2.5",
-      "original_text": "- Dla bugfixu: reprodukcja problemu przed zmianą i sprawdzenie po zmianie. Brak możliwości reprodukcji jest jawną luką wymagającą innego dowodu, nie domyślnym sukcesem.",
-      "candidate_ids": [
-        "R-c62c6b8ea12a0851590d",
-        "R-77ac3981edeaef1c75ae"
       ],
       "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
       "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."

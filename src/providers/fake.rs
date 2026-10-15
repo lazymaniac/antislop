@@ -106,6 +106,33 @@ impl Provider for FakeProvider {
         let output = if request
             .schema
             .get("properties")
+            .and_then(|p| p.get("diff_hash"))
+            .is_some()
+        {
+            let context: serde_json::Value = serde_json::Deserializer::from_str(
+                request
+                    .prompt
+                    .split("Immutable diff review context: ")
+                    .nth(1)
+                    .ok_or_else(|| crate::Error::Invalid("fake diff context missing".into()))?,
+            )
+            .into_iter()
+            .next()
+            .transpose()?
+            .ok_or_else(|| crate::Error::Invalid("fake diff context empty".into()))?;
+            let rejected = request.run.spec.objective.contains("[reject]");
+            serde_json::to_string(&serde_json::json!({
+                "diff_hash":context["diff_hash"], "input_hash":context["input_hash"],
+                "spec_revision":context["spec_revision"],
+                "status":if rejected {"fail"} else {"pass"},
+                "method":"Synthetic diff-review transport fixture",
+                "rationale":"Synthetic fixture; no real code quality is established",
+                "findings":if rejected {vec!["Synthetic defect"]} else {vec![]},
+                "agent_messages":[]
+            }))?
+        } else if request
+            .schema
+            .get("properties")
             .and_then(|p| p.get("team_plan_json"))
             .is_some()
         {

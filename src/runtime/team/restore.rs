@@ -1,6 +1,6 @@
 //! Restore a completed, durably applied executor result without repeating a turn or effect.
 use super::*;
-use crate::sessions::{SessionScope, TurnState};
+use crate::sessions::TurnState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,15 +105,12 @@ fn candidate<'a>(run: &'a Run, task_id: &str) -> Result<&'a effects::ExecutionBi
         .provider;
     require(
         session.scope.stage == stage
-            && session.scope
-                == SessionScope::for_run(
-                    &original,
-                    owner.id.clone(),
-                    Some(task.id.clone()),
-                    owner.kind,
-                    session.scope.provider.clone(),
-                    session.scope.binary_version.clone(),
-                )?
+            && session.scope.matches_run(
+                &original,
+                owner.id.clone(),
+                Some(task.id.clone()),
+                owner.kind,
+            )?
             && serde_json::to_value(provider)?.as_str() == Some(session.scope.provider.as_str()),
         "executor result native scope/configuration changed",
     )?;
@@ -123,9 +120,12 @@ fn candidate<'a>(run: &'a Run, task_id: &str) -> Result<&'a effects::ExecutionBi
     crate::team::models::validate_output(&original, task, owner.role, &output)?;
     for receipt in &execution.receipts {
         require(
-            run.input_snapshot
-                .get(&receipt.path)
-                .is_some_and(|text| hash(text) == receipt.after_hash),
+            crate::recovery::matches_version(
+                Path::new(&run.spec.workspace),
+                &run.input_snapshot,
+                receipt,
+                false,
+            )?,
             "executor owned effect changed since completion",
         )?;
     }

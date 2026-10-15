@@ -1,7 +1,11 @@
 //! Worktrees isolate file ownership, not permissions. External commands remain
 //! explicitly authorized local execution, never a substitute for an OS sandbox.
+pub mod delivery;
+pub mod inputs;
+pub mod instructions;
 pub mod managed;
 pub mod snapshot;
+pub mod views;
 use crate::{Result, hash, require};
 use std::{
     collections::BTreeMap,
@@ -33,17 +37,71 @@ pub fn read_input_bytes(root: &Path, name: &str) -> Result<Vec<u8>> {
     )?;
     Ok(std::fs::read(path)?)
 }
+/// Validate the selected scope without loading its source bodies.
+pub fn validate_inputs(root: &Path, paths: &[String]) -> Result<()> {
+    let root = root.canonicalize()?;
+    for name in paths {
+        let relative = inputs::relative(&root, name)?;
+        let mut path = root.clone();
+        for component in Path::new(&relative).components() {
+            if let Component::Normal(part) = component {
+                path.push(part);
+                require(
+                    !path.symlink_metadata()?.file_type().is_symlink(),
+                    "symlink input scopes are not followed",
+                )?;
+            }
+        }
+        let metadata = path.metadata()?;
+        require(
+            metadata.is_file() || metadata.is_dir(),
+            "input must be a file or directory",
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether the project still holds the run's pinned inputs. In task-worktree
+/// mode team work reads its private base commit instead; the project advances
+/// through integrations and user edits without invalidating task inputs.
+pub fn inputs_current(run: &crate::domain::Run) -> Result<bool> {
+    if run.team.is_some() && crate::runtime::team::views::enabled(run) {
+        return Ok(true);
+    }
+    Ok(read_inputs(Path::new(&run.spec.workspace), &run.spec.input_files)? == run.input_snapshot)
+}
 pub fn read_inputs(root: &Path, paths: &[String]) -> Result<BTreeMap<String, String>> {
+    let root = root.canonicalize()?;
     paths
         .iter()
         .map(|name| {
-            let bytes = read_input_bytes(root, name)?;
-            let text = String::from_utf8(bytes)
-                .map_err(|_| crate::Error::Invalid("pinned input is not UTF-8".into()))?;
+            let relative = inputs::relative(&root, name)?;
+            let mut path = root.clone();
+            for component in Path::new(&relative).components() {
+                if let Component::Normal(part) = component {
+                    path.push(part);
+                    require(
+                        !std::fs::symlink_metadata(&path)?.file_type().is_symlink(),
+                        "symlink input scopes are not followed",
+                    )?;
+                }
+            }
+            let text = if path.is_dir() {
+                inputs::directory(&path)?
+            } else {
+                let bytes = read_input_bytes(&root, &relative)?;
+                String::from_utf8(bytes).map_err(|_| {
+                    crate::Error::Invalid(
+                        "pinned file input is not UTF-8; select its containing directory for binary metadata"
+                            .into(),
+                    )
+                })?
+            };
             Ok((name.clone(), text))
         })
         .collect()
 }
+
 pub fn worktree(repository: &Path, destination: &Path) -> Result<()> {
     require(!destination.exists(), "worktree destination exists")?;
     let output = Command::new("git")
@@ -56,6 +114,68 @@ pub fn worktree(repository: &Path, destination: &Path) -> Result<()> {
     require(output.status.success(), "git worktree creation failed")
 }
 /// Compare-and-write refuses a changed input rather than overwriting user work.
+pub fn apply_edit(root: &Path, edit: &crate::domain::FileEdit, expected_hash: &str) -> Result<()> {
+    use crate::domain::FileOperation;
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    if edit.operation == FileOperation::Write {
+        return replace(root, &edit.path, expected_hash, &edit.content);
+    }
+    let relative = inputs::relative(root, &edit.path)?;
+    require(
+        relative != "."
+            && !Path::new(&relative).components().any(|c| {
+                c.as_os_str()
+                    .to_str()
+                    .is_some_and(|p| p.eq_ignore_ascii_case(".git"))
+            }),
+        "invalid file effect path",
+    )?;
+    require(
+        !edit.content.contains('\0')
+            && (edit.operation != FileOperation::Delete || edit.content.is_empty()),
+        "invalid text file effect payload",
+    )?;
+    let mut parent = root.canonicalize()?;
+    let parts: Vec<_> = Path::new(&relative).components().collect();
+    for part in &parts[..parts.len() - 1] {
+        parent.push(part.as_os_str());
+        if edit.operation == FileOperation::Create && !parent.exists() {
+            std::fs::create_dir(&parent)?;
+        }
+        let metadata = parent.symlink_metadata()?;
+        require(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "file effect ancestor is not an ordinary directory",
+        )?;
+    }
+    let target = parent.join(parts.last().unwrap().as_os_str());
+    match edit.operation {
+        FileOperation::Create => {
+            require(
+                expected_hash == inputs::absent_hash(),
+                "create requires an observed absent target",
+            )?;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o644)
+                .open(&target)?;
+            file.write_all(edit.content.as_bytes())?;
+            file.sync_all()?;
+        }
+        FileOperation::Delete => {
+            require(
+                hash(read_input_bytes(root, &relative)?) == expected_hash,
+                "delete target changed; replan required",
+            )?;
+            std::fs::remove_file(&target)?;
+        }
+        FileOperation::Write => unreachable!(),
+    }
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
 pub fn replace(root: &Path, relative: &str, expected_hash: &str, content: &str) -> Result<()> {
     let inputs = read_inputs(root, &[relative.into()])?;
     require(
@@ -196,6 +316,8 @@ pub struct DiffFile {
     pub additions: usize,
     pub deletions: usize,
     pub hunks: Vec<DiffHunk>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_change: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +359,7 @@ pub fn diff_texts(path: &str, old_text: Option<&str>, new_text: Option<&str>) ->
                 additions: count,
                 deletions: 0,
                 hunks: vec![hunk],
+                metadata_change: None,
             })
         }
         (Some(old), None) => {
@@ -266,6 +389,7 @@ pub fn diff_texts(path: &str, old_text: Option<&str>, new_text: Option<&str>) ->
                 additions: 0,
                 deletions: count,
                 hunks: vec![hunk],
+                metadata_change: None,
             })
         }
         (Some(old), Some(new)) => {
@@ -387,6 +511,7 @@ pub fn diff_texts(path: &str, old_text: Option<&str>, new_text: Option<&str>) ->
                 additions: total_adds,
                 deletions: total_dels,
                 hunks,
+                metadata_change: None,
             })
         }
         (None, None) => None,
@@ -421,6 +546,12 @@ fn scan_directory(dir: &Path, base: &Path, out: &mut BTreeSet<String>) {
 }
 
 pub fn compute_diff(root: &Path, baseline: &BTreeMap<String, String>) -> Result<DiffReport> {
+    if baseline.iter().any(|(scope, text)| {
+        scope == "." || root.join(scope).is_dir() || inputs::is_directory_envelope(text)
+    }) {
+        return directory_diff(root, baseline);
+    }
+
     let mut paths: BTreeSet<String> = baseline.keys().cloned().collect();
     if root.exists() {
         scan_directory(root, root, &mut paths);
@@ -447,4 +578,75 @@ pub fn compute_diff(root: &Path, baseline: &BTreeMap<String, String>) -> Result<
         total_additions,
         total_deletions,
     })
+}
+
+fn directory_diff(root: &Path, baseline: &BTreeMap<String, String>) -> Result<DiffReport> {
+    use inputs::DiffContent;
+    let mut before = BTreeMap::new();
+    let mut after = BTreeMap::new();
+    for (scope, text) in baseline {
+        let relative = inputs::relative(root, scope)?;
+        let directory = if inputs::is_directory_envelope(text) || !root.join(scope).is_file() {
+            inputs::directory_diff_entries(&relative, text)?
+        } else {
+            None
+        };
+        if let Some(entries) = directory {
+            before.extend(entries);
+            after.extend(inputs::current_directory_diff_entries(root, scope)?);
+        } else {
+            before.insert(relative.clone(), DiffContent::Text(text.clone()));
+            after.extend(inputs::current_file_diff_entry(root, &relative)?);
+        }
+    }
+    let paths: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
+    let mut report = DiffReport::default();
+    for path in paths {
+        let old = before.get(&path);
+        let new = after.get(&path);
+        if old == new {
+            continue;
+        }
+        let file = match (old, new) {
+            (Some(DiffContent::Text(a)), Some(DiffContent::Text(b))) => {
+                diff_texts(&path, Some(a), Some(b))
+            }
+            (Some(DiffContent::Text(a)), None) => diff_texts(&path, Some(a), None),
+            (None, Some(DiffContent::Text(b))) => diff_texts(&path, None, Some(b)),
+            _ => Some(DiffFile {
+                path: path.clone(),
+                status: if old.is_none() {
+                    DiffFileStatus::Added
+                } else if new.is_none() {
+                    DiffFileStatus::Deleted
+                } else {
+                    DiffFileStatus::Modified
+                },
+                additions: 0,
+                deletions: 0,
+                hunks: vec![],
+                metadata_change: Some(format!(
+                    "Source metadata changed: before={}; after={}. Text line statistics are unavailable for this change.",
+                    describe_diff_content(old),
+                    describe_diff_content(new)
+                )),
+            }),
+        };
+        if let Some(file) = file {
+            report.total_additions += file.additions;
+            report.total_deletions += file.deletions;
+            report.files.push(file);
+        }
+    }
+    Ok(report)
+}
+
+fn describe_diff_content(content: Option<&inputs::DiffContent>) -> String {
+    match content {
+        None => "missing".into(),
+        Some(inputs::DiffContent::Text(text)) => {
+            format!("text ({} bytes, SHA-256 {})", text.len(), hash(text))
+        }
+        Some(inputs::DiffContent::Metadata(value)) => value.to_string(),
+    }
 }

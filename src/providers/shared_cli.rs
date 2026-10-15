@@ -14,16 +14,18 @@ use std::{
 pub(crate) enum StderrCategory {
     InputSize,
     Context,
+    OutputSize,
     Schema,
     Authentication,
     RateLimit,
     Network,
 }
 impl StderrCategory {
-    fn classification(self) -> (FailureKind, &'static str) {
+    pub(crate) fn classification(self) -> (FailureKind, &'static str) {
         match self {
             Self::InputSize => (FailureKind::Protocol, "input_too_large"),
             Self::Context => (FailureKind::Protocol, "context_length_exceeded"),
+            Self::OutputSize => (FailureKind::Protocol, "output_token_limit_exceeded"),
             Self::Schema => (FailureKind::Protocol, "invalid_json_schema"),
             Self::Authentication => (FailureKind::Authentication, "authentication_error"),
             Self::RateLimit => (FailureKind::RateLimit, "rate_limit_or_quota"),
@@ -35,6 +37,11 @@ impl StderrCategory {
 pub(crate) fn classify_stderr(mut stderr: impl Read) -> Option<StderrCategory> {
     const MARKERS: &[(&[u8], StderrCategory)] = &[
         (b"input_too_large", StderrCategory::InputSize),
+        // Antigravity drops an oversized sole user step before inference.
+        (
+            b"all steps in trajectory are cleared",
+            StderrCategory::InputSize,
+        ),
         (
             b"input exceeds the maximum length",
             StderrCategory::InputSize,
@@ -51,6 +58,11 @@ pub(crate) fn classify_stderr(mut stderr: impl Read) -> Option<StderrCategory> {
         (b"exceeded the context window", StderrCategory::Context),
         (b"maximum context length", StderrCategory::Context),
         (b"input is too long", StderrCategory::Context),
+        (b"output_token_limit_exceeded", StderrCategory::OutputSize),
+        (
+            b"exceeded the output token limit",
+            StderrCategory::OutputSize,
+        ),
         (b"invalid_json_schema", StderrCategory::Schema),
         (b"invalid_response_format", StderrCategory::Schema),
         (
@@ -147,6 +159,26 @@ pub(crate) fn diagnostic_category(value: &Value) -> Option<StderrCategory> {
     inspect(value, 0)
 }
 
+/// Prompts above this size cannot fit a ~1M-token context window; refuse before
+/// launch so the failure is diagnosed instead of an opaque CLI exit.
+pub(crate) const MAX_PROMPT_CHARACTERS: usize = 3_000_000;
+pub(crate) fn require_prompt_size(provider: &str, prompt: &str) -> Result<()> {
+    let characters = prompt.chars().count();
+    if characters > MAX_PROMPT_CHARACTERS {
+        return Err(ProviderFailure {
+            provider: provider.into(),
+            kind: FailureKind::Protocol,
+            message: format!(
+                "input_too_large; input_characters={characters}; max_characters={MAX_PROMPT_CHARACTERS}"
+            ),
+            session_id: None,
+            stopped: true,
+            partial_effects: false,
+        }
+        .into());
+    }
+    Ok(())
+}
 pub(crate) fn exit_failure(
     provider: &str,
     status: ExitStatus,
@@ -696,6 +728,14 @@ mod diagnostic_tests {
                 "private-secret Input exceeds the maximum length more-private-secret",
                 StderrCategory::InputSize,
             ),
+            (
+                "private-secret Your previous response was cut off because it exceeded the output token limit",
+                StderrCategory::OutputSize,
+            ),
+            (
+                "generating and executing: serializing trajectory: no renderable messages: all steps in trajectory are cleared",
+                StderrCategory::InputSize,
+            ),
         ] {
             assert_eq!(
                 classify_stderr(ByteReader(std::io::Cursor::new(
@@ -713,5 +753,14 @@ mod diagnostic_tests {
         let mut reader = std::io::Cursor::new(input);
         assert_eq!(classify_stderr(&mut reader), Some(StderrCategory::Schema));
         assert_eq!(reader.position(), 2_000_000);
+    }
+
+    #[test]
+    fn oversized_prompts_are_refused_before_launch() {
+        assert!(require_prompt_size("agy", &"x".repeat(MAX_PROMPT_CHARACTERS)).is_ok());
+        let error = require_prompt_size("agy", &"x".repeat(MAX_PROMPT_CHARACTERS + 1))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("input_too_large"), "{error}");
     }
 }

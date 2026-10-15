@@ -26,10 +26,12 @@ fn interrupted(root: &Path) -> (Run, Vec<FileEdit>) {
     run.reconciliation_required = true;
     let edits = vec![
         FileEdit {
+            operation: architect::domain::FileOperation::Write,
             path: "a".into(),
             content: "new a".into(),
         },
         FileEdit {
+            operation: architect::domain::FileOperation::Write,
             path: "b".into(),
             content: "new b".into(),
         },

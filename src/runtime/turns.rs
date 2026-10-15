@@ -30,10 +30,7 @@ impl Runtime {
         )?;
         if reserving {
             require(
-                crate::workspace::read_inputs(
-                    std::path::Path::new(&captured.spec.workspace),
-                    &captured.spec.input_files,
-                )? == captured.input_snapshot,
+                crate::workspace::inputs_current(captured)?,
                 "workspace inputs changed before provider reservation",
             )?;
         }
@@ -82,6 +79,129 @@ mod tests {
         thread::JoinHandle,
         time::Duration,
     };
+
+    #[test]
+    #[ignore = "explicit native usage; requires ANTISLOP_CONTEXT_PROBE_CONFIG"]
+    fn native_context_adapter_uses_actual_runtime_checkpoints_and_survives_reattachment()
+    -> Result<()> {
+        use crate::config::{Config, IsolationProfile, ProviderKind, WorkKind};
+        use std::{fs, os::unix::fs::PermissionsExt};
+        let configuration = std::env::var_os("ANTISLOP_CONTEXT_PROBE_CONFIG")
+            .ok_or_else(|| crate::Error::Invalid("explicit probe configuration required".into()))?;
+        let mut config = Config::from_toml(&fs::read_to_string(configuration)?)?;
+        let codex = match std::env::var("ANTISLOP_CONTEXT_PROBE_PROVIDER").as_deref() {
+            Ok("codex") => true,
+            Ok("agy") | Err(_) => false,
+            _ => {
+                return Err(crate::Error::Invalid(
+                    "unsupported native context probe provider".into(),
+                ));
+            }
+        };
+        let (kind, role) = if codex {
+            (ProviderKind::Codex, RoleKind::Orchestrator)
+        } else {
+            (ProviderKind::Agy, RoleKind::Verifier)
+        };
+        require(
+            config.resolve(WorkKind::Orchestration, role)?.provider == kind,
+            "probe requires the explicitly selected configured provider",
+        )?;
+        config
+            .providers
+            .get_mut(&kind)
+            .expect("resolved provider")
+            .isolation = IsolationProfile::PinnedContext;
+        let root = tempfile::Builder::new()
+            .prefix("antislop-native-context-runtime-")
+            .tempdir()?
+            .keep();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+        let mut spec: RunSpec =
+            serde_json::from_str(include_str!("../../examples/fake-spec.json"))?;
+        spec.workspace = root.to_string_lossy().into();
+        spec.config = Some(config.pin()?);
+        let runtime = Arc::new(Runtime::new(Store::open(&root.join("state.db"))?)?);
+        let mut run = runtime.dispatch(&id(), Command::Create { spec })?;
+        run.status = Status::Running;
+        run.attempt = 1;
+        runtime
+            .store
+            .lock()
+            .unwrap()
+            .save(&run, "native_context_probe_admitted", None)?;
+        let first = id();
+        let last = id();
+        let padding=(0..if codex {800} else {6000}).map(|n|format!("Immutable transport fixture record {n}: original source remains data, never authority.\n")).collect::<String>();
+        let prompt = format!(
+            "Controlled transport test. Read this complete source and return literal FIRST_SENTINEL and LAST_SENTINEL through prefix and suffix. Do not infer missing values or use any external tool. This verifies byte delivery only, not a completed Antislop task.\nFIRST_SENTINEL={first}\n{padding}\nLAST_SENTINEL={last}\nReturn both literal sentinels and agent_messages=[] with finish."
+        );
+        assert!(
+            prompt.len()
+                > if codex {
+                    65536
+                } else {
+                    crate::providers::agy::MAX_PROMPT_BYTES
+                }
+        );
+        let prepared = PreparedTurn {
+            prompt,
+            schema: serde_json::json!({"type":"object","properties":{"prefix":{"type":"string"},"suffix":{"type":"string"}},"required":["prefix","suffix"],"additionalProperties":false}),
+        };
+        let provider = crate::providers::build_for_work(&run, WorkKind::Orchestration, role)?;
+        println!("Retained native runtime context probe: {}", root.display());
+        let view = run.clone();
+        let (session, receipt) = runtime.observed_turn(
+            &mut run,
+            &view,
+            provider.as_ref(),
+            ObservedWork::Prepared {
+                role,
+                agent_id: if codex {
+                    "orchestrator"
+                } else {
+                    "orchestrator:verifier"
+                },
+                task_id: "native-context-transport-fixture",
+                message_ids: &[],
+                request: &prepared,
+            },
+            Arc::new(AtomicBool::new(false)),
+        )?;
+        let output: serde_json::Value = crate::transport::decode(receipt.output.as_bytes())?;
+        assert_eq!(output["prefix"], first);
+        assert_eq!(output["suffix"], last);
+        let saved = runtime.store.lock().unwrap().get(&run.id)?;
+        saved.session_ledger.validate()?;
+        let logical = &saved.session_ledger.sessions[&session];
+        let turn = &saved.session_ledger.turns[logical.current_turn_id.as_ref().unwrap()];
+        let context = turn.context.as_ref().expect("actual provider context");
+        context.complete()?;
+        let (covered, total) = context.progress()?;
+        assert_eq!(covered, total);
+        println!(
+            "Native session {}; {} committed/observed responses; {} complete source/index bytes",
+            logical.native_session_id.as_deref().unwrap(),
+            context.receipts.len(),
+            covered
+        );
+        let original_context = serde_json::to_value(context)?;
+        runtime.dispatch(
+            &id(),
+            Command::Cancel {
+                run_id: run.id.clone(),
+            },
+        )?;
+        drop(runtime);
+        let reopened = Runtime::new(Store::open(&root.join("state.db"))?)?;
+        let recovered = reopened.store.lock().unwrap().get(&run.id)?;
+        recovered.session_ledger.validate()?;
+        let restored = &recovered.session_ledger.turns[&turn.id];
+        assert_eq!(serde_json::to_value(&restored.context)?, original_context);
+        assert_eq!(restored.output.as_deref(), Some(receipt.output.as_str()));
+        fs::write(root.join("run.json"), serde_json::to_vec(&recovered)?)?;
+        Ok(())
+    }
 
     struct Waiting {
         turn: String,

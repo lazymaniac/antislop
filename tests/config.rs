@@ -9,6 +9,32 @@ fn config() -> Config {
 }
 
 #[test]
+fn review_reply_pagination_defaults_without_changing_legacy_pins_or_permissions() {
+    let original = config();
+    assert_eq!(
+        original.orchestrator.review_checks_per_part,
+        default_review_checks()
+    );
+    let pinned = original.pin().unwrap();
+    let stored = serde_json::to_string(&pinned).unwrap();
+    assert!(!stored.contains("review_checks_per_part"));
+    let restored: PinnedConfig = serde_json::from_str(&stored).unwrap();
+    restored.validate().unwrap();
+    assert_eq!(restored, pinned);
+    let mut legacy = original.clone();
+    legacy.orchestrator.review_checks_per_part = 0;
+    let legacy = legacy.pin().unwrap();
+    assert_ne!(legacy.content_hash, pinned.content_hash);
+    assert_eq!(legacy.config.policy, original.policy);
+    assert_eq!(legacy.config.routing, original.routing);
+    assert!(
+        serde_json::to_string(&legacy)
+            .unwrap()
+            .contains("\"review_checks_per_part\":0")
+    );
+}
+
+#[test]
 fn example_resolves_every_task_family_and_dedicated_review() {
     let config = config();
     let kinds = BTreeSet::from([

@@ -155,6 +155,206 @@ fn catalog_templates_and_bootstrap_preserve_required_pairs() {
     }
 }
 #[test]
+fn selected_template_is_bound_to_the_task_contract_and_legacy_specs_keep_their_encoding() {
+    let mut source = spec(1);
+    source.task_family = TaskFamily::Software;
+    source.check_command = vec!["true".into()];
+    let legacy = serde_json::to_string(&source).unwrap();
+    assert!(!legacy.contains("team_template"));
+    let decoded: RunSpec = serde_json::from_str(&legacy).unwrap();
+    assert_eq!(serde_json::to_string(&decoded).unwrap(), legacy);
+    let default = TeamPlan::bootstrap(source.task_family, &source).unwrap();
+    assert_eq!(default.template, TemplateKind::SmallChange);
+    source.team_template = Some(TemplateKind::Refactoring);
+    source.validate().unwrap();
+    assert_ne!(hash(serde_json::to_vec(&source).unwrap()), hash(&legacy));
+    let selected = TeamPlan::bootstrap(source.task_family, &source).unwrap();
+    assert_eq!(selected.template, TemplateKind::Refactoring);
+    let mut forged = selected.clone();
+    forged.template = TemplateKind::SmallChange;
+    assert!(forged.validate(&source).is_err());
+    assert!(TeamPlan::bootstrap_template(TemplateKind::SmallChange, &source).is_err());
+    source.team_template = Some(TemplateKind::Research);
+    assert!(source.validate().is_err());
+    assert!(TeamPlan::bootstrap(source.task_family, &source).is_err());
+}
+
+#[test]
+fn refactoring_template_assigns_transformations_to_refactorers_with_before_after_checks() {
+    let mut source = spec(2);
+    source.task_family = TaskFamily::Software;
+    source.input_files = vec!["source.rs".into()];
+    source.editable_files = source.input_files.clone();
+    source.check_command = vec![
+        "python3".into(),
+        "characterize.py".into(),
+        "--existing-contracts".into(),
+    ];
+    source.plan_items[1].dependencies.insert("P0".into());
+    let original = serde_json::to_value(&source).unwrap();
+    let team = TeamPlan::bootstrap_template(TemplateKind::Refactoring, &source).unwrap();
+    team.validate(&source).unwrap();
+    assert_eq!(serde_json::to_value(&source).unwrap(), original);
+    let transformations = team
+        .tasks
+        .iter()
+        .filter(|t| t.deliverable)
+        .collect::<Vec<_>>();
+    assert_eq!(transformations.len(), 2);
+    for task in &transformations {
+        let owner = team.agents.iter().find(|a| a.id == task.owner_id).unwrap();
+        let reviewer = team
+            .agents
+            .iter()
+            .find(|a| a.id == task.verifier_id)
+            .unwrap();
+        assert_eq!(owner.role, CatalogRole::Refactorer);
+        assert_eq!(owner.role.work_kind(), WorkKind::Refactoring);
+        assert_eq!(reviewer.role, owner.role);
+        assert_eq!(reviewer.kind, RoleKind::Verifier);
+        assert_ne!(owner.id, reviewer.id);
+        let before = task
+            .check_plan
+            .iter()
+            .find(|c| c.phase == checks::CheckPhase::BeforeExecution)
+            .unwrap();
+        let after = task
+            .check_plan
+            .iter()
+            .find(|c| c.phase == checks::CheckPhase::BeforeVerification)
+            .unwrap();
+        assert_eq!(before.argv, source.check_command);
+        assert_eq!(after.argv, before.argv);
+        assert_eq!(before.expected_exit_code, 0);
+        assert_eq!(after.expected_exit_code, 0);
+        assert!(before.gate_ids.is_empty());
+        assert!(!after.gate_ids.is_empty());
+        assert_eq!(before.criterion_ids, task.criterion_ids);
+        assert_eq!(
+            task.write_scopes,
+            source.editable_files.iter().cloned().collect()
+        );
+        assert_eq!(task.state, TaskState::Planned);
+        assert!(task.artifact.is_none());
+    }
+    let first = transformations
+        .iter()
+        .find(|t| t.plan_item_ids.contains("P0"))
+        .unwrap();
+    let second = transformations
+        .iter()
+        .find(|t| t.plan_item_ids.contains("P1"))
+        .unwrap();
+    assert!(second.dependencies.contains(&first.id));
+    for task in team
+        .tasks
+        .iter()
+        .filter(|t| matches!(t.stage, TaskStage::Validation | TaskStage::Integration))
+    {
+        assert!(task.dependencies.contains(&first.id) && task.dependencies.contains(&second.id));
+    }
+    assert!(
+        team.agents
+            .iter()
+            .any(|a| a.role == CatalogRole::Implementer && a.kind == RoleKind::Executor)
+    );
+}
+
+#[test]
+fn security_fix_models_original_threats_before_planning_and_rechecks_after_changes() {
+    let mut source = spec(2);
+    source.task_family = TaskFamily::Software;
+    source.team_template = Some(TemplateKind::SecurityFix);
+    source.input_files = vec!["source.rs".into()];
+    source.editable_files = source.input_files.clone();
+    source.check_command = vec!["python3".into(), "security_checks.py".into()];
+    let team = TeamPlan::bootstrap(source.task_family, &source).unwrap();
+    team.validate(&source).unwrap();
+    let threat = team
+        .tasks
+        .iter()
+        .find(|task| task.id == "task-security-threat")
+        .unwrap();
+    let adversarial = team
+        .tasks
+        .iter()
+        .find(|task| task.id == "task-securityanalyst")
+        .unwrap();
+    assert_eq!(threat.stage, TaskStage::Discovery);
+    assert!(threat.dependencies.contains("task-contextanalyst"));
+    assert!(threat.dependencies.contains("task-requirementsanalyst"));
+    assert_eq!(adversarial.stage, TaskStage::Validation);
+    assert_eq!(threat.owner_id, adversarial.owner_id);
+    assert_eq!(threat.verifier_id, adversarial.verifier_id);
+    assert_ne!(threat.owner_id, threat.verifier_id);
+    assert_eq!(threat.criterion_ids, adversarial.criterion_ids);
+    assert!(threat.source_dependencies.contains("file:source.rs"));
+    assert!(threat.write_scopes.is_empty() && adversarial.write_scopes.is_empty());
+    assert!(threat.check_plan.is_empty() && adversarial.check_plan.is_empty());
+    assert!(threat.artifact.is_none() && adversarial.artifact.is_none());
+    let planning = team
+        .tasks
+        .iter()
+        .filter(|task| task.stage == TaskStage::Planning)
+        .collect::<Vec<_>>();
+    assert!(!planning.is_empty());
+    for task in &planning {
+        assert!(task.dependencies.contains(&threat.id));
+    }
+    for task in team.tasks.iter().filter(|task| task.deliverable) {
+        assert!(planning.iter().all(|p| task.dependencies.contains(&p.id)));
+        assert!(adversarial.dependencies.contains(&task.id));
+    }
+    for task in team
+        .tasks
+        .iter()
+        .filter(|task| task.stage == TaskStage::Integration)
+    {
+        assert!(task.dependencies.contains(&adversarial.id));
+    }
+    source.team_template = None;
+    let ordinary = TeamPlan::bootstrap(source.task_family, &source).unwrap();
+    assert!(!ordinary.tasks.iter().any(|task| task.id == threat.id));
+}
+
+#[test]
+fn absent_refactoring_check_stays_an_unresolved_plan_obligation() {
+    let mut source = spec(1);
+    source.task_family = TaskFamily::Software;
+    assert!(source.check_command.is_empty());
+    let team = TeamPlan::bootstrap_template(TemplateKind::Refactoring, &source).unwrap();
+    let task = team.tasks.iter().find(|t| t.deliverable).unwrap();
+    assert!(task.check_plan.is_empty());
+    assert!(
+        checks::validate_plan(task, true, CatalogRole::Refactorer, TaskFamily::Software).is_err()
+    );
+    for template in [
+        TemplateKind::SmallChange,
+        TemplateKind::Feature,
+        TemplateKind::SecurityFix,
+        TemplateKind::Greenfield,
+    ] {
+        let team = TeamPlan::bootstrap_template(template, &source).unwrap();
+        for task in team.tasks.iter().filter(|t| t.deliverable) {
+            assert_eq!(
+                team.agents
+                    .iter()
+                    .find(|a| a.id == task.owner_id)
+                    .unwrap()
+                    .role,
+                CatalogRole::Implementer
+            );
+            assert!(
+                !task
+                    .check_plan
+                    .iter()
+                    .any(|c| c.id == "characterization-baseline")
+            );
+        }
+    }
+}
+
+#[test]
 fn full_original_coverage_is_conjunctive_100_tasks_cannot_drop_one() {
     let source = spec(100);
     let mut team = TeamPlan::bootstrap(TaskFamily::Research, &source).unwrap();
@@ -852,6 +1052,7 @@ fn baseline_plan_never_substitutes_for_required_positive_runner_coverage() {
     task.change_contract = Some(changes::ChangeContract {
         kind: changes::ChangeKind::Feature,
         rationale: "Explicit requested test fixture addition".into(),
+        non_defect_criteria: Default::default(),
         source_refs: task.source_dependencies.clone(),
         bugfixes: vec![],
     });
@@ -897,6 +1098,7 @@ fn software_change_contract_requires_scoped_complete_before_after_bugfix_obligat
     task.change_contract = Some(changes::ChangeContract {
         kind: changes::ChangeKind::Bugfix,
         rationale: "Repair original violated contract".into(),
+        non_defect_criteria: Default::default(),
         source_refs: task.source_dependencies.clone(),
         bugfixes: vec![changes::Bugfix {
             id: "defect".into(),
@@ -910,6 +1112,39 @@ fn software_change_contract_requires_scoped_complete_before_after_bugfix_obligat
         }],
     });
     changes::validate_plan(&task, true, role, source.task_family).unwrap();
+    let mut with_process = task.clone();
+    let process = "REQ:R1:approved_workflow".to_owned();
+    with_process.criterion_ids.insert(process.clone());
+    with_process.check_plan[0]
+        .criterion_ids
+        .insert(process.clone());
+    with_process.change_contract.as_mut().unwrap().non_defect_criteria.insert(process.clone(),
+        "An approval obligation remains mandatory, but does not describe the original behavioral defect".into());
+    changes::validate_plan(&with_process, true, role, source.task_family).unwrap();
+    for invalid_kind in ["missing", "empty", "foreign", "overlap"] {
+        let mut invalid = with_process.clone();
+        let contract = invalid.change_contract.as_mut().unwrap();
+        match invalid_kind {
+            "missing" => contract.non_defect_criteria.clear(),
+            "empty" => *contract.non_defect_criteria.get_mut(&process).unwrap() = String::new(),
+            "foreign" => {
+                contract
+                    .non_defect_criteria
+                    .insert("REQ:foreign".into(), "Not assigned".into());
+            }
+            "overlap" => {
+                contract.non_defect_criteria.insert(
+                    task.criterion_ids.iter().next().unwrap().clone(),
+                    "Cannot hide an actual defect".into(),
+                );
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            changes::validate_plan(&invalid, true, role, source.task_family).is_err(),
+            "{invalid_kind}"
+        );
+    }
     task.check_plan[1].expected_exit_code = 0; // A successful measurement may still demonstrate the defect.
     changes::validate_plan(&task, true, role, source.task_family).unwrap();
     let mut invalid = task.clone();
@@ -975,4 +1210,57 @@ fn supervised_scheduler_holds_cross_stage_results_and_keeps_same_stage_work_avai
     let ready = team.ready_wave(&source, &current).unwrap();
     assert!(ready.iter().any(|i| i.task.stage == TaskStage::Planning));
     assert!(ready.iter().all(|i| i.task.stage != TaskStage::Execution));
+}
+
+#[test]
+fn delivery_author_never_waits_on_the_review_gate_its_own_verifier_must_produce() {
+    let mut source = spec(1);
+    source.task_family = TaskFamily::Software;
+    source.check_command = vec!["true".into()];
+    let team = TeamPlan::bootstrap(architect::quality::TaskFamily::Software, &source).unwrap();
+    let task = team
+        .tasks
+        .iter()
+        .find(|t| t.owner_id == "executor-deliveryauthor")
+        .unwrap();
+    assert!(task.required_gates.contains("requirements_complete"));
+    assert!(task.required_gates.contains("integration_verified"));
+    assert!(!task.required_gates.contains("review_complete"));
+    assert!(
+        team.agents
+            .iter()
+            .any(|a| a.id == task.verifier_id && a.kind == architect::config::RoleKind::Verifier)
+    );
+}
+
+#[test]
+fn preparatory_artifacts_do_not_wait_on_future_implementation_gates_but_writers_still_do() {
+    let mut source = spec(1);
+    source.task_family = TaskFamily::Software;
+    source.check_command = vec!["true".into()];
+    let mut team = TeamPlan::bootstrap(source.task_family, &source).unwrap();
+    for task in &mut team.tasks {
+        if matches!(
+            task.owner_id.as_str(),
+            "executor-contextanalyst" | "executor-planner"
+        ) {
+            task.deliverable = true;
+        }
+    }
+    team.validate(&source).unwrap();
+    let owner = team
+        .agents
+        .iter()
+        .find(|a| a.kind == RoleKind::Executor && a.role == CatalogRole::Implementer)
+        .unwrap()
+        .id
+        .clone();
+    let writer = team.tasks.iter_mut().find(|t| t.owner_id == owner).unwrap();
+    let writer_id = writer.id.clone();
+    writer.required_gates.remove("plan_ready");
+    let error = team.validate(&source).unwrap_err().to_string();
+    assert!(
+        error.contains(&writer_id) && error.contains("plan_ready"),
+        "{error}"
+    );
 }

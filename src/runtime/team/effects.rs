@@ -32,6 +32,9 @@ pub struct ExecutionBinding {
     pub state: ExecutionState,
     #[serde(default)]
     pub reconciliation: Option<super::adjudicate::ObservationReceipt>,
+    /// Task-worktree effects; `None` for edits applied in the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<super::views::ViewEffect>,
 }
 
 pub(super) fn binding<'a>(run: &'a Run, artifact: &ArtifactRef) -> Result<&'a ExecutionBinding> {
@@ -66,7 +69,7 @@ pub(super) fn proposal(
     run: &Run,
     execution: &ExecutionBinding,
 ) -> Result<crate::team::models::Output> {
-    run.session_ledger.validate()?;
+    run.session_ledger.validate_for_run(&run.id)?;
     let session = run
         .session_ledger
         .sessions
@@ -110,20 +113,47 @@ pub(super) fn authenticate(run: &Run, execution: &ExecutionBinding) -> Result<()
         output.edits.len() == execution.receipts.len(),
         "execution proposed edits differ from owned receipts",
     )?;
+    if let Some(view) = &execution.view {
+        for (edit, receipt) in output.edits.iter().zip(&execution.receipts) {
+            require(
+                receipt.path == edit.path
+                    && receipt.state == EditState::Applied
+                    && receipt.operation == edit.operation
+                    && view.before.get(&edit.path) == Some(&receipt.before_hash)
+                    && super::views::after_hash(edit) == receipt.after_hash,
+                "execution receipt does not prove its exact worktree effect",
+            )?;
+        }
+        return require(
+            view.before.len() == execution.receipts.len()
+                && view.result.is_some()
+                && execution.after_snapshot.is_none(),
+            "worktree execution result commit missing",
+        );
+    }
     for (edit, receipt) in output.edits.iter().zip(&execution.receipts) {
         require(
             receipt.path == edit.path
                 && receipt.state == EditState::Applied
-                && execution
-                    .input_snapshot
-                    .get(&edit.path)
-                    .is_some_and(|text| hash(text) == receipt.before_hash)
-                && hash(&edit.content) == receipt.after_hash
-                && execution
-                    .after_snapshot
-                    .as_ref()
-                    .and_then(|s| s.get(&edit.path))
-                    .is_some_and(|text| hash(text) == receipt.after_hash),
+                && receipt.operation == edit.operation
+                && crate::recovery::matches_version(
+                    Path::new(&run.spec.workspace),
+                    &execution.input_snapshot,
+                    receipt,
+                    true,
+                )?
+                && crate::workspace::inputs::version_hash(crate::workspace::inputs::after_text(
+                    edit,
+                )) == receipt.after_hash
+                && execution.after_snapshot.as_ref().is_some_and(|s| {
+                    crate::recovery::matches_version(
+                        Path::new(&run.spec.workspace),
+                        s,
+                        receipt,
+                        false,
+                    )
+                    .unwrap_or(false)
+                }),
             "execution receipt does not prove its exact before/after effect",
         )?;
     }
@@ -142,7 +172,9 @@ pub(super) fn lineage(run: &Run, task: &crate::team::TaskRecord) -> Result<()> {
 }
 
 impl Runtime {
-    pub(super) fn apply_task_output(
+    /// Admit an observed native proposal for effects: same attempt, policy,
+    /// session scope and exact completed output.
+    pub(super) fn admit_task_output(
         &self,
         captured: &Run,
         invocation: &TaskInvocation,
@@ -150,9 +182,13 @@ impl Runtime {
         raw: &str,
         edits: &[FileEdit],
         token: &AtomicBool,
-    ) -> Result<String> {
-        let mut store = self.active_store(captured)?;
-        let mut current = store.get(&captured.id)?;
+    ) -> Result<(
+        std::sync::MutexGuard<'_, crate::storage::Store>,
+        Run,
+        SessionScope,
+    )> {
+        let store = self.active_store(captured)?;
+        let current = store.get(&captured.id)?;
         require(
             !token.load(Ordering::SeqCst),
             "task cancelled before execution binding",
@@ -198,25 +234,58 @@ impl Runtime {
                 && serde_json::to_value(&parsed.edits)? == serde_json::to_value(edits)?,
             "task writes are not the observed native proposal",
         )?;
-        for (path, current_text) in &current.input_snapshot {
-            if captured.input_snapshot.get(path) != Some(current_text) {
-                require(
-                    current.task_executions.iter().any(|e| {
-                        e.wave_attempt == captured.attempt
-                            && matches!(
-                                e.state,
-                                ExecutionState::Applied | ExecutionState::Committed
-                            )
-                            && e.receipts.iter().any(|r| {
-                                &r.path == path
-                                    && r.state == EditState::Applied
-                                    && r.after_hash == hash(current_text)
-                            })
-                    }),
-                    "changed task inputs have no completed managed effect proof",
+        let scope = session.scope.clone();
+        Ok((store, current, scope))
+    }
+    pub(super) fn apply_task_output(
+        &self,
+        captured: &Run,
+        invocation: &TaskInvocation,
+        session_id: &str,
+        raw: &str,
+        edits: &[FileEdit],
+        token: &AtomicBool,
+    ) -> Result<String> {
+        let (mut store, mut current, scope) =
+            self.admit_task_output(captured, invocation, session_id, raw, edits, token)?;
+        let mut proven_inputs = captured.input_snapshot.clone();
+        for execution in &current.task_executions {
+            if execution.wave_attempt != captured.attempt
+                || !matches!(
+                    execution.state,
+                    ExecutionState::Applied | ExecutionState::Committed
+                )
+            {
+                continue;
+            }
+            authenticate(&current, execution)?;
+            for receipt in &execution.receipts {
+                let snapshot = execution
+                    .after_snapshot
+                    .as_ref()
+                    .ok_or_else(|| crate::Error::Invalid("managed after version missing".into()))?;
+                let text = crate::workspace::inputs::captured_text(
+                    Path::new(&current.spec.workspace),
+                    snapshot,
+                    &receipt.path,
+                )?;
+                let edit = FileEdit {
+                    path: receipt.path.clone(),
+                    content: text.unwrap_or_default(),
+                    operation: receipt.operation,
+                };
+                crate::workspace::inputs::record_change(
+                    Path::new(&current.spec.workspace),
+                    &mut proven_inputs,
+                    &edit,
+                    &receipt.before_hash,
                 )?;
             }
         }
+        require(
+            proven_inputs == current.input_snapshot,
+            "changed task inputs have no completed managed effect proof",
+        )?;
         require(
             crate::workspace::read_inputs(
                 Path::new(&current.spec.workspace),
@@ -227,7 +296,15 @@ impl Runtime {
         // Concurrent disjoint managed writes may update other files, never this task's expected write bytes.
         for edit in edits {
             require(
-                current.input_snapshot.get(&edit.path) == captured.input_snapshot.get(&edit.path),
+                crate::workspace::inputs::captured_text(
+                    Path::new(&current.spec.workspace),
+                    &current.input_snapshot,
+                    &edit.path,
+                )? == crate::workspace::inputs::captured_text(
+                    Path::new(&captured.spec.workspace),
+                    &captured.input_snapshot,
+                    &edit.path,
+                )?,
                 "task write conflicts with a newer managed or user edit",
             )?;
         }
@@ -241,7 +318,7 @@ impl Runtime {
             attempt: invocation.task.attempt,
             wave_attempt: captured.attempt,
             artifact_hash: hash(raw),
-            scope: session.scope.clone(),
+            scope,
             session_id: session_id.to_string(),
             input_snapshot: captured.input_snapshot.clone(),
             source_hashes: captured.source_hashes(),
@@ -250,21 +327,24 @@ impl Runtime {
             receipts: receipts.clone(),
             state: ExecutionState::Intent,
             reconciliation: None,
+            view: None,
         });
         current.pending_edits.extend(receipts);
         // Intent and ownership are durable before any filesystem replacement.
         store.save(&current, "task_execution_intent", None)?;
         for (receipt_index, edit) in edits.iter().enumerate() {
             require(!token.load(Ordering::SeqCst), "task cancelled before write")?;
-            crate::workspace::replace(
+            crate::workspace::apply_edit(
                 Path::new(&current.spec.workspace),
-                &edit.path,
+                edit,
                 &current.pending_edits[offset + receipt_index].before_hash,
-                &edit.content,
             )?;
-            current
-                .input_snapshot
-                .insert(edit.path.clone(), edit.content.clone());
+            crate::workspace::inputs::record_change(
+                Path::new(&current.spec.workspace),
+                &mut current.input_snapshot,
+                edit,
+                &current.pending_edits[offset + receipt_index].before_hash,
+            )?;
             current.pending_edits[offset + receipt_index].state = EditState::Applied;
             current.task_executions[index].receipts[receipt_index].state = EditState::Applied;
             crate::verification::refresh_provenance(&mut current);

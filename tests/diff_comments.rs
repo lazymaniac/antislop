@@ -9,6 +9,7 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 fn sample_spec(root: &Path, files: &[String]) -> RunSpec {
     RunSpec {
+        team_template: None,
         task_family: architect::quality::TaskFamily::Software,
         config: None,
         objective: "Test diff inspection, comments, and code review".into(),
@@ -309,24 +310,43 @@ fn test_on_demand_diff_code_review() {
             .any(|a| a.action == "review-diff" && a.scope_hash == scope_hash)
     );
 
-    // Verify artifact recorded
-    let diff_artifact = run.artifacts.last().unwrap();
-    assert_eq!(diff_artifact.session_id, "diff-candidate");
-
-    // Verify evidence recorded
-    let diff_evidence = run.evidence.last().unwrap();
-    assert_eq!(diff_evidence.source, "runtime:workspace-diff");
-    assert!(diff_evidence.success);
-
-    // Verify review recorded
-    let diff_review = run.reviews.last().unwrap();
-    assert_eq!(diff_review.artifact_hash, diff_artifact.hash);
-    assert_eq!(diff_review.checks[0].check_id, "V04");
-    assert_eq!(diff_review.checks[0].status, CheckStatus::Pass);
+    assert_eq!(run.status, Status::Running);
+    assert!(run.reviews.is_empty()); // No invented stage pass at admission.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let run = loop {
+        let current = runtime.store.lock().unwrap().get(&run.id).unwrap();
+        if current.status != Status::Running {
+            break current;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{:?}",
+            current.diagnostic
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let review = run.diff_reviews.last().unwrap();
+    assert_eq!(
+        review.state,
+        architect::runtime::diff_review::State::Completed
+    );
+    assert_eq!(review.response.as_ref().unwrap().status, CheckStatus::Pass);
     assert!(
-        diff_review.checks[0]
-            .rationale
-            .contains("Independently inspected diff candidate")
+        review
+            .response
+            .as_ref()
+            .unwrap()
+            .method
+            .contains("Synthetic")
+    );
+    assert!(run.reviews.is_empty());
+    let session = &run.session_ledger.sessions[review.session_id.as_ref().unwrap()];
+    assert!(session.native_observed);
+    assert_eq!(session.scope.role, architect::config::RoleKind::Verifier);
+    assert_eq!(run.status, Status::AwaitingStart);
+    assert_eq!(
+        run.input_snapshot["main.rs"],
+        "fn main() { println!(\"old\"); }\n"
     );
 
     // Stale scope_hash is rejected

@@ -55,6 +55,11 @@ pub struct SupervisedChild {
 /// Construct the companion guardian command; callers configure stdio/cwd/env.
 /// Never fall back to spawning the external command without supervision.
 pub fn command(program: impl AsRef<OsStr>) -> Result<Command> {
+    let mut command = Command::new(companion()?);
+    command.arg("__supervise").arg(program);
+    Ok(command)
+}
+pub fn companion() -> Result<std::path::PathBuf> {
     let current = std::env::current_exe()?;
     let companion = if current.file_name() == Some(OsStr::new("antislop")) {
         current
@@ -78,9 +83,7 @@ pub fn command(program: impl AsRef<OsStr>) -> Result<Command> {
         companion.is_file(),
         "antislop supervisor binary unavailable; build the companion binary first",
     )?;
-    let mut command = Command::new(companion);
-    command.arg("__supervise").arg(program);
-    Ok(command)
+    Ok(companion)
 }
 
 impl SupervisedChild {

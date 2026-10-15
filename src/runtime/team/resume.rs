@@ -1,7 +1,7 @@
 //! Scope-bound exact native continuation. Original unknown turns remain history.
 use super::*;
 use crate::{
-    sessions::{SessionScope, TurnState},
+    sessions::TurnState,
     team::{NativeResume, TaskRecord},
 };
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ pub(super) fn interrupted(run: &Run, task_id: &str) -> Result<Interrupted> {
         run.checklist_version == crate::domain::checklist_version(),
         "task checklist changed",
     )?;
-    run.session_ledger.validate()?;
+    run.session_ledger.validate_for_run(&run.id)?;
     let team = run
         .team
         .as_ref()
@@ -77,8 +77,7 @@ pub(super) fn interrupted(run: &Run, task_id: &str) -> Result<Interrupted> {
         retry::scope(run, task_id)?;
     }
     require(
-        crate::workspace::read_inputs(Path::new(&run.spec.workspace), &run.spec.input_files)?
-            == run.input_snapshot,
+        crate::workspace::inputs_current(run)?,
         "workspace changed before native continuation",
     )?;
     require(
@@ -166,15 +165,12 @@ pub(super) fn interrupted(run: &Run, task_id: &str) -> Result<Interrupted> {
         require(
             serde_json::to_value(profile.provider)?.as_str()
                 == Some(session.scope.provider.as_str())
-                && session.scope
-                    == SessionScope::for_run(
-                        &view,
-                        agent_id.clone(),
-                        Some(task.id.clone()),
-                        role,
-                        session.scope.provider.clone(),
-                        session.scope.binary_version.clone(),
-                    )?,
+                && session.scope.matches_run(
+                    &view,
+                    agent_id.clone(),
+                    Some(task.id.clone()),
+                    role,
+                )?,
             "native session workspace/input/configuration/role changed; replacement requires a revised contract",
         )?;
     }

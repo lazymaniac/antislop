@@ -154,6 +154,11 @@ pub fn elements(run: &Run) -> Vec<Element> {
             .session_ledger
             .sessions
             .values()
+            .filter(|session| {
+                !run.diff_reviews
+                    .iter()
+                    .any(|review| session.scope.agent_id == format!("diff-review:{}", review.id))
+            })
             .map(|s| s.scope.agent_id.clone())
             .collect();
         for id in visible {
@@ -173,6 +178,17 @@ pub fn elements(run: &Run) -> Vec<Element> {
                 json!({"id":id,"scopes":scopes}),
             );
         }
+    }
+    for review in &run.diff_reviews {
+        let id = format!("diff-review:{}", review.id);
+        add(
+            ElementKind::Agent,
+            id.clone(),
+            format!("Diff reviewer: {}", review.id),
+            [id].into(),
+            json!({"review_id":review.id,"state":review.state,
+                "profile":review.profile,"diff_hash":review.diff_hash,"response":review.response}),
+        );
     }
     let agent_for = |session: &str| {
         run.session_ledger

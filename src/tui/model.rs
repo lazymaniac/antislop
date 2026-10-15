@@ -53,11 +53,27 @@ pub struct Snapshot {
     pub chat_origin: bool,
     /// Latest provisional interview turn awaiting a user answer.
     pub awaiting_user_reply: Option<String>,
+    pub queued_orchestrator_turn: bool,
     pub reviewed_intake_proposal: Option<(String, String)>,
     pub intake_proposal_details: String,
     pub provider_catalogue_details: String,
     pub discovery_status: String,
+    /// Actual received/total native reports in the current review partition.
+    pub review_progress: Option<(usize, usize)>,
+    /// Unique bytes in committed and native-observed context responses.
+    pub context_progress: Vec<(String, usize, usize)>,
     pub workspace: String,
+    pub workspace_required: bool,
+    pub delivery_inspect_available: bool,
+    pub delivery_scope: Option<String>,
+    pub delivery_details: String,
+    pub delivery_recovery: Option<crate::runtime::delivery::Recovery>,
+    pub workspace_inspect_available: bool,
+    pub workspace_phase: String,
+    pub workspace_preparation: Option<(BTreeSet<String>, String)>,
+    pub workspace_preparation_details: String,
+    pub workspace_activation: Option<String>,
+    pub workspace_activation_details: String,
     pub mode: String,
     pub policy_revision: u64,
     pub stage: String,
@@ -77,6 +93,8 @@ pub struct Snapshot {
     pub task_check_restores: BTreeMap<String, crate::runtime::team::check_recovery::Pending>,
     pub task_check_restore_details: BTreeMap<String, String>,
     pub orchestration_recoveries: BTreeMap<String, crate::runtime::orchestration_recovery::Pending>,
+    pub orchestration_recovery_preparing: bool,
+    pub orchestration_recovery_unavailable: bool,
     pub orchestration_recovery_details: BTreeMap<String, String>,
     pub task_session_resume_details: BTreeMap<String, String>,
     pub task_source_refreshes: BTreeMap<String, String>,
@@ -93,6 +111,8 @@ pub struct Snapshot {
     pub sequence: u64,
     pub reviewed_team_round: Option<String>,
     pub reviewed_team_details: String,
+    pub pending_wave: Option<crate::runtime::team::wave::Pending>,
+    pub pending_wave_details: String,
     pub comment_targets: Vec<crate::comments::Element>,
     pub element_comments: Vec<crate::comments::Comment>,
 }
@@ -241,9 +261,32 @@ fn messages_queued_after(run: &Value, round: &Value) -> bool {
 }
 
 impl Snapshot {
-    /// Project only persisted data. Missing transcripts and activity stay explicit.
+    /// Project captured records and explicit daemon control state. Missing
+    /// transcripts and native activity stay explicit.
     pub fn from_document(run: &Value, control: &Value) -> Self {
         let mut snapshot = Self {
+            orchestration_recovery_unavailable: control["orchestration_recovery_state"]
+                == "unavailable",
+            orchestration_recovery_preparing: control["orchestration_recovery_state"]
+                == "preparing",
+            context_progress: values(&run["session_ledger"]["sessions"])
+                .into_iter()
+                .filter_map(|session| {
+                    if !matches!(
+                        session["state"].as_str(),
+                        Some("sent" | "pending" | "pending_unknown")
+                    ) {
+                        return None;
+                    }
+                    let id = session["current_turn_id"].as_str()?;
+                    let transport: crate::context::transport::Transport = serde_json::from_value(
+                        run["session_ledger"]["turns"][id]["context"].clone(),
+                    )
+                    .ok()?;
+                    let (read, total) = transport.progress().ok()?;
+                    Some((field(&session["scope"], "agent_id"), read, total))
+                })
+                .collect(),
             run_id: field(run, "id"),
             intake: run["intake"].as_bool().unwrap_or(false),
             chat_origin: run["chat_origin"].as_bool().unwrap_or(false),
@@ -251,6 +294,18 @@ impl Snapshot {
                 .last()
                 .map(|r| field(r, "discovery_status"))
                 .unwrap_or_default(),
+            review_progress: array(&run["orchestration_rounds"])
+                .last()
+                .filter(|r| r["status"] == "running")
+                .and_then(|r| {
+                    let parts = array(&r["review_parts"]);
+                    (!parts.is_empty()).then(|| {
+                        (
+                            parts.iter().filter(|p| p["output"].is_string()).count(),
+                            parts.len(),
+                        )
+                    })
+                }),
             reviewed_intake_proposal: serde_json::from_value(
                 control["reviewed_intake_proposal"].clone(),
             )
@@ -280,6 +335,68 @@ impl Snapshot {
                 .map(str::to_owned),
             ..Self::default()
         };
+        snapshot.workspace_required = !snapshot.intake
+            && run["spec"]["config"]["config"]["workspace"]["mode"] == "worktree"
+            && run["managed_workspace"]["state"] != "active";
+        if let Ok(document) = serde_json::from_value::<crate::domain::Run>(run.clone()) {
+            snapshot.workspace_inspect_available =
+                crate::workspace::managed::eligible(&document).is_ok();
+        }
+        snapshot.workspace_phase = if run["workspace_inspection"]["state"] == "running" {
+            "Observe workspace inputs and local changes"
+        } else if run["workspace_activation_attempt"]["state"] == "running" {
+            "Validate and activate private workspace"
+        } else if run["managed_workspace"]["state"] == "intent" {
+            "Prepare private workspace candidate"
+        } else {
+            ""
+        }
+        .into();
+        if run["delivery"]["state"] == "inspecting" {
+            snapshot.workspace_phase = "Inspect verified result for source delivery".into();
+        } else if run["delivery"]["state"] == "applying" {
+            snapshot.workspace_phase = "Transfer approved changes to original checkout".into();
+        }
+        snapshot.delivery_inspect_available = control["source_delivery_inspection_available"]
+            .as_bool()
+            .unwrap_or(false);
+        snapshot.delivery_scope = control["source_delivery_scope"].as_str().map(str::to_owned);
+        snapshot.delivery_recovery =
+            serde_json::from_value(control["source_delivery_recovery"].clone()).ok();
+        let delivery = &run["delivery"];
+        let changes:Vec<_>=array(&delivery["plan"]["changes"]).iter().map(|c|serde_json::json!({"path":c["path"],"before":c["before"],"after":c["after"]["stamp"]})).collect();
+        snapshot.delivery_details = format!(
+            "Transfer only the displayed verified candidate changes to the original checkout. Previous entries remain in private delivery backups. This approval does not commit, push or publish the project.\n\n{}",
+            pretty(
+                &serde_json::json!({"state":delivery["state"],"source_checkout":delivery["plan"]["source_root"],"candidate_version":delivery["plan"]["candidate"]["content_hash"],"changes":changes,"conflicts":delivery["plan"]["conflicts"],"effects":delivery["effects"],"diagnostic":delivery["diagnostic"],"recovery":control["source_delivery_recovery"]})
+            )
+        );
+        if let Some(scope) = control["workspace_preparation_scope"].as_str() {
+            let plan = &run["workspace_plan"];
+            if plan["scope_hash"] == scope {
+                let selected: BTreeSet<String> = array(&plan["selectors"])
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect();
+                snapshot.workspace_preparation = Some((selected, scope.into()));
+                snapshot.workspace_preparation_details = format!(
+                    "Create only a private candidate from the displayed source version. The source checkout is preserved. Included local working copies/deletions become task-owned in the candidate; other local changes remain outside it. Activation and task execution require separate approvals.\n\n{}",
+                    pretty(
+                        &serde_json::json!({"source_root":plan["source"]["root"],"source_version":plan["source"]["content_hash"],"repository_commit":plan["source"]["repository"]["head"],"declared_scopes":plan["selectors"],"included_local_changes":plan["selected"],"all_observed_local_changes":plan["source"]["local_changes"],"candidate_file_count":plan["files"].as_object().map_or(0,|files|files.len()),"candidate_bytes":plan["files"].as_object().map(|files|files.values().filter_map(|f|f["length"].as_u64()).sum::<u64>()),"directory_inputs":plan["directory_inputs"],"project_prefix":plan["project_prefix"]})
+                    )
+                );
+            }
+        }
+        if let Some(scope) = control["workspace_activation_scope"].as_str() {
+            snapshot.workspace_activation = Some(scope.into());
+            snapshot.workspace_activation_details = format!(
+                "Validate and activate this captured private workspace in a new task revision. Accepted input contents must match. No provider, check command, source transfer or task execution is authorized by this action.\n\n{}",
+                pretty(
+                    &serde_json::json!({"workspace_id":run["managed_workspace"]["workspace_id"],"private_project":run["managed_workspace"]["receipt"]["project_root"],"candidate_commit":run["managed_workspace"]["receipt"]["commit"],"candidate_version":run["managed_workspace"]["receipt"]["observed"]["content_hash"],"source_workspace":run["spec"]["workspace"]})
+                )
+            );
+        }
         snapshot.baseline_active = array(&run["task_checks"])
             .iter()
             .any(|i| i["state"] == "intent" && i["plan"]["phase"] == "before_execution");
@@ -335,6 +452,33 @@ impl Snapshot {
                 }
             }
         }
+        if let Ok(captured) = serde_json::from_value::<crate::domain::Run>(run.clone())
+            && let Ok(wave) = crate::runtime::team::wave::pending(&captured)
+            && control["scope_hashes"]["step_team"].as_str() == Some(wave.scope_hash.as_str())
+        {
+            snapshot.pending_wave_details = format!(
+                "Authorize only the displayed scheduler wave. Executors and independent reviewers run in separate waves in supervised mode. Later tasks and project effects require their own approvals.\n\n{}",
+                pretty(&serde_json::to_value(&wave).unwrap_or(Value::Null))
+            );
+            snapshot.pending_wave = Some(wave);
+        }
+        snapshot.queued_orchestrator_turn = !run["reconciliation_required"]
+            .as_bool()
+            .unwrap_or(false)
+            && !matches!(
+                snapshot.status.as_str(),
+                "running" | "paused" | "completed" | "cancelled"
+            )
+            && values(&run["communication_ledger"]["messages"])
+                .iter()
+                .any(|message| {
+                    message["recipient_agent_id"] == "orchestrator"
+                        && matches!(message["sender"]["kind"].as_str(), Some("user" | "runtime"))
+                        && matches!(
+                            message["state"].as_str(),
+                            Some("accepted_runtime" | "queued_next_turn")
+                        )
+                });
         if let Some(packages) = control["orchestration_recoveries"].as_object() {
             for (key, value) in packages {
                 if let Ok(p) = serde_json::from_value::<
@@ -369,12 +513,20 @@ impl Snapshot {
             let response: Value =
                 serde_json::from_str(round["output"].as_str().unwrap_or_default())
                     .unwrap_or(Value::Null);
+            let proposal = response["intake_proposal_json"]
+                .as_str()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .unwrap_or(Value::Null);
+            let approach = proposal["task"]["team_template"]
+                .as_str()
+                .map(|name| format!("Selected team approach: {name}\n\n"))
+                .unwrap_or_default();
             snapshot.intake_proposal_details = format!(
                     "Approve the following task contract and routing selected by the orchestrator.
 This replaces the provisional interview scope and authorizes one read-only team-planning turn with independent review.
 It does not start task executors, run project checks, write files or approve quality gates.
 
-Proposal (requirements, profiles, local permissions, exact files/check argv):
+{}Proposal (requirements, profiles, local permissions, exact files/check argv):
 {}
 
 Proposed source hashes:
@@ -382,7 +534,7 @@ Proposed source hashes:
 
 Independent review:
 {}",
-                    pretty(&response["intake_proposal_json"].as_str().and_then(|raw| serde_json::from_str::<Value>(raw).ok()).unwrap_or(Value::Null)),
+                    approach,pretty(&proposal),
                     pretty(&serde_json::to_value(round["proposed_sources"].as_object().map(|sources| sources.iter().map(|(p, text)| (p.clone(),crate::hash(text.as_str().unwrap_or_default()))).collect::<BTreeMap<_,_>>())).unwrap_or(Value::Null)),
                     round["review"].as_str().unwrap_or_default());
         }
@@ -395,8 +547,27 @@ Independent review:
                 serde_json::from_str(round["output"].as_str().unwrap_or_default())
                     .unwrap_or(Value::Null);
             let raw = response["team_plan_json"].as_str().unwrap_or_default();
+            let resolved =
+                (|| -> crate::Result<crate::orchestration::planning::amendment::Resolved> {
+                    let value: Value = crate::transport::decode(raw.as_bytes())?;
+                    if value.get("format").is_some() {
+                        let captured: crate::domain::Run = serde_json::from_value(run.clone())?;
+                        let response = serde_json::from_value(response.clone())?;
+                        crate::orchestration::planning::amendment::resolve(&captured, &response)
+                    } else {
+                        Ok(crate::orchestration::planning::amendment::Resolved {
+                            team: serde_json::from_value(value)?,
+                            risk_owners: serde_json::from_value(response["risk_owners"].clone())
+                                .unwrap_or_default(),
+                            bases: vec![],
+                        })
+                    }
+                })();
             let assignments = (|| -> crate::Result<Vec<Value>> {
-                let team: crate::team::TeamPlan = crate::transport::decode(raw.as_bytes())?;
+                let team = &resolved
+                    .as_ref()
+                    .map_err(|e| crate::Error::Invalid(e.to_string()))?
+                    .team;
                 let spec: crate::domain::RunSpec = serde_json::from_value(run["spec"].clone())?;
                 let config = &spec
                     .config
@@ -415,9 +586,15 @@ Independent review:
                 pretty(
                     &serde_json::to_value(assignments.unwrap_or_default()).unwrap_or(Value::Null)
                 ),
-                pretty(&serde_json::from_str::<Value>(raw).unwrap_or(Value::Null)),
+                pretty(&serde_json::to_value(resolved.as_ref().ok()).unwrap_or(Value::Null)),
                 round["review"].as_str().unwrap_or_default()
             );
+            if !array(&round["review_parts"]).is_empty() {
+                let provenance:Vec<_>=array(&round["review_parts"]).iter().map(|p|serde_json::json!({
+                    "part":p["id"],"check_ids":p["check_ids"],"session":p["session_id"],"output_hash":p["output"].as_str().map(crate::hash)
+                })).collect();
+                snapshot.reviewed_team_details.push_str(&format!("\n\nThe report above is derived from all individually authenticated native parts. Every original check remains required; no single part approves this proposal.\n{}",pretty(&serde_json::json!(provenance))));
+            }
         }
         snapshot.team_stage_results =
             serde_json::from_value(control["team_stage_results"].clone()).unwrap_or_default();
@@ -536,17 +713,32 @@ Independent review:
         snapshot
             .run_details
             .insert("Quality gates".into(), pretty(&run["quality_gates"]));
-        let diff_report: Option<crate::workspace::DiffReport> = run
-            .get("spec")
-            .and_then(|spec| spec.get("workspace"))
-            .and_then(|ws| ws.as_str())
-            .and_then(|ws| {
-                let baseline: Option<std::collections::BTreeMap<String, String>> =
-                    serde_json::from_value(run["input_snapshot"].clone()).ok();
-                baseline
-                    .and_then(|b| crate::workspace::compute_diff(std::path::Path::new(ws), &b).ok())
-            });
-        let diff_text = if let Some(diff) = &diff_report {
+        let diff_report: Option<crate::workspace::DiffReport> =
+            if snapshot.intake || snapshot.workspace_required {
+                None
+            } else {
+                run.get("spec")
+                    .and_then(|spec| spec.get("workspace"))
+                    .and_then(|ws| ws.as_str())
+                    .and_then(|ws| {
+                        let baseline: Option<std::collections::BTreeMap<String, String>> =
+                            serde_json::from_value(
+                                run.get("diff_baseline")
+                                    .filter(|value| !value.is_null())
+                                    .unwrap_or(&run["input_snapshot"])
+                                    .clone(),
+                            )
+                            .ok();
+                        baseline.and_then(|b| {
+                            crate::workspace::compute_diff(std::path::Path::new(ws), &b).ok()
+                        })
+                    })
+            };
+        let diff_text = if snapshot.intake {
+            "Diff becomes available after the interview contract selects the task inputs.".into()
+        } else if snapshot.workspace_required {
+            "The candidate diff becomes available after the private workspace is prepared and activated.".into()
+        } else if let Some(diff) = &diff_report {
             let mut s = format!(
                 "Total files changed: {}\nTotal additions: +{}\nTotal deletions: -{}\n",
                 diff.files.len(),
@@ -559,6 +751,10 @@ Independent review:
                     "\n=== {} [{:?}] (+{} / -{}) ===\n",
                     f.path, f.status, f.additions, f.deletions
                 ));
+                if let Some(metadata) = &f.metadata_change {
+                    s.push_str(metadata);
+                    s.push('\n');
+                }
                 for c in comments {
                     if c["path"] == f.path && c["line_number"].is_null() {
                         s.push_str(&format!(
@@ -601,6 +797,35 @@ Independent review:
             s
         } else {
             "Diff inspection unavailable or workspace unmodified.".into()
+        };
+        let reviews = array(&run["diff_reviews"])
+            .iter()
+            .map(|review| {
+                serde_json::json!({
+                    "id":review["id"],"state":review["state"],"diff_hash":review["diff_hash"],
+                    "session_id":review["session_id"],"profile":review["profile"],
+                    "response":review["response"],"diagnostic":review["diagnostic"]
+                })
+            })
+            .collect::<Vec<_>>();
+        let prospective = serde_json::from_value::<crate::domain::Run>(run.clone())
+            .ok()
+            .and_then(|run| crate::runtime::diff_review::reviewer_profile(&run).ok());
+        let diff_text = if let Some(profile) = prospective {
+            format!(
+                "Independent diff reviewer profile:\n{}\n\n{diff_text}",
+                pretty(&serde_json::json!(profile))
+            )
+        } else {
+            diff_text
+        };
+        let diff_text = if reviews.is_empty() {
+            diff_text
+        } else {
+            format!(
+                "{diff_text}\n\nIndependent candidate reviews (separate from stage acceptance):\n{}",
+                pretty(&serde_json::json!(reviews))
+            )
         };
         snapshot.run_details.insert("Diff".into(), diff_text);
         let mut messages = values(&run["communication_ledger"]["messages"]);
@@ -779,6 +1004,8 @@ Independent review:
                     agent.group = "orchestration".into();
                     agent.task = if round["discovery_status"] == "running" {
                         "Discover CLI capabilities"
+                    } else if round["discovery_status"] == "observing_sources" {
+                        "Observe project sources for the interview"
                     } else if round["discovery_status"] == "queued" {
                         "CLI capability discovery queued"
                     } else if reviewing {
@@ -934,6 +1161,40 @@ Independent review:
                     .insert("Evidence".into(), pretty(&run["evidence"]));
                 snapshot.agents.push(agent);
             }
+        }
+        for review in array(&run["diff_reviews"]) {
+            let id = format!("diff-review:{}", field(review, "id"));
+            snapshot.agents.retain(|agent| agent.id != id);
+            let sessions: Vec<_> = values(&run["session_ledger"]["sessions"])
+                .into_iter()
+                .filter(|s| s["scope"]["agent_id"] == id)
+                .collect();
+            let current = latest_session(run, &sessions);
+            let mut agent = Agent {
+                id,
+                role: "Diff reviewer".into(),
+                provider: field(&review["profile"], "provider"),
+                model: field(&review["profile"], "model"),
+                status: if review["state"] == "running" {
+                    current
+                        .map(|session| field(session, "state"))
+                        .unwrap_or_else(|| "starting".into())
+                } else {
+                    field(review, "state")
+                },
+                group: "Code review".into(),
+                task: format!("Inspect candidate {}", field(review, "diff_hash")),
+                ..Agent::default()
+            };
+            agent.details.insert("Overview".into(), pretty(&serde_json::json!({
+                "state":review["state"],"profile":review["profile"],"diff_hash":review["diff_hash"],
+                "approval_scope":review["approval_scope"],"diagnostic":review["diagnostic"]
+            })));
+            session_details(&mut agent, run, &sessions, current);
+            agent
+                .details
+                .insert("Findings".into(), pretty(&review["response"]));
+            snapshot.agents.push(agent);
         }
         snapshot.agents.sort_by(|a, b| a.id.cmp(&b.id));
         snapshot

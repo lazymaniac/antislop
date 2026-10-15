@@ -178,50 +178,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     footer(frame, app, &theme, parts[2]);
     match app.view.clone() {
         View::Main => (),
-        View::Agent { tab } => {
-            let title = app
-                .selected()
-                .map(|a| format!("{} / {}", a.role, a.id))
-                .unwrap_or_else(|| "Agent no longer available".into());
-            let text = if tab == 7 {
-                "c: choose any visible element to comment on. u: inspect comment history, orchestrator reactions, resolve/reopen or delete. Comments bind to the observed element version.".into()
-            } else if tab == 4 {
-                let id = app.selected_agent_id.as_deref().unwrap_or("");
-                let messages = app
-                    .snapshot
-                    .messages
-                    .iter()
-                    .filter(|m| m.target == id || m.sender == id)
-                    .map(|m| {
-                        format!(
-                            "{} -> {} [{}] session:{}\n{}",
-                            m.sender, m.target, m.state, m.session, m.text
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                if messages.is_empty() {
-                    "No recorded messages. m writes to this agent. Adapter delivery: next-turn queue; delivery requires a session receipt.".into()
-                } else {
-                    messages
-                }
-            } else {
-                app.selected()
-                    .and_then(|a| a.details.get(AGENT_TABS[tab]))
-                    .cloned()
-                    .unwrap_or_else(|| "No recorded data available.".into())
-            };
-            detail(
-                frame,
-                app,
-                &theme,
-                main,
-                &format!("{title} | [ ] tabs · Esc back"),
-                &AGENT_TABS,
-                tab,
-                &text,
-            );
-        }
+        View::Agent { tab } => agent_detail(frame, app, &theme, main, tab),
         View::Run { tab } => {
             let text = app
                 .snapshot
@@ -316,7 +273,7 @@ Your chat draft is retained. Relative paths use the launch directory.",
             );
         }
         View::Help => {
-            let text = "Tab / Shift+Tab: cycle chat, team graph and task carousel (also on a narrow terminal)\nTeam: arrows select nodes by direction in the graph\nTasks: checklist carousel over the graph; [x] done, [*] in progress, [ ] to do\nTasks: Up/Down, PageUp/PageDown, Home/End turn it; the graph follows the owner\nTasks: Enter opens the owner; unfocused, it follows the active task\nEnter: agent details; [ / ] or Tab: detail tabs; Esc: back\nc: comment on any agent element; u: comment history and reactions\n/: search active panel; Enter finishes; Esc leaves the filter\ng: group by stage; r: graph relations; C: hide completed branches\ni: write orchestrator; m: write selected agent; b: broadcast\nEditor: arrows, Home/End, grapheme Backspace/Delete; Enter: newline\nCtrl+S / Ctrl+Enter: send; Esc: keep draft and leave editor\nChat: Up/Down, PageUp/PageDown scroll; / searches history\nCtrl+P: control actions, approvals, run details and run selection\nq outside editor / Ctrl+C: detach; daemon and run continue\nNO_COLOR=1 disables color; ARCHITECT_ASCII=1 uses ASCII display\n\nDelivery states are runtime observations, not animation.\nQueueing does not mean delivery. No hidden reasoning is shown.\n\nNew task: i, type a prompt, Ctrl+S starts an interview.\nNo SPEC.json is required. n optionally imports an existing spec.\nUse `antislop --help` for configuration and intake commands.";
+            let text = "Tab / Shift+Tab: cycle chat, team graph and task carousel (also on a narrow terminal)\nTeam: arrows select nodes by direction in the graph\nTasks: checklist carousel over the graph; [x] done, [*] in progress, [ ] to do\nTasks: Up/Down, PageUp/PageDown, Home/End turn it; the graph follows the owner\nTasks: Enter opens the owner; unfocused, it follows the active task\nEnter: agent details; [ / ] or Tab: detail tabs; Esc: back\nAgent details: / filters records; v toggles readable/raw data\nAgent details: Home/End, PageUp/PageDown; each tab retains its position\nc: comment on any agent element; u: comment history and reactions\n/: search active panel; Enter finishes; Esc leaves the filter\ng: group by stage; r: graph relations; C: hide completed branches\ni: write orchestrator; m: write selected agent; b: broadcast\nEditor: arrows, Home/End, grapheme Backspace/Delete; Enter: newline\nEditor: Up on the first line / Down on the last recall sent messages\nCtrl+S / Ctrl+Enter: send; Esc: keep draft and leave editor\nChat: Up/Down, PageUp/PageDown scroll; / searches history\nCtrl+P: control actions, approvals, run details and run selection\nq outside editor / Ctrl+C: detach; daemon and run continue\nNO_COLOR=1 disables color; ARCHITECT_ASCII=1 uses ASCII display\n\nDelivery states are runtime observations, not animation.\nQueueing does not mean delivery. No hidden reasoning is shown.\n\nNew task: i, type a prompt, Ctrl+S starts an interview.\nNo SPEC.json is required. n optionally imports an existing spec.\nUse `antislop --help` for configuration and intake commands.";
             detail(frame, app, &theme, main, "Help | Esc back", &[], 0, text);
         }
         View::Palette => {
@@ -456,6 +413,17 @@ fn footer(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             ("Esc", "keep draft"),
             ("Tab", "leave"),
         ]
+    } else if matches!(app.view, View::Agent { .. }) {
+        &[
+            ("[ ]", "tabs"),
+            ("Up/Down", "scroll"),
+            ("PgUp/PgDn", "page"),
+            ("Home/End", "jump"),
+            ("/", "find"),
+            ("v", "raw/readable"),
+            ("c", "comment"),
+            ("Esc", "back"),
+        ]
     } else if app.view != View::Main {
         &[
             ("Esc", "back"),
@@ -537,7 +505,7 @@ fn footer(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     draw_rows(frame.buffer_mut(), area, [&notice, &Row::new(fill, spans)]);
 }
 
-fn chat(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+fn chat(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect) {
     let editor_height = if app.editing {
         area.height.min(7)
     } else {
@@ -611,6 +579,16 @@ fn chat(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             width,
         ))
     };
+    if app.snapshot.orchestration_recovery_preparing {
+        notice(
+            "Sprawdzanie zapisanych przeglądów i aktualności źródeł. Raporty są zachowane; po zakończeniu pojawią się dostępne opcje kontynuacji. Możesz nadal przeglądać zadanie.",
+        );
+    }
+    if app.snapshot.orchestration_recovery_unavailable {
+        notice(
+            "Nie można udostępnić kontynuacji zapisanych przeglądów. Sprawdź aktualność źródeł i odśwież widok; wcześniejsze raporty pozostają zachowane.",
+        );
+    }
     if app.snapshot.awaiting_user_reply.is_some() {
         notice(
             "Orkiestrator czeka na Twoją odpowiedź. Odpowiedz na pytania powyżej w jednej wiadomości. Enter lub i otwiera pole odpowiedzi; Ctrl+S wysyła. Po wywiadzie zobaczysz propozycję zadania do akceptacji.",
@@ -625,6 +603,31 @@ fn chat(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         notice(
             "Reviewed agent team ready. Esc leaves the editor; a opens its roles, configurations and task plan for acceptance.",
         );
+    }
+    if app.snapshot.reviewed_intake_proposal.is_none()
+        && app.snapshot.reviewed_team_round.is_none()
+        && let Some((action, label)) = app.next_approval()
+    {
+        let instruction = if matches!(action, super::backend::Action::Orchestrate { .. }) {
+            "Your message is already queued. This starts a read-only reply; questions wait for you and complete proposals receive independent review."
+        } else if matches!(
+            action,
+            super::backend::Action::RecoverOrchestration {
+                kind: crate::runtime::orchestration_recovery::Kind::Restore,
+                ..
+            }
+        ) {
+            "Captured native reports are retained. This restores their checkpoint and authenticates the whole review without repeating a completed native turn."
+        } else if matches!(action, super::backend::Action::RecoverOrchestration { .. }) {
+            "The proposal and completed review parts are retained. This approves a distinct reviewer session for the missing/incomplete response, without repeating the orchestrator or completed parts."
+        } else if matches!(action, super::backend::Action::AcceptTeamStage { .. }) {
+            "Verified results await your acceptance. Review the result and its evidence before proceeding."
+        } else {
+            "The next team wave is ready. Review its tasks, profiles, write scopes and exact check commands."
+        };
+        notice(&format!(
+            "{label}. {instruction} Esc leaves the editor; a opens the approval card; Enter approves only that displayed step."
+        ));
     }
     if cards.is_empty() {
         cards.extend(card(
@@ -690,7 +693,7 @@ fn chat(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     editor(frame, app, theme, parts[2]);
 }
 
-fn editor(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
+fn editor(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect) {
     let title = if app.view == View::CreateRun {
         "SPEC.json path | Enter / Ctrl+S create | Esc back".into()
     } else if let Some(target) = &app.comment_target {
@@ -757,6 +760,7 @@ fn editor(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         card.width.saturating_sub(3),
         card.height.saturating_sub(1),
     );
+    app.active_editor_mut().set_wrap_width(inner.width as usize);
     let (text, x, y) = app
         .active_editor()
         .viewport(inner.width as usize, inner.height as usize);
@@ -843,15 +847,62 @@ fn progress(app: &App) -> (String, Vec<String>) {
         })
         .collect();
     let discovering = snapshot.status == "running"
-        && matches!(snapshot.discovery_status.as_str(), "running" | "queued");
+        && matches!(
+            snapshot.discovery_status.as_str(),
+            "running" | "queued" | "observing_sources"
+        );
     let lines = if snapshot.awaiting_user_reply.is_some() {
         vec![
             "Wywiad: odpowiedz na pytania w czacie".into(),
             "Enter / i: odpowiedź; Ctrl+S: wyślij".into(),
         ]
+    } else if snapshot.status == "running" && !snapshot.workspace_phase.is_empty() {
+        vec![snapshot.workspace_phase.clone()]
+    } else if snapshot.status == "running"
+        && snapshot
+            .context_progress
+            .iter()
+            .any(|(_, read, total)| read < total)
+    {
+        let mut lines = snapshot
+            .context_progress
+            .iter()
+            .map(|(agent, read, total)| {
+                if read < total {
+                    format!("{agent}: read context {read} / {total} bytes")
+                } else {
+                    format!("{agent}: context delivered; awaiting model")
+                }
+            })
+            .collect::<Vec<_>>();
+        lines.extend(
+            active
+                .iter()
+                .filter(|a| {
+                    !snapshot
+                        .context_progress
+                        .iter()
+                        .any(|(id, _, _)| id == &a.id)
+                })
+                .map(|a| format!("{} / {}: {}", a.group, a.role, a.task)),
+        );
+        lines
+    } else if snapshot.status == "running"
+        && let Some((received, total)) = snapshot.review_progress
+    {
+        if received == total {
+            vec![format!("Authenticate {total} received review reports")]
+        } else {
+            vec![
+                format!("Review plan: report {} / {total}", received + 1),
+                format!("{received} native reports received; final acceptance pending"),
+            ]
+        }
     } else if discovering {
         vec![
-            if snapshot.discovery_status == "running" {
+            if snapshot.discovery_status == "observing_sources" {
+                "Observe project sources for the interview"
+            } else if snapshot.discovery_status == "running" {
                 "Discover CLI capabilities"
             } else {
                 "CLI capability discovery queued"
@@ -879,6 +930,19 @@ fn progress(app: &App) -> (String, Vec<String>) {
     };
     let title = if snapshot.awaiting_user_reply.is_some() {
         "Czeka na Twoją odpowiedź".into()
+    } else if snapshot.status == "running" && !snapshot.workspace_phase.is_empty() {
+        "Current step | Workspace".into()
+    } else if snapshot.status == "running"
+        && snapshot
+            .context_progress
+            .iter()
+            .any(|(_, read, total)| read < total)
+    {
+        "Current step | Context delivery".into()
+    } else if snapshot.status == "running" && snapshot.review_progress.is_some() {
+        "Current step | Plan review".into()
+    } else if discovering && snapshot.discovery_status == "observing_sources" {
+        "Current step | Source observation".into()
     } else if discovering {
         "Current step | CLI discovery".into()
     } else if snapshot.status == "running" {
@@ -1233,5 +1297,154 @@ fn list(
         items.len(),
         offset,
         view,
+    );
+}
+
+/// Agent records use wrapped display rows, with bounded scrolling and a stable
+/// active-tab label even when the full tab bar cannot fit.
+fn agent_detail(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect, tab: usize) {
+    use super::inspector::{Kind, document};
+    frame.render_widget(Clear, area);
+    let fill = theme.overlay();
+    frame.buffer_mut().set_style(area, fill);
+    let title = app
+        .selected()
+        .map(|a| format!("{} / {}", a.role, a.id))
+        .unwrap_or_else(|| "Agent no longer available".into());
+    let mut header = vec![Row::new(
+        fill,
+        vec![styled(
+            theme.fit(&theme.clean(&title), area.width as usize),
+            theme.accent(),
+        )],
+    )];
+    let all_width: usize = AGENT_TABS.iter().map(|t| t.width() + 3).sum();
+    let mut tabs = vec![];
+    if all_width <= area.width as usize {
+        for (i, name) in AGENT_TABS.iter().enumerate() {
+            tabs.push(styled(
+                format!(" {name} "),
+                if i == tab {
+                    theme.selected()
+                } else {
+                    theme.dim()
+                },
+            ));
+            tabs.push(styled(" ", fill));
+        }
+    } else {
+        tabs.push(styled(
+            theme.fit(
+                &format!("< {}/{} {} >", tab + 1, AGENT_TABS.len(), AGENT_TABS[tab]),
+                area.width as usize,
+            ),
+            theme.selected(),
+        ));
+    }
+    header.push(Row::new(fill, tabs));
+    if area.height <= 2 {
+        header.swap(0, 1);
+    }
+    // Leave at least one content row, even at the smallest supported size.
+    let header_height = (header.len() as u16).min(area.height.saturating_sub(1));
+    let status_height = u16::from(area.height > header_height + 1);
+    let parts = vsplit(
+        area,
+        &[
+            Constraint::Length(header_height),
+            Constraint::Min(1),
+            Constraint::Length(status_height),
+        ],
+    );
+    draw_rows(frame.buffer_mut(), parts[0], &header);
+    let body = inset(parts[1], 1, 2);
+    let state = app.inspector_mut(tab).clone();
+    let document = document(app, tab, state.raw);
+    let query = state.query.to_lowercase();
+    // Keep complete records when searching, so matches retain their identity,
+    // state, evidence references and surrounding multiline output.
+    let mut groups: Vec<Vec<&super::inspector::Line>> = vec![vec![]];
+    for line in &document {
+        if state.raw && !query.is_empty() {
+            groups.push(vec![line]);
+            continue;
+        }
+        if matches!(line.kind, Kind::Record) && groups.last().is_some_and(|g| !g.is_empty()) {
+            groups.push(vec![]);
+        }
+        groups.last_mut().unwrap().push(line);
+    }
+    let mut rows = vec![];
+    for group in groups {
+        if !query.is_empty() && !group.iter().any(|l| l.text.to_lowercase().contains(&query)) {
+            continue;
+        }
+        for line in group {
+            let matched = !query.is_empty() && line.text.to_lowercase().contains(&query);
+            let style = if matched {
+                theme.selected()
+            } else {
+                match line.kind {
+                    Kind::Heading | Kind::Record => theme.accent(),
+                    Kind::Field => theme.text(),
+                    Kind::Status => theme.status(line.text.rsplit(": ").next().unwrap_or("")),
+                    Kind::Body => theme.text(),
+                }
+            };
+            for text in wrap(&theme.clean(&line.text), body.width as usize) {
+                rows.push(Row::new(fill, vec![styled(text, style)]));
+            }
+        }
+    }
+    if rows.is_empty() {
+        rows.push(Row::new(
+            fill,
+            vec![styled("No matching records.", theme.dim())],
+        ));
+    }
+    let searching = app.searching;
+    let state = app.inspector_mut(tab);
+    state.total = rows.len();
+    state.page = body.height as usize;
+    state.offset = state.offset.min(state.max_offset());
+    draw_rows(
+        frame.buffer_mut(),
+        body,
+        rows.iter().skip(state.offset).take(state.page),
+    );
+    scrollbar(
+        frame.buffer_mut(),
+        theme,
+        Rect::new(parts[1].right().saturating_sub(1), body.y, 1, body.height),
+        state.total,
+        state.offset,
+        state.page,
+    );
+    let position = format!(
+        "{}-{}/{}",
+        state.offset + 1,
+        (state.offset + state.page).min(state.total),
+        state.total
+    );
+    let mode = if state.raw { "Raw" } else { "Readable" };
+    let status = if searching || !state.query.is_empty() {
+        format!(
+            "/{0}{1} | {mode} | {position}",
+            state.query,
+            if searching { "_" } else { "" }
+        )
+    } else {
+        format!("{mode} | {position} | / find | v view")
+    };
+    draw_rows(
+        frame.buffer_mut(),
+        parts[2],
+        [&Row::new(
+            fill,
+            vec![styled(
+                theme.fit(&theme.clean(&status), area.width as usize),
+                theme.dim(),
+            )],
+        )],
     );
 }
