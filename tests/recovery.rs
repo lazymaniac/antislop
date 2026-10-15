@@ -199,3 +199,27 @@ fn v1_database_migration_preserves_state_and_materializes_document_hash() {
     assert!(chunk == text, "migrated document differs");
     assert_eq!(store.get(&run.id).unwrap().id, run.id);
 }
+#[test]
+fn unsettled_effects_name_the_blocking_run_in_overlapping_workspaces() {
+    let temp = tempfile::tempdir().unwrap();
+    let (blocking, _) = interrupted(temp.path());
+    let mut waiting = Run::new(id(), fixture(temp.path())).unwrap();
+    waiting.status = Status::Ready;
+    let mut store = Store::open(&temp.path().join("state.db")).unwrap();
+    store.save(&blocking, "interrupted", None).unwrap();
+    store.save(&waiting, "ready", None).unwrap();
+    let runtime = Arc::new(Runtime::new(store).unwrap());
+    let error = runtime
+        .dispatch(
+            &id(),
+            Command::Advance {
+                run_id: waiting.id.clone(),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(architect::runtime::OVERLAPPING_EFFECTS) && error.contains(&blocking.id),
+        "{error}"
+    );
+}

@@ -548,6 +548,7 @@ impl Backend for IpcBackend {
             })();
             return Ok(match start {
                 Ok(_) => "Message accepted. Orchestrator turn started; awaiting its response. Questions wait for your answer; complete proposals receive independent review.".into(),
+                Err(e) if e.to_string().contains(crate::runtime::OVERLAPPING_EFFECTS) => format!("Message queued; turn NOT started: {e}. Once that run is reconciled, Ctrl+P here starts the queued turn."),
                 Err(e) => format!("Message queued; turn start unconfirmed: {e}. Check status; Ctrl+P can start a queued turn when ready."),
             });
         }

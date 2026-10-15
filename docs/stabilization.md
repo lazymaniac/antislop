@@ -39,7 +39,7 @@ The session ledger records `turn_order` at each successful reservation, atomical
 
 Before writing a batch the runtime validates the entire edit scope and persists receipts containing every path and before/after hash. Each successful rename updates the source snapshot and persists its checkpoint. A crash in the gap is classified from actual bytes on restart as applied, unapplied or conflicting; it never causes automatic write replay.
 
-An interrupted attempt retains `reconciliation_required`. Repair/revision and overlapping managed runs cannot proceed until effects are reconciled and process leases are released. The snapshot exposes a fresh observed-input hash and a reconciliation scope hash. The explicit command binds both:
+An interrupted attempt retains `reconciliation_required`. Repair/revision and overlapping managed runs cannot proceed until effects are reconciled and process leases are released; the rejection names the blocking run. Orchestration turns whose orchestrator and reviewer have no write access (tool-free, pinned-context or read-only) are exempt from other runs' unsettled effects, so a fresh conversation starts regardless of earlier sessions; they still take the workspace lease. The snapshot exposes a fresh observed-input hash and a reconciliation scope hash. The explicit command binds both:
 
 ```json
 {"version":2,"request_id":"reconcile-1","idempotency_key":"reconcile-1","operation":{"type":"mutate","command":{"type":"reconcile","run_id":"RUN","scope_hash":"RECONCILE_SCOPE","input_hash":"OBSERVED_INPUT_HASH"}}}

@@ -16,6 +16,10 @@ pub mod team;
 mod turns;
 pub mod workspace;
 
+/// Prefix of the rejection raised when another run's unsettled effects block
+/// this workspace; clients match it to point at that run instead of retrying.
+pub const OVERLAPPING_EFFECTS: &str = "overlapping workspace has unresolved effects";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
@@ -813,16 +817,8 @@ impl Runtime {
                         .contains_key(&run.id),
                     "worker is still stopping",
                 )?;
-                for other in store.all()? {
-                    require(
-                        other.id == run.id
-                            || !other.reconciliation_required
-                            || !crate::recovery::overlaps(
-                                &run.spec.workspace,
-                                &other.spec.workspace,
-                            ),
-                        "overlapping workspace has unresolved effects",
-                    )?;
+                if !orchestration::read_only(&run)? {
+                    require_no_overlapping_effects(&store, &run)?;
                 }
                 lease = Some(crate::recovery::WorkspaceLease::acquire(
                     &run.spec.workspace,
@@ -1018,17 +1014,7 @@ impl Runtime {
                         .contains_key(&run.id),
                     "worker is still stopping",
                 )?;
-                for other in store.all()? {
-                    require(
-                        other.id == run.id
-                            || !other.reconciliation_required
-                            || !crate::recovery::overlaps(
-                                &run.spec.workspace,
-                                &other.spec.workspace,
-                            ),
-                        "overlapping workspace has unresolved effects",
-                    )?;
-                }
+                require_no_overlapping_effects(&store, &run)?;
                 lease = Some(crate::recovery::WorkspaceLease::acquire(
                     &run.spec.workspace,
                 )?);
@@ -1327,17 +1313,7 @@ impl Runtime {
                 run.spec.validate()?;
                 require(run.status == Status::Ready, "stage or repair not approved")?;
                 require(!run.reconciliation_required, "reconciliation is required")?;
-                for other in store.all()? {
-                    if other.id != run.id
-                        && other.reconciliation_required
-                        && crate::recovery::overlaps(&run.spec.workspace, &other.spec.workspace)
-                    {
-                        return Err(crate::Error::Invalid(
-                            "overlapping workspace has unresolved effects; reconcile it first"
-                                .into(),
-                        ));
-                    }
-                }
+                require_no_overlapping_effects(&store, &run)?;
                 lease = Some(crate::recovery::WorkspaceLease::acquire(
                     &run.spec.workspace,
                 )?);
@@ -1383,17 +1359,7 @@ impl Runtime {
                         .contains_key(&run.id),
                     "worker is still stopping",
                 )?;
-                for other in store.all()? {
-                    if other.id != run.id
-                        && other.reconciliation_required
-                        && crate::recovery::overlaps(&run.spec.workspace, &other.spec.workspace)
-                    {
-                        return Err(crate::Error::Invalid(
-                            "overlapping workspace has unresolved effects; reconcile it first"
-                                .into(),
-                        ));
-                    }
-                }
+                require_no_overlapping_effects(&store, &run)?;
                 lease = Some(crate::recovery::WorkspaceLease::acquire(
                     &run.spec.workspace,
                 )?);
@@ -1540,17 +1506,7 @@ impl Runtime {
                         "current artifact runner evidence is missing",
                     )?;
                 }
-                for other in store.all()? {
-                    require(
-                        other.id == run.id
-                            || !other.reconciliation_required
-                            || !crate::recovery::overlaps(
-                                &run.spec.workspace,
-                                &other.spec.workspace,
-                            ),
-                        "overlapping workspace has unresolved effects; reconcile it first",
-                    )?;
-                }
+                require_no_overlapping_effects(&store, &run)?;
                 lease = Some(crate::recovery::WorkspaceLease::acquire(
                     &run.spec.workspace,
                 )?);
@@ -2796,6 +2752,22 @@ fn record_approval(run: &mut Run, action: &str, scope_hash: &str) {
         spec_revision: run.spec_revision,
         actor: "local_user".into(),
     });
+}
+
+/// Unsettled effects of any run block work in every overlapping workspace.
+/// Name the blocking run: only reconciling it (not cancelling) settles them.
+fn require_no_overlapping_effects(store: &Store, run: &Run) -> Result<()> {
+    match store.all()?.into_iter().find(|other| {
+        other.id != run.id
+            && other.reconciliation_required
+            && crate::recovery::overlaps(&run.spec.workspace, &other.spec.workspace)
+    }) {
+        Some(other) => Err(crate::Error::Invalid(format!(
+            "{OVERLAPPING_EFFECTS} in run {}; open that run and reconcile it first (cancelling does not settle its effects)",
+            other.id
+        ))),
+        None => Ok(()),
+    }
 }
 
 fn approve(run: &mut Run, action: &str, scope_hash: &str) -> Result<()> {

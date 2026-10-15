@@ -52,6 +52,32 @@ fn interview_source_current(
     }))
 }
 
+/// An orchestration turn whose orchestrator and reviewer both lack write access
+/// never changes the workspace, so other runs' unsettled effects cannot concern
+/// it: a fresh conversation starts regardless of earlier sessions.
+pub(super) fn read_only(run: &Run) -> Result<bool> {
+    use crate::config::IsolationProfile;
+    let config = &run
+        .spec
+        .config
+        .as_ref()
+        .ok_or_else(|| {
+            crate::Error::Invalid("orchestrator requires explicit pinned configuration".into())
+        })?
+        .config;
+    for role in [RoleKind::Orchestrator, RoleKind::Verifier] {
+        if !matches!(
+            config.resolve(WorkKind::Orchestration, role)?.isolation,
+            IsolationProfile::ToolFree
+                | IsolationProfile::PinnedContext
+                | IsolationProfile::ReadOnly
+        ) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub(super) fn prepare(run: &mut Run, scope: &str) -> Result<Status> {
     run.spec.validate()?;
     require(

@@ -4246,3 +4246,27 @@ fn incomplete_positive_management_review_can_be_replaced_without_repeating_the_o
         "substantive findings cannot be waived through replacement"
     );
 }
+
+#[test]
+fn a_new_read_only_conversation_ignores_other_runs_unsettled_effects() {
+    let f = Fixture::new("intake-guided");
+    let mut earlier = f.current();
+    earlier.status = Status::Blocked;
+    earlier.reconciliation_required = true;
+    f.runtime
+        .store
+        .lock()
+        .unwrap()
+        .save(&earlier, "interrupted", None)
+        .unwrap();
+    let waiting = reviewed_interview(&f);
+    assert_eq!(
+        waiting.orchestration_rounds[0].status,
+        RoundStatus::AwaitingUser
+    );
+    let earlier = f.current();
+    assert!(
+        earlier.reconciliation_required,
+        "earlier effects stay unsettled"
+    );
+}
