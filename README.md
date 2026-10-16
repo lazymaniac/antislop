@@ -1,12 +1,14 @@
 # antislop
 
 A local team of AI agents that works on your project through the CLIs you
-already use (Codex, Antigravity `agy`, Claude Code). You talk to an
+already use (Codex, Antigravity `agy`, Claude Code, Gemini CLI). You talk to an
 orchestrator; it answers, or proposes a plan of tasks. Each task is done by a
 worker and checked by its own verifier, and approved changes land on your
 branch. The product specification is [design.md](design.md); how the runtime
 works, what it guarantees and what is still open is in
-[docs/lean-core.md](docs/lean-core.md).
+[docs/lean-core.md](docs/lean-core.md); how each acceptance scenario of the
+design is met, and which ones rest on agents' instructions rather than the
+runtime, is in [docs/acceptance.md](docs/acceptance.md).
 
 The library keeps the `architect` crate name.
 

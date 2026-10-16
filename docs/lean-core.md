@@ -336,3 +336,10 @@ replaced when idle. The socket is `<state>/core.sock`, or
    `tests/lean_writer.rs`, `src/lean/diff.rs`).
 12. ✅ In-place mode with snapshot commits (design §11.1;
    `tests/lean_writer.rs`, `src/lean/git.rs`).
+13. ✅ Acceptance scenarios of design §18 mapped to mechanisms and tests
+   ([acceptance.md](acceptance.md)); runtime gaps closed: verdict coverage of
+   every obligation, idempotent integration, writers never given directories
+   outside the project, configuration kept by a busy daemon.
+
+Open (design M5): measuring real CLIs on the scenarios that rest on
+instructions, and a schema version for `core.db`.
