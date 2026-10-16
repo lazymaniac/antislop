@@ -13,7 +13,7 @@ def bump(name):
     return n
 def cover(answer):
     import re
-    ids = re.findall(r"^- ([RC][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
     if not ids or "```verdict" not in answer:
         return answer
     head, body = answer.rsplit("```verdict", 1)
@@ -361,7 +361,7 @@ fn an_obligation_marked_issue_sends_its_note_to_the_worker() {
         RISKY_PLAN,
         r#"
 import re
-ids = re.findall(r"^- ([RC][0-9]+): ", prompt, re.M)
+ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 elif "You verify" in prompt:

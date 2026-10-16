@@ -85,16 +85,23 @@ impl Core {
             .create(true)
             .truncate(false)
             .open(state.join("core.lock"))?;
+        // A process that just let go (a daemon exiting, or a child forked
+        // before its exec closed the descriptor) may hold it for a moment.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         // SAFETY: flock on an owned descriptor that lives as long as the Core.
-        require(
-            unsafe {
-                libc::flock(
-                    std::os::fd::AsRawFd::as_raw_fd(&lock),
-                    libc::LOCK_EX | libc::LOCK_NB,
-                )
-            } == 0,
-            &format!("another antislop process owns {}", state.display()),
-        )?;
+        let locked = || unsafe {
+            libc::flock(
+                std::os::fd::AsRawFd::as_raw_fd(&lock),
+                libc::LOCK_EX | libc::LOCK_NB,
+            ) == 0
+        };
+        while !locked() {
+            require(
+                std::time::Instant::now() < deadline,
+                &format!("another antislop process owns {}", state.display()),
+            )?;
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let store = Store::open(&state.join("core.db"))?;
         let cut_off = store.interrupt_running_turns()?;
         let interrupted = store.interrupt_unfinished_tasks()?;

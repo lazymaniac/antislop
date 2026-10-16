@@ -357,6 +357,7 @@ pub fn review_lines(who: &str, review: &Value) -> Vec<String> {
             {
                 Some("ok") => "✓",
                 Some("issue") => "✗",
+                Some("blocked") => "!",
                 Some("n/a") => "–",
                 _ => "?",
             };

@@ -321,12 +321,15 @@ fn checks(stored: &Value) -> Vec<(Style, String)> {
         {
             Some("ok") => ("✓", Style::default().fg(Color::Green)),
             Some("issue") => ("✗", Style::default().fg(Color::Red)),
+            Some("blocked") => ("!", Style::default().fg(Color::Yellow)),
             Some("n/a") => ("–", dim()),
             _ if stored["verdict"].is_null() => ("○", dim()),
             _ => ("?", Style::default().fg(Color::Yellow)),
         };
         let kind = if id.starts_with('R') {
             "ryzyko"
+        } else if id.starts_with('V') {
+            "wspólna"
         } else {
             "kontrola"
         };

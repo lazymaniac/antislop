@@ -38,7 +38,7 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
             + r#"
 def cover(answer):
     import re
-    ids = re.findall(r"^- ([RC][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
     if not ids or "```verdict" not in answer:
         return answer
     head, body = answer.rsplit("```verdict", 1)

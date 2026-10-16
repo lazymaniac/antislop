@@ -260,9 +260,13 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - A failed or skipped task skips everything that depends on it, transitively.
   A failed task's report keeps the agent's error.
 - A verdict that approves while listing high or medium findings is a
-  rejection. A task verifier's verdict approves only when it accounts for
-  every obligation with a note; one marked `issue` rejects it and its note
-  reaches the worker. A verdict that leaves obligations out is asked for once
+  rejection. A task verifier's obligations are the task's risks (`R1`…),
+  the checks of every verification (`V1`…: each requirement with its
+  qualifiers, key claims reproduced, a counterexample sought, nothing beyond
+  scope, earlier findings resolved; design §7.6) and its kind's checklist
+  (`C1`…). Its verdict approves only when it accounts for every obligation
+  with a note; one marked `issue`, or `blocked` (could not be settled:
+  missing data is not `ok`), rejects it and its note reaches the worker. A verdict that leaves obligations out is asked for once
   more in the verifier's session (earlier entries kept), then the task waits
   for the user: the worker cannot fix a verifier that skipped its checks
   (design §18 scenario 30). A plan where a task depends on itself or a later task is

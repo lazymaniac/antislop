@@ -16,7 +16,7 @@ with open({log:?}, "a") as f:
     f.write(json.dumps({{"bin": sys.argv[0].rsplit("/", 1)[-1], "prompt": prompt}}) + "\n")
 def verdict(approved):
     import re
-    ids = re.findall(r"^- ([RC][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
     coverage = {{i: {{"status": "ok", "note": "checked"}} for i in ids}}
     return "```verdict\n" + json.dumps({{"approved": approved, "findings": [], "coverage": coverage}}) + "\n```"
 def task(id, title, depends=()):

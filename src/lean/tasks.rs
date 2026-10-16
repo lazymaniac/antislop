@@ -206,8 +206,19 @@ pub fn parse_verdict(answer: &str) -> Verdict {
     verdict
 }
 
+/// What every verification checks whatever the kind of work (design §7.6,
+/// V02 and V04–V07; the runtime pins the basis and keeps verifiers
+/// independent, V01 and V08, and the coverage itself is V03).
+pub const COMMON_CHECKS: &str = "every requirement of the goal accounted for, \
+     with each qualifier, exception and prohibition; the key claims \
+     reproduced yourself, not taken from the worker's report; a \
+     counterexample or a failing premise looked for, not only the expected \
+     path; nothing beyond the agreed scope and no hidden change of it; \
+     earlier findings resolved on the current version, with evidence";
+
 /// What a task's verifier must account for in its verdict, with ids: the
-/// risks its task names (`R1`…) and its kind's checklist (`C1`…).
+/// risks its task names (`R1`…), the common checks (`V1`…) and its kind's
+/// checklist (`C1`…).
 pub fn obligations(task: &TaskSpec) -> Vec<(String, String)> {
     let risks = task
         .verifier
@@ -215,11 +226,15 @@ pub fn obligations(task: &TaskSpec) -> Vec<(String, String)> {
         .iter()
         .enumerate()
         .map(|(index, risk)| (format!("R{}", index + 1), risk.clone()));
-    let checks = checklist(task.kind)
-        .split("; ")
-        .enumerate()
-        .map(|(index, check)| (format!("C{}", index + 1), check.to_owned()));
-    risks.chain(checks).collect()
+    let numbered = |prefix: &'static str, list: &'static str| {
+        list.split("; ")
+            .enumerate()
+            .map(move |(index, check)| (format!("{prefix}{}", index + 1), check.to_owned()))
+    };
+    risks
+        .chain(numbered("V", COMMON_CHECKS))
+        .chain(numbered("C", checklist(task.kind)))
+        .collect()
 }
 
 fn obligations_text(obligations: &[(String, String)]) -> String {
@@ -231,8 +246,8 @@ fn obligations_text(obligations: &[(String, String)]) -> String {
 }
 
 /// The obligations a verdict does not account for: missing, with another
-/// status than ok, issue or n/a, or without a note on what was checked or
-/// why it does not apply.
+/// status than ok, issue, blocked or n/a, or without a note on what was
+/// checked or why it does not apply.
 pub fn unaccounted<'a>(
     verdict: &Verdict,
     obligations: &'a [(String, String)],
@@ -249,13 +264,14 @@ pub fn unaccounted<'a>(
             let noted = entry["note"]
                 .as_str()
                 .is_some_and(|note| !note.trim().is_empty());
-            !(noted && matches!(status.as_deref(), Some("ok" | "issue" | "n/a")))
+            !(noted && matches!(status.as_deref(), Some("ok" | "issue" | "blocked" | "n/a")))
         })
         .collect()
 }
 
 /// A verdict counts only with every obligation accounted for; one marked
-/// `issue` rejects it, and its note reaches the worker as a finding.
+/// `issue` or `blocked` (it could not be settled; missing data is not `ok`)
+/// rejects it, and its note reaches the worker as a finding.
 pub fn settle(verdict: &mut Verdict, obligations: &[(String, String)]) {
     let missing = unaccounted(verdict, obligations);
     if !missing.is_empty() {
@@ -279,17 +295,21 @@ pub fn settle(verdict: &mut Verdict, obligations: &[(String, String)]) {
             .get(id.as_str())
             .cloned()
             .unwrap_or_default();
-        if entry["status"]
-            .as_str()
-            .is_some_and(|status| status.eq_ignore_ascii_case("issue"))
-        {
-            verdict.approved = false;
-            verdict.findings.push(serde_json::json!({
-                "severity": "medium",
-                "issue": format!("{text}: {}", entry["note"].as_str().unwrap_or_default()),
-                "where": id,
-            }));
-        }
+        let status = entry["status"].as_str().map(str::to_ascii_lowercase);
+        let unsettled = match status.as_deref() {
+            Some("issue") => "",
+            Some("blocked") => "could not be settled: ",
+            _ => continue,
+        };
+        verdict.approved = false;
+        verdict.findings.push(serde_json::json!({
+            "severity": "medium",
+            "issue": format!(
+                "{unsettled}{text}: {}",
+                entry["note"].as_str().unwrap_or_default()
+            ),
+            "where": id,
+        }));
     }
 }
 
@@ -597,8 +617,8 @@ pub fn verifier_prompt(
          directory: {project}. Check the worker's claims against the actual \
          files yourself with your tools. Work read-only.\n\n\
          Task: {}\nGoal: {}\nScope: {}\nYour focus: {}\n\n\
-         Your obligations (the task's risks, then the checks for this kind of \
-         work):\n{}{risks}\n\n\
+         Your obligations (the task's risks, the checks of every verification, \
+         then those for this kind of work):\n{}{risks}\n\n\
          The worker's report:\n<<<\n{report}\n>>>\n\n{}{VERDICT_FORMAT} {COVERAGE_FORMAT}",
         task.title,
         task.goal,
@@ -764,9 +784,11 @@ const VERDICT_FORMAT: &str = "End your answer with a verdict block:\n\
      Approve only when no high or medium findings remain.";
 
 const COVERAGE_FORMAT: &str = "Your verdict must also account for every \
-     obligation by its id: \"coverage\": {\"R1\": {\"status\": \"ok|issue|n/a\", \
-     \"note\": \"what you checked, or why it does not apply\"}, \"C1\": {...}}. \
-     A verdict that leaves one out, or marks one issue, does not approve the task.";
+     obligation by its id: \"coverage\": {\"R1\": {\"status\": \"ok|issue|blocked|n/a\", \
+     \"note\": \"what you checked, or why it does not apply\"}, \"V1\": {...}, \"C1\": {...}}. \
+     Use blocked when you could not settle it (missing data is not ok) and n/a \
+     only with a reason tied to this task. A verdict that leaves one out, or \
+     marks one issue or blocked, does not approve the task.";
 
 fn scope_text(scope: &[String]) -> String {
     if scope.is_empty() {
@@ -860,10 +882,10 @@ mod tests {
         .unwrap();
         let obligations = obligations(&task);
         assert_eq!(obligations[0], ("R1".to_owned(), "units".to_owned()));
-        assert_eq!(obligations[1].0, "C1");
+        assert_eq!(obligations[1].0, "V1");
         assert_eq!(
             obligations.len(),
-            1 + checklist(task.kind).split("; ").count()
+            1 + COMMON_CHECKS.split("; ").count() + checklist(task.kind).split("; ").count()
         );
 
         let mut skipped = parse_verdict("```verdict\n{\"approved\": true}\n```");
@@ -895,11 +917,16 @@ mod tests {
 
         verdict.coverage["C1"] = serde_json::json!({"status": "N/A", "note": "no data"});
         verdict.coverage["R1"] = serde_json::json!({"status": "issue", "note": "EUR + PLN"});
+        verdict.coverage["V2"] =
+            serde_json::json!({"status": "blocked", "note": "no data to rerun"});
         settle(&mut verdict, &obligations);
         assert!(!verdict.approved);
         assert_eq!(
             findings_text(&verdict.findings),
-            "- [medium] units: EUR + PLN (R1)"
+            format!(
+                "- [medium] units: EUR + PLN (R1)\n- [medium] could not be settled: {}: no data to rerun (V2)",
+                obligations[2].1
+            )
         );
     }
 
