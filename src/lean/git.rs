@@ -95,6 +95,19 @@ pub fn commit_paths(dir: &Path, files: &[String], message: &str) -> Result<Strin
     let mut add = vec!["--literal-pathspecs", "add", "--all", "--"];
     add.extend(files.iter().map(String::as_str));
     ok(dir, &add)?;
+    // Committed already, by a run cut off before it recorded that.
+    let mut staged = vec![
+        "--literal-pathspecs",
+        "diff",
+        "--cached",
+        "--quiet",
+        "HEAD",
+        "--",
+    ];
+    staged.extend(files.iter().map(String::as_str));
+    if git(dir, &staged)?.status.success() {
+        return head(dir);
+    }
     let mut commit = vec![
         "--literal-pathspecs",
         "-c",
@@ -232,6 +245,15 @@ pub enum Integration {
 /// current branch.
 pub fn integrate(project: &Path, base: &str, change: &str, commit: bool) -> Result<Integration> {
     let files = changed_files(project, base, change)?;
+    // Landed already, by a run cut off before it recorded that: never twice.
+    if unchanged_since(project, change, &files)? {
+        if !commit {
+            return Ok(Integration::Applied);
+        }
+        if blobs(project, "HEAD", &files)? == blobs(project, change, &files)? {
+            return Ok(Integration::Committed(head(project)?));
+        }
+    }
     // Uncommitted files that are exactly as the worker started from (for
     // example an earlier task's applied result) are not the user's edits.
     if !commit && unchanged_since(project, base, &files)? {
@@ -412,6 +434,36 @@ mod tests {
     }
 
     #[test]
+    fn a_change_that_already_landed_is_not_landed_again() {
+        let project = repo();
+        let (_trees, base, change) = worker_change(project.path(), "a.txt", "changed\n");
+        let Integration::Committed(first) =
+            integrate(project.path(), &base, &change, true).unwrap()
+        else {
+            panic!("not committed");
+        };
+        assert_eq!(
+            integrate(project.path(), &base, &change, true).unwrap(),
+            Integration::Committed(first.clone())
+        );
+        assert_eq!(head(project.path()).unwrap(), first, "no second commit");
+
+        let project = repo();
+        let (_trees, base, change) = worker_change(project.path(), "a.txt", "changed\n");
+        for _ in 0..2 {
+            assert_eq!(
+                integrate(project.path(), &base, &change, false).unwrap(),
+                Integration::Applied
+            );
+        }
+        assert_eq!(head(project.path()).unwrap(), base);
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("a.txt")).unwrap(),
+            "changed\n"
+        );
+    }
+
+    #[test]
     fn user_edits_and_conflicts_leave_the_project_untouched() {
         let project = repo();
         let (_trees, base, change) = worker_change(project.path(), "a.txt", "worker\n");
@@ -565,5 +617,7 @@ mod snapshot_tests {
         let status =
             String::from_utf8(git(path, &["status", "--porcelain"]).unwrap().stdout).unwrap();
         assert_eq!(status, "M  b.txt\n", "the user's staged edit stays staged");
+        let again = commit_paths(path, &["a.txt".into(), "c.txt".into()], "task").unwrap();
+        assert_eq!(again, commit, "nothing committed twice");
     }
 }
