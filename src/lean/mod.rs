@@ -19,11 +19,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use store::{Conversation, Mail, Message, Store, Task, TurnStatus};
+use store::{Comment, Conversation, Mail, Message, Store, Task, TurnStatus};
 use tasks::{TaskSpec, Verdict, status};
 
 const ORCHESTRATOR: &str = "orchestrator";
 const RUNTIME: &str = "runtime";
+/// How a comment's message starts, before its id.
+pub const COMMENT_PREFIX: &str = "[user comment #";
 /// Checks each plan before the user sees it.
 const PLAN_VERIFIER: &str = "plan-verifier";
 /// Checks, after a plan ran, that the user's request was fully delivered.
@@ -168,6 +170,46 @@ impl Core {
             );
         }
         Ok(json!(self.send(conversation, text)?.seq))
+    }
+
+    /// The user's comment on one element: it reaches the orchestrator as a
+    /// message now and stays in its prompts until the user resolves it.
+    pub fn comment(
+        self: &Arc<Self>,
+        conversation: &str,
+        target: &str,
+        text: &str,
+    ) -> Result<Comment> {
+        self.store.conversation(conversation)?;
+        let text = text.trim();
+        require(!text.is_empty(), "the comment is empty")?;
+        require(!target.trim().is_empty(), "the comment has no element")?;
+        let plan = self.store.latest_plan(conversation)?;
+        let label = comment_label(target, &plan);
+        let comment = self.store.add_comment(
+            conversation,
+            &Comment {
+                id: 0,
+                plan_id: plan.first().map(|task| task.plan_id.clone()),
+                target: target.into(),
+                label: label.clone(),
+                text: text.into(),
+                status: "open".into(),
+                message: 0,
+            },
+            |id| format!("{COMMENT_PREFIX}{id} on {label}] {text}"),
+        )?;
+        self.wake(conversation);
+        Ok(comment)
+    }
+
+    /// Resolves, reopens or deletes a comment; only the user does this.
+    pub fn set_comment(&self, conversation: &str, id: u64, status: &str) -> Result<Comment> {
+        require(
+            matches!(status, "open" | "resolved" | "deleted"),
+            "a comment is open, resolved or deleted",
+        )?;
+        self.store.set_comment_status(conversation, id, status)
     }
 
     /// Stops the orchestrator's turn and any running plan; queued messages stay.
@@ -350,8 +392,16 @@ impl Core {
             access: agent::Access::ReadOnly,
             upto_message: upto,
         };
+        // Comments the user has not resolved stay in view; the ones asked in
+        // this turn already are.
+        let open: Vec<Comment> = self
+            .store
+            .comments(conversation, "open")?
+            .into_iter()
+            .filter(|comment| comment.message <= answered)
+            .collect();
         let Some(answer) = self.turn(setup, cancel, |first| {
-            orchestrator_prompt(&project, first, &asked)
+            orchestrator_prompt(&project, first, &asked, &open)
         })?
         else {
             return Ok(());
@@ -1127,7 +1177,48 @@ fn branch(task: &Task) -> String {
     format!("antislop/{}", &task.id[..8])
 }
 
-fn orchestrator_prompt(project: &Path, first: bool, messages: &[Message]) -> String {
+/// What a comment's target is, in the orchestrator's words.
+fn comment_label(target: &str, plan: &[Task]) -> String {
+    let task = |id: &str| {
+        plan.iter()
+            .find(|task| task.spec["id"] == id)
+            .map(|task| {
+                format!(
+                    "task {id} \"{}\"",
+                    task.spec["title"].as_str().unwrap_or_default()
+                )
+            })
+            .unwrap_or_else(|| format!("task {id}"))
+    };
+    match target.split_once(':') {
+        Some(("worker", id)) => format!("the worker of {}", task(id)),
+        Some(("verifier", id)) => format!("the verifier of {}", task(id)),
+        Some(("diff", rest)) => {
+            let mut parts = rest.splitn(3, ':');
+            let id = parts.next().unwrap_or_default();
+            match (parts.next(), parts.next()) {
+                (Some(file), Some(line)) => {
+                    format!("line {line} of {file} in the change of {}", task(id))
+                }
+                (Some(file), None) => format!("{file} in the change of {}", task(id)),
+                _ => format!("the change of {}", task(id)),
+            }
+        }
+        _ => match target {
+            ORCHESTRATOR => "your own work".into(),
+            PLAN_VERIFIER => "the plan verifier's review".into(),
+            AUDITOR => "the auditor's report".into(),
+            other => other.into(),
+        },
+    }
+}
+
+fn orchestrator_prompt(
+    project: &Path,
+    first: bool,
+    messages: &[Message],
+    open: &[Comment],
+) -> String {
     let mut prompt = String::new();
     if first {
         prompt.push_str(&format!(
@@ -1149,5 +1240,17 @@ fn orchestrator_prompt(project: &Path, first: bool, messages: &[Message]) -> Str
         })
         .collect();
     prompt.push_str(&texts.join("\n\n"));
+    if !open.is_empty() {
+        prompt.push_str(
+            "\n\nComments the user has not resolved yet (answer, ask, or propose work for \
+             them; only the user resolves a comment):",
+        );
+        for comment in open {
+            prompt.push_str(&format!(
+                "\n- #{} on {}: {}",
+                comment.id, comment.label, comment.text
+            ));
+        }
+    }
     prompt
 }

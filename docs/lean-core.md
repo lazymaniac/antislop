@@ -113,6 +113,18 @@ TUI shows each message as waiting for the recipient's next turn and then as
 received: the CLIs offer no delivery into a running turn, so none is
 pretended.
 
+## Comments
+
+A comment targets one element by key: an agent (`worker:t2`, `verifier:t2`,
+`orchestrator`, `plan-verifier`, `auditor`) or a diff (`diff:t2:FILE[:LINE]`).
+It is stored with the plan it was made on and reaches the orchestrator at once
+as a user message `[user comment #N on <what it is>] text` (one transaction
+with the comment, so a crash cannot keep one without the other). Until the user
+resolves or deletes it, every later orchestrator prompt lists it under
+"Comments the user has not resolved yet"; delivery never resolves it, and a
+comment grants nothing: work it asks for goes through a plan as usual. Every
+change is a `comment` event carrying the whole comment.
+
 ## State
 
 `core.db`, WAL, normal synchronous:
@@ -122,6 +134,7 @@ pretended.
 - `turns(id, conversation_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms)`
 - `tasks(id, conversation_id, plan_id, position, spec, status, round, report, verdict, base, result, created_ms)`
 - `mail(id, conversation_id, sender, recipient, kind, text, created_ms, delivered_turn, delivered_ms)`
+- `comments(id, conversation_id, plan_id, target, label, text, status, message, created_ms, updated_ms)`
 - `events(seq, conversation_id, turn_id, kind, payload)` — append-only; tool
   calls are stored as a name and a one-line detail, never their output.
 
@@ -137,7 +150,8 @@ recorded whole when its turn ends.
 (`core.lock` makes it the only owner), so work goes on after a frontend exits.
 One JSON request per connection: `identity`, `shutdown`, `conversations`,
 `start`, `send`, `accept`, `resume`, `cancel`, `task{plan, id}` (one stored task with
-its report, verdict and commits), and `events{conversation, after, wait_ms}`,
+its report, verdict and commits), `comment{conversation, target, text}`,
+`comment_status{conversation, id, status}`, and `events{conversation, after, wait_ms}`,
 a long poll returning at most 500 events / 1 MB. A daemon from another build is
 replaced when idle. The socket is `<state>/core.sock`, or
 `/tmp/antislop-<uid>/<hash>.sock` when that path is too long for Unix sockets.
@@ -162,7 +176,11 @@ replaced when idle. The socket is `<state>/core.sock`, or
   Enter opens its details full screen: Przegląd (task, scope, goal, the
   verifier's focus and, for a verifier, its risks), Sesja (the agent's turns
   and tool calls), Wiadomości (mail to and from it) and Wynik (the worker's
-  report and commits, or the verifier's verdict). Keys: Enter send, Alt+Enter
+  report and commits, or the verifier's verdict) and Komentarze. `c` comments
+  on the selected agent (in the graph or its details); a box shows how many
+  comments on it are open. On Komentarze, `r` resolves, `o` reopens and `d`
+  deletes the selected one; a comment made on an earlier plan is marked so.
+  Keys: Enter send, Alt+Enter
   new line, Ctrl+A run the proposed plan, Ctrl+R resume what the plan left
   unfinished, Ctrl+X cancel, PgUp/PgDn scroll, Ctrl+N new conversation, Esc
   back (from the chat: detach), `q` in the graph detaches.
@@ -244,3 +262,5 @@ replaced when idle. The socket is `<state>/core.sock`, or
    (`tests/lean_messages.rs`).
 9. ✅ TUI team graph, progress overlay and agent details (design §8.1–8.4;
    unit tests in `src/lean/tui`).
+10. ✅ Persistent comments on agents and diffs (design §8.5;
+   `tests/lean_messages.rs`).

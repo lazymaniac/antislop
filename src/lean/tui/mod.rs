@@ -13,7 +13,7 @@ use crate::Result;
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
 };
-use details::{Details, TABS};
+use details::{COMMENTS, Details, RESULT, TABS};
 use graph::{Canvas, Filter, Graph};
 use ratatui::{
     Frame,
@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
-use view::{ORCHESTRATOR, View, dim, truncate, wrap};
+use view::{ORCHESTRATOR, View, dim, target_name, truncate, wrap};
 
 /// Narrower terminals show one panel at a time.
 const SIDE_BY_SIDE: u16 = 100;
@@ -46,6 +46,12 @@ enum Update {
         key: String,
         task: Value,
     },
+}
+
+/// A comment being written on one element.
+struct Editor {
+    target: String,
+    text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +79,7 @@ struct App {
     /// The graph's top-left corner shown in its panel.
     offset: (u16, u16),
     details: Option<Details>,
+    editor: Option<Editor>,
 }
 
 impl App {
@@ -83,6 +90,7 @@ impl App {
         self.view = View::default();
         self.scroll = 0;
         self.details = None;
+        self.editor = None;
         self.selected = ORCHESTRATOR.into();
         self.offset = (0, 0);
         let stop = Arc::new(AtomicBool::new(false));
@@ -228,6 +236,7 @@ impl App {
             KeyCode::Char('x') if control => self.command("/cancel"),
             KeyCode::Char('r') if control => self.command("/resume"),
             KeyCode::Char('n') if control => self.new_conversation(),
+            _ if self.editor.is_some() => self.editor_key(key),
             _ if self.details.is_some() => self.details_key(key),
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = match self.focus {
@@ -276,6 +285,12 @@ impl App {
             KeyCode::Esc => self.focus = Focus::Chat,
             KeyCode::Char('q') => return false,
             KeyCode::Char('f') => self.filter = self.filter.next(),
+            KeyCode::Char('c') => {
+                self.editor = Some(Editor {
+                    target: self.selected.clone(),
+                    text: String::new(),
+                })
+            }
             KeyCode::Enter => {
                 self.details = Some(Details::new(self.selected.clone()));
                 self.fetch_task();
@@ -285,12 +300,71 @@ impl App {
         true
     }
 
+    fn editor_key(&mut self, key: event::KeyEvent) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.editor = None,
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => editor.text.push('\n'),
+            KeyCode::Enter => {
+                let editor = self.editor.take().expect("editing");
+                if !editor.text.trim().is_empty() {
+                    self.request(
+                        Request::Comment {
+                            conversation: self.conversation.clone(),
+                            target: editor.target,
+                            text: editor.text,
+                        },
+                        None,
+                    );
+                }
+            }
+            KeyCode::Backspace => {
+                editor.text.pop();
+            }
+            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                editor.text.push(ch)
+            }
+            _ => {}
+        }
+    }
+
+    fn set_comment(&self, id: u64, status: &str) {
+        self.request(
+            Request::CommentStatus {
+                conversation: self.conversation.clone(),
+                id,
+                status: status.into(),
+            },
+            None,
+        );
+    }
+
     fn details_key(&mut self, key: event::KeyEvent) {
         let Some(details) = &mut self.details else {
             return;
         };
+        let comment = details.selected_comment(&self.view);
+        let on_comments = details.tab == COMMENTS;
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.details = None,
+            KeyCode::Char('c') => {
+                self.editor = Some(Editor {
+                    target: details.key.clone(),
+                    text: String::new(),
+                })
+            }
+            KeyCode::Down if on_comments => details.comment += 1,
+            KeyCode::Up if on_comments => details.comment = details.comment.saturating_sub(1),
+            KeyCode::Char(ch @ ('r' | 'o' | 'd')) if comment.is_some() => {
+                let status = match ch {
+                    'r' => "resolved",
+                    'o' => "open",
+                    _ => "deleted",
+                };
+                self.set_comment(comment.expect("selected"), status);
+            }
             KeyCode::Right | KeyCode::Tab => {
                 details.tab = (details.tab + 1) % TABS.len();
                 details.scroll = 0;
@@ -310,7 +384,7 @@ impl App {
         if self
             .details
             .as_ref()
-            .is_some_and(|details| details.tab == 3)
+            .is_some_and(|details| details.tab == RESULT)
         {
             self.fetch_task();
         }
@@ -319,8 +393,47 @@ impl App {
     fn draw(&mut self, frame: &mut Frame) {
         if let Some(details) = &mut self.details {
             details.draw(frame, &self.view);
-            return;
+        } else {
+            self.draw_main(frame);
         }
+        if let Some(editor) = &self.editor {
+            let area = frame.area();
+            let width = area.width.saturating_sub(2);
+            let lines = wrap(&editor.text, usize::from(width.max(1)));
+            let height = (lines.len() as u16).clamp(1, 6) + 2;
+            if area.height < height + 1 {
+                return;
+            }
+            let shown = lines.len().saturating_sub(6);
+            let box_area = Rect::new(area.x, area.bottom() - 1 - height, area.width, height);
+            frame.render_widget(Clear, box_area);
+            frame.render_widget(
+                Paragraph::new(
+                    lines[shown..]
+                        .iter()
+                        .map(|line| Line::raw(line.clone()))
+                        .collect::<Vec<_>>(),
+                )
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan))
+                        .title(format!(
+                            " komentarz do {} · Enter wyślij · Alt+Enter nowa linia · Esc anuluj ",
+                            target_name(&editor.target)
+                        )),
+                ),
+                box_area,
+            );
+            let last = lines.last().map_or(0, |line| line.width());
+            frame.set_cursor_position((
+                box_area.x + 1 + last as u16,
+                box_area.y + lines[shown..].len() as u16,
+            ));
+        }
+    }
+
+    fn draw_main(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let [header, body, footer] = Layout::vertical([
             Constraint::Length(1),
@@ -369,7 +482,7 @@ impl App {
                     "Enter wyślij (@t2 … do agenta) · Alt+Enter nowa linia · {plan}Ctrl+X anuluj · Tab zespół · Ctrl+N nowa rozmowa · Esc wyjdź"
                 ),
                 Focus::Graph => format!(
-                    "strzałki wybór · Enter szczegóły · f filtr · {plan}Ctrl+X anuluj · Tab czat · q wyjdź"
+                    "strzałki wybór · Enter szczegóły · c skomentuj · f filtr · {plan}Ctrl+X anuluj · Tab czat · q wyjdź"
                 ),
             }
         });
@@ -531,6 +644,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         filter: Filter::All,
         offset: (0, 0),
         details: None,
+        editor: None,
     };
     app.open(conversation);
 
@@ -578,8 +692,13 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                         return Ok(());
                     }
                 }
-                Event::Paste(text) if app.focus == Focus::Chat && app.details.is_none() => {
-                    app.input.push_str(&text.replace('\r', "\n"))
+                Event::Paste(text) => {
+                    let text = text.replace('\r', "\n");
+                    if let Some(editor) = &mut app.editor {
+                        editor.text.push_str(&text);
+                    } else if app.focus == Focus::Chat && app.details.is_none() {
+                        app.input.push_str(&text);
+                    }
                 }
                 _ => {}
             }

@@ -4,7 +4,7 @@
 use super::super::tasks::status;
 use ratatui::style::{Color, Modifier, Style};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -58,6 +58,16 @@ pub struct Link {
     pub last: Instant,
 }
 
+/// A comment as the daemon stores it.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Comment {
+    pub id: u64,
+    pub plan_id: Option<String>,
+    pub target: String,
+    pub text: String,
+    pub status: String,
+}
+
 #[derive(Debug, Default)]
 pub struct View {
     pub transcript: Vec<Entry>,
@@ -73,6 +83,8 @@ pub struct View {
     pub links: HashMap<(String, String), Link>,
     /// Every message to or from an agent, by its key, for its details.
     pub mailbox: HashMap<String, Vec<String>>,
+    /// The user's comments by id, deleted ones included.
+    pub comments: BTreeMap<u64, Comment>,
     /// The latest review of the plan verifier and the auditor, as lines.
     pub reviews: HashMap<String, Vec<String>>,
     /// Agent key of each running turn.
@@ -153,6 +165,8 @@ impl View {
         let key = self.roles.get(turn).cloned().unwrap_or_default();
         match event["kind"].as_str().unwrap_or_default() {
             "message" => match payload["author"].as_str().unwrap_or_default() {
+                // Shown by its `comment` event.
+                "user" if text("text").starts_with(super::super::COMMENT_PREFIX) => {}
                 "user" => {
                     self.push(
                         Style::default()
@@ -390,8 +404,48 @@ impl View {
                 }
                 self.review(AUDITOR, payload);
             }
+            "comment" => {
+                let Ok(comment) = serde_json::from_value::<Comment>(payload.clone()) else {
+                    return;
+                };
+                let name = target_name(&comment.target);
+                let line = match comment.status.as_str() {
+                    "open" if !self.comments.contains_key(&comment.id) => {
+                        format!("✎ #{} do {name}: {}", comment.id, comment.text)
+                    }
+                    "open" => format!("✎ #{} otwarty ponownie", comment.id),
+                    "resolved" => format!("✎ #{} rozwiązany", comment.id),
+                    _ => format!("✎ #{} usunięty", comment.id),
+                };
+                self.push(Style::default().fg(Color::Cyan), line);
+                self.comments.insert(comment.id, comment);
+            }
             _ => {}
         }
+    }
+
+    /// Comments on an element (a diff's comments count for its worker),
+    /// newest first, deleted ones left out.
+    pub fn comments_on(&self, key: &str) -> Vec<&Comment> {
+        let diff = key
+            .strip_prefix("worker:")
+            .map(|task| format!("diff:{task}"));
+        self.comments
+            .values()
+            .rev()
+            .filter(|comment| comment.status != "deleted")
+            .filter(|comment| {
+                comment.target == key
+                    || diff.as_ref().is_some_and(|diff| {
+                        comment.target == *diff || comment.target.starts_with(&format!("{diff}:"))
+                    })
+            })
+            .collect()
+    }
+
+    /// Whether a comment was made on an earlier plan than the one shown.
+    pub fn stale(&self, comment: &Comment) -> bool {
+        comment.plan_id.is_some() && comment.plan_id != self.plan
     }
 
     fn review(&mut self, key: &str, review: &Value) {
@@ -450,6 +504,22 @@ fn review_word(review: &Value) -> String {
         "✓ zatwierdził".into()
     } else {
         "⚠ zastrzeżenia".into()
+    }
+}
+
+/// A human name for a comment's target.
+pub fn target_name(target: &str) -> String {
+    match target.strip_prefix("diff:") {
+        Some(rest) => {
+            let mut parts = rest.splitn(3, ':');
+            let task = parts.next().unwrap_or_default();
+            match (parts.next(), parts.next()) {
+                (Some(file), Some(line)) => format!("{task} diff {file}:{line}"),
+                (Some(file), None) => format!("{task} diff {file}"),
+                _ => format!("{task} diff"),
+            }
+        }
+        None => agent_name(target),
     }
 }
 
@@ -746,5 +816,63 @@ mod tests {
         assert_eq!(view.mailbox["worker:t2"], ["t1/verifier → t2 (finding): x"]);
         assert_eq!(view.reviews[AUDITOR], ["✓ audytor: bez zastrzeżeń"]);
         assert_eq!(view.progress(), ["t1 weryfikacja: verifier: read a.rs"]);
+    }
+
+    #[test]
+    fn comments_are_listed_on_their_element_and_marked_stale_on_a_new_plan() {
+        let mut view = View::default();
+        let plan = |seq, id: &str| {
+            event(
+                seq,
+                None,
+                "plan_proposed",
+                json!({"plan": id, "tasks": [{"id": "t1", "title": "A"}]}),
+            )
+        };
+        view.apply(&plan(1, "p1"));
+        view.apply(&event(
+            2,
+            None,
+            "message",
+            json!({"author": "user", "text": "[user comment #1 on the worker of task t1] x"}),
+        ));
+        for (seq, id, target, status) in [
+            (3, 1, "worker:t1", "open"),
+            (4, 2, "diff:t1:src/a.rs:3", "open"),
+            (5, 3, "verifier:t1", "open"),
+            (6, 3, "verifier:t1", "deleted"),
+        ] {
+            view.apply(&event(
+                seq,
+                None,
+                "comment",
+                json!({"id": id, "plan_id": "p1", "target": target, "label": "l", "text": "x",
+                       "status": status, "message": 2}),
+            ));
+        }
+        let ids = |key| -> Vec<u64> { view.comments_on(key).iter().map(|c| c.id).collect() };
+        assert_eq!(
+            ids("worker:t1"),
+            [2, 1],
+            "a diff's comments count for its worker"
+        );
+        assert!(ids("verifier:t1").is_empty());
+        let text: Vec<&str> = view.transcript[2..]
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "✎ #1 do t1 worker: x",
+                "✎ #2 do t1 diff src/a.rs:3: x",
+                "✎ #3 do t1 weryfikator: x",
+                "✎ #3 usunięty"
+            ],
+            "the comment's message is not shown twice"
+        );
+        assert!(!view.stale(&view.comments[&1]));
+        view.apply(&plan(7, "p2"));
+        assert!(view.stale(&view.comments[&1]));
     }
 }

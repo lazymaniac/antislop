@@ -209,3 +209,61 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Parser"))
             .all(|message| !message.text.contains("dodaj przypadek"))
     );
 }
+
+#[test]
+fn a_comment_reaches_the_orchestrator_and_stays_until_the_user_resolves_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+answer = "noted" if "[runtime]" in prompt or "[user" in prompt or "dalej" in prompt else plan(task("t1", "Parser"))
+"#,
+        r#"    answer = "report""#,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("plan finished", || core.is_idle(&conversation));
+
+    let comment = core
+        .comment(&conversation, "worker:t1", "brakuje przypadku UTF-8")
+        .unwrap();
+    assert_eq!(comment.status, "open");
+    wait_until("comment answered", || core.is_idle(&conversation));
+    let orchestrator = |all: Vec<(String, String)>| {
+        all.into_iter()
+            .filter(|(bin, _)| bin == "codex")
+            .map(|(_, prompt)| prompt)
+            .collect::<Vec<_>>()
+    };
+    let prompts_now = orchestrator(prompts(dir.path()));
+    assert!(
+        prompts_now.last().unwrap().contains(&format!(
+            "[user comment #{} on the worker of task t1 \"Parser\"] brakuje przypadku UTF-8",
+            comment.id
+        )),
+        "{prompts_now:?}"
+    );
+
+    // Unresolved, it is in the next turn's prompt too.
+    core.send(&conversation, "dalej").unwrap();
+    wait_until("answered", || core.is_idle(&conversation));
+    let next = orchestrator(prompts(dir.path())).pop().unwrap();
+    assert!(
+        next.contains("not resolved yet") && next.contains("brakuje przypadku UTF-8"),
+        "{next}"
+    );
+
+    let resolved = core
+        .set_comment(&conversation, comment.id, "resolved")
+        .unwrap();
+    assert_eq!(resolved.status, "resolved");
+    core.send(&conversation, "dalej").unwrap();
+    wait_until("answered", || core.is_idle(&conversation));
+    let last = orchestrator(prompts(dir.path())).pop().unwrap();
+    assert!(!last.contains("UTF-8"), "{last}");
+    let statuses: Vec<String> = events(&core, &conversation, "comment")
+        .iter()
+        .map(|comment| comment["status"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(statuses, ["open", "resolved"]);
+    assert!(core.set_comment(&conversation, comment.id, "done").is_err());
+}

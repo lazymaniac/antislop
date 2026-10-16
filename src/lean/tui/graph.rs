@@ -469,6 +469,19 @@ fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
             canvas.put(cx, cy, ' ', Style::default());
         }
     }
+    let open = view
+        .comments_on(&node.key)
+        .iter()
+        .filter(|comment| comment.status == "open")
+        .count();
+    if open > 0 {
+        canvas.text(
+            right - 4,
+            y,
+            &format!("✎{}", open.min(9)),
+            Style::default().fg(Color::Cyan),
+        );
+    }
     canvas.text(x + 2, y + 1, &truncate(&state, inner), Style::default());
     canvas.text(
         x + 2,

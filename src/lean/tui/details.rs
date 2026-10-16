@@ -11,7 +11,9 @@ use ratatui::{
 };
 use serde_json::Value;
 
-pub const TABS: [&str; 4] = ["Przegląd", "Sesja", "Wiadomości", "Wynik"];
+pub const TABS: [&str; 5] = ["Przegląd", "Sesja", "Wiadomości", "Wynik", "Komentarze"];
+pub const RESULT: usize = 3;
+pub const COMMENTS: usize = 4;
 
 #[derive(Debug)]
 pub struct Details {
@@ -21,6 +23,8 @@ pub struct Details {
     pub scroll: usize,
     /// The task as the daemon stores it, once fetched.
     pub task: Option<Value>,
+    /// The selected comment on the Komentarze tab.
+    pub comment: usize,
 }
 
 impl Details {
@@ -30,7 +34,15 @@ impl Details {
             tab: 0,
             scroll: 0,
             task: None,
+            comment: 0,
         }
+    }
+
+    /// The id of the selected comment, on the Komentarze tab.
+    pub fn selected_comment(&self, view: &View) -> Option<u64> {
+        (self.tab == COMMENTS)
+            .then(|| view.comments_on(&self.key).get(self.comment).map(|c| c.id))
+            .flatten()
     }
 
     /// The task id of a worker or verifier.
@@ -38,7 +50,7 @@ impl Details {
         self.key.split_once(':').map(|(_, id)| id)
     }
 
-    fn lines(&self, view: &View) -> Vec<(Style, String)> {
+    fn lines(&mut self, view: &View) -> Vec<(Style, String)> {
         let plain = |text: String| (Style::default(), text);
         let label = |text: &str| {
             (
@@ -127,6 +139,42 @@ impl Details {
                 Some(mail) => lines.extend(mail.iter().cloned().map(plain)),
                 None => lines.push((dim(), "Brak wiadomości.".into())),
             },
+            COMMENTS => {
+                let comments = view.comments_on(&self.key);
+                if comments.is_empty() {
+                    lines.push((dim(), "Brak komentarzy. c dodaje komentarz.".into()));
+                }
+                self.comment = self.comment.min(comments.len().saturating_sub(1));
+                for (index, comment) in comments.iter().enumerate() {
+                    let mut style = if comment.status == "open" {
+                        Style::default()
+                    } else {
+                        dim()
+                    };
+                    if index == self.comment {
+                        style = style.add_modifier(Modifier::REVERSED);
+                    }
+                    let state = match comment.status.as_str() {
+                        "open" => "otwarty",
+                        "resolved" => "rozwiązany",
+                        other => other,
+                    };
+                    let stale = if view.stale(comment) {
+                        " · dotyczy poprzedniego planu"
+                    } else {
+                        ""
+                    };
+                    lines.push((
+                        style,
+                        format!(
+                            "#{} {} · {state}{stale}",
+                            comment.id,
+                            super::view::target_name(&comment.target)
+                        ),
+                    ));
+                    lines.push((Style::default(), format!("  {}", comment.text)));
+                }
+            }
             _ => match (&self.task, task) {
                 (_, None) => lines.push((
                     dim(),
@@ -215,7 +263,11 @@ impl Details {
         frame.render_widget(Paragraph::new(lines[self.scroll..end].to_vec()), inner);
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "←/→ zakładka · ↑/↓ PgUp/PgDn przewiń · Esc powrót do grafu",
+                if self.tab == COMMENTS {
+                    "←/→ zakładka · ↑/↓ wybór · c skomentuj · r rozwiąż · o otwórz · d usuń · Esc powrót"
+                } else {
+                    "←/→ zakładka · ↑/↓ PgUp/PgDn przewiń · c skomentuj · Esc powrót do grafu"
+                },
                 dim(),
             )),
             footer,

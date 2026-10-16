@@ -80,6 +80,18 @@ pub enum Request {
     Cancel {
         conversation: String,
     },
+    /// The user's comment on one element of the team panel or a diff.
+    Comment {
+        conversation: String,
+        target: String,
+        text: String,
+    },
+    /// Resolves, reopens (`open`) or deletes a comment.
+    CommentStatus {
+        conversation: String,
+        id: u64,
+        status: String,
+    },
     /// One task of a plan with its latest report and verdict.
     Task {
         plan: String,
@@ -192,6 +204,16 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
             core.cancel(&conversation);
             Value::Null
         }
+        Request::Comment {
+            conversation,
+            target,
+            text,
+        } => json!(core.comment(&conversation, &target, &text)?),
+        Request::CommentStatus {
+            conversation,
+            id,
+            status,
+        } => json!(core.set_comment(&conversation, id, &status)?),
         Request::Task { plan, id } => {
             let task = core
                 .store

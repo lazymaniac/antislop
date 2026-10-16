@@ -67,6 +67,22 @@ pub struct Mail {
     pub text: String,
 }
 
+/// The user's comment on one element of the team panel or of a diff.
+/// `target` is the element's key (`worker:t2`, `diff:t2:src/a.rs:14`), `label`
+/// how the orchestrator reads it, `plan_id` the plan it was made on (a later
+/// plan makes it stale), `message` the conversation message that carried it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: u64,
+    pub plan_id: Option<String>,
+    pub target: String,
+    pub label: String,
+    pub text: String,
+    /// `open`, `resolved` or `deleted`.
+    pub status: String,
+    pub message: u64,
+}
+
 /// One task of a plan. `spec` is what the orchestrator asked for; `report`
 /// is the worker's latest answer and `verdict` its verifier's latest one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,7 +168,13 @@ impl Store {
                text TEXT NOT NULL, created_ms INTEGER NOT NULL,
                delivered_turn TEXT, delivered_ms INTEGER);
              CREATE INDEX IF NOT EXISTS mail_by_recipient
-               ON mail(conversation_id, recipient, delivered_turn);",
+               ON mail(conversation_id, recipient, delivered_turn);
+             CREATE TABLE IF NOT EXISTS comments(
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               conversation_id TEXT NOT NULL REFERENCES conversations(id),
+               plan_id TEXT, target TEXT NOT NULL, label TEXT NOT NULL, text TEXT NOT NULL,
+               status TEXT NOT NULL, message INTEGER NOT NULL,
+               created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);",
         )?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -617,6 +639,116 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(mail)
+    }
+
+    /// Stores a comment with the message that tells the orchestrator about
+    /// it (`text` gets the comment's id), in one transaction.
+    pub fn add_comment(
+        &self,
+        conversation: &str,
+        comment: &Comment,
+        text: impl Fn(u64) -> String,
+    ) -> Result<Comment> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let now = now_ms();
+        tx.execute(
+            "INSERT INTO comments(conversation_id,plan_id,target,label,text,status,message,
+                                  created_ms,updated_ms)
+             VALUES(?1,?2,?3,?4,?5,'open',0,?6,?6)",
+            params![
+                conversation,
+                comment.plan_id,
+                comment.target,
+                comment.label,
+                comment.text,
+                now
+            ],
+        )?;
+        let id = tx.last_insert_rowid() as u64;
+        let text = text(id);
+        tx.execute(
+            "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)",
+            params![conversation, text, now],
+        )?;
+        let message = tx.last_insert_rowid() as u64;
+        tx.execute(
+            "INSERT INTO events(conversation_id,turn_id,kind,payload)
+             VALUES(?1,NULL,'message',?2)",
+            params![
+                conversation,
+                serde_json::json!({"seq": message, "author": "user", "text": text}).to_string()
+            ],
+        )?;
+        tx.execute(
+            "UPDATE comments SET message=?1 WHERE id=?2",
+            params![message as i64, id as i64],
+        )?;
+        let comment = Comment {
+            id,
+            status: "open".into(),
+            message,
+            ..comment.clone()
+        };
+        tx.execute(
+            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'comment',?2)",
+            params![conversation, serde_json::to_value(&comment)?.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(comment)
+    }
+
+    pub fn set_comment_status(&self, conversation: &str, id: u64, status: &str) -> Result<Comment> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let changed = tx.execute(
+            "UPDATE comments SET status=?1, updated_ms=?2 WHERE id=?3 AND conversation_id=?4",
+            params![status, now_ms(), id as i64, conversation],
+        )?;
+        if changed == 0 {
+            return Err(Error::Invalid(format!("no comment {id}")));
+        }
+        let comment = Self::comment_rows(&tx, "id=?1", params![id as i64])?
+            .pop()
+            .ok_or_else(|| Error::Invalid(format!("no comment {id}")))?;
+        tx.execute(
+            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'comment',?2)",
+            params![conversation, serde_json::to_value(&comment)?.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(comment)
+    }
+
+    /// The conversation's comments with that status, oldest first.
+    pub fn comments(&self, conversation: &str, status: &str) -> Result<Vec<Comment>> {
+        Self::comment_rows(
+            &self.db(),
+            "conversation_id=?1 AND status=?2",
+            params![conversation, status],
+        )
+    }
+
+    fn comment_rows(
+        db: &Connection,
+        filter: &str,
+        values: impl rusqlite::Params,
+    ) -> Result<Vec<Comment>> {
+        let mut statement = db.prepare(&format!(
+            "SELECT id,plan_id,target,label,text,status,message FROM comments
+             WHERE {filter} ORDER BY id"
+        ))?;
+        let rows = statement.query_map(values, |row| {
+            Ok(Comment {
+                id: row.get::<_, i64>(0)? as u64,
+                plan_id: row.get(1)?,
+                target: row.get(2)?,
+                label: row.get(3)?,
+                text: row.get(4)?,
+                status: row.get(5)?,
+                message: row.get::<_, i64>(6)? as u64,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     /// Messages for `role` not yet delivered, oldest first.
