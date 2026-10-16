@@ -44,8 +44,18 @@ if worker and "You verify" not in prompt and "You audit" not in prompt \
         and not os.path.exists(os.path.join(here, "logged-in")):
     print("Error: not logged in, run `agy login`", file=sys.stderr)
     sys.exit(1)
+def cover(answer):
+    import re
+    ids = re.findall(r"^- ([RC][0-9]+): ", prompt, re.M)
+    if not ids or "```verdict" not in answer:
+        return answer
+    head, body = answer.rsplit("```verdict", 1)
+    data = json.loads(body.split("```")[0])
+    data["coverage"] = {i: {"status": "ok", "note": "checked"} for i in ids}
+    return head + "```verdict\n" + json.dumps(data) + "\n```"
 REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:", "You verify")
 answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```" if any(m in prompt for m in REVIEW) else "report"
+answer = cover(answer)
 print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status": "SUCCESS", "response": answer, "usage": {}}}))
 "#,
     )

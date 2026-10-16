@@ -36,6 +36,15 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
         &agy,
         common
             + r#"
+def cover(answer):
+    import re
+    ids = re.findall(r"^- ([RC][0-9]+): ", prompt, re.M)
+    if not ids or "```verdict" not in answer:
+        return answer
+    head, body = answer.rsplit("```verdict", 1)
+    data = json.loads(body.split("```")[0])
+    data["coverage"] = {i: {"status": "ok", "note": "checked"} for i in ids}
+    return head + "```verdict\n" + json.dumps(data) + "\n```"
 REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:")
 if any(marker in prompt for marker in REVIEW):
     session = "reviewer"
@@ -52,6 +61,7 @@ else:
     with open("hello.txt", "w") as f:
         f.write("from worker\n")
     answer = "wrote hello.txt"
+answer = cover(answer)
 print(json.dumps({"event": "init", "conversation_id": session}))
 print(json.dumps({"event": "result", "result": {"conversation_id": session, "status": "SUCCESS", "response": answer, "usage": {}}}))
 "#,

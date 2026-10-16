@@ -80,9 +80,12 @@ Read-only modes are not a confinement: agy's plan mode was observed running
    range (writers), its risks and a short checklist for the task's kind
    (`tasks::checklist`: e.g. assertions that fail on the bug for testing,
    suppressed warnings for static analysis, recomputation for analysis,
-   sources that support claims for research). It reads the files itself and
-   returns `{approved, findings}`. Findings resume the worker's session; the
-   loop is bounded (3 rounds), then the task waits for the user.
+   sources that support claims for research). Risks (`R1`…) and checklist
+   items (`C1`…) are its numbered obligations. It reads the files itself and
+   returns `{approved, findings, coverage}`, where `coverage` accounts for
+   every obligation as `ok`, `issue` or `n/a`, each with a note. Findings
+   resume the worker's session; the loop is bounded (3 rounds), then the task
+   waits for the user.
 6. **Integration.** An approved writer's work is squashed into one change
    and landed on the user's current branch, one integration at a time. With
    `local_commits` it becomes one commit (cherry-pick); otherwise it is left as
@@ -242,7 +245,12 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - A failed or skipped task skips everything that depends on it, transitively.
   A failed task's report keeps the agent's error.
 - A verdict that approves while listing high or medium findings is a
-  rejection. A plan where a task depends on itself or a later task is
+  rejection. A task verifier's verdict approves only when it accounts for
+  every obligation with a note; one marked `issue` rejects it and its note
+  reaches the worker. A verdict that leaves obligations out is asked for once
+  more in the verifier's session (earlier entries kept), then the task waits
+  for the user: the worker cannot fix a verifier that skipped its checks
+  (design §18 scenario 30). A plan where a task depends on itself or a later task is
   rejected.
 - A turn succeeds only with a complete result *and* a clean exit. When a turn
   ends or is cancelled its whole process group is killed, so no descendant

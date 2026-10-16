@@ -320,6 +320,25 @@ pub fn review_lines(who: &str, review: &Value) -> Vec<String> {
         lines[0] = format!("✓ {who}: drobne uwagi");
     }
     lines.extend(findings);
+    if let Some(coverage) = review["coverage"].as_object().filter(|map| !map.is_empty()) {
+        lines.push("  Rozliczenie obowiązków:".into());
+        for (id, entry) in coverage {
+            let mark = match entry["status"]
+                .as_str()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("ok") => "✓",
+                Some("issue") => "✗",
+                Some("n/a") => "–",
+                _ => "?",
+            };
+            lines.push(format!(
+                "    {mark} {id}: {}",
+                entry["note"].as_str().unwrap_or_default()
+            ));
+        }
+    }
     lines
 }
 

@@ -1105,7 +1105,7 @@ impl Core {
                 if first {
                     tasks::verifier_prompt(&project_text, &spec, &report, changes.as_deref())
                 } else {
-                    tasks::verifier_followup(&report, changes.as_deref())
+                    tasks::verifier_followup(&spec, &report, changes.as_deref())
                 }
             })?;
             let Some(answer) = answer else {
@@ -1117,8 +1117,43 @@ impl Core {
                 &format!("{}/verifier", spec.id),
                 &answer,
             )?;
-            let verdict = tasks::parse_verdict(&answer);
+            let mut verdict = tasks::parse_verdict(&answer);
+            let obligations = tasks::obligations(&spec);
+            let missing = tasks::unaccounted(&verdict, &obligations);
+            if !missing.is_empty() {
+                // A verdict that skips an obligation does not count; the
+                // verifier gets one turn to account for it.
+                let prompt = tasks::coverage_followup(&missing);
+                let setup = TurnSetup {
+                    conversation,
+                    role: verifier.clone(),
+                    profile: self.config.resolve(spec.kind, RoleKind::Verifier),
+                    cwd: workdir.clone(),
+                    add_dirs: add_dirs.clone(),
+                    access: agent::Access::ReadOnly,
+                    upto_message: 0,
+                };
+                let Some(answer) = self.turn(setup, cancel, |_| prompt)? else {
+                    return self.stop_task(conversation, task, &verifier, cancel);
+                };
+                let answer = self.post(
+                    conversation,
+                    Some(&task.plan_id),
+                    &format!("{}/verifier", spec.id),
+                    &answer,
+                )?;
+                let earlier = std::mem::replace(&mut verdict, tasks::parse_verdict(&answer));
+                for (id, entry) in earlier.coverage {
+                    verdict.coverage.entry(id).or_insert(entry);
+                }
+            }
+            let incomplete = !tasks::unaccounted(&verdict, &obligations).is_empty();
+            tasks::settle(&mut verdict, &obligations);
             task.verdict = Some(serde_json::to_value(&verdict)?);
+            if incomplete {
+                // The worker cannot fix a verifier that skips its checks.
+                return self.set_status(conversation, task, status::NEEDS_USER);
+            }
             if verdict.approved {
                 return match &worktree {
                     Some(path) => self.integrate(conversation, task, &spec, &project, path),

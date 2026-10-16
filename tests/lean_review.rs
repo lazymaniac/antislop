@@ -5,7 +5,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const AGENT: &str = r#"
-def say(session, answer):
+def cover(answer):
+    import re
+    ids = re.findall(r"^- ([RC][0-9]+): ", prompt, re.M)
+    if not ids or "```verdict" not in answer:
+        return answer
+    head, body = answer.rsplit("```verdict", 1)
+    data = json.loads(body.split("```")[0])
+    data["coverage"] = {i: {"status": "ok", "note": "checked"} for i in ids}
+    return head + "```verdict\n" + json.dumps(data) + "\n```"
+def say(session, answer, covered=True):
+    if covered:
+        answer = cover(answer)
     print(json.dumps({"event": "result", "result": {"conversation_id": session,
         "status": "SUCCESS", "response": answer, "usage": {}}}))
 def verdict(approved, findings=()):
@@ -232,4 +243,81 @@ sys.exit(1)
     assert_eq!(proposed[0]["automatic"], false);
     let tasks = core.store.latest_plan(&conversation).unwrap();
     assert_eq!(tasks[0].status, "proposed", "the user can still accept it");
+}
+
+const RISKY_PLAN: &str = r#"
+if "[runtime]" in prompt:
+    answer = "done"
+else:
+    answer = plan(dict(task("t1", "Revenue"), verifier={"focus": "numbers", "risks": ["units of money"]}))
+"#;
+
+#[test]
+fn a_verdict_that_skips_an_obligation_is_asked_again_and_never_approves() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        RISKY_PLAN,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "You verify" in prompt or "does not account" in prompt:
+    say("verifier", verdict(True), covered=False)
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "policz przychód");
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "needs_user");
+    let verdict = task.verdict.clone().unwrap();
+    assert_eq!(verdict["approved"], false);
+    assert!(
+        verdict["findings"][0]["issue"]
+            .as_str()
+            .unwrap()
+            .contains("R1 (units of money)"),
+        "{verdict}"
+    );
+    let verifier_turns = events(&core, &conversation, "turn_started")
+        .iter()
+        .filter(|turn| turn["role"] == format!("verifier:{}", task.id))
+        .count();
+    assert_eq!(verifier_turns, 2, "asked once more, then the user");
+}
+
+#[test]
+fn an_obligation_marked_issue_sends_its_note_to_the_worker() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        RISKY_PLAN,
+        r#"
+import re
+ids = re.findall(r"^- ([RC][0-9]+): ", prompt, re.M)
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "You verify" in prompt:
+    # Only R1, as an issue: C1… are asked for again.
+    coverage = {"R1": {"status": "issue", "note": "EUR added to PLN"}}
+    say("verifier", "```verdict\n" + json.dumps({"approved": True, "findings": [], "coverage": coverage}) + "\n```", covered=False)
+elif "does not account" in prompt:
+    assert "R1" not in ids, ids
+    say("verifier", verdict(True))
+elif "found problems" in prompt:
+    say("worker", "fixed: " + ("EUR added to PLN" in prompt and "converted" or "?"))
+elif "updated report" in prompt:
+    say("verifier", verdict(True))
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "policz przychód");
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "approved", "{:?}", task.verdict);
+    assert_eq!(task.report.as_deref(), Some("fixed: converted"));
 }
