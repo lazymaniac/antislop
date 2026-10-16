@@ -77,6 +77,9 @@ impl Details {
             0 => {
                 if let Some(agent) = agent.filter(|agent| !agent.provider.is_empty()) {
                     lines.push(plain(format!("CLI: {}", agent.provider)));
+                    if agent.turns > 0 {
+                        lines.push(plain(format!("Tokeny: {}", agent.tokens())));
+                    }
                 }
                 if let Some(task) = task {
                     lines.push(plain(format!(

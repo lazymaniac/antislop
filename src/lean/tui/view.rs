@@ -49,6 +49,36 @@ pub struct Agent {
     /// The current tool call while running, else the last outcome.
     pub activity: String,
     pub session: Vec<String>,
+    /// Finished turns, and how many of them the CLI reported tokens for.
+    pub turns: u32,
+    pub reported: u32,
+    /// Sums of what was reported; `None` while nothing was.
+    pub tokens_in: Option<u64>,
+    pub tokens_out: Option<u64>,
+}
+
+impl Agent {
+    /// Token use as the CLI reported it; a turn it reported nothing for is
+    /// unknown, never zero.
+    pub fn tokens(&self) -> String {
+        if self.reported == 0 {
+            return "niedostępne (CLI ich nie zgłosił)".into();
+        }
+        let whole = if self.reported >= self.turns {
+            String::new()
+        } else {
+            format!(
+                " · zgłoszone w {} z {} tur, reszta nieznana",
+                self.reported, self.turns
+            )
+        };
+        let side = |sum: Option<u64>| sum.map_or("nieznane".to_owned(), |sum| sum.to_string());
+        format!(
+            "we {} / wy {}{whole}",
+            side(self.tokens_in),
+            side(self.tokens_out)
+        )
+    }
 }
 
 /// Messages that passed between two agents.
@@ -229,6 +259,20 @@ impl View {
                     self.session(&key, format!("↳ {detail}"));
                 }
             }
+            "agent" if payload["type"] == "usage" => {
+                let (input, output) = (payload["input"].as_u64(), payload["output"].as_u64());
+                if !key.is_empty() && (input.is_some() || output.is_some()) {
+                    let agent = self.agents.entry(key.clone()).or_default();
+                    agent.reported += 1;
+                    let add = |sum: &mut Option<u64>, value: Option<u64>| {
+                        if let Some(value) = value {
+                            *sum = Some(sum.unwrap_or(0) + value);
+                        }
+                    };
+                    add(&mut agent.tokens_in, input);
+                    add(&mut agent.tokens_out, output);
+                }
+            }
             "turn_finished" => {
                 let failed = payload["status"] != "done";
                 if key == ORCHESTRATOR {
@@ -254,6 +298,7 @@ impl View {
                     };
                     let agent = self.agents.entry(key.clone()).or_default();
                     agent.running = false;
+                    agent.turns += 1;
                     agent.activity = outcome.clone();
                     self.session(&key, outcome);
                 }
@@ -900,5 +945,44 @@ mod tests {
         assert!(!view.stale(&view.comments[&1]));
         view.apply(&plan(7, "p2"));
         assert!(view.stale(&view.comments[&1]));
+    }
+
+    #[test]
+    fn token_use_is_what_the_cli_reported_and_unknown_otherwise() {
+        let mut view = View::default();
+        let turn = |seq, id: &str, input: Value| {
+            [
+                event(
+                    seq,
+                    Some(id),
+                    "turn_started",
+                    json!({"role": "worker:uuid1", "provider": "codex"}),
+                ),
+                event(
+                    seq + 1,
+                    Some(id),
+                    "agent",
+                    json!({"type": "usage", "input": input, "output": null}),
+                ),
+                event(
+                    seq + 2,
+                    Some(id),
+                    "turn_finished",
+                    json!({"status": "done"}),
+                ),
+            ]
+        };
+        for event in turn(1, "a", Value::Null) {
+            view.apply(&event);
+        }
+        let agent = |view: &View| view.agents.values().next().unwrap().tokens();
+        assert_eq!(agent(&view), "niedostępne (CLI ich nie zgłosił)");
+        for event in turn(4, "b", json!(120)) {
+            view.apply(&event);
+        }
+        assert_eq!(
+            agent(&view),
+            "we 120 / wy nieznane · zgłoszone w 1 z 2 tur, reszta nieznana"
+        );
     }
 }

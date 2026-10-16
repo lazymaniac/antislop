@@ -38,10 +38,22 @@ pub struct Spec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    Session { id: String },
-    Text { delta: String },
-    Tool { name: String, detail: String },
-    Usage { input: u64, output: u64 },
+    Session {
+        id: String,
+    },
+    Text {
+        delta: String,
+    },
+    Tool {
+        name: String,
+        detail: String,
+    },
+    /// Tokens as the CLI reported them; `None` where it did not, which is
+    /// not zero.
+    Usage {
+        input: Option<u64>,
+        output: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -377,8 +389,8 @@ impl Parser {
             },
             "turn.completed" => {
                 events.push(Event::Usage {
-                    input: line["usage"]["input_tokens"].as_u64().unwrap_or(0),
-                    output: line["usage"]["output_tokens"].as_u64().unwrap_or(0),
+                    input: line["usage"]["input_tokens"].as_u64(),
+                    output: line["usage"]["output_tokens"].as_u64(),
                 });
                 self.finish = Some(Ok(self.text.clone()));
             }
@@ -430,8 +442,8 @@ impl Parser {
                 let result = &line["result"];
                 self.session(result["conversation_id"].as_str(), events);
                 events.push(Event::Usage {
-                    input: result["usage"]["input_tokens"].as_u64().unwrap_or(0),
-                    output: result["usage"]["output_tokens"].as_u64().unwrap_or(0),
+                    input: result["usage"]["input_tokens"].as_u64(),
+                    output: result["usage"]["output_tokens"].as_u64(),
                 });
                 self.finish = Some(if result["status"] == "SUCCESS" {
                     Ok(result["response"]
@@ -473,8 +485,8 @@ impl Parser {
             }
             "result" => {
                 events.push(Event::Usage {
-                    input: line["usage"]["input_tokens"].as_u64().unwrap_or(0),
-                    output: line["usage"]["output_tokens"].as_u64().unwrap_or(0),
+                    input: line["usage"]["input_tokens"].as_u64(),
+                    output: line["usage"]["output_tokens"].as_u64(),
                 });
                 let text = line["result"].as_str().unwrap_or_default().to_owned();
                 self.finish = Some(if line["is_error"] == true {
@@ -524,8 +536,8 @@ impl Parser {
             "result" => {
                 let stats = &line["stats"];
                 events.push(Event::Usage {
-                    input: stats["input_tokens"].as_u64().unwrap_or(0),
-                    output: stats["output_tokens"].as_u64().unwrap_or(0),
+                    input: stats["input_tokens"].as_u64(),
+                    output: stats["output_tokens"].as_u64(),
                 });
                 self.finish = Some(if line["status"] == "success" {
                     Ok(line["response"]

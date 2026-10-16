@@ -298,6 +298,11 @@ replaced when idle. The socket is `<state>/core.sock`, or
   finds `architect.toml` changed restarts an idle daemon; a busy one keeps
   its configuration for the running work and the frontend says the new one
   applies once that work is done (scenario 17).
+- Token use is what the CLI reported, summed per agent in its details
+  (Przegląd). A CLI that reported nothing shows `niedostępne`, a side it
+  left out shows `nieznane`, and turns it did not report for are counted as
+  such: missing data is never a zero (design §14). Tokens are not turned
+  into money.
 
 ## Known limits
 
