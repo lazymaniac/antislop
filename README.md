@@ -22,6 +22,7 @@ antislop                         # TUI on the project's latest conversation
 antislop --new                   # TUI on a new conversation
 antislop "przeanalizuj architekturę projektu"   # line mode, exits when idle
 antislop --project DIR --config FILE --state DIR
+antislop export > history.jsonl  # the conversation's history, secrets redacted
 ```
 
 The first call starts the project's daemon (state in `PROJECT/.antislop`), so

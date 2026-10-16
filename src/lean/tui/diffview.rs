@@ -3,7 +3,7 @@
 //! the lines they are on.
 
 use super::super::diff::FileDiff;
-use super::view::{Comment, View, dim, truncate};
+use super::view::{Comment, View, clean, dim, truncate};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -224,7 +224,7 @@ impl DiffView {
                 format!(
                     "              ✎ #{} {}{}",
                     comment.id,
-                    comment.text,
+                    clean(&comment.text),
                     if comment.status == "resolved" {
                         " (rozwiązany)"
                     } else {

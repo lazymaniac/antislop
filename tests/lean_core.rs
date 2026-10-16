@@ -205,6 +205,34 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
         "{calls}"
     );
 
+    // The history exports as JSON lines with secrets redacted (design §15).
+    chat(&dir, &project, "password=hunter2");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+        .args(["export", "--project"])
+        .arg(&project)
+        .arg("--config")
+        .arg(dir.join("architect.toml"))
+        .arg("--state")
+        .arg(dir.join("state"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let lines: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines[0]["export"], "antislop");
+    let all = serde_json::Value::Array(lines).to_string();
+    assert!(
+        all.contains("answer: password=[redacted]") && !all.contains("hunter2"),
+        "{all}"
+    );
+    assert!(
+        all.contains(r#""model":"#) && all.contains("pierwsza"),
+        "{all}"
+    );
+
     architect::lean::daemon::Client::at(&dir.join("state"))
         .call(&architect::lean::daemon::Request::Shutdown)
         .unwrap();

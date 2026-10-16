@@ -245,6 +245,12 @@ replaced when idle. The socket is `<state>/core.sock`, or
   back (from the chat: detach), `q` in the graph detaches.
 - `antislop chat "message"` (or piped input) prints events line by line and
   exits once the conversation is idle; `/accept` and `/cancel` lines work too.
+- `antislop export` writes the conversation's history (`--conversation ID`,
+  else the project's latest) to stdout as JSON lines: a header, then every
+  event, including which CLI, model and effort each turn ran with. Private
+  keys, bearer tokens, well-known token formats and `password=`-like values
+  are redacted; that is best effort, so the export stays where the user puts
+  it (design §15, §13).
 
 ## Guarantees
 
@@ -298,6 +304,8 @@ replaced when idle. The socket is `<state>/core.sock`, or
   finds `architect.toml` changed restarts an idle daemon; a busy one keeps
   its configuration for the running work and the frontend says the new one
   applies once that work is done (scenario 17).
+- Agents' text is stripped of control characters before it reaches the
+  terminal, in the TUI and in line mode (design §13).
 - Token use is what the CLI reported, summed per agent in its details
   (Przegląd). A CLI that reported nothing shows `niedostępne`, a side it
   left out shows `nieznane`, and turns it did not report for are counted as
@@ -317,6 +325,8 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - Prompts are passed as arguments (the orchestrator's plan report is bounded
   by 40k characters per task).
 - `core.db` has no schema versioning yet.
+- The history records each turn's CLI, model and effort, not the CLI's
+  version.
 - In-place: read-only tasks running beside a writer may see its partial
   edits, and the user's edits made while a writer runs are attributed to the
   writer.

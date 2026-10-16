@@ -641,7 +641,7 @@ pub fn clean(text: &str) -> String {
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut lines = vec![];
-    for paragraph in text.split('\n') {
+    for paragraph in clean(text).split('\n') {
         let mut line = String::new();
         let mut used = 0;
         for word in paragraph.split_inclusive(' ') {
@@ -832,6 +832,7 @@ mod tests {
         assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
         assert_eq!(wrap("a\n\nb", 10), ["a", "", "b"]);
         assert_eq!(clean("a\u{1b}[31mb\tc"), "a[31mb c");
+        assert_eq!(wrap("a\u{1b}]0;x\u{7}b", 10), ["a]0;xb"]);
     }
 
     #[test]

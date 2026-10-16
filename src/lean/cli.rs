@@ -7,6 +7,7 @@
 //! work.
 
 use super::daemon::{Client, Request};
+use super::tui::view::clean;
 use crate::{Result, require};
 use serde_json::Value;
 use std::io::{BufRead, IsTerminal, Write};
@@ -73,24 +74,27 @@ impl Options {
         if let Some(id) = &self.conversation {
             return Ok(id.clone());
         }
-        if !self.new {
-            let project = self.project.to_string_lossy();
-            let latest = client
-                .call(&Request::Conversations)?
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|conversation| conversation["project"] == project.as_ref())
-                .max_by_key(|conversation| conversation["created_ms"].as_i64())
-                .and_then(|conversation| conversation["id"].as_str().map(str::to_owned));
-            if let Some(id) = latest {
-                return Ok(id);
-            }
+        if !self.new
+            && let Some(id) = self.latest(client)?
+        {
+            return Ok(id);
         }
         Ok(client.call(&Request::Start)?["id"]
             .as_str()
             .unwrap_or_default()
             .to_owned())
+    }
+    /// This project's latest conversation.
+    pub fn latest(&self, client: &Client) -> Result<Option<String>> {
+        let project = self.project.to_string_lossy();
+        Ok(client
+            .call(&Request::Conversations)?
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|conversation| conversation["project"] == project.as_ref())
+            .max_by_key(|conversation| conversation["created_ms"].as_i64())
+            .and_then(|conversation| conversation["id"].as_str().map(str::to_owned)))
     }
 }
 
@@ -190,7 +194,7 @@ pub fn chat(args: &[String]) -> Result<()> {
                 },
             };
             if let Err(error) = client.call(&request) {
-                eprintln!("✗ {error}");
+                eprintln!("✗ {}", clean(&error.to_string()));
             }
         }
         let (page, idle) = events(last, if input_open { 200 } else { 2_000 })?;
@@ -360,7 +364,8 @@ pub fn review_lines(who: &str, review: &Value) -> Vec<String> {
 fn print(event: &Value) {
     if let Some(line) = describe(event) {
         let mut out = std::io::stdout().lock();
-        let _ = writeln!(out, "{line}");
+        // Agents' text may carry terminal escapes (design §13).
+        let _ = writeln!(out, "{}", clean(&line));
         let _ = out.flush();
     }
 }

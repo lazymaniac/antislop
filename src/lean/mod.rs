@@ -5,6 +5,7 @@ pub mod agent;
 pub mod cli;
 pub mod daemon;
 pub mod diff;
+pub mod export;
 pub mod git;
 pub mod store;
 pub mod tasks;
@@ -765,7 +766,16 @@ impl Core {
                 .store
                 .append_event(conversation, Some(&turn.id), kind, &payload);
         };
-        announce("turn_started", json!({"role": role, "provider": provider}));
+        // What ran, for the history and its export (design §15).
+        announce(
+            "turn_started",
+            json!({
+                "role": role,
+                "provider": provider,
+                "model": profile.as_ref().ok().and_then(|profile| profile.model.clone()),
+                "effort": profile.as_ref().ok().and_then(|profile| profile.native_effort.clone()),
+            }),
+        );
         let outcome = profile.and_then(|profile| {
             let spec = agent::Spec {
                 provider: profile.provider,

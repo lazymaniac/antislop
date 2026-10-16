@@ -5,6 +5,8 @@ antislop — a team of CLI agents working on your project
 
 usage:
   antislop [chat] [options] [message]
+  antislop export [options]   the conversation's history as JSON lines,
+                              secrets redacted, on stdout
 
 With no message in a terminal it opens the TUI; with a message, or when
 input is not a terminal, it prints the conversation line by line.
@@ -45,6 +47,7 @@ fn run() -> Result<()> {
             )
         }
         Some("chat") => architect::lean::cli::chat(&args[1..]),
+        Some("export") => architect::lean::export::export(&args[1..]),
         _ => architect::lean::cli::chat(&args),
     }
 }
