@@ -303,8 +303,7 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - A session is resumed only by the CLI that created it.
 - A CLI's own subagents are turned off, so no team runs that no verifier
   checks (design §9.5): codex runs with `features.multi_agent=false`, claude
-  without its `Task`/`Agent` tool. agy and gemini start none in their headless
-  modes as configured here.
+  without its `Task`/`Agent` tool.
 - `/pause` (or the palette) starts no new plan work: worker, verifier and
   audit turns wait, turns already running finish, the orchestrator still
   answers. `/continue` goes on; Ctrl+X cancels what waits too. A pause is
@@ -356,6 +355,8 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - `core.db` has no schema versioning yet.
 - The history records each turn's CLI, model and effort, not the CLI's
   version.
+- agy and gemini offer no switch for their own subagents; the runtime cannot
+  turn them off and would not see them.
 - In-place: read-only tasks running beside a writer may see its partial
   edits, and the user's edits made while a writer runs are attributed to the
   writer.
