@@ -1,6 +1,6 @@
-//! Ctrl+P palette of commands and `/` search for an agent of the graph:
-//! type to narrow, arrows to choose, Enter to run, Esc to close. Also the
-//! `?` help of the active view.
+//! Ctrl+P palette of commands, `/` search for an agent of the graph and
+//! Ctrl+F search of the conversation: type to narrow, arrows to choose,
+//! Enter to run, Esc to close. Also the `?` help of the active view.
 
 use super::graph::Graph;
 use super::view::{View, agent_name, dim, truncate};
@@ -23,6 +23,7 @@ pub enum Command {
     Supervised,
     NewConversation,
     Find,
+    Search,
     Details,
     Diff,
     Comment,
@@ -31,7 +32,7 @@ pub enum Command {
     Quit,
 }
 
-const COMMANDS: [(Command, &str); 15] = [
+const COMMANDS: [(Command, &str); 16] = [
     (Command::Accept, "Uruchom zaproponowany plan · Ctrl+A"),
     (Command::Resume, "Wznów plan · Ctrl+R"),
     (Command::Cancel, "Anuluj trwającą pracę · Ctrl+X"),
@@ -50,6 +51,7 @@ const COMMANDS: [(Command, &str); 15] = [
     ),
     (Command::NewConversation, "Nowa rozmowa · Ctrl+N"),
     (Command::Find, "Znajdź agenta · /"),
+    (Command::Search, "Szukaj w rozmowie · Ctrl+F"),
     (Command::Details, "Szczegóły wybranego agenta · Enter"),
     (Command::Diff, "Diff zadania wybranego agenta · d"),
     (Command::Comment, "Skomentuj wybrany element · c"),
@@ -63,12 +65,15 @@ pub enum Action {
     Run(Command),
     /// Select this graph node.
     Select(String),
+    /// Show this entry of the conversation.
+    Show(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Commands,
     Agents,
+    History,
 }
 
 #[derive(Debug)]
@@ -108,6 +113,15 @@ impl Picker {
                     };
                     (label, Action::Select(node.key.clone()))
                 })
+                .collect(),
+            // Newest first.
+            Kind::History => view
+                .transcript
+                .iter()
+                .enumerate()
+                .rev()
+                .filter(|(_, entry)| !entry.text.trim().is_empty())
+                .map(|(index, entry)| (entry.text.trim().replace('\n', " "), Action::Show(index)))
                 .collect(),
         };
         let words: Vec<String> = self
@@ -154,6 +168,7 @@ impl Picker {
         let title = match self.kind {
             Kind::Commands => " polecenia · Enter wykonaj · Esc zamknij ",
             Kind::Agents => " znajdź agenta · Enter wybierz · Esc zamknij ",
+            Kind::History => " szukaj w rozmowie · Enter pokaż · Esc zamknij ",
         };
         frame.render_widget(Clear, box_area);
         frame.render_widget(
@@ -195,6 +210,7 @@ impl Help {
                 "/pause, /continue wstrzymaj nowe kroki / kontynuuj",
                 "/mode autonomous|supervised  tryb dla kolejnych działań",
                 "Ctrl+N           nowa rozmowa",
+                "Ctrl+F           szukaj w rozmowie",
                 "Ctrl+P           paleta poleceń",
                 "Esc              wyjdź (praca trwa dalej w demonie)",
             ],
@@ -273,6 +289,27 @@ mod tests {
         let items = picker.items(&view);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].1, Action::Run(Command::Resume));
+    }
+
+    #[test]
+    fn the_conversation_is_searched_newest_first() {
+        let mut view = View::default();
+        for (seq, text) in [(1, "plan importu"), (2, "inne"), (3, "Import gotowy")] {
+            view.apply(&serde_json::json!({"seq": seq, "kind": "message",
+                "payload": {"author": "orchestrator", "text": text}}));
+        }
+        let mut picker = Picker::new(Kind::History);
+        picker.query = "import".into();
+        let shown: Vec<Action> = picker
+            .items(&view)
+            .into_iter()
+            .map(|(_, action)| action)
+            .collect();
+        assert_eq!(shown.len(), 2);
+        let Action::Show(newest) = shown[0] else {
+            panic!("{shown:?}")
+        };
+        assert!(view.transcript[newest].text.contains("Import gotowy"));
     }
 
     #[test]

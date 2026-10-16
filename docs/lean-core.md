@@ -229,7 +229,9 @@ replaced when idle. The socket is `<state>/core.sock`, or
   report and commits, or the verifier's verdict), Kontrole (each obligation
   of the task's verifier, risks and checklist, with how the latest verdict
   accounted for it) and Komentarze. `/` in the graph finds an agent by role
-  or task title; Ctrl+P opens a palette of every command; `?` (F1 anywhere)
+  or task title; Ctrl+F searches the conversation (newest first; Enter
+  brings the entry to the top, highlighted); Ctrl+P opens a palette of every
+  command; `?` (F1 anywhere)
   shows the keys of the active view. `c` comments
   on the selected agent (in the graph or its details); a box shows how many
   comments on it are open. On Komentarze, `r` resolves, `o` reopens and `d`

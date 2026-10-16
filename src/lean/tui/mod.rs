@@ -81,6 +81,9 @@ struct App {
     input: String,
     /// Lines scrolled up from the bottom of the transcript.
     scroll: usize,
+    /// The transcript entry a search led to: shown at the top, highlighted
+    /// until the next key.
+    found: Option<usize>,
     notice: Option<String>,
     updates: mpsc::Sender<Update>,
     focus: Focus,
@@ -376,6 +379,15 @@ impl App {
                         self.selected = key;
                         true
                     }
+                    Some(Action::Show(entry)) => {
+                        self.details = None;
+                        self.diff = None;
+                        self.focus = Focus::Chat;
+                        self.found = Some(entry);
+                        // Brought to the top at the next draw.
+                        self.scroll = usize::MAX;
+                        true
+                    }
                     None => true,
                 };
             }
@@ -397,6 +409,7 @@ impl App {
             Command::Supervised => self.command("/mode supervised"),
             Command::NewConversation => self.new_conversation(),
             Command::Find => self.picker = Some(Picker::new(Kind::Agents)),
+            Command::Search => self.picker = Some(Picker::new(Kind::History)),
             Command::Details => {
                 self.details = Some(Details::new(selected));
                 self.fetch_task();
@@ -418,6 +431,10 @@ impl App {
     /// Returns false when the user quits.
     fn key(&mut self, key: event::KeyEvent) -> bool {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        if self.picker.is_none() {
+            // The search result stays where it is, no longer highlighted.
+            self.found = None;
+        }
         match key.code {
             KeyCode::Char('c') if control => return false,
             KeyCode::Char('a') if control => self.command("/accept"),
@@ -427,6 +444,7 @@ impl App {
             _ if self.help.is_some() => self.help = None,
             _ if self.picker.is_some() => return self.picker_key(key),
             KeyCode::Char('p') if control => self.picker = Some(Picker::new(Kind::Commands)),
+            KeyCode::Char('f') if control => self.picker = Some(Picker::new(Kind::History)),
             KeyCode::F(1) => self.help = Some(self.help_here()),
             _ if self.editor.is_some() => self.editor_key(key),
             _ if self.diff.is_some() => self.diff_key(key),
@@ -744,17 +762,25 @@ impl App {
 
     fn draw_transcript(&mut self, frame: &mut Frame, area: Rect) {
         let width = area.width.saturating_sub(1) as usize;
-        let lines: Vec<Line> = self
-            .view
-            .transcript
-            .iter()
-            .flat_map(|entry| {
+        let mut top = None;
+        let mut lines: Vec<Line> = vec![];
+        for (index, entry) in self.view.transcript.iter().enumerate() {
+            let style = if self.found == Some(index) {
+                top = Some(lines.len());
+                entry.style.add_modifier(Modifier::REVERSED)
+            } else {
+                entry.style
+            };
+            lines.extend(
                 wrap(&entry.text, width)
                     .into_iter()
-                    .map(|line| Line::styled(line, entry.style))
-            })
-            .collect();
+                    .map(|line| Line::styled(line, style)),
+            );
+        }
         let height = area.height as usize;
+        if let Some(top) = top.take().filter(|_| self.scroll == usize::MAX) {
+            self.scroll = lines.len().saturating_sub(top + height);
+        }
         self.scroll = self.scroll.min(lines.len().saturating_sub(height));
         let end = lines.len() - self.scroll;
         let start = end.saturating_sub(height);
@@ -933,6 +959,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         view: View::default(),
         input: options.message.clone().unwrap_or_default(),
         scroll: 0,
+        found: None,
         notice: client.notice.clone(),
         updates,
         focus: Focus::Chat,

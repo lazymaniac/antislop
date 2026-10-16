@@ -41,7 +41,8 @@ review whose findings go to the orchestrator.
 Keys: Enter send, Alt+Enter new line, Ctrl+A run the proposed plan, Ctrl+R
 resume what a plan left unfinished (after a login, a limit reset, a restart or
 your own edits), Ctrl+X cancel running work, PgUp/PgDn scroll, Ctrl+N new
-conversation, Ctrl+P all commands, F1 or `?` help, Esc back or detach.
+conversation, Ctrl+F search the conversation, Ctrl+P all commands, F1 or
+`?` help, Esc back or detach.
 `/pause` stops starting new work (what runs finishes) until `/continue`.
 `/mode autonomous` or `/mode supervised` changes how this conversation goes
 on from now on (the header shows the mode). In line mode, type `/accept`,
