@@ -31,7 +31,8 @@ The TUI shows the chat beside the team graph: every agent as a box, edges for
 dependencies, verification, messages and supervision (`f` filters them), and
 an overlay with what is running right now. Tab moves between the panels; in
 the graph, arrows select an agent, Enter opens its task, session, messages,
-result and comments, and `c` comments on it: the orchestrator gets the comment
+result, the checks its verifier accounted for and comments (`/` finds an
+agent by name or task), and `c` comments on it: the orchestrator gets the comment
 at once and keeps seeing it until you resolve it. `d` opens a task's change as
 a diff with line numbers, where `c` comments on a line and `R` asks for a code
 review whose findings go to the orchestrator.
@@ -39,7 +40,7 @@ review whose findings go to the orchestrator.
 Keys: Enter send, Alt+Enter new line, Ctrl+A run the proposed plan, Ctrl+R
 resume what a plan left unfinished (after a login, a limit reset, a restart or
 your own edits), Ctrl+X cancel running work, PgUp/PgDn scroll, Ctrl+N new
-conversation, Esc back or detach. In line mode, type `/accept`, `/resume` or
+conversation, Ctrl+P all commands, F1 or `?` help, Esc back or detach. In line mode, type `/accept`, `/resume` or
 `/cancel`. `@t2 text` sends text to the worker of task `t2` (delivered in its
 next turn; the orchestrator gets a copy). Agents message each other the same
 way.

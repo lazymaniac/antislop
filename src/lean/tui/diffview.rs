@@ -168,7 +168,7 @@ impl DiffView {
         );
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "↑/↓ wybór · ←/→ plik · Tab pliki/linie · c komentarz · R recenzja kodu · r odśwież · Esc powrót",
+                "↑/↓ wybór · ←/→ plik · Tab pliki/linie · c komentarz · R recenzja kodu · r odśwież · ? pomoc · Esc powrót",
                 dim(),
             )),
             footer,

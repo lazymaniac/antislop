@@ -1,6 +1,7 @@
 //! Full-screen details of one agent: what it was asked, its session, the
 //! messages it sent and received, and what it delivered.
 
+use super::super::tasks::{TaskSpec, obligations};
 use super::view::{View, agent_name, dim, polish, wrap};
 use ratatui::{
     Frame,
@@ -11,9 +12,17 @@ use ratatui::{
 };
 use serde_json::Value;
 
-pub const TABS: [&str; 5] = ["Przegląd", "Sesja", "Wiadomości", "Wynik", "Komentarze"];
+pub const TABS: [&str; 6] = [
+    "Przegląd",
+    "Sesja",
+    "Wiadomości",
+    "Wynik",
+    "Kontrole",
+    "Komentarze",
+];
 pub const RESULT: usize = 3;
-pub const COMMENTS: usize = 4;
+pub const CHECKS: usize = 4;
+pub const COMMENTS: usize = 5;
 
 #[derive(Debug)]
 pub struct Details {
@@ -175,6 +184,16 @@ impl Details {
                     lines.push((Style::default(), format!("  {}", comment.text)));
                 }
             }
+            CHECKS => match (&self.task, task) {
+                (_, None) => lines.push((
+                    dim(),
+                    "Kontrole mają zadania: ryzyka zadania i lista kontrolna jego \
+                     rodzaju, rozliczane przez weryfikatora."
+                        .into(),
+                )),
+                (None, Some(_)) => lines.push((dim(), "Pobieram…".into())),
+                (Some(stored), Some(_)) => lines.extend(checks(stored)),
+            },
             _ => match (&self.task, task) {
                 (_, None) => lines.push((
                     dim(),
@@ -218,6 +237,9 @@ impl Details {
     }
 
     pub fn draw(&mut self, frame: &mut Frame, view: &View) {
+        if self.tab >= TABS.len() {
+            self.tab = 0;
+        }
         let area = frame.area();
         let [header, body, footer] = Layout::vertical([
             Constraint::Length(1),
@@ -264,13 +286,53 @@ impl Details {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 if self.tab == COMMENTS {
-                    "←/→ zakładka · ↑/↓ wybór · c skomentuj · r rozwiąż · o otwórz · x usuń · d diff · Esc powrót"
+                    "←/→ zakładka · ↑/↓ wybór · c skomentuj · r rozwiąż · o otwórz · x usuń · d diff · ? pomoc · Esc powrót"
                 } else {
-                    "←/→ zakładka · ↑/↓ PgUp/PgDn przewiń · c skomentuj · d diff · Esc powrót do grafu"
+                    "←/→ zakładka · ↑/↓ PgUp/PgDn przewiń · c skomentuj · d diff · ? pomoc · Esc powrót do grafu"
                 },
                 dim(),
             )),
             footer,
         );
     }
+}
+
+/// The verifier's obligations (the task's risks, then its kind's checklist)
+/// and how the latest verdict accounted for each.
+fn checks(stored: &Value) -> Vec<(Style, String)> {
+    let Ok(spec) = serde_json::from_value::<TaskSpec>(stored["spec"].clone()) else {
+        return vec![(dim(), "Nie umiem odczytać zadania.".into())];
+    };
+    let coverage = &stored["verdict"]["coverage"];
+    let mut lines = vec![];
+    if stored["verdict"].is_null() {
+        lines.push((dim(), "Weryfikator jeszcze nie ocenił.".into()));
+        lines.push((Style::default(), String::new()));
+    }
+    for (id, text) in obligations(&spec) {
+        let entry = &coverage[id.as_str()];
+        let (mark, style) = match entry["status"]
+            .as_str()
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("ok") => ("✓", Style::default().fg(Color::Green)),
+            Some("issue") => ("✗", Style::default().fg(Color::Red)),
+            Some("n/a") => ("–", dim()),
+            _ if stored["verdict"].is_null() => ("○", dim()),
+            _ => ("?", Style::default().fg(Color::Yellow)),
+        };
+        let kind = if id.starts_with('R') {
+            "ryzyko"
+        } else {
+            "kontrola"
+        };
+        lines.push((style, format!("{mark} {id} {kind}: {text}")));
+        if let Some(note) = entry["note"].as_str() {
+            lines.push((Style::default(), format!("    {note}")));
+        } else if !stored["verdict"].is_null() {
+            lines.push((dim(), "    nierozliczone".into()));
+        }
+    }
+    lines
 }

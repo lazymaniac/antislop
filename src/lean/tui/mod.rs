@@ -6,6 +6,7 @@
 mod details;
 mod diffview;
 mod graph;
+mod palette;
 pub mod view;
 
 use super::cli::Options;
@@ -14,9 +15,10 @@ use crate::Result;
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
 };
-use details::{COMMENTS, Details, RESULT, TABS};
+use details::{CHECKS, COMMENTS, Details, RESULT, TABS};
 use diffview::DiffView;
 use graph::{Canvas, Filter, Graph};
+use palette::{Action, Command, Help, Kind, Picker};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -89,6 +91,8 @@ struct App {
     details: Option<Details>,
     diff: Option<DiffView>,
     editor: Option<Editor>,
+    picker: Option<Picker>,
+    help: Option<Help>,
 }
 
 impl App {
@@ -101,6 +105,8 @@ impl App {
         self.details = None;
         self.diff = None;
         self.editor = None;
+        self.picker = None;
+        self.help = None;
         self.selected = ORCHESTRATOR.into();
         self.offset = (0, 0);
         let stop = Arc::new(AtomicBool::new(false));
@@ -221,6 +227,7 @@ impl App {
         };
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.diff = None,
+            KeyCode::Char('?') => self.help = Some(Help::Diff),
             KeyCode::Char('c') => {
                 if let Some(target) = diff.target() {
                     self.editor = Some(Editor {
@@ -245,8 +252,13 @@ impl App {
     }
 
     fn submit(&mut self) {
-        let text = self.input.trim().to_owned();
-        self.input.clear();
+        let text = std::mem::take(&mut self.input);
+        self.dispatch(text.trim());
+    }
+
+    /// Runs a `/command` or sends a message.
+    fn dispatch(&mut self, text: &str) {
+        let text = text.to_owned();
         let conversation = self.conversation.clone();
         match text.as_str() {
             "" => {}
@@ -291,9 +303,89 @@ impl App {
         });
     }
 
+    /// A command from a shortcut or the palette; the draft stays as it is.
     fn command(&mut self, command: &str) {
-        self.input = command.into();
-        self.submit();
+        self.dispatch(command);
+    }
+
+    fn help_here(&self) -> Help {
+        if self.diff.is_some() {
+            Help::Diff
+        } else if self.details.is_some() {
+            Help::Details
+        } else if self.focus == Focus::Graph {
+            Help::Graph
+        } else {
+            Help::Chat
+        }
+    }
+
+    /// Returns false when the user quits.
+    fn picker_key(&mut self, key: event::KeyEvent) -> bool {
+        let Some(picker) = &mut self.picker else {
+            return true;
+        };
+        match key.code {
+            KeyCode::Esc => self.picker = None,
+            KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+            KeyCode::Down => picker.selected += 1,
+            KeyCode::Backspace => {
+                picker.query.pop();
+                picker.selected = 0;
+            }
+            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                picker.query.push(ch);
+                picker.selected = 0;
+            }
+            KeyCode::Enter => {
+                let action = picker
+                    .items(&self.view)
+                    .into_iter()
+                    .nth(picker.selected)
+                    .map(|(_, action)| action);
+                self.picker = None;
+                return match action {
+                    Some(Action::Run(command)) => self.run(command),
+                    Some(Action::Select(key)) => {
+                        self.details = None;
+                        self.diff = None;
+                        self.focus = Focus::Graph;
+                        self.selected = key;
+                        true
+                    }
+                    None => true,
+                };
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// Returns false when the user quits.
+    fn run(&mut self, command: Command) -> bool {
+        let selected = self.selected.clone();
+        match command {
+            Command::Accept => self.command("/accept"),
+            Command::Resume => self.command("/resume"),
+            Command::Cancel => self.command("/cancel"),
+            Command::NewConversation => self.new_conversation(),
+            Command::Find => self.picker = Some(Picker::new(Kind::Agents)),
+            Command::Details => {
+                self.details = Some(Details::new(selected));
+                self.fetch_task();
+            }
+            Command::Diff => self.open_diff(&selected),
+            Command::Comment => {
+                self.editor = Some(Editor {
+                    target: selected,
+                    text: String::new(),
+                })
+            }
+            Command::Filter => self.filter = self.filter.next(),
+            Command::Help => self.help = Some(self.help_here()),
+            Command::Quit => return false,
+        }
+        true
     }
 
     /// Returns false when the user quits.
@@ -305,6 +397,10 @@ impl App {
             KeyCode::Char('x') if control => self.command("/cancel"),
             KeyCode::Char('r') if control => self.command("/resume"),
             KeyCode::Char('n') if control => self.new_conversation(),
+            _ if self.help.is_some() => self.help = None,
+            _ if self.picker.is_some() => return self.picker_key(key),
+            KeyCode::Char('p') if control => self.picker = Some(Picker::new(Kind::Commands)),
+            KeyCode::F(1) => self.help = Some(self.help_here()),
             _ if self.editor.is_some() => self.editor_key(key),
             _ if self.diff.is_some() => self.diff_key(key),
             _ if self.details.is_some() => self.details_key(key),
@@ -354,6 +450,8 @@ impl App {
         match key.code {
             KeyCode::Esc => self.focus = Focus::Chat,
             KeyCode::Char('q') => return false,
+            KeyCode::Char('?') => self.help = Some(Help::Graph),
+            KeyCode::Char('/') => self.picker = Some(Picker::new(Kind::Agents)),
             KeyCode::Char('f') => self.filter = self.filter.next(),
             KeyCode::Char('d') => {
                 let key = self.selected.clone();
@@ -423,6 +521,7 @@ impl App {
         let on_comments = details.tab == COMMENTS;
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.details = None,
+            KeyCode::Char('?') => self.help = Some(Help::Details),
             KeyCode::Char('c') => {
                 self.editor = Some(Editor {
                     target: details.key.clone(),
@@ -463,7 +562,7 @@ impl App {
         if self
             .details
             .as_ref()
-            .is_some_and(|details| details.tab == RESULT)
+            .is_some_and(|details| details.tab == RESULT || details.tab == CHECKS)
         {
             self.fetch_task();
         }
@@ -511,6 +610,12 @@ impl App {
                 box_area.x + 1 + last as u16,
                 box_area.y + lines[shown..].len() as u16,
             ));
+        }
+        if let Some(picker) = &mut self.picker {
+            picker.draw(frame, &self.view);
+        }
+        if let Some(help) = self.help {
+            help.draw(frame);
         }
     }
 
@@ -560,10 +665,10 @@ impl App {
             };
             match self.focus {
                 Focus::Chat => format!(
-                    "Enter wyślij (@t2 … do agenta) · Alt+Enter nowa linia · {plan}Ctrl+X anuluj · Tab zespół · Ctrl+N nowa rozmowa · Esc wyjdź"
+                    "Enter wyślij (@t2 … do agenta) · Alt+Enter nowa linia · {plan}Ctrl+P polecenia · F1 pomoc · Tab zespół · Esc wyjdź"
                 ),
                 Focus::Graph => format!(
-                    "strzałki wybór · Enter szczegóły · d diff · c skomentuj · f filtr · {plan}Ctrl+X anuluj · Tab czat · q wyjdź"
+                    "strzałki wybór · Enter szczegóły · / znajdź · d diff · c skomentuj · f filtr · {plan}Ctrl+P polecenia · ? pomoc · q wyjdź"
                 ),
             }
         });
@@ -727,6 +832,8 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         details: None,
         diff: None,
         editor: None,
+        picker: None,
+        help: None,
     };
     app.open(conversation);
 
@@ -786,7 +893,9 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                 }
                 Event::Paste(text) => {
                     let text = text.replace('\r', "\n");
-                    if let Some(editor) = &mut app.editor {
+                    if let Some(picker) = &mut app.picker {
+                        picker.query.push_str(text.trim());
+                    } else if let Some(editor) = &mut app.editor {
                         editor.text.push_str(&text);
                     } else if app.focus == Focus::Chat && app.details.is_none() {
                         app.input.push_str(&text);

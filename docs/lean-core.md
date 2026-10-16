@@ -221,8 +221,12 @@ replaced when idle. The socket is `<state>/core.sock`, or
   shown); in the graph, arrows select the nearest node in that direction and
   Enter opens its details full screen: Przegląd (task, scope, goal, the
   verifier's focus and, for a verifier, its risks), Sesja (the agent's turns
-  and tool calls), Wiadomości (mail to and from it) and Wynik (the worker's
-  report and commits, or the verifier's verdict) and Komentarze. `c` comments
+  and tool calls), Wiadomości (mail to and from it), Wynik (the worker's
+  report and commits, or the verifier's verdict), Kontrole (each obligation
+  of the task's verifier, risks and checklist, with how the latest verdict
+  accounted for it) and Komentarze. `/` in the graph finds an agent by role
+  or task title; Ctrl+P opens a palette of every command; `?` (F1 anywhere)
+  shows the keys of the active view. `c` comments
   on the selected agent (in the graph or its details); a box shows how many
   comments on it are open. On Komentarze, `r` resolves, `o` reopens and `d`
   deletes the selected one; a comment made on an earlier plan is marked so.
@@ -232,7 +236,8 @@ replaced when idle. The socket is `<state>/core.sock`, or
   `R` asks for a code review and `r` reloads.
   Keys: Enter send, Alt+Enter
   new line, Ctrl+A run the proposed plan, Ctrl+R resume what the plan left
-  unfinished, Ctrl+X cancel, PgUp/PgDn scroll, Ctrl+N new conversation, Esc
+  unfinished, Ctrl+X cancel, PgUp/PgDn scroll, Ctrl+N new conversation,
+  Ctrl+P commands, F1 help, Esc
   back (from the chat: detach), `q` in the graph detaches.
 - `antislop chat "message"` (or piped input) prints events line by line and
   exits once the conversation is idle; `/accept` and `/cancel` lines work too.
