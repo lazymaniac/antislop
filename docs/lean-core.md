@@ -301,6 +301,10 @@ replaced when idle. The socket is `<state>/core.sock`, or
   the conversation busy, and the orchestrator starts on the results before the
   conversation can look idle.
 - A session is resumed only by the CLI that created it.
+- A CLI's own subagents are turned off, so no team runs that no verifier
+  checks (design §9.5): codex runs with `features.multi_agent=false`, claude
+  without its `Task`/`Agent` tool. agy and gemini start none in their headless
+  modes as configured here.
 - `/pause` (or the palette) starts no new plan work: worker, verifier and
   audit turns wait, turns already running finish, the orchestrator still
   answers. `/continue` goes on; Ctrl+X cancels what waits too. A pause is

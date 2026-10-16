@@ -167,6 +167,9 @@ pub fn run(
 }
 
 fn command(spec: &Spec, prompt: &str) -> Result<Command> {
+    // A CLI's own subagents would be a team nobody verifies (design §9.5).
+    const NO_CODEX_SUBAGENTS: &str = "features.multi_agent=false";
+    const NO_CLAUDE_SUBAGENTS: &str = "Task,Agent";
     let mut command = Command::new(&spec.binary);
     command.current_dir(&spec.cwd);
     let read_only = spec.access == Access::ReadOnly;
@@ -182,12 +185,15 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
                     "workspace-write"
                 };
                 command.arg("-c").arg(format!("sandbox_mode=\"{sandbox}\""));
+                command.arg("-c").arg(NO_CODEX_SUBAGENTS);
                 command.arg("--json").arg("--skip-git-repo-check");
                 model_args(&mut command, spec, "-m", "model_reasoning_effort");
                 command.arg(session).arg(prompt);
                 return Ok(command);
             }
             command
+                .arg("-c")
+                .arg(NO_CODEX_SUBAGENTS)
                 .args(["--json", "--skip-git-repo-check", "-C"])
                 .arg(&spec.cwd)
                 .arg("-s")
@@ -227,6 +233,9 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
         ProviderKind::Claude => {
             command
                 .args(["-p", "--output-format", "stream-json", "--verbose"])
+                // Before another option: the list takes every word up to one.
+                .arg("--disallowedTools")
+                .arg(NO_CLAUDE_SUBAGENTS)
                 .arg("--permission-mode")
                 .arg(if read_only { "plan" } else { "acceptEdits" });
             for dir in &spec.add_dirs {
@@ -673,6 +682,46 @@ mod tests {
         assert!(
             matches!(parser.finish(), Finish::Failed(error) if error.contains("quota exceeded"))
         );
+    }
+
+    #[test]
+    fn native_subagents_are_turned_off() {
+        let args = |provider, resume: Option<&str>| -> Vec<String> {
+            let spec = Spec {
+                provider,
+                binary: "cli".into(),
+                model: None,
+                effort: None,
+                cwd: "/".into(),
+                add_dirs: vec![],
+                access: Access::Write,
+                resume: resume.map(str::to_owned),
+            };
+            command(&spec, "prompt")
+                .unwrap()
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect()
+        };
+        for codex in [
+            args(ProviderKind::Codex, None),
+            args(ProviderKind::Codex, Some("s")),
+        ] {
+            assert!(
+                codex
+                    .windows(2)
+                    .any(|pair| pair == ["-c", "features.multi_agent=false"]),
+                "{codex:?}"
+            );
+        }
+        let claude = args(ProviderKind::Claude, None);
+        let at = claude
+            .iter()
+            .position(|arg| arg == "--disallowedTools")
+            .unwrap();
+        assert_eq!(claude[at + 1], "Task,Agent");
+        assert!(claude[at + 2].starts_with("--"), "{claude:?}");
+        assert_eq!(claude.last().unwrap(), "prompt");
     }
 
     #[test]
