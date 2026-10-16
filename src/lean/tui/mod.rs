@@ -841,6 +841,73 @@ impl App {
     }
 }
 
+/// Whether to draw in ASCII: asked for with `ANTISLOP_ASCII`, or the
+/// locale is not UTF-8.
+fn ascii_terminal() -> bool {
+    if std::env::var_os("ANTISLOP_ASCII").is_some_and(|value| !value.is_empty()) {
+        return true;
+    }
+    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    !(locale.contains("utf-8") || locale.contains("utf8"))
+}
+
+/// The ASCII stand-in for a character the screen uses; `?` for others.
+fn ascii(ch: char) -> char {
+    match ch {
+        '─' | '–' | '—' | '−' | '·' => '-',
+        // The selected node keeps a border unlike the others.
+        '═' => '=',
+        '│' | '║' | '⏸' => '|',
+        '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╔' | '╗' | '╚' | '╝' | '╭' | '╮'
+        | '╯' | '╰' => '+',
+        '▶' | '→' | '↳' => '>',
+        '◀' | '←' => '<',
+        '▲' | '↑' => '^',
+        '▼' | '↓' => 'v',
+        '…' => '.',
+        '○' => 'o',
+        '●' => '*',
+        '✓' => '+',
+        '✗' => 'x',
+        '⚠' => '!',
+        '⚙' | '✎' => '#',
+        '✉' => '@',
+        '§' => 'S',
+        'ą' => 'a',
+        'ć' => 'c',
+        'ę' => 'e',
+        'ł' => 'l',
+        'ń' => 'n',
+        'ó' => 'o',
+        'ś' => 's',
+        'ź' | 'ż' => 'z',
+        'Ą' => 'A',
+        'Ć' => 'C',
+        'Ę' => 'E',
+        'Ł' => 'L',
+        'Ń' => 'N',
+        'Ó' => 'O',
+        'Ś' => 'S',
+        'Ź' | 'Ż' => 'Z',
+        ch if ch.is_ascii() => ch,
+        _ => '?',
+    }
+}
+
+/// Replaces every character with its ASCII stand-in (design §8.3).
+fn in_ascii(buffer: &mut ratatui::buffer::Buffer) {
+    for cell in &mut buffer.content {
+        if !cell.symbol().is_ascii() {
+            let first = cell.symbol().chars().next().unwrap_or(' ');
+            cell.set_char(ascii(first));
+        }
+    }
+}
+
 /// Drops every color; what was dim stays dim, selection is reversed anyway.
 fn without_color(buffer: &mut ratatui::buffer::Buffer) {
     for cell in &mut buffer.content {
@@ -882,6 +949,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
 
     // https://no-color.org: nothing depends on color alone (design §17).
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
+    let ascii = ascii_terminal();
     let mut terminal = ratatui::init();
     let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
     let result = (|| -> Result<()> {
@@ -932,6 +1000,9 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                 if no_color {
                     without_color(frame.buffer_mut());
                 }
+                if ascii {
+                    in_ascii(frame.buffer_mut());
+                }
             })?;
             if !event::poll(Duration::from_millis(100))? {
                 continue;
@@ -967,6 +1038,15 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
 mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
+
+    #[test]
+    fn ascii_replaces_box_drawing_marks_and_letters() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 12, 1));
+        buffer.set_string(0, 0, "╭─✓ łódź 漢", Style::default());
+        in_ascii(&mut buffer);
+        let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+        assert_eq!(text, "+-+ lodz ?  ");
+    }
 
     #[test]
     fn without_color_keeps_dim_and_reversed_as_modifiers() {
