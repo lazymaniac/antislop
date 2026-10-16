@@ -38,6 +38,22 @@ class RequirementsAuditTests(unittest.TestCase):
         self.assertFalse(result['completeness_verified'])
         self.assertGreater(result['scope']['remaining_parent_reviews'], 0)
 
+    def test_recovery_review_rejects_each_lost_obligation_with_source_preserved(self):
+        # Mutate each interpreted obligation, keeping the original source,
+        # identifiers, parent, authority and other interpretations unchanged.
+        # The separate source-first oracle must still detect the omission.
+        selected = [c for c in self.atomic['requirements']
+                    if c['interpretation_method'] == 'reviewed_recovery_contract']
+        self.assertGreater(len(selected), 60)
+        self.assertEqual(13, len({c['parent_id'] for c in selected}))
+        for original in selected:
+            with self.subTest(obligation=original['obligation']):
+                ledger, atomic = self.mutate()
+                changed = next(c for c in atomic['requirements'] if c['id'] == original['id'])
+                changed['obligation'] = 'A restarted provider can always continue without further checks.'
+                self.assertTrue(any('semantic obligation/qualifier missing' in error
+                                    for error in self.errors(ledger, atomic)))
+
     def test_omitted_middle_source_fragment_fails(self):
         ledger, atomic = self.mutate()
         del atomic['parents'][len(atomic['parents'])//2]
@@ -114,6 +130,47 @@ class RequirementsAuditTests(unittest.TestCase):
         self.assertEqual(20,len(children))
         self.assertTrue(all(c['authority']==parent['authority'] and c['atomicity']=='reviewed'
                             and c['status']=='identified' and not c['evidence_refs'] for c in children))
+
+    def test_provider_capabilities_preserve_each_dimension_and_actual_stop_receipts(self):
+        for phrase in [
+            'structured-output capability separately', 'streaming capability separately',
+            'history capability separately', 'resume capability separately',
+            'mid-turn-steering capability separately', 'cancellation capability separately',
+            'approvals capability separately', 'tool-restriction capability separately',
+            'sandbox capability separately', 'usage capability separately',
+            'native-subagent capability separately', 'unavailable provider functions explicit',
+            'Do not interpret interrupt as rollback',
+            'interruption request from confirmed stopping in the receipt',
+        ]:
+            with self.subTest(phrase=phrase):
+                ledger, atomic = self.mutate()
+                child = next(c for c in atomic['requirements'] if phrase in c['obligation'])
+                child['obligation'] = 'A streaming CLI has all required features.'
+                self.assertTrue(any('semantic obligation/qualifier missing' in error
+                                    for error in self.errors(ledger, atomic)))
+
+    def test_security_interpretation_keeps_enforcement_limits_assets_and_untrusted_inputs(self):
+        for phrase in [
+            'Protect external resources', 'generated patches as potentially untrusted',
+            'MCP integrations as potentially untrusted', 'secret access in the run policy',
+            'fully autonomous execution within the run policy',
+            'Do not substitute model judgment for process safeguards',
+            'documented provider approvals/restrictions mechanism or an external sandbox/environment',
+            'unless the user explicitly selects a weaker profile',
+            'Do not substitute a prompt for isolation', 'Do not substitute a worktree for isolation',
+            'Deny verifier permission to modify accepted sources',
+            'same command restrictions to tests as to other commands',
+            'retention policy for logs and exports',
+            'Do not claim redaction guarantees removal of every secret',
+            'Limit collection at the source', 'CLI authentication stores into artifacts',
+            'Sanitize dangerous terminal control sequences',
+        ]:
+            with self.subTest(phrase=phrase):
+                ledger, atomic = self.mutate()
+                child = next(c for c in atomic['requirements'] if phrase in c['obligation'])
+                child['obligation'] = 'A trusted model in a worktree is sufficient protection.'
+                self.assertTrue(any('semantic obligation/qualifier missing' in error
+                                    for error in self.errors(ledger, atomic)))
 
     def test_bugfix_requires_actual_before_after_proof_or_an_explicit_gap(self):
         for phrase in ['reproduce the problem before changing', 'check the result after the change',

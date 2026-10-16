@@ -418,6 +418,71 @@ CRITICAL_SPLITS = {
         'Reject stale evidence.', 'Reject a disallowed author.',
         'Independently evaluate evidence quality; runtime format checks do not establish honest reasoning.',
         'Record newly discovered risks with an owner and check, then extend the catalog.'],
+    'Capabilities obejmują osobno:': [
+        'Report structured-output capability separately.',
+        'Report streaming capability separately.',
+        'Report history capability separately.',
+        'Report resume capability separately.',
+        'Report mid-turn-steering capability separately.',
+        'Report cancellation capability separately.',
+        'Report approvals capability separately.',
+        'Report tool-restriction capability separately.',
+        'Report sandbox capability separately.',
+        'Report usage capability separately.',
+        'Report native-subagent capability separately.',
+        'Make unavailable provider functions explicit.',
+        'Do not interpret interrupt as rollback of tool effects.',
+        'Distinguish an interruption request from confirmed stopping in the receipt.'],
+    'Chronimy: pliki użytkownika': [
+        'Protect user files.',
+        'Protect secrets.',
+        'Protect CLI authentication.',
+        'Protect session history.',
+        'Protect artifacts.',
+        'Protect local IPC.',
+        'Protect repositories.',
+        'Protect external resources.',
+        'Treat repository contents as potentially untrusted.',
+        'Treat dependencies as potentially untrusted.',
+        'Treat test scripts as potentially untrusted.',
+        'Treat webpages as potentially untrusted.',
+        'Treat tool results as potentially untrusted.',
+        'Treat plugins as potentially untrusted.',
+        'Treat MCP integrations as potentially untrusted.',
+        'Treat other agents responses as potentially untrusted.',
+        'Treat generated patches as potentially untrusted.'],
+    'Polityka run definiuje dostęp': [
+        'Define file access in the run policy.',
+        'Define network access in the run policy.',
+        'Define tool access in the run policy.',
+        'Define secret access in the run policy.',
+        'Define publication access in the run policy.',
+        'Define deletion access in the run policy.',
+        'Define external-effect access in the run policy.',
+        'Keep fully autonomous execution within the run policy.',
+        'Do not substitute model judgment for process safeguards.'],
+    '**Istotne ograniczenie integracji CLI:**': [
+        'Treat CLI integration alone as not automatically controlling every internal native tool invocation.',
+        'Enforce hard restrictions using a documented provider approvals/restrictions mechanism or an external sandbox/environment.',
+        'Block session start when a required profile restriction cannot be enforced, unless the user explicitly selects a weaker profile.',
+        'Do not silently select a weaker profile on the users behalf.',
+        'Do not substitute a prompt for isolation.',
+        'Do not substitute a worktree for isolation.'],
+    'Weryfikator ma dostęp do przypiętego artefaktu': [
+        'Give the verifier access to the pinned artifact.',
+        'Permit verifier checks in a separate environment.',
+        'Deny verifier permission to modify accepted sources.',
+        'Treat tests as executable code.',
+        'Apply the same command restrictions to tests as to other commands.'],
+    'Logi i eksport mają redakcję sekretów': [
+        'Redact secrets in logs and exports.',
+        'Restrict file permissions for logs and exports.',
+        'Define a retention policy for logs and exports.',
+        'Do not claim redaction guarantees removal of every secret.',
+        'Limit collection at the source.',
+        'Do not copy CLI authentication stores into logs.',
+        'Do not copy CLI authentication stores into artifacts.',
+        'Sanitize dangerous terminal control sequences from terminal output.'],
     'Każde przekazanie utrwala': [
         'Preserve invariants, contracts, negative requirements, open findings and provenance at each handoff.',
         'Invalidate dependent facts when source code or configuration changes.',
@@ -492,6 +557,101 @@ CRITICAL_SPLITS = {
         'Do not lower mandatory criteria based on severity.',
         'Do not use an average or coverage percentage to excuse an omitted requirement.',
         'Invalidate dependent results after a checklist, requirement or material-input revision.'],
+}
+
+
+RECOVERY_SPLITS = {
+    '- SQLite w trybie WAL;': [
+        'Use SQLite WAL mode.',
+        'Commit an event and its state update in one transaction.',
+        'Do not use the TUI as the source of truth.'],
+    '- Checkpointy na granicach etapów,': [
+        'Checkpoint at stage boundaries.',
+        'Checkpoint at tool-result boundaries.',
+        'Checkpoint substantive plan changes.',
+        'Use snapshots to accelerate reads.',
+        'Retain events for audit.'],
+    '- Po awarii:': [
+        'After a crash, reconstruct durable state.',
+        'After a crash, establish the actual fate of processes.',
+        'After a crash, establish the actual fate of sessions.',
+        'After a crash, inspect the workspace.',
+        'After a crash, resume or create a new session with a handoff package.'],
+    '- Po restarcie komputera i uruchomieniu Architect:': [
+        'After computer restart and Architect startup, identify interrupted sessions using durable IDs.',
+        'After computer restart and Architect startup, check current session state.',
+        'After computer restart and Architect startup, natively resume each interrupted session when its provider supports it.',
+        'When the provider cannot resume a particular session, report an explicit error.',
+        'When the provider cannot resume a particular session, offer a replacement session with a handoff package.',
+        'Do not represent a replacement session as the same native session.'],
+    '- Resume zachowuje pauzy': [
+        'Preserve pauses during resume.',
+        'Preserve pending approvals during resume.',
+        'In supervised mode, resume must not start an unapproved stage.',
+        'In supervised mode, resume must not start an unapproved correction round.',
+        'In autonomous mode, resume may continue previously authorized work.',
+        'Do not expand permissions merely because of restart.'],
+    '- Resume nie oznacza dokładnego': [
+        'Do not claim resume exactly reproduces model generation.',
+        'Reconcile state before continuing an operation whose effects are unknown.'],
+    '- Przy utracie połączenia z dostawcą:': [
+        'After provider connection loss, retry only safe operations.',
+        'Apply backoff to safe retries after provider connection loss.',
+        'Represent authentication failure separately.',
+        'Represent rate-limit failure separately.',
+        'Represent network failure separately.',
+        'Repair the cause of permanent failures.',
+        'Do not blindly retry permanent failures.'],
+    '- Brak aktywności:': [
+        'When activity stops, distinguish waiting for the model.',
+        'When activity stops, distinguish waiting for a tool.',
+        'When activity stops, distinguish waiting for the user.',
+        'Keep manual interruption available while waiting.',
+        'Do not impose an MVP turn-completion deadline.',
+        'Do not impose an MVP run-completion deadline.'],
+    '- Pause:': [
+        'Pause stops scheduling new actions.',
+        'Make the availability of safely finishing an active turn explicit.',
+        'Make the availability of safely interrupting an active turn explicit.',
+        'Do not promise pause immediately rolls back a tool.'],
+    '- Cancel:': [
+        'Cancel stops new actions.',
+        'Cancel interrupts processes.',
+        'Cancel preserves the checkpoint.',
+        'Cancel reports observed effects.',
+        'Cancel must not delete user work.'],
+    '**Ustalone:** pierwsza wersja nie ma limitów': [
+        'Do not impose an MVP agent-count limit.',
+        'Do not impose an MVP concurrency limit.',
+        'Do not impose an MVP time limit.',
+        'Do not impose an MVP cost limit.',
+        'Do not impose an MVP delegation-depth limit.',
+        'Do not impose an MVP correction-round limit.',
+        'Do not introduce hidden thresholds that stop MVP work.',
+        'Schedule according to task dependencies.',
+        'Schedule according to write safety.',
+        'Schedule according to actual environment availability.'],
+    'Użytkownik może ręcznie pauzować i anulować zadanie.': [
+        'Allow the user to pause manually.',
+        'Allow the user to cancel manually.',
+        'Continue rejecting dependency cycles.',
+        'Continue rejecting actions without authorization.',
+        'Continue rejecting invalid protocols.',
+        'Do not describe an authorization restriction as a budget limit.',
+        'Report actual operating-system constraints as errors or waiting.',
+        'Report actual throughput constraints as errors or waiting.',
+        'Report actual provider constraints as errors or waiting.',
+        'Do not present actual provider constraints as an absence of provider limits.'],
+    'Buforowanie strumieni i walidacja rozmiaru komunikatów': [
+        'Use stream buffering for transport resilience.',
+        'Use message-size validation for transport resilience.',
+        'Do not interpret transport buffering or message-size validation as a task budget.',
+        'Do not interpret transport buffering or message-size validation as an agent-count budget.',
+        'Label token and cost data as reported when actually reported.',
+        'Label token and cost data as estimated when estimated.',
+        'Label token and cost data as unavailable when absent.',
+        'Do not represent missing token or cost data as zero.',
+        'Keep configurable task budgets outside the MVP; they are a later-version feature.'],
 }
 
 
@@ -572,6 +732,11 @@ def atomic_extract(text, ledger):
             if line.startswith(prefix):
                 units, interpretation_method = children, 'reviewed_m2q_contract'
                 break
+        if source['section'] == '14':
+            for prefix, children in RECOVERY_SPLITS.items():
+                if line.startswith(prefix):
+                    units, interpretation_method = children, 'reviewed_recovery_contract'
+                    break
         # Explicit role-checklist contract makes each semicolon-separated check
         # mandatory; method/rejection and the whole role row remain inherited.
         if source['section'] == '7.6' and line.startswith('|'):
@@ -601,7 +766,7 @@ def atomic_extract(text, ledger):
                 source_policy='Section 2 and explicitly established autonomy/no-limit clauses have user authority; other design obligations retain pending-approval authority. Examples, proposals, code and research are not promoted to mandatory requirements.',
                 interpretation_language='English for reviewed obligations; verbatim Polish source for candidates.',
                 semantic_review=dict(status='partial',
-                    scope='Reviewed all established decisions, M2Q source preservation/compliance/invalidation contracts, explicit role-checklist components and individual catalog-risk acceptance checks.',
+                    scope='Reviewed all established decisions, M2Q source preservation/compliance/invalidation contracts, explicit role-checklist components, individual catalog-risk acceptance checks and section 14 recovery/no-budget contracts.',
                     limitation='Sentence candidates may contain multiple obligations. Full original wording and context are authoritative; pending candidates require semantic review before use as complete acceptance criteria. Generation never marks requirements verified.'),
                 parents=parents, requirements=records)
 

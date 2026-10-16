@@ -8,10 +8,10 @@
   "scope": {
     "source_fragments": 1146,
     "obligation_or_proposal_fragments": 814,
-    "interpretation_units": 1638,
-    "reviewed_atomic_units": 795,
-    "semantic_anchor_count": 63,
-    "remaining_parent_reviews": 428
+    "interpretation_units": 1727,
+    "reviewed_atomic_units": 932,
+    "semantic_anchor_count": 82,
+    "remaining_parent_reviews": 409
   },
   "errors": [],
   "semantic_checks": [
@@ -735,6 +735,109 @@
       "result": "pass"
     },
     {
+      "source_line": 558,
+      "anchor": "Capabilities obejmują osobno:",
+      "checks": [
+        "structured-output capability separately",
+        "streaming capability separately",
+        "history capability separately",
+        "resume capability separately",
+        "mid-turn-steering capability separately",
+        "cancellation capability separately",
+        "approvals capability separately",
+        "tool-restriction capability separately",
+        "sandbox capability separately",
+        "usage capability separately",
+        "native-subagent capability separately",
+        "unavailable provider functions explicit",
+        "Do not interpret interrupt as rollback",
+        "interruption request from confirmed stopping in the receipt"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 969,
+      "anchor": "Chronimy: pliki użytkownika",
+      "checks": [
+        "Protect user files",
+        "Protect secrets",
+        "Protect CLI authentication",
+        "Protect session history",
+        "Protect artifacts",
+        "Protect local IPC",
+        "Protect repositories",
+        "Protect external resources",
+        "repository contents as potentially untrusted",
+        "dependencies as potentially untrusted",
+        "test scripts as potentially untrusted",
+        "webpages as potentially untrusted",
+        "tool results as potentially untrusted",
+        "plugins as potentially untrusted",
+        "MCP integrations as potentially untrusted",
+        "other agents responses as potentially untrusted",
+        "generated patches as potentially untrusted"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 971,
+      "anchor": "Polityka run definiuje dostęp",
+      "checks": [
+        "file access in the run policy",
+        "network access in the run policy",
+        "tool access in the run policy",
+        "secret access in the run policy",
+        "publication access in the run policy",
+        "deletion access in the run policy",
+        "external-effect access in the run policy",
+        "fully autonomous execution within the run policy",
+        "Do not substitute model judgment for process safeguards"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 973,
+      "anchor": "**Istotne ograniczenie integracji CLI:**",
+      "checks": [
+        "not automatically controlling every internal native tool invocation",
+        "documented provider approvals/restrictions mechanism or an external sandbox/environment",
+        "Block session start",
+        "required profile restriction cannot be enforced",
+        "unless the user explicitly selects a weaker profile",
+        "Do not silently select a weaker profile",
+        "Do not substitute a prompt for isolation",
+        "Do not substitute a worktree for isolation"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 977,
+      "anchor": "Weryfikator ma dostęp do przypiętego artefaktu",
+      "checks": [
+        "verifier access to the pinned artifact",
+        "Permit verifier checks in a separate environment",
+        "Deny verifier permission to modify accepted sources",
+        "Treat tests as executable code",
+        "same command restrictions to tests as to other commands"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 979,
+      "anchor": "Logi i eksport mają redakcję sekretów",
+      "checks": [
+        "Redact secrets in logs and exports",
+        "Restrict file permissions for logs and exports",
+        "retention policy for logs and exports",
+        "Do not claim redaction guarantees removal of every secret",
+        "Limit collection at the source",
+        "Do not copy CLI authentication stores into logs",
+        "Do not copy CLI authentication stores into artifacts",
+        "Sanitize dangerous terminal control sequences"
+      ],
+      "result": "pass"
+    },
+    {
       "source_line": 689,
       "anchor": "Każde przekazanie utrwala",
       "checks": [
@@ -859,6 +962,176 @@
         "Do not lower mandatory",
         "average or coverage percentage",
         "checklist, requirement or material-input revision"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 983,
+      "anchor": "- SQLite w trybie WAL;",
+      "checks": [
+        "SQLite WAL mode",
+        "event and its state update in one transaction",
+        "TUI as the source of truth"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 984,
+      "anchor": "- Checkpointy na granicach etapów,",
+      "checks": [
+        "stage boundaries",
+        "tool-result boundaries",
+        "substantive plan changes",
+        "snapshots to accelerate reads",
+        "events for audit"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 985,
+      "anchor": "- Po awarii:",
+      "checks": [
+        "reconstruct durable state",
+        "actual fate of processes",
+        "actual fate of sessions",
+        "inspect the workspace",
+        "resume or create a new session with a handoff package"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 986,
+      "anchor": "- Po restarcie komputera i uruchomieniu Architect:",
+      "checks": [
+        "interrupted sessions using durable IDs",
+        "check current session state",
+        "natively resume each interrupted session when its provider supports it",
+        "cannot resume a particular session, report an explicit error",
+        "cannot resume a particular session, offer a replacement session with a handoff package",
+        "Do not represent a replacement session as the same native session"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 987,
+      "anchor": "- Resume zachowuje pauzy",
+      "checks": [
+        "Preserve pauses during resume",
+        "Preserve pending approvals during resume",
+        "supervised mode, resume must not start an unapproved stage",
+        "supervised mode, resume must not start an unapproved correction round",
+        "autonomous mode, resume may continue previously authorized work",
+        "Do not expand permissions merely because of restart"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 988,
+      "anchor": "- Resume nie oznacza dokładnego",
+      "checks": [
+        "Do not claim resume exactly reproduces model generation",
+        "Reconcile state before continuing an operation whose effects are unknown"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 989,
+      "anchor": "- Przy utracie połączenia z dostawcą:",
+      "checks": [
+        "retry only safe operations",
+        "backoff to safe retries",
+        "authentication failure separately",
+        "rate-limit failure separately",
+        "network failure separately",
+        "Repair the cause of permanent failures",
+        "Do not blindly retry permanent failures"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 990,
+      "anchor": "- Brak aktywności:",
+      "checks": [
+        "distinguish waiting for the model",
+        "distinguish waiting for a tool",
+        "distinguish waiting for the user",
+        "manual interruption available while waiting",
+        "Do not impose an MVP turn-completion deadline",
+        "Do not impose an MVP run-completion deadline"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 991,
+      "anchor": "- Pause:",
+      "checks": [
+        "Pause stops scheduling new actions",
+        "availability of safely finishing an active turn explicit",
+        "availability of safely interrupting an active turn explicit",
+        "Do not promise pause immediately rolls back a tool"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 992,
+      "anchor": "- Cancel:",
+      "checks": [
+        "Cancel stops new actions",
+        "Cancel interrupts processes",
+        "Cancel preserves the checkpoint",
+        "Cancel reports observed effects",
+        "Cancel must not delete user work"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 994,
+      "anchor": "**Ustalone:** pierwsza wersja nie ma limitów",
+      "checks": [
+        "Do not impose an MVP agent-count limit",
+        "Do not impose an MVP concurrency limit",
+        "Do not impose an MVP time limit",
+        "Do not impose an MVP cost limit",
+        "Do not impose an MVP delegation-depth limit",
+        "Do not impose an MVP correction-round limit",
+        "Do not introduce hidden thresholds that stop MVP work",
+        "Schedule according to task dependencies",
+        "Schedule according to write safety",
+        "Schedule according to actual environment availability"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 996,
+      "anchor": "Użytkownik może ręcznie pauzować i anulować zadanie.",
+      "checks": [
+        "Allow the user to pause manually",
+        "Allow the user to cancel manually",
+        "Continue rejecting dependency cycles",
+        "Continue rejecting actions without authorization",
+        "Continue rejecting invalid protocols",
+        "Do not describe an authorization restriction as a budget limit",
+        "actual operating-system constraints as errors or waiting",
+        "actual throughput constraints as errors or waiting",
+        "actual provider constraints as errors or waiting",
+        "Do not present actual provider constraints as an absence of provider limits"
+      ],
+      "result": "pass"
+    },
+    {
+      "source_line": 998,
+      "anchor": "Buforowanie strumieni i walidacja rozmiaru komunikatów",
+      "checks": [
+        "stream buffering for transport resilience",
+        "message-size validation for transport resilience",
+        "Do not interpret transport buffering or message-size validation as a task budget",
+        "Do not interpret transport buffering or message-size validation as an agent-count budget",
+        "token and cost data as reported when actually reported",
+        "token and cost data as estimated when estimated",
+        "token and cost data as unavailable when absent",
+        "Do not represent missing token or cost data as zero",
+        "configurable task budgets outside the MVP",
+        "later-version feature"
       ],
       "result": "pass"
     }
@@ -3040,19 +3313,6 @@
       "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
     },
     {
-      "parent_id": "D-9.4-7c42a73f7d2e-1",
-      "source_line": 558,
-      "section": "9.4",
-      "original_text": "Capabilities obejmują osobno: structured output, streaming, historię, resume, mid-turn steering, cancellation, approvals, ograniczenia narzędzi, sandbox, usage i native subagents. Brak funkcji jest jawny. `interrupt` nie oznacza cofnięcia skutków narzędzia; receipt rozróżnia żądanie przerwania od potwierdzonego zatrzymania.",
-      "candidate_ids": [
-        "R-c24076f938f81d70718f",
-        "R-a9986d63ec7c90ca0940",
-        "R-0653e691435ea36fb41a"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
       "parent_id": "D-9.4-51475056bd2b-1",
       "source_line": 560,
       "section": "9.4",
@@ -4912,231 +5172,6 @@
       "candidate_ids": [
         "R-70a30873c1b99ecbe988",
         "R-4d29ad6a959c7a3a96d2"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-13-df3d0368fd76-1",
-      "source_line": 969,
-      "section": "13",
-      "original_text": "Chronimy: pliki użytkownika, sekrety, logowanie CLI, historię sesji, artefakty, lokalne IPC, repozytoria i zasoby zewnętrzne. Potencjalnie nieufne: treści repo, zależności i skrypty testowe, strony, wyniki narzędzi, pluginy/MCP, odpowiedzi innych agentów i wygenerowane patche.",
-      "candidate_ids": [
-        "R-e8290603fa95e1a87ab8",
-        "R-86c8859ced9ac1cd1f8c"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-13-4dfe27af3106-1",
-      "source_line": 971,
-      "section": "13",
-      "original_text": "Polityka run definiuje dostęp do plików, sieci, narzędzi, sekretów, publikacji, usuwania i skutków zewnętrznych. Tryb pełnego automatu musi mieścić się w tej polityce. Ocena modelu nie zastępuje zabezpieczenia procesu.",
-      "candidate_ids": [
-        "R-bd00b19e57836a9d7024",
-        "R-61abbc6a77ae02bdc5a1",
-        "R-009a46eeb10e4d069b01"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-13-dec032b9a4f2-1",
-      "source_line": 973,
-      "section": "13",
-      "original_text": "**Istotne ograniczenie integracji CLI:** Architect nie kontroluje automatycznie każdego wewnętrznego wywołania narzędzia wykonywanego przez CLI. Twarde ograniczenia wymagają udokumentowanego mechanizmu approvals/restrykcji dostawcy albo zewnętrznego sandboxa/środowiska. Jeśli profil wymaga ograniczenia, którego nie da się wymusić, start takiej sesji jest blokowany lub użytkownik jawnie wybiera słabszy profil. Nie zastępujemy izolacji promptem ani worktree.",
-      "candidate_ids": [
-        "R-54ee4c9d1f0425ab58aa",
-        "R-f40f0773d3f86d5988aa",
-        "R-4f65c8f6fb95e229dc02",
-        "R-f24c9a730cd2d8fa588d"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-13-0105786d98eb-1",
-      "source_line": 977,
-      "section": "13",
-      "original_text": "Weryfikator ma dostęp do przypiętego artefaktu i może uruchamiać sprawdzenia w oddzielnym środowisku. Nie powinien mieć prawa modyfikacji zaakceptowanych źródeł. Testy są wykonywalnym kodem i podlegają tym samym ograniczeniom co inne polecenia.",
-      "candidate_ids": [
-        "R-5a87653fcba38b85a239",
-        "R-44be4b68e8dc17a58aca",
-        "R-e7dbb0b5c5f72a3af43d"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-13-bc95680a927f-1",
-      "source_line": 979,
-      "section": "13",
-      "original_text": "Logi i eksport mają redakcję sekretów, ograniczone prawa plików i politykę retencji. Redakcja nie gwarantuje usunięcia każdego sekretu; ograniczamy zbieranie u źródła. Nie kopiujemy magazynów logowania CLI do logów/artefaktów. Wyjście terminalowe jest oczyszczane z niebezpiecznych sekwencji sterujących.",
-      "candidate_ids": [
-        "R-0639a15eeb8c14ed95f6",
-        "R-5b73d52bf0a3e6615279",
-        "R-bba18614a78a7678c3ab",
-        "R-87cb2f9936f49c1a1e74"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-5caf40a18991-1",
-      "source_line": 983,
-      "section": "14",
-      "original_text": "- SQLite w trybie WAL; zapis zdarzenia i aktualizacja stanu w jednej transakcji. TUI nie jest źródłem prawdy.",
-      "candidate_ids": [
-        "R-f7a0dd806550f75222c7",
-        "R-9bc80b421e568439a1fd"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-87ff250246ef-1",
-      "source_line": 984,
-      "section": "14",
-      "original_text": "- Checkpointy na granicach etapów, wyników narzędzi i istotnych zmian planu. Snapshoty przyspieszają odczyt; zdarzenia umożliwiają audyt.",
-      "candidate_ids": [
-        "R-e70e64b73a99e5e81012",
-        "R-ff8267787fe408fb2c0e"
-      ],
-      "reason": "Multiple candidate sentences share one parent; antecedents and integration obligations have not been independently reviewed.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-053812c93fcd-1",
-      "source_line": 985,
-      "section": "14",
-      "original_text": "- Po awarii: odbudowa stanu, ustalenie losu procesów i sesji, kontrola workspace, wznowienie albo nowa sesja z pakietem przekazania.",
-      "candidate_ids": [
-        "R-e4443b168b74c5aa5dd0"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-920fde9f87f5-1",
-      "source_line": 986,
-      "section": "14",
-      "original_text": "- Po restarcie komputera i uruchomieniu Architect: identyfikacja przerwanych sesji po trwałych ID, sprawdzenie bieżącego stanu i natywne resume każdej zerwanej sesji. Jeśli dostawca nie potrafi wznowić danej sesji, jawny błąd i propozycja sesji zastępczej z pakietem przekazania; nie udajemy, że nowa sesja jest tą samą.",
-      "candidate_ids": [
-        "R-bdc1c4af432253abbce9",
-        "R-fc647075b0e27ca20c21"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-5de811a1fdaf-1",
-      "source_line": 987,
-      "section": "14",
-      "original_text": "- Resume zachowuje pauzy i oczekujące zgody. W supervised nie rozpoczyna niezatwierdzonej rundy/etapu; w autonomous może kontynuować wcześniej autoryzowaną pracę. Sam restart nie rozszerza uprawnień.",
-      "candidate_ids": [
-        "R-5fb020d0662668724310",
-        "R-89abf1ff4552e34ded5a",
-        "R-e5db7b965ce74cdc7ce2"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-d43d1d322d3f-1",
-      "source_line": 988,
-      "section": "14",
-      "original_text": "- Resume nie oznacza dokładnego powtórzenia generacji modelu. Jeśli nie znamy skutku operacji, najpierw uzgadniamy stan.",
-      "candidate_ids": [
-        "R-3b455e4d0b84890e5f3e",
-        "R-04e6d59726c75c172849"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-eb5de984e7d7-1",
-      "source_line": 989,
-      "section": "14",
-      "original_text": "- Przy utracie połączenia z dostawcą: retry/backoff dla bezpiecznych operacji, osobny stan auth/rate-limit/network; błędy trwałe wymagają naprawy przyczyny, nie ślepego retry.",
-      "candidate_ids": [
-        "R-4241cb52d716870bbd3d"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-d7e08180912a-1",
-      "source_line": 990,
-      "section": "14",
-      "original_text": "- Brak aktywności: rozróżnienie oczekiwania na model, narzędzie i użytkownika; ręczne przerwanie jest dostępne. MVP nie narzuca czasu zakończenia tury ani run.",
-      "candidate_ids": [
-        "R-da2d79584452126bc1f1",
-        "R-6217d9912fd091718d90"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-9a9fbf55c8c4-1",
-      "source_line": 991,
-      "section": "14",
-      "original_text": "- Pause: zatrzymuje planowanie nowych działań; możliwość bezpiecznego dokończenia albo przerwania aktywnej tury jest jawna. Nie obiecuje natychmiastowego cofnięcia narzędzia.",
-      "candidate_ids": [
-        "R-4ccf492d119647435f29",
-        "R-9bf380ad1c311bb5f8c2"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-ccb8ee8a5ddc-1",
-      "source_line": 992,
-      "section": "14",
-      "original_text": "- Cancel: zatrzymanie nowych działań, przerwanie procesów, zachowanie checkpointu i raport skutków. Nie usuwa pracy użytkownika.",
-      "candidate_ids": [
-        "R-434c7eaa2be77f257758",
-        "R-167f602fbcf5625c34a8"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-63aeb9c03da4-1",
-      "source_line": 994,
-      "section": "14",
-      "original_text": "**Ustalone:** pierwsza wersja nie ma limitów liczby agentów, współbieżności, czasu, kosztu, głębokości delegacji ani rund poprawek. Nie ma też ukrytych progów, które zatrzymują pracę po ich przekroczeniu. Scheduler kieruje się zależnościami, bezpieczeństwem zapisów i rzeczywistą dostępnością środowiska.",
-      "candidate_ids": [
-        "R-0a1b6ca4b3445a4a04b9",
-        "R-aa924625e048dc4493af",
-        "R-eccce3ef0cd0fed73d26"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-f0ea35615b29-1",
-      "source_line": 996,
-      "section": "14",
-      "original_text": "Użytkownik może ręcznie pauzować i anulować zadanie. Runtime nadal odrzuca cykle zależności, działania bez zgody i niepoprawne protokoły. Brak tych uprawnień nie jest limitem budżetowym. Ograniczenia systemu operacyjnego, przepustowości i dostawców są raportowane jako faktyczne błędy/oczekiwanie, nie przedstawiane jako brak limitów po stronie dostawcy.",
-      "candidate_ids": [
-        "R-a942409dba09e77a17a9",
-        "R-a808c977c248086f0aa0",
-        "R-bbda49fa67c747636c5a",
-        "R-f44eb9f840846a585fb1"
-      ],
-      "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
-      "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
-    },
-    {
-      "parent_id": "D-14-0204bd93e270-1",
-      "source_line": 998,
-      "section": "14",
-      "original_text": "Buforowanie strumieni i walidacja rozmiaru komunikatów służą odporności transportu; nie wyznaczają budżetu zadania ani liczby agentów. Dane o tokenach/kosztach są oznaczone: `reported`, `estimated`, `unavailable`; brak nie jest zerem. Ewentualne konfigurowalne budżety są funkcją późniejszej wersji.",
-      "candidate_ids": [
-        "R-1e572ce83a5eb8bd5d31",
-        "R-65a0258ceef26fca9cc2",
-        "R-696030020fcf04906d82"
       ],
       "reason": "This clause includes a condition, exception, alternative or prohibition whose scope across candidate sentences still needs independent interpretation.",
       "required_action": "Review the original parent with heading/table/preceding conditions; split independent obligations, resolve antecedents and specify acceptance evidence."
