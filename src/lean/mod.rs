@@ -115,8 +115,8 @@ impl Core {
         for conversation in cut_off {
             core.wake(&conversation);
         }
-        if core.config.policy.automatic_progression() {
-            for (conversation, plan) in interrupted {
+        for (conversation, plan) in interrupted {
+            if core.autonomous(&conversation).unwrap_or(false) {
                 let _ = core.resume_plan(&conversation, &plan);
             }
         }
@@ -225,6 +225,22 @@ impl Core {
     /// turns already running finish, the orchestrator still answers, and
     /// everything waiting goes on when the user continues. It survives a
     /// restart.
+    /// Whether the conversation runs on by itself: the mode the user set for
+    /// it, else the configured one.
+    pub fn autonomous(&self, conversation: &str) -> Result<bool> {
+        Ok(self
+            .store
+            .mode(conversation)?
+            .unwrap_or_else(|| self.config.policy.automatic_progression()))
+    }
+
+    /// Changes the conversation's mode for what it does next (design §6.2);
+    /// it approves nothing that already happened.
+    pub fn set_mode(&self, conversation: &str, autonomous: bool) -> Result<()> {
+        self.store.conversation(conversation)?;
+        self.store.set_mode(conversation, autonomous)
+    }
+
     pub fn pause(&self, conversation: &str, paused: bool) -> Result<()> {
         self.store.conversation(conversation)?;
         self.store.set_paused(conversation, paused)
@@ -656,7 +672,8 @@ impl Core {
             return Ok(());
         }
         let checked = review.as_ref().is_ok_and(|verdict| verdict.approved);
-        let waiting = if !self.config.policy.automatic_progression() {
+        let autonomous = self.autonomous(conversation)?;
+        let waiting = if !autonomous {
             None
         } else if !checked {
             Some("the plan verifier did not approve this plan")
@@ -675,11 +692,11 @@ impl Core {
                 "plan": plan_id,
                 "tasks": tasks.iter().map(|task| task.spec.clone()).collect::<Vec<_>>(),
                 "review": review_json(&review),
-                "automatic": self.config.policy.automatic_progression() && waiting.is_none(),
+                "automatic": autonomous && waiting.is_none(),
                 "waiting": waiting,
             }),
         )?;
-        if self.config.policy.automatic_progression() && waiting.is_none() {
+        if autonomous && waiting.is_none() {
             self.accept_plan(conversation, &plan_id)?;
         }
         Ok(())
@@ -922,7 +939,7 @@ impl Core {
         let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let in_place = spec.writes && self.config.workspace.mode == WorkspaceMode::InPlace;
-        let autonomous = self.config.policy.automatic_progression();
+        let autonomous = self.autonomous(conversation)?;
         // In place, writers take turns in the user's directory.
         let _writing = if in_place {
             require(

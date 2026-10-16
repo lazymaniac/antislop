@@ -85,6 +85,11 @@ pub enum Request {
         conversation: String,
         paused: bool,
     },
+    /// Runs the conversation on by itself, or under the user, from now on.
+    Mode {
+        conversation: String,
+        autonomous: bool,
+    },
     /// The user's comment on one element of the team panel or a diff.
     Comment {
         conversation: String,
@@ -238,6 +243,13 @@ fn handle(
             core.pause(&conversation, paused)?;
             Value::Null
         }
+        Request::Mode {
+            conversation,
+            autonomous,
+        } => {
+            core.set_mode(&conversation, autonomous)?;
+            Value::Null
+        }
         Request::Comment {
             conversation,
             target,
@@ -288,7 +300,11 @@ fn handle(
                 })
                 .map(|(_, event)| event)
                 .collect();
-            json!({"events": events, "idle": core.is_idle(&conversation)})
+            json!({
+                "events": events,
+                "idle": core.is_idle(&conversation),
+                "autonomous": core.autonomous(&conversation)?,
+            })
         }
     })
 }

@@ -188,6 +188,10 @@ pub fn chat(args: &[String]) -> Result<()> {
                     conversation,
                     paused: false,
                 },
+                "/mode autonomous" | "/mode supervised" => Request::Mode {
+                    conversation,
+                    autonomous: line.trim().ends_with("autonomous"),
+                },
                 text => Request::Send {
                     conversation,
                     text: text.to_owned(),
@@ -273,6 +277,10 @@ pub fn describe(event: &Value) -> Option<String> {
             "⏸ wstrzymano: nowe kroki czekają, /continue wznawia".into()
         }
         "paused" => "▶ wznowiono".into(),
+        "mode" if payload["autonomous"] == true => {
+            "⚙ tryb autonomiczny: kolejne plany i rundy ruszają same".into()
+        }
+        "mode" => "⚙ tryb nadzorowany: kolejne plany czekają na /accept".into(),
         "mail" if payload["kind"] != "copy" => format!(
             "✉ {} → {} ({}): {}",
             text("sender"),

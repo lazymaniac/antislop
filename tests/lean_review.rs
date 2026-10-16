@@ -455,3 +455,55 @@ else:
         .collect();
     assert_eq!(paused, [true, false]);
 }
+
+#[test]
+fn a_mode_change_applies_to_what_the_conversation_does_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        false,
+        r#"
+if "[runtime]" in prompt:
+    answer = "done"
+else:
+    answer = plan(task("t1", "Step " + str(bump("plans"))))
+"#,
+        r#"
+if "You verify" in prompt or "You review a plan" in prompt or "new plan:" in prompt \
+        or "You audit" in prompt or "next plan:" in prompt:
+    say("reviewer", verdict(True))
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "krok");
+    assert!(!core.autonomous(&conversation).unwrap());
+
+    core.set_mode(&conversation, true).unwrap();
+    core.send(&conversation, "następny krok").unwrap();
+    wait_idle(&core, &conversation);
+    core.set_mode(&conversation, false).unwrap();
+    core.send(&conversation, "i jeszcze jeden").unwrap();
+    wait_idle(&core, &conversation);
+
+    let automatic: Vec<_> = events(&core, &conversation, "plan_proposed")
+        .iter()
+        .map(|plan| plan["automatic"] == true)
+        .collect();
+    assert_eq!(automatic, [false, true, false]);
+    let plans = events(&core, &conversation, "plan_proposed");
+    let first = plans[0]["plan"].as_str().unwrap();
+    assert!(
+        core.store
+            .plan(first)
+            .unwrap()
+            .iter()
+            .all(|task| task.status == "proposed"),
+        "switching to autonomous starts nothing the user did not accept"
+    );
+    let modes: Vec<_> = events(&core, &conversation, "mode")
+        .iter()
+        .map(|mode| mode["autonomous"] == true)
+        .collect();
+    assert_eq!(modes, [true, false]);
+}

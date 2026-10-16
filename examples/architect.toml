@@ -12,6 +12,7 @@ schema_version = 1
 mode = "task-worktrees"
 
 # supervised: you accept every plan. autonomous: a checked plan runs on its own.
+# This is the default; `/mode` changes it for one conversation.
 # local_write lets workers change files (in their own worktrees); with
 # local_commits each approved change is committed on your branch, otherwise it
 # is left as uncommitted changes in the project.

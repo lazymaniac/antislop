@@ -176,7 +176,10 @@ impl Store {
                status TEXT NOT NULL, message INTEGER NOT NULL,
                created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS pauses(
-               conversation_id TEXT PRIMARY KEY REFERENCES conversations(id));",
+               conversation_id TEXT PRIMARY KEY REFERENCES conversations(id));
+             CREATE TABLE IF NOT EXISTS modes(
+               conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
+               autonomous INTEGER NOT NULL);",
         )?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -764,6 +767,48 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Sets the conversation's mode for what it does from now on, with its
+    /// event when it changes.
+    pub fn set_mode(&self, conversation: &str, autonomous: bool) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let before: Option<bool> = tx
+            .query_row(
+                "SELECT autonomous FROM modes WHERE conversation_id=?1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if before != Some(autonomous) {
+            tx.execute(
+                "INSERT INTO modes(conversation_id,autonomous) VALUES(?1,?2)
+                 ON CONFLICT(conversation_id) DO UPDATE SET autonomous=excluded.autonomous",
+                params![conversation, autonomous],
+            )?;
+            tx.execute(
+                "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'mode',?2)",
+                params![
+                    conversation,
+                    serde_json::json!({"autonomous": autonomous}).to_string()
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The mode the user set for the conversation, if any.
+    pub fn mode(&self, conversation: &str) -> Result<Option<bool>> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT autonomous FROM modes WHERE conversation_id=?1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?)
     }
 
     pub fn paused(&self, conversation: &str) -> Result<bool> {

@@ -119,6 +119,8 @@ pub struct View {
     pub reviews: HashMap<String, Vec<String>>,
     /// The user paused new plan work.
     pub paused: bool,
+    /// The conversation's mode, once the daemon said it.
+    pub autonomous: Option<bool>,
     /// Agent key of each running turn.
     roles: HashMap<String, String>,
     /// Recipient of each shown message to an agent, by mail id.
@@ -395,6 +397,17 @@ impl View {
                         "⏸ wstrzymano: nowe kroki czekają (/continue wznawia)"
                     } else {
                         "▶ wznowiono"
+                    },
+                );
+            }
+            "mode" => {
+                self.autonomous = Some(payload["autonomous"] == true);
+                self.push(
+                    Style::default().fg(Color::Yellow),
+                    if payload["autonomous"] == true {
+                        "⚙ tryb autonomiczny: kolejne plany i rundy ruszają same"
+                    } else {
+                        "⚙ tryb nadzorowany: kolejne plany czekają na zgodę (Ctrl+A)"
                     },
                 );
             }

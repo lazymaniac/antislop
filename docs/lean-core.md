@@ -296,6 +296,12 @@ replaced when idle. The socket is `<state>/core.sock`, or
   audit turns wait, turns already running finish, the orchestrator still
   answers. `/continue` goes on; Ctrl+X cancels what waits too. A pause is
   stored, so it holds across a restart (design §14).
+- `/mode autonomous|supervised` (or the palette) sets one conversation's mode,
+  stored with its event, over the configured default. It applies to what the
+  conversation does next: the next plan, the next correction round, a resume
+  after a restart. It accepts no plan that was waiting and approves nothing
+  after the fact; capabilities (`local_write`, `local_commits`) stay the
+  policy's (design §6.2).
 - A plan never widens where an agent may write: directories of a task's
   scope outside the project are passed to the CLI (`--add-dir`,
   `--include-directories`) only for read-only agents, since a writer's CLI

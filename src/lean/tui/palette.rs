@@ -19,6 +19,8 @@ pub enum Command {
     Cancel,
     Pause,
     Continue,
+    Autonomous,
+    Supervised,
     NewConversation,
     Find,
     Details,
@@ -29,7 +31,7 @@ pub enum Command {
     Quit,
 }
 
-const COMMANDS: [(Command, &str); 13] = [
+const COMMANDS: [(Command, &str); 15] = [
     (Command::Accept, "Uruchom zaproponowany plan · Ctrl+A"),
     (Command::Resume, "Wznów plan · Ctrl+R"),
     (Command::Cancel, "Anuluj trwającą pracę · Ctrl+X"),
@@ -38,6 +40,14 @@ const COMMANDS: [(Command, &str); 13] = [
         "Wstrzymaj nowe kroki (bieżące się dokończą) · /pause",
     ),
     (Command::Continue, "Kontynuuj wstrzymaną pracę · /continue"),
+    (
+        Command::Autonomous,
+        "Tryb autonomiczny: plany i rundy ruszają same · /mode autonomous",
+    ),
+    (
+        Command::Supervised,
+        "Tryb nadzorowany: plany czekają na zgodę · /mode supervised",
+    ),
     (Command::NewConversation, "Nowa rozmowa · Ctrl+N"),
     (Command::Find, "Znajdź agenta · /"),
     (Command::Details, "Szczegóły wybranego agenta · Enter"),
@@ -183,6 +193,7 @@ impl Help {
                 "Ctrl+A / Ctrl+R  uruchom / wznów plan",
                 "Ctrl+X           anuluj trwającą pracę",
                 "/pause, /continue wstrzymaj nowe kroki / kontynuuj",
+                "/mode autonomous|supervised  tryb dla kolejnych działań",
                 "Ctrl+N           nowa rozmowa",
                 "Ctrl+P           paleta poleceń",
                 "Esc              wyjdź (praca trwa dalej w demonie)",

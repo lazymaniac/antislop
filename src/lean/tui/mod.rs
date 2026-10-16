@@ -41,6 +41,7 @@ enum Update {
         generation: u64,
         events: Vec<Value>,
         idle: bool,
+        autonomous: bool,
     },
     Conversation(String),
     Notice(String),
@@ -134,6 +135,7 @@ impl App {
                             generation,
                             events,
                             idle: reply["idle"] == true,
+                            autonomous: reply["autonomous"] == true,
                         }
                     }
                     Err(error) => {
@@ -296,6 +298,13 @@ impl App {
                 },
                 None,
             ),
+            "/mode autonomous" | "/mode supervised" => self.request(
+                Request::Mode {
+                    conversation,
+                    autonomous: text.ends_with("autonomous"),
+                },
+                None,
+            ),
             _ => {
                 self.scroll = 0;
                 self.request(Request::Send { conversation, text }, None);
@@ -384,6 +393,8 @@ impl App {
             Command::Cancel => self.command("/cancel"),
             Command::Pause => self.command("/pause"),
             Command::Continue => self.command("/continue"),
+            Command::Autonomous => self.command("/mode autonomous"),
+            Command::Supervised => self.command("/mode supervised"),
             Command::NewConversation => self.new_conversation(),
             Command::Find => self.picker = Some(Picker::new(Kind::Agents)),
             Command::Details => {
@@ -651,10 +662,15 @@ impl App {
             (None, false) => "zadania w toku…".into(),
         };
         let short = self.conversation.get(..8).unwrap_or(&self.conversation);
+        let mode = match self.view.autonomous {
+            Some(true) => "autonomiczny · ",
+            Some(false) => "nadzorowany · ",
+            None => "",
+        };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(" antislop ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{} · {short} · ", self.project), dim()),
+                Span::styled(format!("{} · {short} · {mode}", self.project), dim()),
                 Span::styled(status, Style::default().fg(Color::Yellow)),
             ])),
             header,
@@ -876,11 +892,13 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                         generation,
                         events,
                         idle,
+                        autonomous,
                     } if generation == app.generation => {
                         for event in &events {
                             app.view.apply(event);
                         }
                         app.view.idle = idle;
+                        app.view.autonomous = Some(autonomous);
                     }
                     Update::Events { .. } => {}
                     Update::Conversation(id) => app.open(id),
