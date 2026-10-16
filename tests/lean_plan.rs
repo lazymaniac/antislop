@@ -69,10 +69,19 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
 }
 
 fn config(codex: &Path, agy: &Path) -> Config {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/architect.toml"))
-        .unwrap()
-        .replace("/opt/homebrew/bin/codex", &codex.to_string_lossy())
-        .replace("/Users/sebastian/.local/bin/agy", &agy.to_string_lossy());
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/architect.toml"
+    ))
+    .unwrap()
+    .replace(
+        "binary = \"codex\"",
+        &format!("binary = {:?}", codex.to_string_lossy()),
+    )
+    .replace(
+        "binary = \"agy\"",
+        &format!("binary = {:?}", agy.to_string_lossy()),
+    );
     Config::from_toml(&text).unwrap()
 }
 

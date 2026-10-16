@@ -57,7 +57,7 @@ struct TurnSetup<'a> {
 
 impl Core {
     pub fn open(state: &Path, config: Config) -> Result<Arc<Self>> {
-        crate::ipc::private_directory(state)?;
+        daemon::private_directory(state)?;
         // Keeps the state (and worktrees in it) out of the project's git status.
         let ignore = state.join(".gitignore");
         if !ignore.exists() {

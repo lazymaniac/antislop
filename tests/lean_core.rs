@@ -32,9 +32,15 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
 }
 
 fn config(codex: &std::path::Path) -> Config {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/architect.toml"))
-        .unwrap()
-        .replace("/opt/homebrew/bin/codex", &codex.to_string_lossy());
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/architect.toml"
+    ))
+    .unwrap()
+    .replace(
+        "binary = \"codex\"",
+        &format!("binary = {:?}", codex.to_string_lossy()),
+    );
     Config::from_toml(&text).unwrap()
 }
 
@@ -165,9 +171,15 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     let codex = fake_codex(&dir);
     std::fs::write(
         dir.join("architect.toml"),
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/architect.toml"))
-            .unwrap()
-            .replace("/opt/homebrew/bin/codex", &codex.to_string_lossy()),
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/architect.toml"
+        ))
+        .unwrap()
+        .replace(
+            "binary = \"codex\"",
+            &format!("binary = {:?}", codex.to_string_lossy()),
+        ),
     )
     .unwrap();
 

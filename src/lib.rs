@@ -1,30 +1,9 @@
-pub mod comments;
-pub mod communication;
 pub mod config;
-pub mod context;
-pub mod domain;
-pub mod drive;
-pub mod ipc;
 pub mod lean;
-pub mod orchestration;
-pub mod policy;
-pub mod process;
-pub mod providers;
-pub mod quality;
-pub mod recovery;
-pub mod runtime;
-pub mod sessions;
-pub mod storage;
-pub mod team;
 pub mod transport;
-pub mod tui;
-pub mod verification;
-pub mod workspace;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    Provider(#[from] providers::ProviderFailure),
     #[error("{0}")]
     Invalid(String),
     #[error(transparent)]

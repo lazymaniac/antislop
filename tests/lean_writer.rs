@@ -57,10 +57,19 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
 }
 
 fn config(codex: &Path, agy: &Path) -> Config {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/architect.toml"))
-        .unwrap()
-        .replace("/opt/homebrew/bin/codex", &codex.to_string_lossy())
-        .replace("/Users/sebastian/.local/bin/agy", &agy.to_string_lossy());
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/architect.toml"
+    ))
+    .unwrap()
+    .replace(
+        "binary = \"codex\"",
+        &format!("binary = {:?}", codex.to_string_lossy()),
+    )
+    .replace(
+        "binary = \"agy\"",
+        &format!("binary = {:?}", agy.to_string_lossy()),
+    );
     Config::from_toml(&text).unwrap()
 }
 
@@ -118,7 +127,7 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert!(task.report.as_deref().unwrap().contains("not committed"));
-    // local_commits = false in architect.toml: applied, not committed.
+    // local_commits = false in the example configuration: applied, not committed.
     assert_eq!(git(&project, &["rev-parse", "HEAD"]), base);
     assert_eq!(git(&project, &["status", "--porcelain"]), "?? hello.txt");
     assert_eq!(

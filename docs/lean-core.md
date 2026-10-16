@@ -4,9 +4,10 @@ The first runtime treated agents as tool-free reasoners: it copied project
 sources into run state and prompts, then proved the agent had read every byte.
 A 15 MB repository produced a 112 MB run document that was rewritten on every
 progress step, prompts over provider limits, and runs that blocked on the first
-message. The lean core replaces that model. It is built beside the old runtime
-(`src/lean/`, its own `core.db`) and the old path is deleted once the lean core
-handles "przeanalizuj architekturę projektu" end to end.
+message. The lean core (`src/lean/`, its own `core.db`) replaced that model;
+the old runtime, its context reader, recovery/proof machinery and requirement
+audits were deleted once the lean core handled "przeanalizuj architekturę
+projektu" end to end.
 
 ## Principles
 
@@ -88,7 +89,7 @@ recorded whole when its turn ends.
 
 ## Daemon and frontends
 
-`antislop chat` starts (or reuses) the project's daemon, which owns the `Core`
+`antislop` (or `antislop chat`) starts (or reuses) the project's daemon, which owns the `Core`
 (`core.lock` makes it the only owner), so work goes on after a frontend exits.
 One JSON request per connection: `identity`, `shutdown`, `conversations`,
 `start`, `send`, `accept`, `cancel`, and `events{conversation, after, wait_ms}`,
@@ -154,5 +155,5 @@ replaced when idle. The socket is `<state>/core.sock`, or
    A real nine-task analysis of this repository ran end to end (about 34
    minutes, 40 agent turns); its findings about the lean core itself are the
    regressions in `tests/lean_recovery.rs` and the guarantees above.
-5. Delete the old runtime, context reader, recovery/proof machinery and the
-   requirement audits that encode them.
+5. ✅ The old runtime, TUI, context reader, recovery/proof machinery and the
+   requirement audits were deleted; `antislop` with no verb opens the chat.

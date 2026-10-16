@@ -1,7 +1,7 @@
 //! Explicit, versioned routing and autonomy policy. Parsing never authorizes an
 //! external effect. A caller must separately authenticate user grants before
 //! presenting them to `authorize_external`.
-use crate::{Error, Result, hash, require};
+use crate::{Error, Result, require};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -196,48 +196,6 @@ pub struct ResolvedProfile {
     pub requires_independent_session: bool,
 }
 
-/// Store this owned value in a run; subsequent global-file edits cannot change
-/// its assignments. The hash covers all provider/profile/policy fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PinnedConfig {
-    pub content_hash: String,
-    pub config: Config,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalAction {
-    Read,
-    Write,
-    Check,
-    Commit,
-    StartStage,
-    StartCorrectionRound,
-    AcceptStageResult,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExternalAction {
-    Push,
-    Publish,
-    ExternalMessage,
-    Destructive,
-}
-
-/// A runtime-authenticated user decision, never an AI/configuration assertion.
-/// Runtime checks actor identity and persists issuance before this API is called.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ExternalGrant {
-    pub id: String,
-    pub actor: String,
-    pub action: ExternalAction,
-    pub scope_hash: String,
-    pub policy_revision: u64,
-    pub approved: bool,
-}
-
 fn identifier(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -427,110 +385,49 @@ impl Config {
             requires_independent_session: role == RoleKind::Verifier,
         })
     }
-
-    /// Validate all kinds required by a planned team before starting any member.
-    pub fn validate_work_kinds(&self, kinds: &BTreeSet<WorkKind>) -> Result<()> {
-        self.validate()?;
-        self.resolve(WorkKind::Orchestration, RoleKind::Orchestrator)?;
-        self.resolve(WorkKind::Orchestration, RoleKind::Verifier)?;
-        for kind in kinds {
-            if *kind != WorkKind::Orchestration {
-                self.resolve(*kind, RoleKind::Executor)?;
-                self.resolve(*kind, RoleKind::Verifier)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn pin(&self) -> Result<PinnedConfig> {
-        self.validate()?;
-        Ok(PinnedConfig {
-            content_hash: hash(serde_json::to_vec(self)?),
-            config: self.clone(),
-        })
-    }
-}
-
-impl ResolvedProfile {
-    /// Call after probing the selected binary/version; configuration declarations
-    /// cannot establish that a native provider parameter is actually supported.
-    pub fn validate_native_effort(&self, supported_values: &BTreeSet<String>) -> Result<()> {
-        require(
-            self.native_effort
-                .as_ref()
-                .is_none_or(|effort| supported_values.contains(effort)),
-            "configured native effort is unsupported by the probed CLI",
-        )
-    }
-}
-
-impl PinnedConfig {
-    pub fn validate(&self) -> Result<()> {
-        self.config.validate()?;
-        require(
-            self.content_hash == hash(serde_json::to_vec(&self.config)?),
-            "pinned configuration hash mismatch",
-        )
-    }
 }
 
 impl Policy {
-    pub fn authorize_project_check(&self, stage_approved: bool) -> Result<()> {
-        self.authorize_local(LocalAction::Check, stage_approved)?;
-        require(
-            self.mode == Mode::Supervised,
-            "autonomous project checks require a restricted runner; unsandboxed execution is not enabled",
-        )
-    }
-
+    /// Autonomous mode runs a checked plan without waiting for the user.
     pub fn automatic_progression(&self) -> bool {
         self.mode == Mode::Autonomous
     }
+}
 
-    /// `stage_approved` must come from runtime validation of the current scope
-    /// and policy revision, never from an unchecked boolean supplied by a model.
-    pub fn authorize_local(&self, action: LocalAction, stage_approved: bool) -> Result<()> {
-        require(self.revision > 0, "policy revision must be positive")?;
-        require(
-            self.mode == Mode::Autonomous || stage_approved,
-            "supervised action requires current explicit stage/round approval",
-        )?;
-        require(
-            match action {
-                LocalAction::Write => self.local_write,
-                LocalAction::Check => self.local_checks,
-                LocalAction::Commit => self.local_commits,
-                _ => true,
-            },
-            "local action is outside the configured policy",
-        )
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_example_routes_every_kind_to_a_worker_and_a_verifier() {
+        let text = include_str!("../examples/architect.toml");
+        let config = Config::from_toml(text).unwrap();
+        for kind in config
+            .routing
+            .keys()
+            .filter(|kind| **kind != WorkKind::Orchestration)
+        {
+            assert_eq!(
+                config.resolve(*kind, RoleKind::Executor).unwrap().work_kind,
+                *kind
+            );
+            let verifier = config.resolve(*kind, RoleKind::Verifier).unwrap();
+            assert!(verifier.requires_independent_session);
+        }
+        let orchestrator = config
+            .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
+            .unwrap();
+        assert_eq!(orchestrator.provider, ProviderKind::Codex);
+        assert_eq!(orchestrator.native_effort.as_deref(), Some("high"));
     }
 
-    /// Mode, local-write permission, and stage acceptance never grant external
-    /// effects. Each effect must match its own authenticated approval exactly.
-    pub fn authorize_external(
-        &self,
-        action: ExternalAction,
-        scope_hash: &str,
-        grant: Option<&ExternalGrant>,
-    ) -> Result<()> {
-        require(self.revision > 0, "policy revision must be positive")?;
-        require(
-            nonempty_text(scope_hash),
-            "external action requires a nonempty scope hash",
-        )?;
-        let grant = grant.ok_or_else(|| {
-            Error::Invalid("external or destructive action requires a separate user grant".into())
-        })?;
-        require(
-            grant.approved && nonempty_text(&grant.id) && nonempty_text(&grant.actor),
-            "external grant must be an explicit attributed approval",
-        )?;
-        require(
-            grant.action == action
-                && grant.scope_hash == scope_hash
-                && grant.policy_revision == self.revision,
-            "external grant action, scope or policy revision does not match",
-        )
+    #[test]
+    fn a_route_to_a_missing_profile_is_rejected() {
+        let text = include_str!("../examples/architect.toml").replacen(
+            "executor = \"reasoning\"",
+            "executor = \"nobody\"",
+            1,
+        );
+        assert!(Config::from_toml(&text).is_err());
     }
 }

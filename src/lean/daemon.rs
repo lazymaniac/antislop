@@ -13,6 +13,47 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Creates `path` if needed and insists it is a real directory private to
+/// the current user.
+pub fn private_directory(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    if !path.exists() {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)?;
+    }
+    let metadata = std::fs::symlink_metadata(path)?;
+    // SAFETY: geteuid has no arguments or failure modes.
+    let uid = unsafe { libc::geteuid() };
+    require(
+        metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+            && metadata.uid() == uid
+            && metadata.permissions().mode() & 0o077 == 0,
+        &format!(
+            "{} must be a directory owned by the current user with mode 0700",
+            path.display()
+        ),
+    )
+}
+
+/// Identifies a build of the executable: path, size and modification time.
+pub fn build_identity(executable: &Path) -> Result<String> {
+    let path = executable.canonicalize()?;
+    let metadata = std::fs::metadata(&path)?;
+    let modified = metadata
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    Ok(crate::hash(format!(
+        "{}\0{}\0{modified}",
+        path.display(),
+        metadata.len()
+    )))
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
@@ -72,7 +113,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     let config_path = config_path.canonicalize()?;
     let socket = socket(state);
     if let Some(parent) = socket.parent() {
-        crate::ipc::private_directory(parent)?;
+        private_directory(parent)?;
     }
     // The state lock is held, so a socket file left here is stale.
     let _ = std::fs::remove_file(&socket);
@@ -183,7 +224,7 @@ fn build() -> &'static str {
     static BUILD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     BUILD.get_or_init(|| {
         std::env::current_exe()
-            .and_then(|exe| crate::ipc::build_identity(&exe).map_err(std::io::Error::other))
+            .and_then(|exe| build_identity(&exe).map_err(std::io::Error::other))
             .unwrap_or_default()
     })
 }
@@ -205,16 +246,15 @@ impl Client {
     /// Connects to the project's daemon, starting it (or replacing an idle one
     /// from another build) as needed.
     pub fn connect(project: &Path, config: &Path, state: &Path) -> Result<Self> {
-        crate::ipc::private_directory(state)?;
+        private_directory(state)?;
         let client = Self::at(state);
         if let Some(parent) = client.socket.parent() {
             // Never talk to a socket someone else could have placed.
-            crate::ipc::private_directory(parent)?;
+            private_directory(parent)?;
         }
         let executable = std::env::current_exe()?;
         if let Ok(identity) = client.call(&Request::Identity) {
-            let current = identity["build"].as_str()
-                == Some(crate::ipc::build_identity(&executable)?.as_str())
+            let current = identity["build"].as_str() == Some(build_identity(&executable)?.as_str())
                 && identity["project"].as_str() == project.to_str()
                 && identity["config"].as_str() == config.to_str()
                 && identity["config_modified"].as_u64() == Some(modified(config));

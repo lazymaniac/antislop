@@ -1,185 +1,60 @@
 # antislop
 
-Private local Rust prototype for supervised AI-agent orchestration. The product specification is [design.md](design.md). This implementation establishes the runtime and quality-contract foundation; it is not the full MVP.
+A local team of AI agents that works on your project through the CLIs you
+already use (Codex, Antigravity `agy`, Claude Code). You talk to an
+orchestrator; it answers, or proposes a plan of tasks. Each task is done by a
+worker and checked by its own verifier, and approved changes land on your
+branch. The product specification is [design.md](design.md); how the runtime
+works, what it guarantees and what is still open is in
+[docs/lean-core.md](docs/lean-core.md).
 
-The self-host milestone is a compiled `antislop` that performed a verified change to its own source. Development continues toward the full design; see the [current implementation audit](docs/development-status.md). The library retains the `architect` crate name for compatibility; existing protocol-2 state uses `architect.sock`.
+The library keeps the `architect` crate name.
 
-## Build and verify
+## Use
 
-Rust 1.98.1 is pinned. The wrapper prefers rustup when an asdf shim shadows the selected toolchain.
+Put an `architect.toml` in the project (start from
+[examples/architect.toml](examples/architect.toml)) and run:
+
+```sh
+antislop                         # TUI on the project's latest conversation
+antislop --new                   # TUI on a new conversation
+antislop "przeanalizuj architekturę projektu"   # line mode, exits when idle
+antislop --project DIR --config FILE --state DIR
+```
+
+The first call starts the project's daemon (state in `PROJECT/.antislop`), so
+agents keep working when the frontend exits; the next call reattaches.
+
+TUI keys: Enter send, Alt+Enter new line, Ctrl+A run the proposed plan,
+Ctrl+X cancel running work, PgUp/PgDn scroll, Ctrl+N new conversation, Esc
+detach. In line mode, type `/accept` or `/cancel`.
+
+## How a request runs
+
+1. The orchestrator works in the project directory, read-only, with its CLI's
+   own tools. It answers, asks, or proposes a plan: tasks with a goal, the
+   directories in scope, dependencies, whether the task changes files, and what
+   its verifier should focus on (including the risks of that task's domain).
+2. You accept the plan (supervised policy).
+3. Workers read and edit the project's files themselves. A task that changes
+   files works in its own git worktree; the runtime commits its work there.
+4. The task's verifier reads the result (and the diff) and approves or lists
+   findings; findings go back to the same worker session, for a bounded number
+   of rounds.
+5. Approved changes are integrated into your branch one at a time, never over
+   files you are editing and never with conflict markers.
+6. The orchestrator receives the results and answers you.
+
+## Build and test
+
+Rust 1.98.1 is pinned. `scripts/cargo.sh` prefers rustup when an asdf shim
+shadows the selected toolchain.
 
 ```sh
 scripts/cargo.sh build
 scripts/cargo.sh test --all-targets
 scripts/cargo.sh clippy --all-targets -- -D warnings
-python3 scripts/requirements.py --check
-python3 scripts/audit_requirements.py --check
-python3 scripts/requirements_gaps.py --check
-python3 -m unittest discover -s tests -p 'test_*.py'
-python3 scripts/demo.py
-python3 scripts/demo.py --reject
 ```
 
-The fake demo exercises six stages with independent fixture reviews and explicit approvals, daemon restart/reattach and duplicate requests. Fake results are simulations, never evidence of model quality.
-
-For an authenticated real bugfix in a disposable Git worktree:
-
-```sh
-python3 scripts/demo.py --live --repair
-```
-
-This uses Codex 0.162.1 through its CLI, consumes provider usage and runs only the fixture's explicit local checks. The demo driver approves its fixed test stages; the daemon itself always enforces supervised approval hashes. No direct provider API is used.
-
-## Authenticated chat/team experiment
-
-`tests/live_team.rs` is an explicitly ignored acceptance experiment using the configured Codex orchestrator and Antigravity verifier/executor routes. It consumes provider usage and retains its disposable project, state and native reports on failure. It submits a chat prompt through the same IPC backend and approves only that fixture's frozen UI actions, `lib.rs` edits and exact `python3 check.py` command. It does not authorize changes to this repository or a live user run.
-
-```sh
-env CARGO_TARGET_DIR=/tmp/architect-codex-validation scripts/cargo.sh test --locked --test live_team -- --ignored --nocapture --test-threads=1
-```
-
-The printed directory and `run-id` support inspection or reattachment. A clarification, substantive rejection or uncertain effect stops the experiment for explicit handling; it never fabricates a pass or silently repeats an uncertain turn. Full real-provider task acceptance remains open until the retained result proves it.
-
-Set `ANTISLOP_LIVE_PINNED_CONTEXT=1` for a fresh experiment using explicit Codex/Antigravity reader profiles in its disposable fixture configuration. This leaves the user's configuration unchanged. The flag does not upgrade a retained experiment or bypass a rejected review. The full team requirements still apply: `design.md` §§7.2–7.3 require 15 paired software competencies, including orchestration, even for `small-change`; smaller artifacts and a task-specific DAG do not waive those pairs.
-
-Bugfix contracts account separately for actual defect criteria and other assigned acceptance obligations. `non_defect_criteria` maps the latter to explicit classification rationales; a dedicated plan check and the task's independent `non_defect_assessments` must support each classification. These criteria still require ordinary completion checks. Every actual defect retains before/after proof; an unavailable reproduction remains an explicit gap requiring an observed investigation and justified alternative evidence. Legacy contracts omit the new empty maps and retain their original hashes.
-
-The intake orchestrator receives all eight team-template choices and can propose `task.team_template` from the interview. Independent review and the contract approval card include that selection; accepted plans must retain its family and template. Omitted selections preserve legacy defaults and serialized hashes. The `refactoring` starter assigns transformation tasks to Refactorer pairs and, when an actual check command is supplied, proposes separate before/after checks for preserved behavior. An absent command remains an unresolved proof obligation. Template selection alone does not establish complete specialization or real-provider acceptance of every template.
-
-The `security-fix` starter places threat/reproduction assessment after context and requirements discovery, before planning the fix. The same dedicated security pair has a separate adversarial review after implementation, and integration waits for that review. Planned tasks do not invent a reproduction, security test or passing result; actual proof and independent assessment remain required.
-
-A missing initial `check_command` no longer prevents read-only team planning. The orchestrator receives a structurally valid starting template and must supply actual task-specific checks for runner-required gates. The returned proposal still needs complete coverage before independent review and installation. This supports selecting meaningful checks for research and other tasks without inventing compilation tests.
-
-Mode changes retain a versioned history of the previous configuration. Historical authentication can recognize those exact mode-only transitions; new turns and approval scopes use the current policy revision. Permissions and routing stay unchanged. A live or paused worker must finish or stop before switching modes. Unsupported autonomous project checks are refused before the change commits, including checks declared only in task plans; the same restriction applies before running a planned check. Restricted autonomous runners, automatic repair/refresh and full native acceptance of mode transitions remain open.
-
-Team planning supports corrections bound to an earlier native proposal (`team-plan-amendment-v1`). Corrections retain prior outputs, inherit risk allocations and cannot change execution history. Runtime validates the complete resulting plan; the independent verifier and UI approval card receive that full result before installation. Rejected proposals can be corrected without regenerating every unchanged agent/task/risk assignment. A correction requires a new reviewed round and approval.
-
-Orchestration reviews may share identical inspection methods and receipt lists through proof references. Every check retains its own status and rationale, and runtime validates the expanded result against all original obligations. Older expanded reports remain readable. Real-provider acceptance of the compact report remains open after a native output-limit failure; local fixture success does not establish task completion.
-
-Large team reviews are split into independently authenticated native reports (default: 24 assigned checks plus input/output identity checks per part). Every original check remains required. The UI shows reports received and final authentication; team installation still needs its own approval. Interrupted parts support explicit replacement/exact resume where available, while completed prefixes are retained. Captured reports can be restored without replay. The optional `[orchestrator] review_checks_per_part = 0` selects the legacy single-report transport; it does not waive any checks. Native model acceptance of pagination remains under test.
-
-New Antigravity orchestration reviews share repeated context through an exact inline registry. The adapter rejects complete prompts above 192,000 UTF-8 bytes before native delivery, preventing the CLI's observed silent input truncation. The retained native proposal keeps its original `tool_free` profile and still exceeds that ceiling after deduplication; it has not been silently upgraded or accepted.
-
-The explicit Antigravity 1.3.5 [`pinned_context` profile](docs/context.md) serves immutable context pages through the daemon, commits receipts before returning bytes, authenticates completed native reads and requires complete input delivery before turn acceptance. The overlay shows unique delivered bytes; reconnect/replacement retain the turn's bundle, receipts and rejected outputs. Existing `tool_free` sessions keep their earlier profile. A genuine runtime probe delivered 529,115 source/index bytes in 39 responses and retained its output after reattachment. Full end-to-end task acceptance remains open in the implementation audit.
-
-Codex CLI 0.162.1 also supports explicitly selected `pinned_context`, including pre-contract interview sources and browsable member documents for project-root directory captures. Original input selectors remain unchanged. Its real runtime probe delivered 72,113 bytes in six authenticated responses and survived reattachment. Exact native-session resume for this new profile remains unsupported; an authorized distinct replacement retains history.
-
-Observed conventional project instructions carry directory scopes and source hashes in agent/reviewer context. Interview proposals retain applicable instruction sources; selecting a containing directory already includes them without expanding it into a file list. The index does not resolve semantic conflicts or claim exhaustive discovery of custom instruction documents. Source text cannot increase runtime permissions.
-
-## Self-host acceptance
-
-```sh
-scripts/cargo.sh build --locked
-python3 scripts/selfhost.py --live
-```
-
-This consumes authenticated Codex CLI usage. Antislop receives a task to add its own `--version`, changes only `src/main.rs` in a private source copy, and uses independent verifier sessions and real Rust checks. The driver delegates stage approvals for that immutable task, with at most two repair rounds. It preserves the copy, run export and logs under the printed `/tmp/antislop-selfhost-*` path. A failed gate is a failed experiment, not a completed task.
-
-For a supplied task, start the daemon and run `target/debug/antislop run STATE_DIR SPEC.json --approve-scoped [MAX_REPAIRS] [TIMEOUT_SECONDS]`. Reattach to the same run with `target/debug/antislop follow STATE_DIR RUN_ID SPEC.json --approve-scoped [MAX_REPAIRS] [TIMEOUT_SECONDS]`. Repairs count against the total persisted budget, including earlier attachments. Without a timeout the driver follows indefinitely; expiry leaves the daemon running. This explicitly authorizes the immutable spec’s files, local check argv and stage approvals. Uncertain effects require explicit reconciliation. This is scoped supervised execution, not unrestricted autonomous mode.
-
-If an independent review needs additional observations, an operator can explicitly approve one exact local argv with `target/debug/antislop check STATE_DIR RUN_ID ARGV.json --approve-scoped`. The JSON file is an array of argument strings. This runs asynchronously on a stopped run, records output and before/after input hashes, and preserves its stage, revision and attempt. Source changes or interruption require reconciliation. The run/follow driver does not delegate these additional commands. Put script contents in a literal `-c` argument when their bytes must be part of the approved scope.
-
-After reconciling an interrupted main verifier, `target/debug/antislop verify STATE_DIR RUN_ID --approve-scoped` authorizes a fresh independent review of the existing artifact. It preserves the executor output, stage and attempt and reuses actual current runner evidence. The daemon requires a failed verifier or an authentic completed acceptance report that failed structural validation, a registered artifact with completed durable authorship, fresh prerequisites and unchanged pinned inputs. Substantive rejection and already valid completed reports require their normal progression paths. The operator approves this retry separately from run/follow.
-
-## CLI providers
-
-Project configurations may set `[role_providers]` with `orchestrator = ["codex"]`, `executor = ["agy"]` and `verifier = ["agy"]`. These are user limits: every profile must comply and an intake proposal must retain them exactly. Models, effort and task-role choices remain configurable within those provider assignments.
-
-Runs explicitly select `fake`, `codex`, `claude`, `gemini` or `agy`. Antigravity CLI 1.3.4/1.3.5 is integrated under the canonical provider name `agy`, using an owned agent with only the internal `finish` component for structured output. Model and native effort may be routed separately for executor and verifier profiles. Existing authenticated CLI homes are audited without changing their settings; optional managed homes use their own CLI authentication. See [Antigravity configuration, protocol and limitations](docs/agy.md). No adapter invokes a model API directly.
-
-See [the prompt map](docs/prompts.md) for executor/verifier templates, response schemas, additional context and audited exact self-host inputs.
-
-## Diagnostic client
-
-Start the terminal frontend with `target/debug/antislop ui [STATE_DIR] [RUN_ID] [--orchestrator codex|claude|gemini|agy]`. It connects to the existing daemon or starts one; detaching leaves the daemon running. With no run ID, `i`, a task prompt and `Ctrl+S` start an orchestrator interview without a SPEC.json. The project’s `architect.toml`, when present, supplies the initial orchestrator; otherwise the built-in conversational bootstrap uses the native `codex` CLI and a separate Codex reviewer. Without a project configuration, `antislop ui --orchestrator claude` (or `codex`, `gemini`, `agy`) explicitly selects the initial conversational CLI and its separate reviewer; it does not assign the eventual task team. A project configuration or attached run cannot be overridden by this option. Compatibility is checked by the runtime, and a rejected selected CLI is never replaced silently. This bootstrap grants no writes, checks or commits. Interview replies also start a read-only orchestrator turn. The provisional intake contract cannot start a team or project commands. After clarifying the task, the orchestrator proposes its requirements, criteria, source files, exact check argv and role/provider/model/effort routing. A dedicated reviewer inspects that contract and the runtime-observed proposed sources. Press `Esc`, then `a` to open the frozen approval card and `Enter` to accept it. For worktree tasks, acceptance first observes the sources in the background. Press `a` to inspect and approve task-owned local changes for private-candidate preparation, then `a` again to validate and activate the captured workspace. The next approval starts read-only team planning with independent review. The conversational bootstrap defaults to worktree mode; an explicit project `in-place` setting keeps its direct workflow. Press `a` again when the reviewed team is ready to inspect its effective agent configurations and task DAG before installation. Installed tasks stay planned; starting execution still uses the separately scoped wave approval. No manual SPEC.json or per-agent assignment is required for this flow. The initial orchestrator remains explicitly configured, with Codex as the default conversational bootstrap. Before its intake turn, a runtime worker probes the declared and detected Codex/Claude/Gemini/agy executables. The catalogue records actual compatible, missing, rejected and timed-out candidates; a discovered CLI can enter proposed routing only with its exact observed configuration and later user acceptance. Selected task profiles require compatible observations. Authentication and available model names remain explicitly unverified; detection does not replace the initial orchestrator or approve execution. General integration/delivery back to the source checkout, separate resources/environments and substantive cross-provider acceptance remain open.
-
-During the interview, a provisional question waits for the user (`awaiting_user`); it does not start the independent verifier or approve a contract. The chat and graph progress overlay show “Czeka na Twoją odpowiedź”. In chat, Enter or `i` opens the answer editor; `Ctrl+S` submits one free-form response to the questions. A completed contract/configuration proposal then receives independent review and a separate acceptance card. Runtime authenticates native authorship and session separation after output delivery; a verifier must not require an advance receipt of its own unfinished turn.
-
-Existing runs can be selected through `Ctrl+P > Select run`; `n` optionally imports a SPEC.json. Direct messages to observed task agents (`m`) remain persisted next-turn queues. These do not start task execution. Sending shows acceptance, queue/start failures and actual response/review state; failed sends retain the draft. Conversations originating in chat continue to start read-only orchestrator turns with `Ctrl+S` after contract approval. Imported executable runs retain their explicit scoped palette approval.
-
-To process queued orchestrator messages, use the command palette's reviewed orchestrator turn or `target/debug/antislop orchestrate STATE_DIR RUN_ID --approve-scoped`. This authorizes one read-only turn and its dedicated independent review using the pinned profiles. Answers and exact review/output records survive reattachment. A team proposal must preserve the original specification, all required role pairs, DAG/gates and every risk owner; it grants no project action.
-
-Inspect the proposal and review under Options / plan or `antislop export STATE_DIR RUN_ID`. Accept a reviewed plan with the palette or `target/debug/antislop accept-team STATE_DIR RUN_ID ROUND_ID --approve-scoped`. Runtime authenticates the actual completed native sessions and current source bytes before installing it. New messages invalidate the old acceptance path. Installed tasks remain `planned`. Use the next approval or `step-team STATE_DIR RUN_ID --approve-scoped` to execute the scoped ready wave, then approve its independently reviewed stage results. Source refresh and repair rounds require their own approvals. Fixed-stage progression is disabled after installation so it cannot complete a run while silently ignoring its accepted team.
-
-After the complete managed team result is verified and accepted, the next approval inspects source delivery and then opens a separate frozen transfer card. CLI equivalents are `inspect-delivery STATE_DIR RUN_ID` and `deliver-source STATE_DIR RUN_ID --approve-scoped`. Transfer admits authenticated text writes, creations and deletions, retains displaced versions and refuses source drift or unsupported effects. Creation/deletion require a captured containing directory input and an assigned editable scope. Interrupted transfers require explicit observation/restoration rather than replay. General conflict integration, commits and publication remain open; see [workspace lifecycle](docs/workspace-lifecycle.md).
-
-```sh
-target/debug/antislop daemon .architect
-target/debug/antislop list .architect
-target/debug/antislop create .architect examples/fake-spec.json
-target/debug/antislop snapshot .architect RUN_ID
-target/debug/antislop events .architect 0
-```
-
-The daemon stays active when the diagnostic client disconnects. Run it in your own process supervisor or background job as needed. `Ctrl-C` stops the daemon; interrupted work is marked for reconciliation on restart.
-
-To approve a stage, copy its `scope_hashes.start` from a fresh snapshot and send a versioned request:
-
-```json
-{"version":2,"request_id":"user-request-1","idempotency_key":"stage-start-1","operation":{"type":"mutate","command":{"type":"approve_start","run_id":"RUN_ID","scope_hash":"START_HASH"}}}
-```
-
-```sh
-target/debug/antislop request .architect < request.json
-```
-
-Snapshots and mutation replies contain summaries. Use `antislop export STATE_DIR RUN_ID` for a consistent paginated full document. Protocol 2 rejects older clients explicitly.
-
-The `send_message` mutation takes `run_id`, `target_agent_id` and `text`. Fixed-workflow targets are case-sensitive names such as `Discovery:executor` and `Execution:verifier`; an installed team uses its exact agent IDs. `*` broadcasts to all current agents; `b` opens the TUI broadcast composer. Sender identity is assigned by the daemon. The run export retains message bodies, immutable history, exact context packets and session/turn delivery bindings; `antislop export STATE_DIR RUN_ID message:MESSAGE_ID` reads an individual body. Unknown delivery is preserved without automatic replay. Revising the spec cancels queued old-scope messages while retaining their history.
-
-The agent panel renders a two-dimensional graph with node boxes, relationship edges and directional arrow navigation. Selection and layout survive status updates; `g` groups by stage and `r` includes communication relations. The lower-right progress overlay reports the actual active task steps or the run's paused/waiting/blocked state.
-
-After reconciling a failed/interrupted interview or planning round, use `resume-orchestration STATE_DIR RUN_ID ROUND_ID --approve-scoped` for its exact observed native session, or `replace-orchestration ... --approve-scoped` for a distinctly new read-only management session with a captured handoff. The TUI palette offers frozen management-recovery cards. A completed orchestrator response is preserved when only its verifier needs recovery. `restore-orchestration ... --approve-scoped` restores a retained completed native review without running CLI turns again. New user obligations, changed comments/source/configuration, superseded rounds and substantive rejection require a fresh round rather than silently rebinding the old scope. These actions do not install or execute the team.
-
-After reconciling an interrupted installed-team task, `target/debug/antislop resume-task-session STATE_DIR RUN_ID TASK_ID --approve-scoped` continues its exact observed native session when the current workspace, inputs, role, configuration and CLI version still match. The TUI palette offers a separate **Resume exact native session** card with the managed/native IDs and previous turn. Executor and verifier continuations retain the original task attempt and old failed/unknown turn; they create a new turn in the same session. Only the selected task runs, and resumed execution still needs independent verification. Unknown checks, existing unapplied executor effects, unobserved native IDs, source/configuration drift and uncertain scheduler checkpoints refuse continuation. Completed outputs use the restoration/review path instead. A missing or unsupported native session fails explicitly without a silent replacement. The frontend can restart a daemon after a refused connection to a private owned stale socket; the daemon's state-directory lock controls stale-socket removal. Live protocol/application errors do not trigger replacement.
-
-When an interrupted task has no observed native ID, or its native session is rejected/unavailable, `target/debug/antislop replace-task-session STATE_DIR RUN_ID TASK_ID --approve-scoped` explicitly starts a **distinct new session** with a captured `task-handoff-v1` packet. The TUI has a separate replacement card showing the packet, its hash and previous session/turn. The handoff retains the original contract/constraints, source versions, dependencies, prior reports, evidence provenance and historical message states; queued messages remain in the normal inbox channel. The original attempt stays pinned, all old sessions/turns remain history, and executor replacement still needs independent verification. No fallback happens automatically after a resume failure. Changed task sources/configuration require a revised contract; unknown checks/effects and uncertain scheduler checkpoints still refuse replacement.
-
-If a task check actually finished and its raw output was durably captured before the final result checkpoint failed, `target/debug/antislop restore-task-check-result STATE_DIR RUN_ID INVOCATION_ID --approve-scoped` restores that exact process result without running the command again. The TUI palette shows the captured output and pinned recovery scope. Success and failure are retained as observed; restoration grants no quality pass. Current inputs, argv, configuration, attempt, authorization and executor authorship must still match. A baseline may settle scheduler uncertainty only with its captured pre-admission barrier and unchanged native/execution ledgers; further task work still requires explicit continuation. Missing or corrupted captures, changed inputs and unrelated scheduler uncertainty remain blocked.
-
-After reconciling an incomplete installed-team verifier, `target/debug/antislop retry-task-verification STATE_DIR RUN_ID TASK_ID --approve-scoped` authorizes only that task's verifier. The TUI command palette offers eligible tasks with pinned scope approvals. Recovery preserves the executor artifact, attempt, edit receipts and all prior native turns; unknown message delivery is not replayed. Changed sources, substantive rejections, unresolved defects or uncertain scheduler checkpoints refuse this replacement. Exact observed executor/verifier continuation is described above. Current-scope task handoffs and management-session recovery are described above; revised-scope and automatic recovery remain open in the implementation audit.
-
-After reconciliation, a completed executor with a durably applied effect/input record but a missing scheduler artifact can be recovered with `target/debug/antislop restore-task-result STATE_DIR RUN_ID TASK_ID --approve-scoped`. The TUI palette shows the exact retained output and effect receipts before submitting its pinned approval. This restores the original attempt, native session/turn and artifact bytes without running the agent, commands or writes again. It creates no verifier pass or stage acceptance. Changed sources still require read-only refresh and independent review; original baseline receipts are preserved. Snapshot controls expose only a recovery count; `antislop export STATE_DIR RUN_ID task-recovery` reads current eligible scopes through hash-bound paginated IPC. Missing/uncommitted native output, ambiguous executions, uncertain checks/effects, changed owned files or configuration refuse this action. Incomplete native turns, unapplied/conflicting effects and general checkpoint adjudication still require the remaining recovery work.
-
-For an interrupted mediated write whose durable record remains `Intent`, `target/debug/antislop reconcile-task-effects STATE_DIR RUN_ID TASK_ID --approve-scoped` can acknowledge the observed approved after-state when every proposed file matches exactly. The TUI offers the retained intent and pinned scope; the paginated `task-recovery` document includes eligible effect scopes. This performs no file write or provider/check invocation. It preserves the original inputs/intent and records `observed_applied` with a user observation receipt rather than claiming the runtime completed the write. A separate result restoration and independent source refresh/review are still required. Unapplied, conflicting, missing or unrelated changed inputs refuse this acknowledgement. It covers mediated pinned file state; general unknown checks, incomplete native turns and external/untracked effects remain open.
-
-When several interrupted writers from one original wave have unrecorded matching after-states, `target/debug/antislop reconcile-wave-effects STATE_DIR RUN_ID WAVE_ATTEMPT --approve-scoped` acknowledges the exact current cohort together. The TUI card lists every selected task/intent. IPC `reconcile_wave_effects` takes explicit `task_ids` and the displayed `scope_hash`; the paginated `task-recovery` document supplies eligible packages. Missing members, duplicate or overlapping ownership, a different original wave, conflicts or unowned changes refuse the whole action. One transaction retains each original intent plus shared cohort membership and one user approval. No writes, checks, provider turns or positive reviews are produced; result restoration and independent current-source validation remain separate.
-
-Native context/planning tasks retain sourced context sections, actual solution models and versioned scenario assessments. Their reviewers bind the exact models and provide independent observations/scenarios; an audit label alone cannot open the context or planning gate. The `task-models-v1` change updates the pinned checklist, so older active runs require explicit revision. Supervised source refresh is described below; complete role/family execution remains open in the implementation audit.
-
-Managed edits retain each task's original inputs and owned before/after receipts. Changed sources or reviewed dependencies mark affected positive/unreviewed task results stale. Use `target/debug/antislop refresh-task-sources STATE_DIR RUN_ID TASK_ID --approve-scoped` or the TUI palette to authorize one eligible read-only refresh, then independently review it with the next team step. Prior effects, artifacts and sessions remain in history; proposed refresh edits are refused. Task-worker guardians retain workspace ownership through process-group cleanup, including after daemon death; a competing run must wait for cleanup, including through symlink aliases or nested workspaces. Restart preserves unknown outcomes without automatic replay. Actual current runner evidence is still required for runner gates. Automatic execution of approved check plans is described below; autonomous refresh and recovery of uncertain execution outcomes remain open.
-
-An installed task's reviewed `check_plan` binds exact local argv and criterion/gate coverage. Approving a team wave authorizes these checks in their declared phase. `before_execution` captures a historical baseline for every selected executor before any native wave worker starts; `before_verification` (the default) checks the resulting current artifact. `expected_exit_code` defaults to zero; a baseline may explicitly expect a known nonzero exit to reproduce a defect. Runtime persists intent, actual output and before/after input hashes, and reuses only completed results for the same artifact, plan and source/configuration scope. Check failure cannot become a positive gate, and unknown execution is not replayed. The overlay shows actual check progress. Baseline receipts retain original inputs and cannot replace positive current checks or required runner gates. A read-only source refresh cites the original baseline without repeating it. Signals, truncated output and unknown completion cannot satisfy an expected exit. Isolated check environments and recovery of unknown outcomes remain open.
-
-Supervised teams require separate acceptance of independently verified stage results before another stage consumes them. The TUI palette opens a pinned result card with the listed tasks, result text, proposed edits, criteria and artifact/review identities. `target/debug/antislop accept-team-stage STATE_DIR RUN_ID STAGE --approve-scoped` accepts the currently reviewed package (`discovery`, `planning`, `execution`, `validation`, `integration` or `delivery`). Snapshots expose small stage counts/scopes; `antislop export STATE_DIR RUN_ID stage-results` reads the full hash-bound package document through paginated IPC. IPC `accept_team_stage` takes `run_id`, `stage`, exact `task_ids` and the displayed `scope_hash`; an explicit subset can approve an independent branch or milestone. Same-stage internal dependencies can proceed with their separately approved waves. Approval persists across restart, starts no provider work and does not approve the next wave. Changed sources, task packages, dependencies, configuration or reviews invalidate the corresponding acceptance. Completion still requires every current task result and every applicable exact design/delivery gate. The checklist marker `team-stage-result-v1` requires explicit revision of older active runs.
-
-Software implementer/refactorer/test-implementer/integrator tasks, and software tasks declaring writes, require an explicitly reviewed `change_contract` (`feature`, `bugfix`, `refactor`, `maintenance` or `mixed`). Each bugfix identifies assigned criteria, an oracle, an original-state reproduction or justified alternative investigation, and its post-change check. Native proposal review and team approval bind this contract. Task acceptance requires `quality.change_review`, the actual original/current receipts, source observation and independent oracle/counterexample assessment. Exit zero may return a measurement; it does not itself establish that the original state was correct. Verifier replacement cannot erase contradictory contract or receipt claims. This contract currently applies to native team tasks; equivalent classification/proof enforcement in the legacy fixed-stage path remains open.
-
-Agent details (`Enter` on an agent) show readable sections and full wrapped output across Overview, Session, Artifacts, Findings, Messages, Evidence, Checks and Comments. `[` / `]` or Tab / Shift+Tab switch tabs; the active tab stays visible on narrow terminals. Up/Down and PageUp/PageDown scroll, Home/End jump to the beginning/end, and each agent/tab remembers its reading position. `/` filters complete records and highlights matching text; Enter keeps the filter, Esc clears it, then Esc returns to the graph. `v` switches between readable fields and raw data. Comments show the selected agent's annotations, version state and recorded orchestrator reactions.
-
-With the agent panel or agent details focused, `c` selects an element to annotate: agent, task, relation, session, turn, artifact, finding, message, evidence, check or gate. `Ctrl+S` saves the comment; the chat draft remains separate. `u` opens comment history and reviewed orchestrator reactions; `r` resolves/reopens and `d` deletes the selected comment. Deleted records remain in the durable audit history. Changed element versions are marked stale and stale submissions are refused.
-
-Comments queue an authenticated user notification for the configured orchestrator. The existing supervised orchestration approval starts its next turn and independent review. Completed/cancelled runs also accept comments and explicitly approved read-only dialogue while preserving their task history and terminal status; dialogue cannot install a replacement team. Their historical task checklist remains pinned, while the new dialogue uses the current review contract. Each unresolved comment requires a linked answer, clarification question or proposed task; missing/forged reactions or failed review are refused. A comment does not authorize work, change scope or mark itself resolved. The IPC commands are `add_element_comment` (`target`: `kind`, `id`, `version_hash`; `text`), `delete_element_comment` and `resolve_element_comment` (`comment_id`, `resolved`). Each also takes `run_id`.
-
-Every runtime-observed CLI role can send direct or broadcast messages through the common `agent_messages` output field. Runtime authenticates the sender from the native turn and queues each recipient separately. Management uses task reports, artifacts, verifier decisions and its inbox; it does not need child session transcripts. The current mechanism delivers on the next turn; provider hooks and live steering remain open. Queueing a message does not launch or approve another turn.
-
-```json
-{"agent_messages":[{"target":{"type":"agent","agent_id":"orchestrator"},"kind":"finding","text":"A dependency is missing; please resolve it."},{"target":{"type":"broadcast"},"kind":"status","text":"The task report is ready for review."}]}
-```
-
-This field accompanies the role's usual structured result. It cannot grant permissions, approve a result or supply a sender identity. Invalid outboxes retain their raw output and a rejection without sending a partial batch.
-
-Then send `advance` with another idempotency key. After a verified result, `accept_result` needs `scope_hashes.accept`; rejected/blocked attempts need `approve_repair` and `scope_hashes.repair`. `pause`, `resume`, `cancel` and `revise` are explicit commands. Revisions need `expected_revision` and the full new spec. A restart does not grant approvals or blindly replay an uncertain action.
-
-Pause lets already admitted CLI turns/checks finish and holds subsequent turns, checks and file writes until `resume`. The waiting worker retains its workspace lease; resume continues the same attempt without replaying completed work or adding approvals. Cancel wakes a paused worker and stops its processes after the cancellation is durably committed. A daemon restart loses that in-memory continuation, preserves the pause and requires explicit reconciliation before further work.
-
-The spec selects its provider explicitly. `input_files` selects files or entire directories within the workspace (`.` selects the whole repository); directory scopes remain single versioned inputs, with text contents and explicit binary/link metadata; `editable_files` is a subset; `check_command` is an explicitly authorized argv executed locally. Arbitrary untrusted project commands are not sandboxed by this prototype. Do not use it as a general unattended execution environment.
-
-The diff view retains the accepted task baseline while managed writes advance current inputs. `antislop review-diff STATE_DIR RUN_ID --approve-scoped` or `r` in the TUI diff view starts a separate native reviewer using the pinned implementation verifier profile. The confirmation shows the candidate and reviewer profile. Results, findings and stale versions appear in the diff view and reviewer node; a candidate review grants no stage acceptance or permission to modify sources. New diff comments notify the configured orchestrator on its next approved turn.
-
-See [stabilization, protocol and recovery details](docs/stabilization.md), [implementation decisions and limitations](docs/implementation.md), [prioritized backlog](docs/backlog.md) and [M0 evidence](docs/m0/probe.json). No public code or binary distribution is authorized.
-
-A reviewed interview contract can also be accepted with `target/debug/antislop accept-intake STATE_DIR RUN_ID ROUND_ID --approve-scoped`. This CLI action accepts the exact current contract and routing without starting a provider or task. The TUI action explicitly also requests the following read-only team-planning turn. Changed user messages, files, native review bindings or the displayed scope refuse old acceptance; a failed commit preserves the original interview and supports an idempotent retry.
-
-
-`target/debug/antislop workspace-snapshot DIRECTORY [ADDITIONAL_PATH ...]` inspects source state without a specification or daemon. JSON records the Git HEAD/branch, staged index entries, current content hashes and permissions, deleted paths and nonignored untracked files. Additional relative paths can explicitly include ignored files. File bodies are omitted. Binary files stream through hashing; symlinks hash their target bytes without following the target. The reader disables optional index refresh, filters/fsmonitor/hooks and lazy object fetching. Hash-bound revalidation and selection of observed working copies/deletions are available to the managed-workspace implementation. Submodule content requires separate recursive admission. This is the source-observation stage of managed workspaces; creation, task routing and integrated delivery still need the lifecycle work in [workspace-lifecycle.md](docs/workspace-lifecycle.md).
+Tests use small fake CLIs written in Python (`python3` must be on `PATH`); they
+consume no provider usage.

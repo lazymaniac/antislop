@@ -55,7 +55,7 @@ impl Options {
             &format!("no configuration at {}", config.display()),
         )?;
         let state = state.unwrap_or_else(|| project.join(".antislop"));
-        crate::ipc::private_directory(&state)?;
+        super::daemon::private_directory(&state)?;
         Ok(Self {
             project,
             config: config.canonicalize()?,
