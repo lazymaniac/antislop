@@ -25,13 +25,19 @@ antislop --project DIR --config FILE --state DIR
 The first call starts the project's daemon (state in `PROJECT/.antislop`), so
 agents keep working when the frontend exits; the next call reattaches.
 
-TUI keys: Enter send, Alt+Enter new line, Ctrl+A run the proposed plan,
-Ctrl+R resume what a plan left unfinished (after a login, a limit reset, a
-restart or your own edits), Ctrl+X cancel running work, PgUp/PgDn scroll,
-Ctrl+N new conversation, Esc detach. In line mode, type `/accept`, `/resume`
-or `/cancel`. `@t2 text` sends text to the worker of task `t2` (delivered in
-its next turn; the orchestrator gets a copy). Agents message each other the
-same way.
+The TUI shows the chat beside the team graph: every agent as a box, edges for
+dependencies, verification, messages and supervision (`f` filters them), and
+an overlay with what is running right now. Tab moves between the panels; in
+the graph, arrows select an agent and Enter opens its task, session, messages
+and result.
+
+Keys: Enter send, Alt+Enter new line, Ctrl+A run the proposed plan, Ctrl+R
+resume what a plan left unfinished (after a login, a limit reset, a restart or
+your own edits), Ctrl+X cancel running work, PgUp/PgDn scroll, Ctrl+N new
+conversation, Esc back or detach. In line mode, type `/accept`, `/resume` or
+`/cancel`. `@t2 text` sends text to the worker of task `t2` (delivered in its
+next turn; the orchestrator gets a copy). Agents message each other the same
+way.
 
 ## How a request runs
 

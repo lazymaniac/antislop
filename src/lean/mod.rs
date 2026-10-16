@@ -453,10 +453,7 @@ impl Core {
             "plan_proposed",
             &json!({
                 "plan": plan_id,
-                "tasks": tasks.iter().map(|task| json!({
-                    "id": task.spec["id"], "title": task.spec["title"],
-                    "kind": task.spec["kind"], "writes": task.spec["writes"],
-                })).collect::<Vec<_>>(),
+                "tasks": tasks.iter().map(|task| task.spec.clone()).collect::<Vec<_>>(),
                 "review": review_json(&review),
                 "automatic": self.config.policy.automatic_progression() && waiting.is_none(),
                 "waiting": waiting,

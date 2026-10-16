@@ -80,6 +80,11 @@ pub enum Request {
     Cancel {
         conversation: String,
     },
+    /// One task of a plan with its latest report and verdict.
+    Task {
+        plan: String,
+        id: String,
+    },
     Events {
         conversation: String,
         after: u64,
@@ -186,6 +191,16 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         Request::Cancel { conversation } => {
             core.cancel(&conversation);
             Value::Null
+        }
+        Request::Task { plan, id } => {
+            let task = core
+                .store
+                .plan(&plan)?
+                .into_iter()
+                .find(|task| task.spec["id"] == id.as_str());
+            json!(
+                task.ok_or_else(|| crate::Error::Invalid(format!("no task {id} in plan {plan}")))?
+            )
         }
         Request::Events {
             conversation,

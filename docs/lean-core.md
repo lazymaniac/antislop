@@ -136,7 +136,8 @@ recorded whole when its turn ends.
 `antislop` (or `antislop chat`) starts (or reuses) the project's daemon, which owns the `Core`
 (`core.lock` makes it the only owner), so work goes on after a frontend exits.
 One JSON request per connection: `identity`, `shutdown`, `conversations`,
-`start`, `send`, `accept`, `resume`, `cancel`, and `events{conversation, after, wait_ms}`,
+`start`, `send`, `accept`, `resume`, `cancel`, `task{plan, id}` (one stored task with
+its report, verdict and commits), and `events{conversation, after, wait_ms}`,
 a long poll returning at most 500 events / 1 MB. A daemon from another build is
 replaced when idle. The socket is `<state>/core.sock`, or
 `/tmp/antislop-<uid>/<hash>.sock` when that path is too long for Unix sockets.
@@ -144,12 +145,27 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - `antislop chat` in a terminal opens the TUI on the project's latest
   conversation (`--new` for a fresh one, `--conversation ID` for a given one).
   A poller thread long-polls events and every request runs on its own thread,
-  so the draw loop never waits. The transcript shows messages and the
-  orchestrator's tool calls; a side panel shows each task's status, round and
-  its agent's current tool call. Keys: Enter send, Alt+Enter new line, Ctrl+A
-  run the proposed plan, Ctrl+R resume what the plan left unfinished, Ctrl+X
-  cancel, PgUp/PgDn scroll, Ctrl+N new
-  conversation, Esc detach.
+  so the draw loop never waits. The screen has two panels: the chat (messages,
+  the orchestrator's tool calls, reviews, mail) and the team graph. The graph
+  draws every agent as a box: the orchestrator between the plan verifier and
+  the auditor on top, below them each task's worker with its verifier right
+  under it, tasks in columns by dependency depth. Edges are routed through the
+  gaps between boxes: dependencies, verification, messages (with a count,
+  highlighted for 10 s after one is sent) and supervision; `f` cycles which
+  relations are shown (supervision only on its own, since it reaches every
+  worker). The layout depends only on the plan's shape, so nodes never jump as
+  events arrive. A "teraz" overlay in a corner lists the steps actually running,
+  or says that the plan waits for the user, or that nothing runs; it moves to
+  the other corner rather than cover the selected node. Tab moves focus between
+  the panels (on terminals narrower than 100 columns it switches which one is
+  shown); in the graph, arrows select the nearest node in that direction and
+  Enter opens its details full screen: Przegląd (task, scope, goal, the
+  verifier's focus and, for a verifier, its risks), Sesja (the agent's turns
+  and tool calls), Wiadomości (mail to and from it) and Wynik (the worker's
+  report and commits, or the verifier's verdict). Keys: Enter send, Alt+Enter
+  new line, Ctrl+A run the proposed plan, Ctrl+R resume what the plan left
+  unfinished, Ctrl+X cancel, PgUp/PgDn scroll, Ctrl+N new conversation, Esc
+  back (from the chat: detach), `q` in the graph detaches.
 - `antislop chat "message"` (or piped input) prints events line by line and
   exits once the conversation is idle; `/accept` and `/cancel` lines work too.
 
@@ -226,3 +242,5 @@ replaced when idle. The socket is `<state>/core.sock`, or
    `tests/lean_core.rs`).
 8. ✅ Messages between agents and from the user to one agent
    (`tests/lean_messages.rs`).
+9. ✅ TUI team graph, progress overlay and agent details (design §8.1–8.4;
+   unit tests in `src/lean/tui`).
