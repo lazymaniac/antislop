@@ -274,6 +274,14 @@ replaced when idle. The socket is `<state>/core.sock`, or
   the conversation busy, and the orchestrator starts on the results before the
   conversation can look idle.
 - A session is resumed only by the CLI that created it.
+- A plan never widens where an agent may write: directories of a task's
+  scope outside the project are passed to the CLI (`--add-dir`,
+  `--include-directories`) only for read-only agents, since a writer's CLI
+  would make them writable (design §18 scenario 15).
+- The daemon runs with the configuration it read at start. A frontend that
+  finds `architect.toml` changed restarts an idle daemon; a busy one keeps
+  its configuration for the running work and the frontend says the new one
+  applies once that work is done (scenario 17).
 
 ## Known limits
 

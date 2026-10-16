@@ -707,7 +707,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     let conversation = options.conversation(&client)?;
     let (updates, received) = mpsc::channel();
     let mut app = App {
-        client,
+        client: client.clone(),
         project: options
             .project
             .file_name()
@@ -718,7 +718,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         view: View::default(),
         input: options.message.clone().unwrap_or_default(),
         scroll: 0,
-        notice: None,
+        notice: client.notice.clone(),
         updates,
         focus: Focus::Chat,
         selected: ORCHESTRATOR.into(),

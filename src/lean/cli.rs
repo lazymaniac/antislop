@@ -100,6 +100,9 @@ pub fn chat(args: &[String]) -> Result<()> {
     if options.message.is_none() && std::io::stdin().is_terminal() {
         return super::tui::run(&options, client);
     }
+    if let Some(notice) = &client.notice {
+        eprintln!("{notice}");
+    }
     let conversation = options.conversation(&client)?;
     eprintln!("conversation {conversation}");
     let events = |after: u64, wait_ms: u64| -> Result<(Vec<Value>, bool)> {

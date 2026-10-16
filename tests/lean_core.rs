@@ -242,3 +242,74 @@ fn a_question_cut_off_by_a_restart_is_answered_after_it() {
         ("orchestrator", "answer: co dalej?")
     );
 }
+
+#[test]
+fn a_changed_configuration_waits_for_running_work_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path().canonicalize().unwrap();
+    let project = dir.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(&dir);
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/architect.toml"
+    ))
+    .unwrap()
+    .replace(
+        "binary = \"codex\"",
+        &format!("binary = {:?}", codex.to_string_lossy()),
+    );
+    std::fs::write(dir.join("architect.toml"), &text).unwrap();
+    let state = dir.join("state");
+    let identity = || {
+        architect::lean::daemon::Client::at(&state)
+            .call(&architect::lean::daemon::Request::Identity)
+            .ok()
+    };
+    let run = |message: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+            .args(["chat", "--project"])
+            .arg(&project)
+            .arg("--config")
+            .arg(dir.join("architect.toml"))
+            .arg("--state")
+            .arg(&state)
+            .arg(message)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+
+    let first = run("slow: pierwsza");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let daemon = loop {
+        if let Some(identity) = identity().filter(|identity| identity["busy"] == true) {
+            break identity["pid"].clone();
+        }
+        assert!(Instant::now() < deadline, "the daemon never got busy");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // The user edits the configuration while the work runs.
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(dir.join("architect.toml"), format!("{text}\n# edited\n")).unwrap();
+    let second = run("druga").wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(second.status.success(), "{stderr}");
+    assert!(stderr.contains("architect.toml zmienił się"), "{stderr}");
+    assert_eq!(
+        identity().unwrap()["pid"],
+        daemon,
+        "the running work kept its daemon"
+    );
+    assert!(first.wait_with_output().unwrap().status.success());
+
+    // Once the work is done, the next frontend gets the new configuration.
+    let third = chat(&dir, &project, "trzecia");
+    assert!(third.contains("answer: trzecia"), "{third}");
+    assert_ne!(identity().unwrap()["pid"], daemon);
+    architect::lean::daemon::Client::at(&state)
+        .call(&architect::lean::daemon::Request::Shutdown)
+        .unwrap();
+}

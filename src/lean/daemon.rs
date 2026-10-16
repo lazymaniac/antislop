@@ -142,6 +142,9 @@ pub fn socket(state: &Path) -> PathBuf {
 }
 
 pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
+    // The version of the configuration this daemon runs with, taken before
+    // reading it so an edit made meanwhile still counts as newer.
+    let loaded = modified(config_path);
     let core = Core::open(state, Config::load(config_path)?)?;
     let project = project.canonicalize()?;
     let config_path = config_path.canonicalize()?;
@@ -164,17 +167,18 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
             let request = crate::transport::read::<Request>(&mut BufReader::new(&stream))
                 .and_then(|request| request.ok_or_else(|| Error::Invalid("empty request".into())));
             let shutdown = matches!(request, Ok(Request::Shutdown)) && !core.busy();
-            let response =
-                match request.and_then(|request| handle(&core, &project, &config_path, request)) {
-                    Ok(data) => Response {
-                        data: Some(data),
-                        error: None,
-                    },
-                    Err(error) => Response {
-                        data: None,
-                        error: Some(error.to_string()),
-                    },
-                };
+            let response = match request
+                .and_then(|request| handle(&core, &project, &config_path, loaded, request))
+            {
+                Ok(data) => Response {
+                    data: Some(data),
+                    error: None,
+                },
+                Err(error) => Response {
+                    data: None,
+                    error: Some(error.to_string()),
+                },
+            };
             let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
             if let Ok(mut bytes) = serde_json::to_vec(&response) {
                 bytes.push(b'\n');
@@ -189,7 +193,13 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     Ok(())
 }
 
-fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> Result<Value> {
+fn handle(
+    core: &Arc<Core>,
+    project: &Path,
+    config: &Path,
+    loaded: u64,
+    request: Request,
+) -> Result<Value> {
     Ok(match request {
         Request::Identity => json!({
             "build": build(),
@@ -197,7 +207,7 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
             "pid": std::process::id(),
             "project": project,
             "config": config,
-            "config_modified": modified(config),
+            "config_modified": loaded,
         }),
         Request::Shutdown => {
             require(!core.busy(), "the daemon is executing work")?;
@@ -294,6 +304,8 @@ fn build() -> &'static str {
 #[derive(Clone)]
 pub struct Client {
     socket: PathBuf,
+    /// Something the user should know about the daemon they reached.
+    pub notice: Option<String>,
 }
 
 impl Client {
@@ -301,25 +313,36 @@ impl Client {
     pub fn at(state: &Path) -> Self {
         Self {
             socket: socket(state),
+            notice: None,
         }
     }
 
     /// Connects to the project's daemon, starting it (or replacing an idle one
-    /// from another build) as needed.
+    /// from another build or configuration) as needed. A busy daemon keeps
+    /// the configuration its work started with: a changed `architect.toml`
+    /// applies once the work is done, and the frontend says so.
     pub fn connect(project: &Path, config: &Path, state: &Path) -> Result<Self> {
         private_directory(state)?;
-        let client = Self::at(state);
+        let mut client = Self::at(state);
         if let Some(parent) = client.socket.parent() {
             // Never talk to a socket someone else could have placed.
             private_directory(parent)?;
         }
         let executable = std::env::current_exe()?;
         if let Ok(identity) = client.call(&Request::Identity) {
-            let current = identity["build"].as_str() == Some(build_identity(&executable)?.as_str())
+            let same = identity["build"].as_str() == Some(build_identity(&executable)?.as_str())
                 && identity["project"].as_str() == project.to_str()
-                && identity["config"].as_str() == config.to_str()
-                && identity["config_modified"].as_u64() == Some(modified(config));
-            if current {
+                && identity["config"].as_str() == config.to_str();
+            let config_current = identity["config_modified"].as_u64() == Some(modified(config));
+            if same && config_current {
+                return Ok(client);
+            }
+            if same && identity["busy"] == true {
+                client.notice = Some(
+                    "architect.toml zmienił się: trwająca praca zachowuje swoją konfigurację, \
+                     nowa zadziała po jej zakończeniu i ponownym otwarciu"
+                        .into(),
+                );
                 return Ok(client);
             }
             require(
