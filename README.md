@@ -54,14 +54,16 @@ way.
 2. An independent plan verifier checks the plan against your request and the
    project before you see it; a flawed plan goes back to the orchestrator.
 3. `supervised`: you accept the plan. `autonomous`: a checked plan starts by
-   itself (at most three in a row before it waits for you).
+   itself, and the next one too, until a plan would repeat one that already
+   ran.
 4. Workers read and edit the project's files themselves. A task that changes
    files works in its own git worktree; the runtime commits its work there.
    With `workspace.mode = "in-place"` writers work in your directory itself,
    one at a time, and stop if they touch a file you were editing.
 5. The task's verifier reads the result (and the diff) with a checklist for
    that kind of work and approves or lists findings; findings go back to the
-   same worker session, for a bounded number of rounds.
+   same worker session (supervised: three rounds, then you decide;
+   autonomous: until approval, or until the verifier repeats itself).
 6. Approved changes are integrated into your branch one at a time, never over
    files you are editing and never with conflict markers.
 7. An independent auditor checks that every part of your request was

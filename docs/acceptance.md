@@ -24,7 +24,7 @@ does not grow with the repository), the scenario says so.
 | 5 | Parallel tasks share a contract | Orchestrator orders tasks on the same files or contract; plan verifier checks the order; an integration task checks the whole change; integration lands one change at a time and never with conflict markers | runtime: `git::tests::user_edits_and_conflicts_leave_the_project_untouched`, `git::tests::a_dependent_result_applies_over_an_earlier_uncommitted_one`; prompt: team shapes |
 | 6 | The user writes to a working agent; delivery state shown; the orchestrator knows | `@t2 text` → the worker's mailbox (delivered at its next turn, the state shown in the graph and details) and a copy for the orchestrator | runtime: `lean_messages::the_user_writes_to_a_working_agent_and_the_orchestrator_learns_of_it`, `view::messages_to_agents_show_their_delivery` |
 | 7 | Supervised stops at the gate and goes on after consent | A plan waits for `accept` naming the plan the user saw | runtime: `lean_recovery::accepting_runs_the_plan_the_user_saw_not_a_newer_one` |
-| 8 | Autonomous runs within policy; a missing capability is not bypassed | A checked plan starts by itself, at most three in a row; a plan whose review failed never runs by itself; without `local_write` a change stays on its branch | runtime: `lean_review::autonomous_mode_runs_a_checked_plan_and_reports_audit_gaps`, `…_stop_for_the_user_after_a_few_rounds`, `…_review_failed_is_shown_but_never_runs_by_itself` |
+| 8 | Autonomous runs within policy; a missing capability is not bypassed | A checked plan starts by itself, and correction rounds go on, without a count (design §14); a plan that repeats one that ran, or a verifier repeating its findings, waits for the user; a plan whose review failed never runs by itself; without `local_write` a change stays on its branch | runtime: `lean_review::autonomous_mode_runs_a_checked_plan_and_reports_audit_gaps`, `…_plans_go_on_until_one_repeats_a_plan_that_ran`, `…_rounds_go_on_while_the_worker_gets_closer`, `…_verifier_repeating_its_findings_stops_the_rounds`, `…_review_failed_is_shown_but_never_runs_by_itself` |
 | 9 | Closing the TUI does not stop the run; reattaching restores graph and chat | The daemon owns the work; frontends replay events | runtime: `lean_core::the_cli_talks_to_one_daemon_that_outlives_it`; the View is rebuilt from events (`view::the_view_follows_a_conversation_and_its_tasks`) |
 | 10 | A daemon crash between an action and its record does not repeat it blindly | Turns left running become `interrupted`, tasks `cancelled`; resume continues the agents' sessions; integration and in-place commits notice a change that already landed | runtime: `lean_recovery::tasks_cut_off_by_a_daemon_restart_end_cancelled`, `git::tests::a_change_that_already_landed_is_not_landed_again`, `git::snapshot_tests::committing_paths_leaves_the_users_other_changes_alone` |
 | 11 | Research with a non-existent or unsupportive source is not passed | Research obligations (every source exists and supports its claim) | prompt |
@@ -66,5 +66,7 @@ does not grow with the repository), the scenario says so.
   and the agents read the project themselves. This keeps state independent
   of the repository's size.
 - Risks go only to the verifier paired with the task, never to the worker.
-- Correction rounds inside a task run without asking in both modes
-  (design §6.2 asks at each round in supervised mode).
+- In supervised mode the first three correction rounds of a task run
+  without asking, then the user decides (design §6.2 asks at each round).
+  Autonomous mode has no count of rounds or plans, as design §14 says; it
+  stops only when work repeats itself.

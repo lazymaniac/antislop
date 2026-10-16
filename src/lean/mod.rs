@@ -38,13 +38,8 @@ const PLAN_VERIFIER: &str = "plan-verifier";
 const AUDITOR: &str = "auditor";
 /// Extra worker turns, per round, for messages that arrived while it worked.
 const MAIL_TURNS: usize = 2;
-/// Plans an autonomous conversation runs on its own after the user's last
-/// message; the next one waits for the user.
-const AUTO_PLANS: usize = 3;
 /// Longest worker report handed back to the orchestrator per task.
 const REPORT_LIMIT: usize = 40_000;
-/// Tasks of one plan running at once; the rest wait their turn.
-const PARALLEL_TASKS: usize = 4;
 
 pub struct Core {
     pub store: Store,
@@ -655,8 +650,10 @@ impl Core {
             None
         } else if !checked {
             Some("the plan verifier did not approve this plan")
-        } else if self.store.count_since_user(conversation, RUNTIME)? >= AUTO_PLANS {
-            Some("several plans already ran without you")
+        } else if self.store.count_since_user(conversation, RUNTIME)? > 0
+            && self.repeats_a_plan_that_ran(conversation, &plan_id, specs)?
+        {
+            Some("the same plan already ran without you and did not close what was found")
         } else {
             None
         };
@@ -880,7 +877,6 @@ impl Core {
                 }
                 return;
             }
-            ready.truncate(PARALLEL_TASKS);
             std::thread::scope(|scope| {
                 for task in ready {
                     scope.spawn(move || {
@@ -1008,7 +1004,16 @@ impl Core {
         let mut findings = verdict.map(|verdict| verdict.findings).unwrap_or_default();
         let resumed = task.round > 0;
         let first_round = task.round + 1;
-        for round in first_round..first_round + tasks::MAX_ROUNDS {
+        // Supervised: a few rounds run on their own, then the user decides.
+        // Autonomous: rounds go on until approval or until the verifier
+        // repeats its findings, which means the worker is not getting closer.
+        let last_round = if autonomous {
+            u32::MAX
+        } else {
+            first_round + tasks::MAX_ROUNDS - 1
+        };
+        let mut previous: Option<String> = None;
+        for round in first_round..=last_round {
             task.round = round;
             self.set_status(conversation, task, status::WORKING)?;
             let worker_setup = || TurnSetup {
@@ -1168,9 +1173,49 @@ impl Core {
                     None => self.set_status(conversation, task, status::APPROVED),
                 };
             }
+            let text = tasks::findings_text(&verdict.findings);
+            if previous.as_deref() == Some(text.as_str()) {
+                let report = task.report.take().unwrap_or_default();
+                task.report = Some(format!(
+                    "{report}\n\n[runtime] the verifier repeated the same findings; \
+                     the worker is not getting closer"
+                ));
+                return self.set_status(conversation, task, status::NEEDS_USER);
+            }
+            previous = Some(text);
             findings = verdict.findings;
         }
         self.set_status(conversation, task, status::NEEDS_USER)
+    }
+
+    /// Whether `specs` asks for the same work as the last plan of the
+    /// conversation that ran (ids aside).
+    fn repeats_a_plan_that_ran(
+        &self,
+        conversation: &str,
+        plan_id: &str,
+        specs: &[TaskSpec],
+    ) -> Result<bool> {
+        let work = |spec: &TaskSpec| {
+            (
+                spec.title.clone(),
+                spec.goal.clone(),
+                spec.kind,
+                spec.writes,
+            )
+        };
+        let Some(earlier) = self.store.last_plan_that_ran(conversation, plan_id)? else {
+            return Ok(false);
+        };
+        let mut before: Vec<_> = earlier
+            .iter()
+            .filter_map(|task| serde_json::from_value::<TaskSpec>(task.spec.clone()).ok())
+            .map(|spec| work(&spec))
+            .collect();
+        let mut now: Vec<_> = specs.iter().map(work).collect();
+        before.sort();
+        now.sort();
+        Ok(before == now)
     }
 
     /// Sends the ```message blocks of `answer` and returns the answer

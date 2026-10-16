@@ -560,6 +560,26 @@ impl Store {
         }
     }
 
+    /// The latest plan of the conversation other than `except` that was
+    /// accepted and ran (not only proposed or sent back).
+    pub fn last_plan_that_ran(
+        &self,
+        conversation: &str,
+        except: &str,
+    ) -> Result<Option<Vec<Task>>> {
+        let plan_id: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT plan_id FROM tasks WHERE conversation_id=?1 AND plan_id<>?2
+                   AND status NOT IN ('proposed','revised')
+                 ORDER BY created_ms DESC, rowid DESC LIMIT 1",
+                params![conversation, except],
+                |row| row.get(0),
+            )
+            .optional()?;
+        plan_id.map(|plan_id| self.plan(&plan_id)).transpose()
+    }
+
     /// Tasks of one plan, in the orchestrator's order.
     pub fn plan(&self, plan_id: &str) -> Result<Vec<Task>> {
         let db = self.db();

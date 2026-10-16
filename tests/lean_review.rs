@@ -5,6 +5,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const AGENT: &str = r#"
+def bump(name):
+    import os
+    path = os.path.join(os.path.dirname(sys.argv[0]), name)
+    n = int(open(path).read()) + 1 if os.path.exists(path) else 1
+    open(path, "w").write(str(n))
+    return n
 def cover(answer):
     import re
     ids = re.findall(r"^- ([RC][0-9]+): ", prompt, re.M)
@@ -188,12 +194,12 @@ else:
 }
 
 #[test]
-fn autonomous_plans_stop_for_the_user_after_a_few_rounds() {
+fn autonomous_plans_go_on_until_one_repeats_a_plan_that_ran() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
         true,
-        r#"answer = plan(task("t1", "Again"))"#,
+        r#"answer = plan(task("t1", "Step " + str(min(bump("plans"), 4))))"#,
         r#"
 if "You verify" in prompt or "You review a plan" in prompt or "new plan:" in prompt \
         or "You audit" in prompt or "next plan:" in prompt:
@@ -209,12 +215,70 @@ else:
         .iter()
         .map(|plan| plan["automatic"] == true)
         .collect();
-    assert_eq!(automatic, [true, true, true, false]);
+    // Steps 1–4 run on their own; the second "Step 4" waits for the user.
+    assert_eq!(automatic, [true, true, true, true, false]);
     assert!(
-        proposed[3]["waiting"]
+        proposed[4]["waiting"]
             .as_str()
             .unwrap()
-            .contains("without you")
+            .contains("same plan already ran")
+    );
+}
+
+#[test]
+fn autonomous_rounds_go_on_while_the_worker_gets_closer() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "found problems" in prompt:
+    say("worker", "report")
+elif "You verify" in prompt or "updated report" in prompt:
+    n = bump("verdicts")
+    say("verifier", verdict(n >= 5, [] if n >= 5 else [{"severity": "high", "issue": "case %d" % n, "where": "a"}]))
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "napraw");
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert_eq!(task.round, 5, "more rounds than supervised mode runs alone");
+}
+
+#[test]
+fn a_verifier_repeating_its_findings_stops_the_rounds() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "found problems" in prompt:
+    say("worker", "report")
+elif "You verify" in prompt or "updated report" in prompt:
+    say("verifier", verdict(False, [{"severity": "high", "issue": "still wrong", "where": "a"}]))
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "napraw");
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "needs_user");
+    assert_eq!(task.round, 2);
+    assert!(
+        task.report
+            .as_deref()
+            .unwrap()
+            .contains("repeated the same findings")
     );
 }
 

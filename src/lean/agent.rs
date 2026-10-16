@@ -747,13 +747,14 @@ echo '{"type":"turn.completed","usage":{}}'
         let marker = dir.path().join("alive");
         let spec = script_spec(
             dir.path(),
-            &format!("(sleep 3; touch '{}') &\n{RESULT}", marker.display()),
+            &format!("(sleep 5; touch '{}') &\n{RESULT}", marker.display()),
         );
         let started = std::time::Instant::now();
         let outcome = run(&spec, "hi", &AtomicBool::new(false), &mut |_| {}).unwrap();
         assert_eq!(outcome.text, "ok");
-        assert!(started.elapsed() < Duration::from_millis(2900));
-        std::thread::sleep(Duration::from_millis(3500) - started.elapsed());
+        // Well under the descendant's sleep, with room for a loaded machine.
+        assert!(started.elapsed() < Duration::from_millis(4500));
+        std::thread::sleep(Duration::from_millis(5500) - started.elapsed());
         assert!(!marker.exists(), "a descendant kept running");
     }
 }

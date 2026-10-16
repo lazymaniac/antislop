@@ -68,10 +68,12 @@ Read-only modes are not a confinement: agy's plan mode was observed running
    that fails to run shows the plan with the error.
 3. **Plan approval.** `supervised`: the user accepts the plan (one key).
    `autonomous`: a plan the verifier approved starts at once; one it did not
-   approve, or a fourth plan in a row without a user message, waits for the
-   user. Deviation from design §6.2: correction rounds inside a task run
-   without asking in both modes; asking at every round is what made the first
-   runtime unusable.
+   approve, or one that asks for the same work as the last plan that ran
+   (after the user's last message), waits for the user. There is no count of
+   plans (design §14: no limits in the MVP). Deviation from design §6.2:
+   in supervised mode the first three correction rounds of a task run
+   without asking, then the task waits for the user; asking at every round
+   is what made the first runtime unusable.
 4. **Task.** The worker runs (worktree if `writes`, otherwise the project
    read-only). A writer's changes are committed in its worktree by the runtime.
    With `workspace.mode = "in-place"` writers work in the project itself
@@ -84,8 +86,10 @@ Read-only modes are not a confinement: agy's plan mode was observed running
    items (`C1`…) are its numbered obligations. It reads the files itself and
    returns `{approved, findings, coverage}`, where `coverage` accounts for
    every obligation as `ok`, `issue` or `n/a`, each with a note. Findings
-   resume the worker's session; the loop is bounded (3 rounds), then the task
-   waits for the user.
+   resume the worker's session. Supervised: after three rounds the task waits
+   for the user. Autonomous: rounds go on until approval; a verifier that
+   repeats its findings word for word means the worker is not getting closer,
+   and the task waits for the user.
 6. **Integration.** An approved writer's work is squashed into one change
    and landed on the user's current branch, one integration at a time. With
    `local_commits` it becomes one commit (cherry-pick); otherwise it is left as
@@ -271,10 +275,13 @@ replaced when idle. The socket is `<state>/core.sock`, or
   happened; a writer continues in its worktree (or from its last result); a
   change that was approved but could not be integrated is integrated again
   without another worker turn.
-- At most four tasks of a plan run at once.
+- Every task whose dependencies are approved runs at once (no concurrency
+  limit, design §14); writers land one at a time, and in place they work one
+  at a time.
 - No plan is shown to the user, or run, without passing through the plan
   verifier; an autonomous conversation never runs a plan the verifier did not
-  approve, and stops for the user after three plans in a row.
+  approve, and stops for the user when a plan repeats the work of the last
+  one that ran.
 - The audit counts as part of the running plan: it can be cancelled and keeps
   the conversation busy, and the orchestrator starts on the results before the
   conversation can look idle.
