@@ -54,6 +54,12 @@ pub struct Agent {
     /// Finished turns, and how many of them the CLI reported tokens for.
     pub turns: u32,
     pub reported: u32,
+    /// Time spent in finished turns whose start and end times are known,
+    /// and the last such turn's.
+    pub busy_ms: u64,
+    pub last_ms: Option<u64>,
+    /// When the running turn started, if known.
+    started_ms: Option<i64>,
     /// Sums of what was reported; `None` while nothing was.
     pub tokens_in: Option<u64>,
     pub tokens_out: Option<u64>,
@@ -245,6 +251,7 @@ impl View {
                 let agent = self.agents.entry(key.clone()).or_default();
                 agent.provider = provider;
                 agent.running = true;
+                agent.started_ms = event["created_ms"].as_i64().filter(|ms| *ms > 0);
                 agent.activity = "zaczyna turę".into();
                 self.session(&key, "── tura".into());
                 self.roles.insert(turn.to_owned(), key);
@@ -303,6 +310,12 @@ impl View {
                     let agent = self.agents.entry(key.clone()).or_default();
                     agent.running = false;
                     agent.turns += 1;
+                    let ended = event["created_ms"].as_i64().filter(|ms| *ms > 0);
+                    if let (Some(start), Some(end)) = (agent.started_ms.take(), ended) {
+                        let took = end.saturating_sub(start).max(0) as u64;
+                        agent.busy_ms += took;
+                        agent.last_ms = Some(took);
+                    }
                     agent.activity = outcome.clone();
                     self.session(&key, outcome);
                 }
@@ -651,6 +664,16 @@ pub fn polish(status: &str) -> &str {
     }
 }
 
+/// A duration as people say it: `45 s`, `3 min 12 s`, `2 h 5 min`.
+pub fn duration(ms: u64) -> String {
+    let seconds = ms / 1000;
+    match seconds {
+        0..60 => format!("{seconds} s"),
+        60..3600 => format!("{} min {} s", seconds / 60, seconds % 60),
+        _ => format!("{} h {} min", seconds / 3600, seconds % 3600 / 60),
+    }
+}
+
 /// Agents' text may carry terminal escapes; keep it printable.
 pub fn clean(text: &str) -> String {
     text.chars()
@@ -972,6 +995,33 @@ mod tests {
         assert!(!view.stale(&view.comments[&1]));
         view.apply(&plan(7, "p2"));
         assert!(view.stale(&view.comments[&1]));
+    }
+
+    #[test]
+    fn turn_times_add_up_only_when_known() {
+        let mut view = View::default();
+        let at = |seq, id: &str, kind: &str, ms: i64| {
+            let mut event = event(
+                seq,
+                Some(id),
+                kind,
+                json!({"role": "worker:uuid1", "status": "done"}),
+            );
+            event["created_ms"] = json!(ms);
+            event
+        };
+        for event in [
+            at(1, "a", "turn_started", 0),
+            at(2, "a", "turn_finished", 5_000),
+            at(3, "b", "turn_started", 10_000),
+            at(4, "b", "turn_finished", 85_000),
+        ] {
+            view.apply(&event);
+        }
+        let agent = view.agents.values().next().unwrap();
+        assert_eq!(agent.turns, 2);
+        assert_eq!((agent.busy_ms, agent.last_ms), (75_000, Some(75_000)));
+        assert_eq!(duration(agent.busy_ms), "1 min 15 s");
     }
 
     #[test]

@@ -183,14 +183,15 @@ the user's version recoverable.
 - `tasks(id, conversation_id, plan_id, position, spec, status, round, report, verdict, base, result, created_ms)`
 - `mail(id, conversation_id, sender, recipient, kind, text, created_ms, delivered_turn, delivered_ms)`
 - `comments(id, conversation_id, plan_id, target, label, text, status, message, created_ms, updated_ms)`
-- `events(seq, conversation_id, turn_id, kind, payload)` — append-only; tool
+- `events(seq, conversation_id, turn_id, kind, payload, created_ms)` — append-only; tool
   calls are stored as a name and a one-line detail, never their output.
 - `pauses(conversation_id)` and `modes(conversation_id, autonomous)` — what
   the user set for a conversation.
 
-`PRAGMA user_version` holds the schema version (1). Tables are only added;
-a build that finds a newer version refuses the state instead of rewriting
-it.
+`PRAGMA user_version` holds the schema version (2). A build migrates an
+older state on open (1 → 2 gave events their time; earlier events keep 0,
+unknown) and refuses a newer one instead of rewriting it. An agent's details
+show its time in turns where both ends are known.
 
 Writer worktrees live in `<state>/worktrees/<task>`, removed after a clean
 integration. A real nine-task analysis of this repository (40 agent turns,

@@ -53,6 +53,8 @@ pub struct Event {
     pub turn_id: Option<String>,
     pub kind: String,
     pub payload: Value,
+    /// When it was recorded; 0 for events from before schema 2.
+    pub created_ms: i64,
 }
 
 /// A message to one agent, delivered into its next turn. `sender` and
@@ -131,7 +133,7 @@ impl TurnStatus {
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Tables only ever get added; a change to an existing one raises it and
 /// migrates from the version found.
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -162,7 +164,8 @@ impl Store {
              CREATE TABLE IF NOT EXISTS events(
                seq INTEGER PRIMARY KEY AUTOINCREMENT,
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               turn_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL);
+               turn_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL,
+               created_ms INTEGER NOT NULL DEFAULT 0);
              CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, seq);
              CREATE INDEX IF NOT EXISTS turns_by_conversation ON turns(conversation_id, role, started_ms);
              CREATE INDEX IF NOT EXISTS events_by_conversation ON events(conversation_id, seq);
@@ -194,6 +197,17 @@ impl Store {
                conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
                autonomous INTEGER NOT NULL);",
         )?;
+        // 1 → 2: events got their time; earlier ones keep 0, unknown.
+        let timed: bool = connection.query_row(
+            "SELECT count(*) FROM pragma_table_info('events') WHERE name='created_ms'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !timed {
+            connection.execute_batch(
+                "ALTER TABLE events ADD COLUMN created_ms INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
         connection.pragma_update(None, "user_version", SCHEMA)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -263,7 +277,7 @@ impl Store {
         )?;
         let seq = tx.last_insert_rowid() as u64;
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'message',?2)",
+            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![
                 conversation,
                 serde_json::json!({"seq":seq,"author":author,"text":text}).to_string()
@@ -673,7 +687,7 @@ impl Store {
             ..mail.clone()
         };
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'mail',?2)",
+            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'mail',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![conversation, serde_json::to_value(&mail)?.to_string()],
         )?;
         tx.commit()?;
@@ -712,8 +726,8 @@ impl Store {
         )?;
         let message = tx.last_insert_rowid() as u64;
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload)
-             VALUES(?1,NULL,'message',?2)",
+            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms)
+             VALUES(?1,NULL,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![
                 conversation,
                 serde_json::json!({"seq": message, "author": "user", "text": text}).to_string()
@@ -730,7 +744,7 @@ impl Store {
             ..comment.clone()
         };
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'comment',?2)",
+            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![conversation, serde_json::to_value(&comment)?.to_string()],
         )?;
         tx.commit()?;
@@ -751,7 +765,7 @@ impl Store {
             .pop()
             .ok_or_else(|| Error::Invalid(format!("no comment {id}")))?;
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'comment',?2)",
+            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![conversation, serde_json::to_value(&comment)?.to_string()],
         )?;
         tx.commit()?;
@@ -775,7 +789,7 @@ impl Store {
         };
         if changed > 0 {
             tx.execute(
-                "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'paused',?2)",
+                "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'paused',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
                 params![conversation, serde_json::json!({"paused": paused}).to_string()],
             )?;
         }
@@ -802,7 +816,7 @@ impl Store {
                 params![conversation, autonomous],
             )?;
             tx.execute(
-                "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'mode',?2)",
+                "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'mode',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
                 params![
                     conversation,
                     serde_json::json!({"autonomous": autonomous}).to_string()
@@ -902,7 +916,7 @@ impl Store {
             )?;
         }
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,?2,'mail_delivered',?3)",
+            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,?2,'mail_delivered',?3,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![conversation, turn, serde_json::json!({"ids": ids}).to_string()],
         )?;
         tx.commit()?;
@@ -918,7 +932,7 @@ impl Store {
     ) -> Result<u64> {
         let db = self.db();
         db.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,?2,?3,?4)",
+            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![conversation, turn, kind, payload.to_string()],
         )?;
         Ok(db.last_insert_rowid() as u64)
@@ -927,7 +941,7 @@ impl Store {
     pub fn events_since(&self, conversation: &str, after: u64, limit: usize) -> Result<Vec<Event>> {
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT seq,turn_id,kind,payload FROM events
+            "SELECT seq,turn_id,kind,payload,created_ms FROM events
              WHERE conversation_id=?1 AND seq>?2 ORDER BY seq LIMIT ?3",
         )?;
         let rows =
@@ -937,15 +951,17 @@ impl Store {
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
                 ))
             })?;
         rows.map(|row| {
-            let (seq, turn_id, kind, payload) = row?;
+            let (seq, turn_id, kind, payload, created_ms) = row?;
             Ok(Event {
                 seq: seq as u64,
                 turn_id,
                 kind,
                 payload: serde_json::from_str(&payload)?,
+                created_ms,
             })
         })
         .collect()
@@ -972,6 +988,31 @@ mod tests {
         drop(connection);
         let error = Store::open(&path).err().unwrap();
         assert!(error.to_string().contains("newer antislop"), "{error}");
+    }
+
+    #[test]
+    fn a_schema_1_state_gains_event_times() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core.db");
+        let old = Connection::open(&path).unwrap();
+        old.execute_batch(
+            "CREATE TABLE conversations(id TEXT PRIMARY KEY, project TEXT NOT NULL, created_ms INTEGER NOT NULL);
+             CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,
+               conversation_id TEXT NOT NULL REFERENCES conversations(id),
+               turn_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL);
+             INSERT INTO conversations VALUES('c', '/p', 0);
+             INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES('c',NULL,'old','{}');
+             PRAGMA user_version=1;",
+        )
+        .unwrap();
+        drop(old);
+        let store = Store::open(&path).unwrap();
+        store
+            .append_event("c", None, "new", &serde_json::json!({}))
+            .unwrap();
+        let events = store.events_since("c", 0, 10).unwrap();
+        assert_eq!(events[0].created_ms, 0, "unknown, not invented");
+        assert!(events[1].created_ms > 1_700_000_000_000);
     }
 
     #[test]

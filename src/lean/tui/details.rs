@@ -2,7 +2,7 @@
 //! messages it sent and received, and what it delivered.
 
 use super::super::tasks::{TaskSpec, obligations};
-use super::view::{View, agent_name, dim, polish, wrap};
+use super::view::{View, agent_name, dim, duration, polish, wrap};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
@@ -79,6 +79,13 @@ impl Details {
                     lines.push(plain(format!("CLI: {}", agent.provider)));
                     if agent.turns > 0 {
                         lines.push(plain(format!("Tokeny: {}", agent.tokens())));
+                    }
+                    if let Some(last) = agent.last_ms {
+                        lines.push(plain(format!(
+                            "Czas w turach: {} (ostatnia {})",
+                            duration(agent.busy_ms),
+                            duration(last)
+                        )));
                     }
                 }
                 if let Some(task) = task {
