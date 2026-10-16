@@ -166,6 +166,21 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
     eprintln!("antislop core ready at {}", socket.display());
+    // A daemon whose state was deleted (or whose socket was taken over) has
+    // nobody to serve: it leaves once idle instead of lingering.
+    {
+        let core = core.clone();
+        let database = state.join("core.db");
+        let socket = socket.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(2));
+                if !(database.exists() && socket.exists()) && !core.busy() {
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let core = core.clone();

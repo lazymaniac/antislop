@@ -334,6 +334,8 @@ replaced when idle. The socket is `<state>/core.sock`, or
   scope outside the project are passed to the CLI (`--add-dir`,
   `--include-directories`) only for read-only agents, since a writer's CLI
   would make them writable (design §18 scenario 15).
+- An idle daemon whose state directory or socket is gone exits within a few
+  seconds; nothing lingers after `.antislop` is deleted.
 - The daemon runs with the configuration it read at start. A frontend that
   finds `architect.toml` changed restarts an idle daemon; a busy one keeps
   its configuration for the running work and the frontend says the new one

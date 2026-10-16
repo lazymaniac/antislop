@@ -341,3 +341,39 @@ fn a_changed_configuration_waits_for_running_work_and_says_so() {
         .call(&architect::lean::daemon::Request::Shutdown)
         .unwrap();
 }
+
+#[test]
+fn a_daemon_whose_state_is_deleted_leaves() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path().canonicalize().unwrap();
+    let project = dir.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(&dir);
+    std::fs::write(
+        dir.join("architect.toml"),
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/architect.toml"
+        ))
+        .unwrap()
+        .replace(
+            "binary = \"codex\"",
+            &format!("binary = {:?}", codex.to_string_lossy()),
+        ),
+    )
+    .unwrap();
+    chat(&dir, &project, "pierwsza");
+    let pid = architect::lean::daemon::Client::at(&dir.join("state"))
+        .call(&architect::lean::daemon::Request::Identity)
+        .unwrap()["pid"]
+        .as_i64()
+        .unwrap() as libc::pid_t;
+
+    std::fs::remove_dir_all(dir.join("state")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // SAFETY: signal 0 only asks whether the process exists.
+    while unsafe { libc::kill(pid, 0) } == 0 {
+        assert!(Instant::now() < deadline, "the daemon lingered");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
