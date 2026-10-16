@@ -4,6 +4,7 @@
 //! so typing, scrolling and sending stay instant.
 
 mod details;
+mod diffview;
 mod graph;
 pub mod view;
 
@@ -14,6 +15,7 @@ use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
 };
 use details::{COMMENTS, Details, RESULT, TABS};
+use diffview::DiffView;
 use graph::{Canvas, Filter, Graph};
 use ratatui::{
     Frame,
@@ -40,6 +42,12 @@ enum Update {
     },
     Conversation(String),
     Notice(String),
+    /// A task's change, for the diff view of `task`.
+    Diff {
+        generation: u64,
+        task: String,
+        reply: std::result::Result<Value, String>,
+    },
     /// A task as the daemon stores it, for the details of `key`.
     Task {
         generation: u64,
@@ -79,6 +87,7 @@ struct App {
     /// The graph's top-left corner shown in its panel.
     offset: (u16, u16),
     details: Option<Details>,
+    diff: Option<DiffView>,
     editor: Option<Editor>,
 }
 
@@ -90,6 +99,7 @@ impl App {
         self.view = View::default();
         self.scroll = 0;
         self.details = None;
+        self.diff = None;
         self.editor = None;
         self.selected = ORCHESTRATOR.into();
         self.offset = (0, 0);
@@ -175,6 +185,65 @@ impl App {
         });
     }
 
+    fn open_diff(&mut self, key: &str) {
+        if let Some((_, task)) = key.split_once(':') {
+            self.diff = Some(DiffView::new(task.to_owned()));
+            self.fetch_diff();
+        }
+    }
+
+    fn fetch_diff(&self) {
+        let (Some(diff), Some(plan)) = (&self.diff, &self.view.plan) else {
+            return;
+        };
+        let request = Request::Diff {
+            conversation: self.conversation.clone(),
+            plan: plan.clone(),
+            id: diff.task.clone(),
+        };
+        let task = diff.task.clone();
+        let generation = self.generation;
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        std::thread::spawn(move || {
+            let reply = client.call(&request).map_err(|error| error.to_string());
+            let _ = updates.send(Update::Diff {
+                generation,
+                task,
+                reply,
+            });
+        });
+    }
+
+    fn diff_key(&mut self, key: event::KeyEvent) {
+        let Some(diff) = &mut self.diff else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.diff = None,
+            KeyCode::Char('c') => {
+                if let Some(target) = diff.target() {
+                    self.editor = Some(Editor {
+                        target,
+                        text: String::new(),
+                    });
+                }
+            }
+            KeyCode::Char('r') => self.fetch_diff(),
+            KeyCode::Char('R') => {
+                if let Some(plan) = self.view.plan.clone() {
+                    let request = Request::Review {
+                        conversation: self.conversation.clone(),
+                        plan,
+                        id: diff.task.clone(),
+                    };
+                    self.request(request, Some("recenzja kodu uruchomiona"));
+                }
+            }
+            code => diff.key(code),
+        }
+    }
+
     fn submit(&mut self) {
         let text = self.input.trim().to_owned();
         self.input.clear();
@@ -237,6 +306,7 @@ impl App {
             KeyCode::Char('r') if control => self.command("/resume"),
             KeyCode::Char('n') if control => self.new_conversation(),
             _ if self.editor.is_some() => self.editor_key(key),
+            _ if self.diff.is_some() => self.diff_key(key),
             _ if self.details.is_some() => self.details_key(key),
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = match self.focus {
@@ -285,6 +355,10 @@ impl App {
             KeyCode::Esc => self.focus = Focus::Chat,
             KeyCode::Char('q') => return false,
             KeyCode::Char('f') => self.filter = self.filter.next(),
+            KeyCode::Char('d') => {
+                let key = self.selected.clone();
+                self.open_diff(&key);
+            }
             KeyCode::Char('c') => {
                 self.editor = Some(Editor {
                     target: self.selected.clone(),
@@ -357,13 +431,18 @@ impl App {
             }
             KeyCode::Down if on_comments => details.comment += 1,
             KeyCode::Up if on_comments => details.comment = details.comment.saturating_sub(1),
-            KeyCode::Char(ch @ ('r' | 'o' | 'd')) if comment.is_some() => {
+            KeyCode::Char(ch @ ('r' | 'o' | 'x')) if comment.is_some() => {
                 let status = match ch {
                     'r' => "resolved",
                     'o' => "open",
                     _ => "deleted",
                 };
                 self.set_comment(comment.expect("selected"), status);
+            }
+            KeyCode::Char('d') => {
+                let key = details.key.clone();
+                self.open_diff(&key);
+                return;
             }
             KeyCode::Right | KeyCode::Tab => {
                 details.tab = (details.tab + 1) % TABS.len();
@@ -391,7 +470,9 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        if let Some(details) = &mut self.details {
+        if let Some(diff) = &mut self.diff {
+            diff.draw(frame, &self.view);
+        } else if let Some(details) = &mut self.details {
             details.draw(frame, &self.view);
         } else {
             self.draw_main(frame);
@@ -482,7 +563,7 @@ impl App {
                     "Enter wyślij (@t2 … do agenta) · Alt+Enter nowa linia · {plan}Ctrl+X anuluj · Tab zespół · Ctrl+N nowa rozmowa · Esc wyjdź"
                 ),
                 Focus::Graph => format!(
-                    "strzałki wybór · Enter szczegóły · c skomentuj · f filtr · {plan}Ctrl+X anuluj · Tab czat · q wyjdź"
+                    "strzałki wybór · Enter szczegóły · d diff · c skomentuj · f filtr · {plan}Ctrl+X anuluj · Tab czat · q wyjdź"
                 ),
             }
         });
@@ -644,6 +725,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         filter: Filter::All,
         offset: (0, 0),
         details: None,
+        diff: None,
         editor: None,
     };
     app.open(conversation);
@@ -679,6 +761,16 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                         }
                     }
                     Update::Task { .. } => {}
+                    Update::Diff {
+                        generation,
+                        task,
+                        reply,
+                    } if generation == app.generation => {
+                        if let Some(diff) = app.diff.as_mut().filter(|diff| diff.task == task) {
+                            diff.load(reply);
+                        }
+                    }
+                    Update::Diff { .. } => {}
                 }
             }
             terminal.draw(|frame| app.draw(frame))?;

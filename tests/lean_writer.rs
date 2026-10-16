@@ -40,6 +40,10 @@ REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:")
 if any(marker in prompt for marker in REVIEW):
     session = "reviewer"
     answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```"
+elif "You review a code change" in prompt:
+    session = "code-review"
+    answer = "```verdict\n" + json.dumps({"approved": False, "findings": [
+        {"severity": "medium", "issue": "greeting lacks a name", "where": "hello.txt:1"}]}) + "\n```"
 elif "You verify" in prompt:
     session = "verifier"
     answer = "```verdict\n" + json.dumps({"approved": "git diff" in prompt, "findings": []}) + "\n```"
@@ -234,4 +238,94 @@ fn resuming_integrates_an_approved_change_once_the_user_is_done() {
         .count();
     assert_eq!(calls_after, calls_before, "no new worker turn");
     assert!(core.resume_plan(&conversation, &task.plan_id).is_err());
+}
+
+#[test]
+fn the_user_reads_a_change_comments_a_line_and_asks_for_a_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core.store.latest_plan(&conversation).unwrap().remove(0);
+    let plan = task.plan_id.clone();
+
+    let diff = core.diff(&conversation, &plan, "t1").unwrap();
+    let file = &diff["files"][0];
+    assert_eq!(
+        (
+            &file["path"],
+            &file["status"],
+            &file["added"],
+            &file["removed"]
+        ),
+        (
+            &Value::from("hello.txt"),
+            &Value::from("added"),
+            &Value::from(1),
+            &Value::from(0)
+        )
+    );
+    assert_eq!(file["lines"][1]["text"], "from worker");
+    assert_eq!(file["lines"][1]["new"], 1);
+    assert_eq!(diff["head"], task.result.clone().unwrap().as_str());
+
+    core.comment(&conversation, "diff:t1:hello.txt:1", "dodaj imię")
+        .unwrap();
+    wait_idle(&core, &conversation);
+    core.review_change(&conversation, &plan, "t1").unwrap();
+    assert!(
+        core.review_change(&conversation, &plan, "t1").is_err(),
+        "one review at a time"
+    );
+    wait_idle(&core, &conversation);
+
+    let reviews: Vec<Value> = core
+        .store
+        .events_since(&conversation, 0, 10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "code_review")
+        .map(|event| event.payload)
+        .collect();
+    assert_eq!(reviews.len(), 2);
+    assert_eq!(reviews[1]["approved"], false);
+    assert_eq!(reviews[1]["findings"][0]["issue"], "greeting lacks a name");
+    let calls: Vec<Value> = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let review = calls
+        .iter()
+        .find(|call| {
+            call["args"]
+                .to_string()
+                .contains("You review a code change")
+        })
+        .unwrap();
+    let prompt = review["args"].to_string();
+    assert!(prompt.contains("dodaj imię") && prompt.contains("line 1 of hello.txt"));
+    assert!(prompt.contains(&format!(
+        "git diff {} {}",
+        task.base.unwrap(),
+        task.result.unwrap()
+    )));
+    assert_eq!(
+        review["cwd"],
+        project.to_str().unwrap(),
+        "the worktree is gone"
+    );
+    let orchestrator = calls.iter().rfind(|call| call["bin"] == "codex").unwrap();
+    assert!(
+        orchestrator["args"]
+            .to_string()
+            .contains("[code review of task t1 \\\"Add greeting\\\", requested by the user]"),
+        "{}",
+        orchestrator["args"]
+    );
+    assert!(
+        core.diff(&conversation, &plan, "t9").is_err(),
+        "unknown task"
+    );
 }

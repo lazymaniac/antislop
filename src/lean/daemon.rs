@@ -92,6 +92,18 @@ pub enum Request {
         id: u64,
         status: String,
     },
+    /// A writer's change as files and numbered lines.
+    Diff {
+        conversation: String,
+        plan: String,
+        id: String,
+    },
+    /// Reviews a writer's change now; findings go to the orchestrator.
+    Review {
+        conversation: String,
+        plan: String,
+        id: String,
+    },
     /// One task of a plan with its latest report and verdict.
     Task {
         plan: String,
@@ -214,15 +226,19 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
             id,
             status,
         } => json!(core.set_comment(&conversation, id, &status)?),
-        Request::Task { plan, id } => {
-            let task = core
-                .store
-                .plan(&plan)?
-                .into_iter()
-                .find(|task| task.spec["id"] == id.as_str());
-            json!(
-                task.ok_or_else(|| crate::Error::Invalid(format!("no task {id} in plan {plan}")))?
-            )
+        Request::Task { plan, id } => json!(core.task(&plan, &id)?),
+        Request::Diff {
+            conversation,
+            plan,
+            id,
+        } => core.diff(&conversation, &plan, &id)?,
+        Request::Review {
+            conversation,
+            plan,
+            id,
+        } => {
+            core.review_change(&conversation, &plan, &id)?;
+            Value::Null
         }
         Request::Events {
             conversation,

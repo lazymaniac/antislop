@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod cli;
 pub mod daemon;
+pub mod diff;
 pub mod git;
 pub mod store;
 pub mod tasks;
@@ -24,6 +25,11 @@ use tasks::{TaskSpec, Verdict, status};
 
 const ORCHESTRATOR: &str = "orchestrator";
 const RUNTIME: &str = "runtime";
+/// Author of a code review's findings, and how its message starts.
+const CODE_REVIEW: &str = "code-review";
+const CODE_REVIEW_PREFIX: &str = "[code review";
+/// Largest patch the diff view gets.
+const DIFF_LIMIT: usize = 2 * 1024 * 1024;
 /// How a comment's message starts, before its id.
 pub const COMMENT_PREFIX: &str = "[user comment #";
 /// Checks each plan before the user sees it.
@@ -53,6 +59,8 @@ pub struct Core {
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Conversations with a plan running, and its cancel flag.
     plans: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Conversations with a code review the user asked for, and its flag.
+    reviews: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 /// Who runs a turn, where, and with what access.
@@ -100,6 +108,7 @@ impl Core {
             integrating: Mutex::new(()),
             running: Mutex::new(HashMap::new()),
             plans: Mutex::new(HashMap::new()),
+            reviews: Mutex::new(HashMap::new()),
         });
         // Pick up where the previous process stopped: the orchestrator answers
         // what it was answering, and an autonomous conversation resumes its
@@ -214,7 +223,7 @@ impl Core {
 
     /// Stops the orchestrator's turn and any running plan; queued messages stay.
     pub fn cancel(&self, conversation: &str) {
-        for flags in [&self.running, &self.plans] {
+        for flags in [&self.running, &self.plans, &self.reviews] {
             if let Some(flag) = flags.lock().expect("flags mutex").get(conversation) {
                 flag.store(true, Ordering::SeqCst);
             }
@@ -232,12 +241,163 @@ impl Core {
                 .lock()
                 .expect("plans mutex")
                 .contains_key(conversation)
+            && !self
+                .reviews
+                .lock()
+                .expect("reviews mutex")
+                .contains_key(conversation)
     }
 
     /// Whether any conversation has an agent or a plan running.
     pub fn busy(&self) -> bool {
         !self.running.lock().expect("running mutex").is_empty()
             || !self.plans.lock().expect("plans mutex").is_empty()
+            || !self.reviews.lock().expect("reviews mutex").is_empty()
+    }
+
+    /// One task of a plan, by the id the orchestrator gave it.
+    pub fn task(&self, plan: &str, id: &str) -> Result<Task> {
+        self.store
+            .plan(plan)?
+            .into_iter()
+            .find(|task| task.spec["id"] == id)
+            .ok_or_else(|| crate::Error::Invalid(format!("no task {id} in plan {plan}")))
+    }
+
+    /// Where a writer's change can be read: its worktree while it works (the
+    /// working tree against its base), else the project's repository between
+    /// its base and result commits.
+    fn change(&self, conversation: &str, task: &Task) -> Result<(PathBuf, String, Option<String>)> {
+        let id = task.spec["id"].as_str().unwrap_or_default();
+        let base = task.base.clone().ok_or_else(|| {
+            crate::Error::Invalid(format!(
+                "task {id} has no change: it does not write files or has not started"
+            ))
+        })?;
+        let worktree = self.state.join("worktrees").join(&task.id);
+        if worktree.exists() {
+            return Ok((worktree, base, None));
+        }
+        let result = task.result.clone().ok_or_else(|| {
+            crate::Error::Invalid(format!("task {id} has no committed change yet"))
+        })?;
+        let project = PathBuf::from(self.store.conversation(conversation)?.project);
+        Ok((project, base, Some(result)))
+    }
+
+    /// A writer's change as files with per-file counts and numbered lines.
+    pub fn diff(&self, conversation: &str, plan: &str, id: &str) -> Result<serde_json::Value> {
+        let task = self.task(plan, id)?;
+        let (dir, base, result) = self.change(conversation, &task)?;
+        let mut patch = git::patch(&dir, &base, result.as_deref())?;
+        let truncated = patch.len() > DIFF_LIMIT;
+        if truncated {
+            let mut end = DIFF_LIMIT;
+            while !patch.is_char_boundary(end) {
+                end -= 1;
+            }
+            patch.truncate(end);
+        }
+        Ok(json!({
+            "task": id,
+            "base": base,
+            "head": result,
+            "files": diff::parse(&patch),
+            "truncated": truncated,
+        }))
+    }
+
+    /// Reviews a writer's change on the user's request, with the task's
+    /// verifier profile in a session of its own. The findings go to the
+    /// orchestrator; the review never changes the task's status.
+    pub fn review_change(self: &Arc<Self>, conversation: &str, plan: &str, id: &str) -> Result<()> {
+        let task = self.task(plan, id)?;
+        let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
+        let (dir, base, result) = self.change(conversation, &task)?;
+        let cancel = {
+            let mut reviews = self.reviews.lock().expect("reviews mutex");
+            require(
+                !reviews.contains_key(conversation),
+                "a code review is already running",
+            )?;
+            let cancel = Arc::new(AtomicBool::new(false));
+            reviews.insert(conversation.to_owned(), cancel.clone());
+            cancel
+        };
+        let comments: Vec<Comment> = self
+            .store
+            .comments(conversation, "open")?
+            .into_iter()
+            .filter(|comment| {
+                comment.plan_id.as_deref() == Some(plan)
+                    && comment.target.starts_with(&format!("diff:{id}"))
+            })
+            .collect();
+        self.store.append_event(
+            conversation,
+            None,
+            "code_review",
+            &json!({"id": id, "status": "running"}),
+        )?;
+        let core = self.clone();
+        let conversation = conversation.to_owned();
+        std::thread::spawn(move || {
+            let role = format!("code-review:{}", task.id);
+            let setup = TurnSetup {
+                conversation: &conversation,
+                role: role.clone(),
+                profile: core.config.resolve(spec.kind, RoleKind::Verifier),
+                cwd: dir.clone(),
+                add_dirs: vec![],
+                access: agent::Access::ReadOnly,
+                upto_message: 0,
+            };
+            let outcome = core.turn(setup, &cancel, |_| {
+                tasks::code_review_prompt(
+                    &dir.to_string_lossy(),
+                    &spec,
+                    &base,
+                    result.as_deref(),
+                    &comments,
+                )
+            });
+            let review = match outcome {
+                Ok(Some(answer)) => Ok(tasks::parse_verdict(&answer)),
+                Ok(None) => Err(core
+                    .store
+                    .last_turn(&conversation, &role)
+                    .ok()
+                    .flatten()
+                    .and_then(|turn| turn.error)
+                    .unwrap_or_else(|| "no reason recorded".into())),
+                Err(error) => Err(error.to_string()),
+            };
+            let mut payload = review_json(&review);
+            payload["id"] = json!(spec.id);
+            payload["status"] = json!("done");
+            let _ = core
+                .store
+                .append_event(&conversation, None, "code_review", &payload);
+            if let Ok(verdict) = &review {
+                let text = format!(
+                    "{CODE_REVIEW_PREFIX} of task {} \"{}\", requested by the user]\n{}",
+                    spec.id,
+                    spec.title,
+                    if verdict.findings.is_empty() {
+                        "No findings.".to_owned()
+                    } else {
+                        tasks::findings_text(&verdict.findings)
+                    }
+                );
+                let _ = core.store.add_message(&conversation, CODE_REVIEW, &text);
+            }
+            core.reviews
+                .lock()
+                .expect("reviews mutex")
+                .remove(&conversation);
+            core.wake(&conversation);
+        });
+        Ok(())
     }
 
     /// Starts the proposed plan `plan_id`: exactly the one the user saw, even
@@ -1193,15 +1353,23 @@ fn comment_label(target: &str, plan: &[Task]) -> String {
     match target.split_once(':') {
         Some(("worker", id)) => format!("the worker of {}", task(id)),
         Some(("verifier", id)) => format!("the verifier of {}", task(id)),
-        Some(("diff", rest)) => {
-            let mut parts = rest.splitn(3, ':');
-            let id = parts.next().unwrap_or_default();
-            match (parts.next(), parts.next()) {
-                (Some(file), Some(line)) => {
-                    format!("line {line} of {file} in the change of {}", task(id))
-                }
-                (Some(file), None) => format!("{file} in the change of {}", task(id)),
-                _ => format!("the change of {}", task(id)),
+        Some(("diff", _)) => {
+            let Some(diff::Target {
+                task: id,
+                file,
+                line,
+            }) = diff::target(target)
+            else {
+                return target.into();
+            };
+            let change = format!("the change of {}", task(id));
+            match (file, line) {
+                (Some(file), Some(line)) => match line.strip_prefix("old") {
+                    Some(old) => format!("removed line {old} of {file} in {change}"),
+                    None => format!("line {line} of {file} in {change}"),
+                },
+                (Some(file), None) => format!("{file} in {change}"),
+                _ => change,
             }
         }
         _ => match target {

@@ -264,9 +264,9 @@ impl Details {
         frame.render_widget(
             Paragraph::new(Span::styled(
                 if self.tab == COMMENTS {
-                    "←/→ zakładka · ↑/↓ wybór · c skomentuj · r rozwiąż · o otwórz · d usuń · Esc powrót"
+                    "←/→ zakładka · ↑/↓ wybór · c skomentuj · r rozwiąż · o otwórz · x usuń · d diff · Esc powrót"
                 } else {
-                    "←/→ zakładka · ↑/↓ PgUp/PgDn przewiń · c skomentuj · Esc powrót do grafu"
+                    "←/→ zakładka · ↑/↓ PgUp/PgDn przewiń · c skomentuj · d diff · Esc powrót do grafu"
                 },
                 dim(),
             )),

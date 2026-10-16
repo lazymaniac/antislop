@@ -90,6 +90,22 @@ pub fn diff_stat(dir: &Path, base: &str, result: &str) -> Result<String> {
     ok(dir, &["diff", "--stat", base, result])
 }
 
+/// The change from `base` to `rev`, or to the working tree when `rev` is
+/// `None`, as a unified patch with unquoted UTF-8 paths and renames.
+pub fn patch(dir: &Path, base: &str, rev: Option<&str>) -> Result<String> {
+    let mut args = vec![
+        "-c",
+        "core.quotePath=false",
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "-M",
+        base,
+    ];
+    args.extend(rev);
+    ok(dir, &args)
+}
+
 pub fn changed_files(dir: &Path, base: &str, result: &str) -> Result<Vec<String>> {
     Ok(ok(dir, &["diff", "--name-only", "-z", base, result])?
         .split('\0')

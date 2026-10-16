@@ -165,8 +165,9 @@ impl View {
         let key = self.roles.get(turn).cloned().unwrap_or_default();
         match event["kind"].as_str().unwrap_or_default() {
             "message" => match payload["author"].as_str().unwrap_or_default() {
-                // Shown by its `comment` event.
+                // Shown by their `comment` and `code_review` events.
                 "user" if text("text").starts_with(super::super::COMMENT_PREFIX) => {}
+                "code-review" => {}
                 "user" => {
                     self.push(
                         Style::default()
@@ -404,6 +405,19 @@ impl View {
                 }
                 self.review(AUDITOR, payload);
             }
+            "code_review" => {
+                let task = text("id");
+                if payload["status"] == "running" {
+                    self.push(dim(), format!("· recenzja kodu {task} w toku"));
+                } else {
+                    let who = format!("recenzja kodu {task}");
+                    let lines = super::super::cli::review_lines(&who, payload);
+                    for line in &lines {
+                        self.push(Style::default().fg(Color::Yellow), line.clone());
+                    }
+                    self.reviews.insert(format!("worker:{task}"), lines);
+                }
+            }
             "comment" => {
                 let Ok(comment) = serde_json::from_value::<Comment>(payload.clone()) else {
                     return;
@@ -509,16 +523,12 @@ fn review_word(review: &Value) -> String {
 
 /// A human name for a comment's target.
 pub fn target_name(target: &str) -> String {
-    match target.strip_prefix("diff:") {
-        Some(rest) => {
-            let mut parts = rest.splitn(3, ':');
-            let task = parts.next().unwrap_or_default();
-            match (parts.next(), parts.next()) {
-                (Some(file), Some(line)) => format!("{task} diff {file}:{line}"),
-                (Some(file), None) => format!("{task} diff {file}"),
-                _ => format!("{task} diff"),
-            }
-        }
+    match super::super::diff::target(target) {
+        Some(diff) => match (diff.file, diff.line) {
+            (Some(file), Some(line)) => format!("{} diff {file}:{line}", diff.task),
+            (Some(file), None) => format!("{} diff {file}", diff.task),
+            _ => format!("{} diff", diff.task),
+        },
         None => agent_name(target),
     }
 }

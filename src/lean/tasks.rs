@@ -484,6 +484,43 @@ pub fn verifier_followup(report: &str, changes: Option<&str>) -> String {
     )
 }
 
+/// A code review the user asked for on a writer's change.
+pub fn code_review_prompt(
+    dir: &str,
+    task: &TaskSpec,
+    base: &str,
+    result: Option<&str>,
+    comments: &[super::store::Comment],
+) -> String {
+    let range = match result {
+        Some(result) => format!("`git diff {base} {result}`"),
+        None => format!("`git diff {base}` (the working tree is the change)"),
+    };
+    let comments = if comments.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "The user's comments on this change:\n{}\n\n",
+            comments
+                .iter()
+                .map(|comment| format!("- on {}: {}", comment.label, comment.text))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+    format!(
+        "You review a code change the user asked you to look at. The repository \
+         is your current working directory: {dir}. Read the change with {range} \
+         and the surrounding files yourself; work read-only.\n\n\
+         Task: {}\nGoal: {}\nScope: {}\nAlso check: {}\n\n{comments}{}",
+        task.title,
+        task.goal,
+        scope_text(&task.scope),
+        checklist(task.kind),
+        VERDICT_FORMAT
+    )
+}
+
 /// Longest user request handed to a reviewer in one prompt.
 const REQUEST_LIMIT: usize = 60_000;
 

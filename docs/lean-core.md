@@ -125,6 +125,18 @@ resolves or deletes it, every later orchestrator prompt lists it under
 comment grants nothing: work it asks for goes through a plan as usual. Every
 change is a `comment` event carrying the whole comment.
 
+## Diff and code review
+
+A writer's change is read where it is: in its worktree while it works (the
+working tree against its base, so uncommitted edits show; untracked files only
+once the runtime commits them), else in the project's repository between its
+base and result commits. A code review the user asks for runs with the task's
+verifier profile in a session of its own (`code-review:<task>`), read-only, in
+that directory, with the user's open comments on the change in its prompt. It
+records a `code_review` event (running, then the verdict) and sends its
+findings to the orchestrator as a message; it never changes the task's status.
+One code review runs per conversation at a time; Ctrl+X cancels it.
+
 ## State
 
 `core.db`, WAL, normal synchronous:
@@ -151,7 +163,9 @@ recorded whole when its turn ends.
 One JSON request per connection: `identity`, `shutdown`, `conversations`,
 `start`, `send`, `accept`, `resume`, `cancel`, `task{plan, id}` (one stored task with
 its report, verdict and commits), `comment{conversation, target, text}`,
-`comment_status{conversation, id, status}`, and `events{conversation, after, wait_ms}`,
+`comment_status{conversation, id, status}`, `diff{conversation, plan, id}` (a
+writer's change as files with counts and numbered lines, at most 2 MB of
+patch), `review{conversation, plan, id}` (a code review now), and `events{conversation, after, wait_ms}`,
 a long poll returning at most 500 events / 1 MB. A daemon from another build is
 replaced when idle. The socket is `<state>/core.sock`, or
 `/tmp/antislop-<uid>/<hash>.sock` when that path is too long for Unix sockets.
@@ -180,6 +194,10 @@ replaced when idle. The socket is `<state>/core.sock`, or
   on the selected agent (in the graph or its details); a box shows how many
   comments on it are open. On Komentarze, `r` resolves, `o` reopens and `d`
   deletes the selected one; a comment made on an earlier plan is marked so.
+  `d` on a task's agent opens its change full screen: changed files with their
+  status and +/− counts beside the unified diff with old and new line numbers;
+  `c` comments on the selected line (or file), comments show under their lines,
+  `R` asks for a code review and `r` reloads.
   Keys: Enter send, Alt+Enter
   new line, Ctrl+A run the proposed plan, Ctrl+R resume what the plan left
   unfinished, Ctrl+X cancel, PgUp/PgDn scroll, Ctrl+N new conversation, Esc
@@ -264,3 +282,5 @@ replaced when idle. The socket is `<state>/core.sock`, or
    unit tests in `src/lean/tui`).
 10. ✅ Persistent comments on agents and diffs (design §8.5;
    `tests/lean_messages.rs`).
+11. ✅ Diff view with line comments and a code review on request (design §8.6;
+   `tests/lean_writer.rs`, `src/lean/diff.rs`).
