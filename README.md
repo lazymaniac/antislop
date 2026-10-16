@@ -51,6 +51,11 @@ on from now on (the header shows the mode). In line mode, type `/accept`,
 the orchestrator gets a copy). Agents message each other the same
 way.
 
+An agent's details show its CLI, model and effort, tokens as the CLI reported
+them (`niedostępne` when it did not), time spent in turns and, for a stopped
+task, why it stopped. `NO_COLOR=1` drops colors; without a UTF-8 locale, or
+with `ANTISLOP_ASCII=1`, the TUI draws in plain ASCII.
+
 ## How a request runs
 
 1. The orchestrator works in the project directory, read-only, with its CLI's
@@ -66,8 +71,10 @@ way.
    files works in its own git worktree; the runtime commits its work there.
    With `workspace.mode = "in-place"` writers work in your directory itself,
    one at a time, and stop if they touch a file you were editing.
-5. The task's verifier reads the result (and the diff) with a checklist for
-   that kind of work and approves or lists findings; findings go back to the
+5. The task's verifier reads the result (and the diff) and must account for
+   each obligation by id: the task's risks, the checks of every verification
+   and the checklist for that kind of work (`ok`, `issue`, `blocked` or
+   `n/a` with a reason). It approves or lists findings; findings go back to the
    same worker session (supervised: three rounds, then you decide;
    autonomous: until approval, or until the verifier repeats itself).
 6. Approved changes are integrated into your branch one at a time, never over
