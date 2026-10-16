@@ -76,7 +76,14 @@ impl Details {
         match self.tab {
             0 => {
                 if let Some(agent) = agent.filter(|agent| !agent.provider.is_empty()) {
-                    lines.push(plain(format!("CLI: {}", agent.provider)));
+                    let mut cli = format!("CLI: {}", agent.provider);
+                    if let Some(model) = &agent.model {
+                        cli.push_str(&format!(" · model {model}"));
+                    }
+                    if let Some(effort) = &agent.effort {
+                        cli.push_str(&format!(" · effort {effort}"));
+                    }
+                    lines.push(plain(cli));
                     if agent.turns > 0 {
                         lines.push(plain(format!("Tokeny: {}", agent.tokens())));
                     }

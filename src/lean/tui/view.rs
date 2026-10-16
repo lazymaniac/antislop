@@ -47,6 +47,9 @@ pub struct TaskRow {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Agent {
     pub provider: String,
+    /// The model and native effort of its latest turn, when configured.
+    pub model: Option<String>,
+    pub effort: Option<String>,
     pub running: bool,
     /// The current tool call while running, else the last outcome.
     pub activity: String,
@@ -250,6 +253,8 @@ impl View {
                 }
                 let agent = self.agents.entry(key.clone()).or_default();
                 agent.provider = provider;
+                agent.model = payload["model"].as_str().map(str::to_owned);
+                agent.effort = payload["effort"].as_str().map(str::to_owned);
                 agent.running = true;
                 agent.started_ms = event["created_ms"].as_i64().filter(|ms| *ms > 0);
                 agent.activity = "zaczyna turę".into();
