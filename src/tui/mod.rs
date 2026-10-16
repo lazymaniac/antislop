@@ -84,6 +84,56 @@ pub fn run_options(options: options::Options) -> crate::Result<()> {
     }
     run_with_backend(backend, options.run_id)
 }
+/// A daemon outlives its frontend, so a rebuilt frontend may find a daemon
+/// still running an older build. Stop it when idle and report `true` so the
+/// caller starts one from `executable`; never interrupt running work.
+fn stop_stale_daemon(state: &Path, executable: &Path) -> crate::Result<bool> {
+    use crate::ipc::{Operation, Request, call};
+    let request = |operation| Request {
+        version: crate::ipc::PROTOCOL_VERSION,
+        request_id: crate::id(),
+        idempotency_key: None,
+        operation,
+    };
+    let identity = call(state, &request(Operation::Identity))?;
+    let Some(identity) = identity.data else {
+        return Err(crate::Error::Invalid(format!(
+            "the daemon for {} runs an older antislop build that cannot be replaced automatically; stop it (pkill -f 'antislop daemon') and start again",
+            state.display()
+        )));
+    };
+    if identity["build"].as_str() == Some(crate::ipc::build_identity(executable)?.as_str()) {
+        return Ok(false);
+    }
+    if identity["busy"] == true {
+        return Err(crate::Error::Invalid(format!(
+            "the daemon (pid {}) runs a different antislop build and is executing work; reopen after it finishes",
+            identity["pid"]
+        )));
+    }
+    let stopped = call(state, &request(Operation::Shutdown))?;
+    if let Some(error) = stopped.error {
+        return Err(crate::Error::Invalid(error));
+    }
+    // The old daemon holds the state lock until its process exits.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(state.join("daemon.lock"))?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    // SAFETY: flock operates on the owned descriptor, which is closed on return.
+    while unsafe {
+        libc::flock(
+            std::os::fd::AsRawFd::as_raw_fd(&lock),
+            libc::LOCK_EX | libc::LOCK_NB,
+        )
+    } != 0
+    {
+        crate::require(Instant::now() < deadline, "old daemon did not stop")?;
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(true)
+}
 /// Detaching the frontend does not stop its daemon. A refused connection to an
 /// owned socket may start a daemon; only its locked server removes stale sockets.
 pub fn connect_or_start_daemon(
@@ -118,7 +168,9 @@ pub fn connect_or_start_daemon(
             match crate::ipc::call(state, &request) {
                 Ok(response) => {
                     crate::require(response.error.is_none(), "daemon rejected UI connection")?;
-                    return Ok(None);
+                    if !stop_stale_daemon(state, executable)? {
+                        return Ok(None);
+                    }
                 }
                 Err(crate::Error::Io(error))
                     if matches!(

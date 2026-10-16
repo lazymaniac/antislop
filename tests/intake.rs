@@ -127,6 +127,57 @@ fn frontend_starts_one_daemon_and_reuses_it() {
 }
 
 #[test]
+fn frontend_replaces_an_idle_daemon_from_another_build() {
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let original = std::path::Path::new(env!("CARGO_BIN_EXE_antislop"));
+    let rebuilt = root.path().join("antislop");
+    std::fs::copy(original, &rebuilt).unwrap();
+    struct Cleanup(std::process::Child);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut old = Cleanup(
+        architect::tui::connect_or_start_daemon(&state, original)
+            .unwrap()
+            .expect("first connection should start the daemon"),
+    );
+    let _new = Cleanup(
+        architect::tui::connect_or_start_daemon(&state, &rebuilt)
+            .unwrap()
+            .expect("a frontend from another build should start its own daemon"),
+    );
+    assert!(
+        old.0.wait().unwrap().success(),
+        "old daemon should exit cleanly"
+    );
+    let identity = architect::ipc::call(
+        &state,
+        &architect::ipc::Request {
+            version: architect::ipc::PROTOCOL_VERSION,
+            request_id: id(),
+            idempotency_key: None,
+            operation: architect::ipc::Operation::Identity,
+        },
+    )
+    .unwrap()
+    .data
+    .unwrap();
+    assert_eq!(
+        identity["build"],
+        architect::ipc::build_identity(&rebuilt).unwrap()
+    );
+    assert!(
+        architect::tui::connect_or_start_daemon(&state, &rebuilt)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn conversation_does_not_require_execution_routes_or_a_managed_worktree() {
     use architect::config::{WorkKind, WorkspaceMode};
     let root = tempfile::tempdir().unwrap();

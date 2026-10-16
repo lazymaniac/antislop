@@ -43,6 +43,10 @@ pub enum Operation {
     ListPage {
         after: String,
     },
+    /// Which binary this daemon runs and whether it is executing work.
+    Identity,
+    /// Stop an idle daemon so a frontend from another build can replace it.
+    Shutdown,
     Read {
         run_id: String,
         document: String,
@@ -60,6 +64,32 @@ pub struct Response {
     pub data: Option<Value>,
     pub error: Option<String>,
 }
+/// Identifies the binary file a daemon was started from. A frontend compares
+/// it with its own executable so it never keeps talking to a daemon left
+/// running from an older (or debug) build.
+pub fn build_identity(executable: &Path) -> Result<String> {
+    let path = executable.canonicalize()?;
+    let metadata = std::fs::metadata(&path)?;
+    let modified = metadata
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    Ok(crate::hash(format!(
+        "{}\0{}\0{modified}",
+        path.display(),
+        metadata.len()
+    )))
+}
+fn daemon_build() -> &'static str {
+    static BUILD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BUILD.get_or_init(|| {
+        std::env::current_exe()
+            .and_then(|exe| build_identity(&exe).map_err(std::io::Error::other))
+            .unwrap_or_default()
+    })
+}
+static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 fn uid() -> u32 {
     // SAFETY: geteuid has no arguments or failure modes.
     unsafe { libc::geteuid() }
@@ -178,12 +208,14 @@ pub fn serve(state: &Path) -> Result<()> {
         .open(&db)?;
     file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     let runtime = Arc::new(Runtime::new(Store::open(&db)?)?);
+    daemon_build();
     let (listener, pending) = prepare_listener(&guard.socket)?;
     publish_listener(&pending, &guard.socket)?;
     eprintln!("Architect daemon ready at {:?}", guard.socket);
     for stream in listener.incoming() {
         let mut stream = stream?;
         let runtime = runtime.clone();
+        let socket = guard.socket.clone();
         std::thread::spawn(move || {
             let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
             let response = match read_request(&stream) {
@@ -210,6 +242,11 @@ pub fn serve(state: &Path) -> Result<()> {
                 }
                 bytes.push(b'\n');
                 let _ = stream.write_all(&bytes);
+            }
+            if SHUTDOWN.load(std::sync::atomic::Ordering::SeqCst) {
+                // The flock is released by process exit; the store lock is held.
+                let _ = std::fs::remove_file(&socket);
+                std::process::exit(0);
             }
         });
     }
@@ -350,6 +387,22 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
             }
             Operation::List => list_page(runtime, ""),
             Operation::ListPage { after } => list_page(runtime, &after),
+            Operation::Identity => Ok(json!({
+                "build": daemon_build(),
+                "pid": std::process::id(),
+                "busy": runtime.busy(),
+            })),
+            Operation::Shutdown => {
+                let store = runtime.store.lock().expect("store mutex");
+                require(
+                    !runtime.busy(),
+                    "daemon has active work; restart it after the work finishes",
+                )?;
+                // Keep the store locked until exit so no mutation starts meanwhile.
+                std::mem::forget(store);
+                SHUTDOWN.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(json!({"stopping": true}))
+            }
             Operation::Read {
                 run_id,
                 document,

@@ -290,6 +290,13 @@ pub struct Runtime {
     check_active: Mutex<bool>,
     check_changed: Condvar,
 }
+impl Runtime {
+    /// True while any run worker or check is executing.
+    pub(crate) fn busy(&self) -> bool {
+        !self.workers.lock().expect("workers mutex").is_empty()
+            || *self.check_active.lock().expect("check mutex")
+    }
+}
 pub(crate) fn messaging_agents(run: &Run) -> std::collections::BTreeSet<String> {
     messaging::agents(run)
 }
