@@ -40,10 +40,11 @@ streams normalized events: `Session(id)`, `Text(delta)`, `Tool{name, detail}`,
 | codex | `exec --json -s read-only -C <dir>` | `-s workspace-write` |
 | agy | `-p --output-format stream-json --mode plan` | `--mode accept-edits --sandbox` |
 | claude | `-p --output-format stream-json --permission-mode plan` | `acceptEdits` |
+| gemini | `-p --output-format stream-json --approval-mode plan` | `auto_edit` (no shell, no sandbox) |
 
-Extra scope directories go through `--add-dir`. Follow-up turns resume the
+Extra scope directories go through `--add-dir` (gemini: `--include-directories`). Follow-up turns resume the
 CLI's own session (`codex exec resume <id>`, `agy --conversation <id>`,
-`claude --resume <id>`), so earlier context is never re-sent.
+`claude --resume <id>`, `gemini --resume <id>`), so earlier context is never re-sent.
 
 Read-only modes are not a confinement: agy's plan mode was observed running
 `ls ..`. Writes are confined by the worktree and the CLI sandbox; reads are not.
@@ -254,7 +255,9 @@ replaced when idle. The socket is `<state>/core.sock`, or
 
 ## Stages
 
-1. ✅ Store, agent adapters (codex, agy, claude), conversation with the
+1. ✅ Store, agent adapters (codex, agy, claude; gemini added later from its
+   documented stream-json, both field spellings accepted, not yet run against
+   a real gemini binary), conversation with the
    orchestrator, `antislop chat` CLI. Accepted on a real run: the orchestrator
    answered "przeanalizuj architekturę projektu" by reading the project itself;
    a second message sent while the first ran was accepted at once and answered

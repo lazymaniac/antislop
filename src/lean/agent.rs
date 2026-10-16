@@ -232,9 +232,21 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
             command.arg(prompt);
         }
         ProviderKind::Gemini => {
-            return Err(Error::Invalid(
-                "the gemini CLI is not supported by the lean core yet".into(),
-            ));
+            // `plan` keeps it read-only; `auto_edit` approves file edits but
+            // not shell commands. Gemini has no reasoning-effort flag.
+            command
+                .args(["--output-format", "stream-json", "--approval-mode"])
+                .arg(if read_only { "plan" } else { "auto_edit" });
+            for dir in &spec.add_dirs {
+                command.arg("--include-directories").arg(dir);
+            }
+            if let Some(session) = &spec.resume {
+                command.arg("--resume").arg(session);
+            }
+            if let Some(model) = &spec.model {
+                command.arg("--model").arg(model);
+            }
+            command.arg("-p").arg(prompt);
         }
     }
     Ok(command)
@@ -301,6 +313,8 @@ struct Parser {
     provider: ProviderKind,
     session: Option<String>,
     text: String,
+    /// The last fatal error the CLI reported before its result.
+    error: Option<String>,
     finish: Option<Result<String>>,
 }
 
@@ -310,6 +324,7 @@ impl Parser {
             provider,
             session: None,
             text: String::new(),
+            error: None,
             finish: None,
         }
     }
@@ -327,7 +342,7 @@ impl Parser {
             ProviderKind::Codex => self.codex(line, &mut events),
             ProviderKind::Agy => self.agy(line, &mut events),
             ProviderKind::Claude => self.claude(line, &mut events),
-            ProviderKind::Gemini => {}
+            ProviderKind::Gemini => self.gemini(line, &mut events),
         }
         events
     }
@@ -471,6 +486,64 @@ impl Parser {
             _ => {}
         }
     }
+    /// Gemini CLI versions spell some fields differently (`session_id` or
+    /// `sessionId`, `tool_name`/`parameters` or `name`/`args`); both are read.
+    fn gemini(&mut self, line: &Value, events: &mut Vec<Event>) {
+        let field = |a: &str, b: &str| {
+            if line[a].is_null() {
+                line[b].clone()
+            } else {
+                line[a].clone()
+            }
+        };
+        self.session(field("session_id", "sessionId").as_str(), events);
+        match line["type"].as_str().unwrap_or_default() {
+            "message" if line["role"] == "assistant" => {
+                let text = line["content"].as_str().unwrap_or_default();
+                // A whole message replaces what came before it; deltas add.
+                if line["delta"] != true {
+                    self.text.clear();
+                }
+                self.text.push_str(text);
+                events.push(Event::Text { delta: text.into() });
+            }
+            "tool_use" => {
+                let parameters = field("parameters", "args");
+                let detail = parameters
+                    .as_object()
+                    .and_then(|p| p.values().find_map(Value::as_str))
+                    .unwrap_or_default();
+                events.push(Event::Tool {
+                    name: field("tool_name", "name").as_str().unwrap_or("tool").into(),
+                    detail: short(detail),
+                });
+            }
+            "error" if line["severity"] == "error" => {
+                self.error = line["message"].as_str().map(str::to_owned);
+            }
+            "result" => {
+                let stats = &line["stats"];
+                events.push(Event::Usage {
+                    input: stats["input_tokens"].as_u64().unwrap_or(0),
+                    output: stats["output_tokens"].as_u64().unwrap_or(0),
+                });
+                self.finish = Some(if line["status"] == "success" {
+                    Ok(line["response"]
+                        .as_str()
+                        .map_or_else(|| self.text.clone(), str::to_owned))
+                } else {
+                    let error = line["error"]["message"]
+                        .as_str()
+                        .or(line["error"].as_str())
+                        .map(str::to_owned)
+                        .or_else(|| self.error.clone())
+                        .unwrap_or_else(|| "turn failed".into());
+                    Err(Error::Invalid(format!("gemini: {error}")))
+                });
+            }
+            _ => {}
+        }
+    }
     fn finish(&mut self) -> Finish {
         match self.finish.take() {
             Some(Ok(text)) => Finish::Done(text),
@@ -547,6 +620,47 @@ mod tests {
         );
         assert_eq!(events[0], Event::Session { id: "s1".into() });
         assert!(matches!(parser.finish(), Finish::Done(text) if text == "done"));
+    }
+
+    #[test]
+    fn gemini_stream_yields_session_tools_and_assistant_text() {
+        let (events, mut parser) = feed(
+            ProviderKind::Gemini,
+            &[
+                json!({"type":"init","session_id":"g1","model":"gemini-3-pro"}),
+                json!({"type":"message","role":"user","content":"hi"}),
+                json!({"type":"tool_use","tool_name":"read_file","tool_id":"x","parameters":{"file_path":"src/a.rs"}}),
+                json!({"type":"tool_result","tool_id":"x","status":"success","output":"..."}),
+                json!({"type":"message","role":"assistant","content":"Read ","delta":true}),
+                json!({"type":"message","role":"assistant","content":"it.","delta":true}),
+                json!({"type":"result","status":"success","stats":{"input_tokens":5,"output_tokens":2}}),
+            ],
+        );
+        assert_eq!(events[0], Event::Session { id: "g1".into() });
+        assert_eq!(
+            events[1],
+            Event::Tool {
+                name: "read_file".into(),
+                detail: "src/a.rs".into()
+            }
+        );
+        assert!(matches!(parser.finish(), Finish::Done(text) if text == "Read it."));
+
+        // The other spelling, and a failed turn.
+        let (events, mut parser) = feed(
+            ProviderKind::Gemini,
+            &[
+                json!({"type":"init","sessionId":"g2"}),
+                json!({"type":"tool_use","name":"bash","args":{"command":"ls"}}),
+                json!({"type":"error","severity":"error","message":"quota exceeded"}),
+                json!({"type":"result","status":"error"}),
+            ],
+        );
+        assert_eq!(events[0], Event::Session { id: "g2".into() });
+        assert!(matches!(&events[1], Event::Tool { name, .. } if name == "bash"));
+        assert!(
+            matches!(parser.finish(), Finish::Failed(error) if error.contains("quota exceeded"))
+        );
     }
 
     #[test]
