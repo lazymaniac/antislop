@@ -36,6 +36,17 @@ fn run() -> Result<()> {
         architect::require(args.len() == 3, "__context-connect requires SOCKET")?;
         return architect::context::bridge::connect(std::path::Path::new(&args[2]));
     }
+    if verb == "__core" {
+        architect::require(args.len() == 5, "__core requires PROJECT CONFIG STATE")?;
+        return architect::lean::daemon::serve(
+            std::path::Path::new(&args[2]),
+            std::path::Path::new(&args[3]),
+            std::path::Path::new(&args[4]),
+        );
+    }
+    if verb == "chat" {
+        return architect::lean::cli::chat(&args[2..]);
+    }
     if verb == "ui" {
         return architect::tui::run_options(architect::tui::options::Options::parse(&args[2..])?);
     }

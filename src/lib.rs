@@ -5,6 +5,7 @@ pub mod context;
 pub mod domain;
 pub mod drive;
 pub mod ipc;
+pub mod lean;
 pub mod orchestration;
 pub mod policy;
 pub mod process;
