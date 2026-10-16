@@ -37,6 +37,8 @@ pub struct TaskRow {
     pub round: u64,
     /// What its worker or verifier is doing right now.
     pub activity: String,
+    /// Why it stopped, when it stopped short of approval.
+    pub reason: Option<String>,
 }
 
 /// One agent on the team graph: the orchestrator, the plan verifier, the
@@ -340,6 +342,7 @@ impl View {
                         } else {
                             String::new()
                         },
+                        reason: None,
                     })
                     .collect();
                 self.task_rows.clear();
@@ -384,8 +387,14 @@ impl View {
                     row.uuid = Some(text("task"));
                     row.status = text("status");
                     row.round = payload["round"].as_u64().unwrap_or_default();
+                    row.reason = payload["reason"].as_str().map(str::to_owned);
                     if status::finished(&row.status) {
                         row.activity.clear();
+                    }
+                    if let Some(reason) = row.reason.clone() {
+                        let line =
+                            format!("! {} {}: {} — {reason}", id, row.title, polish(&row.status));
+                        self.push(Style::default().fg(Color::Yellow), line);
                     }
                 }
             }

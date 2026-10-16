@@ -280,6 +280,15 @@ else:
             .unwrap()
             .contains("repeated the same findings")
     );
+    // Frontends are told why it stopped.
+    let last = events(&core, &conversation, "task").pop().unwrap();
+    assert_eq!(last["status"], "needs_user");
+    assert!(
+        last["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not getting closer")
+    );
 }
 
 #[test]

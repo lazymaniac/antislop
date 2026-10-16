@@ -280,6 +280,9 @@ replaced when idle. The socket is `<state>/core.sock`, or
   become `cancelled` with the reason; nothing waits for a reconciliation.
   The orchestrator then answers what it was answering, and an autonomous
   conversation resumes its cut-off plan.
+- A task that stops short of approval (`needs_user`, `waiting`, `failed`,
+  `cancelled`) says why in its event; the chat, the line mode and the task's
+  Przegląd show the reason (design §8.4).
 - A turn that fails because the CLI needs a login or hit a usage/rate limit
   leaves its task `waiting` (not `failed`), with the CLI's message.
 - `resume` (Ctrl+R, `/resume`) runs again every task of a plan that ended

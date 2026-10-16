@@ -301,10 +301,12 @@ pub fn describe(event: &Value) -> Option<String> {
             text("title"),
             text("status"),
             payload["round"],
-            if payload["status"] == "waiting" {
-                " — CLI agenta czeka na logowanie albo odnowienie limitu; potem /resume"
-            } else {
-                ""
+            match payload["reason"].as_str() {
+                Some(reason) if payload["status"] == "waiting" => format!(
+                    " — {reason}; CLI agenta czeka na logowanie albo odnowienie limitu, potem /resume"
+                ),
+                Some(reason) => format!(" — {reason}"),
+                None => String::new(),
             }
         ),
         "agent" if payload["type"] == "tool" => {

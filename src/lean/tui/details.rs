@@ -91,6 +91,9 @@ impl Details {
                             String::new()
                         }
                     )));
+                    if let Some(reason) = &task.reason {
+                        lines.push(plain(format!("Dlaczego: {reason}")));
+                    }
                     lines.push(plain(format!("Zadanie {}: {}", task.id, task.title)));
                     lines.push(plain(format!(
                         "Rodzaj: {}{}",

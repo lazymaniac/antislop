@@ -466,7 +466,7 @@ impl Core {
         queue(&self.store)?;
         let tasks = self.store.plan(plan_id)?;
         for task in &tasks {
-            self.announce_task(conversation, task);
+            self.announce_task(conversation, task, None);
         }
         let cancel = Arc::new(AtomicBool::new(false));
         plans.insert(conversation.to_owned(), cancel.clone());
@@ -858,20 +858,32 @@ impl Core {
         }
     }
 
-    fn announce_task(&self, conversation: &str, task: &Task) {
+    /// The task's state for frontends; `reason` says why it stopped.
+    fn announce_task(&self, conversation: &str, task: &Task, reason: Option<&str>) {
         let _ = self.store.append_event(
             conversation,
             None,
             "task",
             &json!({"id": task.spec["id"], "task": task.id, "title": task.spec["title"],
-                    "status": task.status, "round": task.round}),
+                    "status": task.status, "round": task.round, "reason": reason}),
         );
     }
 
     fn set_status(&self, conversation: &str, task: &mut Task, status: &str) -> Result<()> {
+        self.stop(conversation, task, status, None)
+    }
+
+    /// Sets a status the task stops in, saying why (design §8.4).
+    fn stop(
+        &self,
+        conversation: &str,
+        task: &mut Task,
+        status: &str,
+        reason: Option<&str>,
+    ) -> Result<()> {
         task.status = status.into();
         self.store.update_task(task)?;
-        self.announce_task(conversation, task);
+        self.announce_task(conversation, task, reason);
         Ok(())
     }
 
@@ -932,7 +944,12 @@ impl Core {
                         let mut task = task;
                         if let Err(error) = self.run_task(conversation, &mut task, cancel) {
                             task.report = Some(error.to_string());
-                            let _ = self.set_status(conversation, &mut task, status::FAILED);
+                            let _ = self.stop(
+                                conversation,
+                                &mut task,
+                                status::FAILED,
+                                Some(&error.to_string()),
+                            );
                         }
                     });
                 }
@@ -1142,7 +1159,7 @@ impl Core {
                                     "status": status::NEEDS_USER, "detail": text}),
                         );
                         task.report = Some(format!("{report}\n\n[in place] {text}"));
-                        return self.set_status(conversation, task, status::NEEDS_USER);
+                        return self.stop(conversation, task, status::NEEDS_USER, Some(&text));
                     }
                     Some(tasks::changes_text(
                         base,
@@ -1213,7 +1230,12 @@ impl Core {
             task.verdict = Some(serde_json::to_value(&verdict)?);
             if incomplete {
                 // The worker cannot fix a verifier that skips its checks.
-                return self.set_status(conversation, task, status::NEEDS_USER);
+                return self.stop(
+                    conversation,
+                    task,
+                    status::NEEDS_USER,
+                    Some("the verifier's verdict still leaves obligations unaccounted for"),
+                );
             }
             if verdict.approved {
                 return match &worktree {
@@ -1229,12 +1251,24 @@ impl Core {
                     "{report}\n\n[runtime] the verifier repeated the same findings; \
                      the worker is not getting closer"
                 ));
-                return self.set_status(conversation, task, status::NEEDS_USER);
+                return self.stop(
+                    conversation,
+                    task,
+                    status::NEEDS_USER,
+                    Some(
+                        "the verifier repeated the same findings; the worker is not getting closer",
+                    ),
+                );
             }
             previous = Some(text);
             findings = verdict.findings;
         }
-        self.set_status(conversation, task, status::NEEDS_USER)
+        self.stop(
+            conversation,
+            task,
+            status::NEEDS_USER,
+            Some("the correction rounds that run without asking are over; the verifier has not approved"),
+        )
     }
 
     /// Whether `specs` asks for the same work as the last plan of the
@@ -1431,11 +1465,12 @@ impl Core {
             "integration",
             &json!({"id": spec.id, "title": spec.title, "status": status, "detail": text}),
         );
-        note(task, text);
+        note(task, text.clone());
         if status == status::APPROVED {
             git::remove_worktree(project, worktree, &branch(task))?;
+            return self.set_status(conversation, task, status);
         }
-        self.set_status(conversation, task, status)
+        self.stop(conversation, task, status, Some(&text))
     }
 
     /// An approved in-place change is already in the project; with commit
@@ -1500,7 +1535,12 @@ impl Core {
                 .trim_start()
                 .to_owned(),
         );
-        self.set_status(conversation, task, next)
+        self.stop(
+            conversation,
+            task,
+            next,
+            Some(&format!("the {who}'s turn ended: {error}")),
+        )
     }
 
     /// The finished plan's results, and an independent audit of whether they
