@@ -12,7 +12,7 @@ pub mod tui;
 
 use crate::{
     Result,
-    config::{Config, ResolvedProfile, RoleKind, WorkKind},
+    config::{Config, ResolvedProfile, RoleKind, WorkKind, WorkspaceMode},
     require,
 };
 use serde_json::json;
@@ -55,6 +55,8 @@ pub struct Core {
     state: PathBuf,
     /// Writers land on the user's branch one at a time.
     integrating: Mutex<()>,
+    /// In-place writers work in the user's directory one at a time.
+    in_place: Mutex<()>,
     /// Conversations with an orchestrator loop running, and its cancel flag.
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Conversations with a plan running, and its cancel flag.
@@ -106,6 +108,7 @@ impl Core {
             config,
             state: state.canonicalize()?,
             integrating: Mutex::new(()),
+            in_place: Mutex::new(()),
             running: Mutex::new(HashMap::new()),
             plans: Mutex::new(HashMap::new()),
             reviews: Mutex::new(HashMap::new()),
@@ -897,8 +900,46 @@ impl Core {
     fn run_task(&self, conversation: &str, task: &mut Task, cancel: &AtomicBool) -> Result<()> {
         let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
-        // A writer works in its own worktree; everyone else in the project.
-        let worktree = if spec.writes {
+        let in_place = spec.writes && self.config.workspace.mode == WorkspaceMode::InPlace;
+        // In place, writers take turns in the user's directory.
+        let _writing = if in_place {
+            require(
+                git::is_repository(&project),
+                "tasks that change files need the project to be a git repository",
+            )?;
+            require(
+                self.config.policy.local_write,
+                "in-place writers need policy.local_write",
+            )?;
+            loop {
+                match self.in_place.try_lock() {
+                    Ok(guard) => break Some(guard),
+                    // A writer that panicked left nothing half-locked.
+                    Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                        break Some(poisoned.into_inner());
+                    }
+                    Err(std::sync::TryLockError::WouldBlock) => {}
+                }
+                if cancel.load(Ordering::SeqCst) {
+                    return self.set_status(conversation, task, status::CANCELLED);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        } else {
+            None
+        };
+        if in_place && task.base.is_none() {
+            task.base = Some(git::snapshot(&project, &format!("before {}", spec.title))?);
+        }
+        // What the user had not committed when the writer started: theirs,
+        // not the writer's to change.
+        let user_edits = match (&task.base, in_place) {
+            (Some(base), true) => git::changed_files(&project, &format!("{base}^"), base)?,
+            _ => vec![],
+        };
+        // A writer works in its own worktree (in place: in the project);
+        // everyone else in the project.
+        let worktree = if spec.writes && !in_place {
             require(
                 git::is_repository(&project),
                 "tasks that change files need the project to be a git repository",
@@ -951,10 +992,15 @@ impl Core {
             .verdict
             .as_ref()
             .and_then(|verdict| serde_json::from_value::<Verdict>(verdict.clone()).ok());
-        if let (Some(verdict), Some(path)) = (&verdict, &worktree)
+        if let Some(verdict) = &verdict
             && verdict.approved
         {
-            return self.integrate(conversation, task, &spec, &project, path);
+            if let Some(path) = &worktree {
+                return self.integrate(conversation, task, &spec, &project, path);
+            }
+            if in_place {
+                return self.finish_in_place(conversation, task, &spec, &project);
+            }
         }
         let mut findings = verdict.map(|verdict| verdict.findings).unwrap_or_default();
         let resumed = task.round > 0;
@@ -974,6 +1020,7 @@ impl Core {
             let report = self.turn(worker_setup(), cancel, |first| {
                 if first {
                     tasks::worker_prompt(&project_text, &spec, &team)
+                        + &tasks::user_edits_note(&user_edits)
                 } else if resumed && round == first_round {
                     tasks::worker_resume(&findings)
                 } else {
@@ -1012,6 +1059,36 @@ impl Core {
                         &git::diff_stat(path, base, &result)?,
                     ))
                 }
+                (None, Some(base)) if in_place => {
+                    let result =
+                        git::snapshot(&project, &format!("{} (round {round})", spec.title))?;
+                    task.result = Some(result.clone());
+                    let touched: Vec<String> = git::changed_files(&project, base, &result)?
+                        .into_iter()
+                        .filter(|file| user_edits.contains(file))
+                        .collect();
+                    if !touched.is_empty() {
+                        let text = format!(
+                            "the worker changed files you were editing: {}. Your version is kept: \
+                             `git checkout {base} -- <file>` restores it",
+                            touched.join(", ")
+                        );
+                        let _ = self.store.append_event(
+                            conversation,
+                            None,
+                            "integration",
+                            &json!({"id": spec.id, "title": spec.title,
+                                    "status": status::NEEDS_USER, "detail": text}),
+                        );
+                        task.report = Some(format!("{report}\n\n[in place] {text}"));
+                        return self.set_status(conversation, task, status::NEEDS_USER);
+                    }
+                    Some(tasks::changes_text(
+                        base,
+                        &result,
+                        &git::diff_stat(&project, base, &result)?,
+                    ))
+                }
                 _ => None,
             };
             self.set_status(conversation, task, status::VERIFYING)?;
@@ -1045,6 +1122,7 @@ impl Core {
             if verdict.approved {
                 return match &worktree {
                     Some(path) => self.integrate(conversation, task, &spec, &project, path),
+                    None if in_place => self.finish_in_place(conversation, task, &spec, &project),
                     None => self.set_status(conversation, task, status::APPROVED),
                 };
             }
@@ -1222,6 +1300,41 @@ impl Core {
             git::remove_worktree(project, worktree, &branch(task))?;
         }
         self.set_status(conversation, task, status)
+    }
+
+    /// An approved in-place change is already in the project; with commit
+    /// permission exactly its files are committed.
+    fn finish_in_place(
+        &self,
+        conversation: &str,
+        task: &mut Task,
+        spec: &TaskSpec,
+        project: &Path,
+    ) -> Result<()> {
+        let (Some(base), Some(result)) = (task.base.clone(), task.result.clone()) else {
+            return self.set_status(conversation, task, status::APPROVED);
+        };
+        let files = git::changed_files(project, &base, &result)?;
+        let text = if files.is_empty() {
+            "no file changes".to_owned()
+        } else if self.config.policy.local_commits {
+            let _one_at_a_time = self.integrating.lock().expect("integration mutex");
+            format!(
+                "committed in place as {}",
+                git::commit_paths(project, &files, &spec.title)?
+            )
+        } else {
+            format!("applied in place, not committed: {}", files.join(", "))
+        };
+        let _ = self.store.append_event(
+            conversation,
+            None,
+            "integration",
+            &json!({"id": spec.id, "title": spec.title, "status": status::APPROVED, "detail": text}),
+        );
+        let report = task.report.take().unwrap_or_default();
+        task.report = Some(format!("{report}\n\n[in place] {text}"));
+        self.set_status(conversation, task, status::APPROVED)
     }
 
     /// Ends a task whose agent turn failed or was cancelled, keeping why.

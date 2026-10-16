@@ -84,7 +84,7 @@ impl Details {
                         "Rodzaj: {}{}",
                         task.kind,
                         if task.writes {
-                            " · zmienia pliki (własny worktree)"
+                            " · zmienia pliki"
                         } else {
                             " · tylko odczyt"
                         }

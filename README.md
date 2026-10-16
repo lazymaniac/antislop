@@ -54,6 +54,8 @@ way.
    itself (at most three in a row before it waits for you).
 4. Workers read and edit the project's files themselves. A task that changes
    files works in its own git worktree; the runtime commits its work there.
+   With `workspace.mode = "in-place"` writers work in your directory itself,
+   one at a time, and stop if they touch a file you were editing.
 5. The task's verifier reads the result (and the diff) with a checklist for
    that kind of work and approves or lists findings; findings go back to the
    same worker session, for a bounded number of rounds.

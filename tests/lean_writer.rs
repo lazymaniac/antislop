@@ -65,6 +65,10 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
 }
 
 fn config(codex: &Path, agy: &Path) -> Config {
+    config_with(codex, agy, |text| text)
+}
+
+fn config_with(codex: &Path, agy: &Path, change: impl Fn(String) -> String) -> Config {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/examples/architect.toml"
@@ -78,7 +82,7 @@ fn config(codex: &Path, agy: &Path) -> Config {
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
     );
-    Config::from_toml(&text).unwrap()
+    Config::from_toml(&change(text)).unwrap()
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -328,4 +332,107 @@ fn the_user_reads_a_change_comments_a_line_and_asks_for_a_review() {
         core.diff(&conversation, &plan, "t9").is_err(),
         "unknown task"
     );
+}
+
+fn in_place(text: String) -> String {
+    text.replace("mode = \"task-worktrees\"", "mode = \"in-place\"")
+}
+
+#[test]
+fn in_place_a_writer_edits_the_project_itself_and_reviewers_see_a_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let base = git(&project, &["rev-parse", "HEAD"]);
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, in_place),
+    )
+    .unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert!(task.report.as_deref().unwrap().contains("applied in place"));
+    assert_eq!(
+        git(&project, &["rev-parse", "HEAD"]),
+        base,
+        "nothing committed"
+    );
+    assert_eq!(git(&project, &["status", "--porcelain"]), "?? hello.txt");
+    assert!(
+        !project.join(".antislop/worktrees").exists()
+            || project
+                .join(".antislop/worktrees")
+                .read_dir()
+                .unwrap()
+                .next()
+                .is_none()
+    );
+    let (snapshot, result) = (task.base.clone().unwrap(), task.result.clone().unwrap());
+    assert_eq!(git(&project, &["rev-parse", &format!("{snapshot}^")]), base);
+    assert_eq!(
+        git(&project, &["show", &format!("{result}:hello.txt")]),
+        "from worker"
+    );
+
+    let calls: Vec<Value> = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let agents: Vec<&Value> = calls
+        .iter()
+        .filter(|call| {
+            let args = call["args"].to_string();
+            call["bin"] == "agy"
+                && !args.contains("You review a plan")
+                && !args.contains("You audit")
+        })
+        .collect();
+    assert_eq!(agents.len(), 2);
+    assert!(
+        agents
+            .iter()
+            .all(|call| call["cwd"] == project.to_str().unwrap())
+    );
+    assert!(
+        agents[1]["args"]
+            .to_string()
+            .contains(&format!("git diff {snapshot} {result}"))
+    );
+    let diff = core.diff(&conversation, &task.plan_id, "t1").unwrap();
+    assert_eq!(diff["files"][0]["path"], "hello.txt");
+}
+
+#[test]
+fn in_place_a_writer_that_touches_the_users_edits_stops_and_keeps_their_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    // The user is editing hello.txt; the worker will overwrite it.
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, in_place),
+    )
+    .unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "needs_user");
+    let report = task.report.as_deref().unwrap();
+    assert!(
+        report.contains("files you were editing: hello.txt"),
+        "{report}"
+    );
+    let snapshot = task.base.clone().unwrap();
+    assert!(report.contains(&format!("git checkout {snapshot} -- <file>")));
+    assert_eq!(
+        git(&project, &["show", &format!("{snapshot}:hello.txt")]),
+        "user draft",
+        "the user's version is recoverable"
+    );
+    let calls = std::fs::read_to_string(dir.path().join("calls.jsonl")).unwrap();
+    assert!(calls.contains("do not modify them") && calls.contains("- hello.txt"));
 }

@@ -74,6 +74,8 @@ Read-only modes are not a confinement: agy's plan mode was observed running
    runtime unusable.
 4. **Task.** The worker runs (worktree if `writes`, otherwise the project
    read-only). A writer's changes are committed in its worktree by the runtime.
+   With `workspace.mode = "in-place"` writers work in the project itself
+   (see In-place mode).
 5. **Verification.** The verifier gets the goal, the worker's report, the diff
    range (writers), its risks and a short checklist for the task's kind
    (`tasks::checklist`: e.g. assertions that fail on the bug for testing,
@@ -137,6 +139,32 @@ that directory, with the user's open comments on the change in its prompt. It
 records a `code_review` event (running, then the verdict) and sends its
 findings to the orchestrator as a message; it never changes the task's status.
 One code review runs per conversation at a time; Ctrl+X cancels it.
+
+## In-place mode
+
+`workspace.mode = "in-place"` (design §11.1) runs writers in the project
+directory instead of worktrees, for users who want to watch the files change.
+
+- Writers run one at a time (a process-wide lock; a waiting writer still
+  honours cancel). Read-only tasks keep running beside them.
+- Before the worker starts, the runtime records a snapshot commit of the
+  working tree (tracked and untracked files, through a scratch index; the
+  user's index, branch and files are untouched). Its parent is `HEAD`; the
+  files it differs in are the user's own edits, and the worker is told not to
+  modify them.
+- After each worker turn another snapshot is the task's `result`; the
+  verifier and the code review read `git diff base result`, the diff view
+  shows the same range.
+- A worker that touched a file the user was editing ends `needs_user`; the
+  report names the files and how to get the user's version back
+  (`git checkout <base> -- <file>`).
+- An approved change is already in place: with `local_commits` the runtime
+  commits exactly the files the task changed; otherwise it stays as
+  uncommitted changes.
+
+This protects the user's edits by detection, not confinement: a worker that
+ignores the instruction overwrites the file, and the snapshot is what makes
+the user's version recoverable.
 
 ## State
 
@@ -252,6 +280,9 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - Prompts are passed as arguments (the orchestrator's plan report is bounded
   by 40k characters per task).
 - `core.db` has no schema versioning yet.
+- In-place: read-only tasks running beside a writer may see its partial
+  edits, and the user's edits made while a writer runs are attributed to the
+  writer.
 
 ## Stages
 
@@ -287,3 +318,5 @@ replaced when idle. The socket is `<state>/core.sock`, or
    `tests/lean_messages.rs`).
 11. ✅ Diff view with line comments and a code review on request (design §8.6;
    `tests/lean_writer.rs`, `src/lean/diff.rs`).
+12. ✅ In-place mode with snapshot commits (design §11.1;
+   `tests/lean_writer.rs`, `src/lean/git.rs`).

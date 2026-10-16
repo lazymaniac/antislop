@@ -1,9 +1,13 @@
 # Example: Codex orchestrates; Antigravity (agy) works and verifies.
 # Copy to your project as architect.toml and adjust binaries and models.
-# Supported CLIs: codex, agy, claude. Each task kind names a worker profile
+# Supported CLIs: codex, agy, claude, gemini. Each task kind names a worker profile
 # and a verifier profile; every verifier gets its own session.
 schema_version = 1
 
+# task-worktrees: each writer works in its own git worktree and its approved
+# change is integrated into your branch. in-place: writers work in this
+# directory itself, one at a time; a writer that touches a file you were
+# editing stops for you.
 [workspace]
 mode = "task-worktrees"
 

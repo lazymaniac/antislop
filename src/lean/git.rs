@@ -4,7 +4,7 @@
 
 use crate::{Error, Result};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
@@ -27,6 +27,90 @@ fn ok(dir: &Path, args: &[&str]) -> Result<String> {
             String::from_utf8_lossy(&output.stderr).trim()
         )))
     }
+}
+
+/// The working tree as it is now (tracked and untracked files, ignored ones
+/// left out) recorded as a commit on top of HEAD, without touching the user's
+/// index, files or branch. A copy of the index keeps git from re-reading
+/// files that did not change, so the cost follows the changes, not the repo.
+pub fn snapshot(dir: &Path, message: &str) -> Result<String> {
+    let index = PathBuf::from(ok(dir, &["rev-parse", "--git-path", "index"])?);
+    let index = if index.is_absolute() {
+        index
+    } else {
+        dir.join(index)
+    };
+    let scratch = index.with_file_name(format!(
+        "antislop-snapshot-{}-{}.index",
+        std::process::id(),
+        crate::id()
+    ));
+    let result = (|| {
+        if index.exists() {
+            std::fs::copy(&index, &scratch)?;
+        }
+        let with_index = |args: &[&str]| -> Result<String> {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .env("GIT_INDEX_FILE", &scratch)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()?;
+            if output.status.success() {
+                Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            } else {
+                Err(Error::Invalid(format!(
+                    "git {}: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )))
+            }
+        };
+        with_index(&["add", "--all", "--", "."])?;
+        let tree = with_index(&["write-tree"])?;
+        ok(
+            dir,
+            &[
+                "-c",
+                "user.name=antislop",
+                "-c",
+                "user.email=antislop@localhost",
+                "commit-tree",
+                &tree,
+                "-p",
+                "HEAD",
+                "-m",
+                message,
+            ],
+        )
+    })();
+    let _ = std::fs::remove_file(&scratch);
+    result
+}
+
+/// Commits exactly `files` as they are in the working tree, whatever else
+/// the user has staged or changed.
+pub fn commit_paths(dir: &Path, files: &[String], message: &str) -> Result<String> {
+    let mut add = vec!["--literal-pathspecs", "add", "--all", "--"];
+    add.extend(files.iter().map(String::as_str));
+    ok(dir, &add)?;
+    let mut commit = vec![
+        "--literal-pathspecs",
+        "-c",
+        "user.name=antislop",
+        "-c",
+        "user.email=antislop@localhost",
+        "commit",
+        "--quiet",
+        "--only",
+        "-m",
+        message,
+        "--",
+    ];
+    commit.extend(files.iter().map(String::as_str));
+    ok(dir, &commit)?;
+    head(dir)
 }
 
 pub fn is_repository(dir: &Path) -> bool {
@@ -390,5 +474,96 @@ mod tests {
         );
         assert!(!project.path().join("b.txt").exists());
         assert_eq!(head(project.path()).unwrap(), base);
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        ok(path, &["init", "--quiet", "-b", "main"]).unwrap();
+        std::fs::write(path.join("a.txt"), "a\n").unwrap();
+        std::fs::write(path.join("b.txt"), "b\n").unwrap();
+        std::fs::write(path.join(".gitignore"), "target/\n").unwrap();
+        ok(path, &["add", "."]).unwrap();
+        ok(
+            path,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "base",
+            ],
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_snapshot_records_the_working_tree_and_leaves_it_alone() {
+        let dir = repo();
+        let path = dir.path();
+        std::fs::write(path.join("a.txt"), "edited\n").unwrap();
+        std::fs::write(path.join("new.txt"), "new\n").unwrap();
+        std::fs::remove_file(path.join("b.txt")).unwrap();
+        std::fs::create_dir(path.join("target")).unwrap();
+        std::fs::write(path.join("target/out"), "ignored\n").unwrap();
+        ok(path, &["add", "a.txt"]).unwrap();
+        let status = |path: &Path| {
+            String::from_utf8(git(path, &["status", "--porcelain"]).unwrap().stdout).unwrap()
+        };
+        let before = status(path);
+
+        let snapshot = snapshot(path, "s").unwrap();
+        assert_eq!(status(path), before, "index and files untouched");
+        assert_eq!(
+            ok(path, &["rev-parse", &format!("{snapshot}^")]).unwrap(),
+            head(path).unwrap()
+        );
+        let mut files = changed_files(path, "HEAD", &snapshot).unwrap();
+        files.sort();
+        assert_eq!(files, ["a.txt", "b.txt", "new.txt"]);
+        assert_eq!(
+            ok(path, &["show", &format!("{snapshot}:a.txt")]).unwrap(),
+            "edited"
+        );
+        assert!(
+            !path.join(".git").read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("antislop")),
+            "no scratch index left behind"
+        );
+    }
+
+    #[test]
+    fn committing_paths_leaves_the_users_other_changes_alone() {
+        let dir = repo();
+        let path = dir.path();
+        std::fs::write(path.join("a.txt"), "task\n").unwrap();
+        std::fs::write(path.join("c.txt"), "task new\n").unwrap();
+        std::fs::remove_file(path.join(".gitignore")).unwrap();
+        std::fs::write(path.join("b.txt"), "user\n").unwrap();
+        ok(path, &["add", "b.txt"]).unwrap();
+
+        let commit = commit_paths(
+            path,
+            &["a.txt".into(), "c.txt".into(), ".gitignore".into()],
+            "task",
+        )
+        .unwrap();
+        let mut files = changed_files(path, &format!("{commit}^"), &commit).unwrap();
+        files.sort();
+        assert_eq!(files, [".gitignore", "a.txt", "c.txt"]);
+        let status =
+            String::from_utf8(git(path, &["status", "--porcelain"]).unwrap().stdout).unwrap();
+        assert_eq!(status, "M  b.txt\n", "the user's staged edit stays staged");
     }
 }

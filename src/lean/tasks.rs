@@ -352,6 +352,24 @@ pub fn checklist(kind: WorkKind) -> &'static str {
     }
 }
 
+/// For a writer in the user's directory: files with the user's own
+/// uncommitted edits, not to be changed.
+pub fn user_edits_note(files: &[String]) -> String {
+    if files.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nYou work directly in the user's directory. The user has uncommitted \
+         edits in these files; do not modify them, and if the task needs a change \
+         there, say so in your report instead:\n{}",
+        files
+            .iter()
+            .map(|file| format!("- {file}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
 pub fn worker_prompt(project: &str, task: &TaskSpec, team: &[TaskSpec]) -> String {
     let others: Vec<String> = team
         .iter()
@@ -436,8 +454,8 @@ pub fn worker_followup(findings: &[Value]) -> String {
 /// How a verifier finds a writer's changes: the commit range, not the diff.
 pub fn changes_text(base: &str, result: &str, stat: &str) -> String {
     format!(
-        "The worker's changes are committed in your working directory. Inspect \
-         them with `git diff {base} {result}`.\nSummary:\n{stat}"
+        "The worker's changes are recorded as commits in this repository. \
+         Inspect them with `git diff {base} {result}`.\nSummary:\n{stat}"
     )
 }
 
