@@ -75,6 +75,11 @@ does not grow with the repository), the scenario says so.
   (design §11.1 creates one): read-only work runs without git, writers ask
   the user to run `git init` and commit first, so nothing of the user's is
   committed without them.
+- Daemon requests carry no request id or idempotency key (design §9.3):
+  a frontend never retries a request by itself, a plan is accepted by its id
+  and only once, and pause or mode requests set a value rather than toggle
+  it. Several frontends may control one conversation; each sees the others'
+  actions as events.
 - In supervised mode the first three correction rounds of a task run
   without asking, then the user decides (design §6.2 asks at each round).
   Autonomous mode has no count of rounds or plans, as design §14 says; it
