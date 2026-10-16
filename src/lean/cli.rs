@@ -176,6 +176,14 @@ pub fn chat(args: &[String]) -> Result<()> {
                     }
                 },
                 "/cancel" => Request::Cancel { conversation },
+                "/pause" => Request::Pause {
+                    conversation,
+                    paused: true,
+                },
+                "/continue" => Request::Pause {
+                    conversation,
+                    paused: false,
+                },
                 text => Request::Send {
                     conversation,
                     text: text.to_owned(),
@@ -257,6 +265,10 @@ pub fn describe(event: &Value) -> Option<String> {
             lines.join("\n")
         }
         "audit" => review_lines("audyt", payload).join("\n"),
+        "paused" if payload["paused"] == true => {
+            "⏸ wstrzymano: nowe kroki czekają, /continue wznawia".into()
+        }
+        "paused" => "▶ wznowiono".into(),
         "mail" if payload["kind"] != "copy" => format!(
             "✉ {} → {} ({}): {}",
             text("sender"),

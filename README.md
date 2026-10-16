@@ -40,9 +40,11 @@ review whose findings go to the orchestrator.
 Keys: Enter send, Alt+Enter new line, Ctrl+A run the proposed plan, Ctrl+R
 resume what a plan left unfinished (after a login, a limit reset, a restart or
 your own edits), Ctrl+X cancel running work, PgUp/PgDn scroll, Ctrl+N new
-conversation, Ctrl+P all commands, F1 or `?` help, Esc back or detach. In line mode, type `/accept`, `/resume` or
-`/cancel`. `@t2 text` sends text to the worker of task `t2` (delivered in its
-next turn; the orchestrator gets a copy). Agents message each other the same
+conversation, Ctrl+P all commands, F1 or `?` help, Esc back or detach.
+`/pause` stops starting new work (what runs finishes) until `/continue`. In
+line mode, type `/accept`, `/resume`, `/pause`, `/continue` or `/cancel`.
+`@t2 text` sends text to the worker of task `t2` (delivered in its next turn;
+the orchestrator gets a copy). Agents message each other the same
 way.
 
 ## How a request runs

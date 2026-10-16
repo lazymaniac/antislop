@@ -220,6 +220,15 @@ impl Core {
     }
 
     /// Stops the orchestrator's turn and any running plan; queued messages stay.
+    /// Pausing starts no new plan work (worker, verifier and audit turns):
+    /// turns already running finish, the orchestrator still answers, and
+    /// everything waiting goes on when the user continues. It survives a
+    /// restart.
+    pub fn pause(&self, conversation: &str, paused: bool) -> Result<()> {
+        self.store.conversation(conversation)?;
+        self.store.set_paused(conversation, paused)
+    }
+
     pub fn cancel(&self, conversation: &str) {
         for flags in [&self.running, &self.plans, &self.reviews] {
             if let Some(flag) = flags.lock().expect("flags mutex").get(conversation) {
@@ -737,6 +746,12 @@ impl Core {
             access,
             upto_message,
         } = setup;
+        if role != ORCHESTRATOR && role != PLAN_VERIFIER {
+            // Cancelling a paused conversation ends what waits, too.
+            while !cancel.load(Ordering::SeqCst) && self.store.paused(conversation)? {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        }
         let provider = profile
             .as_ref()
             .map_or("unconfigured", |profile| agent::name(profile.provider));

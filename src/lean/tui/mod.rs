@@ -282,6 +282,20 @@ impl App {
                 None => self.notice = Some("✗ nie ma czego wznowić".into()),
             },
             "/cancel" => self.request(Request::Cancel { conversation }, Some("anulowano")),
+            "/pause" => self.request(
+                Request::Pause {
+                    conversation,
+                    paused: true,
+                },
+                None,
+            ),
+            "/continue" => self.request(
+                Request::Pause {
+                    conversation,
+                    paused: false,
+                },
+                None,
+            ),
             _ => {
                 self.scroll = 0;
                 self.request(Request::Send { conversation, text }, None);
@@ -368,6 +382,8 @@ impl App {
             Command::Accept => self.command("/accept"),
             Command::Resume => self.command("/resume"),
             Command::Cancel => self.command("/cancel"),
+            Command::Pause => self.command("/pause"),
+            Command::Continue => self.command("/continue"),
             Command::NewConversation => self.new_conversation(),
             Command::Find => self.picker = Some(Picker::new(Kind::Agents)),
             Command::Details => {
@@ -630,6 +646,7 @@ impl App {
 
         let status = match (&self.view.activity, self.view.idle) {
             (Some(activity), _) => activity.clone(),
+            (None, _) if self.view.paused => "wstrzymane".into(),
             (None, true) => "gotowy".into(),
             (None, false) => "zadania w toku…".into(),
         };

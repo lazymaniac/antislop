@@ -385,3 +385,73 @@ else:
     assert_eq!(task.status, "approved", "{:?}", task.verdict);
     assert_eq!(task.report.as_deref(), Some("fixed: converted"));
 }
+
+#[test]
+fn a_paused_conversation_starts_no_new_work_but_still_talks() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        false,
+        r#"
+if "[runtime]" in prompt or "pytanie" in prompt:
+    answer = "odpowiedź"
+else:
+    answer = plan(task("t1", "Analyse"))
+"#,
+        r#"
+if "You verify" in prompt or "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "analiza");
+    let plan = core.store.latest_plan(&conversation).unwrap()[0]
+        .plan_id
+        .clone();
+
+    core.pause(&conversation, true).unwrap();
+    core.accept_plan(&conversation, &plan).unwrap();
+    core.send(&conversation, "pytanie").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while core
+        .store
+        .messages_after(&conversation, 0)
+        .unwrap()
+        .last()
+        .is_none_or(|message| message.text != "odpowiedź")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the orchestrator answers while paused"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let worker_turns = || {
+        events(&core, &conversation, "turn_started")
+            .iter()
+            .filter(|turn| turn["role"].as_str().unwrap().starts_with("worker:"))
+            .count()
+    };
+    assert_eq!(worker_turns(), 0, "no new work while paused");
+    assert!(
+        !core.is_idle(&conversation),
+        "the plan waits, it is not over"
+    );
+    assert!(
+        core.store.paused(&conversation).unwrap(),
+        "kept in the store"
+    );
+
+    core.pause(&conversation, false).unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(worker_turns(), 1);
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "approved");
+    let paused: Vec<bool> = events(&core, &conversation, "paused")
+        .iter()
+        .map(|event| event["paused"] == true)
+        .collect();
+    assert_eq!(paused, [true, false]);
+}

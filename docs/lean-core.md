@@ -286,6 +286,10 @@ replaced when idle. The socket is `<state>/core.sock`, or
   the conversation busy, and the orchestrator starts on the results before the
   conversation can look idle.
 - A session is resumed only by the CLI that created it.
+- `/pause` (or the palette) starts no new plan work: worker, verifier and
+  audit turns wait, turns already running finish, the orchestrator still
+  answers. `/continue` goes on; Ctrl+X cancels what waits too. A pause is
+  stored, so it holds across a restart (design §14).
 - A plan never widens where an agent may write: directories of a task's
   scope outside the project are passed to the CLI (`--add-dir`,
   `--include-directories`) only for read-only agents, since a writer's CLI

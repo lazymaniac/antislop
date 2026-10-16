@@ -174,7 +174,9 @@ impl Store {
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
                plan_id TEXT, target TEXT NOT NULL, label TEXT NOT NULL, text TEXT NOT NULL,
                status TEXT NOT NULL, message INTEGER NOT NULL,
-               created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);",
+               created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS pauses(
+               conversation_id TEXT PRIMARY KEY REFERENCES conversations(id));",
         )?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -737,6 +739,43 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(comment)
+    }
+
+    /// Pauses or continues the conversation's plan work, with its event.
+    pub fn set_paused(&self, conversation: &str, paused: bool) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let changed = if paused {
+            tx.execute(
+                "INSERT OR IGNORE INTO pauses(conversation_id) VALUES(?1)",
+                [conversation],
+            )?
+        } else {
+            tx.execute(
+                "DELETE FROM pauses WHERE conversation_id=?1",
+                [conversation],
+            )?
+        };
+        if changed > 0 {
+            tx.execute(
+                "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'paused',?2)",
+                params![conversation, serde_json::json!({"paused": paused}).to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn paused(&self, conversation: &str) -> Result<bool> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT 1 FROM pauses WHERE conversation_id=?1",
+                [conversation],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
     }
 
     /// The conversation's comments with that status, oldest first.

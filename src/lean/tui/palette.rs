@@ -17,6 +17,8 @@ pub enum Command {
     Accept,
     Resume,
     Cancel,
+    Pause,
+    Continue,
     NewConversation,
     Find,
     Details,
@@ -27,10 +29,15 @@ pub enum Command {
     Quit,
 }
 
-const COMMANDS: [(Command, &str); 11] = [
+const COMMANDS: [(Command, &str); 13] = [
     (Command::Accept, "Uruchom zaproponowany plan · Ctrl+A"),
     (Command::Resume, "Wznów plan · Ctrl+R"),
     (Command::Cancel, "Anuluj trwającą pracę · Ctrl+X"),
+    (
+        Command::Pause,
+        "Wstrzymaj nowe kroki (bieżące się dokończą) · /pause",
+    ),
+    (Command::Continue, "Kontynuuj wstrzymaną pracę · /continue"),
     (Command::NewConversation, "Nowa rozmowa · Ctrl+N"),
     (Command::Find, "Znajdź agenta · /"),
     (Command::Details, "Szczegóły wybranego agenta · Enter"),
@@ -175,6 +182,7 @@ impl Help {
                 "Tab              panel zespołu",
                 "Ctrl+A / Ctrl+R  uruchom / wznów plan",
                 "Ctrl+X           anuluj trwającą pracę",
+                "/pause, /continue wstrzymaj nowe kroki / kontynuuj",
                 "Ctrl+N           nowa rozmowa",
                 "Ctrl+P           paleta poleceń",
                 "Esc              wyjdź (praca trwa dalej w demonie)",

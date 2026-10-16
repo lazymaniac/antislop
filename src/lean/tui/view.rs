@@ -87,6 +87,8 @@ pub struct View {
     pub comments: BTreeMap<u64, Comment>,
     /// The latest review of the plan verifier and the auditor, as lines.
     pub reviews: HashMap<String, Vec<String>>,
+    /// The user paused new plan work.
+    pub paused: bool,
     /// Agent key of each running turn.
     roles: HashMap<String, String>,
     /// Recipient of each shown message to an agent, by mail id.
@@ -340,6 +342,17 @@ impl View {
                     }
                 }
             }
+            "paused" => {
+                self.paused = payload["paused"] == true;
+                self.push(
+                    Style::default().fg(Color::Yellow),
+                    if self.paused {
+                        "⏸ wstrzymano: nowe kroki czekają (/continue wznawia)"
+                    } else {
+                        "▶ wznowiono"
+                    },
+                );
+            }
             "integration" => self.push(
                 if payload["status"] == "approved" {
                     dim()
@@ -474,6 +487,9 @@ impl View {
     /// overlay. Waiting and idle states are named, never shown as activity.
     pub fn progress(&self) -> Vec<String> {
         let mut lines = vec![];
+        if self.paused {
+            lines.push("⏸ wstrzymane: nowe kroki czekają".into());
+        }
         if let Some(activity) = &self.activity {
             lines.push(activity.clone());
         }

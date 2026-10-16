@@ -80,6 +80,11 @@ pub enum Request {
     Cancel {
         conversation: String,
     },
+    /// Stops starting new plan work, or continues it.
+    Pause {
+        conversation: String,
+        paused: bool,
+    },
     /// The user's comment on one element of the team panel or a diff.
     Comment {
         conversation: String,
@@ -224,6 +229,13 @@ fn handle(
         }
         Request::Cancel { conversation } => {
             core.cancel(&conversation);
+            Value::Null
+        }
+        Request::Pause {
+            conversation,
+            paused,
+        } => {
+            core.pause(&conversation, paused)?;
             Value::Null
         }
         Request::Comment {
