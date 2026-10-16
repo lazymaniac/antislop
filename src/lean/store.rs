@@ -128,10 +128,23 @@ impl TurnStatus {
     }
 }
 
+/// The layout of `core.db` this build writes (`PRAGMA user_version`).
+/// Tables only ever get added; a change to an existing one raises it and
+/// migrates from the version found.
+const SCHEMA: u32 = 1;
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        let found: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        crate::require(
+            found <= SCHEMA,
+            &format!(
+                "{} was written by a newer antislop (schema {found}, this one knows {SCHEMA})",
+                path.display()
+            ),
+        )?;
         connection.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
              CREATE TABLE IF NOT EXISTS conversations(
@@ -181,6 +194,7 @@ impl Store {
                conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
                autonomous INTEGER NOT NULL);",
         )?;
+        connection.pragma_update(None, "user_version", SCHEMA)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -941,6 +955,24 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_newer_schema_is_refused_not_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core.db");
+        drop(Store::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        let version: u32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA);
+        connection
+            .pragma_update(None, "user_version", SCHEMA + 1)
+            .unwrap();
+        drop(connection);
+        let error = Store::open(&path).err().unwrap();
+        assert!(error.to_string().contains("newer antislop"), "{error}");
+    }
 
     #[test]
     fn rows_and_events_round_trip() {

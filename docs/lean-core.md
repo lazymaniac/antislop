@@ -185,6 +185,12 @@ the user's version recoverable.
 - `comments(id, conversation_id, plan_id, target, label, text, status, message, created_ms, updated_ms)`
 - `events(seq, conversation_id, turn_id, kind, payload)` — append-only; tool
   calls are stored as a name and a one-line detail, never their output.
+- `pauses(conversation_id)` and `modes(conversation_id, autonomous)` — what
+  the user set for a conversation.
+
+`PRAGMA user_version` holds the schema version (1). Tables are only added;
+a build that finds a newer version refuses the state instead of rewriting
+it.
 
 Writer worktrees live in `<state>/worktrees/<task>`, removed after a clean
 integration. A real nine-task analysis of this repository (40 agent turns,
@@ -361,7 +367,6 @@ replaced when idle. The socket is `<state>/core.sock`, or
   guides agents but does not limit what they read.
 - Prompts are passed as arguments (the orchestrator's plan report is bounded
   by 40k characters per task).
-- `core.db` has no schema versioning yet.
 - The history records each turn's CLI, model and effort, not the CLI's
   version.
 - agy and gemini offer no switch for their own subagents; the runtime cannot
@@ -411,5 +416,13 @@ replaced when idle. The socket is `<state>/core.sock`, or
    every obligation, idempotent integration, writers never given directories
    outside the project, configuration kept by a busy daemon.
 
+14. ✅ Control and observability: pause and continue, a conversation's mode
+   switched for what comes next, why a task stopped, token use as reported,
+   an export of the history with secrets redacted, agents' escapes kept off
+   the terminal, `NO_COLOR` and ASCII drawing, conversation search, common
+   verifier checks with a `blocked` status, the CLIs' own subagents off,
+   a warning about uncommitted changes writers do not see, a versioned
+   `core.db` (design §6.2, §7.6, §8, §9.5, §10.3, §11.1, §13–§15).
+
 Open (design M5): measuring real CLIs on the scenarios that rest on
-instructions, and a schema version for `core.db`.
+instructions.
