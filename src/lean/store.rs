@@ -231,6 +231,40 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// One author's messages after `after`.
+    pub fn messages_by(
+        &self,
+        conversation: &str,
+        author: &str,
+        after: u64,
+    ) -> Result<Vec<Message>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT seq,author,text FROM messages
+             WHERE conversation_id=?1 AND author=?2 AND seq>?3 ORDER BY seq",
+        )?;
+        let rows = statement.query_map(params![conversation, author, after as i64], |row| {
+            Ok(Message {
+                seq: row.get::<_, i64>(0)? as u64,
+                author: row.get(1)?,
+                text: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// How many messages `author` wrote since the user's last message.
+    pub fn count_since_user(&self, conversation: &str, author: &str) -> Result<usize> {
+        let count: i64 = self.db().query_row(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id=?1 AND author=?2
+               AND seq > COALESCE((SELECT MAX(seq) FROM messages
+                                   WHERE conversation_id=?1 AND author='user'), 0)",
+            params![conversation, author],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
     pub fn start_turn(
         &self,
         conversation: &str,
@@ -320,10 +354,9 @@ impl Store {
         )? as u64)
     }
 
-    /// The session of the latest turn of `role` that got one, even if that
-    /// turn later failed: the CLI keeps what it already saw.
-    /// The role's latest session with `provider`; another CLI's session id
-    /// would mean nothing to it.
+    /// The session of the latest turn of `role` with `provider` that got one,
+    /// even if that turn later failed: the CLI keeps what it already saw.
+    /// Another CLI's session id would mean nothing to it.
     pub fn last_session(
         &self,
         conversation: &str,
@@ -385,6 +418,14 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(all as usize)
+    }
+
+    /// Moves every task of a plan that is still `from` to `to`.
+    pub fn set_plan_status(&self, plan_id: &str, from: &str, to: &str) -> Result<usize> {
+        Ok(self.db().execute(
+            "UPDATE tasks SET status=?3 WHERE plan_id=?1 AND status=?2",
+            params![plan_id, from, to],
+        )?)
     }
 
     pub fn add_plan(&self, conversation: &str, specs: &[Value]) -> Result<Vec<Task>> {

@@ -46,7 +46,11 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
             + r#"
 def verdict(approved, findings):
     return "ok\n```verdict\n" + json.dumps({"approved": approved, "findings": findings}) + "\n```"
-if "You verify" in prompt:
+REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:")
+if any(marker in prompt for marker in REVIEW):
+    session = "reviewer"
+    answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```"
+elif "You verify" in prompt:
     session = "verifier"
     approved = "Storage" not in prompt
     answer = verdict(approved, [] if approved else [{"severity": "high", "issue": "wrong claim", "where": "src/a.rs:1"}])
@@ -111,8 +115,12 @@ fn calls(dir: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
+fn is_reviewer(args: &str) -> bool {
+    args.contains("You review a plan") || args.contains("You audit")
+}
+
 fn is_verifier(args: &str) -> bool {
-    args.contains("You verify") || args.contains("Check it again")
+    !is_reviewer(args) && (args.contains("You verify") || args.contains("Check it again"))
 }
 
 #[test]
@@ -156,7 +164,7 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
     let calls = calls(dir.path());
     let workers: Vec<_> = calls
         .iter()
-        .filter(|(bin, args)| bin == "agy" && !is_verifier(args))
+        .filter(|(bin, args)| bin == "agy" && !is_verifier(args) && !is_reviewer(args))
         .collect();
     let verifiers: Vec<_> = calls
         .iter()
@@ -174,6 +182,12 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
         verifiers[1].1.contains("--conversation verifier"),
         "re-check resumes"
     );
+    let reviews: Vec<_> = calls
+        .iter()
+        .filter(|(_, args)| is_reviewer(args))
+        .map(|(_, args)| args.contains("You audit"))
+        .collect();
+    assert_eq!(reviews, [false, true], "one plan review, then one audit");
     let tui_verifier = &verifiers.last().unwrap().1;
     assert!(tui_verifier.contains("r-tui") && !tui_verifier.contains("r-storage"));
 }

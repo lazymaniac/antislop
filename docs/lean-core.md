@@ -53,22 +53,47 @@ Read-only modes are not a confinement: agy's plan mode was observed running
 1. **Conversation.** The user's message goes to the orchestrator session
    (cwd = project). It answers, asks, or returns a plan as JSON:
    tasks with goal, scope directories, `writes` flag, dependencies, worker
-   profile, and verifier focus + domain risks.
-2. **Plan approval.** Supervised policy: the user accepts the plan (one key).
-3. **Task.** The worker runs (worktree if `writes`, otherwise the project
+   profile, and verifier focus + domain risks. Its instructions sketch team
+   shapes (change, refactoring, security fix, new project, research,
+   document, analysis); small requests get few, short tasks.
+2. **Plan review.** Before the user sees a plan, an independent plan
+   verifier (the orchestration route's verifier profile, its own session,
+   cwd = project, read-only) checks it against the user's messages: coverage,
+   missing or misordered dependencies, assumed ordering or unknowns,
+   checkable goals, scope, `writes`, verifier focus. A plan it sends back goes
+   to the orchestrator with the findings (shown in the transcript as the plan
+   verifier's message) and is marked `revised`; after three returns since the
+   user's last message the plan is shown with the open findings. A review
+   that fails to run shows the plan with the error.
+3. **Plan approval.** `supervised`: the user accepts the plan (one key).
+   `autonomous`: a plan the verifier approved starts at once; one it did not
+   approve, or a fourth plan in a row without a user message, waits for the
+   user. Deviation from design §6.2: correction rounds inside a task run
+   without asking in both modes; asking at every round is what made the first
+   runtime unusable.
+4. **Task.** The worker runs (worktree if `writes`, otherwise the project
    read-only). A writer's changes are committed in its worktree by the runtime.
-4. **Verification.** The verifier gets the goal, the worker's report, the diff
-   range (writers) and its risks; it reads the files itself and returns
-   `{approved, findings}`. Findings resume the worker's session; the loop is
-   bounded (default 3 rounds), then the task waits for the user.
-5. **Integration.** An approved writer's work is squashed into one change
+5. **Verification.** The verifier gets the goal, the worker's report, the diff
+   range (writers), its risks and a short checklist for the task's kind
+   (`tasks::checklist`: e.g. assertions that fail on the bug for testing,
+   suppressed warnings for static analysis, recomputation for analysis,
+   sources that support claims for research). It reads the files itself and
+   returns `{approved, findings}`. Findings resume the worker's session; the
+   loop is bounded (3 rounds), then the task waits for the user.
+6. **Integration.** An approved writer's work is squashed into one change
    and landed on the user's current branch, one integration at a time. With
    `local_commits` it becomes one commit (cherry-pick); otherwise it is left as
    ordinary unstaged changes. Without `local_write` it stays on its branch
    `antislop/<task>`. Integration never touches files the user is editing and
    never leaves conflict markers: such a task ends `needs_user` with its work
    kept on its branch.
-6. **Summary.** The orchestrator receives task outcomes and answers the user.
+7. **Audit.** When a plan ends (not cancelled), an independent auditor (own
+   session, read-only) lists every obligation of the user's messages and
+   checks the results and files against them. Its verdict goes into the
+   results the orchestrator receives; gaps ask it to propose a plan for what
+   is missing.
+8. **Summary.** The orchestrator receives task outcomes and the audit and
+   answers the user (or proposes the next plan).
 
 ## State
 
@@ -124,6 +149,12 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - On start, turns left running become `interrupted` and unfinished tasks
   become `cancelled` with the reason; nothing waits for a reconciliation.
 - At most four tasks of a plan run at once.
+- No plan is shown to the user, or run, without passing through the plan
+  verifier; an autonomous conversation never runs a plan the verifier did not
+  approve, and stops for the user after three plans in a row.
+- The audit counts as part of the running plan: it can be cancelled and keeps
+  the conversation busy, and the orchestrator starts on the results before the
+  conversation can look idle.
 - A session is resumed only by the CLI that created it.
 
 ## Known limits
@@ -157,3 +188,6 @@ replaced when idle. The socket is `<state>/core.sock`, or
    regressions in `tests/lean_recovery.rs` and the guarantees above.
 5. ✅ The old runtime, TUI, context reader, recovery/proof machinery and the
    requirement audits were deleted; `antislop` with no verb opens the chat.
+6. ✅ Plan verifier, autonomous mode, final audit, per-kind verifier
+   checklists, team shapes in the orchestrator's instructions
+   (`tests/lean_review.rs`).

@@ -36,7 +36,11 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
         &agy,
         common
             + r#"
-if "You verify" in prompt:
+REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:")
+if any(marker in prompt for marker in REVIEW):
+    session = "reviewer"
+    answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```"
+elif "You verify" in prompt:
     session = "verifier"
     answer = "```verdict\n" + json.dumps({"approved": "git diff" in prompt, "findings": []}) + "\n```"
 else:
@@ -141,7 +145,22 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    let agents: Vec<_> = calls.iter().filter(|call| call["bin"] == "agy").collect();
+    let reviewer = |call: &&Value| {
+        let args = call["args"].to_string();
+        args.contains("You review a plan") || args.contains("You audit")
+    };
+    // Plan review and the final audit read the project itself.
+    let reviews: Vec<_> = calls.iter().filter(reviewer).collect();
+    assert_eq!(reviews.len(), 2);
+    assert!(
+        reviews
+            .iter()
+            .all(|call| call["cwd"] == project.to_str().unwrap())
+    );
+    let agents: Vec<_> = calls
+        .iter()
+        .filter(|call| call["bin"] == "agy" && !reviewer(call))
+        .collect();
     assert_eq!(agents.len(), 2);
     let worktree = agents[0]["cwd"].as_str().unwrap();
     assert!(worktree.contains("/.antislop/worktrees/"), "{worktree}");

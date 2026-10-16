@@ -98,10 +98,10 @@ impl View {
                         Style::default()
                             .fg(Color::Green)
                             .add_modifier(Modifier::BOLD),
-                        if author == ORCHESTRATOR {
-                            "orkiestrator".to_owned()
-                        } else {
-                            author.to_owned()
+                        match author {
+                            ORCHESTRATOR => "orkiestrator".to_owned(),
+                            "plan-verifier" => "weryfikator planu".to_owned(),
+                            author => author.to_owned(),
                         },
                     );
                     self.push(Style::default(), text("text"));
@@ -165,14 +165,28 @@ impl View {
                     })
                     .collect();
                 self.task_rows.clear();
+                for line in super::cli::review_lines("weryfikator planu", &payload["review"]) {
+                    self.push(Style::default().fg(Color::Yellow), line);
+                }
+                let next = if payload["automatic"] == true {
+                    "uruchamiam (tryb autonomiczny).".to_owned()
+                } else {
+                    let waiting = payload["waiting"]
+                        .as_str()
+                        .map(|reason| format!("Czeka na Ciebie: {reason}. "))
+                        .unwrap_or_default();
+                    format!("{waiting}Ctrl+A uruchamia, albo napisz, co zmienić.")
+                };
                 self.push(
                     Style::default().fg(Color::Yellow),
-                    format!(
-                        "Plan: {} zadań. Ctrl+A uruchamia, albo napisz, co zmienić.",
-                        self.tasks.len()
-                    ),
+                    format!("Plan: {} zadań. {next}", self.tasks.len()),
                 );
                 self.push(Style::default(), "");
+            }
+            "audit" => {
+                for line in super::cli::review_lines("audyt", payload) {
+                    self.push(Style::default().fg(Color::Yellow), line);
+                }
             }
             "plan_invalid" => self.push(
                 Style::default().fg(Color::Red),
@@ -699,6 +713,39 @@ mod tests {
         ));
         assert_eq!(view.activity, None);
         assert!(view.transcript.last().unwrap().text.contains("limit"));
+    }
+
+    #[test]
+    fn reviews_and_audits_are_shown_with_their_findings() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "plan_proposed",
+            json!({"plan": "p1", "tasks": [{"id": "t1", "title": "A"}],
+                   "review": {"approved": false, "error": "login required"},
+                   "automatic": false, "waiting": "the plan verifier did not approve this plan"}),
+        ));
+        view.apply(&event(
+            2,
+            None,
+            "audit",
+            json!({"plan": "p1", "approved": false,
+                   "findings": [{"severity": "high", "issue": "README missing"}]}),
+        ));
+        let text: Vec<&str> = view
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert!(text.contains(&"⚠ weryfikator planu nie zadziałał: login required"));
+        assert!(
+            text.iter()
+                .any(|line| line.contains("Czeka na Ciebie") && line.contains("Ctrl+A"))
+        );
+        assert!(text.contains(&"⚠ audyt: zastrzeżenia"));
+        assert!(text.contains(&"  - [high] README missing"));
+        assert!(view.plan_proposed());
     }
 
     #[test]

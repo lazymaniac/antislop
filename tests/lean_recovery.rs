@@ -34,10 +34,11 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
         r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
-if "Task: Fail" in prompt and "You verify" not in prompt:
+if "Task: Fail" in prompt and "You verify" not in prompt and "You audit" not in prompt:
     print("login required", file=sys.stderr)
     sys.exit(1)
-answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```" if "You verify" in prompt else "report"
+REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:", "You verify")
+answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```" if any(m in prompt for m in REVIEW) else "report"
 print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status": "SUCCESS", "response": answer, "usage": {}}}))
 "#,
     )

@@ -50,9 +50,14 @@ pub mod status {
     pub const FAILED: &str = "failed";
     pub const SKIPPED: &str = "skipped";
     pub const CANCELLED: &str = "cancelled";
+    /// A plan the plan verifier sent back; the orchestrator proposes another.
+    pub const REVISED: &str = "revised";
 
     pub fn finished(status: &str) -> bool {
-        matches!(status, APPROVED | NEEDS_USER | FAILED | SKIPPED | CANCELLED)
+        matches!(
+            status,
+            APPROVED | NEEDS_USER | FAILED | SKIPPED | CANCELLED | REVISED
+        )
     }
 }
 
@@ -173,11 +178,119 @@ pub fn orchestrator_instructions() -> String {
          Each task gets a worker that reads the files itself (give scope, not \
          content) and a verifier that checks the worker's result. Give each \
          verifier only the risks relevant to its own task. `kind` is one of: {}. \
-         Set `writes` only for tasks that must change files. The user approves \
-         the plan before it runs; afterwards you receive the results and \
-         answer the user.",
+         Set `writes` only for tasks that must change files. A task that needs \
+         another's result depends on it; tasks that change the same files or \
+         contract are ordered. An unknown that matters is established by an \
+         earlier task, never assumed.\n\n\
+         Shape the team to the request; small requests get few, short tasks:\n\
+         - change to existing code: context, then implementation per module \
+         (with its tests), then integration that checks the whole change; add \
+         architecture, dependencies, security or performance tasks when the \
+         change carries those risks;\n\
+         - refactoring: context and characterization tests first, then the \
+         refactoring, then integration;\n\
+         - security fix: threat and reproduction, fix, adversarial tests;\n\
+         - new project: requirements, architecture, a vertical slice, then \
+         increments;\n\
+         - research: independent areas researched separately, then a synthesis;\n\
+         - document: outline, research if needed, writing;\n\
+         - analysis: method, the analysis, an independent recalculation.\n\n\
+         An independent plan verifier checks your plan before the user sees it \
+         and may send it back with findings. After the plan runs you receive \
+         each task's result and an independent audit of whether the request was \
+         fully delivered; answer the user, or propose a plan for what is \
+         missing.",
         kinds.join(", ")
     )
+}
+
+/// What a verifier checks besides its own focus, by the kind of work: only
+/// the concerns of its worker's domain.
+pub fn checklist(kind: WorkKind) -> &'static str {
+    use WorkKind::*;
+    match kind {
+        Orchestration | Planning => {
+            "dependencies complete and correctly ordered; no intermediate state \
+             or ordering assumed that the system does not guarantee; unknowns \
+             established, not assumed; every requirement covered by a task"
+        }
+        Context => {
+            "every claim backed by files actually read; dependencies, contracts \
+             and conventions that matter are covered; open unknowns named"
+        }
+        Requirements => {
+            "every requirement of the source found, including ones in the middle; \
+             each qualifier of a requirement kept; contradictions named"
+        }
+        Options => {
+            "real alternatives considered under the same conditions; a variant \
+             that misses an obligation is excluded before ranking; the choice \
+             follows from the evidence"
+        }
+        Architecture => {
+            "fits the project's existing structure and idioms; the simplest \
+             adequate design; no pattern or layer without a present need; no \
+             policy duplicated across modules"
+        }
+        Dependencies => {
+            "an existing maintained library considered before custom code; \
+             licenses of the actual dependency graph (vendored files included) \
+             compatible; chosen license option and its obligations stated"
+        }
+        Implementation => {
+            "does exactly what the goal asks, nothing more; no duplicated module \
+             or needless layer; follows project conventions; edge cases and \
+             combinations of inputs handled; tests exercise the change with \
+             meaningful assertions; run the project's checks when you can"
+        }
+        Refactoring => {
+            "behaviour preserved, with evidence; structure actually improved; no \
+             speculative abstraction; when no change is needed, the report says \
+             why instead of a cosmetic patch"
+        }
+        StaticAnalysis => {
+            "analyzers actually run with the project's configuration; warnings \
+             count even when the exit code is 0; no suppression, rule weakening \
+             or baseline change to make findings disappear"
+        }
+        TestDesign => {
+            "scenarios follow from the requirements and the likely failures; \
+             combinations of parameters that interact are covered, not only \
+             each one separately"
+        }
+        Testing => {
+            "tests have assertions that fail on the bug they target; they run \
+             the real code path, not a mock of it; green runs actually observed"
+        }
+        Security => {
+            "threats relevant to the change modelled; findings reproduced, false \
+             alarms separated; the fix closes the issue without new exposure"
+        }
+        Performance => {
+            "benchmark representative and compared to a baseline under the same \
+             conditions; semantics unchanged"
+        }
+        Integration => {
+            "the combined change builds and passes checks as a whole; contracts \
+             between changed modules agree; no regression"
+        }
+        Research => {
+            "every source exists and supports the claim attributed to it; facts \
+             separated from conclusions; sources current enough"
+        }
+        Writing => {
+            "factually correct against the sources and the project; consistent; \
+             matches the brief"
+        }
+        Analysis => {
+            "data and assumptions stated; calculations recomputed independently; \
+             units and denominators correct; reproducible"
+        }
+        Delivery => {
+            "the report matches what was actually done; limitations and open \
+             risks stated; instructions work"
+        }
+    }
 }
 
 pub fn worker_prompt(project: &str, task: &TaskSpec) -> String {
@@ -234,12 +347,14 @@ pub fn verifier_prompt(
         "You verify another agent's work. The project is your current working \
          directory: {project}. Check the worker's claims against the actual \
          files yourself with your tools. Work read-only.\n\n\
-         Task: {}\nGoal: {}\nScope: {}\nYour focus: {}\nRisks to check: {risks}\n\n\
+         Task: {}\nGoal: {}\nScope: {}\nYour focus: {}\nAlso check: {}\n\
+         Risks to check: {risks}\n\n\
          The worker's report:\n<<<\n{report}\n>>>\n\n{}{}",
         task.title,
         task.goal,
         scope_text(&task.scope),
         task.verifier.focus,
+        checklist(task.kind),
         changes
             .map(|text| format!("{text}\n\n"))
             .unwrap_or_default(),
@@ -255,6 +370,104 @@ pub fn verifier_followup(report: &str, changes: Option<&str>) -> String {
             .unwrap_or_default()
     )
 }
+
+/// Longest user request handed to a reviewer in one prompt.
+const REQUEST_LIMIT: usize = 60_000;
+
+fn bounded(text: &str, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => format!("{}\n[truncated]", &text[..end]),
+        None => text.to_owned(),
+    }
+}
+
+pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskSpec]) -> String {
+    format!(
+        "You review a plan before any of it runs or the user sees it. The \
+         project is your current working directory: {project}. Read the files \
+         you need yourself; work read-only.\n\n\
+         The user's request:\n<<<\n{}\n>>>\n\n\
+         The orchestrator's plan:\n{}\n\n{}{}",
+        bounded(request, REQUEST_LIMIT),
+        plan_text(plan),
+        PLAN_CHECKS,
+        VERDICT_FORMAT
+    )
+}
+
+pub fn plan_review_followup(request: &str, plan: &[TaskSpec]) -> String {
+    format!(
+        "{}The orchestrator's new plan:\n{}\n\nCheck it again. {}{}",
+        if request.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "The user wrote since:\n<<<\n{}\n>>>\n\n",
+                bounded(request, REQUEST_LIMIT)
+            )
+        },
+        plan_text(plan),
+        PLAN_CHECKS,
+        VERDICT_FORMAT
+    )
+}
+
+const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
+     by some task and nothing unrequested is planned; dependencies are complete \
+     and ordered (a task needing another's result depends on it; tasks changing \
+     the same files or contract are not unordered); no ordering or intermediate \
+     state is assumed that the system does not guarantee; no unknown that \
+     matters is assumed instead of being established first; each goal is \
+     checkable; scope names the places that matter, including related projects \
+     or services; tasks that change files are marked `writes`; each verifier's \
+     focus and risks fit its own task. ";
+
+fn plan_text(plan: &[TaskSpec]) -> String {
+    serde_json::to_string_pretty(plan).unwrap_or_default()
+}
+
+pub fn plan_rejected(findings: &[Value]) -> String {
+    format!(
+        "The plan verifier sent the plan back before the user saw it:\n{}\n\n\
+         Propose a corrected plan, or explain to the user why a finding does \
+         not apply.",
+        findings_text(findings)
+    )
+}
+
+pub fn audit_prompt(project: &str, request: &str, results: &str) -> String {
+    format!(
+        "You audit whether the user's request was fully delivered. The project \
+         is your current working directory: {project}. Read the files yourself \
+         to check what the results claim; work read-only.\n\n\
+         The user's request:\n<<<\n{}\n>>>\n\n\
+         Results of the plan that ran:\n{results}\n\n{}{}",
+        bounded(request, REQUEST_LIMIT),
+        AUDIT_CHECKS,
+        VERDICT_FORMAT
+    )
+}
+
+pub fn audit_followup(request: &str, results: &str) -> String {
+    format!(
+        "{}Results of the next plan:\n{results}\n\n{}{}",
+        if request.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "The user wrote since:\n<<<\n{}\n>>>\n\n",
+                bounded(request, REQUEST_LIMIT)
+            )
+        },
+        AUDIT_CHECKS,
+        VERDICT_FORMAT
+    )
+}
+
+const AUDIT_CHECKS: &str = "List every obligation in the request, each \
+     qualifier included, and decide for each whether the results and the files \
+     show it done. A missing, partial or unverified obligation is a high \
+     finding. ";
 
 const VERDICT_FORMAT: &str = "End your answer with a verdict block:\n\
      ```verdict\n\

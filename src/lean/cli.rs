@@ -199,6 +199,9 @@ pub fn describe(event: &Value) -> Option<String> {
         "message" if payload["author"] == "runtime" => {
             "· wyniki zadań przekazane orkiestratorowi".into()
         }
+        "message" if payload["author"] == "plan-verifier" => {
+            format!("\nweryfikator planu odesłał plan:\n{}\n", text("text"))
+        }
         "message" if payload["author"] != "user" => {
             format!("\n{}:\n{}\n", text("author"), text("text"))
         }
@@ -226,11 +229,20 @@ pub fn describe(event: &Value) -> Option<String> {
                     )
                 })
                 .collect();
-            format!(
-                "Plan:\n{}\nWpisz /accept, aby go uruchomić.",
-                tasks.join("\n")
-            )
+            let mut lines = review_lines("weryfikator planu", &payload["review"]);
+            lines.insert(0, format!("Plan:\n{}", tasks.join("\n")));
+            lines.push(if payload["automatic"] == true {
+                "Uruchamiam (tryb autonomiczny).".to_owned()
+            } else {
+                let waiting = payload["waiting"]
+                    .as_str()
+                    .map(|reason| format!("Czeka na Ciebie: {reason}. "))
+                    .unwrap_or_default();
+                format!("{waiting}Wpisz /accept, aby go uruchomić.")
+            });
+            lines.join("\n")
         }
+        "audit" => review_lines("audyt", payload).join("\n"),
         "plan_invalid" => format!("✗ plan odrzucony: {}", text("error")),
         "task" => format!(
             "· [{}] {}: {} (runda {})",
@@ -247,6 +259,39 @@ pub fn describe(event: &Value) -> Option<String> {
         }
         _ => return None,
     })
+}
+
+/// What a reviewer (plan verifier, auditor) concluded, for the user.
+pub fn review_lines(who: &str, review: &Value) -> Vec<String> {
+    if review.is_null() {
+        return vec![];
+    }
+    if let Some(error) = review["error"].as_str() {
+        return vec![format!("⚠ {who} nie zadziałał: {error}")];
+    }
+    let findings: Vec<String> = review["findings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|finding| match finding.as_str() {
+            Some(text) => format!("  - {text}"),
+            None => format!(
+                "  - [{}] {}",
+                finding["severity"].as_str().unwrap_or("?"),
+                finding["issue"].as_str().unwrap_or_default()
+            ),
+        })
+        .collect();
+    let mut lines = vec![if review["approved"] == true {
+        format!("✓ {who}: bez zastrzeżeń")
+    } else {
+        format!("⚠ {who}: zastrzeżenia")
+    }];
+    if review["approved"] == true && !findings.is_empty() {
+        lines[0] = format!("✓ {who}: drobne uwagi");
+    }
+    lines.extend(findings);
+    lines
 }
 
 fn print(event: &Value) {

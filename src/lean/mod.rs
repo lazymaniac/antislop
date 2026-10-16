@@ -20,10 +20,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use store::{Conversation, Message, Store, Task, TurnStatus};
-use tasks::{TaskSpec, status};
+use tasks::{TaskSpec, Verdict, status};
 
 const ORCHESTRATOR: &str = "orchestrator";
 const RUNTIME: &str = "runtime";
+/// Checks each plan before the user sees it.
+const PLAN_VERIFIER: &str = "plan-verifier";
+/// Checks, after a plan ran, that the user's request was fully delivered.
+const AUDITOR: &str = "auditor";
+/// Plans an autonomous conversation runs on its own after the user's last
+/// message; the next one waits for the user.
+const AUTO_PLANS: usize = 3;
 /// Longest worker report handed back to the orchestrator per task.
 const REPORT_LIMIT: usize = 40_000;
 /// Tasks of one plan running at once; the rest wait their turn.
@@ -155,11 +162,22 @@ impl Core {
         let plan_id = plan_id.to_owned();
         std::thread::spawn(move || {
             core.run_plan(&conversation, &plan_id, &cancel);
-            core.plans
-                .lock()
-                .expect("plans mutex")
-                .remove(&conversation);
-            let _ = core.report_plan(&conversation, &plan_id);
+            // The audit still counts as the plan running: it can be cancelled
+            // and keeps the daemon busy.
+            let report = core.plan_report(&conversation, &plan_id, &cancel);
+            // The orchestrator starts on the results before the plan stops
+            // counting as running, so the conversation never looks idle in
+            // between; a plan it proposes waits for this lock.
+            let mut plans = core.plans.lock().expect("plans mutex");
+            if let Ok(report) = report
+                && core
+                    .store
+                    .add_message(&conversation, RUNTIME, &report)
+                    .is_ok()
+            {
+                core.wake(&conversation);
+            }
+            plans.remove(&conversation);
         });
         Ok(tasks)
     }
@@ -177,7 +195,7 @@ impl Core {
         std::thread::spawn(move || core.orchestrate(&conversation, &cancel));
     }
 
-    fn orchestrate(&self, conversation: &str, cancel: &AtomicBool) {
+    fn orchestrate(self: &Arc<Self>, conversation: &str, cancel: &AtomicBool) {
         loop {
             // Decide under the lock so a message sent right now either is seen
             // here or finds no loop running and starts one.
@@ -219,7 +237,12 @@ impl Core {
             .next_back())
     }
 
-    fn orchestrator_turn(&self, conversation: &str, upto: u64, cancel: &AtomicBool) -> Result<()> {
+    fn orchestrator_turn(
+        self: &Arc<Self>,
+        conversation: &str,
+        upto: u64,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         // A failed turn may never have reached the agent: repeat everything
         // asked since the last answer.
@@ -250,22 +273,7 @@ impl Core {
         let (text, plan) = tasks::parse_plan(&answer);
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
         match plan {
-            Some(Ok(specs)) => {
-                let specs = specs
-                    .iter()
-                    .map(serde_json::to_value)
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                let tasks = self.store.add_plan(conversation, &specs)?;
-                self.store.append_event(
-                    conversation,
-                    None,
-                    "plan_proposed",
-                    &json!({"plan": tasks[0].plan_id, "tasks": tasks.iter().map(|task| json!({
-                        "id": task.spec["id"], "title": task.spec["title"],
-                        "kind": task.spec["kind"], "writes": task.spec["writes"],
-                    })).collect::<Vec<_>>()}),
-                )?;
-            }
+            Some(Ok(specs)) => self.propose(conversation, &project, &specs, cancel)?,
             Some(Err(error)) => {
                 self.store.append_event(
                     conversation,
@@ -277,6 +285,139 @@ impl Core {
             None => {}
         }
         Ok(())
+    }
+
+    /// Stores the plan and has it checked. A plan the verifier sends back
+    /// goes back to the orchestrator (a bounded number of times); otherwise it
+    /// is shown to the user with the verdict, and in autonomous mode a checked
+    /// plan starts at once.
+    fn propose(
+        self: &Arc<Self>,
+        conversation: &str,
+        project: &Path,
+        specs: &[TaskSpec],
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        let values = specs
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let tasks = self.store.add_plan(conversation, &values)?;
+        let plan_id = tasks[0].plan_id.clone();
+        let project_text = project.to_string_lossy().into_owned();
+        let review = self.review(
+            conversation,
+            PLAN_VERIFIER,
+            project,
+            cancel,
+            |first, request| {
+                if first {
+                    tasks::plan_review_prompt(&project_text, request, specs)
+                } else {
+                    tasks::plan_review_followup(request, specs)
+                }
+            },
+        )?;
+        if cancel.load(Ordering::SeqCst) {
+            self.store
+                .set_plan_status(&plan_id, status::PROPOSED, status::CANCELLED)?;
+            return Ok(());
+        }
+        if let Ok(verdict) = &review
+            && !verdict.approved
+            && self.store.count_since_user(conversation, PLAN_VERIFIER)?
+                < tasks::MAX_ROUNDS as usize
+        {
+            self.store
+                .set_plan_status(&plan_id, status::PROPOSED, status::REVISED)?;
+            self.store.append_event(
+                conversation,
+                None,
+                "plan_review",
+                &json!({"plan": plan_id, "approved": false, "findings": verdict.findings}),
+            )?;
+            // The orchestrator's loop answers this message next.
+            self.store.add_message(
+                conversation,
+                PLAN_VERIFIER,
+                &tasks::plan_rejected(&verdict.findings),
+            )?;
+            return Ok(());
+        }
+        let checked = review.as_ref().is_ok_and(|verdict| verdict.approved);
+        let waiting = if !self.config.policy.automatic_progression() {
+            None
+        } else if !checked {
+            Some("the plan verifier did not approve this plan")
+        } else if self.store.count_since_user(conversation, RUNTIME)? >= AUTO_PLANS {
+            Some("several plans already ran without you")
+        } else {
+            None
+        };
+        self.store.append_event(
+            conversation,
+            None,
+            "plan_proposed",
+            &json!({
+                "plan": plan_id,
+                "tasks": tasks.iter().map(|task| json!({
+                    "id": task.spec["id"], "title": task.spec["title"],
+                    "kind": task.spec["kind"], "writes": task.spec["writes"],
+                })).collect::<Vec<_>>(),
+                "review": review_json(&review),
+                "automatic": self.config.policy.automatic_progression() && waiting.is_none(),
+                "waiting": waiting,
+            }),
+        )?;
+        if self.config.policy.automatic_progression() && waiting.is_none() {
+            self.accept_plan(conversation, &plan_id)?;
+        }
+        Ok(())
+    }
+
+    /// An independent reviewer's verdict (a verifier profile, its own
+    /// session per role), or why there is none. `prompt` gets whether this is
+    /// the session's first turn and the user's messages it has not seen.
+    fn review(
+        &self,
+        conversation: &str,
+        role: &str,
+        project: &Path,
+        cancel: &AtomicBool,
+        prompt: impl FnOnce(bool, &str) -> String,
+    ) -> Result<std::result::Result<Verdict, String>> {
+        let answered = self.store.last_answered(conversation, role)?;
+        let all = self.store.messages_by(conversation, "user", 0)?;
+        let upto = all.last().map_or(0, |message| message.seq);
+        let request = |after: u64| {
+            all.iter()
+                .filter(|message| message.seq > after)
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
+        let setup = TurnSetup {
+            conversation,
+            role: role.into(),
+            profile: self
+                .config
+                .resolve(WorkKind::Orchestration, RoleKind::Verifier),
+            cwd: project.to_path_buf(),
+            add_dirs: vec![],
+            access: agent::Access::ReadOnly,
+            upto_message: upto,
+        };
+        let answer = self.turn(setup, cancel, |first| {
+            prompt(first, &request(if first { 0 } else { answered }))
+        })?;
+        Ok(match answer {
+            Some(answer) => Ok(tasks::parse_verdict(&answer)),
+            None => Err(self
+                .store
+                .last_turn(conversation, role)?
+                .and_then(|turn| turn.error)
+                .unwrap_or_else(|| "no reason recorded".into())),
+        })
     }
 
     /// Runs one agent turn and records it. `Ok(None)` means the turn failed
@@ -681,14 +822,16 @@ impl Core {
         self.set_status(conversation, task, next)
     }
 
-    /// Hands the finished plan's results to the orchestrator, which then
-    /// answers the user.
-    fn report_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<()> {
+    /// The finished plan's results, and an independent audit of whether they
+    /// deliver the user's request, for the orchestrator to answer the user.
+    fn plan_report(
+        &self,
+        conversation: &str,
+        plan_id: &str,
+        cancel: &AtomicBool,
+    ) -> Result<String> {
         let tasks = self.store.plan(plan_id)?;
-        let mut text = String::from(
-            "The plan finished. Results of each task follow. Answer the user's \
-             request using them; verify anything doubtful in the files yourself.\n",
-        );
+        let mut results = String::new();
         for task in &tasks {
             let report = task.report.as_deref().unwrap_or("(no report)");
             let report = match report.char_indices().nth(REPORT_LIMIT) {
@@ -698,21 +841,62 @@ impl Core {
             let findings = task
                 .verdict
                 .as_ref()
-                .and_then(|verdict| serde_json::from_value::<tasks::Verdict>(verdict.clone()).ok())
+                .and_then(|verdict| serde_json::from_value::<Verdict>(verdict.clone()).ok())
                 .map(|verdict| tasks::findings_text(&verdict.findings))
                 .filter(|text| !text.is_empty())
                 .unwrap_or_else(|| "none".into());
-            text.push_str(&format!(
-                "\n## {} — {} ({}, {} round(s))\nWorker report:\n{report}\nOpen verifier findings:\n{findings}\n",
+            results.push_str(&format!(
+                "\n## {} — {} ({}, {} round(s))\nGoal: {}\nWorker report:\n{report}\nOpen verifier findings:\n{findings}\n",
                 task.spec["id"].as_str().unwrap_or_default(),
                 task.spec["title"].as_str().unwrap_or_default(),
                 task.status,
-                task.round
+                task.round,
+                task.spec["goal"].as_str().unwrap_or_default(),
             ));
         }
-        self.store.add_message(conversation, RUNTIME, &text)?;
-        self.wake(conversation);
-        Ok(())
+        let mut text = format!(
+            "The plan finished. Results of each task follow. Answer the user's \
+             request using them; verify anything doubtful in the files yourself.\n{results}"
+        );
+        if !cancel.load(Ordering::SeqCst) {
+            let project = PathBuf::from(self.store.conversation(conversation)?.project);
+            let project_text = project.to_string_lossy().into_owned();
+            let audit =
+                self.review(conversation, AUDITOR, &project, cancel, |first, request| {
+                    if first {
+                        tasks::audit_prompt(&project_text, request, &results)
+                    } else {
+                        tasks::audit_followup(request, &results)
+                    }
+                })?;
+            let mut payload = review_json(&audit);
+            payload["plan"] = json!(plan_id);
+            self.store
+                .append_event(conversation, None, "audit", &payload)?;
+            text.push_str(&match &audit {
+                Ok(verdict) if verdict.approved => {
+                    "\n## Independent audit\nThe request is fully delivered.\n".to_owned()
+                }
+                Ok(verdict) => format!(
+                    "\n## Independent audit\nThe request is not fully delivered:\n{}\n\
+                     Propose a plan for what is missing, or tell the user why it stays open.\n",
+                    tasks::findings_text(&verdict.findings)
+                ),
+                Err(error) => format!(
+                    "\n## Independent audit\nThe audit could not run ({error}); tell the \
+                     user the result is unaudited.\n"
+                ),
+            });
+        }
+        Ok(text)
+    }
+}
+
+/// A review's outcome as an event payload.
+fn review_json(review: &std::result::Result<Verdict, String>) -> serde_json::Value {
+    match review {
+        Ok(verdict) => json!({"approved": verdict.approved, "findings": verdict.findings}),
+        Err(error) => json!({"approved": false, "error": error}),
     }
 }
 
@@ -738,6 +922,7 @@ fn orchestrator_prompt(project: &Path, first: bool, messages: &[Message]) -> Str
         .iter()
         .map(|message| match message.author.as_str() {
             RUNTIME => format!("[runtime]\n{}", message.text),
+            PLAN_VERIFIER => format!("[plan verifier]\n{}", message.text),
             _ => message.text.clone(),
         })
         .collect();
