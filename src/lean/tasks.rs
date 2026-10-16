@@ -82,6 +82,61 @@ fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
     Some((remaining, rest[..end].trim()))
 }
 
+/// A message an agent addresses to another agent in a ```message block.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Outgoing {
+    /// A task id of the plan, `orchestrator`, or `all` (every unfinished task).
+    pub to: String,
+    #[serde(default = "default_kind")]
+    pub kind: String,
+    pub text: String,
+}
+
+fn default_kind() -> String {
+    "status".into()
+}
+
+/// Every ```message block of an answer, and the answer without them.
+/// Unreadable blocks stay in the text, so nothing the agent said is lost.
+pub fn parse_messages(answer: &str) -> (String, Vec<Outgoing>) {
+    let mut text = answer.to_owned();
+    let mut messages = vec![];
+    let mut kept = vec![];
+    while let Some((rest, body)) = fenced(&text, "message") {
+        match serde_json::from_str::<Outgoing>(body) {
+            Ok(message) if !message.text.trim().is_empty() => messages.push(message),
+            _ => kept.push(format!("```message\n{body}\n```")),
+        }
+        text = rest;
+    }
+    messages.reverse();
+    for block in kept.into_iter().rev() {
+        text.push_str("\n\n");
+        text.push_str(&block);
+    }
+    (text.trim().to_owned(), messages)
+}
+
+pub const MESSAGE_FORMAT: &str = "To tell another agent something it needs \
+     (a finding about its area, a handoff, a question), add a block \
+     ```message\n{\"to\": \"t2\", \"kind\": \"finding|handoff|question|answer|decision|status\", \
+     \"text\": \"...\"}\n``` addressed to a task id of the plan, \"orchestrator\" or \"all\". \
+     It reaches that agent in its next turn. Keep messages short and only \
+     when they matter to the recipient.";
+
+/// Messages delivered into a turn, before its own prompt.
+pub fn inbox_text(mail: &[crate::lean::store::Mail]) -> String {
+    let lines: Vec<String> = mail
+        .iter()
+        .map(|mail| format!("- from {} ({}): {}", mail.sender, mail.kind, mail.text))
+        .collect();
+    format!("Messages for you:\n{}\n\n", lines.join("\n"))
+}
+
+pub const INBOX_FOLLOWUP: &str = "Messages arrived while you worked (above). \
+     Take them into account where they matter and give your complete, \
+     updated report.";
+
 /// Splits an orchestrator answer into its text and an optional plan.
 pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskSpec>>>) {
     let Some((text, body)) = fenced(answer, "plan") else {
@@ -201,7 +256,9 @@ pub fn orchestrator_instructions() -> String {
          and may send it back with findings. After the plan runs you receive \
          each task's result and an independent audit of whether the request was \
          fully delivered; answer the user, or propose a plan for what is \
-         missing.",
+         missing.\n\n\
+         While a plan runs you may pass something on to a task's worker \
+         (for example what the user just told you): {MESSAGE_FORMAT}",
         kinds.join(", ")
     )
 }
@@ -295,15 +352,29 @@ pub fn checklist(kind: WorkKind) -> &'static str {
     }
 }
 
-pub fn worker_prompt(project: &str, task: &TaskSpec) -> String {
+pub fn worker_prompt(project: &str, task: &TaskSpec, team: &[TaskSpec]) -> String {
+    let others: Vec<String> = team
+        .iter()
+        .filter(|other| other.id != task.id)
+        .map(|other| format!("- {}: {}", other.id, other.title))
+        .collect();
+    let team = if others.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Other tasks of this plan:\n{}\n{MESSAGE_FORMAT}\n\n",
+            others.join("\n")
+        )
+    };
     format!(
         "You are a worker on a team of agents. The project is your current \
          working directory: {project}. Nothing is pasted for you: read the files \
          you need yourself with your tools.\n\n\
-         Task: {}\nGoal: {}\nScope: {}\n\n{}\
+         Task: {}\nTask id: {}\nGoal: {}\nScope: {}\n\n{}{team}\
          End with a complete report of your result; an independent verifier \
          will check it against the files.",
         task.title,
+        task.id,
         task.goal,
         scope_text(&task.scope),
         if task.writes {
@@ -570,6 +641,26 @@ mod tests {
         let looped = "```plan\n{\"tasks\":[{\"id\":\"t1\",\"title\":\"a\",\"goal\":\"b\",\
             \"depends_on\":[\"t1\"],\"kind\":\"analysis\",\"verifier\":{\"focus\":\"c\"}}]}\n```";
         assert!(parse_plan(looped).1.unwrap().is_err());
+    }
+
+    #[test]
+    fn message_blocks_are_taken_out_of_the_answer() {
+        let answer = "Report.\n```message\n{\"to\": \"t2\", \"kind\": \"finding\", \"text\": \"UTF-16\"}\n```\n\
+                      More.\n```message\n{\"to\": \"all\", \"text\": \"heads up\"}\n```\n\
+                      ```message\nnot json\n```";
+        let (text, messages) = parse_messages(answer);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| (
+                    message.to.as_str(),
+                    message.kind.as_str(),
+                    message.text.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            [("t2", "finding", "UTF-16"), ("all", "status", "heads up")]
+        );
+        assert_eq!(text, "Report.\n\nMore.\n\n```message\nnot json\n```");
     }
 
     #[test]

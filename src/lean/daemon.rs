@@ -176,7 +176,7 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         }
         Request::Conversations => json!(core.store.conversations()?),
         Request::Start => json!(core.start(project)?),
-        Request::Send { conversation, text } => json!(core.send(&conversation, &text)?.seq),
+        Request::Send { conversation, text } => core.submit(&conversation, &text)?,
         Request::Accept { conversation, plan } => {
             json!(core.accept_plan(&conversation, &plan)?.len())
         }

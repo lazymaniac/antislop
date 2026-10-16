@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use store::{Conversation, Message, Store, Task, TurnStatus};
+use store::{Conversation, Mail, Message, Store, Task, TurnStatus};
 use tasks::{TaskSpec, Verdict, status};
 
 const ORCHESTRATOR: &str = "orchestrator";
@@ -28,6 +28,8 @@ const RUNTIME: &str = "runtime";
 const PLAN_VERIFIER: &str = "plan-verifier";
 /// Checks, after a plan ran, that the user's request was fully delivered.
 const AUDITOR: &str = "auditor";
+/// Extra worker turns, per round, for messages that arrived while it worked.
+const MAIL_TURNS: usize = 2;
 /// Plans an autonomous conversation runs on its own after the user's last
 /// message; the next one waits for the user.
 const AUTO_PLANS: usize = 3;
@@ -123,6 +125,49 @@ impl Core {
         let message = self.store.add_message(conversation, "user", text)?;
         self.wake(conversation);
         Ok(message)
+    }
+
+    /// A message from the user: `@t2 text` goes to that task's worker (with
+    /// a copy for the orchestrator), anything else to the orchestrator.
+    pub fn submit(self: &Arc<Self>, conversation: &str, text: &str) -> Result<serde_json::Value> {
+        if let Some((to, body)) = text
+            .strip_prefix('@')
+            .and_then(|rest| rest.split_once(char::is_whitespace))
+            && let Some(task) = self
+                .store
+                .latest_plan(conversation)?
+                .into_iter()
+                .find(|task| task.spec["id"] == to)
+        {
+            let body = body.trim();
+            require(!body.is_empty(), "the message is empty")?;
+            let mail = self.store.add_mail(
+                conversation,
+                &format!("worker:{}", task.id),
+                &Mail {
+                    id: 0,
+                    sender: "user".into(),
+                    recipient: to.into(),
+                    kind: "user_instruction".into(),
+                    text: body.into(),
+                },
+            )?;
+            self.store.add_mail(
+                conversation,
+                ORCHESTRATOR,
+                &Mail {
+                    id: 0,
+                    sender: "user".into(),
+                    recipient: ORCHESTRATOR.into(),
+                    kind: "copy".into(),
+                    text: format!("(the user wrote to {to}) {body}"),
+                },
+            )?;
+            return Ok(
+                json!({"mail": mail.id, "recipient_finished": status::finished(&task.status)}),
+            );
+        }
+        Ok(json!(self.send(conversation, text)?.seq))
     }
 
     /// Stops the orchestrator's turn and any running plan; queued messages stay.
@@ -311,6 +356,13 @@ impl Core {
         else {
             return Ok(());
         };
+        let latest = self.store.latest_plan(conversation)?;
+        let answer = self.post(
+            conversation,
+            latest.first().map(|task| task.plan_id.as_str()),
+            ORCHESTRATOR,
+            &answer,
+        )?;
         let (text, plan) = tasks::parse_plan(&answer);
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
         match plan {
@@ -482,6 +534,7 @@ impl Core {
             .as_ref()
             .map_or("unconfigured", |profile| agent::name(profile.provider));
         let resume = self.store.last_session(conversation, &role, provider)?;
+        let inbox = self.store.pending_mail(conversation, &role)?;
         let turn = self
             .store
             .start_turn(conversation, &role, provider, upto_message)?;
@@ -502,7 +555,13 @@ impl Core {
                 access,
                 resume: resume.clone(),
             };
-            agent::run(&spec, &prompt(resume.is_none()), cancel, &mut |event| {
+            let mut text = if inbox.is_empty() {
+                String::new()
+            } else {
+                tasks::inbox_text(&inbox)
+            };
+            text.push_str(&prompt(resume.is_none()));
+            agent::run(&spec, &text, cancel, &mut |event| {
                 match &event {
                     agent::Event::Session { id } => {
                         let _ = self.store.set_session(&turn.id, id);
@@ -520,6 +579,9 @@ impl Core {
         match outcome {
             Ok(outcome) => {
                 self.store.finish_turn(&turn.id, TurnStatus::Done, None)?;
+                let delivered: Vec<u64> = inbox.iter().map(|mail| mail.id).collect();
+                self.store
+                    .mark_delivered(conversation, &delivered, &turn.id)?;
                 announce("turn_finished", json!({"role": role, "status": "done"}));
                 Ok(Some(outcome.text))
             }
@@ -669,6 +731,12 @@ impl Core {
             })
             .filter(|path| !path.starts_with(&project))
             .collect::<Vec<_>>();
+        let team: Vec<TaskSpec> = self
+            .store
+            .plan(&task.plan_id)?
+            .into_iter()
+            .filter_map(|task| serde_json::from_value(task.spec).ok())
+            .collect();
         let worker = format!("worker:{}", task.id);
         let verifier = format!("verifier:{}", task.id);
         // A resumed task keeps its rounds and its verifier's last word.
@@ -687,7 +755,7 @@ impl Core {
         for round in first_round..first_round + tasks::MAX_ROUNDS {
             task.round = round;
             self.set_status(conversation, task, status::WORKING)?;
-            let setup = TurnSetup {
+            let worker_setup = || TurnSetup {
                 conversation,
                 role: worker.clone(),
                 profile: self.config.resolve(spec.kind, RoleKind::Executor),
@@ -696,9 +764,9 @@ impl Core {
                 access,
                 upto_message: 0,
             };
-            let report = self.turn(setup, cancel, |first| {
+            let report = self.turn(worker_setup(), cancel, |first| {
                 if first {
-                    tasks::worker_prompt(&project_text, &spec)
+                    tasks::worker_prompt(&project_text, &spec, &team)
                 } else if resumed && round == first_round {
                     tasks::worker_resume(&findings)
                 } else {
@@ -708,6 +776,24 @@ impl Core {
             let Some(report) = report else {
                 return self.stop_task(conversation, task, &worker, cancel);
             };
+            let mut report = self.post(conversation, Some(&task.plan_id), &spec.id, &report)?;
+            // Messages that arrived while it worked get a turn of their own.
+            for _ in 0..MAIL_TURNS {
+                if self.store.pending_mail(conversation, &worker)?.is_empty() {
+                    break;
+                }
+                let next = self.turn(worker_setup(), cancel, |first| {
+                    if first {
+                        tasks::worker_prompt(&project_text, &spec, &team)
+                    } else {
+                        tasks::INBOX_FOLLOWUP.into()
+                    }
+                })?;
+                let Some(next) = next else {
+                    return self.stop_task(conversation, task, &worker, cancel);
+                };
+                report = self.post(conversation, Some(&task.plan_id), &spec.id, &next)?;
+            }
             task.report = Some(report.clone());
             let changes = match (&worktree, &task.base) {
                 (Some(path), Some(base)) => {
@@ -741,6 +827,12 @@ impl Core {
             let Some(answer) = answer else {
                 return self.stop_task(conversation, task, &verifier, cancel);
             };
+            let answer = self.post(
+                conversation,
+                Some(&task.plan_id),
+                &format!("{}/verifier", spec.id),
+                &answer,
+            )?;
             let verdict = tasks::parse_verdict(&answer);
             task.verdict = Some(serde_json::to_value(&verdict)?);
             if verdict.approved {
@@ -752,6 +844,80 @@ impl Core {
             findings = verdict.findings;
         }
         self.set_status(conversation, task, status::NEEDS_USER)
+    }
+
+    /// Sends the ```message blocks of `answer` and returns the answer
+    /// without them.
+    fn post(
+        &self,
+        conversation: &str,
+        plan_id: Option<&str>,
+        sender: &str,
+        answer: &str,
+    ) -> Result<String> {
+        let (text, outgoing) = tasks::parse_messages(answer);
+        for message in outgoing {
+            self.deliver(conversation, plan_id, sender, message)?;
+        }
+        Ok(text)
+    }
+
+    /// Queues a message for its recipients: the orchestrator, one task's
+    /// worker, or (`all`) the workers of every unfinished task but the
+    /// sender's.
+    fn deliver(
+        &self,
+        conversation: &str,
+        plan_id: Option<&str>,
+        sender: &str,
+        message: tasks::Outgoing,
+    ) -> Result<()> {
+        let plan = match plan_id {
+            Some(plan_id) => self.store.plan(plan_id)?,
+            None => vec![],
+        };
+        let own_task = sender.split('/').next().unwrap_or(sender);
+        let targets: Vec<(String, String)> = match message.to.as_str() {
+            ORCHESTRATOR => vec![(ORCHESTRATOR.into(), ORCHESTRATOR.into())],
+            "all" => plan
+                .iter()
+                .filter(|task| !status::finished(&task.status) && task.spec["id"] != own_task)
+                .map(|task| {
+                    (
+                        task.spec["id"].as_str().unwrap_or_default().to_owned(),
+                        format!("worker:{}", task.id),
+                    )
+                })
+                .collect(),
+            to => plan
+                .iter()
+                .filter(|task| task.spec["id"] == to)
+                .map(|task| (to.to_owned(), format!("worker:{}", task.id)))
+                .collect(),
+        };
+        if targets.is_empty() {
+            self.store.append_event(
+                conversation,
+                None,
+                "mail_rejected",
+                &json!({"sender": sender, "recipient": message.to, "text": message.text,
+                        "reason": "no such recipient in the current plan"}),
+            )?;
+        }
+        for (label, role) in targets {
+            self.store.add_mail(
+                conversation,
+                &role,
+                &Mail {
+                    id: 0,
+                    sender: sender.into(),
+                    recipient: label,
+                    kind: message.kind.clone(),
+                    text: message.text.clone(),
+                },
+            )?;
+        }
+        Ok(())
     }
 
     /// A writer starts from its writing dependency's result, so it sees that

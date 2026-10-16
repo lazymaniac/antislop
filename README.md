@@ -29,7 +29,9 @@ TUI keys: Enter send, Alt+Enter new line, Ctrl+A run the proposed plan,
 Ctrl+R resume what a plan left unfinished (after a login, a limit reset, a
 restart or your own edits), Ctrl+X cancel running work, PgUp/PgDn scroll,
 Ctrl+N new conversation, Esc detach. In line mode, type `/accept`, `/resume`
-or `/cancel`.
+or `/cancel`. `@t2 text` sends text to the worker of task `t2` (delivered in
+its next turn; the orchestrator gets a copy). Agents message each other the
+same way.
 
 ## How a request runs
 

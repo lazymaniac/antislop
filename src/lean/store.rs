@@ -55,6 +55,18 @@ pub struct Event {
     pub payload: Value,
 }
 
+/// A message to one agent, delivered into its next turn. `sender` and
+/// `recipient` are display names (`user`, `orchestrator`, a task id such as
+/// `t2`); `role` is the recipient's session role.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Mail {
+    pub id: u64,
+    pub sender: String,
+    pub recipient: String,
+    pub kind: String,
+    pub text: String,
+}
+
 /// One task of a plan. `spec` is what the orchestrator asked for; `report`
 /// is the worker's latest answer and `verdict` its verifier's latest one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,7 +144,15 @@ impl Store {
                status TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 0,
                report TEXT, verdict TEXT, base TEXT, result TEXT,
                created_ms INTEGER NOT NULL);
-             CREATE INDEX IF NOT EXISTS tasks_by_plan ON tasks(conversation_id, plan_id, position);",
+             CREATE INDEX IF NOT EXISTS tasks_by_plan ON tasks(conversation_id, plan_id, position);
+             CREATE TABLE IF NOT EXISTS mail(
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               conversation_id TEXT NOT NULL REFERENCES conversations(id),
+               sender TEXT NOT NULL, recipient TEXT NOT NULL, kind TEXT NOT NULL,
+               text TEXT NOT NULL, created_ms INTEGER NOT NULL,
+               delivered_turn TEXT, delivered_ms INTEGER);
+             CREATE INDEX IF NOT EXISTS mail_by_recipient
+               ON mail(conversation_id, recipient, delivered_turn);",
         )?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -568,6 +588,74 @@ impl Store {
                 task.result
             ],
         )?;
+        Ok(())
+    }
+
+    /// Records a message for `role` and announces it.
+    pub fn add_mail(&self, conversation: &str, role: &str, mail: &Mail) -> Result<Mail> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute(
+            "INSERT INTO mail(conversation_id,sender,recipient,kind,text,created_ms)
+             VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                conversation,
+                mail.sender,
+                role,
+                mail.kind,
+                mail.text,
+                now_ms()
+            ],
+        )?;
+        let mail = Mail {
+            id: tx.last_insert_rowid() as u64,
+            ..mail.clone()
+        };
+        tx.execute(
+            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,NULL,'mail',?2)",
+            params![conversation, serde_json::to_value(&mail)?.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(mail)
+    }
+
+    /// Messages for `role` not yet delivered, oldest first.
+    pub fn pending_mail(&self, conversation: &str, role: &str) -> Result<Vec<Mail>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT id,sender,kind,text FROM mail
+             WHERE conversation_id=?1 AND recipient=?2 AND delivered_turn IS NULL ORDER BY id",
+        )?;
+        let rows = statement.query_map(params![conversation, role], |row| {
+            Ok(Mail {
+                id: row.get::<_, i64>(0)? as u64,
+                sender: row.get(1)?,
+                recipient: String::new(),
+                kind: row.get(2)?,
+                text: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Marks messages delivered by a turn that completed, and announces it.
+    pub fn mark_delivered(&self, conversation: &str, ids: &[u64], turn: &str) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        for id in ids {
+            tx.execute(
+                "UPDATE mail SET delivered_turn=?2,delivered_ms=?3 WHERE id=?1",
+                params![*id as i64, turn, now_ms()],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES(?1,?2,'mail_delivered',?3)",
+            params![conversation, turn, serde_json::json!({"ids": ids}).to_string()],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 

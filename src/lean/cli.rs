@@ -254,6 +254,19 @@ pub fn describe(event: &Value) -> Option<String> {
             lines.join("\n")
         }
         "audit" => review_lines("audyt", payload).join("\n"),
+        "mail" if payload["kind"] != "copy" => format!(
+            "✉ {} → {} ({}): {}",
+            text("sender"),
+            text("recipient"),
+            text("kind"),
+            text("text")
+        ),
+        "mail_delivered" => format!("✓ dostarczono wiadomości {}", payload["ids"]),
+        "mail_rejected" => format!(
+            "✗ wiadomość do {} niedostarczalna: {}",
+            text("recipient"),
+            text("reason")
+        ),
         "plan_invalid" => format!("✗ plan odrzucony: {}", text("error")),
         "task" => format!(
             "· [{}] {}: {} (runda {}){}",

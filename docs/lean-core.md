@@ -95,6 +95,24 @@ Read-only modes are not a confinement: agy's plan mode was observed running
 8. **Summary.** The orchestrator receives task outcomes and the audit and
    answers the user (or proposes the next plan).
 
+## Messages between agents
+
+An agent addresses another with a ```` ```message ```` block in its answer:
+`{"to": "t2" | "orchestrator" | "all", "kind": "finding|handoff|question|answer|decision|status", "text": "..."}`.
+The runtime takes the blocks out of the answer, records each message (sender,
+recipient, kind, text) in `mail` before delivery, and delivers it at the top
+of the recipient's next prompt; it is marked delivered when that turn
+completes (a failed turn delivers it again). `all` means the workers of every
+unfinished task of the plan except the sender's. A worker that receives
+messages while it works gets up to two extra turns for them before its
+verifier runs. An unknown recipient is reported as `mail_rejected`.
+
+The user writes `@t2 text` to reach a task's worker the same way; the
+orchestrator gets a copy in its next turn, without a turn of its own. The
+TUI shows each message as waiting for the recipient's next turn and then as
+received: the CLIs offer no delivery into a running turn, so none is
+pretended.
+
 ## State
 
 `core.db`, WAL, normal synchronous:
@@ -103,6 +121,7 @@ Read-only modes are not a confinement: agy's plan mode was observed running
 - `messages(seq, conversation_id, author, text, created_ms)`
 - `turns(id, conversation_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms)`
 - `tasks(id, conversation_id, plan_id, position, spec, status, round, report, verdict, base, result, created_ms)`
+- `mail(id, conversation_id, sender, recipient, kind, text, created_ms, delivered_turn, delivered_ms)`
 - `events(seq, conversation_id, turn_id, kind, payload)` — append-only; tool
   calls are stored as a name and a one-line detail, never their output.
 
@@ -205,3 +224,5 @@ replaced when idle. The socket is `<state>/core.sock`, or
    logins and limits, integration retried on resume, work picked up after a
    restart (`tests/lean_recovery.rs`, `tests/lean_writer.rs`,
    `tests/lean_core.rs`).
+8. ✅ Messages between agents and from the user to one agent
+   (`tests/lean_messages.rs`).

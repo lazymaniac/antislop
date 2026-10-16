@@ -49,6 +49,8 @@ pub struct View {
     pub idle: bool,
     pub after: u64,
     roles: HashMap<String, String>,
+    /// Recipient of each shown message to an agent, by mail id.
+    mail: HashMap<u64, String>,
     /// Task row index by the task's database id.
     task_rows: HashMap<String, usize>,
 }
@@ -196,6 +198,42 @@ impl View {
                 );
                 self.push(Style::default(), "");
             }
+            "mail" if payload["kind"] != "copy" => {
+                let recipient = text("recipient");
+                self.mail.insert(
+                    payload["id"].as_u64().unwrap_or_default(),
+                    recipient.clone(),
+                );
+                let sender = match text("sender").as_str() {
+                    "user" => "Ty".to_owned(),
+                    ORCHESTRATOR => "orkiestrator".to_owned(),
+                    sender => sender.to_owned(),
+                };
+                self.push(
+                    Style::default().fg(Color::Magenta),
+                    format!(
+                        "✉ {sender} → {recipient} ({}): {} · czeka na następną turę odbiorcy",
+                        text("kind"),
+                        text("text")
+                    ),
+                );
+            }
+            "mail_delivered" => {
+                for id in payload["ids"].as_array().into_iter().flatten() {
+                    if let Some(recipient) = id.as_u64().and_then(|id| self.mail.remove(&id)) {
+                        self.push(dim(), format!("✓ {recipient} otrzymał wiadomość"));
+                    }
+                }
+            }
+            "mail_rejected" => self.push(
+                Style::default().fg(Color::Red),
+                format!(
+                    "✗ wiadomość od {} do {} niedostarczalna: {}",
+                    text("sender"),
+                    text("recipient"),
+                    text("reason")
+                ),
+            ),
             "audit" => {
                 for line in super::cli::review_lines("audyt", payload) {
                     self.push(Style::default().fg(Color::Yellow), line);
@@ -510,7 +548,7 @@ impl App {
                 ""
             };
             format!(
-                "Enter wyślij · Alt+Enter nowa linia · {accept}Ctrl+X anuluj · PgUp/PgDn przewiń · Ctrl+N nowa rozmowa · Esc wyjdź"
+                "Enter wyślij (@t2 … do agenta) · Alt+Enter nowa linia · {accept}Ctrl+X anuluj · PgUp/PgDn przewiń · Ctrl+N nowa rozmowa · Esc wyjdź"
             )
         });
         frame.render_widget(Paragraph::new(Span::styled(hint, dim())), footer);
@@ -777,6 +815,41 @@ mod tests {
         assert!(text.contains(&"⚠ audyt: zastrzeżenia"));
         assert!(text.contains(&"  - [high] README missing"));
         assert!(view.plan_proposed());
+    }
+
+    #[test]
+    fn messages_to_agents_show_their_delivery() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "mail",
+            json!({"id": 7, "sender": "user", "recipient": "t2", "kind": "user_instruction", "text": "użyj UTF-8"}),
+        ));
+        view.apply(&event(
+            2,
+            None,
+            "mail",
+            json!({"id": 8, "sender": "user", "recipient": "orchestrator", "kind": "copy", "text": "x"}),
+        ));
+        view.apply(&event(
+            3,
+            Some("turn"),
+            "mail_delivered",
+            json!({"ids": [7, 8]}),
+        ));
+        let text: Vec<&str> = view
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "✉ Ty → t2 (user_instruction): użyj UTF-8 · czeka na następną turę odbiorcy",
+                "✓ t2 otrzymał wiadomość"
+            ]
+        );
     }
 
     #[test]
