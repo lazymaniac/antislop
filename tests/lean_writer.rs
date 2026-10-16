@@ -23,7 +23,7 @@ with open({log:?}, "a") as f:
         common.clone()
             + r#"
 plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
-  "writes": True, "kind": "implementation", "verifier": {"focus": "file content"}}]}
+  "writes": True, "scope": [".", "../shared"], "kind": "implementation", "verifier": {"focus": "file content"}}]}
 answer = "done" if "[runtime]" in prompt else "Plan.\n```plan\n" + json.dumps(plan) + "\n```"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
@@ -114,6 +114,8 @@ fn project(dir: &Path) -> std::path::PathBuf {
     std::fs::write(project.join("README"), "readme\n").unwrap();
     git(&project, &["add", "."]);
     git(&project, &["commit", "--quiet", "-m", "base"]);
+    // A related directory the plan names in its scope.
+    std::fs::create_dir_all(dir.join("shared")).unwrap();
     project.canonicalize().unwrap()
 }
 
@@ -188,6 +190,12 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
     );
     let worker_args = agents[0]["args"].to_string();
     assert!(worker_args.contains("accept-edits") && worker_args.contains("--sandbox"));
+    // The plan names ../shared; only the read-only verifier gets it from
+    // its CLI, a writer is never given a directory to write outside.
+    let shared = dir.path().join("shared").canonicalize().unwrap();
+    let shared = shared.to_str().unwrap();
+    assert!(!worker_args.contains(shared), "{worker_args}");
+    assert!(agents[1]["args"].to_string().contains(shared));
 }
 
 #[test]

@@ -966,7 +966,9 @@ impl Core {
             agent::Access::ReadOnly
         };
         // Related directories outside the project (`../service` included)
-        // are made readable; paths inside it already are.
+        // are made readable; paths inside it already are. A writer's CLI
+        // would make them writable too, so a writer only reads them where
+        // its tools allow: a plan never widens where an agent may write.
         let add_dirs = spec
             .scope
             .iter()
@@ -1014,7 +1016,11 @@ impl Core {
                 role: worker.clone(),
                 profile: self.config.resolve(spec.kind, RoleKind::Executor),
                 cwd: workdir.clone(),
-                add_dirs: add_dirs.clone(),
+                add_dirs: if spec.writes {
+                    vec![]
+                } else {
+                    add_dirs.clone()
+                },
                 access,
                 upto_message: 0,
             };

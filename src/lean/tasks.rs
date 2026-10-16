@@ -508,13 +508,15 @@ pub fn worker_prompt(
         scope_text(&task.scope),
         if task.writes {
             if autonomous {
-                "Make the changes in this working directory. Do not commit; the \
-                 runtime records your changes. A structural problem in adjacent \
+                "Make the changes in this working directory, and nowhere else: \
+                 paths of the scope outside it are references to read. Do not \
+                 commit; the runtime records your changes. A structural problem in adjacent \
                  code that this change runs into may be fixed when it is small, \
                  with evidence that behaviour is preserved; say so in the report.\n\n"
             } else {
-                "Make the changes in this working directory. Do not commit; the \
-                 runtime records your changes. Do not fix problems outside the \
+                "Make the changes in this working directory, and nowhere else: \
+                 paths of the scope outside it are references to read. Do not \
+                 commit; the runtime records your changes. Do not fix problems outside the \
                  goal, even small ones in adjacent code: name them in the report \
                  with the fix you propose, and the user decides.\n\n"
             }
