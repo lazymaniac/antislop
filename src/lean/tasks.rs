@@ -37,7 +37,7 @@ pub struct Verdict {
     #[serde(default)]
     pub findings: Vec<Value>,
     /// A task verifier's account of each of its obligations, by id (`R1`,
-    /// `C2`): `{"status": "ok|issue|n/a", "note": "..."}`.
+    /// `V1`, `C2`): `{"status": "ok|issue|blocked|n/a", "note": "..."}`.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub coverage: serde_json::Map<String, Value>,
 }
@@ -349,7 +349,7 @@ pub fn orchestrator_instructions() -> String {
          agents (thorough analysis of separate areas, changes, reviews), explain \
          briefly and end your answer with a plan block:\n\
          ```plan\n\
-         {{\"tasks\":[{{\"id\":\"t1\",\"title\":\"short title\",\"goal\":\"what to achieve and report\",\
+         {{\"tasks\":[{{\"id\":\"t1\",\"title\":\"short title\",\"goal\":\"what to achieve and report, and how to tell it is done\",\
          \"scope\":[\"paths relative to the project, or absolute paths of related projects or services\"],\
          \"writes\":false,\"depends_on\":[],\"kind\":\"analysis\",\
          \"verifier\":{{\"focus\":\"what the verifier must check\",\"risks\":[\"risks specific to this task's domain\"]}}}}]}}\n\
@@ -393,7 +393,8 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         Orchestration | Planning => {
             "dependencies complete and correctly ordered; no intermediate state \
              or ordering assumed that the system does not guarantee; unknowns \
-             established, not assumed; every requirement covered by a task"
+             established, not assumed; every requirement covered by a task; \
+             each task's goal says how to tell it is done"
         }
         Context => {
             "every claim backed by files actually read; dependencies, contracts \
