@@ -549,6 +549,9 @@ fn directory_context_browses_original_members_without_expanding_selectors_or_fol
     let imitation = run.input_snapshot["."].clone();
     std::fs::write(root.path().join("ordinary.json"), &imitation).unwrap();
     run.input_snapshot.insert("ordinary.json".into(), imitation);
+    // This deliberately hand-built, mixed-epoch fixture exercises the legacy
+    // typeless fallback. Typed captures are tested separately below.
+    run.input_observation = None;
     let pinned = run.input_snapshot.clone();
     std::fs::write(root.path().join("nested/source.rs"), "CHANGED LIVE BODY").unwrap();
     let schema = json!({});

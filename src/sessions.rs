@@ -171,6 +171,12 @@ pub struct RejectedOutput {
     pub hash: String,
     pub output: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NativeRejection {
+    pub step_index: u64,
+    pub reason: crate::providers::NativeOutputRejection,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TurnRecord {
@@ -191,6 +197,10 @@ pub struct TurnRecord {
     pub output: Option<String>,
     pub usage: UsageReport,
     pub failure: Option<FailureKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_input: Option<crate::runtime::team::restore::readonly::TaskInput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_rejections: Vec<NativeRejection>,
 }
 impl TurnRecord {
     pub fn new(
@@ -215,11 +225,22 @@ impl TurnRecord {
             output: None,
             usage: UsageReport::Unavailable,
             failure: None,
+            task_input: None,
+            native_rejections: vec![],
         };
         turn.validate()?;
         Ok(turn)
     }
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
+        require(
+            self.native_rejections
+                .windows(2)
+                .all(|pair| pair[0].step_index < pair[1].step_index),
+            "native model rejection steps are duplicated or out of order",
+        )?;
+        if let Some(input) = &self.task_input {
+            input.validate()?;
+        }
         if let Some(rejected) = &self.rejected_output {
             require(
                 rejected.reason == "incomplete_context"
@@ -338,6 +359,24 @@ impl SessionLedger {
                 "turn map or managed session mismatch",
             )?;
             turn.validate()?;
+            if !turn.native_rejections.is_empty() {
+                let session = &self.sessions[&turn.session_id];
+                require(
+                    session.scope.provider == "agy"
+                        && session.scope.binary_version == "1.4.0"
+                        && session.native_observed
+                        && session.native_session_id.is_some(),
+                    "native model rejection lacks its supported observed session",
+                )?;
+            }
+            if let Some(input) = &turn.task_input {
+                let scope = &self.sessions[&turn.session_id].scope;
+                require(
+                    scope.task_id.as_ref() == Some(&input.task_id)
+                        && scope.role != RoleKind::Verifier,
+                    "task input checkpoint belongs to another native scope",
+                )?;
+            }
             if let Some(context) = &turn.context {
                 let scope = &self.sessions[&turn.session_id].scope;
                 require(
@@ -475,6 +514,7 @@ impl SessionLedger {
         persist: &mut Persist<'_>,
     ) -> Result<()> {
         let event_turn = match event {
+            ProviderEvent::NativeOutputRejected { turn_id, .. } => Some(turn_id.as_str()),
             ProviderEvent::OutputRejected { turn_id, .. } => Some(turn_id.as_str()),
             ProviderEvent::ContextPrepared { turn_id, .. }
             | ProviderEvent::ContextRead { turn_id, .. }
@@ -517,6 +557,32 @@ impl SessionLedger {
                     "callback after terminal/unknown turn state",
                 )?;
                 match event {
+                    ProviderEvent::NativeOutputRejected {
+                        session_id,
+                        step_index,
+                        reason,
+                        ..
+                    } => {
+                        require(
+                            turn.state == TurnState::Sent
+                                && !turn.provider_completed
+                                && !turn.cancellation_requested
+                                && turn.rejected_output.is_none()
+                                && session.scope.provider == "agy"
+                                && session.scope.binary_version == "1.4.0"
+                                && session.native_observed
+                                && session.native_session_id.as_ref() == Some(session_id)
+                                && turn
+                                    .native_rejections
+                                    .last()
+                                    .is_none_or(|previous| previous.step_index < *step_index),
+                            "native model rejection is outside the active supported session",
+                        )?;
+                        turn.native_rejections.push(NativeRejection {
+                            step_index: *step_index,
+                            reason: *reason,
+                        });
+                    }
                     ProviderEvent::OutputRejected { output, .. } => {
                         require(
                             turn.state == TurnState::Sent

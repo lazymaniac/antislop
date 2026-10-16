@@ -6,6 +6,21 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub const CONTRACT: &str = "task-models-v1";
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PromptFormat {
+    #[serde(rename = "task-prompt-v2")]
+    ExplicitSchema,
+}
+
+pub(crate) fn append_wire_schema(prompt: &mut String, schema: &serde_json::Value) -> Result<()> {
+    prompt.push_str("\nTask response wire contract task-prompt-v2. Return exactly the requested JSON schema through the selected structured output component. Schema shape is not an example artifact or proof. Use only observed facts and actual evidence; leave unperformed work and unresolved material questions explicit.");
+    if schema["properties"].get("context").is_some() {
+        prompt.push_str(" The context value is null or an object with exactly model and sections. context.model contains facts and unknowns; context.sections contains the named section arrays of ContextFact objects (claim, source_ref, source_hash). Do not flatten facts/unknowns into context or replace section arrays with narrative objects. solution is null or an object with model and scenarios. Role-specific semantic validation still applies; null is not permission to omit a required model.");
+    }
+    prompt.push_str("\nExact response JSON schema: ");
+    prompt.push_str(&serde_json::to_string(schema)?);
+    Ok(())
+}
 pub const CONTEXT_SECTIONS: [&str; 8] = [
     "intent",
     "domain",

@@ -151,6 +151,7 @@ fn previous_session(run: &Run, task_id: &str) -> Result<Option<String>> {
     effects::lineage(run, task)?;
     let mut original = run.clone();
     original.input_snapshot = execution.input_snapshot.clone();
+    original.input_observation = execution.input_observation.clone();
     checks::retry_safe(run, task, pinned)?;
     let executor = scoped_turn(&original, task, &artifact.session_id, false)?;
     let session = &run.session_ledger.sessions[&artifact.session_id];

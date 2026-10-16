@@ -32,6 +32,8 @@ pub struct Document {
 pub struct Index {
     pub format: String,
     pub observation_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_observation_hash: Option<String>,
     pub exhaustive: bool,
     pub documents: Vec<Document>,
     pub unresolved_directory_scopes: Vec<String>,
@@ -89,6 +91,16 @@ fn relative(root: &Path, selector: &str) -> Result<String> {
     })
 }
 pub fn from_snapshot(root: &Path, snapshot: &BTreeMap<String, String>) -> Result<Index> {
+    from_observation(root, snapshot, None)
+}
+pub fn from_observation(
+    root: &Path,
+    snapshot: &BTreeMap<String, String>,
+    observation: Option<&super::observation::Observation>,
+) -> Result<Index> {
+    if let Some(observation) = observation {
+        observation.validate(snapshot)?;
+    }
     let mut documents = BTreeMap::<String, Document>::new();
     let mut unresolved_directory_scopes = vec![];
     for (source, body) in snapshot {
@@ -97,7 +109,9 @@ pub fn from_snapshot(root: &Path, snapshot: &BTreeMap<String, String>) -> Result
         // Legacy captures encode directories as JSON strings. A regular JSON
         // file may imitate that format; do not let it invent instruction scope.
         // Only type metadata is consulted, never newer source contents.
-        let directory = if selector == "." {
+        let directory = if let Some(observation) = observation {
+            Some(observation.entries[source].kind == super::observation::Kind::Directory)
+        } else if selector == "." {
             Some(true)
         } else if envelope {
             let mut path = root.to_path_buf();
@@ -189,12 +203,22 @@ pub fn from_snapshot(root: &Path, snapshot: &BTreeMap<String, String>) -> Result
         }
     }
     Ok(Index {
-        format: "project-instructions-v1".into(),
+        format: if observation.is_some() {
+            "project-instructions-v2"
+        } else {
+            "project-instructions-v1"
+        }
+        .into(),
         observation_hash: hash(serde_json::to_vec(snapshot)?),
+        type_observation_hash: observation.map(serde_json::to_vec).transpose()?.map(hash),
         exhaustive: false,
         documents: documents.into_values().collect(),
         unresolved_directory_scopes,
-        contract: CONTRACT.into(),
+        contract: if observation.is_some() {
+            CONTRACT.replace("Only no-follow type metadata may disambiguate a legacy JSON directory envelope from an ordinary JSON file.", "File/directory types come exclusively from the durable, content-bound runtime type observation, never from payload JSON or current filesystem metadata.")
+        } else {
+            CONTRACT.into()
+        },
     })
 }
 impl Index {

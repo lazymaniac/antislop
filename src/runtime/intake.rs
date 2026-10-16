@@ -301,6 +301,15 @@ pub fn proposed_spec(run: &Run, raw: &str) -> Result<RunSpec> {
 }
 
 pub fn scope(run: &Run, round: &crate::orchestration::planning::Round) -> Result<String> {
+    round.validate_proposed_observation()?;
+    if let Some(observation) = &round.proposed_input_observation {
+        return Ok(crate::hash(serde_json::to_vec(&(
+            "accept_intake_v2",
+            crate::orchestration::planning::accept_scope(run, round)?,
+            &round.proposed_sources,
+            observation,
+        ))?));
+    }
     Ok(crate::hash(serde_json::to_vec(&(
         "accept_intake_v1",
         crate::orchestration::planning::accept_scope(run, round)?,
@@ -328,9 +337,16 @@ pub fn pending(run: &Run) -> Option<(String, String)> {
     let response: crate::orchestration::planning::Response =
         crate::transport::decode(round.output.as_ref()?.as_bytes()).ok()?;
     let spec = proposed_spec(run, response.intake_proposal_json.as_deref()?).ok()?;
-    if crate::workspace::read_inputs(std::path::Path::new(&spec.workspace), &spec.input_files)
-        .ok()?
-        != round.proposed_sources
+    let capture = crate::workspace::observation::capture(
+        std::path::Path::new(&spec.workspace),
+        &spec.input_files,
+    )
+    .ok()?;
+    if capture.snapshot != round.proposed_sources
+        || round
+            .proposed_input_observation
+            .as_ref()
+            .is_some_and(|o| o != &capture.observation)
     {
         return None;
     }
@@ -354,13 +370,22 @@ pub fn accept(run: &mut Run, round_id: &str, expected_scope: &str) -> Result<()>
             .as_deref()
             .ok_or_else(|| crate::Error::Invalid("missing task contract".into()))?,
     )?;
+    let capture = crate::workspace::observation::capture(
+        std::path::Path::new(&spec.workspace),
+        &spec.input_files,
+    )?;
     require(
-        crate::workspace::read_inputs(std::path::Path::new(&spec.workspace), &spec.input_files)?
-            == round.proposed_sources,
+        capture.snapshot == round.proposed_sources
+            && round
+                .proposed_input_observation
+                .as_ref()
+                .is_none_or(|o| o == &capture.observation),
         "proposed task inputs changed after review",
     )?;
     run.input_snapshot = round.proposed_sources.clone();
+    run.input_observation = round.proposed_input_observation.clone();
     run.diff_baseline = Some(run.input_snapshot.clone());
+    run.diff_baseline_observation = run.input_observation.clone();
     run.approvals.push(Approval {
         action: format!("intake:{round_id}"),
         scope_hash: expected_scope.into(),

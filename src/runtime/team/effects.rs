@@ -25,6 +25,8 @@ pub struct ExecutionBinding {
     pub scope: SessionScope,
     pub session_id: String,
     pub input_snapshot: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_observation: Option<crate::workspace::observation::Observation>,
     pub source_hashes: BTreeMap<String, String>,
     pub dependency_hashes: BTreeMap<String, String>,
     pub after_snapshot: Option<BTreeMap<String, String>>,
@@ -35,6 +37,8 @@ pub struct ExecutionBinding {
     /// Task-worktree effects; `None` for edits applied in the project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<super::views::ViewEffect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_admission: Option<super::restore::readonly::Admission>,
 }
 
 pub(super) fn binding<'a>(run: &'a Run, artifact: &ArtifactRef) -> Result<&'a ExecutionBinding> {
@@ -69,6 +73,14 @@ pub(super) fn proposal(
     run: &Run,
     execution: &ExecutionBinding,
 ) -> Result<crate::team::models::Output> {
+    if let Some(observation) = &execution.input_observation {
+        observation.validate(&execution.input_snapshot)?;
+    } else {
+        crate::workspace::legacy_input_types_known(
+            Path::new(&run.spec.workspace),
+            &execution.input_snapshot,
+        )?;
+    }
     run.session_ledger.validate_for_run(&run.id)?;
     let session = run
         .session_ledger
@@ -102,6 +114,9 @@ pub(super) fn proposal(
 
 pub(super) fn authenticate(run: &Run, execution: &ExecutionBinding) -> Result<()> {
     let output = proposal(run, execution)?;
+    if execution.read_only_admission.is_some() {
+        super::restore::readonly::authenticate(run, execution, &output)?;
+    }
     require(
         execution.state != ExecutionState::ObservedApplied || execution.reconciliation.is_some(),
         "observed effects require their user observation receipt",
@@ -136,9 +151,10 @@ pub(super) fn authenticate(run: &Run, execution: &ExecutionBinding) -> Result<()
             receipt.path == edit.path
                 && receipt.state == EditState::Applied
                 && receipt.operation == edit.operation
-                && crate::recovery::matches_version(
+                && crate::recovery::matches_version_observed(
                     Path::new(&run.spec.workspace),
                     &execution.input_snapshot,
+                    execution.input_observation.as_ref(),
                     receipt,
                     true,
                 )?
@@ -146,9 +162,10 @@ pub(super) fn authenticate(run: &Run, execution: &ExecutionBinding) -> Result<()
                     edit,
                 )) == receipt.after_hash
                 && execution.after_snapshot.as_ref().is_some_and(|s| {
-                    crate::recovery::matches_version(
+                    crate::recovery::matches_version_observed(
                         Path::new(&run.spec.workspace),
                         s,
+                        execution.input_observation.as_ref(),
                         receipt,
                         false,
                     )
@@ -249,6 +266,7 @@ impl Runtime {
         let (mut store, mut current, scope) =
             self.admit_task_output(captured, invocation, session_id, raw, edits, token)?;
         let mut proven_inputs = captured.input_snapshot.clone();
+        let mut proven_types = captured.input_observation.clone();
         for execution in &current.task_executions {
             if execution.wave_attempt != captured.attempt
                 || !matches!(
@@ -264,9 +282,15 @@ impl Runtime {
                     .after_snapshot
                     .as_ref()
                     .ok_or_else(|| crate::Error::Invalid("managed after version missing".into()))?;
-                let text = crate::workspace::inputs::captured_text(
+                let types = execution
+                    .input_observation
+                    .as_ref()
+                    .map(|o| o.rebound(snapshot))
+                    .transpose()?;
+                let text = crate::workspace::inputs::captured_text_observed(
                     Path::new(&current.spec.workspace),
                     snapshot,
+                    types.as_ref(),
                     &receipt.path,
                 )?;
                 let edit = FileEdit {
@@ -274,9 +298,10 @@ impl Runtime {
                     content: text.unwrap_or_default(),
                     operation: receipt.operation,
                 };
-                crate::workspace::inputs::record_change(
+                crate::workspace::observation::record_change(
                     Path::new(&current.spec.workspace),
                     &mut proven_inputs,
+                    &mut proven_types,
                     &edit,
                     &receipt.before_hash,
                 )?;
@@ -296,13 +321,15 @@ impl Runtime {
         // Concurrent disjoint managed writes may update other files, never this task's expected write bytes.
         for edit in edits {
             require(
-                crate::workspace::inputs::captured_text(
+                crate::workspace::inputs::captured_text_observed(
                     Path::new(&current.spec.workspace),
                     &current.input_snapshot,
+                    current.input_observation.as_ref(),
                     &edit.path,
-                )? == crate::workspace::inputs::captured_text(
+                )? == crate::workspace::inputs::captured_text_observed(
                     Path::new(&captured.spec.workspace),
                     &captured.input_snapshot,
+                    captured.input_observation.as_ref(),
                     &edit.path,
                 )?,
                 "task write conflicts with a newer managed or user edit",
@@ -313,6 +340,7 @@ impl Runtime {
         let execution_id = id();
         let index = current.task_executions.len();
         current.task_executions.push(ExecutionBinding {
+            read_only_admission: None,
             id: execution_id.clone(),
             task_id: invocation.task.id.clone(),
             attempt: invocation.task.attempt,
@@ -321,6 +349,7 @@ impl Runtime {
             scope,
             session_id: session_id.to_string(),
             input_snapshot: captured.input_snapshot.clone(),
+            input_observation: captured.input_observation.clone(),
             source_hashes: captured.source_hashes(),
             dependency_hashes: invocation.dependency_hashes.clone(),
             after_snapshot: None,
@@ -339,9 +368,10 @@ impl Runtime {
                 edit,
                 &current.pending_edits[offset + receipt_index].before_hash,
             )?;
-            crate::workspace::inputs::record_change(
+            crate::workspace::observation::record_change(
                 Path::new(&current.spec.workspace),
                 &mut current.input_snapshot,
+                &mut current.input_observation,
                 edit,
                 &current.pending_edits[offset + receipt_index].before_hash,
             )?;

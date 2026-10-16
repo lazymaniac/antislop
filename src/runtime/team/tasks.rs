@@ -1,5 +1,23 @@
 //! Native task turns and atomic scheduler outcome checkpoints.
 use super::*;
+
+pub(super) fn prompt_header(
+    run: &Run,
+    task: &crate::team::TaskRecord,
+    agent: &crate::team::AgentRecord,
+) -> String {
+    format!(
+        "You are {:?} (role {:?}).\nTask ID: {}\nDescription: {}\nAssigned requirements: {:?}\nCriteria: {:?}\nWrite scopes: {:?}\nFamily: {:?}\nImmutable task context: ",
+        agent.id,
+        agent.role,
+        task.id,
+        task.description,
+        task.requirement_ids,
+        task.criterion_ids,
+        task.write_scopes,
+        run.spec.task_family
+    )
+}
 impl Runtime {
     pub(super) fn execute_team_task(
         &self,
@@ -40,20 +58,13 @@ impl Runtime {
             )
         };
         let mut prompt = format!(
-            "You are {:?} (role {:?}).\nTask ID: {}\nDescription: {}\nAssigned requirements: {:?}\nCriteria: {:?}\nWrite scopes: {:?}\nFamily: {:?}\nImmutable task context: {}",
-            invocation.agent.id,
-            invocation.agent.role,
-            invocation.task.id,
-            invocation.task.description,
-            invocation.task.requirement_ids,
-            invocation.task.criterion_ids,
-            invocation.task.write_scopes,
-            view.spec.task_family,
+            "{}{}",
+            prompt_header(view, &invocation.task, &invocation.agent),
             serde_json::to_string(&serde_json::json!({
                 "spec":view.spec,"spec_revision":view.spec_revision,
                 "task":replacement::task_context(&invocation.task)?,"sources":sources,
                 "rejected_native_reports":crate::context::transport::rejected_reports(view,&invocation.agent.id,Some(&invocation.task.id)),
-                "project_instructions":crate::workspace::instructions::from_snapshot(std::path::Path::new(&view.spec.workspace), &view.input_snapshot)?,
+                "project_instructions":view.project_instructions()?,
                 "task_model_contract":crate::team::models::CONTRACT,
                 "context_sections":crate::team::models::CONTEXT_SECTIONS,
                 "scenario_kinds":crate::team::models::SCENARIO_KINDS,
@@ -99,13 +110,16 @@ impl Runtime {
             ));
         }
         let schema = crate::team::models::output_schema();
+        crate::workspace::observation::append_prompt(&mut prompt, view.input_observation.as_ref())?;
         let request = providers::PreparedTurn { prompt, schema };
+        let task_input = restore::readonly::TaskInput::capture(view, &invocation.task)?;
         let mut worker_run = view.clone();
         let (session_id, receipt) = self.observed_turn(
             &mut worker_run,
             view,
             provider.as_ref(),
             ObservedWork::Prepared {
+                task_input: Some(&task_input),
                 role: invocation.agent.kind,
                 agent_id: &invocation.agent.id,
                 task_id: &invocation.task.id,
@@ -296,7 +310,7 @@ impl Runtime {
                     .filter(|c| expected.contains(&c.check_id)).collect::<Vec<_>>(),
                 "task":replacement::task_context(&invocation.task)?,"sources":sources,"change":change,
                 "rejected_native_reports":crate::context::transport::rejected_reports(view,&invocation.agent.id,Some(&invocation.task.id)),
-                "project_instructions":crate::workspace::instructions::from_snapshot(std::path::Path::new(&view.spec.workspace), &view.input_snapshot)?,
+                "project_instructions":view.project_instructions()?,
                 "task_model_contract":crate::team::models::CONTRACT,
                 "model_hashes":crate::team::models::model_hashes(&executor_output),
                 "change_contract_hash":invocation.task.change_contract.as_ref().map(crate::team::changes::contract_hash),
@@ -331,6 +345,7 @@ impl Runtime {
         if worktrees {
             prompt.push_str("\nSources are the files of the task result commit (for a task without write scopes: the commit it read). `change` is the exact diff from what the task's dependencies produced to that result; review every changed line. The result reaches the project only after your acceptance.");
         }
+        crate::workspace::observation::append_prompt(&mut prompt, view.input_observation.as_ref())?;
         let schema = serde_json::json!({
             "type": "object",
             "properties": {
@@ -370,6 +385,7 @@ impl Runtime {
             view,
             verifier.as_ref(),
             ObservedWork::Prepared {
+                task_input: None,
                 role: RoleKind::Verifier,
                 agent_id: &invocation.agent.id,
                 task_id: &invocation.task.id,

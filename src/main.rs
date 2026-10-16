@@ -21,6 +21,9 @@ fn run() -> Result<()> {
     if verb == "__supervise" {
         return architect::process::supervise(&args[2..]);
     }
+    if verb == "__supervise-container" {
+        return architect::process::supervise_container(&args[2..]);
+    }
     if verb == "__context" {
         architect::require(args.len() == 5, "__context requires BUNDLE HASH RECEIPTS")?;
         return architect::context::stdio::serve_file(
@@ -103,10 +106,61 @@ fn run() -> Result<()> {
                 && args.get(flag).map(String::as_str) == Some("--approve-scoped"),
             "team mutation commands require exact arguments and --approve-scoped",
         )?;
-        let run: architect::domain::Run = architect::transport::decode(
-            ipc::read_document(&state, arg(&args, 3)?, "run")?.as_bytes(),
-        )?;
+        let run_document = ipc::read_document(&state, arg(&args, 3)?, "run")?;
+        let run: architect::domain::Run = architect::transport::decode(run_document.as_bytes())?;
         architect::require(run.id == arg(&args, 3)?, "mismatched run document")?;
+        if matches!(
+            verb,
+            "accept-team"
+                | "resume-orchestration"
+                | "replace-orchestration"
+                | "restore-orchestration"
+        ) {
+            let mut waiting_notice = false;
+            loop {
+                let response = ipc::call(
+                    &state,
+                    &Request {
+                        version: ipc::PROTOCOL_VERSION,
+                        request_id: architect::id(),
+                        idempotency_key: None,
+                        operation: Operation::Snapshot {
+                            run_id: run.id.clone(),
+                        },
+                    },
+                )?;
+                if let Some(error) = response.error {
+                    return Err(architect::Error::Invalid(error));
+                }
+                let control = response.data.ok_or_else(|| {
+                    architect::Error::Invalid("missing action preparation state".into())
+                })?;
+                architect::require(
+                    control["document_hash"] == architect::hash(&run_document),
+                    "run changed during preparation; inspect its current scope again",
+                )?;
+                if control["orchestration_recovery_state"] != "preparing" {
+                    architect::require(
+                        if verb == "accept-team" {
+                            control["team_acceptance_ready"] == true
+                        } else {
+                            control["orchestration_recovery_count"]
+                                .as_u64()
+                                .is_some_and(|n| n > 0)
+                        },
+                        "no current authenticated preparation; no mutation admitted",
+                    )?;
+                    break;
+                }
+                if !waiting_notice {
+                    eprintln!(
+                        "Checking retained reviews and current sources before scoped approval..."
+                    );
+                    waiting_notice = true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
         let command = match verb {
             "orchestrate" => Command::Orchestrate {
                 run_id: run.id.clone(),

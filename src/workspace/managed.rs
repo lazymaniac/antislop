@@ -415,7 +415,7 @@ fn validate_candidate_inputs(
 ) -> Result<()> {
     let root = Path::new(&run.spec.workspace);
     require(
-        super::read_inputs(root, &run.spec.input_files)? == run.input_snapshot,
+        super::inputs_current(run)?,
         "task sources changed before candidate preparation",
     )?;
     for (name, text) in &run.input_snapshot {
@@ -891,7 +891,22 @@ pub(crate) fn activate(run: &mut Run, scope: &str) -> Result<()> {
         .iter()
         .map(|(name, text)| Ok((super::inputs::relative(original_root, name)?, text.clone())))
         .collect::<Result<_>>()?;
-    let candidate_inputs = super::read_inputs(Path::new(&receipt.project_root), &inputs)?;
+    let capture = super::observation::capture(Path::new(&receipt.project_root), &inputs)?;
+    if let Some(original) = &run.input_observation {
+        original.validate(&run.input_snapshot)?;
+        for (selector, entry) in &original.entries {
+            let relative = super::inputs::relative(original_root, selector)?;
+            require(
+                capture
+                    .observation
+                    .entries
+                    .get(&relative)
+                    .is_some_and(|candidate| candidate.kind == entry.kind),
+                "prepared input type differs from accepted source",
+            )?;
+        }
+    }
+    let candidate_inputs = capture.snapshot;
     require(
         super::inputs::equivalent_sources(&expected, &candidate_inputs)?,
         "prepared inputs differ from accepted task",
@@ -911,7 +926,18 @@ pub(crate) fn activate(run: &mut Run, scope: &str) -> Result<()> {
     run.spec.input_files = inputs;
     run.spec.editable_files = editable;
     run.input_snapshot = candidate_inputs;
+    run.input_observation = Some(capture.observation);
     run.diff_baseline = Some(baseline);
+    run.diff_baseline_observation = if run.diff_baseline_observation.is_some() {
+        Some(
+            run.input_observation
+                .as_ref()
+                .unwrap()
+                .baseline(Path::new(&receipt.project_root), run.diff_baseline())?,
+        )
+    } else {
+        None
+    };
     run.spec.workspace = receipt.project_root.clone();
     run.spec_revision = run
         .spec_revision

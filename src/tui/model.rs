@@ -62,6 +62,9 @@ pub struct Snapshot {
     pub review_progress: Option<(usize, usize)>,
     /// Unique bytes in committed and native-observed context responses.
     pub context_progress: Vec<(String, usize, usize)>,
+    /// Rejected native model calls in currently active turns, not task failures
+    /// or completed reviews. Counts come from committed observations only.
+    pub native_rejections: Vec<(String, usize)>,
     pub workspace: String,
     pub workspace_required: bool,
     pub delivery_inspect_available: bool,
@@ -91,6 +94,8 @@ pub struct Snapshot {
     pub task_session_replacements: BTreeMap<String, crate::runtime::team::replacement::Pending>,
     pub task_session_replacement_details: BTreeMap<String, String>,
     pub task_check_restores: BTreeMap<String, crate::runtime::team::check_recovery::Pending>,
+    pub task_recovery_preparing: bool,
+    pub task_recovery_unavailable: bool,
     pub task_check_restore_details: BTreeMap<String, String>,
     pub orchestration_recoveries: BTreeMap<String, crate::runtime::orchestration_recovery::Pending>,
     pub orchestration_recovery_preparing: bool,
@@ -98,6 +103,7 @@ pub struct Snapshot {
     pub orchestration_recovery_details: BTreeMap<String, String>,
     pub task_session_resume_details: BTreeMap<String, String>,
     pub task_source_refreshes: BTreeMap<String, String>,
+    pub task_source_refresh_details: BTreeMap<String, String>,
     pub task_result_restores: BTreeMap<String, String>,
     pub task_effect_reconciliations: BTreeMap<String, String>,
     pub wave_effect_reconciliations:
@@ -108,6 +114,9 @@ pub struct Snapshot {
     pub team_stage_results: BTreeMap<String, crate::runtime::team::stage::PendingResult>,
     pub team_stage_result_details: BTreeMap<String, String>,
     pub reconciliation_input_hash: Option<String>,
+    pub reconciliation_required: bool,
+    pub reconciliation_available: bool,
+    pub reconciliation_details: String,
     pub sequence: u64,
     pub reviewed_team_round: Option<String>,
     pub reviewed_team_details: String,
@@ -158,6 +167,9 @@ fn latest_session<'a>(run: &Value, sessions: &[&'a Value]) -> Option<&'a Value> 
     {
         return Some(session);
     }
+    latest_reserved_session(run, sessions)
+}
+fn latest_reserved_session<'a>(run: &Value, sessions: &[&'a Value]) -> Option<&'a Value> {
     for turn_id in array(&run["session_ledger"]["turn_order"]).iter().rev() {
         let turn = run["session_ledger"]["turns"].get(turn_id.as_str()?);
         if let Some(turn) = turn
@@ -287,6 +299,22 @@ impl Snapshot {
                     Some((field(&session["scope"], "agent_id"), read, total))
                 })
                 .collect(),
+            native_rejections: values(&run["session_ledger"]["sessions"])
+                .into_iter()
+                .filter_map(|session| {
+                    if session["state"] != "sent" {
+                        return None;
+                    }
+                    let id = session["current_turn_id"].as_str()?;
+                    let turn = &run["session_ledger"]["turns"][id];
+                    if turn["provider_completed"] == true {
+                        return None;
+                    }
+                    let rejected = array(&turn["native_rejections"]);
+                    (!rejected.is_empty())
+                        .then(|| (field(&session["scope"], "agent_id"), rejected.len()))
+                })
+                .collect(),
             run_id: field(run, "id"),
             intake: run["intake"].as_bool().unwrap_or(false),
             chat_origin: run["chat_origin"].as_bool().unwrap_or(false),
@@ -328,11 +356,25 @@ impl Snapshot {
             status: field(run, "status"),
             diagnostic: field(run, "diagnostic"),
             sequence: control["sequence"].as_u64().unwrap_or(0),
-            reviewed_team_round: control["reviewed_team_round"].as_str().map(String::from),
+            task_recovery_preparing: control["task_recovery_state"] == "preparing",
+            task_recovery_unavailable: control["task_recovery_state"] == "unavailable",
+            reviewed_team_round: control["reviewed_team_round"]
+                .as_str()
+                .filter(|_| control["team_acceptance_ready"] != false)
+                .map(String::from),
             reconciliation_input_hash: control
                 .pointer("/recovery/observed_input_hash")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            reconciliation_required: run["reconciliation_required"] == true,
+            reconciliation_available: control.pointer("/recovery/reconciliation_available")
+                != Some(&Value::Bool(false)),
+            reconciliation_details: format!(
+                "Inspect the recorded file effects and acknowledge the current input observation. This does not repeat an agent or check and does not approve task quality. Changed, missing or unreadable inputs may invalidate the existing contract and require a new review.\n\nObserved inputs (versions and readability):\n{}\n\nRetained file-effect receipts:\n{}\n\nExternal resource status:\n{}",
+                pretty(&control["recovery"]["inputs"]),
+                pretty(&run["pending_edits"]),
+                pretty(&control["recovery"]),
+            ),
             ..Self::default()
         };
         snapshot.workspace_required = !snapshot.intake
@@ -669,13 +711,19 @@ Independent review:
                 if let Some(task) = array(&run["team"]["tasks"])
                     .iter()
                     .find(|t| t["id"] == *task_id)
-                    && let Some(execution) = array(&run["task_executions"]).iter().find(|e| {
+                {
+                    let execution = array(&run["task_executions"]).iter().find(|e| {
                         e["task_id"] == *task_id
                             && e["attempt"] == task["attempt"]
                             && (e["state"] == "applied" || e["state"] == "observed_applied")
-                    })
-                {
-                    let session_id = execution["session_id"].as_str().unwrap_or_default();
+                    });
+                    let owner = array(&run["team"]["agents"])
+                        .iter()
+                        .find(|a| a["id"] == task["owner_id"]);
+                    let session_id = execution
+                        .and_then(|e| e["session_id"].as_str())
+                        .or_else(|| owner.and_then(|a| a["session_id"].as_str()))
+                        .unwrap_or_default();
                     let turn_id = run["session_ledger"]["sessions"][session_id]["current_turn_id"]
                         .as_str()
                         .unwrap_or_default();
@@ -685,13 +733,29 @@ Independent review:
                             .unwrap_or_default(),
                     )
                     .unwrap_or(Value::Null);
-                    snapshot.task_result_restore_details.insert(scope.clone(), sanitize(&format!("Task: {task_id} — {}\nCompleted executor session: {session_id} / turn: {turn_id}\nOutput hash: {}\n\nResult:\n{}\n\nRetained effect receipts:\n{}\n\nRestores the retained result without repeating the agent, checks or file edits. Independent verification or source refresh is still required.", field(task,"description"), field(execution,"artifact_hash"), field(&output,"artifact"), pretty(&execution["receipts"]))));
+                    let output_hash = run["session_ledger"]["turns"][turn_id]["output_ref"]["hash"]
+                        .as_str()
+                        .unwrap_or_default();
+                    let effects = execution.map(|e|pretty(&e["receipts"]))
+                        .unwrap_or_else(||"Completed read-only output; no execution/effect checkpoint was recorded. No proposed file edits. This approval records output admission only.".into());
+                    snapshot.task_result_restore_details.insert(scope.clone(), sanitize(&format!("Task: {task_id} — {}\nCompleted executor session: {session_id} / turn: {turn_id}\nOutput hash: {output_hash}\n\nResult:\n{}\n\nRetained effect receipts:\n{effects}\n\nRestores the retained result without repeating the agent, checks or file edits. Independent verification or source refresh is still required.", field(task,"description"), field(&output,"artifact"))));
                 }
             }
         }
         if let Some(hashes) = control["task_source_refreshes"].as_object() {
             snapshot.task_source_refreshes =
                 hashes.iter().map(|(k, v)| (k.clone(), string(v))).collect();
+            for (task_id, scope) in &snapshot.task_source_refreshes {
+                if let Some(task) = array(&run["team"]["tasks"])
+                    .iter()
+                    .find(|t| t["id"] == *task_id)
+                {
+                    snapshot.task_source_refresh_details.insert(scope.clone(), format!(
+                        "Task: {} — {}\nSpecification revision: {}\n\nInspect the current captured sources and produce an updated read-only result with independent verification. Prior file changes remain recorded; this action does not repeat them.\n\nRetained result:\n{}\n\nDeclared source dependencies:\n{}",
+                        sanitize(task_id), field(task,"description"), field(run,"spec_revision"), pretty(&task["artifact"]), pretty(&task["source_dependencies"]),
+                    ));
+                }
+            }
         }
         snapshot
             .run_details
@@ -730,7 +794,20 @@ Independent review:
                             )
                             .ok();
                         baseline.and_then(|b| {
-                            crate::workspace::compute_diff(std::path::Path::new(ws), &b).ok()
+                            crate::workspace::compute_diff_observed(
+                                std::path::Path::new(ws),
+                                &b,
+                                run.get("diff_baseline_observation")
+                                    .filter(|v| !v.is_null())
+                                    .and_then(|v| {
+                                        serde_json::from_value::<
+                                            crate::workspace::observation::Observation,
+                                        >(v.clone())
+                                        .ok()
+                                    })
+                                    .as_ref(),
+                            )
+                            .ok()
                         })
                     })
             };
@@ -1067,10 +1144,18 @@ Independent review:
                 .into_iter()
                 .filter(|s| s["scope"]["agent_id"] == id)
                 .collect();
-            let current = sessions
+            let task_sessions: Vec<_> = sessions
                 .iter()
-                .find(|s| s["id"] == session)
                 .copied()
+                .filter(|s| {
+                    task.is_some_and(|t| t["id"].is_string() && s["scope"]["task_id"] == t["id"])
+                })
+                .collect();
+            // SessionRecorded may lag native callbacks or fail before a task
+            // result checkpoint. Display its actual latest reserved turn,
+            // without rewriting the authoritative artifact/session binding.
+            let current = latest_reserved_session(run, &task_sessions)
+                .or_else(|| sessions.iter().find(|s| s["id"] == session).copied())
                 .or_else(|| latest_session(run, &sessions));
             session_details(&mut agent, run, &sessions, current);
             snapshot.agents.push(agent);

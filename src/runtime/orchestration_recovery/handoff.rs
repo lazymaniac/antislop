@@ -256,10 +256,7 @@ mod tests {
                 }
                 "context" => {
                     let turn = run.session_ledger.turns.get_mut("old-turn").unwrap();
-                    turn.context
-                        .as_mut()
-                        .unwrap()
-                        .bundle
+                    std::sync::Arc::make_mut(&mut turn.context.as_mut().unwrap().bundle)
                         .documents
                         .get_mut(&turn.prompt_hash)
                         .unwrap()

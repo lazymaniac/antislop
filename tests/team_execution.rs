@@ -27,6 +27,26 @@ impl Drop for TestDaemon {
     }
 }
 
+// A control snapshot stays responsive while task recovery is authenticated in
+// the background. Assertions about its packages wait for their advertised state.
+fn task_snapshot(
+    backend: &mut impl architect::tui::backend::Backend,
+    id: &str,
+) -> architect::Result<architect::tui::model::Snapshot> {
+    let start = Instant::now();
+    loop {
+        let snapshot = backend.snapshot(id)?;
+        if !snapshot.task_recovery_preparing {
+            return Ok(snapshot);
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "fixture task recovery preparation did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 impl TeamFixture {
     fn new(mode: &str) -> Self {
         Self::new_scoped(mode, false)
@@ -564,6 +584,10 @@ print(json.dumps(dict(type='result', subtype='success', is_error=False, session_
 fn actual_task_executor_and_verifier_receive_the_same_source_bound_instruction_index() {
     let f = TeamFixture::new_scoped("project_instructions", true);
     let installed = f.install_team();
+    assert_eq!(
+        installed.task_prompt_format,
+        Some(architect::team::models::PromptFormat::ExplicitSchema)
+    );
     let executed = step(&f, &installed);
     let _reviewed = step(&f, &executed);
     let mut executors = 0;
@@ -577,13 +601,16 @@ fn actual_task_executor_and_verifier_receive_the_same_source_bound_instruction_i
         let Some((_, raw)) = prompt.split_once("Immutable task context: ") else {
             continue;
         };
+        assert!(prompt.contains("Task response wire contract task-prompt-v2."));
+        assert!(prompt.contains("Exact response JSON schema:"));
         let context = serde_json::Deserializer::from_str(raw)
             .into_iter::<serde_json::Value>()
             .next()
             .unwrap()
             .unwrap();
         let index = &context["project_instructions"];
-        assert_eq!(index["format"], "project-instructions-v1");
+        assert_eq!(index["format"], "project-instructions-v2");
+        assert!(index["type_observation_hash"].is_string());
         assert_eq!(index["documents"][0]["path"], "AGENTS.md");
         assert_eq!(index["documents"][0]["directory_scope"], ".");
         let binding = &index["documents"][0]["source_bindings"][0];
@@ -1598,7 +1625,7 @@ fn source_refresh_is_available_through_daemon_tui_and_cli_and_keeps_scope_pinned
     let mut backend = IpcBackend::new(f.root.path());
     let deadline = Instant::now() + Duration::from_secs(5);
     let snapshot = loop {
-        match backend.snapshot(&before.id) {
+        match task_snapshot(&mut backend, &before.id) {
             Ok(snapshot) => break snapshot,
             Err(error) => {
                 assert!(Instant::now() < deadline, "{error}");
@@ -1655,7 +1682,7 @@ fn source_refresh_is_available_through_daemon_tui_and_cli_and_keeps_scope_pinned
         serde_json::to_value(&after.pending_edits).unwrap(),
         serde_json::to_value(&before.pending_edits).unwrap()
     );
-    let snapshot = backend.snapshot(&after.id).unwrap();
+    let snapshot = task_snapshot(&mut backend, &after.id).unwrap();
     assert!(
         !snapshot
             .task_source_refreshes
@@ -2727,7 +2754,7 @@ fn daemon_exposes_task_recovery_to_tui_and_cli_without_replaying_executors() {
     let mut backend = IpcBackend::new(f.root.path());
     let deadline = Instant::now() + Duration::from_secs(5);
     let snapshot = loop {
-        match backend.snapshot(&before.id) {
+        match task_snapshot(&mut backend, &before.id) {
             Ok(snapshot) => break snapshot,
             Err(error) => {
                 assert!(
@@ -2791,7 +2818,7 @@ fn daemon_exposes_task_recovery_to_tui_and_cli_without_replaying_executors() {
         .find(|t| t.id == "task-contextanalyst")
         .unwrap();
     assert_eq!(task.state, TaskState::Verified, "{:?}", after.diagnostic);
-    let snapshot = backend.snapshot(&before.id).unwrap();
+    let snapshot = task_snapshot(&mut backend, &before.id).unwrap();
     assert!(
         !snapshot
             .task_verification_retries
@@ -3321,6 +3348,98 @@ fn expected_failed_baseline_is_observed_before_executor_and_reviewed_as_historic
     assert!(architect::verification::evidence_is_current(
         &executed, artifact, receipt
     ));
+    let mut cited: architect::team::models::Output =
+        architect::transport::decode(artifact.content.as_bytes()).unwrap();
+    cited
+        .context
+        .as_mut()
+        .unwrap()
+        .model
+        .facts
+        .push(ContextFact {
+        claim:
+            "The retained fixture baseline command exited unsuccessfully; this is not task success"
+                .into(),
+        source_ref: receipt.source.clone(),
+        source_hash: receipt.output_hash.clone(),
+    });
+    let source_hashes = executed.source_hashes();
+    architect::team::models::validate_output(
+        &executed,
+        task,
+        architect::team::CatalogRole::ContextAnalyst,
+        &cited,
+    )
+    .unwrap();
+    assert_eq!(executed.source_hashes(), source_hashes);
+    let mut conflicting = cited.clone();
+    let mut second = conflicting
+        .context
+        .as_ref()
+        .unwrap()
+        .model
+        .facts
+        .last()
+        .unwrap()
+        .clone();
+    second.source_hash = architect::hash("another result for the same check label");
+    conflicting
+        .context
+        .as_mut()
+        .unwrap()
+        .model
+        .facts
+        .push(second);
+    assert!(
+        architect::team::models::validate_output(
+            &executed,
+            task,
+            architect::team::CatalogRole::ContextAnalyst,
+            &conflicting,
+        )
+        .is_err(),
+        "a cached authenticated receipt cannot authorize another output hash"
+    );
+    for fault in [
+        "missing-check",
+        "unknown-check",
+        "changed-output",
+        "missing-approval",
+        "changed-original",
+    ] {
+        let mut bad = executed.clone();
+        match fault {
+            "missing-check" => bad.task_checks.clear(),
+            "unknown-check" => {
+                bad.task_checks[0].state = architect::runtime::team::checks::CheckState::Unknown
+            }
+            "changed-output" => bad
+                .evidence
+                .iter_mut()
+                .find(|e| e.id == receipt.id)
+                .unwrap()
+                .output
+                .push('x'),
+            "missing-approval" => bad.approvals.clear(),
+            _ => {
+                bad.task_checks[0]
+                    .input_snapshot
+                    .as_mut()
+                    .unwrap()
+                    .insert("source.txt".into(), "changed baseline".into());
+            }
+        }
+        assert!(
+            architect::team::models::validate_output(
+                &bad,
+                task,
+                architect::team::CatalogRole::ContextAnalyst,
+                &cited,
+            )
+            .is_err(),
+            "{fault}"
+        );
+    }
     let verified = step(&f, &executed);
     let task = verified
         .team
@@ -4482,7 +4601,7 @@ fn partial_stage_acceptance_survives_daemon_restart_and_cli_accepts_only_remaini
     let mut backend = IpcBackend::new(f.root.path());
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match backend.snapshot(&reviewed.id) {
+        match task_snapshot(&mut backend, &reviewed.id) {
             Ok(snapshot) => {
                 assert_eq!(
                     snapshot.team_stage_results["discovery"].scope_hash,
@@ -4569,7 +4688,10 @@ fn partial_stage_acceptance_survives_daemon_restart_and_cli_accepts_only_remaini
     assert_eq!(partial.status, Status::AwaitingResult);
     assert_eq!(partial.team_result_approvals.len(), 1);
     assert_eq!(partial.team_result_approvals[0].results.len(), 1);
-    let remaining = backend.snapshot(&reviewed.id).unwrap().team_stage_results["discovery"].clone();
+    let remaining = task_snapshot(&mut backend, &reviewed.id)
+        .unwrap()
+        .team_stage_results["discovery"]
+        .clone();
     assert_eq!(remaining.task_ids.len(), package.task_ids.len() - 1);
     assert!(!remaining.task_ids.contains(&selected[0]));
     assert!(
@@ -4599,7 +4721,7 @@ fn partial_stage_acceptance_survives_daemon_restart_and_cli_accepts_only_remaini
     let daemon = start_daemon();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match backend.snapshot(&reviewed.id) {
+        match task_snapshot(&mut backend, &reviewed.id) {
             Ok(snapshot) => {
                 assert_eq!(
                     snapshot.team_stage_results["discovery"].scope_hash,
@@ -4642,8 +4764,7 @@ fn partial_stage_acceptance_survives_daemon_restart_and_cli_accepts_only_remaini
     assert_eq!(accepted.status, Status::Ready);
     assert_eq!(accepted.team_result_approvals.len(), 2);
     assert!(
-        backend
-            .snapshot(&reviewed.id)
+        task_snapshot(&mut backend, &reviewed.id)
             .unwrap()
             .team_stage_results
             .is_empty()
@@ -4684,6 +4805,253 @@ fn missing_executor_checkpoint(f: &TeamFixture, installed: &Run, task_id: &str) 
         .execute_batch("DROP TRIGGER refuse_executor_result;")
         .unwrap();
     reconcile_team(f, &stopped)
+}
+
+fn missing_readonly_binding(f: &TeamFixture, installed: &Run) -> Run {
+    let db = rusqlite::Connection::open(f.root.path().join("state.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER refuse_readonly_binding BEFORE UPDATE ON runs WHEN EXISTS (SELECT 1 FROM json_each(NEW.state, '$.task_executions') WHERE json_extract(value, '$.task_id')='task-contextanalyst') BEGIN SELECT RAISE(ABORT, 'injected readonly execution checkpoint failure'); END;").unwrap();
+    let stopped = raw_team_step(f, installed);
+    assert_eq!(stopped.status, Status::Blocked);
+    assert!(stopped.reconciliation_required);
+    assert!(
+        !stopped
+            .task_executions
+            .iter()
+            .any(|e| e.task_id == "task-contextanalyst")
+    );
+    let task = stopped
+        .team
+        .as_ref()
+        .unwrap()
+        .tasks
+        .iter()
+        .find(|t| t.id == "task-contextanalyst")
+        .unwrap();
+    let owner = stopped
+        .team
+        .as_ref()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|a| a.id == task.owner_id)
+        .unwrap();
+    let session = &stopped.session_ledger.sessions[owner.session_id.as_ref().unwrap()];
+    assert!(
+        stopped.session_ledger.turns[session.current_turn_id.as_ref().unwrap()].provider_completed
+    );
+    db.execute_batch("DROP TRIGGER refuse_readonly_binding")
+        .unwrap();
+    reconcile_team(f, &stopped)
+}
+
+#[test]
+fn completed_readonly_output_before_effect_checkpoint_is_admitted_once_without_replay() {
+    let f = TeamFixture::new("restore_single_baseline");
+    let before = missing_readonly_binding(&f, &f.install_team());
+    let task_id = "task-contextanalyst";
+    let calls = std::fs::read(f.root.path().join("calls.jsonl")).unwrap();
+    let sources = before.source_hashes();
+    let scope = before.task_result_restore_scope(task_id).unwrap();
+    let snapshot = architect::tui::model::Snapshot::from_document(
+        &serde_json::to_value(&before).unwrap(),
+        &serde_json::json!({"task_result_restores":{task_id:scope}}),
+    );
+    assert!(
+        snapshot.task_result_restore_details[&scope].contains("no execution/effect checkpoint")
+    );
+    let mut app = architect::tui::app::App::default();
+    app.update(snapshot);
+    let (action, _) = app.next_approval().unwrap();
+    assert!(matches!(
+        action,
+        architect::tui::backend::Action::RestoreTaskResult { .. }
+    ));
+    let command = Command::RestoreTaskResult {
+        run_id: before.id.clone(),
+        task_id: task_id.into(),
+        scope_hash: scope,
+    };
+    let key = id();
+    let restored = f.runtime.dispatch(&key, command.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(f.runtime.dispatch(&key, command).unwrap()).unwrap(),
+        serde_json::to_value(&restored).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(f.root.path().join("calls.jsonl")).unwrap(),
+        calls
+    );
+    assert_eq!(
+        serde_json::to_value(&before.session_ledger).unwrap(),
+        serde_json::to_value(&restored.session_ledger).unwrap()
+    );
+    assert_eq!(restored.source_hashes(), sources);
+    assert_eq!(restored.attempt, before.attempt);
+    let task = restored
+        .team
+        .as_ref()
+        .unwrap()
+        .tasks
+        .iter()
+        .find(|t| t.id == task_id)
+        .unwrap();
+    assert_eq!(task.state, TaskState::AwaitingVerification);
+    assert!(task.review.is_none());
+    let binding = restored
+        .task_executions
+        .iter()
+        .find(|e| e.task_id == task_id)
+        .unwrap();
+    assert!(binding.read_only_admission.is_some() && binding.receipts.is_empty());
+    assert_eq!(
+        binding.state,
+        architect::runtime::team::effects::ExecutionState::Committed
+    );
+    assert_eq!(restored.task_result_restorations.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("workspace/baseline-count")).unwrap(),
+        "1"
+    );
+    assert!(restored.quality_gates.is_empty() && restored.team_result_approvals.is_empty());
+    let reviewed = raw_team_step(&f, &restored);
+    assert_eq!(
+        reviewed
+            .team
+            .as_ref()
+            .unwrap()
+            .tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .unwrap()
+            .state,
+        TaskState::Verified,
+        "{:?}",
+        reviewed.diagnostic
+    );
+    assert!(reviewed.team_result_approvals.is_empty());
+    let reopened = Store::open(&f.root.path().join("state.db"))
+        .unwrap()
+        .get(&before.id)
+        .unwrap();
+    assert!(
+        reopened
+            .task_executions
+            .iter()
+            .find(|e| e.task_id == task_id)
+            .unwrap()
+            .read_only_admission
+            .is_some()
+    );
+}
+
+#[test]
+fn unbound_readonly_output_refuses_changed_bindings_unknown_checks_and_failed_commit() {
+    let f = TeamFixture::new("restore_single_baseline");
+    let before = missing_readonly_binding(&f, &f.install_team());
+    let task_id = "task-contextanalyst";
+    let scope = before.task_result_restore_scope(task_id).unwrap();
+    let calls = std::fs::read(f.root.path().join("calls.jsonl")).unwrap();
+    for fault in [
+        "no-input-pin",
+        "contract",
+        "write-scope",
+        "attempt",
+        "unknown-baseline",
+        "missing-baseline",
+        "schema",
+        "proposed-edit",
+        "newer-turn",
+        "paused",
+        "cancelled",
+    ] {
+        let mut bad = before.clone();
+        let task = bad
+            .team
+            .as_mut()
+            .unwrap()
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == task_id)
+            .unwrap();
+        let owner_id = task.owner_id.clone();
+        match fault {
+            "contract" => task.description.push_str("changed"),
+            "write-scope" => {
+                task.write_scopes.insert("source.txt".into());
+            }
+            "attempt" => task.attempt += 1,
+            "unknown-baseline" => {
+                bad.task_checks[0].state = architect::runtime::team::checks::CheckState::Unknown
+            }
+            "missing-baseline" => bad.task_checks.clear(),
+            "paused" => bad.status = Status::Paused,
+            "cancelled" => bad.status = Status::Cancelled,
+            _ => {
+                let owner = bad
+                    .team
+                    .as_ref()
+                    .unwrap()
+                    .agents
+                    .iter()
+                    .find(|a| a.id == owner_id)
+                    .unwrap();
+                let session = &bad.session_ledger.sessions[owner.session_id.as_ref().unwrap()];
+                let turn = bad
+                    .session_ledger
+                    .turns
+                    .get_mut(session.current_turn_id.as_ref().unwrap())
+                    .unwrap();
+                if fault == "proposed-edit" {
+                    let mut output: serde_json::Value =
+                        serde_json::from_str(turn.output.as_ref().unwrap()).unwrap();
+                    output["edits"] = serde_json::json!([{"path":"source.txt","content":"unauthorized output","operation":"write"}]);
+                    let raw = output.to_string();
+                    turn.output_ref.as_mut().unwrap().hash = architect::hash(&raw);
+                    turn.output = Some(raw);
+                } else if fault == "newer-turn" {
+                    let mut next = turn.clone();
+                    next.id = id();
+                    next.provider_completed = false;
+                    next.state = architect::sessions::TurnState::Failed;
+                    next.output = None;
+                    next.output_ref = None;
+                    next.context = None;
+                    let session_id = next.session_id.clone();
+                    let next_id = next.id.clone();
+                    bad.session_ledger.turn_order.push(next_id.clone());
+                    bad.session_ledger.turns.insert(next_id.clone(), next);
+                    let session = bad.session_ledger.sessions.get_mut(&session_id).unwrap();
+                    session.current_turn_id = Some(next_id);
+                    session.state = architect::sessions::TurnState::Failed;
+                } else if fault == "no-input-pin" {
+                    turn.task_input = None;
+                } else {
+                    turn.schema_hash = architect::hash("wrong schema");
+                }
+            }
+        }
+        assert!(bad.task_result_restore_scope(task_id).is_err(), "{fault}");
+    }
+    let db = rusqlite::Connection::open(f.root.path().join("state.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER refuse_readonly_admission BEFORE INSERT ON events WHEN NEW.kind='task_executor_result_restored' BEGIN SELECT RAISE(ABORT,'injected readonly admission failure'); END;").unwrap();
+    let command = Command::RestoreTaskResult {
+        run_id: before.id.clone(),
+        task_id: task_id.into(),
+        scope_hash: scope,
+    };
+    let key = id();
+    assert!(f.runtime.dispatch(&key, command.clone()).is_err());
+    assert_eq!(
+        serde_json::to_value(f.current()).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(f.root.path().join("calls.jsonl")).unwrap(),
+        calls
+    );
+    db.execute_batch("DROP TRIGGER refuse_readonly_admission")
+        .unwrap();
+    f.runtime.dispatch(&key, command).unwrap();
 }
 
 #[test]
@@ -5020,7 +5388,7 @@ fn restoring_applied_writer_keeps_original_effect_and_requires_current_source_re
 
 #[test]
 fn completed_executor_restoration_is_exposed_through_daemon_tui_and_cli_without_replay() {
-    use architect::tui::backend::{Backend, IpcBackend};
+    use architect::tui::backend::IpcBackend;
     let f = TeamFixture::new("restore_single");
     let before = missing_executor_checkpoint(&f, &f.install_team(), "task-contextanalyst");
     let calls = std::fs::read(f.root.path().join("calls.jsonl")).unwrap();
@@ -5037,7 +5405,7 @@ fn completed_executor_restoration_is_exposed_through_daemon_tui_and_cli_without_
     let mut backend = IpcBackend::new(f.root.path());
     let deadline = Instant::now() + Duration::from_secs(5);
     let snapshot = loop {
-        match backend.snapshot(&before.id) {
+        match task_snapshot(&mut backend, &before.id) {
             Ok(snapshot) => break snapshot,
             Err(error) => {
                 assert!(Instant::now() < deadline, "daemon unavailable: {error}");
@@ -5083,8 +5451,7 @@ fn completed_executor_restoration_is_exposed_through_daemon_tui_and_cli_without_
     let after = f.current();
     assert_eq!(after.task_result_restorations.len(), 1);
     assert!(
-        backend
-            .snapshot(&after.id)
+        task_snapshot(&mut backend, &after.id)
             .unwrap()
             .task_result_restores
             .is_empty()
@@ -5443,7 +5810,7 @@ fn observed_effect_adjudication_refuses_unapplied_conflicting_stale_and_uncommit
 
 #[test]
 fn observed_task_effects_are_exposed_through_daemon_tui_cli_and_survive_restart() {
-    use architect::tui::backend::{Backend, IpcBackend};
+    use architect::tui::backend::IpcBackend;
     let f = TeamFixture::new("managed_success");
     let (before, task_id) = interrupted_owned_write(&f);
     let calls = std::fs::read(f.root.path().join("calls.jsonl")).unwrap();
@@ -5460,7 +5827,7 @@ fn observed_task_effects_are_exposed_through_daemon_tui_cli_and_survive_restart(
     let mut backend = IpcBackend::new(f.root.path());
     let deadline = Instant::now() + Duration::from_secs(5);
     let snapshot = loop {
-        match backend.snapshot(&before.id) {
+        match task_snapshot(&mut backend, &before.id) {
             Ok(snapshot) => break snapshot,
             Err(error) => {
                 assert!(Instant::now() < deadline, "daemon unavailable: {error}");
@@ -5502,7 +5869,7 @@ fn observed_task_effects_are_exposed_through_daemon_tui_cli_and_survive_restart(
     );
     let observed = f.current();
     assert!(!observed.reconciliation_required);
-    let after = backend.snapshot(&before.id).unwrap();
+    let after = task_snapshot(&mut backend, &before.id).unwrap();
     assert!(after.task_effect_reconciliations.is_empty());
     assert!(after.task_result_restores.contains_key(&task_id));
     assert_eq!(
@@ -5554,6 +5921,8 @@ fn two_missing_writer_receipts(f: &TeamFixture) -> (Run, Vec<String>) {
     assert_eq!(writers.len(), 2);
     assert_eq!(writers[0].wave_attempt, writers[1].wave_attempt);
     interrupted.input_snapshot = writers[0].input_snapshot.clone();
+    interrupted.input_observation = writers[0].input_observation.clone();
+    assert_eq!(writers[0].input_observation, writers[1].input_observation);
     interrupted.pending_edits.clear();
     let mut ids = vec![];
     // Fault model: retain the actual native completions, captured originals and
@@ -5770,7 +6139,7 @@ fn observed_wave_effects_reject_one_conflicting_member_and_roll_back_entire_coho
 
 #[test]
 fn observed_wave_cohort_is_offered_in_daemon_tui_cli_and_retained_after_restart() {
-    use architect::tui::backend::{Backend, IpcBackend};
+    use architect::tui::backend::IpcBackend;
     let f = TeamFixture::new("managed_disjoint");
     let (before, task_ids) = two_missing_writer_receipts(&f);
     let wave = before
@@ -5793,7 +6162,7 @@ fn observed_wave_cohort_is_offered_in_daemon_tui_cli_and_retained_after_restart(
     let mut backend = IpcBackend::new(f.root.path());
     let deadline = Instant::now() + Duration::from_secs(5);
     let snapshot = loop {
-        match backend.snapshot(&before.id) {
+        match task_snapshot(&mut backend, &before.id) {
             Ok(snapshot) => break snapshot,
             Err(error) => {
                 assert!(Instant::now() < deadline, "daemon unavailable: {error}");
@@ -5833,8 +6202,7 @@ fn observed_wave_cohort_is_offered_in_daemon_tui_cli_and_retained_after_restart(
     let after = f.current();
     assert!(!after.reconciliation_required);
     assert!(
-        backend
-            .snapshot(&before.id)
+        task_snapshot(&mut backend, &before.id)
             .unwrap()
             .wave_effect_reconciliations
             .is_empty()
@@ -6149,7 +6517,7 @@ fn native_resume_refuses_source_identity_checkpoint_drift_and_rolls_back_failed_
 
 #[test]
 fn daemon_and_cli_expose_native_resume_and_preserve_it_after_restart() {
-    use architect::tui::backend::{Backend, IpcBackend};
+    use architect::tui::backend::IpcBackend;
     let f = TeamFixture::new("fail_context_once");
     let executed = step(&f, &f.install_team());
     let before = reconcile_team(&f, &step(&f, &executed));
@@ -6164,7 +6532,7 @@ fn daemon_and_cli_expose_native_resume_and_preserve_it_after_restart() {
         .unwrap(),
     );
     let mut backend = IpcBackend::new(state);
-    let snapshot = backend.snapshot(&before.id).unwrap();
+    let snapshot = task_snapshot(&mut backend, &before.id).unwrap();
     let projected = &snapshot.task_session_resumes[&package.task_id];
     assert_eq!(projected.session_id, package.session_id);
     assert_eq!(projected.previous_turn_id, package.previous_turn_id);
@@ -6226,7 +6594,7 @@ fn daemon_and_cli_expose_native_resume_and_preserve_it_after_restart() {
     )
     .unwrap()
     .unwrap();
-    let restored = backend.snapshot(&after.id).unwrap();
+    let restored = task_snapshot(&mut backend, &after.id).unwrap();
     assert!(restored.task_session_resumes.is_empty());
     let saved: Run = architect::transport::decode(
         architect::ipc::read_document(state, &after.id, "run")
@@ -6536,7 +6904,7 @@ fn replacement_handoff_refuses_drift_uncertainty_and_failed_commit_without_new_n
 
 #[test]
 fn replacement_handoff_is_reviewable_through_daemon_tui_cli_and_survives_restart() {
-    use architect::tui::backend::{Backend, IpcBackend};
+    use architect::tui::backend::IpcBackend;
     let f = TeamFixture::new("replacement_executor_unobserved");
     let before = reconcile_team(&f, &step(&f, &f.install_team()));
     let p =
@@ -6549,7 +6917,7 @@ fn replacement_handoff_is_reviewable_through_daemon_tui_cli_and_survives_restart
             .unwrap(),
     );
     let mut backend = IpcBackend::new(state);
-    let snapshot = backend.snapshot(&before.id).unwrap();
+    let snapshot = task_snapshot(&mut backend, &before.id).unwrap();
     let projected = &snapshot.task_session_replacements[&p.task_id];
     assert_eq!(projected.handoff_hash, p.handoff_hash);
     assert_eq!(projected.scope_hash, p.scope_hash);
@@ -6606,7 +6974,7 @@ fn replacement_handoff_is_reviewable_through_daemon_tui_cli_and_survives_restart
     daemon.0 = architect::tui::connect_or_start_daemon(state, executable)
         .unwrap()
         .unwrap();
-    let restored = backend.snapshot(&after.id).unwrap();
+    let restored = task_snapshot(&mut backend, &after.id).unwrap();
     assert!(restored.task_session_replacements.is_empty());
     let saved: Run = architect::transport::decode(
         architect::ipc::read_document(state, &after.id, "run")
@@ -6973,7 +7341,7 @@ fn captured_check_recovery_keeps_original_expected_failing_baseline_without_repl
 #[test]
 fn captured_check_recovery_is_reviewable_through_daemon_tui_cli_and_survives_restart() {
     use architect::runtime::team::check_recovery;
-    use architect::tui::backend::{Backend, IpcBackend};
+    use architect::tui::backend::IpcBackend;
     let f = TeamFixture::new("task_check_failure");
     let executed = step(&f, &f.install_team());
     let db = rusqlite::Connection::open(f.root.path().join("state.db")).unwrap();
@@ -7001,7 +7369,7 @@ fn captured_check_recovery_is_reviewable_through_daemon_tui_cli_and_survives_res
             .unwrap(),
     );
     let mut backend = IpcBackend::new(state);
-    let snapshot = backend.snapshot(&before.id).unwrap();
+    let snapshot = task_snapshot(&mut backend, &before.id).unwrap();
     let projected = &snapshot.task_check_restores[&invocation_id];
     assert_eq!(projected.scope_hash, p.scope_hash);
     assert_eq!(projected.outcome.output, p.outcome.output);
@@ -7050,8 +7418,7 @@ fn captured_check_recovery_is_reviewable_through_daemon_tui_cli_and_survives_res
         .unwrap()
         .unwrap();
     assert!(
-        backend
-            .snapshot(&after.id)
+        task_snapshot(&mut backend, &after.id)
             .unwrap()
             .task_check_restores
             .is_empty()

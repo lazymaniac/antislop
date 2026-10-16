@@ -190,6 +190,19 @@ pub(super) struct Interrupted {
 pub fn for_task(run: &Run, task_id: &str) -> Result<Pending> {
     let checkpoint = interrupted(run, task_id)?;
     let operation = checkpoint.operation;
+    let team = run.team.as_ref().unwrap();
+    let task = team.tasks.iter().find(|t| t.id == task_id).unwrap();
+    let agent_id = if operation == TaskOperation::Execute {
+        &task.owner_id
+    } else {
+        &task.verifier_id
+    };
+    let agent = team.agents.iter().find(|a| &a.id == agent_id).unwrap();
+    let provider = providers::build_for_work(run, agent.role.work_kind(), agent.kind)?;
+    require(
+        provider.native_resume_implemented(),
+        "selected adapter/profile does not implement native exact-ID continuation; explicit replacement required",
+    )?;
     let session = checkpoint
         .session
         .ok_or_else(|| crate::Error::Invalid("no ordered native task turn to resume".into()))?;
@@ -242,6 +255,10 @@ pub fn pending(run: &Run) -> BTreeMap<String, Pending> {
         .map(|team| {
             team.tasks
                 .iter()
+                // These are necessary conditions only. Authenticate every
+                // actual candidate with for_task; unrelated planned/completed
+                // tasks must not revalidate the full native ledger each.
+                .filter(|t| t.state == TaskState::Blocked && t.review.is_none())
                 .filter_map(|t| for_task(run, &t.id).ok().map(|p| (t.id.clone(), p)))
                 .collect()
         })

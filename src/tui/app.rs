@@ -700,6 +700,53 @@ impl App {
         ) {
             return None;
         }
+        // Preserve captured writes/cohorts before generic reconciliation can
+        // invalidate their original attempt. Every choice still opens a pinned
+        // confirmation card and is revalidated by the runtime on admission.
+        if self.snapshot.task_recovery_preparing || self.snapshot.task_recovery_unavailable {
+            return None;
+        }
+        if let Some(wave) = self.snapshot.wave_effect_reconciliations.values().next() {
+            return Some((
+                Action::ReconcileWaveEffects {
+                    task_ids: wave.task_ids.clone(),
+                    scope_hash: wave.scope_hash.clone(),
+                },
+                "Confirm the observed interrupted wave without repeating writes".into(),
+            ));
+        }
+        if let Some((task_id, scope_hash)) = self.snapshot.task_effect_reconciliations.iter().next()
+        {
+            return Some((
+                Action::ReconcileTaskEffects {
+                    task_id: task_id.clone(),
+                    scope_hash: scope_hash.clone(),
+                },
+                "Confirm the observed task effects without repeating writes".into(),
+            ));
+        }
+        if self.snapshot.reconciliation_required {
+            return self
+                .snapshot
+                .reconciliation_input_hash
+                .as_ref()
+                .filter(|_| self.snapshot.reconciliation_available)
+                .zip(
+                    self.snapshot
+                        .scope_hashes
+                        .get("reconcile")
+                        .filter(|s| !s.is_empty()),
+                )
+                .map(|(input_hash, scope_hash)| {
+                    (
+                        Action::Reconcile {
+                            scope_hash: scope_hash.clone(),
+                            input_hash: input_hash.clone(),
+                        },
+                        "Inspect interrupted work before continuing".into(),
+                    )
+                });
+        }
         if let Some((round_id, scope_hash)) = &self.snapshot.reviewed_intake_proposal {
             return Some((
                 Action::AcceptIntake {
@@ -813,6 +860,60 @@ impl App {
                 "Continue the queued conversation with the orchestrator".into(),
             ));
         }
+        if let Some(package) = self.snapshot.task_check_restores.values().next() {
+            return Some((
+                Action::RestoreTaskCheckResult {
+                    invocation_id: package.invocation_id.clone(),
+                    scope_hash: package.scope_hash.clone(),
+                },
+                "Restore the captured check result without running it again".into(),
+            ));
+        }
+        if let Some((task_id, scope_hash)) = self.snapshot.task_result_restores.iter().next() {
+            return Some((
+                Action::RestoreTaskResult {
+                    task_id: task_id.clone(),
+                    scope_hash: scope_hash.clone(),
+                },
+                "Restore the captured task result without repeating its agent".into(),
+            ));
+        }
+        if let Some(package) = self.snapshot.task_session_resumes.values().next() {
+            return Some((
+                Action::ResumeTaskSession {
+                    task_id: package.task_id.clone(),
+                    scope_hash: package.scope_hash.clone(),
+                },
+                "Continue the interrupted task in its exact native session".into(),
+            ));
+        }
+        if let Some(package) = self.snapshot.task_session_replacements.values().next() {
+            return Some((
+                Action::ReplaceTaskSession {
+                    task_id: package.task_id.clone(),
+                    scope_hash: package.scope_hash.clone(),
+                },
+                "Continue the interrupted task in a new session with its retained handoff".into(),
+            ));
+        }
+        if let Some((task_id, scope_hash)) = self.snapshot.task_verification_retries.iter().next() {
+            return Some((
+                Action::RetryTaskVerification {
+                    task_id: task_id.clone(),
+                    scope_hash: scope_hash.clone(),
+                },
+                "Retry the incomplete independent verification of the retained result".into(),
+            ));
+        }
+        if let Some((task_id, scope_hash)) = self.snapshot.task_source_refreshes.iter().next() {
+            return Some((
+                Action::RefreshTaskSources {
+                    task_id: task_id.clone(),
+                    scope_hash: scope_hash.clone(),
+                },
+                "Refresh the stale task against current sources without repeating writes".into(),
+            ));
+        }
         self.snapshot.pending_wave.as_ref().map(|wave| {
             (
                 Action::StepTeam {
@@ -886,6 +987,8 @@ impl App {
                 .get(scope_hash)
                 .cloned()
                 .unwrap_or_default(),
+            Action::Reconcile { .. } => self.snapshot.reconciliation_details.clone(),
+            Action::RefreshTaskSources { scope_hash, .. } => self.snapshot.task_source_refresh_details.get(scope_hash).cloned().unwrap_or_default(),
             _ => String::new(),
         };
         let stage = match &action {

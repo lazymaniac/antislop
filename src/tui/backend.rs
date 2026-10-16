@@ -5,6 +5,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -169,13 +170,72 @@ pub trait Backend: Send + 'static {
 pub struct IpcBackend {
     state: PathBuf,
     bootstrap_provider: Option<crate::config::ProviderKind>,
+    decoded_run: Option<Arc<DecodedRun>>,
+}
+/// Presentation data for one exact downloaded document. Reuse requires the
+/// daemon's fresh verification of the complete actual database bytes, not just
+/// stored hash metadata. Never serialized or used to authorize a mutation.
+struct DecodedRun {
+    text: String,
+    hash: String,
+    document: Value,
+    captured: OnceLock<crate::domain::Run>,
+    management: OnceLock<crate::runtime::orchestration_recovery::authenticated::Set>,
+}
+impl DecodedRun {
+    fn captured(&self) -> Result<&crate::domain::Run> {
+        if self.captured.get().is_none() {
+            let run = serde_json::from_str(&self.text)?;
+            let _ = self.captured.set(run);
+        }
+        Ok(self.captured.get().expect("decoded run initialized"))
+    }
+    fn validate_management(
+        &self,
+        packages: &std::collections::BTreeMap<
+            String,
+            crate::runtime::orchestration_recovery::Pending,
+        >,
+    ) -> Result<()> {
+        let run = self.captured()?;
+        // The proof belongs to this immutable decoded document, not a mutable
+        // backend slot. Replacing any original byte constructs a new owner and
+        // discards this proof. Package JSON alone never initializes the cell.
+        if let Some(proof) = self.management.get()
+            && proof.packages_match(packages)?
+        {
+            return crate::runtime::orchestration_recovery::sources_current(run);
+        }
+        let proof = crate::runtime::orchestration_recovery::authenticated::Set::build_for_packages(
+            run, packages,
+        )?;
+        let _ = self.management.set(proof);
+        Ok(())
+    }
 }
 impl IpcBackend {
     pub fn new(state: &Path) -> Self {
         Self {
             state: state.into(),
             bootstrap_provider: None,
+            decoded_run: None,
         }
+    }
+    fn decode_run(&mut self, text: String) -> Result<Arc<DecodedRun>> {
+        if let Some(cached) = &self.decoded_run
+            && cached.text == text
+        {
+            return Ok(Arc::clone(cached));
+        }
+        let decoded = Arc::new(DecodedRun {
+            hash: crate::hash(&text),
+            document: serde_json::from_str(&text)?,
+            text,
+            captured: OnceLock::new(),
+            management: OnceLock::new(),
+        });
+        self.decoded_run = Some(Arc::clone(&decoded));
+        Ok(decoded)
     }
     pub fn with_bootstrap_provider(mut self, provider: crate::config::ProviderKind) -> Self {
         self.bootstrap_provider = Some(provider);
@@ -322,17 +382,26 @@ impl Backend for IpcBackend {
             },
             false,
         )?;
-        // Hash-pinned chunk reads reject concurrent document changes; the worker
-        // reports that error and tries again without blocking terminal input.
+        // New daemons verify actual complete SQLite bytes in the same capture
+        // as their decoded control state. Only that explicit guarantee permits
+        // reuse. Older daemons still require a complete hash-pinned download.
         let expected_hash = control["document_hash"].as_str().ok_or_else(|| {
             Error::Invalid("snapshot document hash unavailable; update daemon".into())
         })?;
-        let text = ipc::read_document(&self.state, run_id, "run")?;
-        crate::require(
-            expected_hash == crate::hash(&text),
-            "run changed between control snapshot and document read; refresh again",
-        )?;
-        let document: Value = serde_json::from_str(&text)?;
+        let cached = self.decoded_run.as_ref().filter(|cached| {
+            control["document_hash_verified"] == true && cached.hash == expected_hash
+        });
+        let decoded = if let Some(cached) = cached {
+            Arc::clone(cached)
+        } else {
+            let text = ipc::read_document(&self.state, run_id, "run")?;
+            crate::require(
+                expected_hash == crate::hash(&text),
+                "run changed between control snapshot and document read; refresh again",
+            )?;
+            self.decode_run(text)?
+        };
+        let document = &decoded.document;
         crate::require(
             document["id"].as_str() == Some(run_id),
             "mismatched run document",
@@ -386,6 +455,12 @@ impl Backend for IpcBackend {
                 .is_some_and(|count| count > 0)
         {
             let text = ipc::read_document(&self.state, run_id, "task-recovery")?;
+            crate::require(
+                control["task_recovery_document_hash"]
+                    .as_str()
+                    .is_none_or(|expected| crate::hash(&text) == expected),
+                "task recovery document differs from control snapshot",
+            )?;
             let recovery: Value = serde_json::from_str(&text)?;
             crate::require(
                 recovery["run_document_hash"] == control["document_hash"],
@@ -440,11 +515,11 @@ impl Backend for IpcBackend {
                 "task check recovery package count changed",
             )?;
             control["task_check_restores"] = recovery["check_restores"].clone();
-            let captured: crate::domain::Run = serde_json::from_value(document.clone())?;
+            let captured = decoded.captured()?;
             for (id, value) in recovery["check_restores"].as_object().unwrap() {
                 let package: crate::runtime::team::check_recovery::Pending =
                     serde_json::from_value(value.clone())?;
-                package.validate_for_run(&captured)?;
+                package.validate_for_run(captured)?;
                 crate::require(
                     package.invocation_id == *id,
                     "captured task check package identity changed",
@@ -454,8 +529,7 @@ impl Backend for IpcBackend {
                 let package: crate::runtime::team::replacement::Pending =
                     serde_json::from_value(value.clone())?;
                 package.validate()?;
-                let captured: crate::domain::Run = serde_json::from_value(document.clone())?;
-                package.validate_for_run(&captured)?;
+                package.validate_for_run(captured)?;
                 crate::require(
                     package.task_id == *id,
                     "replacement task package identity changed",
@@ -487,11 +561,10 @@ impl Backend for IpcBackend {
                 "management recovery package count changed",
             )?;
             control["orchestration_recoveries"] = recovery["packages"].clone();
-            let captured: crate::domain::Run = serde_json::from_value(document.clone())?;
             let packages = serde_json::from_value(recovery["packages"].clone())?;
-            crate::runtime::orchestration_recovery::validate_pending_for_run(&captured, &packages)?;
+            decoded.validate_management(&packages)?;
         }
-        let snapshot = Snapshot::from_document(&document, &control);
+        let snapshot = Snapshot::from_document(document, &control);
         Ok(snapshot)
     }
     fn act(&mut self, run_id: &str, action: Action) -> Result<String> {
@@ -798,5 +871,177 @@ impl Backend for IpcBackend {
             }
             _ => "Runtime accepted control action.".into(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verified_snapshots_skip_repeat_downloads_and_older_daemons_still_download() {
+        use std::{
+            io::{BufReader, Write},
+            os::unix::{fs::PermissionsExt, net::UnixListener},
+            time::{Duration, Instant},
+        };
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        ipc::private_directory(root.path()).unwrap();
+        let socket = root.path().join("architect.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let before = json!({"id":"run","diagnostic":"before"}).to_string();
+        let after = json!({"id":"run","diagnostic":"after"}).to_string();
+        let control = |body: &str, verified: Option<bool>| {
+            let mut value = json!({"document_hash":crate::hash(body)});
+            if let Some(verified) = verified {
+                value["document_hash_verified"] = json!(verified);
+            }
+            value
+        };
+        let chunk = |body: &str| json!({"hash":crate::hash(body),"chunk":body,"next_offset":null});
+        let responses = [
+            ("snapshot", control(&before, Some(true))),
+            ("read", chunk(&before)),
+            ("snapshot", control(&before, Some(true))),
+            ("snapshot", control(&before, Some(false))),
+            ("read", chunk(&before)),
+            ("snapshot", control(&before, None)),
+            ("read", chunk(&before)),
+            ("snapshot", control(&after, Some(true))),
+            ("read", chunk(&after)),
+        ];
+        let server = std::thread::spawn(move || {
+            for (expected, data) in responses {
+                let start = Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(start.elapsed() < Duration::from_secs(5));
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                // Darwin may inherit the listener's O_NONBLOCK. The server
+                // must wait for the client's first bytes, not race its write.
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let request: Request = crate::transport::read(&mut BufReader::new(&stream))
+                    .unwrap()
+                    .unwrap();
+                match (&request.operation, expected) {
+                    (Operation::Snapshot { run_id }, "snapshot") => assert_eq!(run_id, "run"),
+                    (
+                        Operation::Read {
+                            run_id,
+                            document,
+                            offset,
+                            ..
+                        },
+                        "read",
+                    ) => {
+                        assert_eq!(run_id, "run");
+                        assert_eq!(document, "run");
+                        assert_eq!(*offset, 0);
+                    }
+                    _ => panic!("unexpected document transfer: {:?}", request.operation),
+                }
+                let response = ipc::Response {
+                    version: PROTOCOL_VERSION,
+                    request_id: request.request_id,
+                    data: Some(data),
+                    error: None,
+                };
+                serde_json::to_writer(&mut stream, &response).unwrap();
+                stream.write_all(b"\n").unwrap();
+            }
+        });
+        let mut backend = IpcBackend::new(root.path());
+        for _ in 0..4 {
+            assert_eq!(backend.snapshot("run").unwrap().diagnostic, "before");
+        }
+        assert_eq!(backend.snapshot("run").unwrap().diagnostic, "after");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn decoded_documents_reuse_only_exact_bytes_and_keep_one_current_run() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("source"), "original").unwrap();
+        let mut spec: crate::domain::RunSpec =
+            serde_json::from_str(include_str!("../../examples/fake-spec.json")).unwrap();
+        spec.workspace = root.path().to_string_lossy().into();
+        spec.input_files = vec!["source".into()];
+        let mut run = crate::domain::Run::new(crate::id(), spec).unwrap();
+        run.diagnostic = Some("before".into());
+        run.orchestration_rounds.push(
+            serde_json::from_value(json!({
+                "id":"round","spec_revision":run.spec_revision,"source_hashes":{},
+                "input_hash":crate::hash("inputs"),"approval_scope":crate::hash("scope"),
+                "previous_status":"blocked","message_ids":[],"request_sequence":0,
+                "request_context":"{}","status":"failed","executor_session":null,
+                "verifier_session":null,"output":null,"review":null,"diagnostic":null
+            }))
+            .unwrap(),
+        );
+        let text = serde_json::to_string(&run).unwrap();
+        let mut backend = IpcBackend::new(root.path());
+        let first = backend.decode_run(text.clone()).unwrap();
+        let same = backend.decode_run(text.clone()).unwrap();
+        assert!(Arc::ptr_eq(&first, &same));
+        assert!(std::ptr::eq(
+            first.captured().unwrap(),
+            same.captured().unwrap()
+        ));
+        let empty = std::collections::BTreeMap::new();
+        first.validate_management(&empty).unwrap();
+        assert!(same.management.get().is_some());
+        std::fs::write(root.path().join("source"), "changed live source").unwrap();
+        assert!(same.validate_management(&empty).is_err());
+        std::fs::write(root.path().join("source"), "original").unwrap();
+        same.validate_management(&empty).unwrap();
+        let forged = std::collections::BTreeMap::from([(
+            "round:Replacement".into(),
+            serde_json::from_value(json!({"round_id":"round","kind":"replacement",
+                "role":"verifier","handoff":{},"handoff_hash":crate::hash("forged"),
+                "scope_hash":crate::hash("forged scope")}))
+            .unwrap(),
+        )]);
+        assert!(same.validate_management(&forged).is_err());
+        same.validate_management(&empty).unwrap();
+
+        // A same-length change in canonical bytes must replace both decoded
+        // views; a prior snapshot continues to describe its original version.
+        run.diagnostic = Some("after!".into());
+        let changed_text = serde_json::to_string(&run).unwrap();
+        assert_eq!(changed_text.len(), text.len());
+        let changed = backend.decode_run(changed_text).unwrap();
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert!(changed.management.get().is_none());
+        assert_eq!(changed.document["diagnostic"], "after!");
+        assert_eq!(changed.captured().unwrap().diagnostic, run.diagnostic);
+        assert_eq!(
+            first.captured().unwrap().diagnostic.as_deref(),
+            Some("before")
+        );
+
+        assert!(backend.decode_run("{".into()).is_err());
+        assert!(Arc::ptr_eq(&changed, backend.decoded_run.as_ref().unwrap()));
+        run.id = crate::id();
+        let foreign = backend
+            .decode_run(serde_json::to_string(&run).unwrap())
+            .unwrap();
+        assert_eq!(foreign.captured().unwrap().id, run.id);
+        let restored = backend.decode_run(text.clone()).unwrap();
+        assert!(!Arc::ptr_eq(&first, &restored));
+        let whitespace = backend.decode_run(format!("{text}\n")).unwrap();
+        assert!(!Arc::ptr_eq(&restored, &whitespace));
+        assert_eq!(restored.document, whitespace.document);
     }
 }

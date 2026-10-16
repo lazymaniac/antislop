@@ -1,44 +1,24 @@
 //! Derived, process-local management recovery documents. No cached result
-//! authorizes an action; admission always rebuilds and validates its scope.
-use crate::{Result, domain::Run, hash, runtime::orchestration_recovery};
-use serde_json::json;
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
+//! authorizes an action; admission checks the entire canonical state, live
+//! sources and explicit approval against an internally authenticated package.
+use crate::{
+    Result,
+    domain::Run,
+    hash,
+    runtime::{orchestration_recovery, team_acceptance},
 };
+use serde_json::json;
+use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) struct Document {
     pub text: String,
     pub hash: String,
     pub count: usize,
+    authenticated: Option<Arc<orchestration_recovery::authenticated::Set>>,
+    pub prepared_team: Option<Arc<team_acceptance::Prepared>>,
 }
-pub(crate) enum View {
-    Preparing,
-    Unavailable,
-    Ready(Arc<Document>),
-}
-impl View {
-    pub fn state(&self) -> &'static str {
-        match self {
-            Self::Preparing => "preparing",
-            Self::Unavailable => "unavailable",
-            Self::Ready(_) => "ready",
-        }
-    }
-    pub fn document(&self) -> Option<&Document> {
-        match self {
-            Self::Ready(document) => Some(document),
-            _ => None,
-        }
-    }
-}
-struct Entry {
-    key: String,
-    generation: String,
-    result: Option<Option<Arc<Document>>>,
-}
-#[derive(Default)]
-pub(crate) struct Cache(Mutex<BTreeMap<String, Entry>>);
+pub(crate) type View = super::projection::View<Document>;
+pub(crate) type Cache = super::projection::Cache<Document>;
 
 impl Cache {
     pub fn view(
@@ -47,93 +27,75 @@ impl Cache {
         run_document_hash: String,
         fresh_sources: bool,
     ) -> Result<View> {
+        let reviewed_team = team_acceptance::reviewed_round(&run).is_some();
         let eligible = !run.reconciliation_required
             && !matches!(
                 run.status,
                 crate::domain::Status::Running | crate::domain::Status::Paused
             )
-            && run.orchestration_rounds.last().is_some_and(|r| {
-                matches!(
-                    r.status,
-                    crate::orchestration::planning::RoundStatus::Failed
-                        | crate::orchestration::planning::RoundStatus::Interrupted
-                        | crate::orchestration::planning::RoundStatus::Rejected
-                )
-            });
+            && (reviewed_team
+                || run.orchestration_rounds.last().is_some_and(|r| {
+                    matches!(
+                        r.status,
+                        crate::orchestration::planning::RoundStatus::Failed
+                            | crate::orchestration::planning::RoundStatus::Interrupted
+                            | crate::orchestration::planning::RoundStatus::Rejected
+                    )
+                }));
         if !eligible {
-            self.0.lock().expect("projection mutex").remove(&run.id);
+            self.clear(&run.id);
             return Ok(View::Ready(Arc::new(document(
                 &run_document_hash,
                 BTreeMap::new(),
             )?)));
         }
-        // Store::get compares actual database bytes. Do not trust state_hash as
-        // the sole identity: an out-of-band row edit may leave it unchanged.
+        // Store compares actual bytes, including out-of-band edits which left
+        // the stored state_hash unchanged. Sealed proofs retain the full run.
         let key = hash(serde_json::to_vec(&(&run, &run_document_hash))?);
-        let existing = {
-            let entries = self.0.lock().expect("projection mutex");
-            entries
-                .get(&run.id)
-                .filter(|e| e.key == key)
-                .map(|e| e.result.clone())
-        };
-        match existing {
-            Some(None) => return Ok(View::Preparing),
-            Some(Some(Some(document))) => {
-                if !fresh_sources || orchestration_recovery::sources_current(&run).is_ok() {
-                    return Ok(View::Ready(document));
-                }
-                self.remove(&run.id, &key);
-                return Ok(View::Unavailable);
+        let captured = run.clone();
+        let view = self.prepare(run.id.clone(), key.clone(), move || {
+            if reviewed_team {
+                let prepared = Arc::new(team_acceptance::Prepared::build(&captured)?);
+                orchestration_recovery::sources_current(&captured)?;
+                let mut document = document(&run_document_hash, BTreeMap::new())?;
+                document.prepared_team = Some(prepared);
+                return Ok(document);
             }
-            Some(Some(None)) => {
-                self.remove(&run.id, &key);
-                return Ok(View::Unavailable);
-            }
-            None => {}
-        }
-        let generation = crate::id();
-        {
-            let mut entries = self.0.lock().expect("projection mutex");
-            // Concurrent first snapshots must share the same validation job.
-            if entries.get(&run.id).is_some_and(|e| e.key == key) {
-                return Ok(View::Preparing);
-            }
-            entries.insert(
-                run.id.clone(),
-                Entry {
-                    key: key.clone(),
-                    generation: generation.clone(),
-                    result: None,
-                },
-            );
-        }
-        let cache = Arc::clone(self);
-        std::thread::spawn(move || {
-            let result = (|| -> Result<Document> {
-                let packages = orchestration_recovery::pending(&run);
-                // Prefix validation may be slow. Re-observe sources before
-                // publishing, not just before starting that validation.
-                orchestration_recovery::sources_current(&run)?;
-                document(&run_document_hash, packages)
-            })()
-            .ok()
-            .map(Arc::new);
-            let mut entries = cache.0.lock().expect("projection mutex");
-            if let Some(entry) = entries.get_mut(&run.id)
-                && entry.key == key
-                && entry.generation == generation
-            {
-                entry.result = Some(result);
-            }
+            let authenticated = Arc::new(orchestration_recovery::authenticated::Set::build(
+                &captured,
+            )?);
+            orchestration_recovery::sources_current(&captured)?;
+            let mut document = document(&run_document_hash, authenticated.packages().clone())?;
+            document.authenticated = Some(authenticated);
+            Ok(document)
         });
-        Ok(View::Preparing)
-    }
-    fn remove(&self, run_id: &str, key: &str) {
-        let mut entries = self.0.lock().expect("projection mutex");
-        if entries.get(run_id).is_some_and(|e| e.key == key) {
-            entries.remove(run_id);
+        if matches!(view, View::Unavailable)
+            || matches!(&view, View::Ready(_) if fresh_sources && orchestration_recovery::sources_current(&run).is_err())
+        {
+            self.remove(&run.id, &key);
+            return Ok(View::Unavailable);
         }
+        Ok(view)
+    }
+    pub fn authenticated(
+        &self,
+        run: &Run,
+        run_document_hash: &str,
+    ) -> Result<Option<Arc<orchestration_recovery::authenticated::Set>>> {
+        let key = hash(serde_json::to_vec(&(run, run_document_hash))?);
+        Ok(self
+            .peek(&run.id, &key)
+            .and_then(|d| d.authenticated.clone()))
+    }
+    pub fn prepared_team(
+        &self,
+        run: &Run,
+        run_document_hash: &str,
+    ) -> Result<Option<Arc<team_acceptance::Prepared>>> {
+        let key = hash(serde_json::to_vec(&(run, run_document_hash))?);
+        Ok(self
+            .peek(&run.id, &key)
+            .and_then(|d| d.prepared_team.clone()))
     }
 }
 fn document(
@@ -147,6 +109,8 @@ fn document(
         hash: hash(&text),
         text,
         count,
+        authenticated: None,
+        prepared_team: None,
     })
 }
 

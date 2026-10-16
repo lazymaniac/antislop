@@ -485,6 +485,17 @@ pub fn captured_text(
     snapshot: &BTreeMap<String, String>,
     path: &str,
 ) -> Result<Option<String>> {
+    captured_text_observed(root, snapshot, None, path)
+}
+pub fn captured_text_observed(
+    root: &Path,
+    snapshot: &BTreeMap<String, String>,
+    observation: Option<&super::observation::Observation>,
+    path: &str,
+) -> Result<Option<String>> {
+    if let Some(observation) = observation {
+        observation.validate(snapshot)?;
+    }
     let edited = relative(root, path)?;
     require(
         edited != "."
@@ -498,14 +509,22 @@ pub fn captured_text(
     let mut version = None;
     let mut covered = false;
     for (scope, text) in snapshot {
+        let directory_kind =
+            observation.map(|o| o.entries[scope].kind == super::observation::Kind::Directory);
         let scope = relative(root, scope)?;
         let observed = if scope == edited {
             require(
-                directory_body(text).is_none(),
+                directory_kind.map_or_else(
+                    || directory_body(text).is_none(),
+                    |is_directory| !is_directory,
+                ),
                 "file effect cannot replace a directory input",
             )?;
             Some(Some(text.clone()))
         } else if scope == "." || edited.starts_with(&format!("{scope}/")) {
+            if directory_kind == Some(false) {
+                continue;
+            }
             let Some(directory) = directory_body(text) else {
                 continue;
             };
@@ -597,12 +616,21 @@ pub fn record_change(
     edit: &crate::domain::FileEdit,
     expected_hash: &str,
 ) -> Result<()> {
+    record_change_observed(root, snapshot, None, edit, expected_hash)
+}
+pub fn record_change_observed(
+    root: &Path,
+    snapshot: &mut BTreeMap<String, String>,
+    observation: Option<&super::observation::Observation>,
+    edit: &crate::domain::FileEdit,
+    expected_hash: &str,
+) -> Result<()> {
     use crate::domain::FileOperation;
     require(
         !edit.content.contains('\0'),
         "text file effects cannot carry binary data",
     )?;
-    let before = captured_text(root, snapshot, &edit.path)?;
+    let before = captured_text_observed(root, snapshot, observation, &edit.path)?;
     require(
         version_hash(before.as_deref()) == expected_hash
             && match edit.operation {
@@ -619,6 +647,8 @@ pub fn record_change(
     let mut updated = snapshot.clone();
     let mut covered = false;
     for (scope, text) in &mut updated {
+        let directory_kind =
+            observation.map(|o| o.entries[scope].kind == super::observation::Kind::Directory);
         let scope = relative(root, scope)?;
         if scope == edited {
             require(
@@ -627,6 +657,9 @@ pub fn record_change(
             )?;
             *text = edit.content.clone();
             covered = true;
+            continue;
+        }
+        if directory_kind == Some(false) {
             continue;
         }
         let Some(mut directory) = directory_body(text) else {

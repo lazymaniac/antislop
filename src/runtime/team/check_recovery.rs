@@ -266,6 +266,11 @@ pub fn for_invocation(run: &Run, id: &str) -> Result<Pending> {
 pub fn pending(run: &Run) -> BTreeMap<String, Pending> {
     run.task_checks
         .iter()
+        .filter(|i| {
+            matches!(i.state, CheckState::Intent | CheckState::Unknown)
+                && i.restoration.is_none()
+                && i.evidence_id.is_none()
+        })
         .filter_map(|i| for_invocation(run, &i.id).ok().map(|p| (i.id.clone(), p)))
         .collect()
 }

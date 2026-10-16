@@ -16,6 +16,37 @@ use std::{
 };
 
 const FIXTURE_SESSION: &str = "00000000-0000-4000-8000-000000000001";
+
+#[test]
+fn native_resume_eligibility_follows_the_resolved_adapter_profile_without_probing() {
+    use architect::config::{Config, IsolationProfile as I, ProviderKind as P, RoleKind, WorkKind};
+    for (kind, isolation, implemented) in [
+        (P::Codex, I::ReadOnly, true),
+        (P::Codex, I::PinnedContext, false),
+        (P::Claude, I::ToolFree, true),
+        (P::Gemini, I::ToolFree, true),
+        (P::Agy, I::ToolFree, false),
+        (P::Agy, I::PinnedContext, false),
+    ] {
+        let mut config = Config::from_toml(include_str!("../examples/architect.toml")).unwrap();
+        config.profiles.get_mut("reasoning").unwrap().provider = kind;
+        let provider = config.providers.get_mut(&kind).unwrap();
+        provider.isolation = isolation;
+        provider.binary = PathBuf::from("/nonexistent/never-probe-for-recovery-eligibility");
+        let mut spec: RunSpec =
+            serde_json::from_str(include_str!("../examples/fake-spec.json")).unwrap();
+        spec.config = Some(config.pin().unwrap());
+        let run = Run::new(architect::id(), spec).unwrap();
+        let provider =
+            providers::build_for_work(&run, WorkKind::Context, RoleKind::Executor).unwrap();
+        assert_eq!(
+            provider.native_resume_implemented(),
+            implemented,
+            "{kind:?}/{isolation:?}"
+        );
+    }
+}
+
 struct Cli {
     root: tempfile::TempDir,
     binary: PathBuf,

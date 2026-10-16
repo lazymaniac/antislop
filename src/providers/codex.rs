@@ -658,6 +658,10 @@ impl CodexProvider {
     }
 }
 impl Provider for CodexProvider {
+    fn native_resume_implemented(&self) -> bool {
+        !self.pinned_context
+    }
+
     fn turn_receipt(
         &self,
         request: &TurnRequest<'_>,
@@ -688,7 +692,7 @@ impl Provider for CodexProvider {
     }
     fn probe_cancelled(&self, cancelled: &AtomicBool) -> Result<Capabilities> {
         Ok(Capabilities { provider: "codex".into(), version: self.validated_version(Some(cancelled))?,
-            structured_output: true, streaming: true, resume: !self.pinned_context, steering: false,
+            structured_output: true, streaming: true, resume: self.native_resume_implemented(), steering: false,
             cancellation: true, approvals: false, native_subagents_disabled: true,
             sandbox: if self.pinned_context {"filesystem read-only in controlled cwd; owned immutable MCP reader; other native tools rejected; project documents/shell/apps/hooks/plugins/subagents disabled; no proven tool_free allowlist or OS containment claim"} else {"filesystem read-only in controlled cwd; project documents disabled; shell_tool/apps/hooks/plugins/subagents disabled; reasoning-only directive and forbidden-event rejection; other native tools/skills remain outside a proven allowlist; tool_free unsupported"}.into(), usage: "reported tokens when present; USD unavailable".into() })
     }

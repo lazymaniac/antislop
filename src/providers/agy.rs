@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-const VERSIONS: &[&str] = &["1.3.4", "1.3.5"];
+const VERSIONS: &[&str] = &["1.3.4", "1.3.5", "1.4.0"];
 const AGENT: &str = "antislop-stdio";
 /// Observed CLI user-content ceiling. Reject before delivery instead of letting
 /// native ingestion silently replace the tail with a truncation marker.
@@ -223,6 +223,7 @@ impl AgyProvider {
         let version = shared_cli::capture(
             shared_cli::command("agy", self.binary())?
                 .env("HOME", home)
+                .env("AGY_CLI_OSC7501", "off")
                 .current_dir(cwd)
                 .arg("--version"),
             cancelled,
@@ -231,19 +232,22 @@ impl AgyProvider {
             return Err(failure(
                 "agy",
                 FailureKind::Unsupported,
-                "CLI version is outside the validated Antigravity 1.3.4/1.3.5 contract",
+                "CLI version is outside the validated Antigravity 1.3.4/1.3.5/1.4.0 contract",
             ));
         }
-        if self.isolation == IsolationProfile::PinnedContext && version.trim() != "1.3.5" {
+        if self.isolation == IsolationProfile::PinnedContext
+            && !matches!(version.trim(), "1.3.5" | "1.4.0")
+        {
             return Err(failure(
                 "agy",
                 FailureKind::Unsupported,
-                "pinned_context requires the validated Antigravity 1.3.5 MCP contract; no profile downgrade",
+                "pinned_context requires the validated Antigravity 1.3.5/1.4.0 MCP contract; no profile downgrade",
             ));
         }
         let help = shared_cli::capture_help(
             shared_cli::command("agy", self.binary())?
                 .env("HOME", home)
+                .env("AGY_CLI_OSC7501", "off")
                 .current_dir(cwd),
             cancelled,
         )?;
@@ -334,6 +338,42 @@ pub enum NativeEvent {
         kind: FailureKind,
     },
 }
+
+// Exact internal guard messages map to fixed protocol categories. Unknown
+// errors (including callback/storage text) never become native diagnostics.
+fn stream_diagnostic(error: &crate::Error) -> &'static str {
+    let crate::Error::Invalid(message) = error else {
+        return "unclassified";
+    };
+    match message.as_str() {
+        "invalid Antigravity registry catalog" => "initialization_catalog",
+        "invalid or failed native finish component" => "finish_component",
+        "invalid Antigravity step state" => "native_step_state",
+        "native event after terminal result" => "event_after_terminal",
+        "duplicate native conversation initialization" => "duplicate_initialization",
+        "CLI returned another conversation than requested" => "initialization_identity",
+        "CLI did not select the owned finish-only profile/cwd" => "initialization_profile",
+        "step refers to another or unobserved conversation" => "step_identity",
+        "result lacks observed conversation and completed finish" => "result_identity_or_finish",
+        "native result schema differs from requested schema" => "result_schema",
+        "failure refers to another conversation" => "failure_identity",
+        "context response before native delivery" => "context_before_delivery",
+        "MCP event escapes the pinned context reader" => "context_tool_scope",
+        "duplicate closed context tool step" => "context_step_replayed",
+        "active context tool arguments changed" => "context_arguments_changed",
+        "context tool completion has no matching start" => "context_completion_without_start",
+        "unrecognized context tool failure" => "context_failure_shape",
+        "successful context response contains an error" => "context_success_with_error",
+        "unsupported native context output shape" => "context_output_shape",
+        "native context response differs from its committed request" => "context_response_binding",
+        "context receipt is duplicate or out of order" => "context_receipt_order",
+        "context receipt sequence changed" => "context_receipt_sequence",
+        "observed context response has no committed receipt" => {
+            "context_observation_without_receipt"
+        }
+        _ => "unclassified",
+    }
+}
 fn identity(value: &Value) -> Result<String> {
     value
         .as_str()
@@ -349,10 +389,130 @@ fn identity(value: &Value) -> Result<String> {
 }
 // Only call for a native error_message step, never an agent's artifact text.
 fn step_error(step: &Value) -> &Value {
-    step.get("error_message")
-        .or_else(|| step.get("errorMessage"))
-        .or_else(|| step.get("error"))
+    ["error_message", "errorMessage", "error", "text_delta"]
+        .iter()
+        .filter_map(|name| step.get(name))
+        .find(|value| !value.is_null())
         .unwrap_or(step)
+}
+
+// Fixed field/type names only. Never include native keys, text or arguments in
+// a failure report. This distinguishes an absent error body from an unsupported
+// shape without guessing how the discarded original NDJSON was encoded.
+const ERROR_STEP_FIELDS: &[&str] = &[
+    "conversation_id",
+    "step_index",
+    "state",
+    "step_type",
+    "text_delta",
+    "error_message",
+    "errorMessage",
+    "error",
+    "duration_seconds",
+    "usage",
+    "tool_name",
+    "tool_info",
+    "subagent_info",
+];
+fn known_error_step_fields(step: &Value) -> bool {
+    step.as_object().is_some_and(|object| {
+        object
+            .keys()
+            .all(|key| ERROR_STEP_FIELDS.contains(&key.as_str()))
+    })
+}
+fn step_error_shape(step: &Value) -> String {
+    let carriers = ["error_message", "errorMessage", "error", "text_delta"]
+        .iter()
+        .map(|name| {
+            let kind = match step.get(name) {
+                None | Some(Value::Null) => "absent",
+                Some(Value::String(_)) => "string",
+                Some(Value::Object(_)) => "object",
+                Some(_) => "other",
+            };
+            format!("{name}:{kind}")
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{carriers},unrecognized_fields:{},indexed:{}",
+        !known_error_step_fields(step),
+        step["step_index"].is_u64()
+    )
+}
+
+// Only the native error-message envelope is eligible. Broad diagnostic marker
+// scanning is deliberately insufficient: arbitrary nested values, other error
+// codes and prose mentioning a failure do not request model-format correction.
+fn malformed_call(step: &Value) -> bool {
+    if step["state"] != "DONE" {
+        return false;
+    }
+    if step
+        .get("text_delta")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return false;
+    }
+    if ["error_message", "errorMessage", "error", "text_delta"]
+        .iter()
+        .filter(|name| step.get(**name).is_some_and(|value| !value.is_null()))
+        .count()
+        != 1
+    {
+        return false;
+    }
+    let error = step_error(step);
+    if error.get("retryable") == Some(&Value::Bool(false)) {
+        return false;
+    }
+    if error.get("code").is_some_and(|code| {
+        !code.is_null()
+            && !code
+                .as_str()
+                .is_some_and(|code| code.eq_ignore_ascii_case("malformed_function_call"))
+    }) {
+        return false;
+    }
+    let Some(message) = error.as_str().or_else(|| error["message"].as_str()) else {
+        return false;
+    };
+    // Known native prefix may precede the diagnostic; never inspect/copy the
+    // malformed arguments that follow it, or interpret them as a tool call.
+    let prefix = &message.as_bytes()[..message.len().min(256)];
+    let marker = b"malformed function call:";
+    prefix
+        .windows(marker.len())
+        .enumerate()
+        .any(|(offset, candidate)| {
+            candidate.eq_ignore_ascii_case(marker)
+                && (offset == 0 || prefix[offset - 1].is_ascii_whitespace())
+                && shared_cli::classify_stderr(&prefix[..offset]).is_none()
+        })
+}
+
+// A well-formed native error-message update is a step observation, not the
+// terminal result. CLI 1.4.0 can omit every error-text carrier. Do not invent a
+// cause or declare SDK retries successful; keep the SAME restricted process
+// observable until its actual result. Unknown payloads/protocol fields and known
+// fatal diagnostics are not eligible for this absence-only case.
+fn opaque_error_step(step: &Value, kind: FailureKind) -> bool {
+    kind == FailureKind::Process
+        && step["state"] == "DONE"
+        && known_error_step_fields(step)
+        && ["error_message", "errorMessage", "error", "text_delta"]
+            .iter()
+            .all(|name| step.get(name).is_none_or(Value::is_null))
+        && step.get("duration_seconds").is_none_or(|value| {
+            value.is_null()
+                || value
+                    .as_f64()
+                    .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
+        })
+        && step
+            .get("usage")
+            .is_none_or(|value| value.is_null() || value.is_object())
 }
 
 // Never copy native text, arguments, arbitrary tool names or subagent bodies
@@ -388,16 +548,24 @@ fn external_step_diagnostic(step: &Value) -> String {
 }
 
 fn unknown_step_diagnostic(step: &Value) -> String {
-    // Native system-message names are useful for protocol diagnosis, but an
-    // unrecognized category is never made admissible by its diagnostic label.
+    // The CLI also emits the literal unmapped label "unknown". Neither it nor
+    // a system message becomes admissible through a diagnostic label. Retain
+    // only bounded protocol metadata, never text or arbitrary native payloads.
     let name = match step["step_type"].as_str() {
         Some("system_message") => "system_message",
+        Some("unknown") => "unknown",
         Some(_) => "redacted",
         None => "non-string",
     };
+    let state = match step["state"].as_str() {
+        Some("ACTIVE") => "ACTIVE",
+        Some("DONE") => "DONE",
+        _ => "unrecognized",
+    };
     let fingerprint = crate::hash(serde_json::to_vec(&step["step_type"]).unwrap_or_default());
     format!(
-        "unknown native step type (step={name}, type_sha256={fingerprint}, text_delta={}, system_message={}, error_message={})",
+        "unknown native step type (step={name}, state={state}, step_index={:?}, type_sha256={fingerprint}, text_delta={}, system_message={}, error_message={})",
+        step["step_index"].as_u64(),
         step.get("text_delta").is_some_and(|v| !v.is_null()),
         step.get("system_message").is_some_and(|v| !v.is_null()),
         step.get("error_message").is_some_and(|v| !v.is_null()),
@@ -428,12 +596,30 @@ pub fn normalize(value: &Value) -> Result<NativeEvent> {
         }
         Some("step_update") => {
             let step = &value["step_update"];
+            // CLI 1.3.5 can encode the selected structured-output component as
+            // an ordinary tool step. It is the same allowed finish operation,
+            // not a filesystem/MCP/delegation grant. Arguments remain data;
+            // only the later schema-bound terminal result is an artifact.
+            let finish_tool = step["step_type"] == "tool"
+                && step["tool_name"] == "finish"
+                && step["tool_info"].is_object()
+                && step["tool_info"]["name"] == "finish";
             if step.get("subagent_info").is_some_and(|v| !v.is_null())
-                || step.get("tool_info").is_some_and(|v| !v.is_null())
-                || step.get("tool_name").is_some_and(|v| !v.is_null())
-                || step["step_type"] == "tool"
+                || (!finish_tool
+                    && (step.get("tool_info").is_some_and(|v| !v.is_null())
+                        || step.get("tool_name").is_some_and(|v| !v.is_null())
+                        || step["step_type"] == "tool"))
             {
                 return Err(policy(&external_step_diagnostic(step)));
+            }
+            if finish_tool {
+                require(
+                    step["tool_info"].get("error").is_none_or(Value::is_null)
+                        && step["tool_info"]
+                            .get("parameters")
+                            .is_none_or(|v| v.is_null() || v.is_object()),
+                    "invalid or failed native finish component",
+                )?;
             }
             require(
                 matches!(step["state"].as_str(), Some("ACTIVE" | "DONE")),
@@ -445,6 +631,10 @@ pub fn normalize(value: &Value) -> Result<NativeEvent> {
                     Ok(NativeEvent::Step { id, finish: false })
                 }
                 Some("finish") => Ok(NativeEvent::Step {
+                    id,
+                    finish: step["state"] == "DONE",
+                }),
+                Some("tool") if finish_tool => Ok(NativeEvent::Step {
                     id,
                     finish: step["state"] == "DONE",
                 }),
@@ -579,7 +769,7 @@ impl Provider for AgyProvider {
         }
         let home = self.home()?;
         let probe_cwd = self.cwd(Path::new(&request.run.spec.workspace))?;
-        self.inspect(&home, &probe_cwd, Some(&cancelled))?;
+        let version = self.inspect(&home, &probe_cwd, Some(&cancelled))?;
         let mut context = if self.isolation == IsolationProfile::PinnedContext {
             Some(crate::context::transport::Transport::new(request)?)
         } else {
@@ -590,7 +780,10 @@ impl Provider for AgyProvider {
             .map(|c| c.reader().and_then(crate::context::bridge::Bridge::start))
             .transpose()?;
         let cwd = if let Some(bridge) = &bridge {
-            context::cwd(bridge)?
+            context::cwd(
+                bridge,
+                &context.as_ref().expect("context bridge scope").version,
+            )?
         } else {
             probe_cwd
         };
@@ -640,6 +833,7 @@ impl Provider for AgyProvider {
                 "0",
             ])
             .env("HOME", home)
+            .env("AGY_CLI_OSC7501", "off")
             .current_dir(&cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -720,6 +914,9 @@ impl Provider for AgyProvider {
         let mut failed = None;
         let mut native_diagnosis = None;
         let mut context_tools = context::Tools::default();
+        let mut highest_step = None::<u64>;
+        let mut last_rejected_step = None::<u64>;
+        let mut stream_phase = "native_stream";
         #[cfg(test)]
         let mut context_trace = std::env::var_os("ANTISLOP_CONTEXT_TOOL_TRACE")
             .map(|name| {
@@ -734,6 +931,7 @@ impl Provider for AgyProvider {
         let stream_result = (|| -> Result<()> {
             while !eof || status.is_none() || !write_finished {
                 if cancelled.load(Ordering::SeqCst) {
+                    stream_phase = "cancellation";
                     let callback = events(&ProviderEvent::CancellationRequested {
                         turn_id: request.turn_id.into(),
                     });
@@ -758,6 +956,7 @@ impl Provider for AgyProvider {
                     && let (Some(bridge), Some(context)) = (&bridge, &mut context)
                 {
                     while let Some(commit) = bridge.pending() {
+                        stream_phase = "context_commit";
                         let result = (|| {
                             require(
                                 sent && native.is_some(),
@@ -780,6 +979,7 @@ impl Provider for AgyProvider {
                 if !write_finished {
                     match sent_receiver.try_recv() {
                         Ok(Ok(())) => {
+                            stream_phase = "delivery";
                             write_finished = true;
                             sent = true;
                             events(&ProviderEvent::DeliverySent {
@@ -793,11 +993,13 @@ impl Provider for AgyProvider {
                         Err(mpsc::TryRecvError::Empty) => (),
                     }
                 }
+                stream_phase = "process_status";
                 status = status.or(child.child.try_wait()?);
                 if eof {
                     std::thread::sleep(Duration::from_millis(25));
                     continue;
                 }
+                stream_phase = "frame_read";
                 let frame = match receiver.recv_timeout(Duration::from_millis(25)) {
                     Ok(Ok(Some(v))) => v,
                     Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -813,7 +1015,23 @@ impl Provider for AgyProvider {
                         ));
                     }
                 };
+                stream_phase = "terminal_order";
                 require(!terminal, "native event after terminal result")?;
+                let step_index = (frame["event"] == "step_update")
+                    .then(|| frame["step_update"]["step_index"].as_u64())
+                    .flatten();
+                if frame["event"] == "step_update"
+                    && let Some(rejected) = last_rejected_step
+                {
+                    require(
+                        step_index.is_some_and(|index| index > rejected),
+                        "native step did not advance after rejected model output",
+                    )?;
+                }
+                let previous_step = highest_step;
+                if let Some(index) = step_index {
+                    highest_step = Some(highest_step.map_or(index, |highest| highest.max(index)));
+                }
                 #[cfg(test)]
                 if frame["event"] == "step_update"
                     && frame["step_update"]["tool_name"] == "call_mcp_tool"
@@ -823,6 +1041,7 @@ impl Provider for AgyProvider {
                     trace.write_all(b"\n")?;
                     trace.flush()?;
                 }
+                stream_phase = "context_tool";
                 if let Some(context) = &mut context
                     && context_tools.frame(
                         &frame,
@@ -834,12 +1053,14 @@ impl Provider for AgyProvider {
                 {
                     continue;
                 }
+                stream_phase = "normalization";
                 match normalize(&frame)? {
                     NativeEvent::Init {
                         id,
                         cwd: reported,
                         agent,
                     } => {
+                        stream_phase = "initialization";
                         require(
                             native.is_none(),
                             "duplicate native conversation initialization",
@@ -858,6 +1079,7 @@ impl Provider for AgyProvider {
                         native = Some(id);
                     }
                     NativeEvent::Step { id, finish: done } => {
+                        stream_phase = "native_step";
                         require(
                             native.as_ref() == Some(&id),
                             "step refers to another or unobserved conversation",
@@ -870,6 +1092,7 @@ impl Provider for AgyProvider {
                         schema,
                         usage: reported,
                     } => {
+                        stream_phase = "native_result";
                         require(
                             native.as_ref() == Some(&id) && finish,
                             "result lacks observed conversation and completed finish",
@@ -892,22 +1115,58 @@ impl Provider for AgyProvider {
                         usage = reported;
                     }
                     NativeEvent::Failed { id, kind } => {
+                        stream_phase = "native_failure";
                         require(
                             id.as_ref().is_none_or(|id| native.as_ref() == Some(id)),
                             "failure refers to another conversation",
                         )?;
                         if frame["event"] == "step_update" {
+                            let rejection = if malformed_call(&frame["step_update"]) {
+                                Some(NativeOutputRejection::MalformedFunctionCall)
+                            } else if opaque_error_step(&frame["step_update"], kind) {
+                                Some(NativeOutputRejection::UnclassifiedNativeStep)
+                            } else {
+                                None
+                            };
+                            if version == "1.4.0"
+                                && sent
+                                && native.is_some()
+                                && !finish
+                                && let Some(reason) = rejection
+                                && step_index.is_some_and(|index| {
+                                    previous_step.is_none_or(|previous| index > previous)
+                                })
+                                && context_tools.settled()
+                                && context.as_ref().is_none_or(|context| {
+                                    context.receipts.len() == context.observed.len()
+                                })
+                            {
+                                let index = step_index.expect("checked native rejection index");
+                                stream_phase = "native_rejection_commit";
+                                events(&ProviderEvent::NativeOutputRejected {
+                                    turn_id: request.turn_id.into(),
+                                    session_id: native.clone().expect("observed conversation"),
+                                    step_index: index,
+                                    reason,
+                                })?;
+                                last_rejected_step = Some(index);
+                                // Keep reading this SAME supervised process. No
+                                // resend, new conversation, inferred result or
+                                // weakened terminal/schema/coverage admission.
+                                continue;
+                            }
                             let diagnosis =
                                 shared_cli::diagnostic_category(step_error(&frame["step_update"]))
                                     .map(|category| category.classification().1)
                                     .unwrap_or("unknown");
-                            // A reported failed native step already makes this turn
+                            let shape = step_error_shape(&frame["step_update"]);
+                            // An unhandled failed native step makes this turn
                             // inadmissible. Stop its internal retries immediately.
                             // The outer error path reaps the owned process group.
                             return Err(ProviderFailure {
                                 provider: "agy".into(),
                                 kind,
-                                message: format!("Native CLI reported a failed step; diagnosis={diagnosis}; internal retries stopped; raw diagnostics not retained"),
+                                message: format!("Native CLI reported a failed step; diagnosis={diagnosis}; error_shape={shape}; internal retries stopped; raw diagnostics not retained"),
                                 session_id: native.clone(),
                                 stopped: false,
                                 partial_effects: sent,
@@ -923,12 +1182,15 @@ impl Provider for AgyProvider {
         })();
         if let Err(error) = stream_result {
             child.cancel()?;
+            let boundary = stream_diagnostic(&error);
             let mut error = match error {
                 crate::Error::Provider(error) => error,
                 _ => ProviderFailure {
                     provider: "agy".into(),
                     kind: FailureKind::Protocol,
-                    message: "native stream ordering, structure or acknowledgement failed".into(),
+                    message: format!(
+                        "native stream ordering, structure or acknowledgement failed; phase={stream_phase}; boundary={boundary}"
+                    ),
                     session_id: None,
                     stopped: true,
                     partial_effects: false,

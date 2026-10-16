@@ -439,10 +439,7 @@ impl Runtime {
         )?;
         if current.task_views.is_none() {
             require(
-                crate::workspace::read_inputs(
-                    Path::new(&current.spec.workspace),
-                    &current.spec.input_files,
-                )? == current.input_snapshot,
+                crate::workspace::inputs_current(&current)?,
                 "workspace changed before team work captured it; reconcile first",
             )?;
             let dir = store
@@ -602,6 +599,7 @@ impl Runtime {
         let execution_id = id();
         let index = current.task_executions.len();
         current.task_executions.push(effects::ExecutionBinding {
+            read_only_admission: None,
             id: execution_id.clone(),
             task_id: invocation.task.id.clone(),
             attempt: invocation.task.attempt,
@@ -610,6 +608,7 @@ impl Runtime {
             scope,
             session_id: session_id.to_string(),
             input_snapshot: captured.input_snapshot.clone(),
+            input_observation: captured.input_observation.clone(),
             source_hashes: captured.source_hashes(),
             dependency_hashes: invocation.dependency_hashes.clone(),
             after_snapshot: None,

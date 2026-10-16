@@ -19,9 +19,10 @@ use std::{
 };
 
 const SCRIPT: &str = r#"
+assert os.environ.get('AGY_CLI_OSC7501')=='off'
 if '--version' in sys.argv:
  (base/'probes').touch()
- print('1.3.4' if mode!='version' else '1.3.5');sys.exit(0)
+ print((base/'version').read_text() if (base/'version').exists() else '1.3.5' if mode in ('version','finish_tool_135') else '1.3.4');sys.exit(0)
 if '--help' in sys.argv:
  print('--input-format --output-format --json-schema --agent --disable-slash-commands --mode --sandbox --print-timeout --conversation --model --effort');sys.exit(0)
 (base/'started').touch()
@@ -51,6 +52,19 @@ if mode=='post_terminal':frames.append(frames[1])
 if mode=='schema_mismatch':frames[-1]['result']['json_schema']={}
 if mode=='no_output':del frames[-1]['result']['structured_output']
 if mode=='no_terminal':frames=frames[:-1]
+if mode.startswith('finish_tool'):
+ step=frames[-2]['step_update'];step['step_type']='tool';step['tool_name']='finish'
+ step['tool_info']={'name':'finish','parameters':{'ok':True,'toolAction':'Return result','toolSummary':'Component metadata, not artifact text'}}
+ if mode=='finish_tool_active':step['state']='ACTIVE'
+ if mode=='finish_tool_error':step['tool_info']['error']={'message':'private error text'}
+ if mode=='finish_tool_mismatch':step['tool_info']['name']='run_command'
+ if mode=='finish_tool_subagent':step['subagent_info']={'subagents':[]}
+ if mode=='finish_tool_wrong_session':step['conversation_id']=str(uuid.uuid4())
+ if mode=='finish_tool_schema':frames[-1]['result']['json_schema']={}
+ if mode=='finish_tool_no_output':del frames[-1]['result']['structured_output']
+ if mode in ('finish_tool','finish_tool_135'):
+  active=json.loads(json.dumps(frames[-2]));active['step_update']['state']='ACTIVE';frames.insert(-2,active)
+ if mode=='finish_tool_no_terminal':frames=frames[:-1]
 if mode in ['tool','subagent','nested_tool']:
  step=frames[1]['step_update']
  if mode=='tool':step['step_type']='tool';step['tool_name']='write_to_file'
@@ -60,6 +74,13 @@ if mode in ['FAILURE','CANCELLED','PARTIAL','success']:
  frames[-1]['result']['status']=mode
 if mode in ['auth','rate','network']:
  frames[-1]['result']['status']='ERROR';frames[-1]['result']['error']={'code':{'auth':401,'rate':429,'network':503}[mode]}
+if mode.startswith('error_delta'):
+ step={'conversation_id':sid,'step_index':2,'state':'DONE','step_type':'error_message','text_delta':'Model rejected response. Malformed function call: PRIVATE-FAILED-ARGUMENTS'}
+ if mode=='error_delta_unknown':step['text_delta']='PRIVATE-UNKNOWN-ERROR'
+ if mode=='error_delta_conflict':step['error']={'code':'authentication_error','message':'PRIVATE-AUTH-ERROR'}
+ if mode=='error_delta_null':step['error_message']=None
+ frames[-2]['step_update']['step_index']=3
+ frames.insert(-2,{'event':'step_update','step_update':step})
 if mode=='duplicate_key':
  print('{"event":"init","event":"result"}',flush=True);sys.exit(0)
 for f in frames:
@@ -119,6 +140,11 @@ impl Cli {
         events: &mut dyn FnMut(&ProviderEvent) -> architect::Result<()>,
     ) -> architect::Result<TurnReceipt> {
         self.provider.turn_receipt(&TurnRequest{turn_id:"independent-agy-turn",run:&self.run,prompt:"Literal @/private and żółw 🧠",schema:&json!({"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}),resume},cancelled,events)
+    }
+    fn with_version(mode: &str, version: &str) -> Self {
+        let fixture = Self::new(mode);
+        std::fs::write(fixture.root.path().join("version"), version).unwrap();
+        fixture
     }
     fn capture(&self) -> Value {
         serde_json::from_slice(&std::fs::read(self.root.path().join("capture.json")).unwrap())
@@ -211,6 +237,92 @@ fn actual_protocol_fixture_observes_fresh_native_sessions_and_cumulative_usage()
         "unsupported resume cannot launch another turn"
     );
 }
+
+#[test]
+fn independently_declared_140_finish_variants_keep_exact_version_and_no_resume_fallback() {
+    for mode in ["ok", "finish_tool"] {
+        let cli = Cli::with_version(mode, "1.4.0");
+        assert_eq!(cli.provider.probe().unwrap().version, "1.4.0");
+        let receipt = cli
+            .turn(None, Arc::new(AtomicBool::new(false)), &mut |_| Ok(()))
+            .unwrap();
+        assert!(receipt.completed && receipt.stopped);
+        assert_eq!(
+            serde_json::from_str::<Value>(&receipt.output).unwrap(),
+            json!({"ok":true})
+        );
+    }
+    let cli = Cli::with_version("ok", "1.4.0");
+    let error = check_failure(
+        cli.turn(
+            Some(&architect::id()),
+            Arc::new(AtomicBool::new(false)),
+            &mut |_| Ok(()),
+        ),
+        FailureKind::Unsupported,
+    );
+    assert!(!error.partial_effects);
+    assert!(!cli.root.path().join("probes").exists());
+    assert!(!cli.root.path().join("started").exists());
+    for version in ["1.4.1", "1.4.0-preview"] {
+        let cli = Cli::with_version("ok", version);
+        check_failure(
+            cli.turn(None, Arc::new(AtomicBool::new(false)), &mut |_| Ok(())),
+            FailureKind::Unsupported,
+        );
+        assert!(!cli.root.path().join("started").exists());
+    }
+}
+
+#[test]
+fn independently_declared_140_bad_native_events_cannot_complete_the_turn() {
+    for mode in [
+        "wrong_agent",
+        "wrong_cwd",
+        "wrong_step",
+        "wrong_result",
+        "no_init",
+        "duplicate_init",
+        "no_finish",
+        "active_finish",
+        "post_terminal",
+        "schema_mismatch",
+        "no_output",
+        "no_terminal",
+        "finish_tool_active",
+        "finish_tool_error",
+        "finish_tool_mismatch",
+        "finish_tool_subagent",
+        "finish_tool_wrong_session",
+        "finish_tool_schema",
+        "finish_tool_no_output",
+        "finish_tool_no_terminal",
+        "tool",
+        "subagent",
+        "nested_tool",
+        "exit_nonzero",
+        "duplicate_key",
+    ] {
+        let cli = Cli::with_version(mode, "1.4.0");
+        let mut events = vec![];
+        let architect::Error::Provider(error) = cli
+            .turn(None, Arc::new(AtomicBool::new(false)), &mut |e| {
+                events.push(e.clone());
+                Ok(())
+            })
+            .unwrap_err()
+        else {
+            panic!("unscoped error for {mode}")
+        };
+        assert!(error.stopped && error.partial_effects, "{mode}");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ProviderEvent::Completed { .. })),
+            "{mode}"
+        );
+    }
+}
 #[test]
 fn finish_only_profile_is_owned_and_non_os_containment_is_honest() {
     let cli = Cli::new("success_fixture");
@@ -285,6 +397,14 @@ fn native_success_requires_full_terminal_identity_finish_schema_and_clean_exit()
         "CANCELLED",
         "PARTIAL",
         "success",
+        "finish_tool_active",
+        "finish_tool_error",
+        "finish_tool_mismatch",
+        "finish_tool_subagent",
+        "finish_tool_wrong_session",
+        "finish_tool_schema",
+        "finish_tool_no_output",
+        "finish_tool_no_terminal",
     ] {
         let cli = Cli::new(mode);
         let mut events = vec![];
@@ -305,6 +425,33 @@ fn native_success_requires_full_terminal_identity_finish_schema_and_clean_exit()
         assert!(e.stopped && e.partial_effects, "{mode}");
     }
 }
+
+#[test]
+fn typed_finish_component_uses_only_the_schema_bound_terminal_artifact() {
+    for mode in ["finish_tool", "finish_tool_135"] {
+        let cli = Cli::new(mode);
+        let mut events = vec![];
+        let receipt = cli
+            .turn(None, Arc::new(AtomicBool::new(false)), &mut |event| {
+                events.push(event.clone());
+                Ok(())
+            })
+            .unwrap();
+        assert!(receipt.completed && receipt.delivered && receipt.stopped);
+        assert_eq!(
+            serde_json::from_str::<Value>(&receipt.output).unwrap(),
+            json!({"ok":true})
+        );
+        assert!(!receipt.output.contains("toolSummary"));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, ProviderEvent::Completed { .. }))
+                .count(),
+            1
+        );
+    }
+}
 #[test]
 fn native_tool_and_subagent_events_fail_closed_with_observed_scope() {
     for mode in ["tool", "subagent", "nested_tool"] {
@@ -317,6 +464,52 @@ fn native_tool_and_subagent_events_fail_closed_with_observed_scope() {
         assert!(e.session_id.is_some());
     }
 }
+#[test]
+fn native_error_text_carriers_never_promote_failed_arguments_to_results() {
+    for version in ["1.3.4", "1.4.0"] {
+        for mode in [
+            "error_delta",
+            "error_delta_null",
+            "error_delta_unknown",
+            "error_delta_conflict",
+        ] {
+            let cli = Cli::new(mode);
+            std::fs::write(cli.root.path().join("version"), version).unwrap();
+            let mut events = vec![];
+            let result = cli.turn(None, Arc::new(AtomicBool::new(false)), &mut |event| {
+                events.push(event.clone());
+                Ok(())
+            });
+            if version == "1.4.0" && matches!(mode, "error_delta" | "error_delta_null") {
+                let receipt = result.unwrap();
+                assert_eq!(receipt.output, "{\"ok\":true}");
+                assert!(receipt.completed && receipt.delivered && receipt.stopped);
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|e| matches!(e, ProviderEvent::NativeOutputRejected { .. }))
+                        .count(),
+                    1
+                );
+            } else {
+                let expected = match mode {
+                    "error_delta_unknown" => FailureKind::Process,
+                    "error_delta_conflict" => FailureKind::Authentication,
+                    _ => FailureKind::Protocol,
+                };
+                let failure = check_failure(result, expected);
+                assert!(failure.message.contains("text_delta:string"));
+                assert!(!failure.message.contains("PRIVATE-"));
+                assert!(!events.iter().any(|e| matches!(
+                    e,
+                    ProviderEvent::NativeOutputRejected { .. } | ProviderEvent::Completed { .. }
+                )));
+            }
+            assert!(!serde_json::to_string(&events).unwrap().contains("PRIVATE-"));
+        }
+    }
+}
+
 #[test]
 fn terminal_diagnostics_classify_actual_failures_without_disclosing_raw_output() {
     for (mode, kind) in [

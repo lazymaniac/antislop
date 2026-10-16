@@ -589,6 +589,16 @@ fn chat(frame: &mut Frame, app: &mut App, theme: &Theme, area: Rect) {
             "Nie można udostępnić kontynuacji zapisanych przeglądów. Sprawdź aktualność źródeł i odśwież widok; wcześniejsze raporty pozostają zachowane.",
         );
     }
+    if app.snapshot.task_recovery_preparing {
+        notice(
+            "Checking interrupted tasks and current source versions. Retained results are preserved; continuation options will appear when ready. You can keep inspecting the task.",
+        );
+    }
+    if app.snapshot.task_recovery_unavailable {
+        notice(
+            "Task recovery changed or could not be prepared. Refresh the view and inspect source changes; retained results remain available.",
+        );
+    }
     if app.snapshot.awaiting_user_reply.is_some() {
         notice(
             "Orkiestrator czeka na Twoją odpowiedź. Odpowiedz na pytania powyżej w jednej wiadomości. Enter lub i otwiera pole odpowiedzi; Ctrl+S wysyła. Po wywiadzie zobaczysz propozycję zadania do akceptacji.",
@@ -851,7 +861,7 @@ fn progress(app: &App) -> (String, Vec<String>) {
             snapshot.discovery_status.as_str(),
             "running" | "queued" | "observing_sources"
         );
-    let lines = if snapshot.awaiting_user_reply.is_some() {
+    let mut lines = if snapshot.awaiting_user_reply.is_some() {
         vec![
             "Wywiad: odpowiedz na pytania w czacie".into(),
             "Enter / i: odpowiedź; Ctrl+S: wyślij".into(),
@@ -928,6 +938,28 @@ fn progress(app: &App) -> (String, Vec<String>) {
             .map(|a| format!("{} / {}: {}", a.group, a.role, a.task))
             .collect()
     };
+    if snapshot.status == "running"
+        && snapshot.awaiting_user_reply.is_none()
+        && !snapshot.native_rejections.is_empty()
+    {
+        let (agent, count) = snapshot
+            .native_rejections
+            .iter()
+            .find(|(agent, _)| app.selected_agent_id.as_ref() == Some(agent))
+            .unwrap_or(&snapshot.native_rejections[0]);
+        let rejected = format!("{agent}: rejected native steps: {count}");
+        if snapshot
+            .context_progress
+            .iter()
+            .any(|(_, read, total)| read < total)
+        {
+            // Keep current context delivery first in the two-line overlay.
+            lines.insert(1.min(lines.len()), rejected);
+        } else {
+            lines.insert(0, "Same session; awaiting a valid native result".into());
+            lines.insert(0, rejected);
+        }
+    }
     let title = if snapshot.awaiting_user_reply.is_some() {
         "Czeka na Twoją odpowiedź".into()
     } else if snapshot.status == "running" && !snapshot.workspace_phase.is_empty() {

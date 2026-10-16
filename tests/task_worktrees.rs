@@ -357,6 +357,95 @@ fn writer(run: &Run) -> &architect::team::TaskRecord {
 }
 
 #[test]
+fn completed_reader_before_binding_uses_its_original_view_without_new_git_effects() {
+    let f = Fixture::new("success");
+    let installed = f.install_team();
+    let db = rusqlite::Connection::open(f.root.path().join("state.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER refuse_reader_binding BEFORE UPDATE ON runs WHEN EXISTS (SELECT 1 FROM json_each(NEW.state, '$.task_executions') WHERE json_extract(value, '$.task_id')='task-contextanalyst') BEGIN SELECT RAISE(ABORT,'injected reader binding failure'); END;").unwrap();
+    f.runtime
+        .dispatch(
+            &id(),
+            Command::StepTeam {
+                run_id: installed.id.clone(),
+                scope_hash: installed.team_step_scope().unwrap(),
+            },
+        )
+        .unwrap();
+    let stopped = f.wait_for_idle();
+    assert_eq!(stopped.status, Status::Blocked, "{:?}", stopped.diagnostic);
+    db.execute_batch("DROP TRIGGER refuse_reader_binding")
+        .unwrap();
+    let before = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::Reconcile {
+                run_id: stopped.id.clone(),
+                scope_hash: stopped.scope_hash("reconcile"),
+                input_hash: architect::recovery::observe(&stopped).unwrap().hash,
+            },
+        )
+        .unwrap();
+    let task_id = "task-contextanalyst";
+    let calls = std::fs::read(f.root.path().join("calls.jsonl")).unwrap();
+    let view = before.task_views.as_ref().unwrap().tasks[task_id].clone();
+    let head = git(&f.workspace(), &["rev-parse", "HEAD"]);
+    let restored = f
+        .runtime
+        .dispatch(
+            &id(),
+            Command::RestoreTaskResult {
+                run_id: before.id.clone(),
+                task_id: task_id.into(),
+                scope_hash: before.task_result_restore_scope(task_id).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        restored
+            .team
+            .as_ref()
+            .unwrap()
+            .tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .unwrap()
+            .state,
+        TaskState::AwaitingVerification
+    );
+    assert_eq!(
+        serde_json::to_value(&before.task_views).unwrap(),
+        serde_json::to_value(&restored.task_views).unwrap()
+    );
+    let execution = restored
+        .task_executions
+        .iter()
+        .find(|e| e.task_id == task_id)
+        .unwrap();
+    assert!(execution.read_only_admission.is_some() && execution.receipts.is_empty());
+    assert_eq!(
+        execution.view.as_ref().unwrap().result.as_ref(),
+        Some(&view.start)
+    );
+    assert!(execution.view.as_ref().unwrap().worktree.is_none());
+    assert_eq!(git(&f.workspace(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        std::fs::read(f.root.path().join("calls.jsonl")).unwrap(),
+        calls
+    );
+    let mut changed = before.clone();
+    changed
+        .task_views
+        .as_mut()
+        .unwrap()
+        .tasks
+        .get_mut(task_id)
+        .unwrap()
+        .start = "0".repeat(40);
+    assert!(changed.task_result_restore_scope(task_id).is_err());
+}
+
+#[test]
 fn verified_writer_result_lands_as_one_commit_without_invalidating_other_tasks() {
     let f = Fixture::new("success");
     let mut run = f.install_team();

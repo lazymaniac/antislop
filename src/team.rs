@@ -1426,8 +1426,7 @@ impl TeamPlan {
                     && replacement.launch_attempt > 0
                     && text(&replacement.new_session_id)
                     && replacement.previous_session.as_ref() != Some(&replacement.new_session_id)
-                    && replacement.handoff.version
-                        == crate::runtime::team::replacement::HANDOFF_VERSION
+                    && replacement.handoff.validate().is_ok()
                     && replacement.handoff.task_id == task.id
                     && replacement.handoff.task_attempt == replacement.attempt
                     && replacement.handoff.hash()? == replacement.handoff_hash

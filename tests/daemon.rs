@@ -67,6 +67,65 @@ fn mutate(state: &Path, key: &str, command: Command) -> Run {
         .unwrap()
     }
 }
+
+#[test]
+fn repeated_frontend_reads_reject_changed_database_bytes_with_a_retained_hash() {
+    use architect::tui::backend::{Backend, IpcBackend};
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("source"), "original").unwrap();
+    let mut spec: architect::domain::RunSpec =
+        serde_json::from_str(include_str!("../examples/fake-spec.json")).unwrap();
+    spec.workspace = workspace.to_string_lossy().into();
+    spec.input_files = vec!["source".into()];
+    let _daemon = start(&state);
+    let first = mutate(&state, "first", Command::Create { spec: spec.clone() });
+    let second = mutate(&state, "second", Command::Create { spec });
+    let mut backend = IpcBackend::new(&state);
+    for _ in 0..2 {
+        assert_eq!(backend.snapshot(&first.id).unwrap().run_id, first.id);
+    }
+    let db = rusqlite::Connection::open(state.join("state.db")).unwrap();
+    let (original, digest): (String, String) = db
+        .query_row(
+            "SELECT state,state_hash FROM runs WHERE id=?1",
+            [&first.id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    let mut altered: serde_json::Value = serde_json::from_str(&original).unwrap();
+    altered["diagnostic"] = serde_json::json!("changed canonical bytes");
+    let altered = serde_json::to_string(&altered).unwrap();
+    // Simulate an out-of-band row edit that omits the transactional hash.
+    db.execute(
+        "UPDATE runs SET state=?1 WHERE id=?2",
+        (&altered, &first.id),
+    )
+    .unwrap();
+    let error = backend.snapshot(&first.id).unwrap_err().to_string();
+    assert!(error.contains("document hash mismatch"), "{error}");
+    db.execute(
+        "UPDATE runs SET state_hash=?1 WHERE id=?2",
+        (architect::hash(&altered), &first.id),
+    )
+    .unwrap();
+    assert_eq!(
+        backend.snapshot(&first.id).unwrap().diagnostic,
+        "changed canonical bytes"
+    );
+    assert_eq!(backend.snapshot(&second.id).unwrap().run_id, second.id);
+    db.execute(
+        "UPDATE runs SET state=?1,state_hash=?2 WHERE id=?3",
+        (&original, &digest, &first.id),
+    )
+    .unwrap();
+    let restored = backend.snapshot(&first.id).unwrap();
+    assert_eq!(restored.run_id, first.id);
+    assert!(restored.diagnostic.is_empty());
+}
+
 #[test]
 fn daemon_crash_after_check_effect_does_not_replay_and_keeps_approval() {
     let root = tempfile::tempdir().unwrap();

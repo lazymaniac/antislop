@@ -1,5 +1,10 @@
+use crate::context::citations::Resolver;
 use crate::{Result, domain::*, hash, id, require};
 use std::collections::{BTreeMap, BTreeSet};
+
+fn source_current(sources: &mut Resolver<'_>, reference: &str, expected: &str) -> bool {
+    sources.matches(reference, expected).unwrap_or(false)
+}
 
 fn review_hash(review: &Review) -> String {
     hash(serde_json::to_vec(review).expect("review serialization"))
@@ -62,7 +67,7 @@ fn revalidation_is_authentic(
 fn current_node(
     run: &Run,
     node_id: &str,
-    sources: &BTreeMap<String, String>,
+    sources: &mut Resolver<'_>,
     visiting: &mut BTreeSet<String>,
     cache: &mut BTreeMap<String, bool>,
 ) -> bool {
@@ -76,10 +81,9 @@ fn current_node(
         node.spec_revision == run.spec_revision
             && node.superseded_by.is_none()
             && (!node.refresh || node.revalidation.is_some())
-            && node
-                .revalidation
-                .as_ref()
-                .is_none_or(|binding| revalidation_is_authentic(run, node_id, binding, sources))
+            && node.revalidation.as_ref().is_none_or(|binding| {
+                revalidation_is_authentic(run, node_id, binding, sources.canonical())
+            })
             && match node.kind {
                 ProvenanceKind::Source => true,
                 ProvenanceKind::Artifact => run.artifacts.iter().any(|artifact| {
@@ -91,16 +95,23 @@ fn current_node(
                 _ => node.content_hash == hash(&node.content),
             }
             && (node.kind != ProvenanceKind::Source
-                || node_id
-                    .strip_prefix("source:")
-                    .is_some_and(|reference| sources.get(reference) == Some(&node.content_hash)))
+                || node_id.strip_prefix("source:").is_some_and(|reference| {
+                    source_current(sources, reference, &node.content_hash)
+                        || (node_id
+                            == format!(
+                                "source:derived:{}:{}",
+                                hash(&node.content),
+                                node.content_hash
+                            )
+                            && source_current(sources, &node.content, &node.content_hash))
+                }))
             && node
                 .revalidation
                 .as_ref()
                 .map(|binding| &binding.source_hashes)
                 .unwrap_or(&node.source_hashes)
                 .iter()
-                .all(|(key, value)| sources.get(key) == Some(value))
+                .all(|(key, value)| source_current(sources, key, value))
             && node
                 .revalidation
                 .as_ref()
@@ -123,17 +134,17 @@ pub fn provenance_node_current(run: &Run, node_id: &str) -> bool {
     current_node(
         run,
         node_id,
-        &run.source_hashes(),
+        &mut Resolver::new(run),
         &mut BTreeSet::new(),
         &mut BTreeMap::new(),
     )
 }
 
 pub fn provenance_validity(run: &Run) -> BTreeMap<String, bool> {
-    let sources = run.source_hashes();
+    let mut sources = Resolver::new(run);
     let mut cache = BTreeMap::new();
     for node_id in run.provenance.keys() {
-        current_node(run, node_id, &sources, &mut BTreeSet::new(), &mut cache);
+        current_node(run, node_id, &mut sources, &mut BTreeSet::new(), &mut cache);
     }
     cache
 }
@@ -160,8 +171,15 @@ pub fn refresh_provenance(run: &mut Run) {
         );
     }
     let mut cache = BTreeMap::new();
+    let mut citations = Resolver::with_hashes(run, sources);
     for node_id in run.provenance.keys() {
-        current_node(run, node_id, &sources, &mut BTreeSet::new(), &mut cache);
+        current_node(
+            run,
+            node_id,
+            &mut citations,
+            &mut BTreeSet::new(),
+            &mut cache,
+        );
     }
     for (node_id, node) in &mut run.provenance {
         node.valid = cache.get(node_id).copied().unwrap_or(false);
@@ -245,8 +263,49 @@ pub fn register_artifact(
             .context
             .as_ref()
             .ok_or_else(|| crate::Error::Invalid("missing context provenance".into()))?;
+        let direct_sources = {
+            let mut citations = Resolver::new(run);
+            context
+                .facts
+                .iter()
+                .map(|fact| {
+                    require(
+                        citations.matches(&fact.source_ref, &fact.source_hash)?,
+                        "context source missing or stale",
+                    )?;
+                    Ok(citations.canonical().contains_key(&fact.source_ref))
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
         let mut facts = Vec::new();
-        for (index, fact) in context.facts.iter().enumerate() {
+        for (index, (fact, direct)) in context.facts.iter().zip(direct_sources).enumerate() {
+            let source_id = if direct {
+                format!("source:{}", fact.source_ref)
+            } else {
+                format!(
+                    "source:derived:{}:{}",
+                    hash(&fact.source_ref),
+                    fact.source_hash
+                )
+            };
+            if !direct {
+                insert_provenance(
+                    run,
+                    source_id.clone(),
+                    ProvenanceNode {
+                        kind: ProvenanceKind::Source,
+                        spec_revision: run.spec_revision,
+                        content_hash: fact.source_hash.clone(),
+                        content: fact.source_ref.clone(),
+                        source_hashes: BTreeMap::new(),
+                        dependencies: BTreeMap::new(),
+                        valid: true,
+                        revalidation: None,
+                        superseded_by: None,
+                        refresh: false,
+                    },
+                );
+            }
             let node_id = format!("fact:{}:{index}", artifact.id);
             add_node(
                 run,
@@ -254,7 +313,7 @@ pub fn register_artifact(
                 ProvenanceKind::ContextFact,
                 serde_json::to_string(fact)?,
                 BTreeMap::from([(fact.source_ref.clone(), fact.source_hash.clone())]),
-                [format!("source:{}", fact.source_ref)],
+                [source_id],
             )?;
             facts.push(node_id);
         }
@@ -645,7 +704,7 @@ fn apply_revalidations(run: &mut Run, artifact: &Artifact, review: &Review) -> R
                         current_node(
                             run,
                             &dependency,
-                            &sources,
+                            &mut Resolver::with_hashes(run, sources.clone()),
                             &mut BTreeSet::new(),
                             &mut dependency_cache,
                         ),
@@ -1147,11 +1206,11 @@ pub fn validate_output(run: &Run, output: &ExecutionOutput) -> Result<()> {
 
 pub(crate) fn validate_context_model(run: &Run, context: &ContextModel) -> Result<()> {
     require(!context.facts.is_empty(), "context has no sourced facts")?;
+    let mut citations = Resolver::new(run);
     for fact in &context.facts {
-        let sources = run.sources();
-        let source = sources.get(&fact.source_ref);
         require(
-            !fact.claim.trim().is_empty() && source.is_some_and(|s| hash(s) == fact.source_hash),
+            !fact.claim.trim().is_empty()
+                && citations.matches(&fact.source_ref, &fact.source_hash)?,
             "context source missing or stale",
         )?;
     }
@@ -1165,7 +1224,9 @@ pub(crate) fn validate_context_model(run: &Run, context: &ContextModel) -> Resul
                 && unknown
                     .source_ref
                     .as_ref()
-                    .is_none_or(|source| run.sources().contains_key(source)),
+                    .map(|source| citations.exists(source))
+                    .transpose()?
+                    .unwrap_or(true),
             "context unknown has no question or claims a missing resolution source",
         )?;
         if unknown.material {
@@ -1177,7 +1238,9 @@ pub(crate) fn validate_context_model(run: &Run, context: &ContextModel) -> Resul
                     && unknown
                         .source_ref
                         .as_ref()
-                        .is_some_and(|s| run.sources().contains_key(s)),
+                        .map(|s| citations.exists(s))
+                        .transpose()?
+                        .unwrap_or(false),
                 "material unknown remains unresolved",
             )?;
         }

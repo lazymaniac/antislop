@@ -2,6 +2,7 @@
 use super::*;
 use crate::sessions::TurnState;
 use serde::{Deserialize, Serialize};
+pub mod readonly;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,7 +19,7 @@ pub struct Restoration {
     pub actor: String,
 }
 
-fn candidate<'a>(run: &'a Run, task_id: &str) -> Result<&'a effects::ExecutionBinding> {
+fn candidate(run: &Run, task_id: &str) -> Result<effects::ExecutionBinding> {
     require(
         !run.reconciliation_required && run.pending_edits.is_empty(),
         "reconcile before restoring an executor result",
@@ -61,22 +62,31 @@ fn candidate<'a>(run: &'a Run, task_id: &str) -> Result<&'a effects::ExecutionBi
         .filter(|e| e.task_id == task_id && e.attempt == task.attempt)
         .collect::<Vec<_>>();
     require(
-        executions.len() == 1,
+        executions.len() <= 1,
         "executor outcome missing or ambiguous; do not replay",
     )?;
-    let execution = executions[0];
+    let unbound = executions.is_empty();
+    let execution = if unbound {
+        readonly::candidate(run, task)?
+    } else {
+        executions[0].clone()
+    };
     require(
-        matches!(
-            execution.state,
-            effects::ExecutionState::Applied | effects::ExecutionState::ObservedApplied
-        ) && execution.dependency_hashes == team.dependency_bindings(task)?,
+        (unbound
+            || matches!(
+                execution.state,
+                effects::ExecutionState::Applied | effects::ExecutionState::ObservedApplied
+            ))
+            && execution.dependency_hashes == team.dependency_bindings(task)?,
         "executor effects/dependencies are uncertain or changed",
     )?;
     require(
         execution.source_hashes == run.source_hashes_for_inputs(&execution.input_snapshot),
         "executor original input binding changed",
     )?;
-    effects::authenticate(run, execution)?;
+    if !unbound {
+        effects::authenticate(run, &execution)?;
+    }
     effects::lineage(run, task)?;
     let owner = team.agents.iter().find(|a| a.id == task.owner_id).unwrap();
     require(
@@ -87,6 +97,7 @@ fn candidate<'a>(run: &'a Run, task_id: &str) -> Result<&'a effects::ExecutionBi
     let mut original = run.clone();
     original.stage = session.scope.stage;
     original.input_snapshot = execution.input_snapshot.clone();
+    original.input_observation = execution.input_observation.clone();
     let stage = match task.stage {
         TaskStage::Discovery => Stage::Discovery,
         TaskStage::Planning => Stage::Planning,
@@ -120,9 +131,10 @@ fn candidate<'a>(run: &'a Run, task_id: &str) -> Result<&'a effects::ExecutionBi
     crate::team::models::validate_output(&original, task, owner.role, &output)?;
     for receipt in &execution.receipts {
         require(
-            crate::recovery::matches_version(
+            crate::recovery::matches_version_observed(
                 Path::new(&run.spec.workspace),
                 &run.input_snapshot,
+                run.input_observation.as_ref(),
                 receipt,
                 false,
             )?,
@@ -147,7 +159,12 @@ fn candidate<'a>(run: &'a Run, task_id: &str) -> Result<&'a effects::ExecutionBi
         "executor has an uncertain check outcome; adjudicate before restoration",
     )?;
     let mut preview = run.clone();
-    attach_result(&mut preview, task_id, execution)?;
+    finish(
+        &mut preview,
+        task_id,
+        &execution,
+        &scope_hash(run, task_id)?,
+    )?;
     Ok(execution)
 }
 
@@ -179,6 +196,13 @@ fn attach_result(
         execution_id: Some(execution.id.clone()),
         evidence_refs: BTreeSet::from([evidence_id.clone()]),
     };
+    if !run.task_executions.iter().any(|e| e.id == execution.id) {
+        require(
+            execution.read_only_admission.is_some(),
+            "missing applied executor binding",
+        )?;
+        run.task_executions.push(execution.clone());
+    }
     run.task_executions
         .iter_mut()
         .find(|e| e.id == execution.id)
@@ -207,15 +231,6 @@ fn attach_result(
         success: true,
         input_hash: Some(hash(serde_json::to_vec(&execution.input_snapshot)?)),
     });
-    let task = run
-        .team
-        .as_ref()
-        .unwrap()
-        .tasks
-        .iter()
-        .find(|t| t.id == task_id)
-        .unwrap();
-    checks::retry_safe(run, task, run.artifacts.last().unwrap())?;
     Ok((artifact_id, turn_id))
 }
 
@@ -246,21 +261,30 @@ pub(crate) fn scopes(run: &Run) -> BTreeMap<String, String> {
 }
 
 pub(crate) fn restore(run: &mut Run, task_id: &str, expected_scope: &str) -> Result<()> {
-    let execution = candidate(run, task_id)?.clone();
+    let execution = candidate(run, task_id)?;
     require(
         scope_hash(run, task_id)? == expected_scope,
         "executor result restoration scope changed",
     )?;
-    let (artifact_id, turn_id) = attach_result(run, task_id, &execution)?;
+    finish(run, task_id, &execution, expected_scope)
+}
+
+fn finish(
+    run: &mut Run,
+    task_id: &str,
+    execution: &effects::ExecutionBinding,
+    expected_scope: &str,
+) -> Result<()> {
+    let (artifact_id, turn_id) = attach_result(run, task_id, execution)?;
     run.task_result_restorations.push(Restoration {
         id: id(),
         task_id: task_id.into(),
         task_attempt: execution.attempt,
-        execution_id: execution.id,
-        session_id: execution.session_id,
+        execution_id: execution.id.clone(),
+        session_id: execution.session_id.clone(),
         turn_id,
         artifact_id,
-        artifact_hash: execution.artifact_hash,
+        artifact_hash: execution.artifact_hash.clone(),
         scope_hash: expected_scope.into(),
         actor: "local_user".into(),
     });
@@ -270,6 +294,22 @@ pub(crate) fn restore(run: &mut Run, task_id: &str, expected_scope: &str) -> Res
         spec_revision: run.spec_revision,
         actor: "local_user".into(),
     });
+    effects::authenticate(
+        run,
+        run.task_executions
+            .iter()
+            .find(|e| e.id == execution.id)
+            .unwrap(),
+    )?;
+    let task = run
+        .team
+        .as_ref()
+        .unwrap()
+        .tasks
+        .iter()
+        .find(|t| t.id == task_id)
+        .unwrap();
+    checks::retry_safe(run, task, run.artifacts.last().unwrap())?;
     // Clear only scheduler uncertainty for which every interrupted executor has
     // retained authenticated effects/output. Unknown checks still hold the barrier.
     let settled = run

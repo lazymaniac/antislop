@@ -160,9 +160,10 @@ impl Runtime {
                 edit,
                 &current.pending_edits[offset + index].before_hash,
             )?;
-            crate::workspace::inputs::record_change(
+            crate::workspace::observation::record_change(
                 std::path::Path::new(&current.spec.workspace),
                 &mut current.input_snapshot,
+                &mut current.input_observation,
                 edit,
                 &current.pending_edits[offset + index].before_hash,
             )?;
@@ -662,6 +663,7 @@ fn authenticate_pair(
         let mut author_scope = scoped.clone();
         if role != RoleKind::Verifier {
             author_scope.input_snapshot = execution.input_snapshot.clone();
+            author_scope.input_observation = execution.input_observation.clone();
         }
         require(
             session

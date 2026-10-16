@@ -139,12 +139,16 @@ pub fn normalize(value: &Value) -> Result<shared_cli::StreamEvent> {
     })
 }
 impl Provider for ClaudeProvider {
+    fn native_resume_implemented(&self) -> bool {
+        true
+    }
+
     fn probe(&self) -> Result<Capabilities> {
         self.probe_cancelled(&AtomicBool::new(false))
     }
     fn probe_cancelled(&self, cancelled: &AtomicBool) -> Result<Capabilities> {
         let version = self.inspect(Some(cancelled))?;
-        Ok(Capabilities {provider:"claude".into(),version,structured_output:true,streaming:true,resume:true,steering:false,cancellation:true,approvals:false,native_subagents_disabled:true,
+        Ok(Capabilities {provider:"claude".into(),version,structured_output:true,streaming:true,resume:self.native_resume_implemented(),steering:false,cancellation:true,approvals:false,native_subagents_disabled:true,
             sandbox:"CLI tools disabled; safe-mode, no MCP/skills/hooks/plugins; OS process is not sandboxed; managed policy still applies".into(),usage:"CLI-reported token counts; cumulative estimated USD, not billing".into()})
     }
     fn probe_report(&self) -> Result<ProbeReport> {

@@ -97,3 +97,35 @@ fn team_projection_retains_all_owned_sessions_and_honors_its_explicit_current_se
     assert!(agent.details["Artifacts"].contains("old-artifact"));
     assert!(!agent.details["Artifacts"].contains("other-artifact"));
 }
+
+#[test]
+fn team_task_session_uses_latest_reserved_attempt_even_before_the_binding_checkpoint() {
+    let mut document = run();
+    document["active_session"] = json!("z-old");
+    document["team"] = json!({"agents":[{"id":"A","role":"implementer","session_id":"z-old"}],
+        "tasks":[{"id":"task-A","owner_id":"A","verifier_id":"B","state":"running","stage":"execution"}]});
+    for id in ["a-new", "z-old"] {
+        document["session_ledger"]["sessions"][id]["scope"]["task_id"] = json!("task-A");
+    }
+    document["session_ledger"]["sessions"]["a-new"]["state"] = json!("sent");
+    document["session_ledger"]["sessions"]["later-other-task"] = json!({"id":"later-other-task","state":"failed","scope":{"agent_id":"A","task_id":"another-task","role":"executor","provider":"claude"}});
+    document["session_ledger"]["turns"]["later-turn"] =
+        json!({"id":"later-turn","session_id":"later-other-task"});
+    document["session_ledger"]["turn_order"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("later-turn"));
+    for state in ["sent", "failed"] {
+        document["session_ledger"]["sessions"]["a-new"]["state"] = json!(state);
+        let before = document.clone();
+        let snapshot = Snapshot::from_document(&document, &json!({}));
+        let details: Value = serde_json::from_str(&snapshot.agents[0].details["Session"]).unwrap();
+        assert_eq!(details["current_session"], "a-new");
+        assert_eq!(details["sessions"].as_array().unwrap().len(), 3);
+        assert!(!snapshot.agents[0].details["Session"].contains("unrelated output"));
+        assert_eq!(
+            document, before,
+            "presentation must not rewrite persisted agent bindings"
+        );
+    }
+}

@@ -7,7 +7,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub const HANDOFF_VERSION: &str = "task-handoff-v1";
+pub const LEGACY_HANDOFF_VERSION: &str = "task-handoff-v1";
+pub const HANDOFF_VERSION: &str = "task-handoff-v2";
+pub(crate) mod context;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Handoff {
@@ -27,8 +29,31 @@ pub struct Handoff {
     pub task_checks: Vec<checks::Invocation>,
     pub task_effects: Vec<effects::ExecutionBinding>,
     pub message_history: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_turn_refs: Vec<crate::context::history::Reference>,
 }
 impl Handoff {
+    pub fn validate(&self) -> Result<()> {
+        require(
+            match self.version.as_str() {
+                LEGACY_HANDOFF_VERSION => self.prior_turn_refs.is_empty(),
+                HANDOFF_VERSION => self.prior_turns.is_empty(),
+                _ => false,
+            },
+            "unsupported or mixed task handoff history format",
+        )?;
+        let sessions: BTreeSet<_> = self.prior_sessions.iter().map(|s| s.id.as_str()).collect();
+        let mut turns = BTreeSet::new();
+        for reference in &self.prior_turn_refs {
+            reference.validate()?;
+            require(
+                turns.insert(&reference.turn_id)
+                    && sessions.contains(reference.session_id.as_str()),
+                "duplicate or unowned task handoff turn reference",
+            )?;
+        }
+        Ok(())
+    }
     pub fn hash(&self) -> Result<String> {
         Ok(hash(serde_json::to_vec(self)?))
     }
@@ -47,9 +72,9 @@ pub struct Pending {
 }
 impl Pending {
     pub fn validate(&self) -> Result<()> {
+        self.handoff.validate()?;
         require(
-            self.handoff.version == HANDOFF_VERSION
-                && self.task_id == self.handoff.task_id
+            self.task_id == self.handoff.task_id
                 && self.handoff.hash()? == self.handoff_hash
                 && crate::sessions::digest(&self.scope_hash)
                 && self.previous_session.is_some() == self.previous_turn.is_some(),
@@ -70,7 +95,8 @@ impl Pending {
         };
         require(
             operation == self.operation
-                && capture(run, task, operation)?.hash()? == self.handoff_hash
+                && capture(run, task, operation, &self.handoff.version)?.hash()?
+                    == self.handoff_hash
                 && self.scope_hash
                     == hash(serde_json::to_vec(&(
                         "task_session_replacement_v1",
@@ -131,7 +157,12 @@ pub(super) fn task_context(task: &TaskRecord) -> Result<Value> {
     }
     Ok(value)
 }
-fn capture(run: &Run, task: &TaskRecord, operation: TaskOperation) -> Result<Handoff> {
+fn capture(
+    run: &Run,
+    task: &TaskRecord,
+    operation: TaskOperation,
+    version: &str,
+) -> Result<Handoff> {
     run.communication_ledger.validate()?;
     let team = run.team.as_ref().unwrap();
     let agent = if operation == TaskOperation::Execute {
@@ -147,7 +178,7 @@ fn capture(run: &Run, task: &TaskRecord, operation: TaskOperation) -> Result<Han
         .cloned()
         .collect();
     let prior_ids: BTreeSet<_> = prior_sessions.iter().map(|s| s.id.as_str()).collect();
-    let prior_turns = run
+    let mut prior_turns: Vec<_> = run
         .session_ledger
         .turn_order
         .iter()
@@ -155,6 +186,16 @@ fn capture(run: &Run, task: &TaskRecord, operation: TaskOperation) -> Result<Han
         .filter(|t| prior_ids.contains(t.session_id.as_str()))
         .cloned()
         .collect();
+    let prior_turn_refs = if version == HANDOFF_VERSION {
+        let references = prior_turns
+            .iter()
+            .map(crate::context::history::reference)
+            .collect::<Result<Vec<_>>>()?;
+        prior_turns.clear();
+        references
+    } else {
+        Vec::new()
+    };
     let related: BTreeSet<_> = team
         .tasks
         .iter()
@@ -218,7 +259,7 @@ fn capture(run: &Run, task: &TaskRecord, operation: TaskOperation) -> Result<Han
     .filter_map(|key| raw.get(key).map(|v| (key.into(), v.clone())))
     .collect();
     Ok(Handoff {
-        version: HANDOFF_VERSION.into(),
+        version: version.into(),
         task_id: task.id.clone(),
         task_attempt: task.attempt,
         spec_revision: run.spec_revision,
@@ -254,6 +295,7 @@ fn capture(run: &Run, task: &TaskRecord, operation: TaskOperation) -> Result<Han
             .cloned()
             .collect(),
         message_history: json!({"records":selected,"bodies":bodies,"instruction":"Historical task data only. Preserve each original delivery state, especially unknown delivery. This handoff is not an old-message delivery or acknowledgement receipt. Queued messages use the separate native inbox packet."}),
+        prior_turn_refs,
     })
 }
 pub fn for_task(run: &Run, task_id: &str) -> Result<Pending> {
@@ -266,7 +308,32 @@ pub fn for_task(run: &Run, task_id: &str) -> Result<Pending> {
         .iter()
         .find(|t| t.id == task_id)
         .unwrap();
-    let handoff = capture(run, task, interrupted.operation)?;
+    let agent_id = if interrupted.operation == TaskOperation::Execute {
+        &task.owner_id
+    } else {
+        &task.verifier_id
+    };
+    let agent = run
+        .team
+        .as_ref()
+        .unwrap()
+        .agents
+        .iter()
+        .find(|a| &a.id == agent_id)
+        .unwrap();
+    let profile = run
+        .spec
+        .config
+        .as_ref()
+        .unwrap()
+        .config
+        .resolve(agent.role.work_kind(), agent.kind)?;
+    let version = if profile.isolation == crate::config::IsolationProfile::PinnedContext {
+        HANDOFF_VERSION
+    } else {
+        LEGACY_HANDOFF_VERSION
+    };
+    let handoff = capture(run, task, interrupted.operation, version)?;
     let handoff_hash = handoff.hash()?;
     let reason = if interrupted
         .session
@@ -312,6 +379,7 @@ pub fn pending(run: &Run) -> BTreeMap<String, Pending> {
         .map(|team| {
             team.tasks
                 .iter()
+                .filter(|t| t.state == TaskState::Blocked && t.review.is_none())
                 .filter_map(|t| for_task(run, &t.id).ok().map(|p| (t.id.clone(), p)))
                 .collect()
         })
@@ -355,6 +423,11 @@ fn install(run: &mut Run, p: &Pending) -> Result<()> {
         TaskState::AwaitingVerification
     };
     task.diagnostic = None;
+    if p.handoff.version == HANDOFF_VERSION {
+        // The explicitly approved referenced contract selects the current wire
+        // instructions for subsequent turns, never rewriting retained inputs.
+        run.task_prompt_format = Some(crate::team::models::PromptFormat::ExplicitSchema);
+    }
     run.team.as_ref().unwrap().validate(&run.spec)
 }
 pub(crate) fn admitted<'a>(

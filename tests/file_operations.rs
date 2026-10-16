@@ -69,9 +69,10 @@ fn directory_scope_writes_creates_and_deletes_without_expanding_declared_inputs_
         let receipts = recovery::prepare(&run, &edits).unwrap();
         for (edit, receipt) in edits.iter().zip(&receipts) {
             workspace::apply_edit(r, edit, &receipt.before_hash).unwrap();
-            workspace::inputs::record_change(
+            workspace::observation::record_change(
                 r,
                 &mut run.input_snapshot,
+                &mut run.input_observation,
                 edit,
                 &receipt.before_hash,
             )
@@ -99,9 +100,10 @@ fn directory_scope_writes_creates_and_deletes_without_expanding_declared_inputs_
             .unwrap()
             .remove(0);
         workspace::apply_edit(r, &deletion, &receipt.before_hash).unwrap();
-        workspace::inputs::record_change(
+        workspace::observation::record_change(
             r,
             &mut run.input_snapshot,
+            &mut run.input_observation,
             &deletion,
             &receipt.before_hash,
         )
@@ -119,9 +121,10 @@ fn directory_scope_writes_creates_and_deletes_without_expanding_declared_inputs_
             .unwrap()
             .remove(0);
         workspace::apply_edit(r, &recreated, &receipt.before_hash).unwrap();
-        workspace::inputs::record_change(
+        workspace::observation::record_change(
             r,
             &mut run.input_snapshot,
+            &mut run.input_observation,
             &recreated,
             &receipt.before_hash,
         )
@@ -243,8 +246,14 @@ fn presence_is_part_of_effect_proof_even_if_file_bytes_hash_like_absence() {
     assert!(recovery::matches_version(r, &run.input_snapshot, &receipt, true).unwrap());
     assert!(!recovery::matches_version(r, &run.input_snapshot, &receipt, false).unwrap());
     workspace::apply_edit(r, &edit, &receipt.before_hash).unwrap();
-    workspace::inputs::record_change(r, &mut run.input_snapshot, &edit, &receipt.before_hash)
-        .unwrap();
+    workspace::observation::record_change(
+        r,
+        &mut run.input_snapshot,
+        &mut run.input_observation,
+        &edit,
+        &receipt.before_hash,
+    )
+    .unwrap();
     assert!(!recovery::matches_version(r, &run.input_snapshot, &receipt, true).unwrap());
     assert!(recovery::matches_version(r, &run.input_snapshot, &receipt, false).unwrap());
 }

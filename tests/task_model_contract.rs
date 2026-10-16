@@ -5,6 +5,15 @@ use architect::{
 };
 use std::collections::BTreeSet;
 
+#[test]
+fn flat_context_finish_candidate_is_rejected_instead_of_becoming_an_artifact() {
+    let candidate = serde_json::json!({"contract_version":CONTRACT,"artifact":"Rejected native-shape regression fixture; no model judgment", "edits":[],"agent_messages":[],
+        "context":{"facts":[],"unknowns":[],"sections":{}},"solution":null});
+    assert!(
+        architect::transport::decode::<Output>(&serde_json::to_vec(&candidate).unwrap()).is_err()
+    );
+}
+
 fn fixture() -> (tempfile::TempDir, Run, TaskRecord, Output) {
     let root = tempfile::tempdir().unwrap();
     let mut spec: RunSpec =

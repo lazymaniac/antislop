@@ -47,6 +47,32 @@ fn screen(app: &mut App, w: u16, h: u16) -> String {
         .join("\n")
 }
 #[test]
+fn native_step_rejections_show_pending_work_and_never_a_completed_review() {
+    let mut document = json!({"id":"R1","status":"running","session_ledger":{
+        "sessions":{"S":{"id":"S","state":"sent","current_turn_id":"T","scope":{"agent_id":"A","provider":"agy","role":"verifier"}}},
+        "turns":{"T":{"id":"T","session_id":"S","provider_completed":false,"native_rejections":[{"step_index":4,"reason":"malformed_function_call"},{"step_index":6,"reason":"unclassified_native_step"}]}},
+        "turn_order":["T"]
+    }});
+    let mut app = App::default();
+    app.update(Snapshot::from_document(&document, &json!({})));
+    assert_eq!(app.snapshot.native_rejections, vec![("A".into(), 2)]);
+    let rendered = screen(&mut app, 180, 45);
+    assert!(
+        rendered.contains("A: rejected native steps: 2"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Same session; awaiting a valid native result"));
+    document["session_ledger"]["turns"]["T"]["provider_completed"] = json!(true);
+    app.update(Snapshot::from_document(&document, &json!({})));
+    assert!(app.snapshot.native_rejections.is_empty());
+    assert!(!screen(&mut app, 180, 45).contains("rejected native steps"));
+    document["session_ledger"]["turns"]["T"]["provider_completed"] = json!(false);
+    document["session_ledger"]["sessions"]["S"]["state"] = json!("failed");
+    app.update(Snapshot::from_document(&document, &json!({})));
+    assert!(app.snapshot.native_rejections.is_empty());
+}
+
+#[test]
 fn grapheme_editor_handles_combining_emoji_wide_lines_and_boundaries() {
     let mut editor = Editor::default();
     editor.set("a\u{301}界👩‍💻\nxy".into());
@@ -414,9 +440,11 @@ fn source_refresh_confirmation_preserves_task_scope_when_readiness_changes() {
     app.snapshot
         .task_source_refreshes
         .insert("task-context".into(), "captured-source-scope".into());
-    app.handle(control('p'));
-    app.palette_index = app.palette().iter().position(|(_, action)| matches!(action, Some(Action::RefreshTaskSources { task_id, .. }) if task_id == "task-context")).unwrap();
-    app.handle(key(KeyCode::Enter));
+    assert!(matches!(
+        app.next_approval().unwrap().0,
+        Action::RefreshTaskSources { .. }
+    ));
+    assert!(app.handle(key(KeyCode::Char('a'))).is_empty());
     let mut newer = app.snapshot.clone();
     newer.task_source_refreshes.clear();
     app.update(newer);
@@ -632,13 +660,11 @@ fn executor_result_restoration_confirmation_keeps_exact_completed_output_and_sco
         "saved-result-scope".into(),
         "Completed original observation\nIndependent verification is required".into(),
     );
-    app.handle(control('p'));
-    app.palette_index = app
-        .palette()
-        .iter()
-        .position(|(_, action)| matches!(action, Some(Action::RestoreTaskResult { .. })))
-        .unwrap();
-    assert!(app.handle(key(KeyCode::Enter)).is_empty());
+    assert!(matches!(
+        app.next_approval().unwrap().0,
+        Action::RestoreTaskResult { .. }
+    ));
+    assert!(app.handle(key(KeyCode::Char('a'))).is_empty());
     assert!(screen(&mut app, 120, 30).contains("Completed original observation"));
     let mut changed = app.snapshot.clone();
     changed.task_result_restores.clear();
@@ -840,13 +866,11 @@ fn native_resume_card_freezes_exact_session_checkpoint_and_scope_across_refresh(
         scope.clone(),
         format!("Exact native session: {native}\nCheckpoint: interrupted-turn"),
     );
-    app.handle(control('p'));
-    app.palette_index = app
-        .palette()
-        .iter()
-        .position(|(label, _)| label.starts_with("Resume exact native session:"))
-        .unwrap();
-    app.handle(key(KeyCode::Enter));
+    assert!(matches!(
+        app.next_approval().unwrap().0,
+        Action::ResumeTaskSession { .. }
+    ));
+    assert!(app.handle(key(KeyCode::Char('a'))).is_empty());
     let View::Confirm {
         action, details, ..
     } = &app.view
@@ -894,6 +918,7 @@ fn replacement_handoff_card_keeps_the_reviewed_payload_and_scope_when_current_pa
         knowledge: json!({"unresolved":"retain this finding"}),
         prior_sessions: vec![],
         prior_turns: vec![],
+        prior_turn_refs: vec![],
         artifacts: vec![],
         task_checks: vec![],
         task_effects: vec![],
@@ -918,13 +943,11 @@ fn replacement_handoff_card_keeps_the_reviewed_payload_and_scope_when_current_pa
         .task_session_replacements
         .insert(p.task_id.clone(), p);
     app.snapshot.task_session_replacement_details.insert(scope.clone(),format!("DISTINCT NEW SESSION\nHandoff: {hash}\nPreserve all original constraints\nUnresolved: retain this finding"));
-    app.handle(control('p'));
-    app.palette_index = app
-        .palette()
-        .iter()
-        .position(|(label, _)| label.starts_with("New replacement session with handoff:"))
-        .unwrap();
-    app.handle(key(KeyCode::Enter));
+    assert!(matches!(
+        app.next_approval().unwrap().0,
+        Action::ReplaceTaskSession { .. }
+    ));
+    assert!(app.handle(key(KeyCode::Char('a'))).is_empty());
     let View::Confirm {
         action, details, ..
     } = &app.view
@@ -1210,6 +1233,35 @@ fn interview_chat_guides_the_user_to_answer_and_clears_waiting_after_send() {
 }
 
 #[test]
+fn reviewed_team_approval_waits_for_authenticated_preparation_and_remains_explicit() {
+    let run = json!({"id":"reviewed-team","status":"awaiting_start","stage":"discovery","orchestration_rounds":[{"id":"round","status":"reviewed"}]});
+    let mut app = App::default();
+    let mut control = json!({"reviewed_team_round":"round","team_acceptance_ready":false,"orchestration_recovery_state":"preparing","scope_hashes":{"accept_team":"reviewed-scope"}});
+    app.update(Snapshot::from_document(&run, &control));
+    assert!(app.snapshot.orchestration_recovery_preparing);
+    assert!(app.snapshot.reviewed_team_round.is_none());
+    assert!(app.next_approval().is_none());
+    assert!(screen(&mut app, 140, 40).contains("Sprawdzanie zapisanych"));
+    control["team_acceptance_ready"] = json!(true);
+    control["orchestration_recovery_state"] = json!("ready");
+    app.update(Snapshot::from_document(&run, &control));
+    let (action, _) = app.next_approval().unwrap();
+    assert_eq!(
+        action,
+        Action::AcceptTeam {
+            round_id: "round".into(),
+            scope_hash: "reviewed-scope".into()
+        }
+    );
+    assert!(app.handle(key(KeyCode::Char('a'))).is_empty());
+    assert!(matches!(app.view, View::Confirm { .. }));
+    assert_eq!(
+        app.handle(key(KeyCode::Enter)),
+        vec![Effect::Action(action)]
+    );
+}
+
+#[test]
 fn recovery_preparation_is_visible_without_claiming_a_native_agent_is_running() {
     let run = json!({"id":"retained-review","status":"blocked","stage":"discovery","orchestration_rounds":[{"id":"round","status":"failed"}]});
     let mut app = App::default();
@@ -1298,6 +1350,88 @@ fn diff_review_confirmation_freezes_candidate_and_profile_across_refresh() {
             scope_hash: "original-diff-scope".into()
         })]
     );
+}
+
+#[test]
+fn task_recovery_preparation_is_visible_and_prevents_premature_generic_reconciliation() {
+    let run = json!({"id":"recovering","status":"blocked","stage":"discovery","reconciliation_required":true});
+    let mut app = App::default();
+    app.update(Snapshot::from_document(&run,&json!({"task_recovery_state":"preparing","scope_hashes":{"reconcile":"scope"},"recovery":{"observed_input_hash":"inputs","reconciliation_available":true}})));
+    assert!(app.next_approval().is_none());
+    assert!(app.snapshot.agents.iter().all(|a| a.status != "running"));
+    let display = screen(&mut app, 140, 40);
+    assert!(display.contains("Checking interrupted tasks"), "{display}");
+    app.update(Snapshot::from_document(&run,&json!({"task_recovery_state":"unavailable","scope_hashes":{"reconcile":"scope"},"recovery":{"observed_input_hash":"inputs","reconciliation_available":true}})));
+    assert!(app.next_approval().is_none());
+    assert!(screen(&mut app, 140, 40).contains("Task recovery changed"));
+}
+
+#[test]
+fn guided_reconciliation_requires_a_current_observation_and_pins_the_displayed_versions() {
+    let run = json!({"id":"interrupted","status":"blocked","stage":"discovery","reconciliation_required":true,"pending_edits":[]});
+    let mut control = json!({"scope_hashes":{"reconcile":"scope-before"},"recovery":{"observed_input_hash":"inputs-before","reconciliation_available":true,"inputs":{"source":{"kind":"readable","hash":"source-version"}}}});
+    let mut app = App::default();
+    app.update(Snapshot::from_document(&run, &control));
+    let (action, _) = app.next_approval().unwrap();
+    assert_eq!(
+        action,
+        Action::Reconcile {
+            scope_hash: "scope-before".into(),
+            input_hash: "inputs-before".into()
+        }
+    );
+    assert!(app.handle(key(KeyCode::Char('a'))).is_empty());
+    let View::Confirm { details, .. } = &app.view else {
+        panic!("missing recovery card")
+    };
+    assert!(details.contains("source-version") && details.contains("does not repeat an agent"));
+    let frozen = app.view.clone();
+    control["scope_hashes"]["reconcile"] = json!("scope-after");
+    control["recovery"]["observed_input_hash"] = json!("inputs-after");
+    app.update(Snapshot::from_document(&run, &control));
+    assert_eq!(app.view, frozen);
+    assert_eq!(
+        app.handle(key(KeyCode::Enter)),
+        vec![Effect::Action(action)]
+    );
+    for available in [false, true] {
+        control["recovery"]["reconciliation_available"] = json!(available);
+        if available {
+            control["recovery"]["observed_input_hash"] = serde_json::Value::Null;
+        }
+        app.update(Snapshot::from_document(&run, &control));
+        assert!(app.next_approval().is_none());
+    }
+}
+
+#[test]
+fn guided_recovery_preserves_a_whole_effect_cohort_before_generic_reconciliation() {
+    let mut app = app();
+    app.snapshot.status = "blocked".into();
+    app.snapshot.reconciliation_required = true;
+    app.snapshot.reconciliation_available = true;
+    app.snapshot.reconciliation_input_hash = Some("input-observation".into());
+    app.snapshot
+        .scope_hashes
+        .insert("reconcile".into(), "generic-scope".into());
+    app.snapshot
+        .task_effect_reconciliations
+        .insert("one".into(), "individual-scope".into());
+    app.snapshot.wave_effect_reconciliations.insert(
+        "cohort".into(),
+        architect::runtime::team::adjudicate::PendingWave {
+            wave_attempt: 1,
+            task_ids: vec!["one".into(), "two".into()],
+            scope_hash: "cohort-scope".into(),
+        },
+    );
+    assert!(
+        matches!(app.next_approval().unwrap().0, Action::ReconcileWaveEffects{task_ids,scope_hash} if task_ids==vec!["one","two"] && scope_hash=="cohort-scope")
+    );
+    for status in ["running", "paused", "cancelled"] {
+        app.snapshot.status = status.into();
+        assert!(app.next_approval().is_none());
+    }
 }
 
 #[test]

@@ -124,15 +124,235 @@ fn fixture(root: &Path) -> Result<PathBuf> {
     Ok(project)
 }
 fn read(state: &Path, id: &str) -> Result<Run> {
+    // Observation is safe to repeat; scoped mutations below are never passed
+    // through this retry path. A socket read timeout must not immediately kill
+    // the owned daemon (and its currently running native reviewer).
+    read_observed(
+        || ipc::read_document(state, id, "run"),
+        || {
+            thread::sleep(Duration::from_millis(100));
+        },
+    )
+}
+
+fn confirm_guided(app: &mut App, action: &Action) -> Result<()> {
+    app.handle(Event::Key(KeyEvent::new(
+        KeyCode::Char('a'),
+        KeyModifiers::NONE,
+    )));
+    architect::require(
+        matches!(&app.view, View::Confirm { action: displayed, .. } if displayed == action),
+        "guided confirmation did not retain the exact scoped action",
+    )?;
+    let effects = app.handle(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+    architect::require(
+        effects
+            .iter()
+            .any(|e| matches!(e,Effect::Action(a) if a==action)),
+        "confirmation changed the scoped action",
+    )
+}
+fn confirm_selected(app: &mut App, action: &Action) -> Result<()> {
+    app.handle(Event::Key(KeyEvent::new(
+        KeyCode::Char('p'),
+        KeyModifiers::CONTROL,
+    )));
+    app.palette_index = app
+        .palette()
+        .iter()
+        .position(|(_, offered)| offered.as_ref() == Some(action))
+        .ok_or_else(|| {
+            architect::Error::Invalid("selected scoped action is not offered by the UI".into())
+        })?;
+    app.handle(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+    architect::require(
+        matches!(&app.view, View::Confirm { action: displayed, .. } if displayed == action),
+        "selected confirmation did not retain its exact action",
+    )?;
+    let effects = app.handle(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+    architect::require(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Action(a) if a == action)),
+        "selected confirmation changed the scoped action",
+    )
+}
+fn ready_snapshot(backend: &mut IpcBackend, id: &str) -> Result<architect::tui::model::Snapshot> {
     loop {
-        match ipc::read_document(state, id, "run") {
+        let snapshot = backend.snapshot(id)?;
+        if !snapshot.orchestration_recovery_preparing && !snapshot.task_recovery_preparing {
+            return Ok(snapshot);
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn unchanged_fixture(
+    run: &Run,
+    project: &Path,
+    baseline: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> Result<()> {
+    for root in [project, Path::new(&run.spec.workspace)] {
+        let mut names = std::collections::BTreeSet::new();
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if entry.file_name() == ".git" {
+                continue;
+            }
+            architect::require(
+                entry.file_type()?.is_file(),
+                "recovery fixture acquired a directory or link outside its immutable baseline",
+            )?;
+            let name = entry.file_name().into_string().map_err(|_| {
+                architect::Error::Invalid("non-UTF-8 recovery fixture member".into())
+            })?;
+            architect::require(
+                baseline.get(&name).is_some_and(|bytes| {
+                    fs::read(entry.path()).is_ok_and(|current| current == *bytes)
+                }),
+                "recovery fixture membership or original bytes changed",
+            )?;
+            names.insert(name);
+        }
+        architect::require(
+            names == baseline.keys().cloned().collect(),
+            "recovery fixture has missing baseline members",
+        )?;
+    }
+    Ok(())
+}
+fn read_observed(
+    mut download: impl FnMut() -> Result<String>,
+    mut wait: impl FnMut(),
+) -> Result<Run> {
+    let mut transient_failures = 0;
+    loop {
+        match download() {
             Ok(text) => return architect::transport::decode(text.as_bytes()),
             Err(error) if error.to_string().contains("document changed") => {
-                thread::sleep(Duration::from_millis(25))
+                wait();
+            }
+            Err(architect::Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) && transient_failures < 2 =>
+            {
+                transient_failures += 1;
+                eprintln!(
+                    "Read-only fixture observation timed out/interrupted; retry {transient_failures}/2; no mutation replay"
+                );
+                wait();
             }
             Err(error) => return Err(error),
         }
     }
+}
+
+#[test]
+fn read_only_observation_retries_transient_transport_errors_but_stays_bounded() {
+    for kind in [
+        std::io::ErrorKind::WouldBlock,
+        std::io::ErrorKind::TimedOut,
+        std::io::ErrorKind::Interrupted,
+    ] {
+        let mut attempts = 0;
+        let mut waits = 0;
+        let result = read_observed(
+            || {
+                attempts += 1;
+                Err(architect::Error::Io(std::io::Error::from(kind)))
+            },
+            || waits += 1,
+        );
+        assert!(matches!(result,Err(architect::Error::Io(e)) if e.kind()==kind));
+        assert_eq!(attempts, 3);
+        assert_eq!(waits, 2);
+    }
+}
+
+#[test]
+fn read_only_observation_does_not_retry_other_errors_or_invalid_data() {
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::ConnectionRefused,
+    ] {
+        let mut attempts = 0;
+        assert!(
+            read_observed(
+                || {
+                    attempts += 1;
+                    Err(architect::Error::Io(std::io::Error::from(kind)))
+                },
+                || panic!("must not retry this failure"),
+            )
+            .is_err()
+        );
+        assert_eq!(attempts, 1);
+    }
+    assert!(read_observed(|| Ok("{invalid}".into()), || panic!("invalid bytes")).is_err());
+}
+
+#[test]
+fn read_only_observation_restarts_changed_download_and_validates_the_final_bytes() {
+    let mut attempts = 0;
+    let mut waits = 0;
+    let result = read_observed(
+        || {
+            attempts += 1;
+            match attempts {
+                1 => Err(architect::Error::Invalid(
+                    "document changed; restart from offset zero".into(),
+                )),
+                2 => Err(architect::Error::Io(std::io::Error::from(
+                    std::io::ErrorKind::WouldBlock,
+                ))),
+                _ => Ok("{invalid}".into()),
+            }
+        },
+        || waits += 1,
+    );
+    assert!(result.is_err(), "invalid final bytes must not become a run");
+    assert_eq!(attempts, 3);
+    assert_eq!(waits, 2);
+}
+
+#[test]
+fn read_only_observation_can_return_the_complete_run_after_a_transient_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let mut spec: architect::domain::RunSpec =
+        serde_json::from_str(include_str!("../examples/fake-spec.json")).unwrap();
+    spec.workspace = root.path().to_string_lossy().into_owned();
+    let run = Run::new(architect::id(), spec).unwrap();
+    let bytes = serde_json::to_string(&run).unwrap();
+    let mut attempts = 0;
+    let observed = read_observed(
+        || {
+            attempts += 1;
+            if attempts == 1 {
+                Err(architect::Error::Io(std::io::Error::from(
+                    std::io::ErrorKind::WouldBlock,
+                )))
+            } else {
+                Ok(bytes.clone())
+            }
+        },
+        || {},
+    )
+    .unwrap();
+    assert_eq!(serde_json::to_string(&observed).unwrap(), bytes);
+    assert_eq!(attempts, 2);
 }
 fn experiment() -> Result<()> {
     if let Some(path) = std::env::var_os("ANTISLOP_LIVE_INSPECT_RUN") {
@@ -191,6 +411,11 @@ fn experiment() -> Result<()> {
         return Ok(());
     }
     let existing = std::env::var_os("ANTISLOP_LIVE_ROOT").map(PathBuf::from);
+    architect::require(
+        std::env::var_os("ANTISLOP_LIVE_VERIFIER_RECOVERY").is_none()
+            || (existing.is_some() && std::env::var_os("ANTISLOP_LIVE_TASK_RECOVERY").is_some()),
+        "selected verifier recovery requires an explicit retained fixture and task",
+    )?;
     let root = existing.clone().unwrap_or_else(|| {
         tempfile::Builder::new()
             .prefix("antislop-live-team-")
@@ -272,6 +497,258 @@ fn experiment() -> Result<()> {
         architect::require(started.message_accepted, &started.notice)?;
         started.run_id
     };
+    if let Ok(task_id) = std::env::var("ANTISLOP_LIVE_TASK_RECOVERY") {
+        let verifier_only = std::env::var_os("ANTISLOP_LIVE_VERIFIER_RECOVERY").is_some();
+        architect::require(
+            existing.is_some()
+                && std::env::var_os("ANTISLOP_LIVE_RECONCILE").is_none()
+                && std::env::var_os("ANTISLOP_LIVE_REVIEW_RETRY").is_none(),
+            "task recovery requires an explicit retained fixture without other recovery modes",
+        )?;
+        let before = read(&state, &id)?;
+        unchanged_fixture(&before, &project, &baseline)?;
+        let task = before
+            .team
+            .as_ref()
+            .and_then(|team| team.tasks.iter().find(|t| t.id == task_id))
+            .ok_or_else(|| architect::Error::Invalid("recovery fixture task is missing".into()))?;
+        architect::require(
+            before.status == Status::Blocked
+                && before.spec.editable_files == vec!["lib.rs"]
+                && before.spec.check_command == vec!["python3", "check.py"]
+                && before.pending_edits.is_empty()
+                && before.check_resources.is_empty()
+                && before.task_executions.iter().all(|e| e.receipts.is_empty())
+                && before
+                    .task_checks
+                    .iter()
+                    .all(|c| c.state == architect::runtime::team::checks::CheckState::Completed)
+                && task.stage == architect::team::TaskStage::Discovery
+                && task.state == architect::team::TaskState::Blocked
+                && task.artifact.is_some() == verifier_only
+                && task.review.is_none()
+                && task.write_scopes.is_empty()
+                && task
+                    .check_plan
+                    .iter()
+                    .all(|c| c.argv == vec!["python3", "check.py"]),
+            "fixture recovery requires the explicitly selected failed read-only discovery operation, unchanged original files and settled checks",
+        )?;
+        if before.reconciliation_required {
+            let mut app = App::default();
+            app.update(ready_snapshot(&mut backend, &id)?);
+            let (action, label) = app.next_approval().ok_or_else(|| {
+                architect::Error::Invalid("no guided checkpoint observation available".into())
+            })?;
+            architect::require(
+                matches!(action, Action::Reconcile { .. }),
+                "fixture requires a source-only checkpoint, not effect replay",
+            )?;
+            confirm_guided(&mut app, &action)?;
+            println!("Approve fixture action: {label}");
+            backend.act(&id, action)?;
+            let after = read(&state, &id)?;
+            unchanged_fixture(&after, &project, &baseline)?;
+            architect::require(
+                serde_json::to_value(&before.artifacts)? == serde_json::to_value(&after.artifacts)?
+                    && serde_json::to_value(&before.session_ledger)?
+                        == serde_json::to_value(&after.session_ledger)?
+                    && serde_json::to_value(&before.team)? == serde_json::to_value(&after.team)?
+                    && before.spec_revision == after.spec_revision
+                    && before.attempt == after.attempt,
+                "checkpoint reconciliation changed retained team, artifacts or native sessions",
+            )?;
+            println!(
+                "Read-only task checkpoint reconciled; retained artifacts/sessions/team and original source/candidate bytes unchanged; no provider work launched"
+            );
+        }
+        if std::env::var_os("ANTISLOP_LIVE_CHECKPOINT_ONLY").is_none() {
+            let before_action = read(&state, &id)?;
+            let restore_only = std::env::var_os("ANTISLOP_LIVE_RESTORE_ONLY").is_some();
+            architect::require(
+                !verifier_only || !restore_only,
+                "verifier replacement cannot also restore an executor result",
+            )?;
+            let mut app = App::default();
+            app.update(ready_snapshot(&mut backend, &id)?);
+            let selected = if verifier_only {
+                app.snapshot.task_session_replacements.get(&task_id).map(|package| {
+                    (Action::ReplaceTaskSession {task_id:task_id.clone(), scope_hash:package.scope_hash.clone()},
+                    "Replace only the selected failed verifier; retain the executor artifact".into())
+                })
+            } else {
+                app.next_approval()
+            };
+            let (action, label) = selected.ok_or_else(|| {
+                architect::Error::Invalid(
+                    "no guided interrupted-task continuation available".into(),
+                )
+            })?;
+            architect::require(
+                if restore_only {
+                    matches!(&action, Action::RestoreTaskResult { task_id: target, .. } if *target == task_id)
+                } else {
+                    matches!(&action, Action::ReplaceTaskSession { task_id: target, .. } if *target == task_id)
+                },
+                "fixture recovery must explicitly select only its authorized retained result or distinct read-only session",
+            )?;
+            if verifier_only {
+                confirm_selected(&mut app, &action)?;
+            } else {
+                confirm_guided(&mut app, &action)?;
+            }
+            println!("Approve fixture action: {label}");
+            let started = std::time::Instant::now();
+            backend.act(&id, action)?;
+            println!(
+                "Guided recovery approval acknowledged in {:.3}s",
+                started.elapsed().as_secs_f64()
+            );
+            if verifier_only {
+                loop {
+                    let after = read(&state, &id)?;
+                    if after.status == Status::Running
+                        || architect::recovery::WorkspaceLease::acquire(&after.spec.workspace)
+                            .is_err()
+                    {
+                        thread::sleep(Duration::from_millis(250));
+                        continue;
+                    }
+                    unchanged_fixture(&after, &project, &baseline)?;
+                    fs::write(root.join("run.json"), serde_json::to_vec_pretty(&after)?)?;
+                    let old_team = before_action.team.as_ref().unwrap();
+                    let new_team = after.team.as_ref().unwrap();
+                    let target = new_team.tasks.iter().find(|t| t.id == task_id).unwrap();
+                    let original_target = old_team.tasks.iter().find(|t| t.id == task_id).unwrap();
+                    let old_turns = &before_action.session_ledger.turns;
+                    let new_turns: Vec<_> = after
+                        .session_ledger
+                        .turns
+                        .values()
+                        .filter(|t| !old_turns.contains_key(&t.id))
+                        .collect();
+                    architect::require(
+                        new_turns.len() == 1
+                            && before_action
+                                .session_ledger
+                                .turns
+                                .iter()
+                                .all(|(id, old)| after.session_ledger.turns.get(id) == Some(old))
+                            && before_action
+                                .session_ledger
+                                .sessions
+                                .iter()
+                                .all(|(id, old)| {
+                                    after.session_ledger.sessions.get(id) == Some(old)
+                                })
+                            && after.session_ledger.sessions.len()
+                                == before_action.session_ledger.sessions.len() + 1
+                            && serde_json::to_value(&before_action.artifacts)?
+                                == serde_json::to_value(&after.artifacts)?
+                            && serde_json::to_value(&before_action.task_checks)?
+                                == serde_json::to_value(&after.task_checks)?
+                            && serde_json::to_value(&before_action.quality_gates)?
+                                == serde_json::to_value(&after.quality_gates)?
+                            && old_team
+                                .tasks
+                                .iter()
+                                .filter(|t| t.id != task_id)
+                                .all(|old| {
+                                    new_team.tasks.iter().find(|t| t.id == old.id).is_some_and(
+                                        |new| {
+                                            serde_json::to_value(old).ok()
+                                                == serde_json::to_value(new).ok()
+                                        },
+                                    )
+                                })
+                            && target.artifact == original_target.artifact
+                            && serde_json::to_value(&before_action.task_executions)?
+                                == serde_json::to_value(&after.task_executions)?
+                            && serde_json::to_value(&before_action.team_result_approvals)?
+                                == serde_json::to_value(&after.team_result_approvals)?
+                            && after.spec_revision == before_action.spec_revision
+                            && target.native_replacements.len()
+                                == original_target.native_replacements.len() + 1,
+                        "selected verifier replacement changed retained turns, sibling tasks, artifacts, checks or quality gates",
+                    )?;
+                    let turn = new_turns[0];
+                    let session = &after.session_ledger.sessions[&turn.session_id];
+                    architect::require(
+                        session.scope.task_id.as_deref() == Some(&task_id)
+                            && session.scope.role == architect::config::RoleKind::Verifier
+                            && session.scope.provider == "agy"
+                            && session.scope.binary_version == "1.4.0",
+                        "replacement launched another native operation",
+                    )?;
+                    println!(
+                        "Selected native verifier stopped: {:?}; completed={}; model-format rejections={}; review={}; retained original files/artifacts/checks and sibling tasks unchanged",
+                        after.status,
+                        turn.provider_completed,
+                        turn.native_rejections.len(),
+                        target.review.is_some()
+                    );
+                    architect::require(
+                        turn.provider_completed && target.review.is_some(),
+                        "selected native verifier did not produce an accepted independent review; retained state must not be replayed",
+                    )?;
+                    return Ok(());
+                }
+            }
+            if restore_only {
+                let after = read(&state, &id)?;
+                unchanged_fixture(&after, &project, &baseline)?;
+                let task = after
+                    .team
+                    .as_ref()
+                    .unwrap()
+                    .tasks
+                    .iter()
+                    .find(|t| t.id == task_id)
+                    .unwrap();
+                let artifact = after
+                    .artifacts
+                    .iter()
+                    .find(|a| Some(&a.id) == task.artifact.as_ref().map(|r| &r.id))
+                    .ok_or_else(|| {
+                        architect::Error::Invalid("retained native result was not attached".into())
+                    })?;
+                let session = &after.session_ledger.sessions[&artifact.session_id];
+                let turn = &after.session_ledger.turns[session.current_turn_id.as_ref().unwrap()];
+                architect::require(
+                    task.state == architect::team::TaskState::AwaitingVerification
+                        && task.review.is_none()
+                        && turn.output.as_deref() == Some(&artifact.content)
+                        && turn.provider_completed
+                        && after.artifacts.len() == before_action.artifacts.len() + 1
+                        && before_action.artifacts.iter().all(|a| {
+                            after
+                                .artifacts
+                                .iter()
+                                .any(|b| a.id == b.id && a.hash == b.hash && a.content == b.content)
+                        })
+                        && serde_json::to_value(&after.session_ledger)?
+                            == serde_json::to_value(&before_action.session_ledger)?
+                        && serde_json::to_value(&after.task_checks)?
+                            == serde_json::to_value(&before_action.task_checks)?
+                        && serde_json::to_value(&after.quality_gates)?
+                            == serde_json::to_value(&before_action.quality_gates)?
+                        && after.team_result_approvals.len()
+                            == before_action.team_result_approvals.len()
+                        && after.spec_revision == before_action.spec_revision
+                        && after.attempt == before_action.attempt
+                        && after
+                            .task_executions
+                            .iter()
+                            .filter(|e| e.task_id == task_id)
+                            .all(|e| e.read_only_admission.is_some() && e.receipts.is_empty()),
+                    "read-only result admission changed original bytes, native sessions/checks or acceptance state",
+                )?;
+                println!(
+                    "Exact completed native output admitted for independent verification; prior artifacts, all sessions/checks and source/candidate bytes unchanged; no provider work or checks repeated"
+                );
+            }
+        }
+    }
     if std::env::var_os("ANTISLOP_LIVE_RECONCILE").is_some() {
         let mut run = read(&state, &id)?;
         if run.status == Status::Paused
@@ -312,7 +789,9 @@ fn experiment() -> Result<()> {
             },
         )?;
     }
-    if std::env::var_os("ANTISLOP_LIVE_CHECKPOINT_ONLY").is_some() {
+    if std::env::var_os("ANTISLOP_LIVE_CHECKPOINT_ONLY").is_some()
+        || std::env::var_os("ANTISLOP_LIVE_RESTORE_ONLY").is_some()
+    {
         let run = read(&state, &id)?;
         fs::write(root.join("run.json"), serde_json::to_vec_pretty(&run)?)?;
         println!(
@@ -419,6 +898,10 @@ fn experiment() -> Result<()> {
             "original checkout changed before separately approved delivery",
         )?;
         let snapshot = backend.snapshot(&id)?;
+        if snapshot.orchestration_recovery_preparing || snapshot.task_recovery_preparing {
+            thread::sleep(Duration::from_millis(100));
+            continue;
+        }
         let mut app = App::default();
         app.update(snapshot);
         let next = app.next_approval().or_else(|| {
@@ -447,24 +930,7 @@ fn experiment() -> Result<()> {
         };
         // Freeze the same UI confirmation used by the user for guided actions.
         if app.next_approval().is_some() {
-            app.handle(Event::Key(KeyEvent::new(
-                KeyCode::Char('a'),
-                KeyModifiers::NONE,
-            )));
-            architect::require(
-                matches!(app.view, View::Confirm { .. }),
-                "guided action did not show its approval card",
-            )?;
-            let effects = app.handle(Event::Key(KeyEvent::new(
-                KeyCode::Enter,
-                KeyModifiers::NONE,
-            )));
-            architect::require(
-                effects
-                    .iter()
-                    .any(|e| matches!(e,Effect::Action(a) if *a==action)),
-                "confirmation changed the scoped action",
-            )?;
+            confirm_guided(&mut app, &action)?;
         }
         if matches!(action, Action::StepTeam { .. }) {
             let wave = app
@@ -490,7 +956,12 @@ fn experiment() -> Result<()> {
             )?;
         }
         println!("Approve fixture action: {label}");
+        let admitted_at = std::time::Instant::now();
         backend.act(&id, action)?;
+        println!(
+            "Fixture approval acknowledged in {:.3}s",
+            admitted_at.elapsed().as_secs_f64()
+        );
     }
 }
 #[test]

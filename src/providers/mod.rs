@@ -63,6 +63,12 @@ pub enum UsageReport {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderEvent {
+    NativeOutputRejected {
+        turn_id: String,
+        session_id: String,
+        step_index: u64,
+        reason: NativeOutputRejection,
+    },
     OutputRejected {
         turn_id: String,
         output: String,
@@ -104,6 +110,14 @@ pub enum ProviderEvent {
     Usage {
         report: UsageReport,
     },
+}
+/// Native rejected-step observation, without attempted arguments or reasoning.
+/// This records an observation, never completion or permission to replay a turn.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeOutputRejection {
+    MalformedFunctionCall,
+    UnclassifiedNativeStep,
 }
 pub struct TurnRequest<'a> {
     pub turn_id: &'a str,
@@ -221,6 +235,11 @@ pub struct Capabilities {
     pub usage: String,
 }
 pub trait Provider: Send + Sync {
+    /// The selected adapter/profile implements literal-ID continuation. This
+    /// is not a substitute for the actual CLI/version probe before a turn.
+    fn native_resume_implemented(&self) -> bool {
+        false
+    }
     fn probe(&self) -> Result<Capabilities>;
     fn probe_cancelled(&self, cancelled: &AtomicBool) -> Result<Capabilities> {
         crate::require(
@@ -458,6 +477,9 @@ struct ModelOverride {
     model: Option<String>,
 }
 impl Provider for ModelOverride {
+    fn native_resume_implemented(&self) -> bool {
+        self.inner.native_resume_implemented()
+    }
     fn probe(&self) -> Result<Capabilities> {
         self.inner.probe()
     }

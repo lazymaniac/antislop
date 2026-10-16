@@ -2,16 +2,25 @@ use super::*;
 use crate::context::{Page, Read, bridge::Bridge, transport::Transport};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub fn cwd(bridge: &Bridge) -> Result<PathBuf> {
+pub fn cwd(bridge: &Bridge, version: &str) -> Result<PathBuf> {
+    use crate::context::transport::{AGY_CALL_GUIDANCE, LEGACY_AGY_VERSION, VERSION};
+    require(
+        matches!(version, LEGACY_AGY_VERSION | VERSION),
+        "unsupported Antigravity reader profile version",
+    )?;
     let cwd = bridge.root().join("native");
     crate::ipc::private_directory(&cwd)?;
     let agents = cwd.join(".agents");
     crate::ipc::private_directory(&agents)?;
     let definitions = agents.join("agents");
     crate::ipc::private_directory(&definitions)?;
-    let source=std::str::from_utf8(AGENT_SOURCE).expect("static profile")
+    let mut source=std::str::from_utf8(AGENT_SOURCE).expect("static profile")
         .replace("inheritMcp: false","inheritMcp: true")
         .replace("Never use any other tool or delegate.","You may use only the antislop-context immutable MCP reader and finish. Never use other tools or delegate.");
+    if version == VERSION {
+        source.push_str(AGY_CALL_GUIDANCE);
+        source.push('\n');
+    }
     controlled_file(&definitions.join("antislop-stdio.md"), source.as_bytes())?;
     let config = json!({"mcpServers":{"antislop-context":{"command":crate::process::companion()?,"args":["__context-connect",bridge.socket()]}}});
     controlled_file(
@@ -26,6 +35,9 @@ pub struct Tools {
     closed: BTreeSet<u64>,
 }
 impl Tools {
+    pub fn settled(&self) -> bool {
+        self.active.is_empty()
+    }
     pub fn frame(
         &mut self,
         frame: &Value,

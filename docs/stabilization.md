@@ -8,7 +8,9 @@ Protocol 1 is explicitly refused rather than silently changing response shapes. 
 
 Mutation responses and snapshots contain summaries, counts, hashes and document references. They do not copy source, artifact, evidence or report bodies. `list` returns up to 100 summaries and a `next_cursor`; use `list_page` to continue. Event polling retains its durable sequence cursor.
 
-Snapshots include the stored `document_hash` of the run alongside their controls. The TUI requires the downloaded run to match that hash before combining its data with approval/reconciliation controls. Concurrent mutation causes a read-only refresh error; no mutation is retried. Older daemons lacking this field require an update before this TUI can attach. The backend no longer retains unused full-document caches for previously selected runs.
+Snapshots include the run's `document_hash` alongside their controls. New daemons capture the complete actual SQLite document and stored hash in one query, reject a mismatch and advertise `document_hash_verified: true`. Only that explicit guarantee lets the TUI reuse its already downloaded, byte-bound version. A changed hash triggers a complete hash-pinned download. Older protocol-2 daemons without the verification flag still require full downloads on every refresh; daemons lacking `document_hash` require an update. Concurrent changes between control and document reads cause a read-only refresh error; no mutation is retried. The backend retains one immutable current document, rather than full documents for previously selected runs.
+
+That document owns its decoded JSON, lazily decoded canonical run and independently authenticated management-package proof. Reuse cannot move a proof to a different document. Each refresh still validates package bytes, live sources and current control scope. Changed canonical bytes, including same-length changes or formatting, replace the owner and require new authentication. Changed package content must pass full authentication again; a source mismatch fails the refresh. Runtime mutation admission separately checks the full canonical run, actual sources and explicit approval. Client caches are never serialized or sent as authority.
 
 A `read` operation fetches a bounded UTF-8 chunk of `run`, `spec`, `artifact:ID` or `evidence:ID`. The first chunk returns the document SHA-256; every subsequent request must supply it as `expected_hash`. An intervening mutation fails the read explicitly. Readers restart the read-only download instead of combining revisions or replaying a mutation. Run chunks are read directly from SQLite's stored JSON bytes with a transactionally maintained hash; pagination does not deserialize the whole run for every chunk.
 
@@ -30,6 +32,23 @@ Managed runtime preflight uses the cancellation-aware provider probe, including 
 Workspace leases are OS locks on canonical path ancestors: parents conflict with descendants, while independent sibling workspaces may proceed. A guardian inherits the complete lease set, retaining it until its process cleanup finishes after daemon death. Tool processes do not inherit the lease descriptors. Missing supervisor binaries fail closed.
 
 Process groups do not contain deliberately escaping programs that use `setsid` or change groups; these require an OS isolation boundary. No arbitrary-project sandbox guarantee is claimed.
+
+The opt-in [restricted-runner spikes](restricted-runner.md) exercise this boundary
+with owned disposable programs. The macOS Seatbelt policy permits a child's
+session escape and is rejected. A pinned local Podman image passed sampled
+read-only input, network, kernel/resource and new-session-child stop checks.
+Neither diagnostic tool is runtime authority or an autonomous project-check
+backend; the existing policy guard remains in force.
+
+The Rust guardian can additionally register an exact already-created container
+through `process::command_with_container`. It confirms labelled ID/image-bound
+removal before releasing leases or returning the local command's status, even
+after parent death or a handled guardian termination signal. Engine errors and
+foreign/malformed metadata leave cleanup pending with leases retained. Only
+ID/image/ownership are projected from engine metadata; raw diagnostics and full
+container environments are not collected. This lifecycle primitive does not
+admit a project check or grant sandbox capability. Durable ownership recovery,
+restricted-check configuration and evidence integration remain open.
 
 ## Partial edits and explicit reconciliation
 

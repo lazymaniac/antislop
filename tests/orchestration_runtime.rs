@@ -96,7 +96,8 @@ if prompt.startswith('You are the configured orchestrator.'):
    task['requirements'][0]['criteria']['result']='Preserve observable behavior while restructuring the implementation'
   if mode=='intake-source-instructions':
    task['input_files']=['source','AGENTS.md']
-   instructions=c['project_instructions'];assert instructions['format']=='project-instructions-v1' and not instructions['exhaustive']
+   instructions=c['project_instructions'];assert instructions['format']=='project-instructions-v2' and not instructions['exhaustive']
+   assert instructions['type_observation_hash']==c['interview_type_observation_hash']
    assert instructions['observation_hash']==c['interview_source_hash']
    assert [(d['path'],d['directory_scope']) for d in instructions['documents']]==[('AGENTS.md','.'),('nested/CLAUDE.md','nested')]
   if mode=='intake-outside':task['input_files']=['/etc']
@@ -572,6 +573,117 @@ fn native_review_part_rejection_never_runs_remaining_parts_or_shops_for_a_positi
                 .as_ref()
                 .unwrap()
         )
+    );
+}
+
+#[test]
+fn prepared_ipc_recovery_requires_explicit_approval_and_replays_only_the_committed_request_result()
+{
+    use architect::ipc::{self, Operation, Request};
+    use architect::runtime::orchestration_recovery::{self, Kind};
+    let f = Fixture::new("management-review-once");
+    let run = reconciled_management(&f, &f.execute());
+    let package =
+        orchestration_recovery::for_round(&run, &run.orchestration_rounds[0].id, Kind::Replacement)
+            .unwrap();
+    let command = Command::RecoverOrchestration {
+        run_id: run.id.clone(),
+        round_id: package.round_id,
+        kind: package.kind,
+        scope_hash: package.scope_hash,
+    };
+    let key = id();
+    let mutate = || {
+        ipc::handle(
+            &f.runtime,
+            Request {
+                version: ipc::PROTOCOL_VERSION,
+                request_id: id(),
+                idempotency_key: Some(key.clone()),
+                operation: Operation::Mutate {
+                    command: Box::new(command.clone()),
+                },
+            },
+        )
+    };
+    let original = serde_json::to_value(&run).unwrap();
+    let calls = std::fs::read_to_string(f.root.path().join("calls")).unwrap();
+    let cold = mutate();
+    assert!(
+        cold.error
+            .as_deref()
+            .unwrap()
+            .contains("no mutation admitted")
+    );
+    assert_eq!(serde_json::to_value(f.current()).unwrap(), original);
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls")).unwrap(),
+        calls
+    );
+    let started = Instant::now();
+    loop {
+        let response = ipc::handle(
+            &f.runtime,
+            Request {
+                version: ipc::PROTOCOL_VERSION,
+                request_id: id(),
+                idempotency_key: None,
+                operation: Operation::Snapshot {
+                    run_id: run.id.clone(),
+                },
+            },
+        );
+        let control = response.data.unwrap();
+        if control["orchestration_recovery_state"] == "ready" {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(30));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let db = rusqlite::Connection::open(f.root.path().join("state.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER refuse_prepared_recovery BEFORE INSERT ON events WHEN NEW.kind='orchestration_recovery_started' BEGIN SELECT RAISE(ABORT, 'injected prepared admission failure'); END;").unwrap();
+    let failed = mutate();
+    assert!(
+        failed
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("injected prepared admission failure")
+    );
+    assert_eq!(serde_json::to_value(f.current()).unwrap(), original);
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls")).unwrap(),
+        calls
+    );
+    db.execute_batch("DROP TRIGGER refuse_prepared_recovery")
+        .unwrap();
+    std::fs::write(f.root.path().join("management-ready"), "ready").unwrap();
+    let admitted = mutate();
+    assert!(admitted.error.is_none(), "{:?}", admitted.error);
+    let duplicate = mutate();
+    assert_eq!(duplicate.data, admitted.data);
+    assert!(duplicate.error.is_none());
+    let completed = management_idle(&f);
+    assert_eq!(
+        completed.orchestration_rounds[0].status,
+        RoundStatus::Reviewed
+    );
+    planning::authenticate(&completed, &completed.orchestration_rounds[0]).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.root.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        calls.lines().count() + 1
+    );
+    assert_eq!(completed.orchestration_rounds[0].recoveries.len(), 1);
+    assert_eq!(
+        completed
+            .approvals
+            .iter()
+            .filter(|a| a.action.starts_with("recover-orchestration:"))
+            .count(),
+        1
     );
 }
 
@@ -1255,6 +1367,260 @@ fn conversational_answer_preserves_stage_and_malformed_output_cannot_hide_source
 }
 
 #[test]
+fn cold_cli_team_acceptance_waits_for_preparation_before_its_single_scoped_mutation() {
+    use std::process::{Command as Process, Stdio};
+    struct Daemon(std::process::Child);
+    impl Drop for Daemon {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let f = Fixture::new("parts-success");
+    std::fs::set_permissions(f.root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let run = f.execute();
+    let round = run.orchestration_rounds.last().unwrap();
+    let calls = std::fs::read(f.root.path().join("calls")).unwrap();
+    let mut daemon = Daemon(
+        Process::new(env!("CARGO_BIN_EXE_antislop"))
+            .arg("daemon")
+            .arg(f.root.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(
+                std::fs::File::create(f.root.path().join("daemon.log")).unwrap(),
+            ))
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !f.root.path().join("architect.sock").exists() {
+        assert!(
+            daemon.0.try_wait().unwrap().is_none(),
+            "{}",
+            std::fs::read_to_string(f.root.path().join("daemon.log")).unwrap()
+        );
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let args = [
+        "accept-team",
+        f.root.path().to_str().unwrap(),
+        &run.id,
+        &round.id,
+    ];
+    assert!(
+        !Process::new(env!("CARGO_BIN_EXE_antislop"))
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(f.current().team.is_none());
+    let output = Process::new(env!("CARGO_BIN_EXE_antislop"))
+        .args(args)
+        .arg("--approve-scoped")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Checking retained reviews"));
+    let accepted = f.current();
+    assert!(accepted.team.is_some());
+    assert_eq!(
+        accepted
+            .approvals
+            .iter()
+            .filter(|a| a.action == format!("team:{}", round.id))
+            .count(),
+        1
+    );
+    assert_eq!(std::fs::read(f.root.path().join("calls")).unwrap(), calls);
+}
+
+#[test]
+fn ipc_team_acceptance_prepares_without_mutation_and_commits_approval_exactly_once() {
+    use architect::ipc::{self, Operation, Request};
+    let f = Fixture::new("parts-success");
+    let run = f.execute();
+    let round = run.orchestration_rounds.last().unwrap();
+    assert_eq!(round.status, RoundStatus::Reviewed);
+    let command = Command::AcceptTeam {
+        run_id: run.id.clone(),
+        round_id: round.id.clone(),
+        scope_hash: planning::accept_scope(&run, round).unwrap(),
+    };
+    let key = id();
+    let mutate = || {
+        ipc::handle(
+            &f.runtime,
+            Request {
+                version: ipc::PROTOCOL_VERSION,
+                request_id: id(),
+                idempotency_key: Some(key.clone()),
+                operation: Operation::Mutate {
+                    command: Box::new(command.clone()),
+                },
+            },
+        )
+    };
+    let original = serde_json::to_vec(&run).unwrap();
+    let calls = std::fs::read(f.root.path().join("calls")).unwrap();
+    let cold = mutate();
+    assert!(cold.error.unwrap().contains("no mutation admitted"));
+    assert_eq!(serde_json::to_vec(&f.current()).unwrap(), original);
+    assert!(
+        f.runtime
+            .store
+            .lock()
+            .unwrap()
+            .cached(&key, &serde_json::to_vec(&command).unwrap())
+            .unwrap()
+            .is_none()
+    );
+    let start = Instant::now();
+    loop {
+        assert!(
+            f.runtime.store.try_lock().is_ok(),
+            "background preparation must release the store"
+        );
+        let snapshot = ipc::handle(
+            &f.runtime,
+            Request {
+                version: ipc::PROTOCOL_VERSION,
+                request_id: id(),
+                idempotency_key: None,
+                operation: Operation::Snapshot {
+                    run_id: run.id.clone(),
+                },
+            },
+        )
+        .data
+        .unwrap();
+        if snapshot["team_acceptance_ready"] == true {
+            break;
+        }
+        assert_ne!(snapshot["orchestration_recovery_state"], "unavailable");
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(serde_json::to_vec(&f.current()).unwrap(), original);
+    let db = rusqlite::Connection::open(f.root.path().join("state.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER refuse_team_acceptance BEFORE INSERT ON events WHEN NEW.kind='team_accepted' BEGIN SELECT RAISE(ABORT, 'injected acceptance failure'); END;").unwrap();
+    assert!(
+        mutate()
+            .error
+            .unwrap()
+            .contains("injected acceptance failure")
+    );
+    assert_eq!(serde_json::to_vec(&f.current()).unwrap(), original);
+    db.execute_batch("DROP TRIGGER refuse_team_acceptance")
+        .unwrap();
+    let admitted = mutate();
+    assert!(admitted.error.is_none(), "{:?}", admitted.error);
+    let duplicate = mutate();
+    assert!(duplicate.error.is_none(), "{:?}", duplicate.error);
+    assert_eq!(admitted.data, duplicate.data);
+    let accepted = f.current();
+    assert!(accepted.team.is_some());
+    assert_eq!(
+        accepted.orchestration_rounds.last().unwrap().status,
+        RoundStatus::Accepted
+    );
+    assert_eq!(
+        accepted
+            .approvals
+            .iter()
+            .filter(|a| a.action == format!("team:{}", round.id) && a.actor == "local_user")
+            .count(),
+        1
+    );
+    assert_eq!(std::fs::read(f.root.path().join("calls")).unwrap(), calls);
+}
+
+#[test]
+fn prepared_team_acceptance_rechecks_canonical_reports_and_live_source_bytes() {
+    use architect::ipc::{self, Operation, Request};
+    for drift in ["source", "report"] {
+        let f = Fixture::new("parts-success");
+        let run = f.execute();
+        let round = run.orchestration_rounds.last().unwrap();
+        let scope = planning::accept_scope(&run, round).unwrap();
+        let snapshot = || {
+            ipc::handle(
+                &f.runtime,
+                Request {
+                    version: ipc::PROTOCOL_VERSION,
+                    request_id: id(),
+                    idempotency_key: None,
+                    operation: Operation::Snapshot {
+                        run_id: run.id.clone(),
+                    },
+                },
+            )
+            .data
+            .unwrap()
+        };
+        let start = Instant::now();
+        while snapshot()["team_acceptance_ready"] != true {
+            assert!(start.elapsed() < Duration::from_secs(30));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let calls = std::fs::read(f.root.path().join("calls")).unwrap();
+        if drift == "source" {
+            std::fs::write(f.root.path().join("workspace/source"), "unreviewed bytes").unwrap();
+        } else {
+            let mut altered = f.current();
+            altered
+                .orchestration_rounds
+                .last_mut()
+                .unwrap()
+                .review_parts
+                .last_mut()
+                .unwrap()
+                .output
+                .as_mut()
+                .unwrap()
+                .push(' ');
+            f.runtime
+                .store
+                .lock()
+                .unwrap()
+                .save(&altered, "tampered_fixture_report", None)
+                .unwrap();
+        }
+        let original = serde_json::to_vec(&f.current()).unwrap();
+        let result = ipc::handle(
+            &f.runtime,
+            Request {
+                version: ipc::PROTOCOL_VERSION,
+                request_id: id(),
+                idempotency_key: Some(id()),
+                operation: Operation::Mutate {
+                    command: Box::new(Command::AcceptTeam {
+                        run_id: run.id.clone(),
+                        round_id: round.id.clone(),
+                        scope_hash: scope,
+                    }),
+                },
+            },
+        );
+        assert!(
+            result.error.is_some(),
+            "{drift} drift must refuse acceptance"
+        );
+        assert_eq!(serde_json::to_vec(&f.current()).unwrap(), original);
+        assert!(f.current().team.is_none());
+        assert_eq!(std::fs::read(f.root.path().join("calls")).unwrap(), calls);
+        assert_ne!(snapshot()["team_acceptance_ready"], true);
+    }
+}
+
+#[test]
 fn cli_and_tui_use_real_daemon_approvals_and_restore_reviewed_dialogue() {
     use architect::{
         ipc::{self, Operation, Request},
@@ -1346,7 +1712,16 @@ fn cli_and_tui_use_real_daemon_approvals_and_restore_reviewed_dialogue() {
         std::thread::sleep(Duration::from_millis(5));
     };
     assert_eq!(run.orchestration_rounds[0].status, RoundStatus::Reviewed);
-    let snapshot = backend.snapshot(&rid).unwrap();
+    let started = Instant::now();
+    let snapshot = loop {
+        let snapshot = backend.snapshot(&rid).unwrap();
+        if !snapshot.orchestration_recovery_preparing {
+            assert!(!snapshot.orchestration_recovery_unavailable);
+            break snapshot;
+        }
+        assert!(started.elapsed() < Duration::from_secs(30));
+        std::thread::sleep(Duration::from_millis(5));
+    };
     assert_eq!(
         snapshot.reviewed_team_round.as_deref(),
         Some(run.orchestration_rounds[0].id.as_str())
@@ -2430,6 +2805,18 @@ fn interview_acceptance_rejects_changed_sources_new_messages_and_forged_native_s
     evidence.output = bytes.clone();
     evidence.output_hash = architect::hash(&bytes);
     evidence.artifact_hash = architect::hash(&bytes);
+    assert!(
+        architect::runtime::intake::pending(&forged).is_none(),
+        "changed bodies must first fail their independent type binding"
+    );
+    forged.orchestration_rounds[0].proposed_input_observation = Some(
+        architect::workspace::observation::capture(
+            std::path::Path::new(&forged.spec.workspace),
+            &["source".into()],
+        )
+        .unwrap()
+        .observation,
+    );
     let (forged_id, forged_scope) = architect::runtime::intake::pending(&forged).unwrap();
     assert!(
         architect::runtime::intake::accept(&mut forged, &forged_id, &forged_scope)

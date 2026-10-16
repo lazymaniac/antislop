@@ -27,6 +27,8 @@ pub struct EditReceipt {
 pub enum InputObservation {
     Readable {
         hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<crate::workspace::observation::Kind>,
     },
     Missing,
     Unreadable {
@@ -38,6 +40,7 @@ pub struct Observation {
     pub inputs: BTreeMap<String, InputObservation>,
     pub readable: Option<BTreeMap<String, String>>,
     pub hash: String,
+    pub source_types: Option<crate::workspace::observation::Observation>,
 }
 pub fn observe(run: &Run) -> Result<Observation> {
     let root = std::path::Path::new(&run.spec.workspace);
@@ -45,12 +48,19 @@ pub fn observe(run: &Run) -> Result<Observation> {
     let mut readable = BTreeMap::new();
     let mut complete = true;
     for path in &run.spec.input_files {
-        let state = match crate::workspace::read_inputs(root, std::slice::from_ref(path)) {
+        let state = match crate::workspace::observation::capture(root, std::slice::from_ref(path)) {
             Ok(mut captured) => {
-                let text = captured.remove(path).expect("selected input is captured");
+                let kind = run
+                    .input_observation
+                    .as_ref()
+                    .map(|_| captured.observation.entries[path].kind);
+                let text = captured
+                    .snapshot
+                    .remove(path)
+                    .expect("selected input is captured");
                 let digest = hash(&text);
                 readable.insert(path.clone(), text);
-                InputObservation::Readable { hash: digest }
+                InputObservation::Readable { hash: digest, kind }
             }
             Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
                 complete = false;
@@ -69,10 +79,42 @@ pub fn observe(run: &Run) -> Result<Observation> {
         inputs.insert(path.clone(), state);
     }
     let digest = hash(serde_json::to_vec(&inputs)?);
+    let source_types = if run.input_observation.is_some() && complete {
+        let entries = inputs
+            .iter()
+            .map(|(path, state)| {
+                let InputObservation::Readable {
+                    hash,
+                    kind: Some(kind),
+                } = state
+                else {
+                    unreachable!("complete typed source capture")
+                };
+                (
+                    path.clone(),
+                    crate::workspace::observation::Entry {
+                        kind: *kind,
+                        source_hash: hash.clone(),
+                        utf8_bytes: readable[path].len(),
+                    },
+                )
+            })
+            .collect();
+        let types = crate::workspace::observation::Observation {
+            format: crate::workspace::observation::FORMAT.into(),
+            snapshot_hash: hash(serde_json::to_vec(&readable)?),
+            entries,
+        };
+        types.validate(&readable)?;
+        Some(types)
+    } else {
+        None
+    };
     Ok(Observation {
         inputs,
         readable: complete.then_some(readable),
         hash: digest,
+        source_types,
     })
 }
 
@@ -84,6 +126,10 @@ pub fn prepare(run: &Run, edits: &[FileEdit]) -> Result<Vec<EditReceipt>> {
     require(
         current == run.input_snapshot,
         "pinned inputs changed; explicit revision required",
+    )?;
+    require(
+        crate::workspace::inputs_current(run)?,
+        "pinned input types changed; explicit revision required",
     )?;
     let mut seen = BTreeSet::new();
     edits
@@ -101,10 +147,22 @@ pub fn prepare(run: &Run, edits: &[FileEdit]) -> Result<Vec<EditReceipt>> {
                 "unauthorized or duplicate file edit",
             )?;
             let root = std::path::Path::new(&run.spec.workspace);
-            let before = crate::workspace::inputs::captured_text(root, &current, &edit.path)?;
+            let before = crate::workspace::inputs::captured_text_observed(
+                root,
+                &current,
+                run.input_observation.as_ref(),
+                &edit.path,
+            )?;
             let before_hash = crate::workspace::inputs::version_hash(before.as_deref());
             let mut preview = current.clone();
-            crate::workspace::inputs::record_change(root, &mut preview, edit, &before_hash)?;
+            let mut types = run.input_observation.clone();
+            crate::workspace::observation::record_change(
+                root,
+                &mut preview,
+                &mut types,
+                edit,
+                &before_hash,
+            )?;
             if edit.operation == FileOperation::Create {
                 crate::workspace::inputs::validate_creation(root, &current, &edit.path)?;
             }
@@ -129,8 +187,12 @@ pub fn inspect(run: &mut Run) -> Result<()> {
             let physical_matches = (|| -> Result<bool> {
                 let path = crate::workspace::inputs::relative(root, &receipt.path)?;
                 let actual = crate::workspace::delivery::stamp(root, &path)?;
-                let captured =
-                    crate::workspace::inputs::captured_text(root, snapshot, &receipt.path)?;
+                let captured = crate::workspace::inputs::captured_text_observed(
+                    root,
+                    snapshot,
+                    current.source_types.as_ref(),
+                    &receipt.path,
+                )?;
                 Ok(match (actual, captured) {
                     (None, None) => true,
                     (Some(actual), Some(text)) => {
@@ -145,9 +207,25 @@ pub fn inspect(run: &mut Run) -> Result<()> {
                 receipt.state = EditState::Conflict;
                 continue;
             }
-            receipt.state = if matches_version(root, snapshot, receipt, false).unwrap_or(false) {
+            receipt.state = if matches_version_observed(
+                root,
+                snapshot,
+                current.source_types.as_ref(),
+                receipt,
+                false,
+            )
+            .unwrap_or(false)
+            {
                 EditState::Applied
-            } else if matches_version(root, snapshot, receipt, true).unwrap_or(false) {
+            } else if matches_version_observed(
+                root,
+                snapshot,
+                current.source_types.as_ref(),
+                receipt,
+                true,
+            )
+            .unwrap_or(false)
+            {
                 EditState::Unapplied
             } else {
                 EditState::Conflict
@@ -155,7 +233,7 @@ pub fn inspect(run: &mut Run) -> Result<()> {
             continue;
         }
         let observed = match current.inputs.get(&receipt.path) {
-            Some(InputObservation::Readable { hash }) => Some(hash),
+            Some(InputObservation::Readable { hash, .. }) => Some(hash),
             Some(InputObservation::Unreadable {
                 hash: Some(hash), ..
             }) => Some(hash),
@@ -178,7 +256,22 @@ pub fn matches_version(
     receipt: &EditReceipt,
     before: bool,
 ) -> Result<bool> {
-    let text = crate::workspace::inputs::captured_text(root, snapshot, &receipt.path)?;
+    matches_version_observed(root, snapshot, None, receipt, before)
+}
+pub fn matches_version_observed(
+    root: &std::path::Path,
+    snapshot: &BTreeMap<String, String>,
+    observation: Option<&crate::workspace::observation::Observation>,
+    receipt: &EditReceipt,
+    before: bool,
+) -> Result<bool> {
+    let types = observation.map(|o| o.rebound(snapshot)).transpose()?;
+    let text = crate::workspace::inputs::captured_text_observed(
+        root,
+        snapshot,
+        types.as_ref(),
+        &receipt.path,
+    )?;
     let absent = if before {
         receipt.operation == FileOperation::Create
     } else {

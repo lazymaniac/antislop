@@ -75,6 +75,21 @@ impl Store {
         let state: String =
             self.connection
                 .query_row("SELECT state FROM runs WHERE id=?1", [id], |r| r.get(0))?;
+        self.decode(id, state)
+    }
+    /// Capture the complete actual document and its stored hash in one SQLite
+    /// read. A control snapshot may advertise reusable bytes only after this
+    /// check; out-of-band row edits cannot inherit an old document identity.
+    pub(crate) fn snapshot(&self, id: &str) -> Result<(Run, String)> {
+        let (state, digest): (String, String) = self.connection.query_row(
+            "SELECT state,state_hash FROM runs WHERE id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        require(hash(&state) == digest, "document hash mismatch")?;
+        Ok((self.decode(id, state)?, digest))
+    }
+    fn decode(&self, id: &str, state: String) -> Result<Run> {
         if let Some((cached_id, cached_state, cached_run)) = &*self.decoded.borrow()
             && cached_id == id
             && cached_state == &state
@@ -82,6 +97,7 @@ impl Store {
             return Ok(cached_run.clone());
         }
         let run: Run = serde_json::from_str(&state)?;
+        run.check_resources.validate_for_run(&run.id)?;
         *self.decoded.borrow_mut() = Some((id.to_owned(), state, run.clone()));
         Ok(run)
     }
@@ -144,7 +160,11 @@ impl Store {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         states
             .into_iter()
-            .map(|s| Ok(serde_json::from_str(&s)?))
+            .map(|s| {
+                let run: Run = serde_json::from_str(&s)?;
+                run.check_resources.validate_for_run(&run.id)?;
+                Ok(run)
+            })
             .collect()
     }
     pub fn page(&self, after: &str, count: usize) -> Result<Vec<Run>> {
@@ -156,7 +176,11 @@ impl Store {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         states
             .into_iter()
-            .map(|text| Ok(serde_json::from_str(&text)?))
+            .map(|text| {
+                let run: Run = serde_json::from_str(&text)?;
+                run.check_resources.validate_for_run(&run.id)?;
+                Ok(run)
+            })
             .collect()
     }
     pub fn events(&self, after: u64) -> Result<Vec<Event>> {
@@ -214,6 +238,7 @@ impl Store {
     }
     /// The state, event and idempotency response commit together before a worker runs.
     pub fn save(&mut self, run: &Run, kind: &str, request: Option<(&str, &[u8])>) -> Result<()> {
+        run.check_resources.validate_for_run(&run.id)?;
         let state = serde_json::to_string(run)?;
         let tx = self.connection.transaction()?;
         tx.execute("INSERT INTO runs(id,state,state_hash) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET state=excluded.state,state_hash=excluded.state_hash", params![run.id,state,hash(&state)])?;

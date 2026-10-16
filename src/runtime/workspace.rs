@@ -128,7 +128,9 @@ impl Runtime {
                         next.spec = candidate.spec;
                         next.spec_revision = candidate.spec_revision;
                         next.input_snapshot = candidate.input_snapshot;
+                        next.input_observation = candidate.input_observation;
                         next.diff_baseline = candidate.diff_baseline;
+                        next.diff_baseline_observation = candidate.diff_baseline_observation;
                         next.managed_workspace = candidate.managed_workspace;
                         next.approvals
                             .push(candidate.approvals.last().unwrap().clone());
@@ -238,10 +240,7 @@ impl Runtime {
             let workspace = run.managed_workspace.as_ref().unwrap();
             let receipt = crate::workspace::managed::prepare(workspace, &token)?;
             require(
-                crate::workspace::read_inputs(
-                    std::path::Path::new(&run.spec.workspace),
-                    &run.spec.input_files,
-                )? == run.input_snapshot,
+                crate::workspace::inputs_current(&run)?,
                 "task sources changed while preparing the candidate",
             )?;
             let mut store = self.store.lock().expect("store mutex");

@@ -80,6 +80,16 @@ fn failure(marker: &str, exit: i32, shared: bool, read_prompt: bool) -> Provider
 fn codex_classifies_known_stderr_without_retaining_secret_or_raw_diagnostics() {
     for (marker, kind, diagnosis) in [
         (
+            "Malformed function call: private attempted arguments",
+            FailureKind::Protocol,
+            "malformed_function_call",
+        ),
+        (
+            "MALFORMED_FUNCTION_CALL",
+            FailureKind::Protocol,
+            "malformed_function_call",
+        ),
+        (
             "context_length_exceeded",
             FailureKind::Protocol,
             "context_length_exceeded",

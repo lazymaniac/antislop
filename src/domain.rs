@@ -276,6 +276,11 @@ pub struct Run {
     pub task_checks: Vec<crate::runtime::team::checks::Invocation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub task_check_outcomes: Vec<crate::runtime::team::check_recovery::Outcome>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::runtime::check_resources::Ledger::is_empty"
+    )]
+    pub check_resources: crate::runtime::check_resources::Ledger,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_workspace: Option<crate::workspace::managed::Workspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -296,9 +301,13 @@ pub struct Run {
     pub mode_changes: Vec<crate::policy::ModeChange>,
     pub diagnostic: Option<String>,
     pub input_snapshot: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_observation: Option<crate::workspace::observation::Observation>,
     /// Accepted task source baseline; managed writes only advance input_snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_baseline: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_baseline_observation: Option<crate::workspace::observation::Observation>,
     #[serde(default)]
     pub checklist_version: String,
     #[serde(default)]
@@ -324,6 +333,10 @@ pub struct Run {
     pub diff_reviews: Vec<crate::runtime::diff_review::Record>,
     #[serde(default)]
     pub element_comments: Vec<crate::comments::Comment>,
+    /// Runtime-selected native instruction format. Absence preserves legacy
+    /// prepared-input hashes; this is not part of a model-authored proposal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_prompt_format: Option<crate::team::models::PromptFormat>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -348,10 +361,12 @@ impl Run {
     }
     fn new_scoped(id: String, spec: RunSpec, intake: bool) -> Result<Self> {
         spec.validate_scope(intake)?;
-        let input_snapshot = crate::workspace::read_inputs(
+        let capture = crate::workspace::observation::capture(
             std::path::Path::new(&spec.workspace),
             &spec.input_files,
         )?;
+        let input_snapshot = capture.snapshot;
+        let input_observation = (!input_snapshot.is_empty()).then_some(capture.observation);
         Ok(Self {
             id,
             intake,
@@ -378,6 +393,7 @@ impl Run {
             task_executions: vec![],
             task_checks: vec![],
             task_check_outcomes: vec![],
+            check_resources: crate::runtime::check_resources::Ledger::default(),
             managed_workspace: None,
             delivery: None,
             workspace_plan: None,
@@ -389,7 +405,9 @@ impl Run {
             mode_changes: vec![],
             diagnostic: None,
             diff_baseline: Some(input_snapshot.clone()),
+            diff_baseline_observation: input_observation.clone(),
             input_snapshot,
+            input_observation,
             checklist_version: checklist_version(),
             risk_coverage: risk_coverage(),
             provenance: BTreeMap::new(),
@@ -402,6 +420,7 @@ impl Run {
             diff_comments: vec![],
             diff_reviews: vec![],
             element_comments: vec![],
+            task_prompt_format: None,
         })
     }
     pub fn scope_hash(&self, action: &str) -> String {
@@ -507,14 +526,25 @@ impl Run {
             self.source_hashes(),
         ))?))
     }
+    pub fn project_instructions(&self) -> Result<crate::workspace::instructions::Index> {
+        crate::workspace::instructions::from_observation(
+            std::path::Path::new(&self.spec.workspace),
+            &self.input_snapshot,
+            self.input_observation.as_ref(),
+        )
+    }
     pub fn diff_baseline(&self) -> &BTreeMap<String, String> {
         self.diff_baseline.as_ref().unwrap_or(&self.input_snapshot)
     }
-    pub fn diff_review_scope(&self) -> Result<String> {
-        let diff = crate::workspace::compute_diff(
+    pub fn current_diff(&self) -> Result<crate::workspace::DiffReport> {
+        crate::workspace::compute_diff_observed(
             std::path::Path::new(&self.spec.workspace),
             self.diff_baseline(),
-        )?;
+            self.diff_baseline_observation.as_ref(),
+        )
+    }
+    pub fn diff_review_scope(&self) -> Result<String> {
+        let diff = self.current_diff()?;
         Ok(hash(serde_json::to_vec(&(
             self.scope_hash("review-diff"),
             self.spec_revision,

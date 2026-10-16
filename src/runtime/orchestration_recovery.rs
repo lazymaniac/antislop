@@ -11,6 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{cell::OnceCell, collections::BTreeMap};
 
+pub(crate) mod authenticated;
 pub(crate) mod handoff;
 
 // One immutable run view can offer several recovery kinds. Authenticate its
@@ -262,6 +263,7 @@ pub(crate) fn sources_current(run: &Run) -> Result<()> {
         "management sources changed",
     )?;
     if round.intake_evidence_id.is_some() {
+        round.validate_proposed_observation()?;
         let raw: planning::Response = crate::transport::decode(
             round
                 .output
@@ -275,11 +277,16 @@ pub(crate) fn sources_current(run: &Run) -> Result<()> {
                 .ok_or_else(|| crate::Error::Invalid("intake source proposal missing".into()))?
                 .as_bytes(),
         )?;
+        let captured = crate::workspace::observation::capture(
+            std::path::Path::new(&run.spec.workspace),
+            &proposal.task.input_files,
+        )?;
         require(
-            crate::workspace::read_inputs(
-                std::path::Path::new(&run.spec.workspace),
-                &proposal.task.input_files,
-            )? == round.proposed_sources,
+            captured.snapshot == round.proposed_sources
+                && round
+                    .proposed_input_observation
+                    .as_ref()
+                    .is_none_or(|o| o == &captured.observation),
             "proposed intake sources changed; start a fresh management round",
         )?;
     }
@@ -514,14 +521,16 @@ pub fn pending(run: &Run) -> BTreeMap<String, Pending> {
         .unwrap_or_default()
 }
 pub fn validate_pending_for_run(run: &Run, packages: &BTreeMap<String, Pending>) -> Result<()> {
-    require(
-        serde_json::to_value(packages)? == serde_json::to_value(pending(run))?,
-        "management recovery packages differ from captured scope",
-    )
+    authenticated::Set::build_for_packages(run, packages).map(|_| ())
 }
-pub(super) fn prepare(run: &mut Run, round_id: &str, kind: Kind, scope: &str) -> Result<Status> {
-    let p = for_round(run, round_id, kind)?;
-    require(p.scope_hash == scope, "management recovery scope mismatch")?;
+pub(super) fn prepare(
+    run: &mut Run,
+    round_id: &str,
+    kind: Kind,
+    scope: &str,
+    authenticated: &authenticated::Set,
+) -> Result<Status> {
+    let p = authenticated.select(run, round_id, kind, scope)?;
     let index = run.orchestration_rounds.len() - 1;
     if run.orchestration_rounds[index]
         .review_known_agents

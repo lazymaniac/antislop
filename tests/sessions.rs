@@ -49,6 +49,131 @@ fn ok(_: &SessionLedger, _: &str) -> Result<()> {
 }
 
 #[test]
+fn native_format_rejections_are_scoped_durable_progress_not_completed_output() {
+    let (_root, _run, mut session, turn) = fixture();
+    session.scope.provider = "agy".into();
+    session.scope.binary_version = "1.4.0".into();
+    let native = architect::id();
+    let rejected = |step_index| ProviderEvent::NativeOutputRejected {
+        turn_id: turn.id.clone(),
+        session_id: native.clone(),
+        step_index,
+        reason: providers::NativeOutputRejection::MalformedFunctionCall,
+    };
+    let mut ledger = SessionLedger::default();
+    ledger
+        .reserve(session.clone(), turn.clone(), &mut ok)
+        .unwrap();
+    assert!(
+        ledger
+            .record_provider_event(&turn.id, &rejected(4), &mut ok)
+            .is_err()
+    );
+    for event in [
+        ProviderEvent::DeliverySent {
+            turn_id: turn.id.clone(),
+        },
+        ProviderEvent::SessionObserved {
+            session_id: native.clone(),
+        },
+    ] {
+        ledger
+            .record_provider_event(&turn.id, &event, &mut ok)
+            .unwrap();
+    }
+    let original = serde_json::to_value(&ledger).unwrap();
+    assert!(
+        ledger
+            .record_provider_event(&turn.id, &rejected(4), &mut |_, _| Err(
+                architect::Error::Invalid("disk commit failed".into())
+            ))
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(&ledger).unwrap(), original);
+    let mut wrong = rejected(4);
+    if let ProviderEvent::NativeOutputRejected { session_id, .. } = &mut wrong {
+        *session_id = architect::id();
+    }
+    assert!(
+        ledger
+            .record_provider_event(&turn.id, &wrong, &mut ok)
+            .is_err()
+    );
+    for version in ["1.3.5", "1.4.1"] {
+        let mut unsupported = ledger.clone();
+        unsupported
+            .sessions
+            .get_mut(&session.id)
+            .unwrap()
+            .scope
+            .binary_version = version.into();
+        assert!(
+            unsupported
+                .record_provider_event(&turn.id, &rejected(4), &mut ok)
+                .is_err()
+        );
+    }
+    ledger
+        .record_provider_event(&turn.id, &rejected(4), &mut ok)
+        .unwrap();
+    assert!(
+        ledger
+            .record_provider_event(&turn.id, &rejected(4), &mut ok)
+            .is_err()
+    );
+    assert!(
+        ledger
+            .record_provider_event(&turn.id, &rejected(3), &mut ok)
+            .is_err()
+    );
+    let mut opaque = rejected(6);
+    if let ProviderEvent::NativeOutputRejected { reason, .. } = &mut opaque {
+        *reason = providers::NativeOutputRejection::UnclassifiedNativeStep;
+    }
+    ledger
+        .record_provider_event(&turn.id, &opaque, &mut ok)
+        .unwrap();
+    let restored: SessionLedger =
+        serde_json::from_value(serde_json::to_value(&ledger).unwrap()).unwrap();
+    restored.validate().unwrap();
+    assert_eq!(restored, ledger);
+    assert_eq!(ledger.turns[&turn.id].native_rejections.len(), 2);
+    assert!(!ledger.turns[&turn.id].provider_completed);
+    assert!(ledger.turns[&turn.id].output.is_none() && ledger.turns[&turn.id].output_ref.is_none());
+    assert_eq!(ledger.turns[&turn.id].state, TurnState::Sent);
+    ledger
+        .record_provider_event(
+            &turn.id,
+            &ProviderEvent::Completed {
+                turn_id: turn.id.clone(),
+            },
+            &mut ok,
+        )
+        .unwrap();
+    assert!(
+        ledger
+            .record_provider_event(&turn.id, &rejected(8), &mut ok)
+            .is_err()
+    );
+    let mut changed = restored.clone();
+    changed
+        .turns
+        .get_mut(&turn.id)
+        .unwrap()
+        .native_rejections
+        .swap(0, 1);
+    assert!(changed.validate().is_err());
+    let mut changed = restored;
+    changed
+        .sessions
+        .get_mut(&session.id)
+        .unwrap()
+        .scope
+        .provider = "codex".into();
+    assert!(changed.validate().is_err());
+}
+
+#[test]
 fn incomplete_context_keeps_authenticated_rejected_output_without_completing_or_replaying_the_turn()
 {
     let (_root, run, mut session, mut turn) = fixture();

@@ -118,16 +118,18 @@ fn approved(
                                 && crate::workspace::inputs::version_hash(
                                     crate::workspace::inputs::after_text(edit),
                                 ) == effect.after_hash
-                                && crate::recovery::matches_version(
+                                && crate::recovery::matches_version_observed(
                                     Path::new(&run.spec.workspace),
                                     &other.input_snapshot,
+                                    other.input_observation.as_ref(),
                                     effect,
                                     true,
                                 )
                                 .unwrap_or(false)
-                                && crate::recovery::matches_version(
+                                && crate::recovery::matches_version_observed(
                                     Path::new(&run.spec.workspace),
                                     &observed.observed_snapshot,
+                                    other.input_observation.as_ref(),
                                     effect,
                                     false,
                                 )
@@ -244,6 +246,7 @@ fn owned_candidate(
     )?;
     let mut original = run.clone();
     original.input_snapshot = execution.input_snapshot.clone();
+    original.input_observation = execution.input_observation.clone();
     original.stage = match task.stage {
         TaskStage::Discovery => Stage::Discovery,
         TaskStage::Planning => Stage::Planning,
@@ -296,9 +299,10 @@ fn owned_candidate(
                     )
                     .unwrap_or(false)
                 })
-                && crate::recovery::matches_version(
+                && crate::recovery::matches_version_observed(
                     Path::new(&run.spec.workspace),
                     &execution.input_snapshot,
+                    execution.input_observation.as_ref(),
                     receipt,
                     true,
                 )?
@@ -306,9 +310,10 @@ fn owned_candidate(
                 && crate::workspace::inputs::version_hash(crate::workspace::inputs::after_text(
                     edit,
                 )) == receipt.after_hash
-                && crate::recovery::matches_version(
+                && crate::recovery::matches_version_observed(
                     Path::new(&run.spec.workspace),
                     observed,
+                    execution.input_observation.as_ref(),
                     receipt,
                     false,
                 )?
@@ -389,6 +394,7 @@ fn candidates(
         }
     }
     let mut proven = run.input_snapshot.clone();
+    let mut proven_types = run.input_observation.clone();
     for execution in run
         .task_executions
         .iter()
@@ -408,17 +414,19 @@ fn candidates(
         }
         let proposal = effects::proposal(run, execution)?;
         for (edit, receipt) in proposal.edits.iter().zip(&execution.receipts) {
-            if crate::recovery::matches_version(
+            if crate::recovery::matches_version_observed(
                 Path::new(&run.spec.workspace),
                 &proven,
+                run.input_observation.as_ref(),
                 receipt,
                 false,
             )? {
                 continue;
             }
-            crate::workspace::inputs::record_change(
+            crate::workspace::observation::record_change(
                 Path::new(&run.spec.workspace),
                 &mut proven,
+                &mut proven_types,
                 edit,
                 &receipt.before_hash,
             )?;
@@ -533,6 +541,26 @@ fn apply_observations(
     expected_scope: &str,
 ) -> Result<()> {
     let observed = selected[0].1.observed_snapshot.clone();
+    let observed_types = if let Some(original) = &run.input_observation {
+        let captured = crate::workspace::observation::capture(
+            Path::new(&run.spec.workspace),
+            &run.spec.input_files,
+        )?;
+        require(
+            captured.snapshot == observed
+                && original.entries.iter().all(|(path, entry)| {
+                    captured
+                        .observation
+                        .entries
+                        .get(path)
+                        .is_some_and(|current| current.kind == entry.kind)
+                }),
+            "source content or root type changed during effect reconciliation",
+        )?;
+        Some(captured.observation)
+    } else {
+        None
+    };
     for (execution, receipt) in &selected {
         let index = run
             .task_executions
@@ -568,6 +596,7 @@ fn apply_observations(
         });
     }
     run.input_snapshot = observed;
+    run.input_observation = observed_types;
     run.approvals.push(crate::domain::Approval {
         actor: "local_user".into(),
         action: action.into(),

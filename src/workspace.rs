@@ -4,6 +4,7 @@ pub mod delivery;
 pub mod inputs;
 pub mod instructions;
 pub mod managed;
+pub mod observation;
 pub mod snapshot;
 pub mod views;
 use crate::{Result, hash, require};
@@ -35,7 +36,15 @@ pub fn read_input_bytes(root: &Path, name: &str) -> Result<Vec<u8>> {
         path.canonicalize()?.starts_with(&root),
         "input escaped workspace",
     )?;
-    Ok(std::fs::read(path)?)
+    use std::{io::Read, os::unix::fs::OpenOptionsExt};
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    require(file.metadata()?.is_file(), "input is not a regular file")?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 /// Validate the selected scope without loading its source bodies.
 pub fn validate_inputs(root: &Path, paths: &[String]) -> Result<()> {
@@ -65,41 +74,43 @@ pub fn validate_inputs(root: &Path, paths: &[String]) -> Result<()> {
 /// mode team work reads its private base commit instead; the project advances
 /// through integrations and user edits without invalidating task inputs.
 pub fn inputs_current(run: &crate::domain::Run) -> Result<bool> {
-    if run.team.is_some() && crate::runtime::team::views::enabled(run) {
+    if run.team.is_some() && run.task_views.is_some() && crate::runtime::team::views::enabled(run) {
         return Ok(true);
     }
-    Ok(read_inputs(Path::new(&run.spec.workspace), &run.spec.input_files)? == run.input_snapshot)
+    let captured = observation::capture(Path::new(&run.spec.workspace), &run.spec.input_files)?;
+    captured_inputs_match(run, &captured)
+}
+pub(crate) fn captured_inputs_match(
+    run: &crate::domain::Run,
+    captured: &observation::Capture,
+) -> Result<bool> {
+    if let Some(expected) = &run.input_observation {
+        expected.validate(&run.input_snapshot)?;
+        Ok(captured.snapshot == run.input_snapshot && expected == &captured.observation)
+    } else {
+        legacy_input_types_known(
+            std::path::Path::new(&run.spec.workspace),
+            &run.input_snapshot,
+        )?;
+        Ok(captured.snapshot == run.input_snapshot)
+    }
+}
+pub(crate) fn legacy_input_types_known(
+    root: &Path,
+    snapshot: &BTreeMap<String, String>,
+) -> Result<()> {
+    for (scope, body) in snapshot {
+        let possible_directory = serde_json::from_str::<serde_json::Value>(body)
+            .is_ok_and(|value| value["kind"] == "directory" && value["files"].is_object());
+        require(
+            !possible_directory || inputs::relative(root, scope)? == ".",
+            "legacy source type is ambiguous; explicitly revise inputs to capture file/directory provenance",
+        )?;
+    }
+    Ok(())
 }
 pub fn read_inputs(root: &Path, paths: &[String]) -> Result<BTreeMap<String, String>> {
-    let root = root.canonicalize()?;
-    paths
-        .iter()
-        .map(|name| {
-            let relative = inputs::relative(&root, name)?;
-            let mut path = root.clone();
-            for component in Path::new(&relative).components() {
-                if let Component::Normal(part) = component {
-                    path.push(part);
-                    require(
-                        !std::fs::symlink_metadata(&path)?.file_type().is_symlink(),
-                        "symlink input scopes are not followed",
-                    )?;
-                }
-            }
-            let text = if path.is_dir() {
-                inputs::directory(&path)?
-            } else {
-                let bytes = read_input_bytes(&root, &relative)?;
-                String::from_utf8(bytes).map_err(|_| {
-                    crate::Error::Invalid(
-                        "pinned file input is not UTF-8; select its containing directory for binary metadata"
-                            .into(),
-                    )
-                })?
-            };
-            Ok((name.clone(), text))
-        })
-        .collect()
+    Ok(observation::capture(root, paths)?.snapshot)
 }
 
 pub fn worktree(repository: &Path, destination: &Path) -> Result<()> {
@@ -530,13 +541,17 @@ fn scan_directory(dir: &Path, base: &Path, out: &mut BTreeSet<String>) {
         if name_str.starts_with(".git")
             || name_str == "target"
             || name_str == ".antislop"
+            || name_str == ".architect"
             || name_str.starts_with(".architect-")
         {
             continue;
         }
-        if path.is_dir() {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
             scan_directory(&path, base, out);
-        } else if path.is_file() {
+        } else if kind.is_file() || kind.is_symlink() {
             let Ok(rel) = path.strip_prefix(base) else {
                 continue;
             };
@@ -546,47 +561,60 @@ fn scan_directory(dir: &Path, base: &Path, out: &mut BTreeSet<String>) {
 }
 
 pub fn compute_diff(root: &Path, baseline: &BTreeMap<String, String>) -> Result<DiffReport> {
+    compute_diff_observed(root, baseline, None)
+}
+pub fn compute_diff_observed(
+    root: &Path,
+    baseline: &BTreeMap<String, String>,
+    observation: Option<&observation::Observation>,
+) -> Result<DiffReport> {
+    if let Some(observation) = observation {
+        observation.validate(baseline)?;
+    }
     if baseline.iter().any(|(scope, text)| {
-        scope == "." || root.join(scope).is_dir() || inputs::is_directory_envelope(text)
+        scope == "."
+            || root.join(scope).is_dir()
+            || observation.map_or_else(
+                || inputs::is_directory_envelope(text),
+                |o| o.entries[scope].kind == self::observation::Kind::Directory,
+            )
     }) {
-        return directory_diff(root, baseline);
+        return directory_diff(root, baseline, observation);
     }
 
-    let mut paths: BTreeSet<String> = baseline.keys().cloned().collect();
+    let mut before = BTreeMap::new();
+    for (scope, body) in baseline {
+        let relative = inputs::relative(root, scope)?;
+        let content = inputs::DiffContent::Text(body.clone());
+        if let Some(old) = before.insert(relative, content.clone()) {
+            require(old == content, "overlapping file diff baselines disagree")?;
+        }
+    }
+    let mut paths = before.keys().cloned().collect();
     if root.exists() {
         scan_directory(root, root, &mut paths);
     }
-    let mut files = Vec::new();
-    let mut total_additions = 0;
-    let mut total_deletions = 0;
+    let mut after = BTreeMap::new();
     for path in paths {
-        let old_text = baseline.get(&path).map(String::as_str);
-        let target_path = root.join(&path);
-        let new_text = if target_path.is_file() {
-            std::fs::read_to_string(&target_path).ok()
-        } else {
-            None
-        };
-        if let Some(diff_file) = diff_texts(&path, old_text, new_text.as_deref()) {
-            total_additions += diff_file.additions;
-            total_deletions += diff_file.deletions;
-            files.push(diff_file);
-        }
+        after.extend(inputs::current_file_diff_entry(root, &path)?);
     }
-    Ok(DiffReport {
-        files,
-        total_additions,
-        total_deletions,
-    })
+    diff_entries(before, after)
 }
 
-fn directory_diff(root: &Path, baseline: &BTreeMap<String, String>) -> Result<DiffReport> {
+fn directory_diff(
+    root: &Path,
+    baseline: &BTreeMap<String, String>,
+    observation: Option<&observation::Observation>,
+) -> Result<DiffReport> {
     use inputs::DiffContent;
     let mut before = BTreeMap::new();
     let mut after = BTreeMap::new();
     for (scope, text) in baseline {
         let relative = inputs::relative(root, scope)?;
-        let directory = if inputs::is_directory_envelope(text) || !root.join(scope).is_file() {
+        let directory = if observation.map_or_else(
+            || inputs::is_directory_envelope(text) || !root.join(scope).is_file(),
+            |o| o.entries[scope].kind == self::observation::Kind::Directory,
+        ) {
             inputs::directory_diff_entries(&relative, text)?
         } else {
             None
@@ -599,6 +627,13 @@ fn directory_diff(root: &Path, baseline: &BTreeMap<String, String>) -> Result<Di
             after.extend(inputs::current_file_diff_entry(root, &relative)?);
         }
     }
+    diff_entries(before, after)
+}
+fn diff_entries(
+    before: BTreeMap<String, inputs::DiffContent>,
+    after: BTreeMap<String, inputs::DiffContent>,
+) -> Result<DiffReport> {
+    use inputs::DiffContent;
     let paths: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
     let mut report = DiffReport::default();
     for path in paths {

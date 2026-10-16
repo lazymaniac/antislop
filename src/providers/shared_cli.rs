@@ -15,6 +15,7 @@ pub(crate) enum StderrCategory {
     InputSize,
     Context,
     OutputSize,
+    MalformedCall,
     Schema,
     Authentication,
     RateLimit,
@@ -26,6 +27,7 @@ impl StderrCategory {
             Self::InputSize => (FailureKind::Protocol, "input_too_large"),
             Self::Context => (FailureKind::Protocol, "context_length_exceeded"),
             Self::OutputSize => (FailureKind::Protocol, "output_token_limit_exceeded"),
+            Self::MalformedCall => (FailureKind::Protocol, "malformed_function_call"),
             Self::Schema => (FailureKind::Protocol, "invalid_json_schema"),
             Self::Authentication => (FailureKind::Authentication, "authentication_error"),
             Self::RateLimit => (FailureKind::RateLimit, "rate_limit_or_quota"),
@@ -36,6 +38,8 @@ impl StderrCategory {
 
 pub(crate) fn classify_stderr(mut stderr: impl Read) -> Option<StderrCategory> {
     const MARKERS: &[(&[u8], StderrCategory)] = &[
+        (b"malformed function call", StderrCategory::MalformedCall),
+        (b"malformed_function_call", StderrCategory::MalformedCall),
         (b"input_too_large", StderrCategory::InputSize),
         // Antigravity drops an oversized sole user step before inference.
         (

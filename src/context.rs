@@ -2,8 +2,11 @@
 use crate::{Result, hash, require};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 pub mod bridge;
+pub(crate) mod citations;
+pub mod history;
 mod sources;
 pub mod stdio;
 pub mod transport;
@@ -183,7 +186,7 @@ pub struct Page {
 
 #[derive(Clone)]
 pub struct Reader {
-    bundle: Bundle,
+    bundle: Arc<Bundle>,
     bundle_hash: String,
     index_hash: String,
     index: String,
@@ -203,6 +206,16 @@ impl Reader {
         let bundle: Bundle = crate::transport::decode(bytes)
             .map_err(|_| crate::Error::Invalid("invalid pinned context encoding".into()))?;
         bundle.validate()?;
+        Self::from_validated(Arc::new(bundle), expected_hash)
+    }
+    /// Own the same immutable allocation as the transport. Any public-field
+    /// mutation requires copy-on-write while a reader owns it; pointer identity
+    /// can therefore attest reuse without comparing/copying every source body.
+    pub(crate) fn from_shared(bundle: Arc<Bundle>) -> Result<Self> {
+        let bytes = bundle.bytes()?;
+        Self::from_validated(bundle, &hash(bytes))
+    }
+    fn from_validated(bundle: Arc<Bundle>, expected_hash: &str) -> Result<Self> {
         let index = serde_json::to_string(
             &serde_json::json!({"format":FORMAT,"bundle_hash":expected_hash,"scope":bundle.scope,
             "documents":bundle.documents.iter().map(|(id,d)|serde_json::json!({"document_hash":id,"utf8_bytes":d.utf8_bytes,"source_refs":d.source_refs})).collect::<Vec<_>>() }),

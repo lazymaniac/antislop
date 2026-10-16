@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub(crate) mod management_projection;
+mod projection;
+pub(crate) mod task_projection;
 
 pub const PROTOCOL_VERSION: u32 = 2;
 pub const DOCUMENT_CHUNK: usize = 256 * 1024;
@@ -232,13 +234,59 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
                 let key = request
                     .idempotency_key
                     .ok_or_else(|| crate::Error::Invalid("idempotency key required".into()))?;
-                Ok(summary(&runtime.dispatch(&key, *command)?))
+                require(!key.trim().is_empty(), "idempotency key required")?;
+                if let Command::AcceptTeam { run_id, .. } = command.as_ref() {
+                    let (run, document_hash) = {
+                        let store = runtime.store.lock().expect("store mutex");
+                        if let Some(run) =
+                            store.cached(&key, &serde_json::to_vec(command.as_ref())?)?
+                        {
+                            return Ok(summary(&run));
+                        }
+                        (store.get(run_id)?, store.run_chunk(run_id, 0, 1)?.0)
+                    };
+                    let view = runtime
+                        .management_projection
+                        .view(run, document_hash, true)?;
+                    if !view.document().is_some_and(|d| d.prepared_team.is_some()) {
+                        let store = runtime.store.lock().expect("store mutex");
+                        if let Some(run) =
+                            store.cached(&key, &serde_json::to_vec(command.as_ref())?)?
+                        {
+                            return Ok(summary(&run));
+                        }
+                        return Err(crate::Error::Invalid("team acceptance is being authenticated; refresh its preparation state before approving; no mutation admitted".into()));
+                    }
+                }
+                if let Command::RecoverOrchestration { run_id, .. } = command.as_ref() {
+                    let (run, document_hash) = {
+                        let store = runtime.store.lock().expect("store mutex");
+                        if let Some(run) =
+                            store.cached(&key, &serde_json::to_vec(command.as_ref())?)?
+                        {
+                            return Ok(summary(&run));
+                        }
+                        (store.get(run_id)?, store.run_chunk(run_id, 0, 1)?.0)
+                    };
+                    let view = runtime
+                        .management_projection
+                        .view(run, document_hash, true)?;
+                    if !view.document().is_some_and(|d| d.count > 0) {
+                        let store = runtime.store.lock().expect("store mutex");
+                        if let Some(run) =
+                            store.cached(&key, &serde_json::to_vec(command.as_ref())?)?
+                        {
+                            return Ok(summary(&run));
+                        }
+                        return Err(crate::Error::Invalid("management recovery is not ready; refresh its preparation state before approving; no mutation admitted".into()));
+                    }
+                }
+                Ok(summary(&runtime.dispatch_ipc(&key, *command)?))
             }
             Operation::Snapshot { run_id } => {
                 let (run, document_hash, data_directory, sequence) = {
                     let store = runtime.store.lock().expect("store mutex");
-                    let run = store.get(&run_id)?;
-                    let (document_hash, _, _) = store.run_chunk(&run_id, 0, 1)?;
+                    let (run, document_hash) = store.snapshot(&run_id)?;
                     (
                         run,
                         document_hash,
@@ -249,6 +297,10 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
                 let management =
                     runtime
                         .management_projection
+                        .view(run.clone(), document_hash.clone(), true)?;
+                let tasks =
+                    runtime
+                        .task_projection
                         .view(run.clone(), document_hash.clone(), true)?;
                 let reviewed = run.orchestration_rounds.last().filter(|round| {
                     round.status == crate::orchestration::planning::RoundStatus::Reviewed
@@ -268,33 +320,30 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
                     .ok()
                     .map(|p| p.scope_hash.clone());
                 Ok(
-                    json!({"reviewed_intake_proposal":intake,"document_hash":document_hash,"scope_hashes":{"start":run.scope_hash("start"),"accept":run.scope_hash("accept"),"repair":run.scope_hash("repair"),"reconcile":run.scope_hash("reconcile"),
+                    json!({"reviewed_intake_proposal":intake,"document_hash":document_hash,"document_hash_verified":true,"scope_hashes":{"start":run.scope_hash("start"),"accept":run.scope_hash("accept"),"repair":run.scope_hash("repair"),"reconcile":run.scope_hash("reconcile"),
                         "orchestrate":crate::orchestration::planning::start_scope(&run)?,"accept_team":reviewed.map(|r|crate::orchestration::planning::accept_scope(&run,r)).transpose()?,
                         "review_diff":crate::runtime::diff_review::scope(&run).unwrap_or_default(),
                         "step_team":run.team_step_scope().unwrap_or_default()},
                     "team_stage_results":stage_result_summary(&crate::runtime::team::stage::pending(&run)),
-                    "task_result_restore_count":crate::runtime::team::restore::scopes(&run).len(),
+                    "task_result_restore_count":tasks.document().map_or(0, |d|d.count("result_restores")),
                     "workspace_preparation_scope":prepare_workspace,
                     "workspace_activation_scope":crate::workspace::managed::activation_scope(&run).ok(),
                     "source_delivery_scope":crate::runtime::delivery::pending(&run).ok().map(|p|&p.scope_hash),
                     "source_delivery_inspection_available":crate::runtime::delivery::eligible(&run).is_ok(),
                     "source_delivery_recovery":crate::runtime::delivery::recovery(&run).ok(),
-                    "task_effect_reconciliation_count":crate::runtime::team::adjudicate::scopes(&run).len(),
-                    "wave_effect_reconciliation_count":crate::runtime::team::adjudicate::pending_waves(&run).len(),
-                    "task_source_refreshes":run.team.as_ref().map(|team| team.tasks.iter()
-                        .filter(|task| task.state == crate::team::TaskState::Stale)
-                        .filter_map(|task|run.task_source_refresh_scope(&task.id).ok().map(|scope|(task.id.clone(),scope)))
-                        .collect::<std::collections::BTreeMap<_,_>>()).unwrap_or_default(),
-                    "task_verification_retries":run.team.as_ref().map(|team| team.tasks.iter()
-                        .filter(|task| task.state == crate::team::TaskState::Blocked)
-                        .filter_map(|task| run.task_verification_retry_scope(&task.id).ok().map(|scope|(task.id.clone(),scope)))
-                        .collect::<std::collections::BTreeMap<_,_>>()).unwrap_or_default(),
-                    "task_session_resume_count":crate::runtime::team::resume::pending(&run).len(),
-                    "task_session_replacement_count":crate::runtime::team::replacement::pending(&run).len(),
-                    "task_check_restore_count":crate::runtime::team::check_recovery::pending(&run).len(),
+                    "task_effect_reconciliation_count":tasks.document().map_or(0, |d|d.count("effect_reconciliations")),
+                    "wave_effect_reconciliation_count":tasks.document().map_or(0, |d|d.count("wave_effect_reconciliations")),
+                    "task_source_refreshes":tasks.document().map(|d|&d.packages["source_refreshes"]).cloned().unwrap_or_else(||json!({})),
+                    "task_verification_retries":tasks.document().map(|d|&d.packages["verification_retries"]).cloned().unwrap_or_else(||json!({})),
+                    "task_recovery_state":tasks.state(),
+                    "task_recovery_document_hash":tasks.document().map(|d|&d.hash),
+                    "task_session_resume_count":tasks.document().map_or(0, |d|d.count("native_resumes")),
+                    "task_session_replacement_count":tasks.document().map_or(0, |d|d.count("replacements")),
+                    "task_check_restore_count":tasks.document().map_or(0, |d|d.count("check_restores")),
                     "orchestration_recovery_count":management.document().map_or(0, |d|d.count),
                     "orchestration_recovery_state":management.state(),
                     "orchestration_recovery_document_hash":management.document().map(|d|&d.hash),
+                    "team_acceptance_ready":management.document().is_some_and(|d|d.prepared_team.is_some()),
                     "reviewed_team_round":reviewed.map(|r|&r.id),
                     "run":summary(&run),"recovery":recovery_snapshot(&run),"sequence":sequence}),
                 )
@@ -347,13 +396,25 @@ pub fn handle(runtime: &Arc<Runtime>, request: Request) -> Response {
                         expected_hash.as_deref(),
                     );
                 }
+                if document == "task-recovery" {
+                    let view = runtime
+                        .task_projection
+                        .view(run, run_document_hash, offset == 0)?;
+                    let document = view.document().ok_or_else(|| {
+                        crate::Error::Invalid(
+                            "task recovery is being checked; refresh the snapshot".into(),
+                        )
+                    })?;
+                    return document_page(
+                        &document.text,
+                        &document.hash,
+                        offset,
+                        expected_hash.as_deref(),
+                    );
+                }
                 let text = if document == "stage-results" {
                     serde_json::to_string(
                         &json!({"run_document_hash":run_document_hash,"packages":crate::runtime::team::stage::pending(&run)}),
-                    )?
-                } else if document == "task-recovery" {
-                    serde_json::to_string(
-                        &json!({"run_document_hash":run_document_hash,"result_restores":crate::runtime::team::restore::scopes(&run),"effect_reconciliations":crate::runtime::team::adjudicate::scopes(&run),"wave_effect_reconciliations":crate::runtime::team::adjudicate::pending_waves(&run),"native_resumes":crate::runtime::team::resume::pending(&run),"replacements":crate::runtime::team::replacement::pending(&run),"check_restores":crate::runtime::team::check_recovery::pending(&run)}),
                     )?
                 } else {
                     document_text(&run, &document)?
@@ -461,7 +522,14 @@ fn recovery_snapshot(run: &crate::domain::Run) -> Value {
     }
     match crate::recovery::observe(run) {
         Ok(observed) => {
-            json!({"observed_input_hash":observed.hash,"inputs_readable":observed.readable.is_some(),"pending_edits":run.pending_edits.len()})
+            let unsettled_container = run.check_resources.records().any(|r| r.unresolved());
+            let unsettled_delivery = run
+                .delivery
+                .as_ref()
+                .is_some_and(|d| d.state == crate::runtime::delivery::State::Unknown);
+            json!({"observed_input_hash":observed.hash,"inputs_readable":observed.readable.is_some(),"pending_edits":run.pending_edits.len(),
+                "inputs":observed.inputs,"reconciliation_available":!unsettled_container && !unsettled_delivery,
+                "unsettled_check_container":unsettled_container,"unsettled_source_delivery":unsettled_delivery})
         }
         Err(error) => json!({"error":error.to_string()}),
     }
@@ -494,10 +562,7 @@ fn document_text(run: &crate::domain::Run, name: &str) -> Result<String> {
         return Ok(serde_json::to_string(&run.spec)?);
     }
     if name == "diff" {
-        let diff = crate::workspace::compute_diff(
-            std::path::Path::new(&run.spec.workspace),
-            run.diff_baseline(),
-        )?;
+        let diff = run.current_diff()?;
         return Ok(serde_json::to_string(&diff)?);
     }
     if let Some(id) = name.strip_prefix("message:") {

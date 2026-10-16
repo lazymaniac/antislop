@@ -94,12 +94,16 @@ pub struct Round {
     /// Kept outside the bounded model packet for immutable paged retrieval.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub observed_interview_sources: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interview_input_observation: Option<crate::workspace::observation::Observation>,
     #[serde(default)]
     pub input_evidence_id: Option<String>,
     #[serde(default)]
     pub output_evidence_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub proposed_sources: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_input_observation: Option<crate::workspace::observation::Observation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intake_evidence_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,6 +120,19 @@ pub struct Round {
 impl Round {
     pub fn validate_interview_sources(&self) -> Result<()> {
         let context: serde_json::Value = crate::transport::decode(self.request_context.as_bytes())?;
+        if let Some(observation) = &self.interview_input_observation {
+            observation.validate(&self.observed_interview_sources)?;
+            require(
+                context["interview_type_observation_hash"]
+                    == hash(serde_json::to_vec(observation)?),
+                "interview source types differ from pinned context",
+            )?;
+        } else {
+            require(
+                context.get("interview_type_observation_hash").is_none(),
+                "interview source types missing",
+            )?;
+        }
         require(
             context["interview_source_visibility"] != "pinned_context"
                 || !self.observed_interview_sources.is_empty(),
@@ -127,6 +144,19 @@ impl Round {
                     == hash(serde_json::to_vec(&self.observed_interview_sources)?),
                 "interview source observation differs from its pinned context",
             )?;
+        }
+        Ok(())
+    }
+    pub fn validate_proposed_observation(&self) -> Result<()> {
+        let context: serde_json::Value = crate::transport::decode(self.request_context.as_bytes())?;
+        require(
+            context["review_input_format"] != "inline-exact-utf8-v9"
+                || self.proposed_sources.is_empty()
+                || self.proposed_input_observation.is_some(),
+            "proposed source types missing",
+        )?;
+        if let Some(observation) = &self.proposed_input_observation {
+            observation.validate(&self.proposed_sources)?;
         }
         Ok(())
     }
@@ -712,7 +742,7 @@ fn review_packet(run: &Run, round: &Round, packet: Value) -> Result<String> {
         Some(Value::String(format))
             if matches!(
                 format.as_str(),
-                "inline-exact-utf8-v7" | "inline-exact-utf8-v8"
+                "inline-exact-utf8-v7" | "inline-exact-utf8-v8" | "inline-exact-utf8-v9"
             ) =>
         {
             true
@@ -766,21 +796,24 @@ pub(super) fn verifier_request_checks(
     response: &Response,
     checks: BTreeSet<String>,
 ) -> Result<PreparedTurn> {
+    round.validate_proposed_observation()?;
     let review_non_defects = checks.iter().any(|id| id.starts_with("NON_DEFECT_PLAN:"));
     let context: Value = crate::transport::decode(round.request_context.as_bytes())?;
-    let compact = context["review_input_format"] == "inline-exact-utf8-v8"
-        && run
-            .spec
-            .config
-            .as_ref()
-            .ok_or_else(|| crate::Error::Invalid("review configuration missing".into()))?
-            .config
-            .resolve(
-                crate::config::WorkKind::Orchestration,
-                crate::config::RoleKind::Verifier,
-            )?
-            .isolation
-            == crate::config::IsolationProfile::PinnedContext;
+    let compact = matches!(
+        context["review_input_format"].as_str(),
+        Some("inline-exact-utf8-v8" | "inline-exact-utf8-v9")
+    ) && run
+        .spec
+        .config
+        .as_ref()
+        .ok_or_else(|| crate::Error::Invalid("review configuration missing".into()))?
+        .config
+        .resolve(
+            crate::config::WorkKind::Orchestration,
+            crate::config::RoleKind::Verifier,
+        )?
+        .isolation
+        == crate::config::IsolationProfile::PinnedContext;
     let resolved_team = if response.team_plan_json.is_some() {
         Some(amendment::resolve(run, response)?)
     } else {
@@ -813,21 +846,32 @@ pub(super) fn verifier_request_checks(
         })
         .collect();
     let required_evidence = json!({"V01":round.input_evidence_id,"V04":round.output_evidence_id,"INTAKE:sources":round.intake_evidence_id});
-    let mut request = PreparedTurn {
-        prompt: format!(
-            "Independently review this orchestrator answer/proposal against the complete original context, current source bytes and pinned configuration. Search for counterexamples, missing competencies, unpaired roles, cycles, ungated writes, permission escalation, requirement omissions and bad risk ownership. Runtime structural checks are not semantic acceptance. Each unresolved element comment requires an explicit linked answer, clarification question, or proposed task. COMMENT checks independently verify the response against the annotated element and original text; receipt delivery alone does not resolve a comment. For a conversational answer, assess the answer's fidelity and evidence, not completion of the whole project. For an intake proposal, independently compare every interview obligation with the proposed original requirements/criteria and plan, examine configuration/provider/model/effort assignments and local permissions, and inspect the proposed_sources manifest (paths, kinds, sizes and SHA-256 of the captured scope; contents are bound by the runtime:intake-sources receipt output_hash, not repeated here). Judge the scope selection, not file contents. INTAKE checks and proposed REQ/PLAN checks assess this future contract, never completed project work. V01 identity; V02 original obligations; V03 applicable checks/risks; V04 independent inspection; V05 counterexamples; V06 scope; V07 unresolved findings; V08 independent assessment: explain your own inspection and counterexample reasoning using the supplied input/output receipts. Native session separation is enforced by runtime after your response, not by a model check. Do not block V08 because your current native identity is absent from this pre-response packet; do not certify that identity yourself. ORCH checks cover competencies, dedicated pairs, dependencies, permissions and rounds. Return exactly one result for every expected ID with method, rationale and actual receipt IDs. Pass only with supporting evidence. N/A is allowed only for risks with scope-specific rationale and evidence. Missing information is blocked, not pass. Findings contain unresolved actionable problems. You cannot edit, delegate, change policy or run commands. The current verifier native session is not known in advance; do not invent it.\n{}",
-            review_packet(
-                run,
-                round,
-                json!({"contract_version":round.contract_version,"checklist_version":round.checklist_version,"context":round.request_context,"output":round.output,"output_hash":round.output.as_ref().map(hash),"input_hash":round.input_hash,"spec_revision":round.spec_revision,"expected_checks":checks,"receipts":receipts,"proposed_sources":if compact { serde_json::to_value(round.proposed_sources.iter().map(|(scope, text)| (scope.clone(), json!({"manifest":crate::workspace::inputs::manifest(text),"source_ref":format!("orchestration-proposed-source:{scope}"),"document_hash":hash(text),"utf8_bytes":text.len()}))).collect::<BTreeMap<_, _>>())? } else { serde_json::to_value(&round.proposed_sources)? },
+    let proposed_sources = if compact {
+        serde_json::to_value(round.proposed_sources.iter().map(|(scope, text)| -> Result<_> {
+            let manifest = if let Some(observation) = &round.proposed_input_observation {
+                observation.manifest(scope, text)?
+            } else { crate::workspace::inputs::manifest(text) };
+            Ok((scope.clone(), json!({"manifest":manifest,"source_ref":format!("orchestration-proposed-source:{scope}"),"document_hash":hash(text),"utf8_bytes":text.len()})))
+        }).collect::<Result<BTreeMap<_, _>>>()?)?
+    } else {
+        serde_json::to_value(&round.proposed_sources)?
+    };
+    let mut packet = json!({"contract_version":round.contract_version,"checklist_version":round.checklist_version,"context":round.request_context,"output":round.output,"output_hash":round.output.as_ref().map(hash),"input_hash":round.input_hash,"spec_revision":round.spec_revision,"expected_checks":checks,"receipts":receipts,"proposed_sources":proposed_sources,
                     "resolved_team_proposal":resolved_team,"team_plan_review_contract":"A team proposal describes FUTURE work. ORCH/REQ/PLAN/RISK/TASK checks assess whether its responsibilities, criteria, source scopes, risk mitigations, model/check/gate obligations and DAG preserve the original contract. Assignment is not fulfillment. Do not demand that planned tasks have already run or that their future quality gates are already open. Reject missing ownership/mitigation, unpaired roles, omissions, contradictions or material unknowns in the proposal. Never invent current source facts. Passing this review permits only explicit team installation; all actual task/stage/risk verification remains mandatory during execution.","amendment_review_contract":"Review the complete resolved team, full risk allocation, base hashes and current delta against the original requirements. Prior native proposal authorship is not approval; all original checks still apply. The current output receipt binds the amendment and exact referenced base. Never accept only the changed fields.",
                     "allowed_evidence_ids":receipt_ids,"required_evidence_ids":required_evidence,
                     "evidence_id_contract":"Copy exact receipt id UUID values, never source labels such as runtime:intake-sources. Every evidence_ids entry must belong to allowed_evidence_ids. V01 must include required_evidence_ids.V01; V04 must include required_evidence_ids.V04. For an intake contract INTAKE:sources must include required_evidence_ids[INTAKE:sources]. Cite additional current receipts where relevant. An input receipt does not substitute for actually inspecting the separately observed output or proposed sources.",
                     "observed_executor":round.executor_session.as_ref().and_then(|id|run.session_ledger.sessions.get(id)),
                     "task_change_contract":"Every software implementer/refactorer/test implementer/integrator and every task with write scopes requires an explicit change_contract with kind, original source context, rationale and bugfix obligations. TASK_CHANGE independently classifies the actual requested behavior; do not relabel a fix as feature/refactor to waive its proof. Each BUGFIX_PLAN checks exact assigned defect criteria, before/after argv and meaningful unchanged oracle. Reproduction must identify the defect in actual original-state output before execution; exit zero alone is not substantive success and may merely return a measurement. If reproduction is unavailable, independently justify the concrete limitation and inspect the planned original-state investigation and alternative proof. Missing reproduction is a gap, never implicit success. Post-change checks must cover every defect criterion and pass on current inputs. Mixed changes retain every defect obligation.",
                     "task_check_contract":"Each TASK_CHECK obligation reviews exact argv bytes, policy/effects, resource assumptions and meaningful criterion/gate coverage. BeforeExecution commands are observed for the whole wave before any executor starts; expected nonzero exits require a concrete reproduction oracle and never cover positive runner gates. BeforeVerification commands must expect exit zero and supply required gate/criterion coverage. Planned commands are not performed evidence. Reject missing commands for runner-required gates before installation.",
-                    "independence_contract":"Runtime alone authenticates canonical provider/native separation after response delivery, rejecting missing or reused identities before accepting output. This pending runtime check is not an unresolved semantic finding. V08 assesses your independent inspection/reasoning against current receipts; never demand a receipt of your own future completed turn."})
-            )?
+                    "independence_contract":"Runtime alone authenticates canonical provider/native separation after response delivery, rejecting missing or reused identities before accepting output. This pending runtime check is not an unresolved semantic finding. V08 assesses your independent inspection/reasoning against current receipts; never demand a receipt of your own future completed turn."});
+    if context["review_input_format"] == "inline-exact-utf8-v9" {
+        packet["input_observations"] =
+            json!({"accepted":run.input_observation,"proposed":round.proposed_input_observation});
+    }
+    let mut request = PreparedTurn {
+        prompt: format!(
+            "Independently review this orchestrator answer/proposal against the complete original context, current source bytes and pinned configuration. Search for counterexamples, missing competencies, unpaired roles, cycles, ungated writes, permission escalation, requirement omissions and bad risk ownership. Runtime structural checks are not semantic acceptance. Each unresolved element comment requires an explicit linked answer, clarification question, or proposed task. COMMENT checks independently verify the response against the annotated element and original text; receipt delivery alone does not resolve a comment. For a conversational answer, assess the answer's fidelity and evidence, not completion of the whole project. For an intake proposal, independently compare every interview obligation with the proposed original requirements/criteria and plan, examine configuration/provider/model/effort assignments and local permissions, and inspect the proposed_sources manifest (paths, kinds, sizes and SHA-256 of the captured scope; contents are bound by the runtime:intake-sources receipt output_hash, not repeated here). Judge the scope selection, not file contents. INTAKE checks and proposed REQ/PLAN checks assess this future contract, never completed project work. V01 identity; V02 original obligations; V03 applicable checks/risks; V04 independent inspection; V05 counterexamples; V06 scope; V07 unresolved findings; V08 independent assessment: explain your own inspection and counterexample reasoning using the supplied input/output receipts. Native session separation is enforced by runtime after your response, not by a model check. Do not block V08 because your current native identity is absent from this pre-response packet; do not certify that identity yourself. ORCH checks cover competencies, dedicated pairs, dependencies, permissions and rounds. Return exactly one result for every expected ID with method, rationale and actual receipt IDs. Pass only with supporting evidence. N/A is allowed only for risks with scope-specific rationale and evidence. Missing information is blocked, not pass. Findings contain unresolved actionable problems. You cannot edit, delegate, change policy or run commands. The current verifier native session is not known in advance; do not invent it.\n{}",
+            review_packet(run, round, packet)?
         ),
         schema: object(
             json!({"contract_version":{"type":"string","enum":[REVIEW_CONTRACT_VERSION]},"output_hash":{"type":"string"},"spec_revision":{"type":"integer"},"input_hash":{"type":"string"},"proofs":{"type":"array","items":object(json!({"id":{"type":"string"},"method":{"type":"string"},"evidence_ids":{"type":"array","items":{"type":"string","enum":receipt_ids}}}))},"checks":{"type":"array","items":object(json!({"check_id":{"type":"string","enum":checks},"status":{"type":"string","enum":["pass","fail","blocked","not_applicable"]},"proof_id":{"type":"string"},"rationale":{"type":"string"}}))},"findings":{"type":"array","items":{"type":"string"}}}),

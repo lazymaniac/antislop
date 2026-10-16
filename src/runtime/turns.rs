@@ -156,6 +156,7 @@ mod tests {
             &view,
             provider.as_ref(),
             ObservedWork::Prepared {
+                task_input: None,
                 role,
                 agent_id: if codex {
                     "orchestrator"
@@ -360,6 +361,7 @@ mod tests {
                     &view,
                     &provider,
                     ObservedWork::Prepared {
+                        task_input: None,
                         role,
                         agent_id: agent,
                         task_id: agent,

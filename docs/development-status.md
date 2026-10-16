@@ -1,5 +1,925 @@
 # Implementation audit and next work
 
+## Reasonless native error steps and commit checkpoint — 2026-10-16
+
+The owned attempt-6 verifier terminated after 944.94 seconds with 117 committed
+and native-observed context responses, no accepted review and no correction
+event. Its task diagnostic records all four recognized error carriers as absent;
+the run-level summary omits that shape. The exact terminal export is retained as
+`run-after-error-carrier-verifier-failure.json` in the owned fixture. Original
+source/candidate files, previous sessions/turns/artifacts/checks and sibling tasks
+were preserved. No native process is still running and no replacement has been
+started for the following change.
+
+Exactly CLI 1.4.0 may now continue reading a reasonless DONE error-message step
+with only allowlisted metadata, absent/null error carriers and valid duration
+and usage shapes. The existing current-UUID, completed-send, advancing-index,
+pre-finish and settled-reader guards remain mandatory. A durably committed
+`UnclassifiedNativeStep` observation precedes continued reading of the same
+process. This identifies an observed rejected step without claiming its cause,
+a native retry, a completed review or task acceptance. Unknown fields, malformed
+metadata, fatal terminal results and failed observation commits still stop.
+Actual fresh finish, exact schema, complete context and clean exit remain
+necessary. No input is resent or failed arguments promoted to artifacts.
+
+The final focused regression passed 183 ordinary Rust cases across library,
+adapters, diagnostics, ledgers, history and TUI. It includes successful native
+fixture continuation and adversarial refusal/cleanup cases. A Darwin test-only
+accepted-socket race was corrected by explicitly restoring blocking I/O, matching
+production behavior. The broader orchestration/worktree/team regression passed
+53 + 4 + 85 cases. Logs: `/tmp/architect-opaque-native-step-regression.log` and
+`/tmp/architect-shared-context-team-regression.log`. Genuine continuation after a
+reasonless step, complete native task/quality/delivery acceptance and the full
+original design remain open.
+
+## Immutable reader ownership and actual context growth — 2026-10-16
+
+Read-only size inspection of the exact three owned ContextAnalyst verifier
+prompts found 177,188, 351,280 and 361,202 UTF-8 bytes. The ordinary task JSON
+grew from 150,092 to 158,181 to 166,270 bytes; its receipt field grew from
+59,422 to 66,959 to 74,496 bytes. The first replacement additionally carries its
+explicit handoff. The newest referenced history is not recursively re-embedding
+entire prior turns. These are metadata observations of original prepared inputs,
+not permission to omit any receipt, history, requirement or captured source.
+
+Transport and reader clones now share an immutable `Arc<Bundle>` owner. A cache
+hit requires ownership identity; any copy-on-write or deserialized replacement
+must validate again. A live cached reader prevents unique in-place mutation.
+Cache eviction cannot leave an attestation for an exclusively mutable old owner.
+The serde `rc` feature of the existing dependency preserves the original JSON
+representation; no dependency version, native schema, input bytes, bundle/page
+hash or required delivery coverage changes. No authority is deserialized from
+the cache. Canonical snapshot serialization, persistent CAS/retention/compaction
+and duplicate prompt fields remain separate work. No general latency guarantee
+is inferred from this ownership change.
+
+87 ordinary Rust cases passed across library, Antigravity/Codex context,
+paging/bridge and history. New adversarial tests cover shared ownership,
+reopening, same-sized tampering, eviction followed by unique mutation, concurrent
+scopes and exact noncanonical external encoding hashes. The actual retained
+failed attempt authenticated all twelve original native planning reports, the
+unchanged v1 handoff hash and its original full 355,766-byte required coverage
+without provider work or canonical mutation (9.40 seconds; not an isolated
+performance benchmark). All-target warnings-denied Clippy and locked build passed.
+Logs: `/tmp/architect-shared-context-regression.log`,
+`/tmp/architect-shared-context-native-compatibility.log`,
+`/tmp/architect-shared-context-clippy.log`, `/tmp/architect-shared-context-build.log`.
+Broader orchestration/worktree/team regression passed 53 + 4 + 85 cases. The
+owned attempt-6 native verifier used its frozen earlier binary and subsequently
+terminated as recorded above; no active provider was rebuilt or restarted.
+The full original design remains open.
+
+## Native error carriers and preserved failed verification — 2026-10-16
+
+The selected verifier terminated after 844.11 seconds with all 355,766 required
+bytes and 91 context responses committed/native-observed, but zero accepted
+reviews and zero model-format rejection events. Original source/candidate files,
+all earlier turns/sessions/artifacts/checks and sibling tasks stayed unchanged.
+The exact failed attempt-5 state is retained as
+`run-after-selected-verifier-format-failure.json` in the owned fixture. Its
+historical runtime failure is still `Process/unknown`; read-only diagnosis of
+only native UUID `7c25dcb2-beb4-43e4-a8da-2b01a52bbc26` found the malformed-call
+marker in its native error record. This cannot reconstruct its discarded NDJSON
+frame, identify its exact public carrier or prove native retry behavior.
+
+Only native error-message steps now support string `text_delta` alongside the
+explicit non-null error fields. Conflicting carriers and malformed delta types
+cannot enable correction. Successful artifact text is still never diagnosed as
+an error. Unhandled errors include only fixed field/type shape metadata, so the
+next actual observation can distinguish missing error content from an unsupported
+payload without collecting raw diagnostics or attempted arguments. Independent
+fixtures check both supported/older versions, typed fatal errors, unknown text,
+null carriers and absence of false completion/secret disclosure.
+
+All 179 distinct ordinary Rust cases passed in one final regression command,
+all 42 Python cases passed, and warnings-denied all-target Clippy plus the locked
+build passed. Logs: `/tmp/architect-native-error-carriers-final-regression.log`,
+`/tmp/architect-recovery-source-audit-tests.log`,
+`/tmp/architect-native-error-carriers-clippy.log`,
+`/tmp/architect-native-error-carriers-build.log`.
+The failed owned process is terminal. Checkpoint-only reconciliation passed in
+16.28 seconds without provider work or changes to retained results, native
+history, team or original files; the exact reconciled attempt-5 export is
+`run-after-native-error-carriers-checkpoint.json`.
+The subsequently scoped single-verifier replacement terminated
+(`/tmp/architect-native-error-carriers-selected-verifier.log`) as recorded above.
+Its approval was acknowledged in 3.870 seconds. Attempt 6 used native
+conversation `e81c0a45-6bcc-4cf6-a050-606d12986b75`, managed turn
+`cd3a06a1-0503-460e-85a3-00249791131a`. Its target
+`/tmp/architect-agy-140-candidate-validation` stayed frozen while live. No check,
+executor write or accepted artifact is replayed. The user's separate daemon and
+task remain untouched. Native correction, completed task/quality/delivery and
+the complete original design are still unproven.
+
+## Recovery source audit and live verifier coverage — 2026-10-16
+
+All thirteen normative source fragments in section 14 now have a separate
+hand-authored interpretation: 78 obligations preserving crash recovery, exact-ID
+resume or explicit replacement, unknown-effect reconciliation, pause/cancel,
+safe retry/backoff, distinct waiting/error states and every no-budget qualifier.
+The source-first audit has thirteen separately authored expectation anchors.
+A mutation test replaces each obligation while retaining the original source,
+authority, identifiers and parent linkage; each missing obligation must fail the
+semantic oracle. This improves the interpretation inventory, not implementation
+acceptance. Proposals and pending design authority are unchanged.
+
+The current original-source ledger remains 1,146 fragments. It now contains
+1,727 interpretation units, 932 reviewed atomic units and 82 semantic anchors;
+409 parent interpretations remain open. Package assessment is still provisional:
+1,696 partial, four narrow implemented observations and 27 pending. No new
+requirement is marked implemented or independently verified. All 42 Python cases
+passed (`/tmp/architect-recovery-source-audit-tests.log`). The container spike
+documentation also makes explicit that its sampled resource quotas cannot become
+hidden product limits under the original MVP contract.
+
+The selected genuine verifier subsequently terminated as described above,
+without an accepted task review. A read-only saved observation
+authenticated all 355,766/355,766 required index/prepared-prompt UTF-8 bytes,
+all twelve original native planning reports and the unchanged v1 handoff hash
+(`/tmp/architect-native-format-current-coverage.log`). Full input delivery is not
+semantic task acceptance or proof that native model-format correction succeeds.
+The native process was not restarted from an observation timeout; its actual
+terminal failure was inspected before separately scoped checkpoint recovery.
+
+## Same-session native model-format correction — 2026-10-16
+
+The Antigravity 1.4.0 adapter can keep reading its same supervised process after
+a narrowly recognized, indexed native malformed-call rejection. A separate typed
+`NativeOutputRejected` event commits the fixed reason and step before continuing;
+no attempted arguments or reasoning are retained. Supported-version/current-UUID,
+send, strict step advancement, reader settlement and pre-finish guards apply.
+Conflicting codes, known fatal prefixes, explicit non-retryable errors, unknown
+shapes and other versions still stop. This path neither resends input nor starts
+a replacement. A valid new finish, successful terminal output, exact echoed
+schema, complete context and clean exit remain necessary. An error or missing
+result after correction cannot complete a turn or create a review.
+
+The durable ledger checks scope, session, version and increasing rejection
+indices, rolls back failed commits and rejects events after completion or
+cancellation. Empty new fields preserve old serialized turn hashes. Existing
+lossless history archives retain actual rejection observations. Active-session
+progress displays the committed count and pending result; it does not declare
+that native retry or verification has succeeded. The two-line graph overlay
+keeps incomplete context delivery visible first.
+
+178 distinct ordinary Rust cases passed across adapter, durable sessions,
+history, library, model contract, provider/verifier diagnostics, UI and the
+native-experiment harness. All 41 Python cases also passed. Adversarial cases cover absent
+native initialization, wrong UUID/index, duplicate/old/unindexed steps, known
+fatal/non-retryable errors, active reader calls, incomplete context, missing
+finish/result, schema drift and nonzero exit. A failed rejection callback stops
+the process and delayed descendant without leaking the raw error. Warnings-denied
+all-target Clippy, locked build, formatting/diff and all three requirement-ledger
+freshness checks passed. Logs:
+`/tmp/architect-native-format-correction-regression.log`,
+`/tmp/architect-native-format-correction-final-protocol.log`,
+`/tmp/architect-native-format-correction-clippy.log`.
+Additional logs: `/tmp/architect-native-format-foundation-regression.log`,
+`/tmp/architect-native-format-python.log`, `/tmp/architect-native-format-build.log`.
+All twelve original native planning reports and the original v1 handoff hash
+authenticated again without native work or canonical mutation
+(`/tmp/architect-native-format-legacy-compatibility.log`).
+
+The genuine failed three-verifier wave remains preserved. An explicitly selected
+verifier-only fixture mode now uses the actual UI palette and frozen confirmation
+to request one replacement after checkpoint reconciliation. It retains the
+original executor artifact, all previous turns/sessions/checks, sibling tasks and
+original four source/candidate files, then stops after that verifier. Actual
+native correction and independent review acceptance are still under evaluation;
+neither the fixture cases nor a source checkpoint count as native task success.
+The actual checkpoint passed in 14.31 seconds with unchanged retained state and
+no provider work (`/tmp/architect-native-format-checkpoint.log`). The selected
+ContextAnalyst verifier replacement was acknowledged in 3.648 seconds and ran
+at attempt 5 in native conversation
+`7c25dcb2-beb4-43e4-a8da-2b01a52bbc26`
+(`/tmp/architect-native-format-selected-verifier.log`); it subsequently terminated
+as described above. A separate user's daemon/session remains
+untouched. These single observations are not general latency guarantees.
+The complete original design and package statuses remain open.
+
+## Scoped citation reuse, actual session display and malformed native calls — 2026-10-16
+
+The genuine three-verifier wave terminated after 767.11 seconds. All required
+prompt/index bytes had been native-observed (179,163 for ContextAnalyst,
+148,681 for Orchestrator, 155,187 for RequirementsAnalyst). None produced an
+accepted native review; there are still three retained executor artifacts,
+zero task reviews and zero quality gates. The run is Blocked at attempt 4 and
+requires reconciliation. Both source/candidate directories still contain exactly
+the four original files with unchanged bytes. The owned daemon/native processes
+have stopped; the user's separate daemon was not modified.
+
+Read-only diagnosis was restricted to the three exact owned native UUIDs. Each
+terminal error-message payload contained `Malformed function call`; raw attempted
+arguments, planner text and unrelated conversations were not emitted or accepted
+as results. The discarded NDJSON frames cannot be reconstructed from these
+records. Historical `Process/unknown` failures remain unchanged. New known
+code/message diagnostics classify this separately as `Protocol` with fixed
+`malformed_function_call`, preserving identity/cancellation and withholding
+completion. Static fixtures prove redaction and process cleanup. This does not
+yet enable internal retry. The next priority is validating narrowly scoped
+same-session model-format correction through the actual CLI, with durable
+rejection/progress records and all existing terminal schema/finish/coverage gates.
+The official [SDK retry types](https://github.com/google-antigravity/antigravity-sdk-python/blob/main/google/antigravity/types.py)
+separate model-output retries from API retries; that API declaration alone does
+not establish the CLI's actual recovery behavior. No malformed text is coerced
+into a tool invocation, task result or proof.
+
+Citation validation now creates one immutable borrowed-run resolver per model
+or provenance walk. It hashes canonical sources once, lazily decodes selected
+directory members once and memoizes check bindings by both source reference and
+output hash. It retains hashes rather than extra complete source copies. Reader
+construction borrows captured directory envelopes without changing any source
+body, alias, bundle or approval hash. The resolver has no serializer or cross-run
+reuse; a new validation uses the actual new snapshot. Duplicate-alias/conflicting
+hash and source/check drift counterexamples still fail. This removes repeated
+copy/hash work by construction; no isolated latency bound or persistent CAS claim
+is made.
+
+The agent session inspector also uses the latest reserved session for its
+displayed task before an older committed agent pointer. Other task/agent scopes
+cannot replace that choice. All owned history stays visible and legacy ambiguous
+selection stays unknown. This is presentation only. A read-only projection of the
+actual failed wave selected all three failed verifier sessions correctly without
+rewriting bindings (`/tmp/architect-failed-native-session-ui.log`).
+
+Validation: 296 distinct ordinary Rust cases passed across source/paging,
+provenance/core/quality, library, orchestration/instructions, model/history,
+native-protocol/diagnostic fixtures and UI/session projection. Native probes
+revalidated all 32 context facts and all 12 original planning reports plus the
+exact v1 handoff hash; neither probe launched a provider or accepted a task.
+Main logs: `/tmp/architect-citation-resolver-regression.log`,
+`/tmp/architect-citation-resolver-boundary-regression.log`,
+`/tmp/architect-citation-resolver-model-review-regression.log`,
+`/tmp/architect-malformed-call-diagnostics.log`,
+`/tmp/architect-citation-session-ui-regression.log`,
+`/tmp/architect-readonly-output-native-verification.log`.
+The complete original design remains open with unchanged package counts.
+
+## Completed read-only output admission — 2026-10-16
+
+A completed native answer can now be recovered when semantic validation or an
+execution-checkpoint failure stopped it before any effect binding was recorded.
+The scoped `RestoreTaskResult` path accepts only a current read-only task with
+zero proposed edits, no existing execution, a complete latest native output,
+matching schema/session/provider/configuration, unchanged original sources and
+dependencies, and settled required checks/resources. It does not reconstruct
+writes or repeat inference/checks. Existing applied-effect restoration keeps its
+own authentication and source-refresh requirements.
+
+New executor turns durably record `task-turn-input-v1` before delivery. It binds
+the actual invocation's task attempt/contract, specification, agent identity,
+dependencies and private view. Configuration remains separately session-pinned;
+mode-only history retains its existing rules. Earlier pinned-reader turns can
+authenticate the same contract and dependencies from their exact full original
+runtime-authored prompt. An old inline turn without either record is refused,
+rather than inventing its missing task input. Absence of the new optional fields
+preserves all retained legacy serialization and native hashes.
+
+Admission records a distinct `readonly-task-admission-v1` receipt linked to the
+exact native turn, artifact and local scoped restoration approval. It is not an
+observed-write receipt or quality pass. The artifact remains awaiting its
+dedicated verifier; neither stage acceptance nor delivery is granted. UI cards
+show the completed session/turn, output hash/narrative and missing effect
+checkpoint explicitly. Source observations, preparation, frozen confirmation,
+full mutation guards, the workspace lease and transaction/deduplication remain
+in force. Failed SQLite admission rolls back the entire operation.
+
+The actual retained native experiment passed guided reconciliation and admission
+in 36.00 seconds, with the result mutation acknowledged in 4.397 seconds. The run
+was Ready with three artifacts awaiting verification at that checkpoint. The original four source
+and candidate files, both earlier artifacts, all native turns/sessions, task
+checks, specification revision and run attempt stayed unchanged. No model or
+check was launched. Log: `/tmp/architect-readonly-output-owned-admission.log`.
+The 4.397-second observation is not a general latency guarantee. All 12 original
+native plan reports and the exact old v1 handoff hash authenticated again
+(`/tmp/architect-readonly-output-native-compatibility.log`).
+
+Two new executable failure-boundary tests passed admission/idempotency, actual
+independent verification, missing/changed pins, contract/schema/attempt drift,
+proposed edits, a newer failed turn, uncertain/missing baseline, pause/cancel and
+failed SQLite commit without replay. Four existing restoration cases passed.
+All four task-worktree cases passed, including the new original-view admission
+case with no Git changes or inference. All 85 team cases passed in 469.00 seconds.
+The final foundation regression passed 41 library, 53 orchestration, 6 session,
+3 history, 4 model-contract and 58 UI cases; all 41 Python cases passed.
+All-target warnings-denied Clippy, locked build, format/diff and all three
+requirement-ledger freshness checks passed. Main logs:
+`/tmp/architect-readonly-output-team-regression.log`,
+`/tmp/architect-readonly-output-final-regression.log`,
+`/tmp/architect-readonly-output-task-views.log`,
+`/tmp/architect-readonly-output-final-clippy.log`.
+The next genuine guided verification experiment started from the
+retained Ready checkpoint (`/tmp/architect-readonly-output-native-verification.log`).
+Its three-action verification wave was acknowledged in 1.268 seconds and then
+terminated as described above, without an accepted review. The owned binary is
+no longer serving a live run. Complete native task/quality/delivery acceptance,
+autonomous progression, production restricted checks, source storage/compaction,
+all families/platforms/providers and the full original requirement audit remain
+open. The user's separate daemon/session/configuration was not changed.
+
+## Lossless task history and explicit response schema — 2026-10-16
+
+The new owned continuation terminated after 478.46 seconds. Native finish,
+schema, completion and all 178,861 required delivery bytes passed; semantic
+admission then rejected `context source missing or stale`. The exact output is
+retained in its completed native turn, not attached as an accepted artifact.
+All 32 cited hashes matched either the original reader documents or actual
+baseline-check output. The defect was a split registry: the reader exposed
+captured directory members and task prompts exposed check receipts, while model
+validation recognized only top-level run sources.
+
+Citation validation now resolves exact typed captured members and authenticated
+completed task-check receipts. Opaque ordinary files cannot impersonate directory
+captures; live filesystem text, archive aliases, invented commands, missing
+receipts, changed outputs/inputs/approvals and stale hashes cannot supply proof.
+Canonical source selectors and source/configuration/approval hashes are unchanged.
+Provenance records derived citation identity and content hash separately and
+rechecks actual source/check bindings instead of trusting cached validity.
+This authenticates source identity, not the truth of model claims or successful
+task delivery. The actual native result passes structural validation of all
+32 sourced facts and eight sections; negative capture/receipt/hash probes fail.
+Log: `/tmp/architect-context-citations-native.log`.
+
+Citation/provenance regressions passed: one captured-member adversarial case,
+34 core, 6 evidence-graph, 8 quality and 5 independent quality fixtures. The
+existing actual expected-failing baseline case now also proves citation support
+and refusal after loss of checks/approval, unknown execution state or changed
+output/original inputs. Warnings-denied all-target Clippy, locked build and all
+requirement-ledger freshness checks passed. All 83 team cases passed again after
+this registry change in 466.31 seconds; all 41 Python cases also passed.
+Logs: `/tmp/architect-context-citations-provenance.log`,
+`/tmp/architect-context-citations-check-regression.log`,
+`/tmp/architect-context-citations-clippy.log`,
+`/tmp/architect-context-citations-build.log`,
+`/tmp/architect-context-citations-team-regression.log`.
+
+The next task-recovery gap at this checkpoint was concrete: this completed read-only native turn
+failed validation before an execution/effect binding was admitted. Existing
+result restoration requires that binding and native replacement correctly
+refuses to replay a completed output. A scoped, source-current admission path for
+that retained no-edit result was subsequently implemented and tested above.
+The original stopped checkpoint and complete native output remain preserved;
+no write or successful verification was fabricated to bypass the gap.
+
+Pinned-reader task replacements now use `task-handoff-v2`. Prior turns are
+represented by authenticated `turn-archive-v1` manifests and flat content-addressed
+source documents, rather than embedding each old transport bundle again in the
+next mandatory prompt. Reconstruction verifies the exact original serialized
+turn, including context, original source references, receipts, observed reads,
+failure and rejected-output state. The handoff also shows historical completion
+and coverage explicitly; none of these become current delivery or approval.
+Missing/changed originals and ambiguous aliases fail closed. Tool-free profiles
+retain inline v1 history; existing v1 handoff bytes and hashes remain unchanged.
+Canonical runs still store inline turn bundles. Persistent CAS storage, complete
+source-kind registration, management-history flattening and compaction remain open.
+
+The second actual ContextAnalyst attempt also failed at `finish_component` after
+575.08 seconds, despite complete 261,207-byte required context coverage. Its
+submitted context again omitted `model` and did not match the task schema. Both
+previous sibling artifacts, all native sessions and the original files remain
+retained; this is not a successful task. Newly accepted teams and explicitly
+approved v2 replacements now select `task-prompt-v2`, which includes the exact
+response JSON schema and states the nested context/model/sections wire shape.
+The typed output contract and rejection rules are unchanged. Existing historical
+inputs are not rewritten and diagnostic candidates never become artifacts.
+
+All 83 team-execution cases passed. The selected regression additionally passed
+41 library, 2 bridge, 12 paging, 53 orchestration, 3 history, 4 model-contract and
+58 UI cases. The archive cases exercise UTF-8 paging, exact reconstruction,
+partial historical delivery, corruption/refusal and repeated flat handoffs.
+The final library/live-harness/archive rerun and warnings-denied all-target Clippy
+passed. Logs: `/tmp/architect-task-history-team-regression.log`,
+`/tmp/architect-task-history-final-regression.log`,
+`/tmp/architect-task-history-owned-build.log`,
+`/tmp/architect-task-history-clippy.log`.
+
+The owned guided checkpoint then passed in 13.69 seconds with no provider work.
+It preserved exact membership/bytes of all four source and candidate files, both
+artifacts, the team, session ledger, specification revision and attempt. Log:
+`/tmp/architect-task-history-checkpoint-owned.log`. The full design remains open;
+these checks establish neither semantic task success nor delivery acceptance.
+
+Read-only reconstruction of the actual owned fixture passed in 7.38 seconds
+(7.55 seconds after the final archive-validator refinement):
+both original native task turns were reconstructed byte-for-byte; the new
+handoff was 122,809 UTF-8 bytes. Unsupported exact-session resume still admitted
+no approval, attempt or worker in the disposable copy. All 12 retained native
+reports and the original legacy handoff hash authenticated again both before
+and after the new format was explicitly installed. The new owned continuation
+was acknowledged in 2.413 seconds, with two referenced turns and no inline old
+turns. Its required prompt/index coverage is 178,861 bytes versus 261,207 for the
+previous attempt, despite adding the full exact response schema. That is a
+transport-size observation, not an isolated benchmark or semantic acceptance.
+Logs: `/tmp/architect-task-history-native-reconstruction.log`,
+`/tmp/architect-task-history-final-native-compatibility.log`,
+`/tmp/architect-task-history-post-v2-native-compatibility.log`,
+`/tmp/architect-task-history-schema-native.log`.
+
+## Guided interrupted-task recovery and immutable task documents — 2026-10-16
+
+The next priority remains the genuine chat-to-delivery task and its blocking
+recovery/UI paths. The full original design remains open. Production restricted
+checks/autonomous progression, complete source/context storage and compaction,
+all required task families/platforms/providers, calibration and the remaining
+semantic requirement review follow; no competency or acceptance gate is removed.
+
+Read-only inspection was restricted to the failed owned Antigravity conversation
+`f1cd1a9f-c545-41e8-bd02-edb81fe083c5`. Its last persisted step was a failed
+`finish` component with error metadata; the submitted `context` lacked the
+required `ContextArtifact.model` and contained fields outside the advertised
+task schema. This candidate cannot be accepted as a task result. These retained
+data establish an invalid submitted shape; the discarded stdout frame still
+prevents identifying the precise historical stream guard. Native reasoning,
+raw error text, credentials and unrelated conversation bodies were not emitted.
+The diagnostic component JSON is private under the owned fixture root and is
+not an artifact, trusted handoff input or canonical output.
+
+The chat approval guide now offers observed effect cohorts before generic
+reconciliation, then explicit current checkpoint reconciliation. It waits for
+task recovery preparation instead of suggesting an incomplete generic recovery.
+After reconciliation, captured checks/results, exact-session continuation,
+distinct replacement sessions, eligible verifier retries and read-only source
+refreshes have guided confirmation cards. Existing dedicated cards retain exact
+scope/session/handoff/effect details across refresh; no approval occurs without
+confirmation. Generic reconciliation includes observed source versions and
+effect receipts. Unsettled container or source-delivery custody disables this
+generic path. Source refresh explains preservation of earlier writes.
+
+The explicitly scoped owned checkpoint experiment passed in 9.82 seconds,
+without provider work. It verified exact four-file source/candidate membership
+and bytes, no unsettled writes/checks, and retained both artifacts, the complete
+native ledger, team, specification revision and attempt. Only the explicit
+checkpoint approval/reconciliation evidence was added. Log:
+`/tmp/architect-guided-task-checkpoint-owned.log`.
+
+A following read-only UI probe exposed a five-second IPC timeout while building
+task recovery. Necessary-condition filters now skip unrelated planned/completed
+tasks and already settled checks before full candidate authentication. This
+removed the individual-call timeout, but full backend refreshes still cost
+9.33 seconds initially and about 6.0 seconds repeatedly. Task recovery now builds
+one immutable paginated document asynchronously outside the store lock, with
+canonical run bytes plus verified database document identity as its key and
+fresh observed source versions before/after publication and reuse. Source drift,
+out-of-band canonical changes and late abandoned workers invalidate the view.
+The generation-safe cache is shared with the existing sealed management/team
+preparation; its authority and full admission checks are unchanged.
+
+Task documents are read-only projections, not mutation proofs. The backend still
+checks their full hash, owning run, counts and captured package bindings;
+runtime mutations still recompute their current task/source/approval guards.
+The current owned probe passed with roughly 3.55-second full backend refreshes,
+1.11-second control snapshots and 0.97-second complete 212,490-byte task document
+reads (`/tmp/architect-guided-task-boundary-profile.log`). This is a measured
+improvement, not a general latency bound or full task acceptance. The UI displays
+preparation/unavailability without claiming that a native agent is running.
+
+The guided owned experiment initially exposed another defect: task recovery
+advertised exact-ID resume for Antigravity although that adapter does not
+implement it. The fixture refused the wrong action before any mutation; SQLite
+still held both artifacts and zero replacements. Resume eligibility and direct
+admission now use the resolved adapter/profile's declared implementation, with
+the model override forwarding that property. Claude/Gemini and Codex read-only
+retain their existing implementation; Antigravity, fake and Codex pinned-context
+do not advertise it. Actual version/capability probing remains mandatory at
+launch and is not replaced by this declaration. No probe/inference is needed to
+reject a route which the adapter does not implement.
+
+A six-profile executable matrix uses a nonexistent binary to demonstrate this
+without probing. A separate test copied the actual stopped native fixture into
+a disposable store and proved that even the former exact scope admits no
+resume approval, attempt, event or worker while its valid replacement handoff
+and both artifacts remain intact (`/tmp/architect-native-resume-owned-refusal.log`,
+6.76 seconds). Actual supported-resume and replacement regressions then passed.
+
+The corrected guided continuation acknowledged its explicit replacement in
+2.431 seconds and started one new Antigravity session for the failed read-only
+discovery task. It terminated after 575.08 seconds with an invalid finish
+component, as detailed above. The previous two artifacts and all original native
+sessions are retained. There was no completed task or quality/delivery acceptance
+(`/tmp/architect-guided-task-supported-continuation-native.log`).
+
+Validation: 316 distinct ordinary Rust cases, including all 83 team-execution
+cases, passed. The three supported native-resume and four replacement tests were
+rerun after the capability-admission change. All 41 Python cases, all-target
+warnings-denied Clippy, locked build, format/diff and requirement/audit/gap
+freshness checks passed. Main logs:
+`/tmp/architect-task-projection-final-regression.log`,
+`/tmp/architect-task-projection-final-ui.log`,
+`/tmp/architect-task-projection-team-regression.log`,
+`/tmp/architect-task-projection-boundary-regression.log`,
+`/tmp/architect-native-resume-profile-regression.log`,
+`/tmp/architect-guided-native-resume-regression.log`,
+`/tmp/architect-guided-native-replacement-regression.log`,
+`/tmp/architect-task-projection-final-clippy.log`.
+The user's separately investigated daemon/session/configuration was not changed.
+The full design remains open with unchanged package completion counts.
+
+## Prepared team acceptance and durable check custody — 2026-10-16
+
+The owned native planning review completed all twelve original reports. Its
+following `AcceptTeam` exceeded the normal five-second IPC response deadline:
+full native report authentication was inside mutation admission under the store
+mutex. After that harness exited, read-only SQLite inspection confirmed no
+installed team, artifacts or `team_accepted` event, exact original four-file
+source/candidate membership and bytes, and twelve completed reports. No uncertain
+mutation was replayed. A current read-only compatibility probe authenticated all
+twelve against their original prepared inputs in 8.92 seconds, including complete
+268,707/268,707 mandatory bytes in the last native context; no provider or state
+write (`/tmp/architect-team-acceptance-twelve-native.log`).
+
+Team acceptance now prepares the full authentication outside the store mutex in
+the existing asynchronous management projection. An internal, non-deserializable
+proof binds the entire canonical run, exact round/scope, validated team and risk
+owners. Publication and admission re-observe sources. A canonical change or
+source drift invalidates preparation. IPC admits no mutation while preparation
+is missing, including a concurrent change after its first readiness check; it
+does not fall back to cold synchronous authentication. Direct in-process callers
+retain full cold authentication outside the mutex. The scoped local approval,
+team validation, event and deduplicated request result still commit together.
+
+The UI displays preparation and offers its explicit team confirmation only after
+readiness. It never treats readiness as approval. Executable regressions cover
+no cold mutation/provider work, failed SQLite acceptance, exactly-once approval,
+canonical report/source drift and the preparation-to-confirmation UI flow. The
+first 153 ordinary tests passed, followed by an all-target warnings-denied Clippy
+check. The actual owned fixture then acknowledged team installation in 3.372
+seconds and the first three-action wave in 1.112 seconds. That native experiment
+then stopped after 382.47 seconds with two retained executor artifacts and a
+third task's normalization rejection (`phase=normalization; boundary=unclassified`),
+not task/quality/delivery acceptance. The reviewed team remains installed;
+reconciliation is required. The harness and its owned daemon exited; no mutation
+or failed task was replayed. Source and candidate still have their exact original
+four-file membership and bytes. Private canonical export:
+`run-after-first-task-wave-failure.json` under the same owned fixture root.
+Its failed native conversation is `f1cd1a9f-c545-41e8-bd02-edb81fe083c5`, with
+39 committed/native-observed reads; these do not prove complete context or task
+success. The raw rejecting stdout frame was not retained, so the specific old
+normalization guard cannot be established from this diagnostic alone.
+
+Normalization now maps its remaining fixed catalog/step-state/finish-component
+guard messages to private allowlisted categories. This improves future diagnosis
+without changing admission, retaining raw text or relabeling the old failure.
+Executable fixtures cover each category, including secret-bearing invalid state
+and component metadata. The CLI also waits on read-only preparation for an
+explicit `accept-team --approve-scoped`, preserving the captured document hash
+and issuing a single mutation; it never retries an uncertain mutation.
+
+The new canonical check-container journal persists custody before creation and
+start, rejects uncertain replay, validates historical identity/transitions and
+requires an actual engine removal proof before recording cleanup. Its seven tests
+include real SQLite rollback and restart/pause/cancellation handling. Unresolved
+custody blocks source-only reconciliation without issuing engine calls. Empty
+journals preserve historical native input serialization. This is ordering and
+custody support. Read-only exact-name observation now authenticates the returned
+full ID/image/ownership label and consumes a sealed observation to recover a lost
+create response. Absence remains unsettled; no create/start/removal is issued by
+observation. The actual Podman valid/foreign-token observations and four cleanup
+scenarios passed in 6.50 seconds, with all owned containers removed
+(`/tmp/architect-custody-name-owned-podman.log`). Production restricted-check
+selection/controller, recovery admission/UI, sandbox admission, configuration pins
+and outcome evidence remain incomplete. See
+[restricted runner evidence](restricted-runner.md).
+
+The full design goal remains open; no requirement package is promoted to complete.
+
+Final ordinary validation for this slice: 321 distinct Rust cases passed. The
+broad regression has 283 top-level successes (its extra nested subprocess summary
+is excluded), with one additional custody observation case, one cold CLI case
+and 36 adapter/independent-adapter cases. All 41 Python cases, requirements/audit/
+gap freshness, formatting and diff checks passed. Logs:
+`/tmp/architect-team-acceptance-final-regression.log`,
+`/tmp/architect-custody-name-observation.log`,
+`/tmp/architect-team-acceptance-normalization-regression.log`,
+`/tmp/architect-team-acceptance-cold-cli.log`,
+`/tmp/architect-team-acceptance-python.log`. The initial cold CLI fixture lacked
+the daemon's required 0700 state-directory mode; its setup was corrected without
+relaxing admission. Its individual rerun passed in 4.41 seconds; all other 52
+orchestration cases had already passed on the final CLI implementation. Explicit
+native read-only authentication and Podman probes are separate evidence; the
+382.47-second native task experiment remains a recorded failure, not part of
+the passing ordinary count. The user's separately investigated daemon/session
+was not changed.
+
+## Exact Antigravity 1.4.0 admission — 2026-10-16
+
+The installed CLI's move to 1.4.0 had stopped the owned review at preflight.
+Before changing the main version gate, an owned source candidate was prepared
+from 105 explicitly selected code/fixture files, with a source-hash manifest and
+only exact-version/MCP admission plus disabled terminal status reporting changed.
+The native executable was copied separately, without authentication stores.
+Candidate: `/private/tmp/antislop-agy-140-candidate-9y_k5lzl`;
+binary SHA-256 `a4502aaf310b2fd6eb657fcfec2fcc31a690fbbd0c2d14c8eefbb556409024ce`.
+The main gate remained unchanged throughout the actual probe.
+
+The new opt-in `tests/agy_version_live.rs` exercises the actual adapter, audited
+home, selected configured Antigravity verifier model/effort, durable callbacks,
+SQLite reopening and strict native identities/schema/finish/clean exit. On the
+exact 1.4.0 copy, inline input at the existing 192,000-byte ceiling retained both
+unpredictable end sentinels. A 224,768-byte prepared prompt used 22 committed and
+native-observed reader responses, covering all 226,077 mandatory index/prompt
+UTF-8 bytes. Both reopened ledgers validated and the executable hash remained
+unchanged; the installed binary matched the tested copy. Total native probe:
+162.78 seconds (`/tmp/architect-agy-140-owned-contract.log`), report:
+`/var/folders/d2/vtn09lpd2717th937yj7smhw0000gn/T/antislop-agy-version-Bdea2Z/report.json`.
+This proves the sampled transport/persistence contract, not semantic project
+review, full task delivery, OS containment or exact-ID native resume.
+
+Main admission now includes exactly 1.4.0 alongside 1.3.4/1.3.5; pinned-context
+admission remains limited to 1.3.5/1.4.0. Its adapter source matches the
+native-tested candidate after Rust formatting and updates to version-error text.
+All version/help/turn invocations explicitly set `AGY_CLI_OSC7501=off`, using the
+control documented in the primary
+[1.4.0 release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.4.0).
+Inherited arbitrary AGY overrides remain excluded. Unknown future/prerelease
+versions, profile downgrade and native-resume fallback remain refused. Provider,
+model/effort, user settings and historical input hashes were not rewritten.
+
+The 35-case adapter/independent-verifier regression passed with explicit 1.4.0
+success and adversarial matrices for both profiles, forged/incomplete/replayed
+context, invalid finish/session/schema/terminal data, nonzero exit, terminal
+status suppression and unknown-version/no-resume refusal. A further 87 library,
+configuration, session, context, Codex-reader, daemon and live-harness cases
+passed: 122 distinct ordinary Rust cases for this slice. Logs:
+`/tmp/architect-agy-140-verified-version-matrix.log`,
+`/tmp/architect-agy-140-contract-regression.log`. Preliminary matrix failures
+exposed two fixture setup mistakes: a one-page input cannot demonstrate missing
+later pages, and the independent fixture's lowercase `success` mode deliberately
+represents an invalid terminal status. The corrected tests use a genuinely
+multi-page source and the existing valid fixture branch; no admission guard was
+relaxed. All 41 Python cases, ledger freshness, all-target warnings-denied
+Clippy, locked build, formatting and diff checks passed
+(`/tmp/architect-agy-140-python.log`, `/tmp/architect-agy-140-verified-clippy.log`,
+`/tmp/architect-agy-140-build.log`). The opt-in exact-native experiment is not
+added to the ordinary count. A separate current read-only probe authenticated
+all ten original native reports in 6.24 seconds without provider launch or
+canonical state write (`/tmp/architect-agy-140-retained-prefix.log`).
+
+After the earlier unsupported-version preflight, checkpoint-only reconciliation
+passed in 7.22 seconds without provider work
+(`/tmp/architect-native-version-checkpoint.log`). The source and candidate still
+matched their exact original four-file membership and bytes, with no installed
+team. An explicitly scoped replacement for only the unfinished review ran
+on production 1.4.0 support
+(`/tmp/architect-agy-140-native-review.log`). An intermediate observation retained
+eleven of twelve completed reports; turn
+`e58c2ef5-727f-425f-a85b-d9244c1e45fb` was running the final part with five
+committed/native-observed reads. A fresh read-only canonical snapshot additionally
+authenticated all eleven original report bodies in 7.37 seconds, without provider
+launch or state mutation (`/tmp/architect-agy-140-eleven-report-prefix.log`).
+That then-active final part's mandatory context was still incomplete; it was not
+accepted by this prefix probe. The later twelve-report authentication and team
+acceptance are recorded above. Full genuine native task/quality/delivery
+acceptance remains unproven.
+
+The source-linked inventory now records exact 1.4.0 contract evidence and the
+owned container lifecycle support while retaining partial package status.
+Counts remain unchanged: 1,146 fragments, 1,678 interpretation units, 854 reviewed
+units, 69 semantic anchors, 422 parent reviews open; 1,647 partial, four narrowly
+implemented and 27 pending work items. The full original design remains open,
+including production restricted-check admission/recovery/evidence,
+source/context storage/compaction, all required task families/platforms and
+calibration. The user's separately investigated session/configuration was not
+changed.
+
+## Owned container cleanup and stream-boundary diagnostics — 2026-10-16
+
+`process::command_with_container` now attaches a runtime-owned, already-created
+container to the external guardian. Its binding requires an absolute engine
+path, full container ID, exact SHA-256 image ID and UUID invocation ownership
+label. On local command exit, cancellation or parent death, the guardian stops
+its local process group and confirms removal of that exact container before
+releasing inherited workspace leases or reproducing the original exit/signal.
+INT/TERM/HUP/QUIT request cleanup; their exec-startup window is protected and
+child execution regains normal caught-signal dispositions. Interrupted wait
+observations retry. Engine unavailability, bad/malformed/oversized metadata or
+foreign ownership cannot count as cleanup: the guardian stays live, holds its
+leases and retries with one fixed notice. It projects only ID/image/ownership
+from the engine, bounds control replies to 4 KiB, drains output and discards raw
+stderr. It never uses a latest/all/prefix/dependency/volume removal selector.
+
+Ten ordinary executable fixtures cover invalid selectors/private-lifeline
+admission, exit, cancellation, failed local launch, signal preservation,
+parent SIGKILL, guardian termination signals and unavailable/foreign/malformed
+engine responses. Negative ownership/metadata fixtures observe repeated failed
+probes before restoring the engine, then verify eventual removal and lease
+release. The separate actual Podman experiment passed all four scenarios:
+exit 7, cancellation, guardian TERM and parent SIGKILL, including children that
+create a separate session. Final completion took 4.14 seconds; every owned
+container was absent afterward. Log:
+`/tmp/architect-container-lifecycle-verified-owned-acceptance.log`.
+An intermediate metadata-projection attempt used JSON's `Id` spelling where
+the Go template requires `ID`; the real test held the guardian rather than
+falsely confirming cleanup. Its failed owned fixture was stopped and removed
+only after checking exact guardian/container/image/label ownership; the corrected
+projection was rerun against the real engine. The failed log remains separate
+(`/tmp/architect-container-lifecycle-final-owned-acceptance.log`).
+
+This is production lifecycle support, not a complete check backend or permission
+grant. It is not yet selected by run configuration or project checks. Durable
+pre-start ownership/unknown-operation recovery, immutable input materialization,
+effective restriction admission, engine/environment/policy pins and authentic
+task-termination/evidence bindings remain required. Guardian loss/restart still
+needs durable recovery. The existing autonomous project-check refusal remains
+unchanged. See [restricted runner](restricted-runner.md).
+
+The prior genuine native review stopped after 701.39 seconds on an older generic
+stream ordering/structure/acknowledgement error
+(`/tmp/architect-native-bounded-observation-review.log`). It retained ten of
+twelve completed reports, with 74 committed/native-observed reader receipts in
+failed turn `60106fef-e92e-470c-84ba-1467d73136f0`. Read-only prefix authentication
+passed in 6.33 seconds and proved the latest turn's required context was still
+incomplete (126,574/298,190 UTF-8 bytes); no final result or team was accepted.
+Log: `/tmp/architect-native-ordering-prefix.log`. Only numeric metadata from
+owned native session `9ba513cf-7f6b-4eb6-a867-8389d640eb7b` was inspected; it cannot
+reconstruct the missing exact stdout frame. The adapter now adds a fixed phase
+and an exact allowlisted boundary category for stream-guard errors. Unknown
+callback/storage text stays unclassified and is not copied. Fixtures verify
+reader replay/scope, init/result/finish/schema ordering and redaction of a private
+callback error. No guard was relaxed or old failure retrospectively classified.
+
+Validation passed 234 distinct Rust cases during this slice: the 232-case broad
+library/adapter/daemon/management/team/recovery regression and two additional
+container cases in the final 51-case affected regression. The broad run preceded
+the last container metadata/signal refinements; the final affected run includes
+all ten container, ten process, 17 Antigravity adapter and 14 independent verifier
+cases. Logs: `/tmp/architect-container-lifecycle-complete-regression.log`,
+`/tmp/architect-container-lifecycle-final-regression.log`. All 41 Python cases,
+three ledger freshness checks, all-target warnings-denied Clippy, locked build,
+formatting and diff checks passed (`/tmp/architect-container-lifecycle-python.log`,
+`/tmp/architect-container-lifecycle-verified-clippy.log`,
+`/tmp/architect-container-lifecycle-verified-build.log`). The actual container,
+native-prefix and checkpoint experiments are separate from ordinary counts.
+
+The owned source/candidate still matched the exact original four-file membership
+and bytes. Checkpoint-only reconciliation passed in 16.38 seconds, with no
+provider work (`/tmp/architect-native-ordering-checkpoint.log`). An explicitly
+scoped replacement for only the unfinished review then stopped after 31.70
+seconds at preflight: the installed `agy` now reports 1.4.0, outside the
+validated 1.3.4/1.3.5 contract
+(`/tmp/architect-native-stream-boundary-review.log`). It did not create a new
+logical/native turn; all ten reports and exact source/candidate baselines were
+retained. The new release is documented in the primary
+[1.4.0 release notes](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.4.0);
+those notes and the current headless documentation are not evidence of adapter
+compatibility. No allowlist was widened, provider profile downgraded, CLI
+installed or global configuration rewritten. The owning experiment is terminal;
+the target is no longer serving a paid native job. Next native work must verify
+the exact 1.4.0 contract before resuming. Native task/quality/delivery acceptance remains unproven. The user's
+separately investigated session/configuration was not changed. The full original
+design remains open, including production runner admission/recovery/evidence,
+context/storage work and 422 parent semantic reviews.
+
+## Executable sandbox spikes and resilient native observation — 2026-10-16
+
+The §13 backend spike is now reproducible through two provider-free, opt-in
+scripts, documented in [restricted-runner.md](restricted-runner.md).
+`scripts/probe_restricted_runner.py` builds an owned macOS deny-default policy
+with literal path parameters, positive file/socket controls and independent
+post-run sentinel checks. Selected reads/scratch writes worked; eight forbidden
+file/network operations and a child's outside write returned EPERM. A child
+could still call `setsid`, so the profile was rejected with exit 2 rather than
+advertised as an autonomous runner. The report explicitly retains untested
+resource, system-root, hostile-cleanup and integration obligations.
+
+An already running rootless Podman VM and a local immutable Rust image allowed
+the stronger alternative to be exercised without installation, image pull, VM
+restart or user-project mounts. `scripts/probe_container_runner.py` requires an
+exact local SHA-256 image ID, disables proxy/default environment/image-volume
+inheritance and inspects actual restrictions before starting either generated
+fixture. Added/writable host binds, extra volumes, weak namespaces/privileges,
+devices, published ports and missing configured limits refuse start. The final
+owned run passed all sampled controls: actual zero effective capabilities,
+no-new-privileges, seccomp, loopback-only networking, 256 MiB/32-process/one-CPU
+cgroup limits, unchanged selected/host sentinels, forbidden filesystem/network
+attempts and separate passing/failing Rust checks (0/101). A new-session,
+new-group child emitted a live heartbeat before container kill; afterward the
+container was stopped/exit 137 and its heartbeat stopped. Both token-labelled
+containers were removed. Measured client/server versions were 6.1.4/5.8.3;
+host Darwin 25.6.0. Final report: `/tmp/architect-container-runner-final-probe.json`.
+The narrower macOS report is `/tmp/architect-restricted-runner-probe.json`.
+
+Both reports retain `autonomous_ready: false`. These are fixed owned programs,
+not arbitrary project execution or completed security acceptance. Production
+policy/image/environment/input/evidence bindings, cancellation/daemon-death
+recovery, source-secret selection, engine trust, native Linux-host acceptance,
+hostile resource exhaustion and toolchain coverage remain open. Autonomous
+project checks still fail the existing unsupported-runner guard. No historical
+approval or provider profile was changed.
+
+The preceding paid native review terminated after 779.30 seconds when its harness
+returned an IPC WouldBlock error (`/tmp/architect-agy-finish-component-native-review.log`).
+It had completed a tenth report before interruption; it did not complete the
+eleventh review or a task/team. A separate current read-only probe authenticated
+all ten original report bodies against their exact prepared inputs in 6.17
+seconds without provider launch or state mutation
+(`/tmp/architect-native-ten-report-prefix.log`). The interrupted turn's required
+context was incomplete, so no final result was accepted from it. Source and
+candidate retained the exact original four-file membership and bytes.
+Checkpoint-only reconciliation then passed in 9.70 seconds with no provider work
+(`/tmp/architect-native-ipc-checkpoint.log`).
+
+The live harness now permits two retries for transient read-only observation
+timeouts/interruption. Every retry restarts a complete hash-pinned document
+download; final JSON still passes the strict decoder. Other I/O errors and
+invalid final data fail. This path cannot replay scoped mutations or approvals,
+and the product's five-second IPC deadlines are unchanged. Four harness cases
+and four daemon regression cases passed; the two explicit native/profile probes
+remain opt-in. All 41 Python cases, three requirement-ledger freshness checks,
+all-target warnings-denied Clippy, locked build, formatting and diff checks passed.
+Logs: `/tmp/architect-runner-observation-regression.log`,
+`/tmp/architect-restricted-runner-final-python.log`,
+`/tmp/architect-runner-observation-clippy.log`,
+`/tmp/architect-runner-observation-build.log`. Native prefix/reconciliation and
+real sandbox spikes are separate experiments, not ordinary regression counts.
+
+An explicitly scoped replacement is running against the frozen
+`/tmp/architect-restricted-runner-validation` binary
+(`/tmp/architect-native-bounded-observation-review.log`). At the latest observation
+it retained ten of twelve completed review parts, with 23 committed/native-observed
+reads in turn `60106fef-e92e-470c-84ba-1467d73136f0`. Do not rebuild that target
+while it serves the experiment. This is not full native task/quality/delivery
+acceptance. The separately investigated user's session/configuration remains
+untouched. The complete original design stays open; P0 proceeds with native
+acceptance and production restricted-runner integration. The unchanged source
+audit still has 422 parent semantic reviews open.
+
+## Explicit reader calls, native finish variants and security-source review — 2026-10-15
+
+Scoped metadata-only inspection of owned failed native sessions `61d7c4d3-213f-4de5-b13c-fe09405461d1` and `3096fa7c-2784-4750-b7d7-debdf81de85a` found `list_resources` as each last recorded call, with the same server argument that did not match the owned reader. The stored step metadata and result lengths/hashes were collected without tool arguments, response text or reasoning (`/tmp/architect-agy-list-resources-metadata.json`). This suggests the earlier unmapped-frame trigger; it does not reconstruct the missing old stdout frame/state or establish permission for resource discovery.
+
+Fresh Antigravity contexts now use `agy-pinned-context-v2`. The short native prompt supplies an executable first `call_mcp_tool` request, including exact server/tool names, bundle/index hashes, offset and page size; the owned agent profile repeats the same routing guidance. The immutable index supplies document hashes. Source labels and inline-registry aliases are not other MCP servers or resource URIs; resource discovery remains outside the reader contract. Retained agy v1 native inputs and Codex v1 rendering remain exact. A current read-only probe authenticated all nine completed native reports after the change in 5.41 seconds without a provider launch or state write (`/tmp/architect-agy-call-contract-legacy-prefix.log`). A version flip without its matching native input hash fails validation. Correct index access alone still cannot complete the turn.
+
+The owned fixture was reconciled against its unchanged exact four-file source/candidate baselines, then explicitly resumed only its unfinished review (`/tmp/architect-agy-explicit-call-reconciliation.log`, 7.80 seconds, no provider work). That v2 attempt reached native `finish` after 69 committed/native-observed reads, but the former generic tool guard rejected the output component because the CLI encoded it as `step_type=tool`, `tool_name=finish`, `tool_info.name=finish`. It terminated after 548.60 seconds with nine completed reports retained and reconciliation required (`/tmp/architect-agy-explicit-call-native-review.log`). A later read-only probe validated complete delivery of all 298,080 mandatory index/prepared-prompt UTF-8 bytes and reauthenticated all nine original reports in 5.44 seconds (`/tmp/architect-agy-finish-component-prefix-observation.log`). Complete transport delivery is not a completed review or task; no tool-call arguments were promoted to an accepted artifact.
+
+The adapter now recognizes that exact encoding of the already configured finish component as well as the original bare finish event. Conflicting component names, subagent metadata, component errors and malformed parameters remain refused. ACTIVE does not establish completed finish. Component arguments and native `toolAction`/`toolSummary` are data; the later full terminal structured result, exact session/schema, complete context and clean exit remain mandatory. Positive and adversarial executable fixtures cover both profiles, metadata privacy, missing output/terminal data, active-only completion, foreign identity, schema mismatch and nonzero exit. Independent verifier fixtures cover the same terminal obligations separately.
+
+Validation passed 213 distinct Rust cases during this slice: 91 final adapter/context/library/session cases and 122 orchestration/intake/prompt/UI cases preceding the final narrow finish-handler change. Logs: `/tmp/architect-agy-finish-component-final-regression.log`, `/tmp/architect-agy-call-contract-orchestration-ui.log`. All-target warnings-denied Clippy, locked build and the explicit native harness build passed (`/tmp/architect-agy-finish-component-clippy.log`, `/tmp/architect-agy-finish-component-build.log`, `/tmp/architect-agy-finish-component-live-build.log`). All 30 Python cases, three requirement-ledger freshness checks, formatting and diff checks passed. The separate compatibility/owned-native experiments are not added to the ordinary regression count.
+
+Source review additionally splits §9.4 capability dimensions and the five normative §13 security paragraphs into 59 reviewed obligations, preserving the original source and authority. It retains unavailable-capability reporting, interruption-request versus confirmed-stop receipts, protected assets/untrusted inputs, per-run policy, documented provider or external enforcement, explicit weaker-profile selection, prompts/worktrees not being isolation, verifier write restrictions, executable-test restrictions, secret collection/redaction/retention limits and terminal sanitization. The proposed profile list remains a proposal. The audit is still partial: unchanged 1,146 source fragments, 1,678 interpretation units, 854 reviewed units, 69 semantic anchors and 422 parent reviews open; inventory status is 1,647 partial, four narrowly implemented and 27 pending. Interpretation is not implementation or independent product acceptance. Package assessments now reflect already implemented scoped recovery/mode controls while retaining actual native/autonomous/security gaps.
+
+After the finish correction, checkpoint-only reconciliation passed in 6.39 seconds without provider work (`/tmp/architect-agy-finish-component-reconciliation.log`), preserving the nine accepted report bodies and original file sets. A newly scoped replacement is running against the frozen current binary (`/tmp/architect-agy-finish-component-native-review.log`); it has not yet established a completed review/team/task. Do not rebuild `/tmp/architect-ui-document-validation` while it serves that owned experiment. No separately investigated user daemon/session/configuration was changed. The full original design remains open; next P0 remains genuine native review/task/quality/delivery acceptance, restricted autonomous execution and remaining context/storage/control costs, followed by full source/family/platform/calibration acceptance.
+
+
+## Verified document reuse and continued native review — 2026-10-15
+
+The daemon now captures the complete actual SQLite run bytes and their stored hash in one query, rejects a mismatch and advertises `document_hash_verified: true` only after verification. The frontend retains one immutable downloaded document and reuses it under that verified hash; a changed hash requires a new complete hash-pinned download. Older protocol-2 daemons without this guarantee still trigger a full download on every refresh. A same-length content change, formatting change or switch to another run cannot inherit a decoded view. This removes repeated unchanged transfers and JSON/canonical-run decoding while preserving exact control/document binding.
+
+The locally authenticated management-package proof belongs to that immutable document, rather than a mutable backend slot. It is built through complete native-prefix authentication against that document's canonical run; changed original bytes produce a different owner and no proof. Reuse compares the entire package set and re-observes live sources, including proposed intake captures. Changed package content goes through full authentication and a source error fails the refresh. Runtime admission still compares the complete current canonical run, rechecks sources and requires scoped explicit approval with atomic persistence. No serialized field, IPC package or frontend cache becomes authority.
+
+An alternating old/new frontend measurement against the same new daemon and an owned copy of the genuine seven-report fixture measured four unchanged refreshes each: old 3.1428–3.3186 seconds (mean 3.2408), new 2.3525–2.4543 seconds (mean 2.4205), approximately 25% lower. Initial frontend authentication with a ready daemon still took 7.8155–8.3155 seconds. The normal five-second IPC deadline was unchanged; initial local validation remains on the existing background UI thread. Exact copied/source canonical rows and event/request counts remained unchanged; no approval, provider launch or native session was requested by this profile. Its daemon is terminal. Log: `/tmp/architect-ui-document-owned-profile.log`; private copy: `/var/folders/d2/vtn09lpd2717th937yj7smhw0000gn/T/antislop-decode-x6yc176s`. Earlier decode-only and verified-transfer measurements are retained separately. This fixture measurement does not establish general responsiveness or scalability: daemon canonical serialization, source capture, presentation construction, cold validation and durable storage still need work.
+
+Regression passed 229 distinct Rust cases during this slice: library 35, context pages 12, core 34, daemon four, orchestration 50, TUI 54, TUI sessions three, Antigravity adapter 16, independent Antigravity verifier 13, IPC six and storage two. The 192-case broad regression preceded the final narrow native-diagnostic change; its affected 29 adapter/verifier cases and eight IPC/storage cases passed afterward. Logs: `/tmp/architect-ui-document-final-owned-regression.log`, `/tmp/architect-ui-document-native-diagnostics.log`, `/tmp/architect-ui-document-storage-ipc.log`. New coverage verifies actual request counts for verified reuse and older-daemon fallback, same-length/document/run changes, source drift/restoration, forged package refusal, and an actual daemon/database edit retaining its old hash. All 28 Python cases, three requirement-ledger freshness checks, all-target warnings-denied Clippy, locked build, formatting and diff checks passed (`/tmp/architect-ui-document-python.log`, `/tmp/architect-ui-document-final-diagnostic-clippy.log`, `/tmp/architect-ui-document-final-diagnostic-build.log`). Initial logs retain a missing renamed-method caller, an assertion expecting a later hash-check boundary and a mock directory without required private permissions; final regression corrects the caller/fixtures and preserves the guards and original deadlines.
+
+The owned genuine native experiment was separately reconciled after verifying both the exact original four-file membership and bytes in source and candidate (`/tmp/architect-native-step-reconciliation.log`, 4.95 seconds, no provider work). Its explicitly scoped independent-review replacement continued the retained seven-report prefix and completed two more reports. The tenth reviewer then failed the unknown-step guard after four committed/native-observed reads; the experiment terminated after 1,202.43 seconds. It is blocked with reconciliation required, nine of twelve reports complete and no installed team. The seven original report bodies and exact source/candidate membership and bytes remain unchanged. This is progress through native review, not task/quality/delivery acceptance. Its frozen reference binary predates these UI changes; no binary serving that experiment was rebuilt. Log: `/tmp/architect-native-step-review-replacement.log`; fixture: `/var/folders/d2/vtn09lpd2717th937yj7smhw0000gn/T/antislop-live-team-uZerlu`.
+
+The new failure's type fingerprint exactly matches the JSON string `"unknown"` (`eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c`). This identifies the CLI's literal unmapped label, not the underlying native operation. Its old frame/state cannot be reconstructed from this diagnostic. A subsequent narrow diagnostic change records that known label, bounded ACTIVE/DONE state and numeric step index while continuing to reject the event. No tool arguments, source/response bodies or reasoning text enter this diagnostic. Unknown ACTIVE events remain refused as well as DONE; an incomplete category cannot establish a safe action or source read. The adapter/verifier regression separately covers these two shapes. A separate current-binary read-only probe authenticated all nine retained native reports against their exact original prepared inputs in 5.27 seconds, without a provider launch or canonical write (`/tmp/architect-ui-document-nine-report-prefix.log`); it is not added to the 229-case ordinary regression count. All owned native/profiling processes are terminal; no separately investigated user daemon/session/configuration was changed.
+
+The full original design remains open. P0 continues with this genuine review/task/quality/delivery path and remaining control/UI costs, followed by restricted autonomous execution, complete contextual-source storage/compaction, task-family/platform acceptance and calibration. The source audit still has 428 parent semantic reviews open; test counts and transport observations do not establish complete compliance.
+
+
+## Durable source kinds and original directory members — 2026-10-15
+
+New input captures preserve runtime-observed file/directory kinds in `input-observation-v1`, bound to each original body's SHA-256 and UTF-8 length and the complete snapshot hash. Selected subdirectories now expose their original indexed text members and scoped project instructions through the pinned reader without expanding `input_files`. A literal file containing the same JSON as a directory capture remains a file; its payload cannot invent descendants, instructions or write permissions. Capture rejects selected links/special files, uses nonblocking no-follow regular-file reads and validates source stability. Binary directory members remain metadata only.
+
+The type binding follows SQLite persistence, interview/proposed scopes, independent review, accepted inputs, workspace activation, task execution, mediated changes and effect/recovery checks. Snapshot and type updates commit together. Same-byte file/directory replacements invalidate currentness and require explicit revision; reconciliation retains the original pins. Diff-baseline types are independent of a reviewer's candidate input types. Diff reads also normalize absolute selectors, avoid following links/cycles and exclude private runtime state. New instruction indexes use `project-instructions-v2`; fresh orchestration review inputs use `inline-exact-utf8-v9`. Retained v7/v8/native inputs and metadata-free records keep their original encodings. Ambiguous legacy non-root directory-shaped scopes require explicit revision before new work; no historical type is silently fabricated. A new mediated version can bind known legacy root kinds without rewriting its original execution.
+
+Validation passed 378 distinct Rust cases during this slice: 146 current-source core/orchestration/workspace/context/recovery cases, 149 current-source library/adapter/intake/session/UI cases, and the complete 83-case task suite. The task suite completed before the final narrow legacy/no-follow diff changes; those changes subsequently passed the 146/149 groups and three focused wave-reconciliation cases. Seven new input-observation cases cover persistence with live path replacement, envelope spoofing, same-byte type changes, atomic mediated updates, tampering, links/FIFOs and no-follow diff isolation. Logs: `/tmp/architect-source-observation-frozen-regression.log`, `/tmp/architect-source-observation-frozen-adapters-ui.log`, `/tmp/architect-source-observation-complete-team-final.log`, `/tmp/architect-source-observation-frozen-wave.log`. Earlier full-suite failures remain in their logs: an old instruction-format expectation, one delivery timeout under concurrent test load (focused rerun passed with its original deadline), and fault fixtures that restored the old snapshot without its corresponding type binding. Corrected fixtures retain both original pins; production validation was not weakened. The later complete task suite passed all 83 cases.
+
+The read-only compatibility probe authenticated all seven retained genuine native reports against their exact original prepared inputs in 3.89 seconds (`/tmp/architect-source-observation-frozen-legacy-prefix.log`), with no provider launch or canonical write. This is compatibility evidence, not successful model/task acceptance. All 28 Python cases, all-target warnings-denied Clippy and locked build passed; formatting and diff checks are clean. Logs: `/tmp/architect-source-observation-python.log`, `/tmp/architect-source-observation-frozen-clippy.log`, `/tmp/architect-source-observation-final-build.log`. No user daemon/session/configuration was changed and all owned paid native experiments remain terminal.
+
+Full `design.md` completion remains open. Next P0 work includes genuine complete native review/task/quality/delivery acceptance and remaining UI/control latency, followed by restricted autonomous runners, complete contextual-source registration/storage/compaction and outstanding family/platform/calibration obligations. The source audit still has 428 parent semantic reviews open; package statuses remain provisional and must not turn test counts into requirement acceptance.
+
+
+## Authenticated recovery admission and frontend reuse — 2026-10-15
+
+The prepared management projection now retains an internal authenticated package set, with private fields and no deserializer. Its construction still performs full native-prefix, ledger, proposal, input and scope authentication. It binds the complete canonical run and exact package bytes. Public pending-package JSON cannot create this internal proof or turn an empty set into an approval. Exact canonical changes, including historical context, obligations, diagnostics and reconciliation state, invalidate it. Live input/proposed-source captures are checked again at admission. A restored source may again match; no stale or altered report becomes accepted through this reuse.
+
+Recovery approval reuses that sealed proof only for the exact current canonical state, requested round, kind and scope. Runtime reacquires the store and compares that state before applying any candidate mutation; it still enforces worker exclusion, overlap checks, workspace lease, explicit user approval and atomic persistence. A cold direct-runtime caller authenticates outside the store lock, then follows the same final checks. A cold IPC mutation starts read-only preparation and returns an explicit `no mutation admitted` error rather than waiting beyond the client deadline and later committing unexpectedly. The CLI observes preparation before sending its scoped approval and refuses intervening document changes. Idempotency checks remain before preparation and before actual mutation; duplicate committed requests return their original response without requiring the run to remain recoverable or spawning another native session. Cold failure paths recheck concurrent committed results.
+
+The frontend independently authenticates an arriving package set once. Later refreshes reuse that internal result only if both the entire captured run and the complete package set remain exact, and recheck live sources. Changed package content triggers full authentication and cannot inherit a previous verdict. This avoids rerendering/authenticating every completed native input on every unchanged UI refresh. These results are process-local derived data, omitted from all run persistence; restart rebuilds them. They establish proof continuity, never permission without the explicit scoped command.
+
+An owned copy of the genuine seven-report fixture exercised the actual backend and normal five-second IPC deadline. First ready backend snapshot, including initial local authentication, took 7.9750 seconds on the existing background UI thread; unchanged complete backend snapshots took 3.1733 and 3.1784 seconds. An exact prepared replacement reached its guarded persistence point in 1.7331 seconds, where a deliberately installed SQLite trigger rejected the transaction. Copied run bytes, event/request counts and the original SQLite bytes remained unchanged; no approval, native session or provider launch committed. This is failed-admission rollback/latency evidence, not a successful recovery or paid-model task. Log: `/tmp/architect-authenticated-admission-profile.log`; private copy: `/tmp/antislop-admission-_h14dp9x`. Its reconciliation flag was changed only in that copy to expose the hypothetical read-only scope. The owned daemon is terminal. No original/user daemon, session or configuration was changed.
+
+Final regression passed 206 distinct Rust cases: library 33, context pages 12, core 34, intake 11, orchestration 49, prompt context seven, sessions six and TUI 54 (`/tmp/architect-authenticated-admission-final-regression.log`). The explicit native library probe and two read-only retained-fixture diagnostics remain ignored in ordinary tests. The separate backend profile is not added to that count. New fixture coverage verifies cold refusal without mutation/provider replay, atomic approval-commit failure, subsequent successful native-protocol-fixture recovery and same-key IPC response replay with exactly one new independent reviewer, one recovery record and one approval. Scope/live-source changes and forged-package refusal have separate regressions. All 28 Python tests, three requirement-ledger freshness checks, all-target warnings-denied Clippy, locked build, formatting and diff checks passed (`/tmp/architect-authenticated-admission-python.log`, `/tmp/architect-authenticated-admission-final-clippy.log`, `/tmp/architect-authenticated-admission-build.log`). A preliminary compile failure for the CLI protocol-version import remains in its log; the later regression compiles and exercises the corrected CLI.
+
+Remaining latency includes canonical serialization, filesystem captures, complete UI document construction and initial client authentication; the approximately 3.17-second unchanged refresh is still too expensive to claim general responsiveness/scalability completion. This single retained fixture does not establish worst-case timing or native task quality. The next P0 is those remaining UI/control costs and actual complete native review/task/quality/delivery acceptance, followed by restricted autonomous runners, durable source-kind/compaction/storage semantics and the remaining family/platform/calibration/source-review obligations. The full design remains open, with 428 parent semantic reviews outstanding.
+
+
+## Asynchronous recovery documents and visible preparation — 2026-10-15
+
+Management recovery projection now runs in a daemon-owned background job. Snapshots report explicit `preparing`, `ready` or `unavailable` state, the completed package count and the hash of the prepared document. No recovery action is offered as ready while validation is pending. Chat explains that retained reports and sources are being checked; source-validation failure has a separate notice. This is runtime preparation, never a claim that a native agent is running. Existing UI input/render handling remains on its separate thread.
+
+The process-local cache binds both the complete canonical `Run` and its database document hash. `Store::get` still checks actual database bytes, so a changed row with an unchanged `state_hash` cannot reuse a validated projection. Concurrent requests share one job for that exact view; an obsolete job cannot publish into a newer generation. Completed review-prefix authentication remains strict. The worker re-observes source captures after authentication, and publication through a new snapshot or initial document read checks live sources again. Source drift removes the offered package; restoring the source can rebuild it. Continuation pages reuse the same immutable bytes/hash while checking the current canonical run binding. Actual recovery admission still performs full independent scope/source validation; a cached document cannot authorize execution or waive proof.
+
+Snapshot state/sequence are captured together under the store lock, then recovery derivation runs outside it. Non-run document derivations also release the lock before expensive work. The first reader receives the prepared document instead of recomputing the whole prefix per page. The frontend additionally checks its hash against the control snapshot and validates all candidate packages together, sharing one immutable authentication view. A direct cold recovery-document read returns an explicit preparation error; clients first poll the snapshot's preparation state. CLI replacement approval remains separately scoped, and the live diagnostic driver waits for the read-only projection before requesting any replacement.
+
+A private backup of the retained genuine seven-report fixture measured: first snapshot 0.3186 seconds with `preparing`; event read during validation 0.0166 seconds; ready after 5.2311 seconds and ten observations; two packages; one 74,687-byte document read in 0.6257 seconds. The normal five-second IPC deadline was unchanged. This smaller document uses the previous slice's v2 references and therefore does not have the old 817,289-byte document hash. Log: `/tmp/architect-async-projection-profile-short.log`; owned copy: `/tmp/antislop-projection-9x3_ifsr`. Only that copy's reconciliation flag was cleared to expose the hypothetical read-only projection; no reconciliation/approval/mutation request or provider launch occurred, and exact original SQLite bytes were checked unchanged. The owned daemon is terminal. The first diagnostic attempt failed before serving because its temporary socket pathname exceeded the platform limit; its separate failure log is retained.
+
+Final validation passed 203 distinct Rust cases: library 31, context pages 12, core 34, intake 11, orchestration 48, prompt context seven, sessions six and TUI 54 (`/tmp/architect-async-projection-final-regression.log`). One explicitly native library probe remains ignored. New coverage verifies immutable document reuse, canonical changes with a retained database hash, live-source invalidation/restoration, store availability during preparation, complete IPC document/package equality, refusal of a stale approval without another native call, and the actual chat notice. All 28 Python cases, three requirement-ledger freshness checks, all-target warnings-denied Clippy, locked build, formatting and diff checks passed. Logs: `/tmp/architect-async-projection-python.log`, `/tmp/architect-async-projection-final-clippy.log`, `/tmp/architect-async-projection-profile-build.log`. The initial Clippy failure was confined to missing imports in the opt-in harness and is retained separately; the final all-target check compiles it successfully.
+
+This closes repeated prefix derivation for recovery-document pages and moves cold projection authentication out of synchronous snapshot requests. Fresh filesystem capture can still be expensive, the UI's local authentication and actual mutation admission remain synchronous, and cache/blob retention needs broader resource/storage work. This is one retained-state measurement, not a universal latency guarantee or a passed native task. The full design, genuine independent quality/delivery acceptance, restricted autonomous execution, source-kind/compaction semantics, remaining task families and platform/calibration coverage stay open; the source audit still has 428 parent semantic reviews outstanding. The user's separately investigated daemon/session/configuration were not changed.
+
+
 ## Recovery projections and referenced history — 2026-10-15
 
 Management recovery now shares one authenticated completed-review prefix, session-ledger validation, source observation and exact proposal validation across the candidate kinds of one immutable borrowed run view. It caches only successful checks within that view; new snapshots/admissions observe sources and authenticate the prefix again. Prompt factoring counts exact repeated token bodies and borrowed JSON slices before hashing retained documents. Original reconstructed bytes, scope hashes, check coverage and native report authentication remain required. A seven-report regression compares shared candidates with independently constructed candidates and refuses a changed last report or changed live input without mutating the run.

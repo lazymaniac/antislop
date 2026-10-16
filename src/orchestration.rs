@@ -49,10 +49,9 @@ pub fn context(run: &Run) -> Result<Value> {
             })
         })
         .collect();
-    Ok(
-        json!({"schema_version":1,"workflow":"fixed six-stage supervised pipeline",
+    let mut context = json!({"schema_version":1,"workflow":"fixed six-stage supervised pipeline",
         "run_id":run.id,"spec_revision":run.spec_revision,"invocation_stage":run.stage,"attempt":run.attempt,
-        "project_instructions":crate::workspace::instructions::from_snapshot(std::path::Path::new(&run.spec.workspace), &run.input_snapshot)?,
+        "project_instructions":run.project_instructions()?,
         "checklist_version":run.checklist_version,"risk_catalog_version":risk_catalog["version"],
         "stage_assignments":stages,"risk_coverage":risks,"approvals":run.approvals,
         "prior_risk_binding_status":crate::verification::prior_risk_binding_summary(run),
@@ -74,8 +73,11 @@ pub fn context(run: &Run) -> Result<Value> {
             "source_refresh":"After an authorized source edit, fresh context/model executor-verifier pairs are subordinate work within the approved implementation attempt, cannot edit files, and do not claim separate stage approvals. Their invocation stage differs from the primary runtime stage in the orchestration receipt.",
             "external_actions":"not granted by stage or repair approval"},
         "independence_contract":"Every invocation reserves a fresh logical session. The CLI native session is recorded on observation; canonical provider/native UUID reuse across logical sessions is rejected before output acceptance. The current verifier native ID is not yet known when its prompt is prepared; do not claim it was observed in advance.",
-        "limitations":["This is the existing fixed-stage runtime, not execution of the standalone TeamPlan scheduler.","Future allocations and unassessed risks are pending, not completed work.","Native CLI support and OS containment limitations remain explicit; stage approvals do not authorize external project actions."]}),
-    )
+        "limitations":["This is the existing fixed-stage runtime, not execution of the standalone TeamPlan scheduler.","Future allocations and unassessed risks are pending, not completed work.","Native CLI support and OS containment limitations remain explicit; stage approvals do not authorize external project actions."] });
+    if let Some(observation) = &run.input_observation {
+        context["input_observation"] = serde_json::to_value(observation)?;
+    }
+    Ok(context)
 }
 
 pub fn observe(run: &Run, artifact_hash: &str) -> Result<Evidence> {

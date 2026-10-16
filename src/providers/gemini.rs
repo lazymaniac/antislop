@@ -215,11 +215,15 @@ pub fn normalize(value: &Value) -> Result<shared_cli::StreamEvent> {
     })
 }
 impl Provider for GeminiProvider {
+    fn native_resume_implemented(&self) -> bool {
+        true
+    }
+
     fn probe(&self) -> Result<Capabilities> {
         self.probe_cancelled(&AtomicBool::new(false))
     }
     fn probe_cancelled(&self, cancelled: &AtomicBool) -> Result<Capabilities> {
-        Ok(Capabilities {provider:"gemini".into(),version:self.inspect(Some(cancelled))?,structured_output:false,streaming:true,resume:true,steering:false,cancellation:true,approvals:false,native_subagents_disabled:true,
+        Ok(Capabilities {provider:"gemini".into(),version:self.inspect(Some(cancelled))?,structured_output:false,streaming:true,resume:self.native_resume_implemented(),steering:false,cancellation:true,approvals:false,native_subagents_disabled:true,
         sandbox:"managed home/cwd with deny-all CLI admin policy; hooks/skills/extensions/subagents disabled; no OS sandbox; auth and live exact-ID resume unverified".into(),usage:"reported tokens when present; USD unavailable".into()})
     }
     fn probe_report(&self) -> Result<ProbeReport> {
