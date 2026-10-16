@@ -825,6 +825,16 @@ impl App {
     }
 }
 
+/// Drops every color; what was dim stays dim, selection is reversed anyway.
+fn without_color(buffer: &mut ratatui::buffer::Buffer) {
+    for cell in &mut buffer.content {
+        if cell.fg == Color::DarkGray {
+            cell.modifier.insert(Modifier::DIM);
+        }
+        cell.set_fg(Color::Reset).set_bg(Color::Reset);
+    }
+}
+
 pub fn run(options: &Options, client: Client) -> Result<()> {
     let conversation = options.conversation(&client)?;
     let (updates, received) = mpsc::channel();
@@ -854,6 +864,8 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     };
     app.open(conversation);
 
+    // https://no-color.org: nothing depends on color alone (design §17).
+    let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     let mut terminal = ratatui::init();
     let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
     let result = (|| -> Result<()> {
@@ -897,7 +909,12 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                     Update::Diff { .. } => {}
                 }
             }
-            terminal.draw(|frame| app.draw(frame))?;
+            terminal.draw(|frame| {
+                app.draw(frame);
+                if no_color {
+                    without_color(frame.buffer_mut());
+                }
+            })?;
             if !event::poll(Duration::from_millis(100))? {
                 continue;
             }
@@ -926,4 +943,28 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+
+    #[test]
+    fn without_color_keeps_dim_and_reversed_as_modifiers() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buffer.set_string(0, 0, "a", dim());
+        buffer.set_string(1, 0, "b", Style::default().fg(Color::Red).bg(Color::Blue));
+        buffer.set_string(2, 0, "c", Style::default().add_modifier(Modifier::REVERSED));
+        without_color(&mut buffer);
+        assert!(
+            buffer
+                .content
+                .iter()
+                .all(|cell| cell.fg == Color::Reset && cell.bg == Color::Reset)
+        );
+        assert!(buffer.content[0].modifier.contains(Modifier::DIM));
+        assert!(!buffer.content[1].modifier.contains(Modifier::DIM));
+        assert!(buffer.content[2].modifier.contains(Modifier::REVERSED));
+    }
 }

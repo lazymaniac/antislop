@@ -304,6 +304,12 @@ replaced when idle. The socket is `<state>/core.sock`, or
   finds `architect.toml` changed restarts an idle daemon; a busy one keeps
   its configuration for the running work and the frontend says the new one
   applies once that work is done (scenario 17).
+- With `NO_COLOR` set the TUI draws no color. Nothing depends on color
+  alone: task states have marks (✓ ✗ ! ● ○ –), the selected node a double
+  border, the active tab brackets, obligations ✓ ✗ – ?, diff lines + and −;
+  relations are told apart by layout (a verifier sits under its worker,
+  dependencies run between columns, messages carry counts) and `f` shows one
+  kind at a time (design §17).
 - Agents' text is stripped of control characters before it reaches the
   terminal, in the TUI and in line mode (design §13).
 - Token use is what the CLI reported, summed per agent in its details
