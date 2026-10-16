@@ -283,6 +283,15 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - A task that stops short of approval (`needs_user`, `waiting`, `failed`,
   `cancelled`) says why in its event; the chat, the line mode and the task's
   Przegląd show the reason (design §8.4).
+- Before writers start in worktrees, the user is told which files have
+  uncommitted changes: writers start from the last commit and do not see
+  them, and a change landing on one of them waits for the user (design
+  §11.1).
+- Every worker and verifier is told to keep to the project's own
+  instructions (AGENTS.md, CLAUDE.md, GEMINI.md…) whichever CLI it is, to
+  name contradictions, and never to change its own permissions; a worker
+  stops and says so when its goal needs something outside its task (design
+  §10.3).
 - A turn that fails because the CLI needs a login or hit a usage/rate limit
   leaves its task `waiting` (not `failed`), with the CLI's message.
 - `resume` (Ctrl+R, `/resume`) runs again every task of a plan that ended

@@ -468,6 +468,7 @@ impl Core {
         for task in &tasks {
             self.announce_task(conversation, task, None);
         }
+        let tasks_write = tasks.iter().any(|task| task.spec["writes"] == true);
         let cancel = Arc::new(AtomicBool::new(false));
         plans.insert(conversation.to_owned(), cancel.clone());
         drop(plans);
@@ -475,6 +476,7 @@ impl Core {
         let conversation = conversation.to_owned();
         let plan_id = plan_id.to_owned();
         std::thread::spawn(move || {
+            core.warn_of_uncommitted(&conversation, tasks_write);
             core.run_plan(&conversation, &plan_id, &cancel);
             // The audit still counts as the plan running: it can be cancelled
             // and keeps the daemon busy.
@@ -494,6 +496,41 @@ impl Core {
             plans.remove(&conversation);
         });
         Ok(tasks)
+    }
+
+    /// Writers in worktrees start from `HEAD`: the user's uncommitted
+    /// changes are not part of their work, and the user is told so before
+    /// they start (design §11.1).
+    fn warn_of_uncommitted(&self, conversation: &str, writes: bool) {
+        if !writes || self.config.workspace.mode == WorkspaceMode::InPlace {
+            return;
+        }
+        let Ok(project) = self.store.conversation(conversation) else {
+            return;
+        };
+        let project = PathBuf::from(project.project);
+        if !git::is_repository(&project) {
+            return;
+        }
+        let Ok(files) = git::uncommitted(&project) else {
+            return;
+        };
+        if files.is_empty() {
+            return;
+        }
+        let shown: Vec<&str> = files.iter().take(10).map(String::as_str).collect();
+        let more = files.len().saturating_sub(shown.len());
+        let _ = self.store.append_event(
+            conversation,
+            None,
+            "notice",
+            &json!({"text": format!(
+                "uncommitted changes in {}{}: writers start from the last commit and do not see them; \
+                 a change to one of these files waits for you when it lands",
+                shown.join(", "),
+                if more > 0 { format!(" and {more} more") } else { String::new() }
+            )}),
+        );
     }
 
     fn wake(self: &Arc<Self>, conversation: &str) {
@@ -968,7 +1005,7 @@ impl Core {
         let _writing = if in_place {
             require(
                 git::is_repository(&project),
-                "tasks that change files need the project to be a git repository",
+                "tasks that change files need the project to be a git repository: run `git init` and commit first",
             )?;
             require(
                 self.config.policy.local_write,
@@ -1005,7 +1042,7 @@ impl Core {
         let worktree = if spec.writes && !in_place {
             require(
                 git::is_repository(&project),
-                "tasks that change files need the project to be a git repository",
+                "tasks that change files need the project to be a git repository: run `git init` and commit first",
             )?;
             let base = match &task.base {
                 Some(base) => base.clone(),

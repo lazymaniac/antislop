@@ -277,6 +277,7 @@ pub fn describe(event: &Value) -> Option<String> {
             "⏸ wstrzymano: nowe kroki czekają, /continue wznawia".into()
         }
         "paused" => "▶ wznowiono".into(),
+        "notice" => format!("⚠ {}", text("text")),
         "mode" if payload["autonomous"] == true => {
             "⚙ tryb autonomiczny: kolejne plany i rundy ruszają same".into()
         }

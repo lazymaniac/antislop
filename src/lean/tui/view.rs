@@ -409,6 +409,10 @@ impl View {
                     },
                 );
             }
+            "notice" => self.push(
+                Style::default().fg(Color::Yellow),
+                format!("⚠ {}", text("text")),
+            ),
             "mode" => {
                 self.autonomous = Some(payload["autonomous"] == true);
                 self.push(

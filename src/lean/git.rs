@@ -126,6 +126,17 @@ pub fn commit_paths(dir: &Path, files: &[String], message: &str) -> Result<Strin
     head(dir)
 }
 
+/// Paths with uncommitted changes, untracked ones included.
+pub fn uncommitted(dir: &Path) -> Result<Vec<String>> {
+    // Not `ok()`: trimming would eat the leading space of " M path".
+    let status = git(dir, &["status", "--porcelain=v1", "-z", "--no-renames"])?;
+    Ok(String::from_utf8_lossy(&status.stdout)
+        .split('\0')
+        .filter(|entry| entry.len() > 3)
+        .map(|entry| entry[3..].to_owned())
+        .collect())
+}
+
 pub fn is_repository(dir: &Path) -> bool {
     git(dir, &["rev-parse", "--is-inside-work-tree"]).is_ok_and(|output| output.status.success())
 }

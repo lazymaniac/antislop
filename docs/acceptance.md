@@ -66,6 +66,10 @@ does not grow with the repository), the scenario says so.
   and the agents read the project themselves. This keeps state independent
   of the repository's size.
 - Risks go only to the verifier paired with the task, never to the worker.
+- A project without git is not turned into a repository by the runtime
+  (design §11.1 creates one): read-only work runs without git, writers ask
+  the user to run `git init` and commit first, so nothing of the user's is
+  committed without them.
 - In supervised mode the first three correction rounds of a task run
   without asking, then the user decides (design §6.2 asks at each round).
   Autonomous mode has no count of rounds or plans, as design §14 says; it

@@ -223,6 +223,23 @@ fn a_writer_never_touches_files_the_user_is_editing() {
         git(&project, &["show", &format!("{branch}:hello.txt")]),
         "from worker"
     );
+    // The user was told before the writer started.
+    let notices: Vec<_> = core
+        .store
+        .events_since(&conversation, 0, 10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert!(
+        notices[0].payload["text"]
+            .as_str()
+            .unwrap()
+            .contains("uncommitted changes in hello.txt"),
+        "{:?}",
+        notices[0].payload
+    );
 }
 
 #[test]
