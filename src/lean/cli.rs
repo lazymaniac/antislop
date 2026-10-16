@@ -2,8 +2,9 @@
 //! it opens the TUI; otherwise it prints events line by line. Either way the
 //! project's daemon does the work, so it goes on after the frontend exits.
 //! Lines typed while agents work are accepted at once and answered in the
-//! orchestrator's next turn. `/accept` starts the proposed plan, `/cancel`
-//! stops running work.
+//! orchestrator's next turn. `/accept` starts the proposed plan, `/resume`
+//! runs again what the last plan left unfinished, `/cancel` stops running
+//! work.
 
 use super::daemon::{Client, Request};
 use crate::{Result, require};
@@ -161,6 +162,16 @@ pub fn chat(args: &[String]) -> Result<()> {
                         continue;
                     }
                 },
+                "/resume" => match &plan {
+                    Some(plan) => Request::Resume {
+                        conversation,
+                        plan: plan.clone(),
+                    },
+                    None => {
+                        eprintln!("✗ there is no plan to resume");
+                        continue;
+                    }
+                },
                 "/cancel" => Request::Cancel { conversation },
                 text => Request::Send {
                     conversation,
@@ -245,11 +256,16 @@ pub fn describe(event: &Value) -> Option<String> {
         "audit" => review_lines("audyt", payload).join("\n"),
         "plan_invalid" => format!("✗ plan odrzucony: {}", text("error")),
         "task" => format!(
-            "· [{}] {}: {} (runda {})",
+            "· [{}] {}: {} (runda {}){}",
             text("id"),
             text("title"),
             text("status"),
-            payload["round"]
+            payload["round"],
+            if payload["status"] == "waiting" {
+                " — CLI agenta czeka na logowanie albo odnowienie limitu; potem /resume"
+            } else {
+                ""
+            }
         ),
         "agent" if payload["type"] == "tool" => {
             format!("  ↳ {} {}", text("name"), text("detail"))

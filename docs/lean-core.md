@@ -117,7 +117,7 @@ recorded whole when its turn ends.
 `antislop` (or `antislop chat`) starts (or reuses) the project's daemon, which owns the `Core`
 (`core.lock` makes it the only owner), so work goes on after a frontend exits.
 One JSON request per connection: `identity`, `shutdown`, `conversations`,
-`start`, `send`, `accept`, `cancel`, and `events{conversation, after, wait_ms}`,
+`start`, `send`, `accept`, `resume`, `cancel`, and `events{conversation, after, wait_ms}`,
 a long poll returning at most 500 events / 1 MB. A daemon from another build is
 replaced when idle. The socket is `<state>/core.sock`, or
 `/tmp/antislop-<uid>/<hash>.sock` when that path is too long for Unix sockets.
@@ -128,7 +128,8 @@ replaced when idle. The socket is `<state>/core.sock`, or
   so the draw loop never waits. The transcript shows messages and the
   orchestrator's tool calls; a side panel shows each task's status, round and
   its agent's current tool call. Keys: Enter send, Alt+Enter new line, Ctrl+A
-  run the proposed plan, Ctrl+X cancel, PgUp/PgDn scroll, Ctrl+N new
+  run the proposed plan, Ctrl+R resume what the plan left unfinished, Ctrl+X
+  cancel, PgUp/PgDn scroll, Ctrl+N new
   conversation, Esc detach.
 - `antislop chat "message"` (or piped input) prints events line by line and
   exits once the conversation is idle; `/accept` and `/cancel` lines work too.
@@ -148,6 +149,15 @@ replaced when idle. The socket is `<state>/core.sock`, or
   outlives it or holds the turn open. Only the tail of stderr is kept.
 - On start, turns left running become `interrupted` and unfinished tasks
   become `cancelled` with the reason; nothing waits for a reconciliation.
+  The orchestrator then answers what it was answering, and an autonomous
+  conversation resumes its cut-off plan.
+- A turn that fails because the CLI needs a login or hit a usage/rate limit
+  leaves its task `waiting` (not `failed`), with the CLI's message.
+- `resume` (Ctrl+R, `/resume`) runs again every task of a plan that ended
+  without approval. Agents resume their own sessions and are told what
+  happened; a writer continues in its worktree (or from its last result); a
+  change that was approved but could not be integrated is integrated again
+  without another worker turn.
 - At most four tasks of a plan run at once.
 - No plan is shown to the user, or run, without passing through the plan
   verifier; an autonomous conversation never runs a plan the verifier did not
@@ -163,8 +173,8 @@ replaced when idle. The socket is `<state>/core.sock`, or
   result; one that depends on several starts from `HEAD`, so without
   `local_commits` it does not see their uncommitted results.
 - A plan runs in waves: a task waits for every task of the previous wave.
-- `needs_user` and cancelled tasks keep their branch and worktree, but there is
-  no command yet to resume one task or retry its integration.
+- Resume works per plan, not per task, and `waiting` tasks are not retried
+  on a timer.
 - Read-only modes are prompts and CLI modes, not OS confinement; `scope`
   guides agents but does not limit what they read.
 - Prompts are passed as arguments (the orchestrator's plan report is bounded
@@ -191,3 +201,7 @@ replaced when idle. The socket is `<state>/core.sock`, or
 6. ✅ Plan verifier, autonomous mode, final audit, per-kind verifier
    checklists, team shapes in the orchestrator's instructions
    (`tests/lean_review.rs`).
+7. ✅ Recovery: resume plans through the agents' sessions, `waiting` for
+   logins and limits, integration retried on resume, work picked up after a
+   restart (`tests/lean_recovery.rs`, `tests/lean_writer.rs`,
+   `tests/lean_core.rs`).

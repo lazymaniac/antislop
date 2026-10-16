@@ -376,21 +376,59 @@ impl Store {
 
     /// Turns left running by a daemon that stopped become interrupted; nothing
     /// else changes and nothing waits for a manual reconciliation.
-    pub fn interrupt_running_turns(&self) -> Result<usize> {
-        Ok(self.db().execute(
+    /// Returns the conversations whose orchestrator was cut off, so its
+    /// unanswered messages can be taken up again.
+    pub fn interrupt_running_turns(&self) -> Result<Vec<String>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let conversations = {
+            let mut statement = tx.prepare(
+                "SELECT DISTINCT conversation_id FROM turns
+                 WHERE status='running' AND role='orchestrator'",
+            )?;
+            statement
+                .query_map([], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<String>, _>>()?
+        };
+        tx.execute(
             "UPDATE turns SET status='interrupted',finished_ms=?1 WHERE status='running'",
             [now_ms()],
-        )?)
+        )?;
+        tx.commit()?;
+        Ok(conversations)
     }
 
-    /// Tasks of a plan that was running when its daemon stopped end
-    /// cancelled, with the reason; their worktrees stay for inspection.
-    pub fn interrupt_unfinished_tasks(&self) -> Result<usize> {
-        Ok(self.db().execute(
+    /// Unfinished tasks become cancelled with the reason. Returns each
+    /// affected (conversation, plan), so the plan can be resumed.
+    pub fn interrupt_unfinished_tasks(&self) -> Result<Vec<(String, String)>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let plans = {
+            let mut statement = tx.prepare(
+                "SELECT DISTINCT conversation_id, plan_id FROM tasks
+                 WHERE status IN ('queued','working','verifying')",
+            )?;
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<std::result::Result<Vec<(String, String)>, _>>()?
+        };
+        tx.execute(
             "UPDATE tasks SET status='cancelled',
                report=COALESCE(report || char(10) || char(10), '') || '[interrupted] the daemon stopped while this task ran'
              WHERE status IN ('queued','working','verifying')",
             [],
+        )?;
+        tx.commit()?;
+        Ok(plans)
+    }
+
+    /// Queues again every task of a plan that ended without approval, keeping
+    /// its rounds, report, verdict and work. Returns how many.
+    pub fn requeue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
+        Ok(self.db().execute(
+            "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2
+               AND status IN ('cancelled','failed','needs_user','skipped','waiting')",
+            params![conversation, plan_id],
         )?)
     }
 
@@ -636,7 +674,10 @@ mod tests {
             .unwrap();
         drop(store);
         let store = Store::open(&dir.path().join("core.db")).unwrap();
-        assert_eq!(store.interrupt_running_turns().unwrap(), 1);
+        assert_eq!(
+            store.interrupt_running_turns().unwrap(),
+            [conversation.id.as_str()]
+        );
         let turn = store
             .last_turn(&conversation.id, "orchestrator")
             .unwrap()

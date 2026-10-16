@@ -26,8 +26,10 @@ The first call starts the project's daemon (state in `PROJECT/.antislop`), so
 agents keep working when the frontend exits; the next call reattaches.
 
 TUI keys: Enter send, Alt+Enter new line, Ctrl+A run the proposed plan,
-Ctrl+X cancel running work, PgUp/PgDn scroll, Ctrl+N new conversation, Esc
-detach. In line mode, type `/accept` or `/cancel`.
+Ctrl+R resume what a plan left unfinished (after a login, a limit reset, a
+restart or your own edits), Ctrl+X cancel running work, PgUp/PgDn scroll,
+Ctrl+N new conversation, Esc detach. In line mode, type `/accept`, `/resume`
+or `/cancel`.
 
 ## How a request runs
 
@@ -35,15 +37,20 @@ detach. In line mode, type `/accept` or `/cancel`.
    own tools. It answers, asks, or proposes a plan: tasks with a goal, the
    directories in scope, dependencies, whether the task changes files, and what
    its verifier should focus on (including the risks of that task's domain).
-2. You accept the plan (supervised policy).
-3. Workers read and edit the project's files themselves. A task that changes
+2. An independent plan verifier checks the plan against your request and the
+   project before you see it; a flawed plan goes back to the orchestrator.
+3. `supervised`: you accept the plan. `autonomous`: a checked plan starts by
+   itself (at most three in a row before it waits for you).
+4. Workers read and edit the project's files themselves. A task that changes
    files works in its own git worktree; the runtime commits its work there.
-4. The task's verifier reads the result (and the diff) and approves or lists
-   findings; findings go back to the same worker session, for a bounded number
-   of rounds.
-5. Approved changes are integrated into your branch one at a time, never over
+5. The task's verifier reads the result (and the diff) with a checklist for
+   that kind of work and approves or lists findings; findings go back to the
+   same worker session, for a bounded number of rounds.
+6. Approved changes are integrated into your branch one at a time, never over
    files you are editing and never with conflict markers.
-6. The orchestrator receives the results and answers you.
+7. An independent auditor checks that every part of your request was
+   delivered; the orchestrator receives the results and the audit and
+   answers you, or proposes a plan for what is missing.
 
 ## Build and test
 

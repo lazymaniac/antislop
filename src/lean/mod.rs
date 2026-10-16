@@ -86,9 +86,9 @@ impl Core {
             &format!("another antislop process owns {}", state.display()),
         )?;
         let store = Store::open(&state.join("core.db"))?;
-        store.interrupt_running_turns()?;
-        store.interrupt_unfinished_tasks()?;
-        Ok(Arc::new(Self {
+        let cut_off = store.interrupt_running_turns()?;
+        let interrupted = store.interrupt_unfinished_tasks()?;
+        let core = Arc::new(Self {
             store,
             _lock: lock,
             config,
@@ -96,7 +96,19 @@ impl Core {
             integrating: Mutex::new(()),
             running: Mutex::new(HashMap::new()),
             plans: Mutex::new(HashMap::new()),
-        }))
+        });
+        // Pick up where the previous process stopped: the orchestrator answers
+        // what it was answering, and an autonomous conversation resumes its
+        // plan through the agents' own sessions.
+        for conversation in cut_off {
+            core.wake(&conversation);
+        }
+        if core.config.policy.automatic_progression() {
+            for (conversation, plan) in interrupted {
+                let _ = core.resume_plan(&conversation, &plan);
+            }
+        }
+        Ok(core)
     }
 
     pub fn start(&self, project: &Path) -> Result<Conversation> {
@@ -144,12 +156,36 @@ impl Core {
     /// Starts the proposed plan `plan_id`: exactly the one the user saw, even
     /// if the orchestrator has proposed another since.
     pub fn accept_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<Vec<Task>> {
+        self.start_plan(conversation, plan_id, |store| {
+            store.queue_plan(conversation, plan_id).map(|_| ())
+        })
+    }
+
+    /// Runs again every task of `plan_id` that ended without approval
+    /// (interrupted, failed, waiting for a login, needing the user, skipped).
+    /// Agents resume their own sessions with what they already did; a change
+    /// that was approved but could not be integrated is integrated again.
+    pub fn resume_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<Vec<Task>> {
+        self.start_plan(conversation, plan_id, |store| {
+            require(
+                store.requeue_plan(conversation, plan_id)? > 0,
+                "this plan has nothing to resume",
+            )
+        })
+    }
+
+    fn start_plan(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: &str,
+        queue: impl FnOnce(&Store) -> Result<()>,
+    ) -> Result<Vec<Task>> {
         let mut plans = self.plans.lock().expect("plans mutex");
         require(
             !plans.contains_key(conversation),
             "a plan is already running",
         )?;
-        self.store.queue_plan(conversation, plan_id)?;
+        queue(&self.store)?;
         let tasks = self.store.plan(plan_id)?;
         for task in &tasks {
             self.announce_task(conversation, task);
@@ -224,10 +260,15 @@ impl Core {
 
     /// The newest message for the orchestrator after its last turn, if any.
     fn unanswered(&self, conversation: &str) -> Result<Option<u64>> {
-        let after = self
-            .store
-            .last_turn(conversation, ORCHESTRATOR)?
-            .map_or(0, |turn| turn.upto_message);
+        // A failed turn counts as handled (the next message asks again); one
+        // cut off by a restart does not.
+        let after = match self.store.last_turn(conversation, ORCHESTRATOR)? {
+            Some(turn) if turn.status == TurnStatus::Interrupted => {
+                self.store.last_answered(conversation, ORCHESTRATOR)?
+            }
+            Some(turn) => turn.upto_message,
+            None => 0,
+        };
         Ok(self
             .store
             .messages_after(conversation, after)?
@@ -598,7 +639,9 @@ impl Core {
                 None => self.writer_base(&task.plan_id, &spec, &project)?,
             };
             let path = self.state.join("worktrees").join(&task.id);
-            git::add_worktree(&project, &path, &branch(task), &base)?;
+            // A resumed writer whose worktree is gone continues from its work.
+            let start = task.result.clone().unwrap_or_else(|| base.clone());
+            git::add_worktree(&project, &path, &branch(task), &start)?;
             task.base = Some(base);
             Some(path)
         } else {
@@ -628,8 +671,20 @@ impl Core {
             .collect::<Vec<_>>();
         let worker = format!("worker:{}", task.id);
         let verifier = format!("verifier:{}", task.id);
-        let mut findings = vec![];
-        for round in 1..=tasks::MAX_ROUNDS {
+        // A resumed task keeps its rounds and its verifier's last word.
+        let verdict = task
+            .verdict
+            .as_ref()
+            .and_then(|verdict| serde_json::from_value::<Verdict>(verdict.clone()).ok());
+        if let (Some(verdict), Some(path)) = (&verdict, &worktree)
+            && verdict.approved
+        {
+            return self.integrate(conversation, task, &spec, &project, path);
+        }
+        let mut findings = verdict.map(|verdict| verdict.findings).unwrap_or_default();
+        let resumed = task.round > 0;
+        let first_round = task.round + 1;
+        for round in first_round..first_round + tasks::MAX_ROUNDS {
             task.round = round;
             self.set_status(conversation, task, status::WORKING)?;
             let setup = TurnSetup {
@@ -644,6 +699,8 @@ impl Core {
             let report = self.turn(setup, cancel, |first| {
                 if first {
                     tasks::worker_prompt(&project_text, &spec)
+                } else if resumed && round == first_round {
+                    tasks::worker_resume(&findings)
                 } else {
                     tasks::worker_followup(&findings)
                 }
@@ -802,16 +859,18 @@ impl Core {
         role: &str,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        let next = if cancel.load(Ordering::SeqCst) {
-            status::CANCELLED
-        } else {
-            status::FAILED
-        };
         let error = self
             .store
             .last_turn(conversation, role)?
             .and_then(|turn| turn.error)
             .unwrap_or_else(|| "no reason recorded".into());
+        let next = if cancel.load(Ordering::SeqCst) {
+            status::CANCELLED
+        } else if tasks::needs_user_action(&error) {
+            status::WAITING
+        } else {
+            status::FAILED
+        };
         let who = role.split(':').next().unwrap_or(role);
         let report = task.report.take().unwrap_or_default();
         task.report = Some(

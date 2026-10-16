@@ -72,6 +72,11 @@ pub enum Request {
         conversation: String,
         plan: String,
     },
+    /// Runs again what the plan left unfinished, through the same sessions.
+    Resume {
+        conversation: String,
+        plan: String,
+    },
     Cancel {
         conversation: String,
     },
@@ -174,6 +179,9 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         Request::Send { conversation, text } => json!(core.send(&conversation, &text)?.seq),
         Request::Accept { conversation, plan } => {
             json!(core.accept_plan(&conversation, &plan)?.len())
+        }
+        Request::Resume { conversation, plan } => {
+            json!(core.resume_plan(&conversation, &plan)?.len())
         }
         Request::Cancel { conversation } => {
             core.cancel(&conversation);

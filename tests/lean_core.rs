@@ -209,3 +209,36 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
         .call(&architect::lean::daemon::Request::Shutdown)
         .unwrap();
 }
+
+#[test]
+fn a_question_cut_off_by_a_restart_is_answered_after_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let state = dir.path().join("state");
+    let codex = fake_codex(dir.path());
+    let core = Core::open(&state, config(&codex)).unwrap();
+    let conversation = core.start(&project).unwrap();
+    // As if the daemon died while the orchestrator worked on this message.
+    let message = core
+        .store
+        .add_message(&conversation.id, "user", "co dalej?")
+        .unwrap();
+    core.store
+        .start_turn(&conversation.id, "orchestrator", "codex", message.seq)
+        .unwrap();
+    drop(core);
+
+    let core = Core::open(&state, config(&codex)).unwrap();
+    wait_idle(&core, &conversation.id);
+    let last = core
+        .store
+        .messages_after(&conversation.id, 0)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        (last.author.as_str(), last.text.as_str()),
+        ("orchestrator", "answer: co dalej?")
+    );
+}

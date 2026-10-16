@@ -67,6 +67,19 @@ impl View {
         });
     }
 
+    /// Whether the plan ended with tasks that can run again.
+    pub fn plan_resumable(&self) -> bool {
+        self.tasks
+            .iter()
+            .all(|task| super::tasks::status::finished(&task.status))
+            && self.tasks.iter().any(|task| {
+                matches!(
+                    task.status.as_str(),
+                    "cancelled" | "failed" | "needs_user" | "skipped" | "waiting"
+                )
+            })
+    }
+
     pub fn plan_proposed(&self) -> bool {
         !self.tasks.is_empty() && self.tasks.iter().all(|task| task.status == "proposed")
     }
@@ -362,6 +375,18 @@ impl App {
                 ),
                 None => self.notice = Some("✗ nie ma planu do uruchomienia".into()),
             },
+            "/resume" => match self
+                .view
+                .plan
+                .clone()
+                .filter(|_| self.view.plan_resumable())
+            {
+                Some(plan) => self.request(
+                    Request::Resume { conversation, plan },
+                    Some("plan wznowiony"),
+                ),
+                None => self.notice = Some("✗ nie ma czego wznowić".into()),
+            },
             "/cancel" => self.request(Request::Cancel { conversation }, Some("anulowano")),
             _ => {
                 self.scroll = 0;
@@ -396,6 +421,10 @@ impl App {
             }
             KeyCode::Char('x') if control => {
                 self.input = "/cancel".into();
+                self.submit();
+            }
+            KeyCode::Char('r') if control => {
+                self.input = "/resume".into();
                 self.submit();
             }
             KeyCode::Char('n') if control => self.new_conversation(),
@@ -475,6 +504,8 @@ impl App {
         let hint = self.notice.clone().unwrap_or_else(|| {
             let accept = if self.view.plan_proposed() {
                 "Ctrl+A uruchom plan · "
+            } else if self.view.plan_resumable() {
+                "Ctrl+R wznów plan · "
             } else {
                 ""
             };

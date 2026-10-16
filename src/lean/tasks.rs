@@ -52,11 +52,13 @@ pub mod status {
     pub const CANCELLED: &str = "cancelled";
     /// A plan the plan verifier sent back; the orchestrator proposes another.
     pub const REVISED: &str = "revised";
+    /// The agent's CLI needs the user: a login, or a usage limit to reset.
+    pub const WAITING: &str = "waiting";
 
     pub fn finished(status: &str) -> bool {
         matches!(
             status,
-            APPROVED | NEEDS_USER | FAILED | SKIPPED | CANCELLED | REVISED
+            APPROVED | NEEDS_USER | FAILED | SKIPPED | CANCELLED | REVISED | WAITING
         )
     }
 }
@@ -313,6 +315,46 @@ pub fn worker_prompt(project: &str, task: &TaskSpec) -> String {
     )
 }
 
+/// For a worker resumed after its task stopped: its session still holds the
+/// task, so only what happened is said.
+pub fn worker_resume(findings: &[Value]) -> String {
+    if findings.is_empty() {
+        "Your work on this task was interrupted. Check the current state of the \
+         files, finish the task and give your complete report."
+            .into()
+    } else {
+        format!(
+            "The task was resumed. Your verifier's open findings:\n{}\n\nCheck the \
+             current state of the files, address them and give your complete \
+             updated report.",
+            findings_text(findings)
+        )
+    }
+}
+
+/// Whether a CLI's error means it waits for the user (a login, a usage or
+/// rate limit) rather than that the task went wrong.
+pub fn needs_user_action(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "login",
+        "log in",
+        "logged in",
+        "authenticat",
+        "unauthorized",
+        "api key",
+        "credentials",
+        "rate limit",
+        "rate_limit",
+        "usage limit",
+        "quota",
+        "too many requests",
+        "credit balance",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+}
+
 pub fn worker_followup(findings: &[Value]) -> String {
     format!(
         "Your verifier found problems:\n{}\n\nAddress them and give your complete updated report.",
@@ -528,6 +570,14 @@ mod tests {
         let looped = "```plan\n{\"tasks\":[{\"id\":\"t1\",\"title\":\"a\",\"goal\":\"b\",\
             \"depends_on\":[\"t1\"],\"kind\":\"analysis\",\"verifier\":{\"focus\":\"c\"}}]}\n```";
         assert!(parse_plan(looped).1.unwrap().is_err());
+    }
+
+    #[test]
+    fn login_and_limit_errors_wait_for_the_user() {
+        assert!(needs_user_action("Error: Not logged in. Run `agy login`."));
+        assert!(needs_user_action("429 Too Many Requests"));
+        assert!(needs_user_action("You've hit your usage limit"));
+        assert!(!needs_user_action("exit status 1: panicked at src/main.rs"));
     }
 
     #[test]

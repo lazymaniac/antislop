@@ -198,3 +198,40 @@ fn a_writer_never_touches_files_the_user_is_editing() {
         "from worker"
     );
 }
+
+#[test]
+fn resuming_integrates_an_approved_change_once_the_user_is_done() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    assert_eq!(task.status, "needs_user");
+    let calls_before = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+        .unwrap()
+        .lines()
+        .filter(|line| line.contains("accept-edits"))
+        .count();
+
+    // The user drops their draft; resuming lands the approved change without
+    // asking the worker again.
+    std::fs::remove_file(project.join("hello.txt")).unwrap();
+    core.resume_plan(&conversation, &task.plan_id).unwrap();
+    wait_idle(&core, &conversation);
+
+    let task = &core.store.plan(&task.plan_id).unwrap()[0];
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "from worker\n"
+    );
+    let calls_after = std::fs::read_to_string(dir.path().join("calls.jsonl"))
+        .unwrap()
+        .lines()
+        .filter(|line| line.contains("accept-edits"))
+        .count();
+    assert_eq!(calls_after, calls_before, "no new worker turn");
+    assert!(core.resume_plan(&conversation, &task.plan_id).is_err());
+}

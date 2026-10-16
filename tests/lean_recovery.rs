@@ -34,8 +34,15 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
         r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
-if "Task: Fail" in prompt and "You verify" not in prompt and "You audit" not in prompt:
-    print("login required", file=sys.stderr)
+import os
+print(json.dumps({"event": "init", "conversation_id": "s"}), flush=True)
+here = os.path.dirname(sys.argv[0])
+with open(os.path.join(here, "agy.log"), "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\n")
+worker = "Task: Fail" in prompt or "was interrupted" in prompt
+if worker and "You verify" not in prompt and "You audit" not in prompt \
+        and not os.path.exists(os.path.join(here, "logged-in")):
+    print("Error: not logged in, run `agy login`", file=sys.stderr)
     sys.exit(1)
 REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:", "You verify")
 answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```" if any(m in prompt for m in REVIEW) else "report"
@@ -51,6 +58,10 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status"
 }
 
 fn open(dir: &Path) -> std::sync::Arc<Core> {
+    open_in_mode(dir, "supervised")
+}
+
+fn open_in_mode(dir: &Path, mode: &str) -> std::sync::Arc<Core> {
     let (codex, agy) = fake_clis(dir);
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -65,6 +76,7 @@ fn open(dir: &Path) -> std::sync::Arc<Core> {
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
     );
+    let text = text.replace("mode = \"supervised\"", &format!("mode = {mode:?}"));
     Core::open(&dir.join("state"), Config::from_toml(&text).unwrap()).unwrap()
 }
 
@@ -103,10 +115,35 @@ fn a_failure_skips_every_task_that_depends_on_it_and_says_why() {
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
-    assert_eq!(statuses(&core, &plan), ["failed", "skipped", "skipped"]);
-    let failed = &core.store.plan(&plan).unwrap()[0];
-    let report = failed.report.as_deref().unwrap();
-    assert!(report.contains("login required"), "{report}");
+    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+    let waiting = &core.store.plan(&plan).unwrap()[0];
+    let report = waiting.report.as_deref().unwrap();
+    assert!(report.contains("not logged in"), "{report}");
+}
+
+#[test]
+fn after_a_login_resuming_finishes_the_plan_in_the_same_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("project")).unwrap();
+    let core = open(dir.path());
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    let plan = propose(&core, &conversation, "chain");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+
+    std::fs::write(dir.path().join("logged-in"), "").unwrap();
+    core.resume_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
+    // The failed turn already had a session: the worker resumes it and is
+    // told what happened instead of being handed the task anew.
+    let log = std::fs::read_to_string(dir.path().join("agy.log")).unwrap();
+    let resumed = log
+        .lines()
+        .find(|line| line.contains("was interrupted"))
+        .expect("a resumed worker turn");
+    assert!(resumed.contains("--conversation"), "{resumed}");
 }
 
 #[test]
@@ -167,4 +204,28 @@ fn tasks_cut_off_by_a_daemon_restart_end_cancelled() {
             .unwrap()
             .contains("[interrupted]")
     );
+}
+
+#[test]
+fn an_autonomous_plan_cut_off_by_a_restart_resumes_by_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("project")).unwrap();
+    std::fs::write(dir.path().join("logged-in"), "").unwrap();
+    let core = open_in_mode(dir.path(), "autonomous");
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
+                      "verifier": {"focus": "f"}});
+    let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
+    core.store
+        .queue_plan(&conversation, &tasks[0].plan_id)
+        .unwrap();
+    let mut working = tasks[0].clone();
+    working.status = "working".into();
+    working.round = 1;
+    core.store.update_task(&working).unwrap();
+    drop(core);
+
+    let core = open_in_mode(dir.path(), "autonomous");
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &tasks[0].plan_id), ["approved"]);
 }
