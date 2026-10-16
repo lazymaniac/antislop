@@ -386,7 +386,8 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         Options => {
             "real alternatives considered under the same conditions; a variant \
              that misses an obligation is excluded before ranking; the choice \
-             follows from the evidence"
+             follows from the evidence; a result that shows a better variant \
+             or breaks a premise reopens the choice, whatever is already built"
         }
         Architecture => {
             "fits the project's existing structure and idioms; the simplest \
@@ -402,7 +403,8 @@ pub fn checklist(kind: WorkKind) -> &'static str {
             "does exactly what the goal asks, nothing more; no duplicated module \
              or needless layer; follows project conventions; edge cases and \
              combinations of inputs handled; tests exercise the change with \
-             meaningful assertions; run the project's checks when you can"
+             meaningful assertions; no refactoring the change needs left undone; \
+             run the project's checks when you can"
         }
         Refactoring => {
             "behaviour preserved, with evidence; structure actually improved; no \
@@ -412,12 +414,14 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         StaticAnalysis => {
             "analyzers actually run with the project's configuration; warnings \
              count even when the exit code is 0; no suppression, rule weakening \
-             or baseline change to make findings disappear"
+             or baseline change to make findings disappear; a finding that \
+             predates the change but lies in the agreed scope still counts, and \
+             a doubt about the scope is named, not settled silently"
         }
         TestDesign => {
             "scenarios follow from the requirements and the likely failures; \
              combinations of parameters that interact are covered, not only \
-             each one separately"
+             each one separately or in pairs when three or more are coupled"
         }
         Testing => {
             "tests have assertions that fail on the bug they target; they run \
@@ -472,7 +476,12 @@ pub fn user_edits_note(files: &[String]) -> String {
     )
 }
 
-pub fn worker_prompt(project: &str, task: &TaskSpec, team: &[TaskSpec]) -> String {
+pub fn worker_prompt(
+    project: &str,
+    task: &TaskSpec,
+    team: &[TaskSpec],
+    autonomous: bool,
+) -> String {
     let others: Vec<String> = team
         .iter()
         .filter(|other| other.id != task.id)
@@ -498,8 +507,17 @@ pub fn worker_prompt(project: &str, task: &TaskSpec, team: &[TaskSpec]) -> Strin
         task.goal,
         scope_text(&task.scope),
         if task.writes {
-            "Make the changes in this working directory (a git worktree of the \
-             project). Do not commit; the runtime commits your changes.\n\n"
+            if autonomous {
+                "Make the changes in this working directory. Do not commit; the \
+                 runtime records your changes. A structural problem in adjacent \
+                 code that this change runs into may be fixed when it is small, \
+                 with evidence that behaviour is preserved; say so in the report.\n\n"
+            } else {
+                "Make the changes in this working directory. Do not commit; the \
+                 runtime records your changes. Do not fix problems outside the \
+                 goal, even small ones in adjacent code: name them in the report \
+                 with the fix you propose, and the user decides.\n\n"
+            }
         } else {
             "Work read-only; do not modify anything.\n\n"
         }

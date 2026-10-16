@@ -901,6 +901,7 @@ impl Core {
         let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let in_place = spec.writes && self.config.workspace.mode == WorkspaceMode::InPlace;
+        let autonomous = self.config.policy.automatic_progression();
         // In place, writers take turns in the user's directory.
         let _writing = if in_place {
             require(
@@ -1019,7 +1020,7 @@ impl Core {
             };
             let report = self.turn(worker_setup(), cancel, |first| {
                 if first {
-                    tasks::worker_prompt(&project_text, &spec, &team)
+                    tasks::worker_prompt(&project_text, &spec, &team, autonomous)
                         + &tasks::user_edits_note(&user_edits)
                 } else if resumed && round == first_round {
                     tasks::worker_resume(&findings)
@@ -1038,7 +1039,7 @@ impl Core {
                 }
                 let next = self.turn(worker_setup(), cancel, |first| {
                     if first {
-                        tasks::worker_prompt(&project_text, &spec, &team)
+                        tasks::worker_prompt(&project_text, &spec, &team, autonomous)
                     } else {
                         tasks::INBOX_FOLLOWUP.into()
                     }
