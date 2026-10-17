@@ -378,6 +378,14 @@ replaced when idle. The socket is `<state>/core.sock`, or
   guides agents but does not limit what they read. In a real run an agy
   plan verifier read files outside the project until told not to
   ([calibration](calibration.md)).
+- Hostile instructions in the project's files are held by the agents'
+  instructions and by review, not by OS confinement: codex's
+  `workspace-write` sandbox leaves temporary directories writable, and a
+  worker ran an injected setup script there until agents were told not to
+  follow project instructions that reach beyond the project
+  ([calibration](calibration.md)).
+- An interrupted verification is requeued with its task, so the worker
+  gets a turn before the verifier resumes its session.
 - A read-only codex agent cannot run checks that write (tests that create
   temporary directories); the orchestrator plans such checks as `writes`
   tasks.
@@ -442,6 +450,9 @@ replaced when idle. The socket is `<state>/core.sock`, or
 
 15. ✅ Calibration (design M5): `antislop eval` runs verifiers on seeded
    cases (`evals/`) on real CLIs against a plain one-agent review; a whole
-   run was compared with one agent on hidden acceptance checks, and the
-   daemon was killed mid-run with real CLIs. Results, measured limits and
-   the faults they found (fixed): [calibration.md](calibration.md).
+   run was compared with one agent on hidden acceptance checks, large
+   changes (600 lines, 40 files) were reviewed, hostile project content
+   was run against the team and one agent, and the daemon (or everything)
+   was killed mid-run in three places with real CLIs. Results, measured
+   limits and the faults they found (fixed):
+   [calibration.md](calibration.md).
