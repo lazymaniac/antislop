@@ -5,7 +5,7 @@ use architect::{
 use std::time::{Duration, Instant};
 
 /// A codex-shaped CLI: records its arguments, answers with the prompt's last
-/// line, sleeps on "slow" and fails on "fail".
+/// line, sleeps on "slow" (longer on "sleepy") and fails on "fail".
 fn fake_codex(dir: &std::path::Path) -> std::path::PathBuf {
     let script = dir.join("codex");
     let log = dir.join("calls.log");
@@ -17,6 +17,7 @@ for last; do :; done
 printf '%s\n---\n' "$*" >> '{log}'
 answer=$(printf '%s' "$last" | tail -n 1)
 case "$answer" in *slow*) sleep 1 ;; esac
+case "$answer" in *sleepy*) sleep 4 ;; esac
 case "$answer" in *fail*) echo 'login required' >&2; exit 1 ;; esac
 echo '{{"type":"thread.started","thread_id":"T1"}}'
 echo '{{"type":"item.started","item":{{"type":"command_execution","command":"ls"}}}}'
@@ -376,4 +377,101 @@ fn a_daemon_whose_state_is_deleted_leaves() {
         assert!(Instant::now() < deadline, "the daemon lingered");
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+#[test]
+fn a_dead_daemons_agent_is_ended_before_its_turn_resumes() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let state = dir.path().join("state");
+    let codex = fake_codex(dir.path());
+    let core = Core::open(&state, config(&codex)).unwrap();
+    let conversation = core.start(&project).unwrap();
+    // As if the daemon died with this CLI still working: it was its own
+    // process group, so it outlived the daemon.
+    let turn = core
+        .store
+        .start_turn(&conversation.id, "worker:t1", "codex", 0)
+        .unwrap();
+    let orphan_script = dir.path().join("orphan").join("codex");
+    std::fs::create_dir(orphan_script.parent().unwrap()).unwrap();
+    std::fs::write(&orphan_script, "#!/bin/sh\nsleep 30\n").unwrap();
+    std::fs::set_permissions(
+        &orphan_script,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let mut orphan = std::os::unix::process::CommandExt::process_group(
+        &mut std::process::Command::new(&orphan_script),
+        0,
+    )
+    .spawn()
+    .unwrap();
+    core.store.set_turn_pid(&turn.id, orphan.id()).unwrap();
+    drop(core);
+
+    let _core = Core::open(&state, config(&codex)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while orphan.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "the orphaned CLI still runs");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_frontend_outlives_a_daemon_killed_mid_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path().canonicalize().unwrap();
+    let project = dir.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(&dir);
+    std::fs::write(
+        dir.join("architect.toml"),
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/architect.toml"
+        ))
+        .unwrap()
+        .replace(
+            "binary = \"codex\"",
+            &format!("binary = {:?}", codex.to_string_lossy()),
+        ),
+    )
+    .unwrap();
+    let frontend = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+        .args(["chat", "--project"])
+        .arg(&project)
+        .arg("--config")
+        .arg(dir.join("architect.toml"))
+        .arg("--state")
+        .arg(dir.join("state"))
+        .arg("sleepy pytanie")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !std::fs::read_to_string(dir.join("calls.log"))
+        .unwrap_or_default()
+        .contains("sleepy pytanie")
+    {
+        assert!(Instant::now() < deadline, "the orchestrator never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let daemon = architect::lean::daemon::Client::at(&dir.join("state"))
+        .call(&architect::lean::daemon::Request::Identity)
+        .unwrap()["pid"]
+        .as_i64()
+        .unwrap() as libc::pid_t;
+    // SAFETY: kills the test's own daemon, as a crash would.
+    unsafe { libc::kill(daemon, libc::SIGKILL) };
+
+    let output = frontend.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout.contains("answer: sleepy pytanie"), "{stdout}");
+    let calls = std::fs::read_to_string(dir.join("calls.log")).unwrap();
+    assert_eq!(calls.matches("sleepy pytanie").count(), 2, "{calls}");
 }

@@ -349,6 +349,9 @@ pub struct Client {
     socket: PathBuf,
     /// Something the user should know about the daemon they reached.
     pub notice: Option<String>,
+    /// Project, configuration and state, to start the daemon again if it
+    /// dies under a frontend that is following events.
+    origin: Option<(PathBuf, PathBuf, PathBuf)>,
 }
 
 impl Client {
@@ -357,6 +360,7 @@ impl Client {
         Self {
             socket: socket(state),
             notice: None,
+            origin: None,
         }
     }
 
@@ -367,6 +371,7 @@ impl Client {
     pub fn connect(project: &Path, config: &Path, state: &Path) -> Result<Self> {
         private_directory(state)?;
         let mut client = Self::at(state);
+        client.origin = Some((project.into(), config.into(), state.into()));
         if let Some(parent) = client.socket.parent() {
             // Never talk to a socket someone else could have placed.
             private_directory(parent)?;
@@ -437,7 +442,25 @@ impl Client {
         }
     }
 
+    /// One request. Following events survives a daemon that died: the
+    /// daemon is started again (and picks up the work) and the request,
+    /// which changes nothing, is repeated once.
     pub fn call(&self, request: &Request) -> Result<Value> {
+        match (self.call_once(request), &self.origin) {
+            (Err(error), Some((project, config, state)))
+                // State the user deleted stays deleted.
+                if matches!(request, Request::Events { .. })
+                    && lost(&error)
+                    && state.join("core.db").exists() =>
+            {
+                Self::connect(project, config, state).map_err(|_| error)?;
+                self.call_once(request)
+            }
+            (result, _) => result,
+        }
+    }
+
+    fn call_once(&self, request: &Request) -> Result<Value> {
         let mut stream = UnixStream::connect(&self.socket)?;
         let wait = match request {
             Request::Events { wait_ms, .. } => Duration::from_millis(*wait_ms).min(LONGEST_WAIT),
@@ -449,13 +472,25 @@ impl Client {
         bytes.push(b'\n');
         stream.write_all(&bytes)?;
         let response: Response = crate::transport::read(&mut BufReader::new(stream))?
-            .ok_or_else(|| Error::Invalid("the daemon disconnected".into()))?;
+            .ok_or_else(|| Error::Invalid(DISCONNECTED.into()))?;
         match response.error {
             Some(error) => Err(Error::Invalid(error)),
             None => Ok(response.data.unwrap_or_default()),
         }
     }
 }
+
+/// Whether a request failed because the daemon was gone, not because it
+/// refused the request.
+fn lost(error: &Error) -> bool {
+    match error {
+        Error::Io(_) => true,
+        Error::Invalid(message) => message == DISCONNECTED,
+        _ => false,
+    }
+}
+
+const DISCONNECTED: &str = "the daemon disconnected";
 
 /// Waits until the daemon that held `state` has exited.
 fn wait_unlocked(state: &Path) -> Result<()> {
