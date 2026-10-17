@@ -357,7 +357,10 @@ pub fn orchestrator_instructions() -> String {
          Each task gets a worker that reads the files itself (give scope, not \
          content) and a verifier that checks the worker's result. Give each \
          verifier only the risks relevant to its own task. `kind` is one of: {}. \
-         Set `writes` only for tasks that must change files. A task that needs \
+         Set `writes` only for tasks that must change files, or must run checks \
+         that write (tests using temporary files, builds): a read-only agent's \
+         CLI may forbid every write, and a `writes` task runs in its own copy of \
+         the project; one that changes nothing leaves the project as it was. A task that needs \
          another's result depends on it; tasks that change the same files or \
          contract are ordered. An unknown that matters is established by an \
          earlier task, never assumed.\n\n\
