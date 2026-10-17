@@ -456,3 +456,21 @@ replaced when idle. The socket is `<state>/core.sock`, or
    was killed mid-run in three places with real CLIs. Results, measured
    limits and the faults they found (fixed):
    [calibration.md](calibration.md).
+
+## Design §16 build stages
+
+| Design stage | Exit criterion | Where it is met |
+| --- | --- | --- |
+| M0: integration spike | Versions and limits documented; a transport chosen per CLI | [Agents](#agents) (one stream-JSON or `exec --json` transport per CLI, resume by the CLI's own session id); runs measured on codex-cli 0.163.0, Claude Code 2.1.301 and agy 1.4.0 ([calibration](calibration.md)). gemini is implemented from its documentation and has not run against a real binary. [m0/](m0/README.md) keeps the old runtime's first probes. |
+| M1: local runtime | State recovered without losing approvals or doubling actions | Stages 1, 4 and 7; [acceptance](acceptance.md) scenarios 9, 10 and 16 |
+| M2: vertical slice | A task finished on evidence; a weak result rejected | Stages 2 and 3; scenarios 1 and 3 |
+| M2Q: quality contracts | A fake provider cannot close a task that skips a requirement, risk or gate | Stages 6 and 13 (verdict coverage of every obligation, final audit); scenarios 27–31 |
+| M3: team and TUI | Real events, navigation, honest delivery states, comments answered | Stages 8–11; scenario 6 |
+| M4: full MVP | Every role verified; acceptance scenarios pass | Stages 12–14; all 40 scenarios in [acceptance](acceptance.md) |
+| M5: calibration | Measured limits and a report against the baseline | Stage 15; [calibration](calibration.md) |
+
+Design §20's open decisions stand as follows. Isolation and the supported
+CLI versions (1) and session resume per CLI (2) are settled above and in
+[Known limits](#known-limits). The name (3) is `antislop`, with
+`architect` as the library. The licence and distribution (4) are left to
+the owner, as the design asks.

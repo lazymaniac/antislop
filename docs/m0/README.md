@@ -1,5 +1,7 @@
 # M0 integration evidence
 
+Historical: these probes were made for the old runtime, since deleted. The lean core's transports and the CLI versions it was measured on are in [lean-core.md](../lean-core.md#design-16-build-stages).
+
 Provider probes were observed on macOS on 2026-10-13. Runtime tests also passed in a Linux Podman container; see `linux-runtime.json`. The previously stopped VM was stopped again after testing. Capability advertisements and successful protocol initialization do not prove that a model turn, resume, steering or cancellation works.
 
 | Provider | Version | Observed | Open |
