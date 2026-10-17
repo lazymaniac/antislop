@@ -188,9 +188,9 @@ the user's version recoverable.
 - `pauses(conversation_id)` and `modes(conversation_id, autonomous)` — what
   the user set for a conversation.
 
-`PRAGMA user_version` holds the schema version (2). A build migrates an
+`PRAGMA user_version` holds the schema version (3). A build migrates an
 older state on open (1 → 2 gave events their time; earlier events keep 0,
-unknown) and refuses a newer one instead of rewriting it. An agent's details
+unknown; 2 → 3 gave turns their CLI's process group) and refuses a newer one instead of rewriting it. An agent's details
 show its time in turns where both ends are known.
 
 Writer worktrees live in `<state>/worktrees/<task>`, removed after a clean
@@ -283,8 +283,12 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - A turn succeeds only with a complete result *and* a clean exit. When a turn
   ends or is cancelled its whole process group is killed, so no descendant
   outlives it or holds the turn open. Only the tail of stderr is kept.
-- On start, turns left running become `interrupted` and unfinished tasks
-  become `cancelled` with the reason; nothing waits for a reconciliation.
+- On start, the CLIs of turns left running by a daemon that died are ended
+  first: each runs in its own process group and would otherwise go on
+  beside its resumed turn. A group is ended only while its number still
+  belongs to that CLI (a group leader running the provider, started when
+  the turn did). Then turns left running become `interrupted` and
+  unfinished tasks become `cancelled` with the reason; nothing waits for a reconciliation.
   The orchestrator then answers what it was answering, and an autonomous
   conversation resumes its cut-off plan.
 - A task that stops short of approval (`needs_user`, `waiting`, `failed`,
@@ -336,6 +340,10 @@ replaced when idle. The socket is `<state>/core.sock`, or
   would make them writable (design §18 scenario 15).
 - An idle daemon whose state directory or socket is gone exits within a few
   seconds; nothing lingers after `.antislop` is deleted.
+- A frontend following a conversation outlives its daemon: when the daemon
+  dies it is started again (picking up the work) and following goes on.
+  Only following is repeated; a request that changes something is not
+  (state the user deleted is not recreated either).
 - The daemon runs with the configuration it read at start. A frontend that
   finds `architect.toml` changed restarts an idle daemon; a busy one keeps
   its configuration for the running work and the frontend says the new one
@@ -367,7 +375,12 @@ replaced when idle. The socket is `<state>/core.sock`, or
 - Resume works per plan, not per task, and `waiting` tasks are not retried
   on a timer.
 - Read-only modes are prompts and CLI modes, not OS confinement; `scope`
-  guides agents but does not limit what they read.
+  guides agents but does not limit what they read. In a real run an agy
+  plan verifier read files outside the project until told not to
+  ([calibration](calibration.md)).
+- A read-only codex agent cannot run checks that write (tests that create
+  temporary directories); the orchestrator plans such checks as `writes`
+  tasks.
 - Prompts are passed as arguments (the orchestrator's plan report is bounded
   by 40k characters per task).
 - The history records each turn's CLI, model and effort, not the CLI's
@@ -427,5 +440,8 @@ replaced when idle. The socket is `<state>/core.sock`, or
    a warning about uncommitted changes writers do not see, a versioned
    `core.db` (design §6.2, §7.6, §8, §9.5, §10.3, §11.1, §13–§15).
 
-Open (design M5): measuring real CLIs on the scenarios that rest on
-instructions.
+15. ✅ Calibration (design M5): `antislop eval` runs verifiers on seeded
+   cases (`evals/`) on real CLIs against a plain one-agent review; a whole
+   run was compared with one agent on hidden acceptance checks, and the
+   daemon was killed mid-run with real CLIs. Results, measured limits and
+   the faults they found (fixed): [calibration.md](calibration.md).

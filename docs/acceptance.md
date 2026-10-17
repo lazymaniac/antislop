@@ -7,9 +7,11 @@ evidence differs, and the difference matters:
   (`tests/`, unit tests in `src/lean`).
 - **prompt**: an agent's instructions or its verifier's numbered
   obligations ask for it (`src/lean/tasks.rs`). The runtime makes sure the
-  verifier accounts for each obligation (scenario 30), but whether a real
-  model judges correctly is the calibration work of design M5. Real CLIs have
-  not yet been measured on these scenarios.
+  verifier accounts for each obligation (scenario 30). Whether a real
+  model judges correctly was measured on claude, codex and agy with seeded
+  cases (design M5, [calibration.md](calibration.md)): every verifier
+  rejected and named each seeded defect of scenarios 3, 4, 11, 12, 15, 19
+  and 21–24 and approved the clean controls.
 
 Where the lean core departs from the design on purpose (the user's
 principles: risks only to paired verifiers, no copies of sources, state that

@@ -23,7 +23,12 @@ antislop --new                   # TUI on a new conversation
 antislop "przeanalizuj architekturę projektu"   # line mode, exits when idle
 antislop --project DIR --config FILE --state DIR
 antislop export > history.jsonl  # the conversation's history, secrets redacted
+antislop eval evals --cli codex  # verifiers on seeded cases vs a plain review
 ```
+
+`antislop eval` runs real CLIs on the cases in [evals/](evals) and compares
+the verifier antislop gives a task with one agent asked plainly to review;
+[docs/calibration.md](docs/calibration.md) reports what it measured.
 
 The first call starts the project's daemon (state in `PROJECT/.antislop`), so
 agents keep working when the frontend exits; the next call reattaches.
