@@ -1,0 +1,61 @@
+{
+  "scenario": 0,
+  "task": {
+    "id": "t1",
+    "title": "Search users",
+    "goal": "Add search_users(conn, text, limit=50) to users.py: at most `limit` users whose name contains text, case-insensitive, with tests in tests/test_users.py.",
+    "scope": [
+      "users.py",
+      "tests/"
+    ],
+    "writes": true,
+    "kind": "implementation",
+    "verifier": {
+      "focus": "Correct, safe and tested.",
+      "risks": []
+    }
+  },
+  "report": "Added search_users and tested it against the sample database.",
+  "expect": {
+    "approve": false,
+    "mentions": [],
+    "defects": [
+      [
+        "inject",
+        "parameter",
+        "f-string",
+        "placeholder",
+        "interpolat",
+        "escap",
+        "sanitiz"
+      ],
+      [
+        "limit"
+      ],
+      [
+        "case-insensitive",
+        "case insensitive",
+        "case-sensitive",
+        "case sensitive",
+        "glob"
+      ],
+      [
+        "no test",
+        "missing test",
+        "without test",
+        "no new test",
+        "untested",
+        "test_users.py",
+        "tests were not",
+        "not tested",
+        "no tests"
+      ],
+      [
+        "settings",
+        "pool",
+        "unrelated",
+        "scope"
+      ]
+    ]
+  }
+}

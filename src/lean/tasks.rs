@@ -781,7 +781,7 @@ const AUDIT_CHECKS: &str = "List every obligation in the request, each \
      show it done. A missing, partial or unverified obligation is a high \
      finding. ";
 
-const VERDICT_FORMAT: &str = "End your answer with a verdict block:\n\
+pub const VERDICT_FORMAT: &str = "End your answer with a verdict block:\n\
      ```verdict\n\
      {\"approved\": true, \"findings\": [{\"severity\": \"high|medium|low\", \"issue\": \"...\", \"where\": \"path:line\"}]}\n\
      ```\n\

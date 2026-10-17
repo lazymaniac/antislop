@@ -1,0 +1,33 @@
+{
+  "scenario": 15,
+  "task": {
+    "id": "t1",
+    "title": "Search users by name",
+    "goal": "Add find_users(conn, name) to users.py: rows of the users table whose name contains the given text.",
+    "scope": [
+      "users.py"
+    ],
+    "writes": true,
+    "kind": "implementation",
+    "verifier": {
+      "focus": "Correct and safe database access.",
+      "risks": [
+        "SQL built from user input"
+      ]
+    }
+  },
+  "report": "Added find_users. Works on the sample database.",
+  "expect": {
+    "approve": false,
+    "mentions": [
+      "inject",
+      "sql",
+      "parameter",
+      "f-string",
+      "format",
+      "placeholder",
+      "escap",
+      "interpolat"
+    ]
+  }
+}

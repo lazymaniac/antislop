@@ -1,0 +1,25 @@
+{
+  "scenario": 1,
+  "task": {
+    "id": "t1",
+    "title": "Export only settled orders",
+    "goal": "export() writes only orders whose status is 'paid' or 'refunded', leaving out orders of test accounts (email ending in @example.com), oldest first by date.",
+    "scope": [
+      "export.py"
+    ],
+    "writes": true,
+    "kind": "implementation",
+    "verifier": {
+      "focus": "Every part of the goal is met.",
+      "risks": []
+    }
+  },
+  "report": "export() now keeps only paid and refunded orders and sorts them by date,\noldest first. Checked with a few sample orders.",
+  "expect": {
+    "approve": false,
+    "mentions": [
+      "example.com",
+      "test account"
+    ]
+  }
+}

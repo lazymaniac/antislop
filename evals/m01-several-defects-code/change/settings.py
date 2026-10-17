@@ -1,0 +1,1 @@
+DB_POOL_SIZE = 1

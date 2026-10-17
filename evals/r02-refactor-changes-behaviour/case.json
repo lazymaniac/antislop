@@ -1,0 +1,29 @@
+{
+  "scenario": 24,
+  "task": {
+    "id": "t1",
+    "title": "Tidy invoice totals",
+    "goal": "Simplify totals.py without changing what any function returns.",
+    "scope": [
+      "totals.py"
+    ],
+    "writes": true,
+    "kind": "refactoring",
+    "verifier": {
+      "focus": "Behaviour is preserved.",
+      "risks": []
+    }
+  },
+  "report": "Simplified totals.py: line_total uses round() and invoice_total is a\nsum() over a generator. Behaviour is unchanged.",
+  "expect": {
+    "approve": false,
+    "mentions": [
+      "round",
+      "half",
+      "banker",
+      "even",
+      "0.5",
+      "behavio"
+    ]
+  }
+}

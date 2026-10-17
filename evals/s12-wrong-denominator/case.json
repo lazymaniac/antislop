@@ -1,0 +1,29 @@
+{
+  "scenario": 12,
+  "task": {
+    "id": "t1",
+    "title": "Visitor conversion",
+    "goal": "Compute the share of website visits that end in a paid account from data/funnel.csv; write it to analysis.md.",
+    "scope": [
+      "data/",
+      "analysis.md"
+    ],
+    "writes": true,
+    "kind": "analysis",
+    "verifier": {
+      "focus": "The rate answers the question asked.",
+      "risks": []
+    }
+  },
+  "report": "Conversion to paid: 25% (400 paid out of 1,600 signups). Written to\nanalysis.md.",
+  "expect": {
+    "approve": false,
+    "mentions": [
+      "denominator",
+      "visits",
+      "20000",
+      "20,000",
+      "2%"
+    ]
+  }
+}

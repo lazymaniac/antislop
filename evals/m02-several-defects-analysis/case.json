@@ -1,0 +1,51 @@
+{
+  "scenario": 12,
+  "task": {
+    "id": "t1",
+    "title": "Order value and refunds in 2026",
+    "goal": "From data/orders.csv: the average value in dollars of the orders of 2026 that were not refunded, and the share of 2026 orders that were refunded. Write both, with the method, to analysis.md.",
+    "scope": [
+      "data/",
+      "analysis.md"
+    ],
+    "writes": true,
+    "kind": "analysis",
+    "verifier": {
+      "focus": "Both numbers answer the question asked.",
+      "risks": []
+    }
+  },
+  "report": "Average order value: $5,000.00. Refund share: 33.3%. Method in\nanalysis.md.",
+  "expect": {
+    "approve": false,
+    "mentions": [],
+    "defects": [
+      [
+        "refunded order",
+        "refunded rows",
+        "includes refund",
+        "including refund",
+        "non-refunded",
+        "not refunded",
+        "exclud",
+        "3 order",
+        "three order"
+      ],
+      [
+        "cent",
+        "53.33",
+        "/ 100",
+        "unit"
+      ],
+      [
+        "2025",
+        "all rows",
+        "6 row",
+        "six row",
+        "25%",
+        "1 / 4",
+        "1/4"
+      ]
+    ]
+  }
+}

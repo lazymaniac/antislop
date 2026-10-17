@@ -7,6 +7,9 @@ usage:
   antislop [chat] [options] [message]
   antislop export [options]   the conversation's history as JSON lines,
                               secrets redacted, on stdout
+  antislop eval SUITE --cli CLI [--model M] [--effort E] [--arm A] [--jobs N]
+                              calibrate verifiers on seeded cases (evals/)
+                              against a plain one-agent review
 
 With no message in a terminal it opens the TUI; with a message, or when
 input is not a terminal, it prints the conversation line by line.
@@ -48,6 +51,7 @@ fn run() -> Result<()> {
         }
         Some("chat") => architect::lean::cli::chat(&args[1..]),
         Some("export") => architect::lean::export::export(&args[1..]),
+        Some("eval") => architect::lean::eval::eval(&args[1..]),
         _ => architect::lean::cli::chat(&args),
     }
 }

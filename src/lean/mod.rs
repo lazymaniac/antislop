@@ -5,6 +5,7 @@ pub mod agent;
 pub mod cli;
 pub mod daemon;
 pub mod diff;
+pub mod eval;
 pub mod export;
 pub mod git;
 pub mod store;
