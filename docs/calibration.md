@@ -161,8 +161,8 @@ The orchestrator reported the limitation to the user rather than hiding
 it. Tasks that must run such checks are now planned as `writes`.
 
 On a task this small, the team bought nothing over one agent: the single
-session's result passed every check, at a twentieth of the time and
-about a fifteenth of the tokens. The team pays where one agent's result
+session's result passed every check, in an eighteenth of the time and
+with a fourteenth of the input tokens. The team pays where one agent's result
 cannot be trusted unchecked: larger changes, unfamiliar code, and work
 where a missed requirement is expensive. These measurements do not show
 where that point lies.
