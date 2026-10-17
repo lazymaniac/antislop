@@ -219,7 +219,7 @@ fn a_comment_reaches_the_orchestrator_and_stays_until_the_user_resolves_it() {
     let core = open(
         dir.path(),
         r#"
-answer = "noted" if "[runtime]" in prompt or "[user" in prompt or "dalej" in prompt else plan(task("t1", "Parser"))
+answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "dalej" in prompt else plan(task("t1", "Parser"))
 "#,
         r#"    answer = "report""#,
     );

@@ -201,7 +201,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     assert_eq!(pid(&dir.join("state")), daemon);
     let calls = std::fs::read_to_string(dir.join("calls.log")).unwrap();
     assert!(
-        calls.contains("exec resume") && calls.contains("T1 druga"),
+        calls.contains("exec resume") && calls.contains("T1 [user]\ndruga"),
         "{calls}"
     );
 
