@@ -493,9 +493,16 @@ impl Parser {
                 }
             }
             "result" => {
+                // Claude counts tokens read from or written to its prompt
+                // cache apart from `input_tokens`; all of them were read.
+                let usage = &line["usage"];
+                let cached = ["cache_creation_input_tokens", "cache_read_input_tokens"]
+                    .iter()
+                    .filter_map(|key| usage[*key].as_u64())
+                    .sum::<u64>();
                 events.push(Event::Usage {
-                    input: line["usage"]["input_tokens"].as_u64(),
-                    output: line["usage"]["output_tokens"].as_u64(),
+                    input: usage["input_tokens"].as_u64().map(|input| input + cached),
+                    output: usage["output_tokens"].as_u64(),
                 });
                 let text = line["result"].as_str().unwrap_or_default().to_owned();
                 self.finish = Some(if line["is_error"] == true {
@@ -636,10 +643,14 @@ mod tests {
             &[
                 json!({"type":"system","subtype":"init","session_id":"s1"}),
                 json!({"type":"assistant","session_id":"s1","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/p/a.rs"}}]}}),
-                json!({"type":"result","session_id":"s1","is_error":false,"result":"done","usage":{"input_tokens":1,"output_tokens":1}}),
+                json!({"type":"result","session_id":"s1","is_error":false,"result":"done","usage":{"input_tokens":1,"cache_creation_input_tokens":20,"cache_read_input_tokens":300,"output_tokens":1}}),
             ],
         );
         assert_eq!(events[0], Event::Session { id: "s1".into() });
+        assert!(events.contains(&Event::Usage {
+            input: Some(321),
+            output: Some(1)
+        }));
         assert!(matches!(parser.finish(), Finish::Done(text) if text == "done"));
     }
 
