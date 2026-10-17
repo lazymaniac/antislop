@@ -117,9 +117,27 @@ The verifier arm again with `--effort low` on codex and agy:
 | agy | low | 24/24 | 21/21 | 8/8 | 25 s |
 
 On these cases light effort lost nothing and cut agy's time by three
-quarters. The example configuration keeps `deep` for verifiers, because
-these runs were on small cases; a team that finds verification slow can
-lower the `review` profile's effort first.
+quarters. The large cases (below) were run at every level as well:
+
+| CLI | Effort | Correct on l01, l02, c04 | Mean time | Output tokens per case |
+| --- | --- | --- | --- | --- |
+| claude | low | 3/3 | 29 s | 2,193 |
+| claude | default | 3/3 | 62 s | 4,762 |
+| codex | low | 3/3 | 123 s | 2,898 |
+| codex | medium | 3/3 | 68 s | 3,701 |
+| codex | high | 3/3 | 99 s | 5,347 |
+| agy | low | 3/3 | 49 s | 3,748 |
+| agy | default | 3/3 | 145 s | 17,843 |
+| agy | high | 3/3 | 181 s | 20,838 |
+
+No level changed a verdict, on small or large cases. Higher effort
+bought time and tokens: agy at `high` took 3.7× its `low` time and wrote
+5.6× the tokens. codex's times varied more between runs than between
+levels. Routing was tuned from this: the example configuration's
+`review` profile, which all verifiers use, went from `deep` (`high`) to
+`standard` (`medium`). That keeps a margin over the lowest level that was
+enough, because real code is harder than seeded cases. Workers and the
+orchestrator keep `deep`, since nothing here measures their effort.
 
 ### Large changes
 
@@ -339,8 +357,10 @@ verification is requeued with its task, so the worker first gets a turn
   codex, in both passes.
 - **Verification costs 1.4–2.4× a plain review's time,** and a whole run
   costs about 18× one agent's wall time on a small change.
-- **Light effort was enough for verifiers here** (codex and agy at `low`
-  matched `medium`/default; agy took a quarter of the time).
+- **Light effort was enough for verifiers here**, on small and large
+  cases alike. `low`, default and `high` gave the same verdicts on
+  claude, codex and agy, and agy took a third to a quarter of the time
+  at `low`. The example's verifiers now run at `standard`.
 - **Reading outside the project is held only by instruction.** agy's
   `plan` mode and claude's `plan` mode confine writing, not reading.
 - **Read-only codex cannot run checks that write**, temporary files

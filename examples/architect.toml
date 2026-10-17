@@ -64,9 +64,12 @@ effort = "deep"
 work_kinds = ["implementation", "refactoring", "static_analysis", "test_design", "testing", "integration", "research", "writing", "delivery"]
 roles = ["executor"]
 
+# Measured (docs/calibration.md): verifiers at light and at deep gave the same
+# verdicts on every case, deep at about three times light's time on agy.
+# standard keeps a margin for code harder than the measured cases.
 [profiles.review]
 provider = "agy"
-effort = "deep"
+effort = "standard"
 work_kinds = ["orchestration", "context", "requirements", "options", "planning", "architecture", "dependencies", "implementation", "refactoring", "static_analysis", "test_design", "testing", "security", "performance", "integration", "research", "writing", "analysis", "delivery"]
 roles = ["verifier"]
 
