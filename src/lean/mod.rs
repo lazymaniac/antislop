@@ -104,6 +104,11 @@ impl Core {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let store = Store::open(&state.join("core.db"))?;
+        // A daemon that died leaves its agents' CLIs running; a resumed turn
+        // must not work beside its own orphan.
+        for (pid, started_ms, provider) in store.running_processes()? {
+            agent::reap(pid, started_ms, &provider);
+        }
         let cut_off = store.interrupt_running_turns()?;
         let interrupted = store.interrupt_unfinished_tasks()?;
         let core = Arc::new(Self {
@@ -863,6 +868,10 @@ impl Core {
                     // Streamed fragments: the answer is recorded whole when
                     // the turn ends, so a row per fragment is only weight.
                     agent::Event::Text { .. } => return,
+                    agent::Event::Process { pid } => {
+                        let _ = self.store.set_turn_pid(&turn.id, *pid);
+                        return;
+                    }
                     _ => {}
                 }
                 if let Ok(payload) = serde_json::to_value(&event) {

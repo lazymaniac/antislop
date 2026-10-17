@@ -133,7 +133,7 @@ impl TurnStatus {
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Tables only ever get added; a change to an existing one raises it and
 /// migrates from the version found.
-const SCHEMA: u32 = 2;
+const SCHEMA: u32 = 3;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -160,7 +160,7 @@ impl Store {
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
                role TEXT NOT NULL, provider TEXT NOT NULL, session_id TEXT,
                status TEXT NOT NULL, error TEXT, upto_message INTEGER NOT NULL,
-               started_ms INTEGER NOT NULL, finished_ms INTEGER);
+               started_ms INTEGER NOT NULL, finished_ms INTEGER, pid INTEGER);
              CREATE TABLE IF NOT EXISTS events(
                seq INTEGER PRIMARY KEY AUTOINCREMENT,
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -207,6 +207,15 @@ impl Store {
             connection.execute_batch(
                 "ALTER TABLE events ADD COLUMN created_ms INTEGER NOT NULL DEFAULT 0",
             )?;
+        }
+        // 2 → 3: turns record their CLI's process group.
+        let tracked: bool = connection.query_row(
+            "SELECT count(*) FROM pragma_table_info('turns') WHERE name='pid'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !tracked {
+            connection.execute_batch("ALTER TABLE turns ADD COLUMN pid INTEGER")?;
         }
         connection.pragma_update(None, "user_version", SCHEMA)?;
         Ok(Self {
@@ -376,6 +385,26 @@ impl Store {
             params![turn, session],
         )?;
         Ok(())
+    }
+
+    pub fn set_turn_pid(&self, turn: &str, pid: u32) -> Result<()> {
+        self.db()
+            .execute("UPDATE turns SET pid=?2 WHERE id=?1", params![turn, pid])?;
+        Ok(())
+    }
+
+    /// The CLIs of turns still marked running: (process group, turn start,
+    /// provider). Read before those turns become interrupted.
+    pub fn running_processes(&self) -> Result<Vec<(u32, i64, String)>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT pid, started_ms, provider FROM turns
+             WHERE status='running' AND pid IS NOT NULL",
+        )?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn finish_turn(&self, turn: &str, status: TurnStatus, error: Option<&str>) -> Result<()> {

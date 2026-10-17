@@ -54,6 +54,11 @@ pub enum Event {
         input: Option<u64>,
         output: Option<u64>,
     },
+    /// The CLI runs as this process group. Kept so that a daemon started
+    /// after this one died can end a turn nobody is reading any more.
+    Process {
+        pid: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,6 +85,7 @@ pub fn run(
     let mut child = command.spawn().map_err(|error| {
         Error::Invalid(format!("cannot start {}: {error}", spec.binary.display()))
     })?;
+    on_event(Event::Process { pid: child.id() });
     let stdout = child.stdout.take().expect("piped stdout");
     let mut stderr = child.stderr.take().expect("piped stderr");
     // Only the end of stderr matters, so only the end is kept.
@@ -280,6 +286,63 @@ fn model_args(command: &mut Command, spec: &Spec, model_flag: &str, effort_key: 
     if let Some(effort) = &spec.effort {
         command.arg("-c").arg(format!("{effort_key}=\"{effort}\""));
     }
+}
+
+/// Ends the process group of a turn left running by a daemon that died, if
+/// `pid` still is that turn's CLI: a group leader running `provider`, started
+/// when the turn did. A process that only reused the number is left alone.
+/// Returns whether the group was ended.
+pub fn reap(pid: u32, started_ms: i64, provider: &str) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: getpgid only reads the process table.
+    if pid <= 1 || unsafe { libc::getpgid(pid) } != pid {
+        return false;
+    }
+    let Ok(output) = Command::new("ps")
+        .args(["-o", "etime=", "-o", "command=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return false;
+    };
+    let line = String::from_utf8_lossy(&output.stdout);
+    let line = line.trim();
+    let (elapsed, command) = line.split_once(' ').unwrap_or((line, ""));
+    let Some(elapsed) = elapsed_seconds(elapsed) else {
+        return false;
+    };
+    let now = super::store::now_ms();
+    let began = now - elapsed * 1000;
+    // `ps` counts whole seconds and the CLI starts just after its turn.
+    if (began - started_ms).abs() > 5_000 || !command.contains(provider) {
+        return false;
+    }
+    // SAFETY: signals the process group verified above.
+    unsafe { libc::kill(-pid, libc::SIGTERM) };
+    for _ in 0..30 {
+        // SAFETY: signal 0 only checks that the group still exists.
+        if unsafe { libc::kill(-pid, 0) } != 0 {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // SAFETY: as above.
+    unsafe { libc::kill(-pid, libc::SIGKILL) };
+    true
+}
+
+/// `ps` elapsed time, `[[dd-]hh:]mm:ss`, in seconds.
+fn elapsed_seconds(text: &str) -> Option<i64> {
+    let (days, clock) = match text.split_once('-') {
+        Some((days, clock)) => (days.parse::<i64>().ok()?, clock),
+        None => (0, text),
+    };
+    let mut seconds = 0;
+    for part in clock.split(':') {
+        seconds = seconds * 60 + part.parse::<i64>().ok()?;
+    }
+    Some(days * 86_400 + seconds)
 }
 
 fn stop(child: &mut std::process::Child) {
@@ -693,6 +756,40 @@ mod tests {
         assert!(
             matches!(parser.finish(), Finish::Failed(error) if error.contains("quota exceeded"))
         );
+    }
+
+    #[test]
+    fn elapsed_times_read_as_ps_writes_them() {
+        assert_eq!(elapsed_seconds("00:07"), Some(7));
+        assert_eq!(elapsed_seconds("03:02:01"), Some(3 * 3600 + 121));
+        assert_eq!(elapsed_seconds("2-00:00:05"), Some(2 * 86_400 + 5));
+        assert_eq!(elapsed_seconds("x"), None);
+    }
+
+    #[test]
+    fn only_the_turns_own_process_group_is_reaped() {
+        let spawn = || {
+            Command::new("sleep")
+                .arg("30")
+                .process_group(0)
+                .spawn()
+                .unwrap()
+        };
+        let alive = |pid: u32| unsafe { libc::kill(pid as i32, 0) } == 0;
+        let mut other = spawn();
+        // Started an hour before the turn: a reused number, not the turn.
+        assert!(!reap(
+            other.id(),
+            super::super::store::now_ms() - 3_600_000,
+            "sleep"
+        ));
+        assert!(!reap(other.id(), super::super::store::now_ms(), "codex"));
+        assert!(alive(other.id()));
+        other.kill().unwrap();
+        other.wait().unwrap();
+        let mut orphan = spawn();
+        assert!(reap(orphan.id(), super::super::store::now_ms(), "sleep"));
+        orphan.wait().unwrap();
     }
 
     #[test]
