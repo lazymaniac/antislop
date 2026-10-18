@@ -1327,6 +1327,39 @@ fn tui_sent_message_history_ring_and_draft_stashing() {
 }
 
 #[test]
+fn test_esc_behavior_and_cleared_draft_counterexample() {
+    let mut app = App::test_app();
+    app.history = vec!["poprzednia wiadomość".into()];
+
+    // 1. Esc during history recall cancels history and restores draft
+    app.input = InputBuffer::with_text("pisany szkic");
+    app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.history_index, Some(0));
+    assert_eq!(app.input.text, "poprzednia wiadomość");
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.history_index, None);
+    assert_eq!(app.input.text, "pisany szkic");
+
+    // 2. Esc on non-empty draft clears input
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.input.is_empty());
+
+    // 3. Counterexample proof: pressing Up on the empty buffer unconditionally
+    // overwrites history_draft with "" (mod.rs:811), so Down does NOT retrieve the draft.
+    app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.history_index, Some(0));
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.history_index, None);
+    assert!(
+        app.input.is_empty(),
+        "Draft cleared by Esc is not restored by Up/Down"
+    );
+
+    // 4. Esc on empty draft detaches (returns false)
+    assert!(!app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+}
+
+#[test]
 fn tui_send_reliability_draft_retention_on_error_and_in_flight_typing() {
     let mut app = App::test_app();
     app.conversation = "conv-abc".into();

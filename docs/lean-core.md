@@ -233,48 +233,62 @@ replaced when idle. The socket is `<state>/core.sock`, or
   worker). The layout depends only on the plan's shape, so nodes never jump as
   events arrive. A "teraz" overlay in a corner lists the steps actually running,
   or says that the plan waits for the user, or that nothing runs; it moves to
-  the other corner rather than cover the selected node. Tab moves focus between
-  the panels (on terminals narrower than 85 columns it switches which one is
-  shown in compact mode); in the graph, arrows select the nearest node in that direction and
-  Enter opens its details full screen: Przegląd (task, scope, goal, the
-  verifier's focus and, for a verifier, its risks), Sesja (the agent's turns
-  and tool calls), Wiadomości (mail to and from it), Wynik (the worker's
-  report and commits, or the verifier's verdict), Kontrole (each obligation
-  of the task's verifier, risks and checklist, with how the latest verdict
-  accounted for it) and Komentarze. `/` in the graph finds an agent by role
-  or task title; Ctrl+F searches the conversation (newest first; Enter
-  brings the entry to the top, highlighted); Ctrl+P opens a palette of every
-  command; `?` (F1 anywhere)
-  shows the keys of the active view. `c` comments
-  on the selected agent (in the graph or its details); a box shows how many
-  comments on it are open. On Komentarze, `r` resolves, `o` reopens and `d`
-  deletes the selected one; a comment made on an earlier plan is marked so.
-  `d` on a task's agent opens its change full screen: changed files with their
-  status and +/− counts beside the unified diff with old and new line numbers;
-  `c` comments on the selected line (or file), comments show under their lines,
-  `R` asks for a code review and `r` reloads.
-  Keys: Enter send, Alt+Enter or Ctrl+J new line in draft, ↑/↓ navigate wrapped
-  lines in draft (or scroll transcript when empty), PgUp/PgDn scroll transcript,
-  Ctrl+A run proposed plan (on empty draft) or Home, Ctrl+R resume plan (on empty
-  draft) or search history, Ctrl+U/Ctrl+K delete to start/end of line, Ctrl+W or
-  Alt+Backspace delete word backward, Ctrl+E move to end of line, Alt/Ctrl+Left
-  and Alt/Ctrl+Right word navigation, Ctrl+X cancel, Ctrl+N new conversation,
-  Ctrl+P commands, F1 help in every view (including comments and search lists;
-  ? also opens help in the graph, details and diff). Help scrolls with ↑/↓, k/j,
-  PgUp/PgDn, Home, End and closes with Esc, F1 or ?; other typing, paste and
-  action shortcuts stay blocked, preserving the drafts and search query beneath
+  the other corner rather than cover the selected node.  Tab moves focus between
+  the panels (`[Czat]`, `[Zadania]`, `[Zespół]`; on terminals narrower than 85 columns it switches
+  the single visible panel in compact mode); in the graph, arrows select the nearest node in that
+  direction and Enter opens its details full screen across 6 tabs: Przegląd (task, scope, goal, the
+  verifier's focus and, for a verifier, its risks), Sesja (the agent's turns, tool calls, and paginated
+  sessions history with `n`/`p`), Wiadomości (mail to and from it), Wynik (the worker's report and
+  commits, or the verifier's verdict), Kontrole (each obligation of the task's verifier, risks and
+  checklist, with how the latest verdict accounted for it) and Komentarze. A dedicated conversation
+  inspector opens via `Ctrl+I` or palette (`Ctrl+P`). Within inspectors, `v` toggles between Readable
+  and Raw JSON view, `/` searches whole records (`DetailRecord`) with query highlighting, and per-tab
+  scroll and search memory is preserved across tab and conversation switches. Explicit notices state
+  historical data gaps (`[brak danych historycznych...]`, `niedostępne (CLI ich nie zgłosił)`).
+  `/` in the graph finds an agent by role or task title; `@` on an empty draft or `Ctrl+P > Adresuj wiadomość`
+  opens a recipient picker (`@orchestrator`, `@all`, `@worker:t1`, `@verifier:t1`), validated by the daemon.
+  Ctrl+F searches the conversation (newest first; Enter brings the entry to the top, highlighted);
+  Ctrl+P opens a palette of every command; `?` (F1 anywhere) shows the keys of the active view. `c` comments
+  on the selected agent or sub-element with precise targets (`plan:`, `task:`, `check:`, `finding:`,
+  `report:`, `artifact:`, `diff:`, `worker:`, `verifier:`, `conversation`); a box shows how many comments
+  on it are open. On Komentarze, `r` resolves, `o` reopens and `d` deletes the selected one; a comment
+  made on an earlier plan is marked so (`[dotyczy poprzedniego planu]`).
+  `d` on a task's agent opens its change full screen: changed files with their status and +/− counts
+  beside the unified diff with old and new line numbers and reviewer profile in the header; `c` comments
+  on the selected line (or file), comments show under their lines, `R` asks for a code review and `r` reloads.
+  Critical actions (accepting plans, resuming plans, reviewing diffs, cancelling) present a pinned
+  confirmation card (`ConfirmationCard`) with frozen `scope_hash`; `Enter` or `y`/`Y` confirms, `Esc` or
+  `n`/`N` rejects. If an asynchronous background event alters the plan or scope before execution, the
+  card transitions to `Stale` (`[nieaktualne: stale_scope]`), and execution is safely blocked.
+  Keys: Enter or Ctrl+S send message (submit draft), Alt+Enter or Ctrl+J new line in draft, ↑/↓ navigate
+  wrapped lines in draft (preserving `preferred_col`); when on row 0 (or draft is empty), ↑ stashes the
+  draft into `history_draft` and recalls sent messages history (successive ↑ moves backward); when browsing
+  history, ↓ on the last row moves forward and restores `history_draft` with its exact cursor and column position.
+  PgUp/PgDn scroll transcript, Ctrl+A run proposed plan (on empty draft) or Home, Ctrl+R resume plan
+  (on empty draft) or search history, Ctrl+U/Ctrl+K delete to start/end of line, Ctrl+W or Alt+Backspace
+  delete word backward, Ctrl+E move to end of line, Alt/Ctrl+Left and Alt/Ctrl+Right word navigation,
+  Ctrl+X cancel, Ctrl+N new conversation, Ctrl+O switch conversation, Ctrl+I conversation inspector,
+  Ctrl+P commands, F1 help in every view (including comments and search lists; ? also opens help in the
+  graph, details and diff). Help scrolls with ↑/↓, k/j, PgUp/PgDn, Home, End and closes with Esc, F1 or ?;
+  other typing, paste and action shortcuts stay blocked, preserving the drafts and search query beneath
   it, with no cursor showing through. Ctrl+C detaches from any view.
-  Outside help: Esc clears the draft (or detaches when empty), `q` in the graph detaches.
-  Input editing, visual wrapping and deletions maintain strict UTF-8 character
-  boundary alignment (`is_char_boundary`), supporting double-width CJK ideographs
-  and multi-byte symbols. Drafts reserve a display column for the insertion cursor;
-  cursor rows and viewport offsets support more than 65,535 lines. Search queries
-  and activity labels are bounded to the viewport before conversion to terminal
-  coordinates. Bracketed paste normalizes CRLF/CR to LF, sanitizes control
-  characters, caps length at 64 KB at character boundaries, and routes paste
-  according to modal ownership (blocked during help, routed to comment editor
-  when active). The layout enforces a 12x5 minimum terminal guard and an 85-column
-  breakpoint switching between side-by-side split and single-panel compact views.
+  Outside help: Esc cancels history when browsing and restores the in-progress draft; when drafting,
+  clears a non-empty draft (a draft cleared by Esc is not retrievable via ↑/↓, as ↑ on an empty buffer
+  overwrites the history draft slot); detaches when draft is empty; in modals, pickers, details and diff,
+  Esc dismisses the overlay without losing underlying drafts. `q` in the graph detaches.
+  Text editing, visual wrapping, and deletions operate strictly on Unicode extended grapheme cluster
+  boundaries (`unicode_segmentation`), safely handling combining accents (`a\u{301}`) and multi-byte
+  ZWJ emoji sequences (`👩‍💻`) without breaking glyphs or splitting UTF-8 bytes on Backspace or Delete.
+  Draft retention and recovery: network or daemon errors never lose text — drafts are automatically
+  restored into `input` if empty, or preserved in `failed_send` if the user was typing anew; conversation
+  switching (`Ctrl+O`) isolates and preserves drafts per conversation (`A → B → A`); per-target comment
+  drafts are remembered on modal close and restored when commenting on that target again.
+  Drafts reserve a display column for the insertion cursor; cursor rows and viewport offsets support
+  more than 65,535 lines. Search queries and activity labels are bounded to the viewport before conversion
+  to terminal coordinates. Bracketed paste normalizes CRLF/CR to LF, sanitizes control characters, caps
+  length at 64 KB at character boundaries, and routes paste according to modal ownership. The layout
+  enforces a 12x5 minimum terminal guard and an 85-column breakpoint switching between side-by-side
+  split and single-panel compact views.
 - `antislop chat "message"` (or piped input) prints events line by line and
   exits once the conversation is idle; `/accept` and `/cancel` lines work too.
 - `antislop export` writes the conversation's history (`--conversation ID`,
@@ -389,23 +403,37 @@ replaced when idle. The socket is `<state>/core.sock`, or
   such: missing data is never a zero (design §14). Tokens are not turned
   into money.
 - Team graph geometry dynamically adapts to the actual interior dimensions of
-  the graph panel (`inner.width`, `inner.height`), utilizing free columns and
+  the graph panel (`inner.width`, `inner.height`), utilizing available columns and
   rows for parallel tasks, long chains, branches, and cycles while keeping
-  worker–verifier pairs together.
-- Collapsing tasks (`z`/Space) or filtering by text query compacts vertical
-  spacing without leaving blank gaps, pulling subsequent tasks upward.
+  worker–verifier pairs together. Taller viewports fit strictly more whole readable
+  cards without scrolling (20 -> 26 -> 46 lines, up to 100% visible on 160x50).
+- Compacting on fold and filter: collapsing tasks (`z`/Space) compacts vertical
+  space to 0 lines, pulling subsequent tasks upward. Filtering admin nodes (e.g. `task 1`)
+  reclaims row 0 for task cards. Column selection maps visible task depths sequentially
+  starting at column 0 (`rel_depth`), eliminating empty preceding columns.
 - A single unified geometry powers rendering, orthogonal edge routing (strictly
   outside card interiors with explicit direction markers `▲`, `▼`, `◀`, `▶`),
   arrow key navigation, and scrolling. Selecting a node or updating streaming
-  activity never shifts or displaces graph nodes.
+  activity never shifts or displaces graph nodes. Arrow navigation moves strictly
+  among visible nodes in the active filter.
+- Orthogonal edge routing incorporates corridor bypass: non-adjacent nodes in the
+  same column bypass intermediate cards through a side corridor lane
+  (`from.right() + GAP_X / 2`), with 0 card interior intersections verified across
+  240 node pairs on a 4x4 grid and in all filter modes.
 - The 'teraz' progress overlay tests all candidate viewport corners and
   automatically yields (hides) if visible cards occupy candidate corners.
 - Canvas memory is strictly bounded: `Canvas::new_window` allocates only
   `O(inner.width * inner.height)` viewport memory, remaining independent of
-  graph size and preventing OOM crashes on large graphs (500+ tasks).
+  graph size and preventing OOM crashes on large graphs (tested on 500+ tasks).
 - Tasks Carousel (`Focus::Tasks`, `t` key) provides a dedicated browsing view
   for cycling through tasks with `←`/`→`, jumping to worker (`w`) or verifier
   (`v`), and initiating diff (`d`), details (`Enter`) or comment (`c`) actions.
+- Pinned confirmation cards (`ConfirmationCard`) with frozen `scope_hash` for
+  `AcceptPlan`, `ResumePlan`, `ReviewDiff`, and `CancelWork`; background updates
+  mark pending cards `Stale` (`[nieaktualne: stale_scope]`), and the daemon verifies
+  `scope_hash` in a SQLite transaction with zero side effects on stale state.
+- Complete parity verification against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8`
+  with test proofs and architectural notes is documented in [parity.md](parity.md).
 
 ## Known limits
 
@@ -413,6 +441,14 @@ replaced when idle. The socket is `<state>/core.sock`, or
   result; one that depends on several starts from `HEAD`, so without
   `local_commits` it does not see their uncommitted results.
 - A plan runs in waves: a task waits for every task of the previous wave.
+- `View::apply(plan_proposed)` replaces the active task cards of the view
+  projection with the newly proposed plan's tasks; while past tasks, verdicts,
+  turns, and messages remain fully persisted in `core.db`, simultaneously
+  projecting historical plans and past workers/verifiers into the live team
+  graph is a planned enhancement for the next plan.
+- Conversation switching (`Ctrl+O`) operates within the project directory
+  managed by the daemon; simultaneous multi-project switching across distinct
+  repositories within a single TUI instance is planned for the next plan.
 - Resume works per plan, not per task, and `waiting` tasks are not retried
   on a timer.
 - Read-only modes are prompts and CLI modes, not OS confinement; `scope`

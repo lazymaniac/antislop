@@ -8,7 +8,9 @@ branch. The product specification is [design.md](design.md); how the runtime
 works, what it guarantees and what is still open is in
 [docs/lean-core.md](docs/lean-core.md); how each acceptance scenario of the
 design is met, and which ones rest on agents' instructions rather than the
-runtime, is in [docs/acceptance.md](docs/acceptance.md).
+runtime, is in [docs/acceptance.md](docs/acceptance.md); the full TUI parity
+matrix and verified contract evidence against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8`
+is in [docs/parity.md](docs/parity.md).
 
 The library keeps the `architect` crate name.
 
@@ -35,33 +37,46 @@ agents keep working when the frontend exits; the next call reattaches.
 
 The TUI shows the chat beside the team graph: every agent as a box, edges for
 dependencies, verification, messages and supervision (`f` filters them), and
-an overlay with what is running right now. Tab moves between the panels; in
-the graph, arrows select an agent, Enter opens its task, session, messages,
-result, the checks its verifier accounted for and comments (`/` finds an
-agent by name or task), and `c` comments on it: the orchestrator gets the comment
-at once and keeps seeing it until you resolve it. `d` opens a task's change as
-a diff with line numbers, where `c` comments on a line and `R` asks for a code
-review whose findings go to the orchestrator.
+an overlay with what is running right now. Tab moves between the panels (`[Czat]`,
+`[Zadania]`, `[Zespół]`); in the graph, arrows select an agent, Enter opens its
+inspector details full screen across 6 tabs (`Przegląd`, `Sesja`, `Wiadomości`,
+`Wynik`, `Kontrole`, `Komentarze`). A dedicated conversation inspector opens
+via `Ctrl+I` or palette (`Ctrl+P`). Within inspectors, `v` toggles between
+Readable and Raw JSON view, `/` searches whole records with highlighting, `n`/`p`
+paginates session history, and per-tab scroll and query memory is preserved across
+tab switches and conversation switches. Explicit notices state historical data gaps
+(`[brak danych historycznych...]`, `niedostępne (CLI ich nie zgłosił)`). `c`
+comments on an agent or sub-element with precise targets (`plan:`, `task:`,
+`check:`, `finding:`, `report:`, `artifact:`, `diff:`, `worker:`, `verifier:`,
+`conversation`). `d` opens a task's change as a diff with line numbers and reviewer
+profile, where `c` comments on a line and `R` asks for a code review.
+Critical actions (accepting plans, resuming plans, reviewing diffs, cancelling)
+present a pinned confirmation card (`ConfirmationCard`) with frozen `scope_hash`;
+`Enter` or `y`/`Y` confirms, `Esc` or `n`/`N` rejects. If an asynchronous background
+event alters the plan or scope before execution, the card transitions to `Stale`
+(`[nieaktualne: stale_scope]`), and execution is safely blocked.
 
 Keys and editing:
-- `Enter`: send message
+- `Enter` or `Ctrl+S`: send message (submit draft)
 - `Alt+Enter` or `Ctrl+J`: new line in draft
-- `↑` / `↓`: vertical cursor movement across wrapped lines in draft (when draft is empty: scroll transcript)
+- `↑` / `↓`: vertical cursor movement across wrapped lines in draft (preserving `preferred_col`); when on row 0 (or draft is empty), `↑` stashes the draft into `history_draft` and recalls sent message history (successive `↑` moves backward in history); when browsing history, `↓` on the last row moves forward to newer entries and restores `history_draft` with its exact cursor and column position
+- `Esc`: when browsing history, cancels history recall and restores the in-progress draft; when drafting, clears a non-empty draft (note: pressing `↑` on a cleared draft starts history recall and overwrites the history draft with empty text, so a draft cleared by `Esc` is not retrievable via `↑`/`↓`); when draft is empty, detaches/exits from TUI (work continues in daemon). In modals, help, diff, details, and pickers, `Esc` dismisses the overlay and preserves underlying drafts and search queries without typing anything
 - `PgUp` / `PgDn`: scroll conversation transcript
-- `Ctrl+A`: accept/run proposed plan on empty draft; move to start of line (`Home`) when drafting
+- `Ctrl+A`: accept proposed plan on empty draft; move to start of line (`Home`) when drafting
 - `Ctrl+R`: resume unfinished plan on empty draft; search conversation history when drafting
 - `Ctrl+U`: delete to start of line; `Ctrl+K`: delete to end of line
 - `Ctrl+W` / `Alt+Backspace`: delete word backward
 - `Ctrl+E`: move cursor to end of line; `Home` / `End`: line start / end (with `Alt`/`Ctrl`: buffer start / end)
 - `Alt+Left` / `Ctrl+Left` and `Alt+Right` / `Ctrl+Right`: word navigation
-- `Esc`: clear non-empty draft; when draft is empty, detach/exit (work continues in daemon)
-- `Ctrl+X`: cancel running work; `Ctrl+N`: new conversation; `Ctrl+F`: search conversation; `Ctrl+P`: command palette
+- `@` on empty draft or `Ctrl+P > Adresuj wiadomość`: open recipient picker (`@orchestrator`, `@all`, `@worker:t1`, `@verifier:t1`), validated by daemon
+- `Ctrl+X`: cancel running work; `Ctrl+N`: new conversation; `Ctrl+O`: switch conversation; `Ctrl+I`: conversation details inspector; `Ctrl+F`: search conversation; `Ctrl+P`: command palette
 - `F1`: context-sensitive help in every view, including comment drafts and search lists. In the graph, details and diff, `?` also opens help; in text fields it types a question mark. Scroll help with `↑`/`↓`, `k`/`j`, `PgUp`/`PgDn`, `Home`, `End`; close it with `Esc`, `F1` or `?`.
 
-Paste and Unicode semantics:
+Paste, Unicode, and draft recovery:
+- Text editing, cursor navigation, wrapping, and deletions operate strictly on Unicode extended grapheme cluster boundaries (`unicode_segmentation`), safely handling combining characters (`a\u{301}`) and ZWJ emoji sequences (`👩‍💻`) without breaking glyphs or splitting UTF-8 bytes on `Backspace` or `Delete`.
+- Unsent draft retention and recovery: network or daemon errors never lose text — drafts are automatically restored into `input` if empty, or preserved in `failed_send` if user started typing anew; conversation switching (`Ctrl+O`) isolates and preserves drafts per conversation (`A → B → A`); per-target comment drafts are remembered on modal close and restored when commenting on that target again.
 - Bracketed paste normalizes `\r\n` and `\r` to `\n`, sanitizes control characters, caps at 64 KB, and truncates strictly at UTF-8 character boundaries (`is_char_boundary`).
 - Single-line paste (in search queries and palettes) flattens newlines to spaces and trims whitespace.
-- All cursor navigation, text editing, line wrapping, and deletions operate strictly on UTF-8 code point boundaries, safely handling multibyte sequences (Polish diacritics, emoji) and double-width CJK ideographs (2 visual display columns) without character splitting or border overflow.
 - Chat and comment drafts reserve a display column for the insertion cursor, so it stays after the final character of a full line. Multiline drafts keep their cursor and viewport position beyond 65,535 lines; long pasted search queries and activity labels are clipped to the available display width.
 - Modals isolate key ownership: Help ignores typing, paste and action shortcuts until explicitly closed, hides the cursor beneath it and preserves drafts and search queries. Comment editor modal routes paste and key events to comment text. `Ctrl+C` detaches from any view.
 
@@ -69,25 +84,27 @@ Responsive layout, carousel and adaptive team graph:
 - Minimum terminal size: 12x5 columns and rows; smaller viewports display a centered guard (`Terminal zbyt mały (wymagane min. 12x5)`).
 - Breakpoint at 85 columns: `>= 85` columns renders side-by-side split (Chat beside Team Graph or Tasks Carousel); `< 85` columns renders single-panel compact mode with active panel toggle badge `[Czat]` / `[Zadania]` / `[Zespół] (Tab: przełącz)`.
 - Tasks Carousel (`t` key): dedicated full-screen or side-by-side panel for cycling through tasks with `←`/`→`, `h`/`l`, jumping to worker (`w`) or verifier (`v`), and quick actions (`Enter` for Details, `d` for Diff, `c` for Comment).
-- Adaptive Graph Geometry: node layout dynamically adapts to the actual interior dimensions of the graph panel (`inner.width`, `inner.height`), utilizing free columns and rows for parallel tasks, long chains, branches, and cycles.
-- Compaction on folding and filtering: collapsing verifiers (`z`/Space) or filtering by text query removes empty gaps, pulling subsequent tasks upward and compacting the layout.
-- Unified geometry: rendering, orthogonal edge routing (routed strictly outside card interiors with explicit direction markers `▲`, `▼`, `◀`, `▶`), arrow key navigation, and scrolling share the exact same spatial model.
+- Adaptive Graph Geometry: node layout dynamically adapts to actual interior dimensions of the graph panel (`inner.width`, `inner.height`), utilizing available columns and rows.
+- Panel height utilization: taller viewports fit strictly more whole readable cards without scrolling (e.g. 20 -> 26 -> 46 lines).
+- Compaction on folding and filtering: collapsing verifiers (`z`/Space) compacts vertical space to 0 lines, pulling subsequent tasks upward. Filtering admin nodes (e.g. `task 1`) reclaims row 0 for task cards. Column selection maps visible task depths sequentially starting at column 0 (`rel_depth`), eliminating empty preceding columns.
+- Orthogonal edge routing with corridor bypass: non-adjacent nodes in the same column bypass intermediate cards through a side corridor lane (`from.right() + GAP_X / 2`), verified with 0 card interior intersections across 240 node pairs on a 4x4 grid and in all filter modes.
+- Spatial navigation: arrow keys move strictly among visible nodes, skipping filtered or collapsed nodes.
 - Stability: selecting a node or streaming activity updates never shifts or displaces graph nodes.
 - Progress overlay collision avoidance: the 'teraz' progress box tests all four viewport corners and automatically yields (hides) if visible cards occupy candidate corners.
-- Bounded Canvas memory: viewport windowing (`Canvas::new_window`) limits buffer allocation to `O(viewport_area)` (~99 KB–300 KB) regardless of graph size, preventing OOM crashes on large plans (e.g. 500+ tasks).
+- Bounded Canvas memory: viewport windowing (`Canvas::new_window`) limits buffer allocation to `O(viewport_area)` (~99 KB–300 KB) regardless of graph size, preventing OOM crashes on large plans (tested on 500+ tasks).
 - Main footer action hints dynamically adapt to available terminal width (at 115+, 75+, 50+, <50 columns).
 - `NO_COLOR=1` disables ANSI color while preserving `dim` and `reversed` modifiers; `ANTISLOP_ASCII=1` (or non-UTF-8 locales) renders borders and status icons in plain ASCII.
 
-### Graph screen utilization: Before vs After
+### Graph screen utilization and layout measurements
 
-| Terminal | Inner panel | Scenario | Before (whole visible cards) | After (whole visible cards) | Redundant empty area |
+| Terminal | Inner panel (`inner.width x inner.height`) | Whole visible cards without scroll | Columns & rows layout | Compaction & scroll impact | Edge routing safety (corridor bypass) |
 |---|---|---|---|---|---|
-| **80x24** (compact) | 78 x 20 | Parallel (4 tasks) | 3 cards (PV, Orch, w1; col 1 empty) | **8 cards** (+166% increase) | Col 1 empty area eliminated |
-| **80x24** (compact) | 78 x 20 | Long chain (4 tasks) | 4 cards (c3/c4 clipped offscreen) | **6–8 cards** (wrapped columns) | Horizontal overflow eliminated |
-| **85x24** (split) | 48 x 20 | Parallel (4 tasks) | 2 cards (Orch clipped horizontally) | **4 cards** (+100%, Orch readable) | 0 clipped cards |
-| **120x30** (split) | 77 x 26 | Parallel (4 tasks) | 5 cards (col 1 empty below row 0) | **10 cards** (+100% increase) | Col 1 empty area eliminated |
-| **160x50** (split) | 104 x 46 | Parallel (4 tasks) | 7 cards (cols 1 & 2 empty below row 0) | **11 cards** (100% visible, no scroll) | >3,500 empty cells eliminated |
-| Any terminal | Any inner | Collapsed verifiers | 6-line blank gaps per task | **0 blank gaps** (compacted vertically) | Empty vertical gaps eliminated |
+| **80x24** (compact) | 78 x 20 | **6 cards** | 2 cols (x=3, 37) x 3 rows (y=0, 6, 12) | Fits completely in height 20 (`offset = (0, 0)`) | 0 collisions; Auditor bypassed via side corridor |
+| **85x24** (split) | 48 x 20 | **3 cards** | 1 col (x=3) x 3 rows (y=0, 6, 12) | Admin nodes in col 0 without horizontal clipping | 0 collisions; clean vertical corridor routing |
+| **120x30** (split) | 77 x 26 | **7 cards** | 2 cols (x=3, 37) x 4 rows (y=0, 6, 12, 18) | 4 row levels utilized; `offset = (0, 0)` | 0 collisions; Verifier bypassed via side corridor |
+| **160x50** (split) | 104 x 46 | **11 cards** | 3 cols (x=3, 37, 71) x 7 rows | 100% of nodes visible without scrolling | 0 collisions across 240 node pairs on 4x4 grid |
+| **Any terminal** | Any inner | — | Collapsed verifiers (`z`/Space) | 0 vertical blank lines (cards pulled upward) | Traces dynamically adjust to compacted coordinates |
+| **Any terminal** | Any inner | — | Filtered tasks (e.g. "task 1") | Row 0 reclaimed, active depth mapped to col 0 | Routes restricted strictly to visible cards |
 
 Commands:
 - `/pause` stops starting new work (running turns finish) until `/continue`.
