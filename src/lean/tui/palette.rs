@@ -23,6 +23,8 @@ pub enum Command {
     Autonomous,
     Supervised,
     NewConversation,
+    SwitchConversation,
+    Tasks,
     Find,
     Search,
     Details,
@@ -33,7 +35,7 @@ pub enum Command {
     Quit,
 }
 
-const COMMANDS: [(Command, &str); 16] = [
+const COMMANDS: [(Command, &str); 18] = [
     (Command::Accept, "Uruchom zaproponowany plan · Ctrl+A"),
     (Command::Resume, "Wznów plan · Ctrl+R"),
     (Command::Cancel, "Anuluj trwającą pracę · Ctrl+X"),
@@ -51,6 +53,8 @@ const COMMANDS: [(Command, &str); 16] = [
         "Tryb nadzorowany: plany czekają na zgodę · /mode supervised",
     ),
     (Command::NewConversation, "Nowa rozmowa · Ctrl+N"),
+    (Command::SwitchConversation, "Przełącz rozmowę · Ctrl+O"),
+    (Command::Tasks, "Zadania (karuzela) · t"),
     (Command::Find, "Znajdź agenta · /"),
     (Command::Search, "Szukaj w rozmowie · Ctrl+F"),
     (Command::Details, "Szczegóły wybranego agenta · Enter"),
@@ -62,12 +66,21 @@ const COMMANDS: [(Command, &str); 16] = [
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationItem {
+    pub id: String,
+    pub project: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Run(Command),
     /// Select this graph node.
     Select(String),
     /// Show this entry of the conversation.
     Show(usize),
+    /// Switch to another conversation.
+    SwitchConversation(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +88,7 @@ pub enum Kind {
     Commands,
     Agents,
     History,
+    Conversations,
 }
 
 #[derive(Debug)]
@@ -82,6 +96,7 @@ pub struct Picker {
     pub kind: Kind,
     pub query: String,
     pub selected: usize,
+    pub conversations: Vec<ConversationItem>,
 }
 
 impl Picker {
@@ -90,6 +105,7 @@ impl Picker {
             kind,
             query: String::new(),
             selected: 0,
+            conversations: Vec::new(),
         }
     }
 
@@ -103,6 +119,7 @@ impl Picker {
             Kind::Agents => Graph::new(view)
                 .nodes
                 .iter()
+                .filter(|node| node.visible)
                 .map(|node| {
                     let task = node
                         .key
@@ -123,6 +140,11 @@ impl Picker {
                 .rev()
                 .filter(|(_, entry)| !entry.text.trim().is_empty())
                 .map(|(index, entry)| (entry.text.trim().replace('\n', " "), Action::Show(index)))
+                .collect(),
+            Kind::Conversations => self
+                .conversations
+                .iter()
+                .map(|c| (c.title.clone(), Action::SwitchConversation(c.id.clone())))
                 .collect(),
         };
         let words: Vec<String> = self
@@ -177,6 +199,7 @@ impl Picker {
                     Kind::Commands => "Brak dostępnych poleceń.",
                     Kind::Agents => "Brak agentów w grafie.",
                     Kind::History => "Brak wpisów w historii rozmowy.",
+                    Kind::Conversations => "Brak innych rozmów w tym projekcie.",
                 }
             } else {
                 "Nic nie pasuje do zapytania."
@@ -201,6 +224,9 @@ impl Picker {
             Kind::History if width >= 45 => " szukaj w rozmowie · Enter pokaż · Esc zamknij ",
             Kind::History if width >= 20 => " szukaj · Esc ",
             Kind::History => " szukaj ",
+            Kind::Conversations if width >= 45 => " przełącz rozmowę · Enter otwórz · Esc zamknij ",
+            Kind::Conversations if width >= 20 => " rozmowy · Esc ",
+            Kind::Conversations => " rozmowy ",
         };
         frame.render_widget(Clear, box_area);
         frame.render_widget(
@@ -227,6 +253,7 @@ impl Picker {
 pub enum Help {
     Chat,
     Graph,
+    Tasks,
     Details,
     Diff,
     Comment,
@@ -251,7 +278,7 @@ impl Help {
                 "/pause, /continue  wstrzymaj nowe kroki / kontynuuj",
                 "/mode autonomous   tryb autonomiczny dla kolejnych planów",
                 "/mode supervised   tryb nadzorowany dla kolejnych planów",
-                "Ctrl+N           nowa rozmowa",
+                "Ctrl+N / Ctrl+O  nowa / przełącz rozmowę",
                 "Ctrl+F           szukaj w rozmowie",
                 "Ctrl+P           paleta poleceń",
                 "Esc              czyść szkic; wyjdź gdy pusty (demon trwa)",
@@ -260,11 +287,26 @@ impl Help {
                 "strzałki         najbliższy węzeł w tym kierunku",
                 "Enter            szczegóły agenta",
                 "/                znajdź agenta",
+                "t                karuzela zadań",
                 "d                diff zadania",
                 "c                komentarz do wybranego elementu",
+                "z, Spacja        zwiń / rozwiń zadanie",
+                "g                przełącz grupowanie (zależności / stan)",
                 "f                filtr relacji: wszystko, zależności, weryfikacja, wiadomości, nadzór",
                 "Ctrl+P           paleta poleceń",
                 "Tab, Esc         czat",
+                "q                wyjdź (praca trwa dalej w demonie)",
+            ],
+            Help::Tasks => &[
+                "←/→, ↑/↓        poprzednie / następne zadanie w karuzeli",
+                "w                przejdź do workera na grafie",
+                "v                przejdź do weryfikatora na grafie",
+                "Enter            szczegóły wybranego zadania",
+                "d                diff zadania",
+                "c                komentarz do zadania",
+                "Ctrl+P           paleta poleceń",
+                "Tab              przełącz na zespół",
+                "Esc              przełącz na czat",
                 "q                wyjdź (praca trwa dalej w demonie)",
             ],
             Help::Details => &[

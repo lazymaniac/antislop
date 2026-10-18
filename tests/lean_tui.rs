@@ -2388,7 +2388,7 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
     let text_85: String = term_85.backend().buffer().content.iter().map(|c| c.symbol()).collect();
     assert!(!text_85.contains("[Czat]"));
     // The separator column contains vertical glyph
-    let sep_col = (85 / 3).max(34);
+    let sep_col = 34;
     assert_eq!(term_85.backend().buffer()[(sep_col, 5)].symbol(), "│");
 }
 
@@ -2478,4 +2478,693 @@ fn tui_malicious_output_sanitization_on_buffer() {
     assert!(!text.contains('\u{202e}'));
     assert!(text.contains("Normalny tekst"));
 }
+
+#[test]
+fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
+    use architect::lean::tui::graph::{Graph, GroupingMode};
+    use architect::lean::tui::view::{AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, TaskRow, View};
+
+    // 1. Stable, deterministic positions based on dependency topology
+    let mut view = View::default();
+    view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "Task 1".into(),
+            depends_on: vec![],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "Task 2".into(),
+            depends_on: vec!["t1".into()],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t3".into(),
+            title: "Task 3".into(),
+            depends_on: vec!["t1".into()],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t4".into(),
+            title: "Task 4".into(),
+            depends_on: vec!["t2".into(), "t3".into()],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+    ];
+
+    let g1 = Graph::new(&view);
+    let g2 = Graph::new(&view);
+    for (n1, n2) in g1.nodes.iter().zip(g2.nodes.iter()) {
+        assert_eq!(n1.key, n2.key);
+        assert_eq!(n1.x, n2.x);
+        assert_eq!(n1.y, n2.y);
+    }
+
+    let node_pos = |g: &Graph, key: &str| {
+        let n = g.node(key).unwrap();
+        (n.x, n.y)
+    };
+    let w1 = node_pos(&g1, "worker:t1");
+    let v1 = node_pos(&g1, "verifier:t1");
+    let w2 = node_pos(&g1, "worker:t2");
+    let w3 = node_pos(&g1, "worker:t3");
+    let w4 = node_pos(&g1, "worker:t4");
+
+    // Worker and verifier alignment: verifier sits directly below worker
+    assert_eq!(w1.0, v1.0);
+    assert!(v1.1 > w1.1);
+
+    // Columns advance with dependency depth: w1.0 < w2.0 <= w4.0
+    assert!(w1.0 < w2.0);
+    assert_eq!(w2.0, w3.0);
+    assert!(w2.0 < w4.0);
+
+    // Fixed supervision positions
+    assert_eq!(node_pos(&g1, PLAN_VERIFIER).1, 0);
+    assert_eq!(node_pos(&g1, ORCHESTRATOR).1, 0);
+    assert_eq!(node_pos(&g1, AUDITOR).1, 0);
+
+    // 2. Large graph (500 tasks): tests non-recursive Kahn's algorithm
+    let mut large_tasks = Vec::new();
+    for i in 0..500 {
+        let parent = if i > 0 {
+            vec![format!("task_{}", i - 1)]
+        } else {
+            vec![]
+        };
+        large_tasks.push(TaskRow {
+            id: format!("task_{i}"),
+            title: format!("Task {i}"),
+            depends_on: parent,
+            status: "proposed".into(),
+            ..TaskRow::default()
+        });
+    }
+    let mut large_view = View::default();
+    large_view.tasks = large_tasks;
+    let large_graph = Graph::new(&large_view);
+    assert_eq!(large_graph.nodes.len(), 3 + 500 * 2);
+    assert!(large_graph.width > 0);
+    assert!(large_graph.height > 0);
+
+    // 3. Pathological cyclic dependencies: c1 -> c2 -> c3 -> c1
+    let cyclic_tasks = vec![
+        TaskRow {
+            id: "c1".into(),
+            title: "Cyclic 1".into(),
+            depends_on: vec!["c2".into()],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "c2".into(),
+            title: "Cyclic 2".into(),
+            depends_on: vec!["c3".into()],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "c3".into(),
+            title: "Cyclic 3".into(),
+            depends_on: vec!["c1".into()],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "leaf".into(),
+            title: "Leaf Task".into(),
+            depends_on: vec!["c3".into()],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+    ];
+    let mut cyclic_view = View::default();
+    cyclic_view.tasks = cyclic_tasks;
+    let cyclic_graph = Graph::new(&cyclic_view);
+    assert_eq!(cyclic_graph.nodes.len(), 3 + 4 * 2);
+    for node in &cyclic_graph.nodes {
+        assert!(node.visible);
+    }
+
+    // 4. Grouping modes (Dependency vs Status)
+    let mut status_view = View::default();
+    status_view.tasks = vec![
+        TaskRow {
+            id: "s1".into(),
+            title: "Task S1".into(),
+            depends_on: vec![],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "s2".into(),
+            title: "Task S2".into(),
+            depends_on: vec![],
+            status: "working".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "s3".into(),
+            title: "Task S3".into(),
+            depends_on: vec![],
+            status: "approved".into(),
+            ..TaskRow::default()
+        },
+    ];
+    let dep_graph = Graph::new_with_options(
+        &status_view,
+        None,
+        &std::collections::HashSet::new(),
+        GroupingMode::Dependency,
+    );
+    let stat_graph = Graph::new_with_options(
+        &status_view,
+        None,
+        &std::collections::HashSet::new(),
+        GroupingMode::Status,
+    );
+
+    assert_eq!(
+        dep_graph.node("worker:s1").unwrap().x,
+        dep_graph.node("worker:s2").unwrap().x
+    );
+    assert!(stat_graph.node("worker:s1").unwrap().x < stat_graph.node("worker:s2").unwrap().x);
+    assert!(stat_graph.node("worker:s2").unwrap().x < stat_graph.node("worker:s3").unwrap().x);
+}
+
+#[test]
+fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
+    use architect::lean::tui::graph::{Canvas, Graph, GroupingMode};
+    use architect::lean::tui::view::{Link, TaskRow, View};
+
+    let mut view = View::default();
+    view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "Pierwsze zadanie".into(),
+            depends_on: vec![],
+            status: "working".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "Drugie zadanie".into(),
+            depends_on: vec!["t1".into()],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+    ];
+    view.links.insert(
+        ("worker:t1".into(), "worker:t2".into()),
+        Link {
+            count: 3,
+            last: std::time::Instant::now(),
+        },
+    );
+
+    // 1. Edge and node relation markers (V, D, M)
+    let graph = Graph::new(&view);
+    let mut canvas = Canvas::new(graph.width, graph.height);
+    graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+    let lines = canvas.lines();
+    let text = lines.join("\n");
+
+    // Edges and node badges contain markers
+    assert!(text.contains('V') || text.contains('D') || text.contains("✉3"));
+
+    // 2. Visible-only navigation and Collapsing
+    let next_below = graph.neighbour("worker:t1", 0, 1);
+    assert_eq!(next_below.as_deref(), Some("verifier:t1"));
+
+    let mut collapsed = std::collections::HashSet::new();
+    collapsed.insert("t1".into());
+    let collapsed_graph = Graph::new_with_options(
+        &view,
+        None,
+        &collapsed,
+        GroupingMode::Dependency,
+    );
+
+    let w1 = collapsed_graph.node("worker:t1").unwrap();
+    let v1 = collapsed_graph.node("verifier:t1").unwrap();
+    assert!(w1.visible);
+    assert!(w1.collapsed);
+    assert!(!v1.visible);
+
+    let next_below_collapsed = collapsed_graph.neighbour("worker:t1", 0, 1);
+    assert_ne!(next_below_collapsed.as_deref(), Some("verifier:t1"));
+
+    // 3. Text query filtering
+    let mut app = App::test_app();
+    app.view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "Pierwsze zadanie".into(),
+            depends_on: vec![],
+            status: "working".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "Drugie zadanie".into(),
+            depends_on: vec!["t1".into()],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+    ];
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+
+    app.set_graph_filter(Some("drugie".into()));
+    assert_ne!(app.selected, "worker:t1");
+    assert!(app.selected.contains("t2"));
+
+    let filtered_graph = Graph::new_with_options(
+        &view,
+        Some("drugie"),
+        &std::collections::HashSet::new(),
+        GroupingMode::Dependency,
+    );
+    assert!(!filtered_graph.node("worker:t1").unwrap().visible);
+    assert!(filtered_graph.node("worker:t2").unwrap().visible);
+
+    let nav = filtered_graph.neighbour("worker:t2", -1, 0);
+    if let Some(target) = nav {
+        assert!(filtered_graph.node(&target).unwrap().visible);
+        assert_ne!(target, "worker:t1");
+    }
+
+    // Toggle collapse via key
+    app.set_graph_filter(None);
+    app.selected = "worker:t1".into();
+    assert!(!app.graph_collapsed.contains("t1"));
+    app.key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+    assert!(app.graph_collapsed.contains("t1"));
+    app.key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+    assert!(!app.graph_collapsed.contains("t1"));
+}
+
+#[test]
+fn test_tasks_carousel_third_focus_and_transitions() {
+    use architect::lean::tui::view::{Agent, Comment, PanelFocus, TaskRow, View};
+
+    let mut app = App::test_app();
+    let mut view = View::default();
+    view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "Przygotowanie danych".into(),
+            depends_on: vec![],
+            scope: vec!["src/data.rs".into()],
+            round: 1,
+            status: "approved".into(),
+            writes: false,
+            goal: "Zbudować strukturę danych".into(),
+            focus: "Sprawdzić brak alokacji".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "Implementacja logiki".into(),
+            depends_on: vec!["t1".into()],
+            scope: vec!["src/logic.rs".into(), "src/engine.rs".into()],
+            round: 2,
+            status: "working".into(),
+            writes: true,
+            goal: "Zaimplementować algorytm".into(),
+            focus: "Sprawdzić złożoność obliczeniową".into(),
+            ..TaskRow::default()
+        },
+    ];
+    view.comments.insert(
+        1,
+        Comment {
+            id: 1,
+            plan_id: None,
+            target: "worker:t2".into(),
+            text: "Uwaga na wyciek pamięci".into(),
+            status: "open".into(),
+        },
+    );
+    view.agents.insert(
+        "worker:t2".into(),
+        Agent {
+            running: true,
+            activity: "kompilowanie modułu".into(),
+            provider: "claude".into(),
+            ..Agent::default()
+        },
+    );
+
+    app.view = view;
+
+    // 1. Navigation to Focus::Tasks
+    assert_eq!(app.focus, Focus::Chat);
+    app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    assert_eq!(app.focus, Focus::Tasks);
+
+    // Header rendering shows [Zadania]
+    let header = render_header(
+        "arch",
+        "conv-1",
+        Some(true),
+        "idle",
+        PanelFocus::Tasks,
+        80,
+    );
+    let mut header_buf = Buffer::empty(Rect::new(0, 0, 100, 1));
+    header_buf.set_line(0, 0, &header, 100);
+    let header_str: String = header_buf.content.iter().map(|c| c.symbol()).collect();
+    assert!(header_str.contains("[Zadania]"));
+
+    // 2. Carousel rendering with real counters
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let text: String = terminal.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+
+    assert!(text.contains("Karuzela zadań"));
+    assert!(text.contains("Zadanie t1"));
+    assert!(text.contains("Runda: r1"));
+    assert!(text.contains("brak (korzeń grafu)"));
+    assert!(text.contains("Podsumowanie planu: 2 zadań łącznie"));
+
+    // 3. Carousel navigation
+    assert_eq!(app.carousel.selected, 0);
+    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(app.carousel.selected, 1);
+    assert_eq!(app.selected, "worker:t2");
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let text2: String = terminal.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    assert!(text2.contains("Zadanie t2"));
+    assert!(text2.contains("Runda: r2"));
+    assert!(text2.contains("Zależności [D]: t1 (liczba: 1)"));
+    assert!(text2.contains("Zakres plików: 2 ścieżek"));
+    assert!(text2.contains("modyfikuje pliki"));
+    assert!(text2.contains("Komentarze: ✎1"));
+    assert!(text2.contains("Worker: ● pracuje"));
+
+    // Wrap around to 0
+    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(app.carousel.selected, 0);
+
+    // Move prev with Left arrow wraps to 1
+    app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert_eq!(app.carousel.selected, 1);
+
+    // 4. Transitions to worker ('w') and verifier ('v') on graph
+    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.selected, "worker:t2");
+
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    assert_eq!(app.focus, Focus::Tasks);
+
+    app.key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.selected, "verifier:t2");
+
+    // Transitioning to verifier for a COLLAPSED task must automatically uncollapse it
+    // and keep verifier:t2 selected without resetting to plan-verifier in draw_graph!
+    app.graph_collapsed.insert("t2".into());
+    app.focus = Focus::Tasks;
+    app.key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    assert_eq!(app.focus, Focus::Graph);
+    assert_eq!(app.selected, "verifier:t2");
+    assert!(!app.graph_collapsed.contains("t2"), "Collapsed task must be uncollapsed when jumping to verifier");
+    terminal.draw(|f| app.draw(f)).unwrap();
+    assert_eq!(app.selected, "verifier:t2", "draw_graph must maintain verifier selection rather than resetting to plan-verifier");
+
+    // 5. Actions from carousel: Enter (Details), 'd' (Diff), 'c' (Comment), Esc (Chat)
+    app.focus = Focus::Tasks;
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.details.is_some());
+    assert_eq!(app.details.as_ref().unwrap().key, "worker:t2");
+    app.details = None;
+
+    app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+    assert!(app.diff.is_some());
+    assert_eq!(app.diff.as_ref().unwrap().task, "t2");
+    app.diff = None;
+
+    app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+    assert!(app.editor.is_some());
+    assert_eq!(app.editor.as_ref().unwrap().target, "worker:t2");
+    app.editor = None;
+
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.focus, Focus::Chat);
+
+    // 6. Plan metrics with cancelled and skipped tasks correctly counted in problems
+    let mut metric_view = View::default();
+    metric_view.tasks = vec![
+        TaskRow { id: "m1".into(), status: "approved".into(), ..TaskRow::default() },
+        TaskRow { id: "m2".into(), status: "working".into(), ..TaskRow::default() },
+        TaskRow { id: "m3".into(), status: "queued".into(), ..TaskRow::default() },
+        TaskRow { id: "m4".into(), status: "cancelled".into(), ..TaskRow::default() },
+        TaskRow { id: "m5".into(), status: "skipped".into(), ..TaskRow::default() },
+        TaskRow { id: "m6".into(), status: "failed".into(), ..TaskRow::default() },
+    ];
+    app.view = metric_view;
+    app.focus = Focus::Tasks;
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let metric_text: String = terminal.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    assert!(metric_text.contains("6 zadań łącznie"));
+    assert!(metric_text.contains("1 zatwierdzone"));
+    assert!(metric_text.contains("1 w toku"));
+    assert!(metric_text.contains("1 oczekuje"));
+    assert!(metric_text.contains("3 problemów"));
+
+    // 7. Compact header hints for each focus
+    for (f, expected) in [
+        (PanelFocus::Chat, "(Tab: przełącz) · (t: zadania)"),
+        (PanelFocus::Tasks, "(Tab: przełącz) · (Esc: czat)"),
+        (PanelFocus::Graph, "(Tab: przełącz) · (t: zadania)"),
+    ] {
+        let h = render_header("arch", "conv-1", Some(true), "idle", f, 80);
+        let mut b = Buffer::empty(Rect::new(0, 0, 80, 1));
+        b.set_line(0, 0, &h, 80);
+        let s: String = b.content.iter().map(|c| c.symbol()).collect();
+        assert!(s.contains(expected), "Expected {expected} in header string: {s}");
+    }
+
+    // 8. Empty state rendering
+    app.view.tasks.clear();
+    app.focus = Focus::Tasks;
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let empty_text: String = terminal.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    assert!(empty_text.contains("Brak zadań w bieżącym planie"));
+}
+
+#[test]
+fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retention() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = socket(dir.path());
+    let listener = UnixListener::bind(&sock).unwrap();
+    let (tx, rx) = mpsc::channel();
+
+    let _server = thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_ok()
+                && !line.is_empty()
+                && let Ok(parsed) = serde_json::from_str::<Value>(&line)
+            {
+                let _ = tx.send(parsed.clone());
+                    let mut writer = stream;
+                    if parsed["op"] == "conversations" {
+                        let resp = json!({
+                            "data": [
+                                {
+                                    "id": "c-alpha",
+                                    "project": "my-project",
+                                    "status": "working",
+                                    "tasks_total": 4,
+                                    "tasks_done": 2
+                                },
+                                {
+                                    "id": "c-foreign",
+                                    "project": "other-project",
+                                    "status": "idle"
+                                },
+                                {
+                                    "id": "c-beta",
+                                    "project": "my-project",
+                                    "status": "idle"
+                                }
+                            ],
+                            "error": null
+                        });
+                        let _ = writer.write_all(format!("{resp}\n").as_bytes());
+                    } else {
+                        let _ = writer.write_all(b"{\"data\":null,\"error\":null}\n");
+                    }
+                    let _ = writer.flush();
+            }
+        }
+    });
+
+    let client = Client::at(dir.path());
+    let (mut app, _rx_updates) = App::test_app_with_client(client);
+    app.project = "my-project".into();
+    app.conversation = "c-initial".into();
+
+    // 1. Enter chat draft in current conversation
+    app.input.insert_str("Szkic w c-initial");
+    app.input.cursor = 5;
+
+    // 2. Open switcher via Ctrl+O
+    app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(req["op"], "conversations");
+
+    assert!(app.picker.is_some());
+    let picker = app.picker.as_ref().unwrap();
+    assert_eq!(picker.kind, Kind::Conversations);
+
+    // Foreign project conversation was filtered out
+    assert!(!picker.conversations.iter().any(|c| c.id == "c-foreign"));
+    // Current project conversations are present
+    assert!(picker.conversations.iter().any(|c| c.id == "c-alpha"));
+    assert!(picker.conversations.iter().any(|c| c.id == "c-beta"));
+    assert!(picker.conversations.iter().any(|c| c.id == "c-initial"));
+
+    // 3. Search filtering
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+    let items = app.picker.as_ref().unwrap().items(&app.view);
+    assert_eq!(items.len(), 1);
+    assert!(items[0].0.contains("c-beta"));
+
+    // 4. Press Enter to switch to c-beta
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.picker.is_none());
+    assert_eq!(app.conversation, "c-beta");
+
+    // In c-beta, input is fresh
+    assert!(app.input.is_empty());
+    app.input.insert_str("Szkic w c-beta");
+    app.input.cursor = 10;
+
+    // 5. Open switcher again and switch back to c-initial
+    app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    for ch in "initial".chars() {
+        app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.conversation, "c-initial");
+
+    // Draft and cursor in c-initial are fully preserved
+    assert_eq!(app.input.text, "Szkic w c-initial");
+    assert_eq!(app.input.cursor, 5);
+
+    // Switch again to c-beta: draft in c-beta preserved as well
+    app.open("c-beta".into());
+    assert_eq!(app.conversation, "c-beta");
+    assert_eq!(app.input.text, "Szkic w c-beta");
+    assert_eq!(app.input.cursor, 10);
+}
+
+#[test]
+fn test_refresh_updates_and_overlay_collision_avoidance() {
+    use architect::lean::tui::graph::{Node, compute_progress_overlay, Graph};
+    use ratatui::layout::Rect;
+
+    // 1. Overlay collision avoidance
+    let inner = Rect::new(0, 0, 80, 25);
+    let progress_width = 30;
+    let progress_height = 6;
+    let default_overlay = Rect::new(50, 19, 30, 6);
+
+    // Case A: No node selected
+    let pos_none = compute_progress_overlay(inner, None, (0, 0), progress_width, progress_height);
+    assert_eq!(pos_none, Some(default_overlay));
+
+    // Case B: Node selected at top-left (no collision)
+    let node_top_left = Node {
+        key: "worker:t1".into(),
+        x: 0,
+        y: 0,
+        visible: true,
+        group: None,
+        collapsed: false,
+    };
+    let pos_top_left = compute_progress_overlay(inner, Some(&node_top_left), (0, 0), progress_width, progress_height);
+    assert_eq!(pos_top_left, Some(default_overlay));
+
+    // Case C: Node selected at bottom-right (collision!) -> flips to top-right
+    let node_bottom_right = Node {
+        key: "worker:t2".into(),
+        x: 55,
+        y: 20,
+        visible: true,
+        group: None,
+        collapsed: false,
+    };
+    let pos_flipped = compute_progress_overlay(inner, Some(&node_bottom_right), (0, 0), progress_width, progress_height);
+    assert_eq!(pos_flipped, Some(Rect::new(50, 0, 30, 6)));
+
+    // Case D: Node selected at bottom-right but HIDDEN -> stays at default bottom-right
+    let node_hidden = Node {
+        key: "verifier:t2".into(),
+        x: 55,
+        y: 20,
+        visible: false,
+        group: None,
+        collapsed: false,
+    };
+    let pos_hidden = compute_progress_overlay(inner, Some(&node_hidden), (0, 0), progress_width, progress_height);
+    assert_eq!(pos_hidden, Some(default_overlay));
+
+    // 2. Refresh updates preserving carousel selection and graph state
+    let mut app = App::test_app();
+    app.view.apply(&json!({
+        "seq": 1,
+        "kind": "plan_proposed",
+        "payload": {
+            "plan": "plan-1",
+            "tasks": [
+                {"id": "t1", "title": "Krok 1", "round": 1, "status": "proposed"},
+                {"id": "t2", "title": "Krok 2", "round": 1, "status": "proposed"},
+                {"id": "t3", "title": "Krok 3", "round": 1, "status": "proposed"}
+            ]
+        }
+    }));
+
+    app.focus = Focus::Tasks;
+    app.carousel.selected = 1;
+    app.selected = "worker:t2".into();
+
+    app.view.apply(&json!({
+        "seq": 2,
+        "kind": "task",
+        "payload": {
+            "id": "t2",
+            "status": "working",
+            "round": 2
+        }
+    }));
+
+    assert_eq!(app.carousel.selected, 1);
+    let cur_task = app.carousel.current_task(&app.view).unwrap();
+    assert_eq!(cur_task.id, "t2");
+    assert_eq!(cur_task.status, "working");
+    assert_eq!(cur_task.round, 2);
+
+    let g = Graph::new(&app.view);
+    let n = g.node("worker:t2").unwrap();
+    assert!(n.visible);
+}
+
 

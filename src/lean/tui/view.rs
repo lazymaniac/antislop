@@ -17,6 +17,7 @@ pub const SIDE_BY_SIDE_BREAKPOINT: u16 = 85;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelFocus {
     Chat,
+    Tasks,
     Graph,
 }
 
@@ -116,7 +117,7 @@ pub struct Agent {
     pub busy_ms: u64,
     pub last_ms: Option<u64>,
     /// When the running turn started, if known.
-    started_ms: Option<i64>,
+    pub started_ms: Option<i64>,
     /// Sums of what was reported; `None` while nothing was.
     pub tokens_in: Option<u64>,
     pub tokens_out: Option<u64>,
@@ -632,10 +633,10 @@ impl View {
                             }
                         }
                         for card in &mut self.cards {
-                            if let TranscriptCard::Message(msg) = card {
-                                if msg.id == id_str {
-                                    msg.state = "dostarczono".to_owned();
-                                }
+                            if let TranscriptCard::Message(msg) = card
+                                && msg.id == id_str
+                            {
+                                msg.state = "dostarczono".to_owned();
                             }
                         }
                         if let Some(recipient) = self.mail.remove(&mail_id) {
@@ -659,11 +660,12 @@ impl View {
                     }
                 }
                 for card in self.cards.iter_mut().rev() {
-                    if let TranscriptCard::Message(msg) = card {
-                        if (msg.sender == sender || msg.sender == norm_sender) && msg.target == recipient {
-                            msg.state = "odrzucono".to_owned();
-                            break;
-                        }
+                    if let TranscriptCard::Message(msg) = card
+                        && (msg.sender == sender || msg.sender == norm_sender)
+                        && msg.target == recipient
+                    {
+                        msg.state = "odrzucono".to_owned();
+                        break;
                     }
                 }
                 self.push(
@@ -930,27 +932,45 @@ pub fn render_header(
     )];
 
     if width < SIDE_BY_SIDE_BREAKPOINT {
-        let (chat_style, graph_style) = match focus {
+        let (chat_style, tasks_style, graph_style) = match focus {
             PanelFocus::Chat => (
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
                 dim(),
+                dim(),
+            ),
+            PanelFocus::Tasks => (
+                dim(),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+                dim(),
             ),
             PanelFocus::Graph => (
+                dim(),
                 dim(),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
         };
-        let (chat_label, graph_label) = match focus {
-            PanelFocus::Chat => ("[Czat]", "Zespół"),
-            PanelFocus::Graph => ("Czat", "[Zespół]"),
+        let (chat_label, tasks_label, graph_label) = match focus {
+            PanelFocus::Chat => ("[Czat]", "Zadania", "Zespół"),
+            PanelFocus::Tasks => ("Czat", "[Zadania]", "Zespół"),
+            PanelFocus::Graph => ("Czat", "Zadania", "[Zespół]"),
         };
         spans.push(Span::styled(format!(" {chat_label} "), chat_style));
+        spans.push(Span::styled(format!("{tasks_label} "), tasks_style));
         spans.push(Span::styled(format!("{graph_label} "), graph_style));
-        if width >= 70 {
+        let switch_hint = match focus {
+            PanelFocus::Chat => "(Tab: przełącz) · (t: zadania) · ",
+            PanelFocus::Tasks => "(Tab: przełącz) · (Esc: czat) · ",
+            PanelFocus::Graph => "(Tab: przełącz) · (t: zadania) · ",
+        };
+        if width >= 75 {
+            spans.push(Span::styled(switch_hint, dim()));
+        } else if width >= 65 {
             spans.push(Span::styled("(Tab: przełącz) · ", dim()));
         } else if width >= 40 {
             spans.push(Span::styled("· ", dim()));
@@ -1007,6 +1027,19 @@ pub fn main_footer_hint(
                 format!("Enter wyślij · {plan}Tab zespół · Esc")
             } else {
                 "Enter · Esc".into()
+            }
+        }
+        PanelFocus::Tasks => {
+            if width >= 115 {
+                format!(
+                    "←/→ zadanie · w worker · v weryfikator · Enter szczegóły · d diff · c skomentuj · {plan}Tab zespół · Esc czat"
+                )
+            } else if width >= 75 {
+                "←/→ zadanie · w worker · v wer. · Enter szczegóły · d diff · Tab zespół · Esc".into()
+            } else if width >= 50 {
+                "←/→ zadanie · w worker · v wer. · Tab zespół".into()
+            } else {
+                "←/→ zadanie · w · v".into()
             }
         }
         PanelFocus::Graph => {

@@ -83,14 +83,64 @@ impl Kind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GroupingMode {
+    #[default]
+    Dependency,
+    Status,
+}
+
+impl GroupingMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Dependency => Self::Status,
+            Self::Status => Self::Dependency,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Dependency => "zależności",
+            Self::Status => "stan",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub key: String,
     pub x: u16,
     pub y: u16,
+    pub visible: bool,
+    pub group: Option<String>,
+    pub collapsed: bool,
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            x: 0,
+            y: 0,
+            visible: true,
+            group: None,
+            collapsed: false,
+        }
+    }
 }
 
 impl Node {
+    pub fn new(key: String, x: u16, y: u16) -> Self {
+        Self {
+            key,
+            x,
+            y,
+            visible: true,
+            group: None,
+            collapsed: false,
+        }
+    }
+
     fn mid_y(&self) -> u16 {
         self.y + HEIGHT / 2
     }
@@ -114,6 +164,9 @@ pub struct Graph {
     edges: Vec<Edge>,
     pub width: u16,
     pub height: u16,
+    pub filter_query: Option<String>,
+    pub collapsed: std::collections::HashSet<String>,
+    pub grouping: GroupingMode,
 }
 
 fn column_x(column: u16) -> u16 {
@@ -126,60 +179,170 @@ fn row_y(row: u16) -> u16 {
 
 impl Graph {
     pub fn new(view: &View) -> Self {
-        let mut graph = Graph::default();
+        Self::new_with_options(view, None, &std::collections::HashSet::new(), GroupingMode::Dependency)
+    }
+
+    pub fn new_with_options(
+        view: &View,
+        filter_query: Option<&str>,
+        collapsed: &std::collections::HashSet<String>,
+        grouping: GroupingMode,
+    ) -> Self {
+        let mut graph = Graph {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            width: 0,
+            height: 0,
+            filter_query: filter_query.map(str::to_string),
+            collapsed: collapsed.clone(),
+            grouping,
+        };
+
         let mut place = |key: String, column: u16, row: u16| {
             graph.nodes.push(Node {
                 key,
                 x: column_x(column),
                 y: row_y(row),
+                visible: true,
+                group: None,
+                collapsed: false,
             });
         };
         place(PLAN_VERIFIER.into(), 0, 0);
         place(ORCHESTRATOR.into(), 1, 0);
         place(AUDITOR.into(), 2, 0);
 
-        // A task's column is the length of its longest dependency chain.
+        let n = view.tasks.len();
         let index: HashMap<&str, usize> = view
             .tasks
             .iter()
             .enumerate()
             .map(|(index, task)| (task.id.as_str(), index))
             .collect();
-        let mut depth = vec![None; view.tasks.len()];
-        fn depth_of(
-            task: usize,
-            view: &View,
-            index: &HashMap<&str, usize>,
-            depth: &mut [Option<u16>],
-            seen: usize,
-        ) -> u16 {
-            if let Some(depth) = depth[task] {
-                return depth;
+
+        let mut columns = vec![0u16; n];
+
+        match grouping {
+            GroupingMode::Dependency => {
+                let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+                let mut in_degree: Vec<usize> = vec![0; n];
+                let mut parents: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+                for (i, task) in view.tasks.iter().enumerate() {
+                    for p_id in &task.depends_on {
+                        if let Some(&p_idx) = index.get(p_id.as_str())
+                            && p_idx != i
+                        {
+                            adj[p_idx].push(i);
+                            parents[i].push(p_idx);
+                            in_degree[i] += 1;
+                        }
+                    }
+                }
+
+                let mut queue = std::collections::VecDeque::new();
+                for (i, &deg) in in_degree.iter().enumerate().take(n) {
+                    if deg == 0 {
+                        queue.push_back(i);
+                    }
+                }
+
+                let mut visited = 0;
+                while let Some(u) = queue.pop_front() {
+                    visited += 1;
+                    let u_depth = columns[u];
+                    for &v in &adj[u] {
+                        if u_depth + 1 > columns[v] {
+                            columns[v] = u_depth + 1;
+                        }
+                        in_degree[v] = in_degree[v].saturating_sub(1);
+                        if in_degree[v] == 0 {
+                            queue.push_back(v);
+                        }
+                    }
+                }
+
+                // If any cycles exist, break them cleanly without recursion
+                if visited < n {
+                    for i in 0..n {
+                        if in_degree[i] > 0 {
+                            let max_p = parents[i]
+                                .iter()
+                                .filter(|&&p| in_degree[p] == 0)
+                                .map(|&p| columns[p] + 1)
+                                .max()
+                                .unwrap_or(0);
+                            columns[i] = max_p;
+                        }
+                    }
+                }
             }
-            // A cycle never passes validation; the bound only keeps a
-            // malformed event from recursing forever.
-            let value = if seen > depth.len() {
-                0
-            } else {
-                view.tasks[task]
-                    .depends_on
-                    .iter()
-                    .filter_map(|id| index.get(id.as_str()))
-                    .map(|&parent| depth_of(parent, view, index, depth, seen + 1) + 1)
-                    .max()
-                    .unwrap_or(0)
-            };
-            depth[task] = Some(value);
-            value
+            GroupingMode::Status => {
+                for (i, task) in view.tasks.iter().enumerate() {
+                    columns[i] = match task.status.as_str() {
+                        "proposed" | "queued" => 0,
+                        "working" | "verifying" => 1,
+                        "approved" => 2,
+                        _ => 3,
+                    };
+                }
+            }
         }
-        let mut slots: HashMap<u16, u16> = HashMap::new();
-        for task in 0..view.tasks.len() {
-            let column = depth_of(task, view, &index, &mut depth, 0);
-            let slot = slots.entry(column).or_default();
-            let id = &view.tasks[task].id;
-            place(format!("worker:{id}"), column, 1 + 2 * *slot);
-            place(format!("verifier:{id}"), column, 2 + 2 * *slot);
-            *slot += 1;
+
+        let mut column_tasks: HashMap<u16, Vec<usize>> = HashMap::new();
+        for (i, &col) in columns.iter().enumerate().take(n) {
+            column_tasks.entry(col).or_default().push(i);
+        }
+        let mut cols: Vec<u16> = column_tasks.keys().copied().collect();
+        cols.sort_unstable();
+
+        for &col in &cols {
+            let tasks_in_col = column_tasks.get_mut(&col).unwrap();
+            tasks_in_col.sort_unstable();
+
+            for (slot, &task_idx) in tasks_in_col.iter().enumerate() {
+                let slot = slot as u16;
+                let task = &view.tasks[task_idx];
+                let id = &task.id;
+                let is_task_collapsed = collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
+
+                let mut worker = Node::new(format!("worker:{id}"), column_x(col), row_y(1 + 2 * slot));
+                worker.collapsed = is_task_collapsed;
+                worker.group = Some(format!("task:{id}"));
+
+                let mut verifier = Node::new(format!("verifier:{id}"), column_x(col), row_y(2 + 2 * slot));
+                verifier.group = Some(format!("task:{id}"));
+                if is_task_collapsed {
+                    verifier.visible = false;
+                }
+
+                graph.nodes.push(worker);
+                graph.nodes.push(verifier);
+            }
+        }
+
+        // Text query filtering
+        if let Some(query) = filter_query {
+            let q = query.trim().to_lowercase();
+            if !q.is_empty() {
+                for node in &mut graph.nodes {
+                    let matches = node.key.to_lowercase().contains(&q)
+                        || agent_name(&node.key).to_lowercase().contains(&q)
+                        || node
+                            .key
+                            .split_once(':')
+                            .and_then(|(_, id)| view.tasks.iter().find(|t| t.id == id))
+                            .is_some_and(|t| {
+                                t.title.to_lowercase().contains(&q)
+                                    || t.status.to_lowercase().contains(&q)
+                                    || t.goal.to_lowercase().contains(&q)
+                                    || t.focus.to_lowercase().contains(&q)
+                            });
+                    if !matches {
+                        node.visible = false;
+                    }
+                }
+            }
         }
 
         let mut edge = |from: String, to: String, kind: Kind, label: Option<String>| {
@@ -194,9 +357,9 @@ impl Graph {
             PLAN_VERIFIER.into(),
             ORCHESTRATOR.into(),
             Kind::Verifies,
-            None,
+            Some("V".into()),
         );
-        edge(AUDITOR.into(), ORCHESTRATOR.into(), Kind::Verifies, None);
+        edge(AUDITOR.into(), ORCHESTRATOR.into(), Kind::Verifies, Some("V".into()));
         for task in &view.tasks {
             let worker = format!("worker:{}", task.id);
             edge(ORCHESTRATOR.into(), worker.clone(), Kind::Supervises, None);
@@ -204,7 +367,7 @@ impl Graph {
                 format!("verifier:{}", task.id),
                 worker.clone(),
                 Kind::Verifies,
-                None,
+                Some("V".into()),
             );
             for parent in &task.depends_on {
                 if index.contains_key(parent.as_str()) {
@@ -212,7 +375,7 @@ impl Graph {
                         format!("worker:{parent}"),
                         worker.clone(),
                         Kind::Depends,
-                        None,
+                        Some("D".into()),
                     );
                 }
             }
@@ -226,13 +389,14 @@ impl Graph {
                 Kind::Mail {
                     recent: link.last.elapsed() < RECENT,
                 },
-                Some(format!("✉{}", link.count)),
+                Some(format!("M✉{}", link.count)),
             );
         }
-        graph.width = graph.nodes.iter().map(Node::right).max().unwrap_or(0) + MARGIN;
+        graph.width = graph.nodes.iter().filter(|n| n.visible).map(Node::right).max().unwrap_or(0) + MARGIN;
         graph.height = graph
             .nodes
             .iter()
+            .filter(|n| n.visible)
             .map(|node| node.y + HEIGHT)
             .max()
             .unwrap_or(0);
@@ -244,6 +408,7 @@ impl Graph {
     }
 
     /// The nearest node from `key` in a direction (dx, dy), each -1, 0 or 1.
+    /// Only navigates between visible nodes.
     pub fn neighbour(&self, key: &str, dx: i32, dy: i32) -> Option<String> {
         let from = self.node(key)?;
         let center = |node: &Node| {
@@ -255,7 +420,7 @@ impl Graph {
         let (fx, fy) = center(from);
         self.nodes
             .iter()
-            .filter(|node| node.key != key)
+            .filter(|node| node.visible && node.key != key)
             .filter_map(|node| {
                 let (x, y) = center(node);
                 let (along, across) = if dx != 0 {
@@ -327,18 +492,29 @@ impl Graph {
             else {
                 continue;
             };
+            if !from.visible || !to.visible {
+                continue;
+            }
             let path = Self::route(from, to);
             canvas.path(&path, edge.kind.style());
             if let Some(&(x, y)) = path.last() {
                 canvas.put(x, y, Self::arrow(&path), edge.kind.style());
             }
             // Beside where the edge leaves its source, inside the gap.
-            if let (Some(label), [(x, y), (next, _), ..]) = (&edge.label, path.as_slice()) {
-                let x = if next < x { x.saturating_sub(3) } else { x + 1 };
-                canvas.text(x, y.saturating_sub(1), label, edge.kind.style());
+            if let (Some(label), [(x, y), (next_x, _), ..]) = (&edge.label, path.as_slice()) {
+                if *next_x == *x {
+                    canvas.text(x + 1, *y, label, edge.kind.style());
+                } else {
+                    let lx = if *next_x < *x {
+                        x.saturating_sub(unicode_width::UnicodeWidthStr::width(label.as_str()) as u16)
+                    } else {
+                        x + 1
+                    };
+                    canvas.text(lx, y.saturating_sub(1), label, edge.kind.style());
+                }
             }
         }
-        for node in &self.nodes {
+        for node in self.nodes.iter().filter(|n| n.visible) {
             draw_node(view, canvas, node, node.key == selected);
         }
     }
@@ -458,12 +634,39 @@ fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
     canvas.put(x, bottom, corners[2], border);
     canvas.put(right, bottom, corners[3], border);
     let inner = usize::from(WIDTH - 4);
+    let title_badge = if node.collapsed {
+        format!(" {} [+] ", truncate(&agent_name(&node.key), inner.saturating_sub(6)))
+    } else {
+        format!(" {} ", truncate(&agent_name(&node.key), inner - 2))
+    };
     canvas.text(
         x + 2,
         y,
-        &format!(" {} ", truncate(&agent_name(&node.key), inner - 2)),
+        &title_badge,
         border,
     );
+    // Badges for relations V/D/M on the bottom border
+    let mut rel_badges = String::new();
+    if let Some((_, id)) = node.key.split_once(':')
+        && let Some(t) = view.tasks.iter().find(|t| t.id == id)
+    {
+        if !t.depends_on.is_empty() {
+            rel_badges.push_str("D ");
+        }
+        rel_badges.push_str("V ");
+        if view.links.keys().any(|(from, to)| from == &node.key || to == &node.key) {
+            rel_badges.push('M');
+        }
+    }
+    let rel_badges = rel_badges.trim();
+    if !rel_badges.is_empty() && inner >= rel_badges.len() + 2 {
+        canvas.text(
+            right.saturating_sub(rel_badges.len() as u16 + 2),
+            bottom,
+            &format!(" {rel_badges} "),
+            Style::default().fg(Color::DarkGray),
+        );
+    }
     for cy in y + 1..bottom {
         for cx in x + 1..right {
             canvas.put(cx, cy, ' ', Style::default());
@@ -610,7 +813,6 @@ impl Canvas {
         }
     }
 
-    #[cfg(test)]
     pub fn lines(&self) -> Vec<String> {
         (0..self.height)
             .map(|y| {
@@ -647,7 +849,7 @@ pub fn compute_progress_overlay(
     let bottom_y = inner.bottom().saturating_sub(progress_height);
     let mut overlay = Rect::new(default_x, bottom_y, progress_width, progress_height);
 
-    if let Some(node) = selected_node {
+    if let Some(node) = selected_node.filter(|n| n.visible) {
         let screen_x = inner.x as i32 + node.x as i32 - offset.0 as i32;
         let screen_y = inner.y as i32 + node.y as i32 - offset.1 as i32;
 
@@ -781,6 +983,7 @@ mod tests {
             key: "worker:t1".into(),
             x: 52,
             y: 20,
+            ..Default::default()
         };
         let overlay = compute_progress_overlay(
             inner,
@@ -799,6 +1002,7 @@ mod tests {
             key: "orchestrator".into(),
             x: 5,
             y: 2,
+            ..Default::default()
         };
         let overlay2 = compute_progress_overlay(
             inner,
@@ -824,6 +1028,7 @@ mod tests {
             key: "worker:t2".into(),
             x: 10,
             y: 2,
+            ..Default::default()
         };
         assert!(
             compute_progress_overlay(small_inner, Some(&center_node), (0, 0), 25, 5,).is_none(),

@@ -3,6 +3,7 @@
 //! poller thread long-polls events and every action runs on its own thread,
 //! so typing, scrolling and sending stay instant.
 
+pub mod carousel;
 pub mod details;
 pub mod diffview;
 pub mod editor;
@@ -12,10 +13,11 @@ pub mod sanitize;
 pub mod theme;
 pub mod view;
 
+pub use carousel::Carousel;
 pub use details::Details;
 pub use diffview::DiffView;
 pub use editor::{InputBuffer, sanitize_paste, sanitize_single_line_paste, visual_text_lines};
-pub use graph::Filter;
+pub use graph::{Filter, GroupingMode};
 pub use palette::{Help, Kind, Picker};
 pub use sanitize::sanitize;
 pub use theme::{
@@ -104,6 +106,7 @@ pub struct Editor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Chat,
+    Tasks,
     Graph,
 }
 
@@ -130,6 +133,11 @@ pub struct ConversationState {
     pub scroll: usize,
     pub task_request_id: u64,
     pub diff_request_id: u64,
+    pub focus: Focus,
+    pub task_index: usize,
+    pub graph_filter: Option<String>,
+    pub graph_collapsed: std::collections::HashSet<String>,
+    pub graph_grouping: graph::GroupingMode,
 }
 
 pub struct App {
@@ -183,6 +191,10 @@ pub struct App {
     pub comment_drafts: std::collections::HashMap<String, String>,
     pub comment_draft_cursors: std::collections::HashMap<String, (usize, Option<u16>)>,
     pub conversation_states: std::collections::HashMap<String, ConversationState>,
+    pub carousel: Carousel,
+    pub graph_filter: Option<String>,
+    pub graph_collapsed: std::collections::HashSet<String>,
+    pub graph_grouping: graph::GroupingMode,
 }
 
 impl App {
@@ -246,6 +258,10 @@ impl App {
             comment_drafts: std::collections::HashMap::new(),
             comment_draft_cursors: std::collections::HashMap::new(),
             conversation_states: std::collections::HashMap::new(),
+            carousel: Carousel::new(),
+            graph_filter: None,
+            graph_collapsed: std::collections::HashSet::new(),
+            graph_grouping: graph::GroupingMode::default(),
         }
     }
 
@@ -345,6 +361,11 @@ impl App {
                     scroll: self.scroll,
                     task_request_id: self.task_request_id,
                     diff_request_id: self.diff_request_id,
+                    focus: self.focus,
+                    task_index: self.carousel.selected,
+                    graph_filter: self.graph_filter.clone(),
+                    graph_collapsed: self.graph_collapsed.clone(),
+                    graph_grouping: self.graph_grouping,
                 },
             );
         }
@@ -373,6 +394,11 @@ impl App {
             self.scroll = state.scroll;
             self.task_request_id = state.task_request_id;
             self.diff_request_id = state.diff_request_id;
+            self.focus = state.focus;
+            self.carousel.selected = state.task_index;
+            self.graph_filter = state.graph_filter;
+            self.graph_collapsed = state.graph_collapsed;
+            self.graph_grouping = state.graph_grouping;
         } else {
             let restored_draft = self
                 .conversation_drafts
@@ -397,6 +423,11 @@ impl App {
             self.failed_comment = None;
             self.task_request_id = 0;
             self.diff_request_id = 0;
+            self.focus = Focus::Chat;
+            self.carousel.selected = 0;
+            self.graph_filter = None;
+            self.graph_collapsed.clear();
+            self.graph_grouping = graph::GroupingMode::default();
         }
         self.input_shown = 0;
         self.picker = None;
@@ -1003,7 +1034,7 @@ impl App {
                         self.details = None;
                         self.diff = None;
                         self.focus = Focus::Graph;
-                        self.selected = key;
+                        self.select_node(key);
                         true
                     }
                     Some(Action::Show(entry)) => {
@@ -1013,6 +1044,12 @@ impl App {
                         self.found = Some(entry);
                         // Brought to the top at the next draw.
                         self.scroll = usize::MAX;
+                        true
+                    }
+                    Some(Action::SwitchConversation(id)) => {
+                        if id != self.conversation {
+                            self.open(id);
+                        }
                         true
                     }
                     None => true,
@@ -1035,6 +1072,8 @@ impl App {
             Command::Autonomous => self.command("/mode autonomous"),
             Command::Supervised => self.command("/mode supervised"),
             Command::NewConversation => self.new_conversation(),
+            Command::SwitchConversation => self.open_conversation_picker(),
+            Command::Tasks => self.focus = Focus::Tasks,
             Command::Find => self.picker = Some(Picker::new(Kind::Agents)),
             Command::Search => self.picker = Some(Picker::new(Kind::History)),
             Command::Details => {
@@ -1141,14 +1180,31 @@ impl App {
                 self.new_conversation();
                 return true;
             }
-            KeyCode::Tab | KeyCode::BackTab => {
+            KeyCode::Char('o') if control => {
+                self.open_conversation_picker();
+                return true;
+            }
+            KeyCode::BackTab => {
                 self.focus = match self.focus {
-                    Focus::Chat => Focus::Graph,
+                    Focus::Chat => Focus::Tasks,
+                    Focus::Tasks => Focus::Graph,
                     Focus::Graph => Focus::Chat,
                 };
                 return true;
             }
+            KeyCode::Tab => {
+                self.focus = match self.focus {
+                    Focus::Chat => Focus::Graph,
+                    Focus::Graph => Focus::Chat,
+                    Focus::Tasks => Focus::Graph,
+                };
+                return true;
+            }
             _ => {}
+        }
+
+        if self.focus == Focus::Tasks {
+            return self.tasks_key(key);
         }
 
         if self.focus == Focus::Graph {
@@ -1267,7 +1323,17 @@ impl App {
     }
 
     fn graph_key(&mut self, key: event::KeyEvent) -> bool {
-        let graph = Graph::new(&self.view);
+        if let Some((role, id)) = self.selected.split_once(':')
+            && role == "verifier"
+        {
+            self.graph_collapsed.remove(id);
+        }
+        let graph = Graph::new_with_options(
+            &self.view,
+            self.graph_filter.as_deref(),
+            &self.graph_collapsed,
+            self.graph_grouping,
+        );
         let step = match key.code {
             KeyCode::Left => Some((-1, 0)),
             KeyCode::Right => Some((1, 0)),
@@ -1276,8 +1342,27 @@ impl App {
             _ => None,
         };
         if let Some((dx, dy)) = step {
-            if graph.node(&self.selected).is_none() {
-                self.selected = ORCHESTRATOR.into();
+            if graph.node(&self.selected).is_none()
+                || !graph.node(&self.selected).is_some_and(|n| n.visible)
+            {
+                if let Some((_, id)) = self.selected.split_once(':') {
+                    let worker_key = format!("worker:{id}");
+                    if graph.node(&worker_key).is_some_and(|n| n.visible) {
+                        self.selected = worker_key;
+                    } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                        self.selected = vis.key.clone();
+                    } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
+                        self.selected = first_vis.key.clone();
+                    } else {
+                        self.selected = ORCHESTRATOR.into();
+                    }
+                } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                    self.selected = vis.key.clone();
+                } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
+                    self.selected = first_vis.key.clone();
+                } else {
+                    self.selected = ORCHESTRATOR.into();
+                }
             } else if let Some(next) = graph.neighbour(&self.selected, dx, dy) {
                 self.selected = next;
             }
@@ -1288,6 +1373,11 @@ impl App {
             KeyCode::Char('q') => return false,
             KeyCode::Char('?') => self.show_help(Help::Graph),
             KeyCode::Char('/') => self.picker = Some(Picker::new(Kind::Agents)),
+            KeyCode::Char('t') => {
+                self.focus = Focus::Tasks;
+            }
+            KeyCode::Char('z') | KeyCode::Char(' ') => self.toggle_selected_collapse(),
+            KeyCode::Char('g') => self.graph_grouping = self.graph_grouping.next(),
             KeyCode::Char('f') => self.filter = self.filter.next(),
             KeyCode::Char('d') => {
                 let key = self.selected.clone();
@@ -1305,6 +1395,175 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    fn tasks_key(&mut self, key: event::KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Left | KeyCode::Up | KeyCode::Char('h') | KeyCode::Char('k') => {
+                self.carousel.prev(self.view.tasks.len());
+                if let Some(task) = self.carousel.current_task(&self.view) {
+                    self.selected = format!("worker:{}", task.id);
+                }
+            }
+            KeyCode::Right | KeyCode::Down | KeyCode::Char('l') | KeyCode::Char('j') => {
+                self.carousel.next(self.view.tasks.len());
+                if let Some(task) = self.carousel.current_task(&self.view) {
+                    self.selected = format!("worker:{}", task.id);
+                }
+            }
+            KeyCode::Char('w') | KeyCode::Char('W') => {
+                if let Some(task) = self.carousel.current_task(&self.view) {
+                    self.select_node(format!("worker:{}", task.id));
+                    self.focus = Focus::Graph;
+                }
+            }
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                if let Some(task) = self.carousel.current_task(&self.view) {
+                    self.select_node(format!("verifier:{}", task.id));
+                    self.focus = Focus::Graph;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(task) = self.carousel.current_task(&self.view) {
+                    let key = format!("worker:{}", task.id);
+                    self.selected = key.clone();
+                    self.details = Some(Details::new(key));
+                    self.fetch_task();
+                }
+            }
+            KeyCode::Char('d') => {
+                if let Some(task) = self.carousel.current_task(&self.view) {
+                    let key = format!("worker:{}", task.id);
+                    self.selected = key.clone();
+                    self.open_diff(&key);
+                }
+            }
+            KeyCode::Char('c') => {
+                if let Some(task) = self.carousel.current_task(&self.view) {
+                    let target = format!("worker:{}", task.id);
+                    let input = self.get_comment_draft(&target);
+                    self.editor = Some(Editor { target, input });
+                }
+            }
+            KeyCode::Esc => self.focus = Focus::Chat,
+            KeyCode::Tab => self.focus = Focus::Graph,
+            KeyCode::BackTab => self.focus = Focus::Chat,
+            KeyCode::Char('?') => self.show_help(Help::Tasks),
+            KeyCode::Char('q') => return false,
+            _ => {}
+        }
+        true
+    }
+
+    pub fn select_node(&mut self, key: String) {
+        if let Some((role, id)) = key.split_once(':')
+            && role == "verifier"
+        {
+            self.graph_collapsed.remove(id);
+        }
+        self.selected = key;
+    }
+
+    pub fn toggle_selected_collapse(&mut self) {
+        let task_id = if let Some((_, id)) = self.selected.split_once(':') {
+            id.to_string()
+        } else {
+            return;
+        };
+        if self.graph_collapsed.contains(&task_id) {
+            self.graph_collapsed.remove(&task_id);
+        } else {
+            self.graph_collapsed.insert(task_id);
+            if self.selected.starts_with("verifier:") {
+                self.selected = format!("worker:{}", self.selected.trim_start_matches("verifier:"));
+            }
+        }
+    }
+
+    pub fn set_graph_filter(&mut self, query: Option<String>) {
+        self.graph_filter = query;
+        let graph = Graph::new_with_options(
+            &self.view,
+            self.graph_filter.as_deref(),
+            &self.graph_collapsed,
+            self.graph_grouping,
+        );
+        if !graph.nodes.iter().any(|n| n.visible && n.key == self.selected) {
+            if let Some((_, id)) = self.selected.split_once(':') {
+                let worker_key = format!("worker:{id}");
+                if graph.node(&worker_key).is_some_and(|n| n.visible) {
+                    self.selected = worker_key;
+                } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                    self.selected = vis.key.clone();
+                } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
+                    self.selected = first_vis.key.clone();
+                } else {
+                    self.selected = ORCHESTRATOR.into();
+                }
+            } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                self.selected = vis.key.clone();
+            } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
+                self.selected = first_vis.key.clone();
+            } else {
+                self.selected = ORCHESTRATOR.into();
+            }
+        }
+    }
+
+    pub fn open_conversation_picker(&mut self) {
+        let mut items = Vec::new();
+
+        if let Ok(Value::Array(list)) = self.client.call(&Request::Conversations) {
+            for val in list {
+                let project = val["project"].as_str().unwrap_or_default();
+                if !project.is_empty() && project != self.project {
+                    continue;
+                }
+                let id = val["id"].as_str().unwrap_or_default().to_string();
+                if id.is_empty() {
+                    continue;
+                }
+                let status = val["status"].as_str().unwrap_or("idle");
+                let total = val["tasks_total"].as_u64().unwrap_or(0);
+                let done = val["tasks_done"].as_u64().unwrap_or(0);
+                let active_mark = if id == self.conversation { " (bieżąca)" } else { "" };
+                let title = if total > 0 {
+                    format!("{id}{active_mark} · {status} · {done}/{total} zadań")
+                } else {
+                    format!("{id}{active_mark} · {status}")
+                };
+                items.push(palette::ConversationItem {
+                    id,
+                    project: project.to_string(),
+                    title,
+                });
+            }
+        }
+
+        for id in self.conversation_states.keys() {
+            if !items.iter().any(|item| &item.id == id) {
+                let active_mark = if id == &self.conversation { " (bieżąca)" } else { "" };
+                items.push(palette::ConversationItem {
+                    id: id.clone(),
+                    project: self.project.clone(),
+                    title: format!("{id}{active_mark} · zapisany stan"),
+                });
+            }
+        }
+        if !items.iter().any(|item| item.id == self.conversation) && !self.conversation.is_empty() {
+            items.insert(
+                0,
+                palette::ConversationItem {
+                    id: self.conversation.clone(),
+                    project: self.project.clone(),
+                    title: format!("{} (bieżąca) · aktywna", self.conversation),
+                },
+            );
+        }
+
+        let mut picker = Picker::new(Kind::Conversations);
+        picker.conversations = items;
+        self.picker = Some(picker);
     }
 
     fn editor_key(&mut self, key: event::KeyEvent) {
@@ -1533,6 +1792,7 @@ impl App {
         };
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
+            Focus::Tasks => PanelFocus::Tasks,
             Focus::Graph => PanelFocus::Graph,
         };
         frame.render_widget(
@@ -1564,9 +1824,15 @@ impl App {
                     .set_symbol(separator)
                     .set_style(theme.separator(false));
             }
-            self.draw_graph(frame, team);
+            if self.focus == Focus::Tasks {
+                self.draw_carousel(frame, team, &theme);
+            } else {
+                self.draw_graph(frame, team);
+            }
         } else if self.focus == Focus::Chat {
             self.draw_chat(frame, body, &theme);
+        } else if self.focus == Focus::Tasks {
+            self.draw_carousel(frame, body, &theme);
         } else {
             self.draw_graph(frame, body);
         }
@@ -1852,7 +2118,16 @@ impl App {
         scrollbar(buf, theme, scroll_area, cards.len(), start, height);
     }
 
+    fn draw_carousel(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        self.carousel.draw(frame, area, &self.view, theme);
+    }
+
     fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
+        if let Some((role, id)) = self.selected.split_once(':')
+            && role == "verifier"
+        {
+            self.graph_collapsed.remove(id);
+        }
         let focused = self.focus == Focus::Graph;
         let block = Block::default()
             .borders(Borders::ALL)
@@ -1861,13 +2136,41 @@ impl App {
             } else {
                 dim()
             })
-            .title(format!(" zespół · {} (f) ", self.filter.name()));
+            .title(format!(
+                " zespół · filtr: {} (f) · grupy: {} (g) · [V] wer [D] zal [M] msg ",
+                self.filter.name(),
+                self.graph_grouping.name()
+            ));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let graph = Graph::new(&self.view);
-        if graph.node(&self.selected).is_none() {
-            self.selected = ORCHESTRATOR.into();
+        let graph = Graph::new_with_options(
+            &self.view,
+            self.graph_filter.as_deref(),
+            &self.graph_collapsed,
+            self.graph_grouping,
+        );
+        if graph.node(&self.selected).is_none()
+            || !graph.node(&self.selected).is_some_and(|n| n.visible)
+        {
+            if let Some((_, id)) = self.selected.split_once(':') {
+                let worker_key = format!("worker:{id}");
+                if graph.node(&worker_key).is_some_and(|n| n.visible) {
+                    self.selected = worker_key;
+                } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                    self.selected = vis.key.clone();
+                } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
+                    self.selected = first_vis.key.clone();
+                } else {
+                    self.selected = ORCHESTRATOR.into();
+                }
+            } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                self.selected = vis.key.clone();
+            } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
+                self.selected = first_vis.key.clone();
+            } else {
+                self.selected = ORCHESTRATOR.into();
+            }
         }
         // Scroll only as far as needed to keep the selected node in view.
         if let Some(node) = graph.node(&self.selected) {
@@ -2054,6 +2357,10 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         comment_drafts: std::collections::HashMap::new(),
         comment_draft_cursors: std::collections::HashMap::new(),
         conversation_states: std::collections::HashMap::new(),
+        carousel: Carousel::new(),
+        graph_filter: None,
+        graph_collapsed: std::collections::HashSet::new(),
+        graph_grouping: graph::GroupingMode::default(),
     };
     app.open(conversation);
 
