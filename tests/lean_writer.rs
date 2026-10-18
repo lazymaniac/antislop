@@ -373,6 +373,191 @@ fn in_place(text: String) -> String {
     text.replace("mode = \"task-worktrees\"", "mode = \"in-place\"")
 }
 
+fn chained_writing_clis(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (codex, agy) = fake_clis(dir);
+    let plan = serde_json::json!({"tasks": [
+        {"id": "t1", "title": "Add greeting", "goal": "Create hello.txt", "writes": true,
+         "scope": ["."], "kind": "implementation", "verifier": {"focus": "file content"}},
+        {"id": "t2", "title": "Extend greeting", "goal": "Update hello.txt", "writes": true,
+         "depends_on": ["t1"], "scope": ["."], "kind": "implementation", "verifier": {"focus": "file content"}}
+    ]});
+    let script = std::fs::read_to_string(&codex).unwrap();
+    let start = script.find("plan = ").unwrap();
+    let end = script[start..].find("\nanswer = ").unwrap() + start;
+    std::fs::write(
+        &codex,
+        format!(
+            "{}plan = json.loads({:?}){}",
+            &script[..start],
+            plan.to_string(),
+            &script[end..]
+        ),
+    )
+    .unwrap();
+    let script = std::fs::read_to_string(&agy).unwrap().replace(
+        "f.write(\"from worker\\n\")",
+        "f.write(\"from second worker\\n\" if \"Task id: t2\\n\" in prompt else \"from worker\\n\")",
+    );
+    std::fs::write(&agy, script).unwrap();
+    (codex, agy)
+}
+
+#[test]
+fn in_place_chained_writers_can_extend_approved_uncommitted_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let head = git(&project, &["rev-parse", "HEAD"]);
+    let (codex, agy) = chained_writing_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, in_place),
+    )
+    .unwrap();
+    // The same rule applies across conversations and plans.
+    for _ in 0..2 {
+        let conversation = run_plan(&core, &project);
+        for task in core.store.latest_plan(&conversation).unwrap() {
+            assert_eq!(task.status, "approved", "{:?}", task.report);
+        }
+        assert_eq!(
+            std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+            "from second worker\n"
+        );
+        assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
+        assert_eq!(git(&project, &["status", "--porcelain"]), "?? hello.txt");
+    }
+}
+
+#[test]
+fn in_place_ownership_survives_restart_but_later_user_edits_stay_protected() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let state = project.join(".antislop");
+    let core = Core::open(&state, config_with(&codex, &agy, in_place)).unwrap();
+    let conversation = run_plan(&core, &project);
+    assert_eq!(
+        core.store.latest_plan(&conversation).unwrap()[0].status,
+        "approved"
+    );
+    drop(core);
+
+    let script = std::fs::read_to_string(&agy)
+        .unwrap()
+        .replace("from worker\\n", "updated by worker\\n");
+    std::fs::write(&agy, script).unwrap();
+    let core = Core::open(&state, config_with(&codex, &agy, in_place)).unwrap();
+    let conversation = run_plan(&core, &project);
+    assert_eq!(
+        core.store.latest_plan(&conversation).unwrap()[0].status,
+        "approved"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "updated by worker\n"
+    );
+
+    // Neither new user content nor a revert to an older approved version
+    // may be treated as the latest approved output.
+    for text in ["new user draft\n", "from worker\n"] {
+        std::fs::write(project.join("hello.txt"), text).unwrap();
+        let conversation = run_plan(&core, &project);
+        let task = &core.store.latest_plan(&conversation).unwrap()[0];
+        assert_eq!(task.status, "needs_user", "{:?}", task.report);
+        assert!(
+            task.report
+                .as_deref()
+                .unwrap()
+                .contains("files you were editing: hello.txt")
+        );
+        assert_eq!(
+            git(
+                &project,
+                &[
+                    "show",
+                    &format!("{}:hello.txt", task.base.as_ref().unwrap())
+                ]
+            ),
+            text.trim_end()
+        );
+    }
+}
+
+#[test]
+fn in_place_approval_does_not_claim_unrelated_user_files_in_its_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("README"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, in_place),
+    )
+    .unwrap();
+    let conversation = run_plan(&core, &project);
+    assert_eq!(
+        core.store.latest_plan(&conversation).unwrap()[0].status,
+        "approved"
+    );
+    let script = std::fs::read_to_string(&agy).unwrap().replace(
+        "with open(\"hello.txt\", \"w\")",
+        "with open(\"README\", \"w\")",
+    );
+    std::fs::write(&agy, script).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "needs_user", "{:?}", task.report);
+    assert!(
+        task.report
+            .as_deref()
+            .unwrap()
+            .contains("files you were editing: README")
+    );
+    assert_eq!(
+        git(
+            &project,
+            &["show", &format!("{}:README", task.base.as_ref().unwrap())]
+        ),
+        "user draft"
+    );
+    // Detection retains the overwritten files; it does not silently roll back.
+    assert_eq!(
+        std::fs::read_to_string(project.join("README")).unwrap(),
+        "from worker\n"
+    );
+}
+
+#[test]
+fn in_place_rejected_changes_do_not_become_approved_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, in_place),
+    )
+    .unwrap();
+    let first = run_plan(&core, &project);
+    assert_eq!(
+        core.store.latest_plan(&first).unwrap()[0].status,
+        "needs_user"
+    );
+    let script = std::fs::read_to_string(&agy)
+        .unwrap()
+        .replace("from worker\\n", "second attempt\\n");
+    std::fs::write(&agy, script).unwrap();
+    let second = run_plan(&core, &project);
+    let task = &core.store.latest_plan(&second).unwrap()[0];
+    assert_eq!(task.status, "needs_user", "{:?}", task.report);
+    assert!(
+        task.report
+            .as_deref()
+            .unwrap()
+            .contains("files you were editing: hello.txt")
+    );
+}
+
 #[test]
 fn in_place_a_writer_edits_the_project_itself_and_reviewers_see_a_snapshot() {
     let dir = tempfile::tempdir().unwrap();

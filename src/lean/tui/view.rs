@@ -2,11 +2,34 @@
 //! frontend that attaches later rebuilds the same state.
 
 use super::super::tasks::status;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Clear, Paragraph};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+pub const MIN_TERM_WIDTH: u16 = 60;
+pub const MIN_TERM_HEIGHT: u16 = 12;
+pub const SIDE_BY_SIDE_BREAKPOINT: u16 = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelFocus {
+    Chat,
+    Graph,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModalKind {
+    None,
+    Help(super::palette::Help),
+    Picker(super::palette::Kind),
+    CommentEditor,
+    Diff,
+    Details,
+}
 
 pub const ORCHESTRATOR: &str = "orchestrator";
 pub const PLAN_VERIFIER: &str = "plan-verifier";
@@ -739,6 +762,156 @@ pub fn truncate(text: &str, width: usize) -> String {
     out
 }
 
+/// Renders the minimum terminal size warning guard when terminal is smaller than 60x12.
+/// Returns true if the guard was triggered and drawn.
+pub fn draw_min_term_guard(frame: &mut ratatui::Frame, area: Rect) -> bool {
+    if area.width < MIN_TERM_WIDTH || area.height < MIN_TERM_HEIGHT {
+        let msg = format!("Terminal zbyt mały (wymagane min. {MIN_TERM_WIDTH}x{MIN_TERM_HEIGHT})");
+        frame.render_widget(Clear, area);
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                msg,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            area,
+        );
+        true
+    } else {
+        false
+    }
+}
+
+/// Builds the responsive header line according to terminal width, mode, status, and compact panel toggle badge.
+pub fn render_header(
+    project: &str,
+    conversation: &str,
+    mode: Option<bool>,
+    status: &str,
+    focus: PanelFocus,
+    width: u16,
+) -> Line<'static> {
+    let short = conversation.get(..8).unwrap_or(conversation);
+    let mode_str = match mode {
+        Some(true) => "autonomiczny · ",
+        Some(false) => "nadzorowany · ",
+        None => "",
+    };
+
+    let mut spans = vec![Span::styled(
+        " antislop ",
+        Style::default().add_modifier(Modifier::BOLD),
+    )];
+
+    if width < SIDE_BY_SIDE_BREAKPOINT {
+        let (chat_style, graph_style) = match focus {
+            PanelFocus::Chat => (
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+                dim(),
+            ),
+            PanelFocus::Graph => (
+                dim(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        };
+        let (chat_label, graph_label) = match focus {
+            PanelFocus::Chat => ("[Czat]", "Zespół"),
+            PanelFocus::Graph => ("Czat", "[Zespół]"),
+        };
+        spans.push(Span::styled(format!(" {chat_label} "), chat_style));
+        spans.push(Span::styled(format!("{graph_label} "), graph_style));
+        if width >= 70 {
+            spans.push(Span::styled("(Tab: przełącz) · ", dim()));
+        } else {
+            spans.push(Span::styled("· ", dim()));
+        }
+    }
+
+    if width >= 80 {
+        spans.push(Span::styled(
+            format!("{project} · {short} · {mode_str}"),
+            dim(),
+        ));
+    } else if width >= 50 {
+        spans.push(Span::styled(format!("{short} · {mode_str}"), dim()));
+    }
+
+    spans.push(Span::styled(
+        status.to_string(),
+        Style::default().fg(Color::Yellow),
+    ));
+    Line::from(spans)
+}
+
+/// Prioritizes action hints and notices by available footer width.
+pub fn main_footer_hint(
+    focus: PanelFocus,
+    plan_proposed: bool,
+    plan_resumable: bool,
+    notice: Option<&str>,
+    width: usize,
+) -> String {
+    if let Some(notice) = notice {
+        return truncate(notice, width);
+    }
+    let plan = if plan_proposed {
+        "Ctrl+A uruchom plan · "
+    } else if plan_resumable {
+        "Ctrl+R wznów plan · "
+    } else {
+        ""
+    };
+    match focus {
+        PanelFocus::Chat => {
+            if width >= 115 {
+                format!(
+                    "Enter wyślij (@t2 … do agenta) · Alt+Enter nowa linia · {plan}Ctrl+P polecenia · F1 pomoc · Tab zespół · Esc wyjdź"
+                )
+            } else if width >= 75 {
+                format!(
+                    "Enter wyślij · Alt+Enter nowa linia · {plan}Ctrl+P · F1 pomoc · Tab zespół · Esc"
+                )
+            } else if width >= 50 {
+                format!("Enter wyślij · {plan}Tab zespół · Esc")
+            } else {
+                "Enter · Esc".into()
+            }
+        }
+        PanelFocus::Graph => {
+            if width >= 115 {
+                format!(
+                    "strzałki wybór · Enter szczegóły · / znajdź · d diff · c skomentuj · f filtr · {plan}Ctrl+P polecenia · ? pomoc · q wyjdź"
+                )
+            } else if width >= 75 {
+                "strzałki wybór · Enter szczegóły · / szukaj · d diff · c kom. · f filtr · ? pomoc · q".into()
+            } else if width >= 50 {
+                "strzałki · Enter szczegóły · Tab czat · q".into()
+            } else {
+                "strzałki · q".into()
+            }
+        }
+    }
+}
+
+/// Polish empty state displayed when transcript contains no messages.
+pub fn transcript_empty_state(width: usize) -> Vec<Line<'static>> {
+    vec![
+        Line::styled("Brak wiadomości w tej rozmowie.", dim()),
+        Line::styled(
+            truncate(
+                "Wpisz wiadomość orkiestratorowi poniżej lub naciśnij Ctrl+P, aby otworzyć paletę.",
+                width,
+            ),
+            dim(),
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1066,5 +1239,160 @@ mod tests {
             agent(&view),
             "we 120 / wy nieznane · zgłoszone w 1 z 2 tur, reszta nieznana"
         );
+    }
+
+    #[test]
+    fn ac_resp_01_responsive_breakpoint_compact_switch() {
+        // Breakpoint: width 99 (< 100) -> compact mode with banner
+        let header_chat = render_header(
+            "proj",
+            "conv-12345",
+            Some(true),
+            "gotowy",
+            PanelFocus::Chat,
+            99,
+        );
+        let chat_text: String = header_chat
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(chat_text.contains("[Czat]"));
+        assert!(chat_text.contains("Zespół"));
+        assert!(chat_text.contains("(Tab: przełącz)"));
+
+        let header_graph = render_header(
+            "proj",
+            "conv-12345",
+            Some(true),
+            "gotowy",
+            PanelFocus::Graph,
+            99,
+        );
+        let graph_text: String = header_graph
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(graph_text.contains("Czat"));
+        assert!(graph_text.contains("[Zespół]"));
+        assert!(graph_text.contains("(Tab: przełącz)"));
+    }
+
+    #[test]
+    fn ac_resp_02_wide_header() {
+        // Wide: width 120 (>= 100) -> side-by-side mode, no compact toggle badge
+        let header_wide = render_header(
+            "proj",
+            "conv-12345",
+            Some(true),
+            "gotowy",
+            PanelFocus::Chat,
+            120,
+        );
+        let wide_text: String = header_wide
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(!wide_text.contains("[Czat]"));
+        assert!(!wide_text.contains("(Tab: przełącz)"));
+        assert!(wide_text.contains("proj"));
+        assert!(wide_text.contains("conv-123"));
+        assert!(wide_text.contains("autonomiczny"));
+        assert!(wide_text.contains("gotowy"));
+    }
+
+    #[test]
+    fn ac_resp_03_minimum_terminal_guard() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // Terminal size 50x10 is smaller than 60x12 guard floor
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut guard_triggered = false;
+        terminal
+            .draw(|frame| {
+                guard_triggered = draw_min_term_guard(frame, frame.area());
+            })
+            .unwrap();
+        assert!(guard_triggered);
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("Terminal zbyt mały (wymagane min. 60x12)"));
+
+        // Terminal size 60x12 meets minimum guard
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut guard_triggered_ok = false;
+        terminal
+            .draw(|frame| {
+                guard_triggered_ok = draw_min_term_guard(frame, frame.area());
+            })
+            .unwrap();
+        assert!(!guard_triggered_ok);
+    }
+
+    #[test]
+    fn ac_copy_02_polish_status_strings() {
+        let header = render_header(
+            "test-proj",
+            "conv-12345",
+            Some(false),
+            "gotowy",
+            PanelFocus::Chat,
+            120,
+        );
+        let text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("antislop"));
+        assert!(text.contains("nadzorowany"));
+        assert!(text.contains("gotowy"));
+
+        let header_auto = render_header(
+            "test-proj",
+            "conv-12345",
+            Some(true),
+            "zadania w toku…",
+            PanelFocus::Chat,
+            120,
+        );
+        let text_auto: String = header_auto
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text_auto.contains("autonomiczny"));
+        assert!(text_auto.contains("zadania w toku…"));
+    }
+
+    #[test]
+    fn main_footer_hints_prioritized_by_width() {
+        // Chat hints
+        let wide = main_footer_hint(PanelFocus::Chat, false, false, None, 120);
+        assert!(wide.contains("Alt+Enter nowa linia"));
+        assert!(wide.contains("F1 pomoc"));
+
+        let medium = main_footer_hint(PanelFocus::Chat, false, false, None, 80);
+        assert!(medium.contains("Ctrl+P"));
+
+        let narrow = main_footer_hint(PanelFocus::Chat, false, false, None, 55);
+        assert!(narrow.contains("Esc"));
+        assert!(!narrow.contains("Alt+Enter"));
+
+        // Graph hints
+        let graph_wide = main_footer_hint(PanelFocus::Graph, false, false, None, 120);
+        assert!(graph_wide.contains("strzałki wybór"));
+        assert!(graph_wide.contains("d diff"));
+
+        let graph_narrow = main_footer_hint(PanelFocus::Graph, false, false, None, 55);
+        assert!(graph_narrow.contains("Tab czat"));
+    }
+
+    #[test]
+    fn transcript_empty_state_polish() {
+        let lines = transcript_empty_state(80);
+        let text = lines[0].spans[0].content.as_ref();
+        assert_eq!(text, "Brak wiadomości w tej rozmowie.");
     }
 }

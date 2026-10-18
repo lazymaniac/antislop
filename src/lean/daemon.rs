@@ -54,8 +54,7 @@ pub fn build_identity(executable: &Path) -> Result<String> {
     )))
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     /// Which binary the daemon runs and whether it is executing work.
     Identity,
@@ -67,18 +66,37 @@ pub enum Request {
         conversation: String,
         text: String,
     },
+    SendAddressed {
+        conversation: String,
+        text: String,
+        to: Option<String>,
+    },
     /// Starts exactly the plan the user saw.
     Accept {
         conversation: String,
         plan: String,
+    },
+    AcceptScoped {
+        conversation: String,
+        plan: String,
+        scope_hash: Option<String>,
     },
     /// Runs again what the plan left unfinished, through the same sessions.
     Resume {
         conversation: String,
         plan: String,
     },
+    ResumeScoped {
+        conversation: String,
+        plan: String,
+        scope_hash: Option<String>,
+    },
     Cancel {
         conversation: String,
+    },
+    CancelScoped {
+        conversation: String,
+        scope_hash: Option<String>,
     },
     /// Stops starting new plan work, or continues it.
     Pause {
@@ -114,6 +132,12 @@ pub enum Request {
         plan: String,
         id: String,
     },
+    ReviewScoped {
+        conversation: String,
+        plan: String,
+        id: String,
+        scope_hash: Option<String>,
+    },
     /// One task of a plan with its latest report and verdict.
     Task {
         plan: String,
@@ -124,6 +148,450 @@ pub enum Request {
         after: u64,
         wait_ms: u64,
     },
+    EventsPaged {
+        conversation: String,
+        after: u64,
+        wait_ms: u64,
+        limit: Option<usize>,
+    },
+    Sessions {
+        conversation: String,
+    },
+    History {
+        conversation: String,
+        after: u64,
+        limit: Option<usize>,
+    },
+    Mail {
+        conversation: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+enum WireRequest {
+    Identity,
+    Shutdown,
+    Conversations,
+    Start,
+    Send {
+        conversation: String,
+        text: String,
+        #[serde(default)]
+        to: Option<String>,
+    },
+    Accept {
+        conversation: String,
+        plan: String,
+        #[serde(default)]
+        scope_hash: Option<String>,
+    },
+    Resume {
+        conversation: String,
+        plan: String,
+        #[serde(default)]
+        scope_hash: Option<String>,
+    },
+    Cancel {
+        conversation: String,
+        #[serde(default)]
+        scope_hash: Option<String>,
+    },
+    Pause {
+        conversation: String,
+        paused: bool,
+    },
+    Mode {
+        conversation: String,
+        autonomous: bool,
+    },
+    Comment {
+        conversation: String,
+        target: String,
+        text: String,
+    },
+    CommentStatus {
+        conversation: String,
+        id: u64,
+        status: String,
+    },
+    Diff {
+        conversation: String,
+        plan: String,
+        id: String,
+    },
+    Review {
+        conversation: String,
+        plan: String,
+        id: String,
+        #[serde(default)]
+        scope_hash: Option<String>,
+    },
+    Task {
+        plan: String,
+        id: String,
+    },
+    Events {
+        conversation: String,
+        after: u64,
+        wait_ms: u64,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    Sessions {
+        conversation: String,
+    },
+    History {
+        conversation: String,
+        #[serde(default)]
+        after: u64,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    Mail {
+        conversation: String,
+    },
+}
+
+impl From<Request> for WireRequest {
+    fn from(req: Request) -> Self {
+        match req {
+            Request::Identity => WireRequest::Identity,
+            Request::Shutdown => WireRequest::Shutdown,
+            Request::Conversations => WireRequest::Conversations,
+            Request::Start => WireRequest::Start,
+            Request::Send { conversation, text } => WireRequest::Send {
+                conversation,
+                text,
+                to: None,
+            },
+            Request::SendAddressed {
+                conversation,
+                text,
+                to,
+            } => WireRequest::Send {
+                conversation,
+                text,
+                to,
+            },
+            Request::Accept { conversation, plan } => WireRequest::Accept {
+                conversation,
+                plan,
+                scope_hash: None,
+            },
+            Request::AcceptScoped {
+                conversation,
+                plan,
+                scope_hash,
+            } => WireRequest::Accept {
+                conversation,
+                plan,
+                scope_hash,
+            },
+            Request::Resume { conversation, plan } => WireRequest::Resume {
+                conversation,
+                plan,
+                scope_hash: None,
+            },
+            Request::ResumeScoped {
+                conversation,
+                plan,
+                scope_hash,
+            } => WireRequest::Resume {
+                conversation,
+                plan,
+                scope_hash,
+            },
+            Request::Cancel { conversation } => WireRequest::Cancel {
+                conversation,
+                scope_hash: None,
+            },
+            Request::CancelScoped {
+                conversation,
+                scope_hash,
+            } => WireRequest::Cancel {
+                conversation,
+                scope_hash,
+            },
+            Request::Pause {
+                conversation,
+                paused,
+            } => WireRequest::Pause {
+                conversation,
+                paused,
+            },
+            Request::Mode {
+                conversation,
+                autonomous,
+            } => WireRequest::Mode {
+                conversation,
+                autonomous,
+            },
+            Request::Comment {
+                conversation,
+                target,
+                text,
+            } => WireRequest::Comment {
+                conversation,
+                target,
+                text,
+            },
+            Request::CommentStatus {
+                conversation,
+                id,
+                status,
+            } => WireRequest::CommentStatus {
+                conversation,
+                id,
+                status,
+            },
+            Request::Diff {
+                conversation,
+                plan,
+                id,
+            } => WireRequest::Diff {
+                conversation,
+                plan,
+                id,
+            },
+            Request::Review {
+                conversation,
+                plan,
+                id,
+            } => WireRequest::Review {
+                conversation,
+                plan,
+                id,
+                scope_hash: None,
+            },
+            Request::ReviewScoped {
+                conversation,
+                plan,
+                id,
+                scope_hash,
+            } => WireRequest::Review {
+                conversation,
+                plan,
+                id,
+                scope_hash,
+            },
+            Request::Task { plan, id } => WireRequest::Task { plan, id },
+            Request::Events {
+                conversation,
+                after,
+                wait_ms,
+            } => WireRequest::Events {
+                conversation,
+                after,
+                wait_ms,
+                limit: None,
+            },
+            Request::EventsPaged {
+                conversation,
+                after,
+                wait_ms,
+                limit,
+            } => WireRequest::Events {
+                conversation,
+                after,
+                wait_ms,
+                limit,
+            },
+            Request::Sessions { conversation } => WireRequest::Sessions { conversation },
+            Request::History {
+                conversation,
+                after,
+                limit,
+            } => WireRequest::History {
+                conversation,
+                after,
+                limit,
+            },
+            Request::Mail { conversation } => WireRequest::Mail { conversation },
+        }
+    }
+}
+
+impl From<WireRequest> for Request {
+    fn from(wire: WireRequest) -> Self {
+        match wire {
+            WireRequest::Identity => Request::Identity,
+            WireRequest::Shutdown => Request::Shutdown,
+            WireRequest::Conversations => Request::Conversations,
+            WireRequest::Start => Request::Start,
+            WireRequest::Send {
+                conversation,
+                text,
+                to,
+            } => {
+                if to.is_some() {
+                    Request::SendAddressed {
+                        conversation,
+                        text,
+                        to,
+                    }
+                } else {
+                    Request::Send { conversation, text }
+                }
+            }
+            WireRequest::Accept {
+                conversation,
+                plan,
+                scope_hash,
+            } => {
+                if scope_hash.is_some() {
+                    Request::AcceptScoped {
+                        conversation,
+                        plan,
+                        scope_hash,
+                    }
+                } else {
+                    Request::Accept { conversation, plan }
+                }
+            }
+            WireRequest::Resume {
+                conversation,
+                plan,
+                scope_hash,
+            } => {
+                if scope_hash.is_some() {
+                    Request::ResumeScoped {
+                        conversation,
+                        plan,
+                        scope_hash,
+                    }
+                } else {
+                    Request::Resume { conversation, plan }
+                }
+            }
+            WireRequest::Cancel {
+                conversation,
+                scope_hash,
+            } => {
+                if scope_hash.is_some() {
+                    Request::CancelScoped {
+                        conversation,
+                        scope_hash,
+                    }
+                } else {
+                    Request::Cancel { conversation }
+                }
+            }
+            WireRequest::Pause {
+                conversation,
+                paused,
+            } => Request::Pause {
+                conversation,
+                paused,
+            },
+            WireRequest::Mode {
+                conversation,
+                autonomous,
+            } => Request::Mode {
+                conversation,
+                autonomous,
+            },
+            WireRequest::Comment {
+                conversation,
+                target,
+                text,
+            } => Request::Comment {
+                conversation,
+                target,
+                text,
+            },
+            WireRequest::CommentStatus {
+                conversation,
+                id,
+                status,
+            } => Request::CommentStatus {
+                conversation,
+                id,
+                status,
+            },
+            WireRequest::Diff {
+                conversation,
+                plan,
+                id,
+            } => Request::Diff {
+                conversation,
+                plan,
+                id,
+            },
+            WireRequest::Review {
+                conversation,
+                plan,
+                id,
+                scope_hash,
+            } => {
+                if scope_hash.is_some() {
+                    Request::ReviewScoped {
+                        conversation,
+                        plan,
+                        id,
+                        scope_hash,
+                    }
+                } else {
+                    Request::Review {
+                        conversation,
+                        plan,
+                        id,
+                    }
+                }
+            }
+            WireRequest::Task { plan, id } => Request::Task { plan, id },
+            WireRequest::Events {
+                conversation,
+                after,
+                wait_ms,
+                limit,
+            } => {
+                if limit.is_some() {
+                    Request::EventsPaged {
+                        conversation,
+                        after,
+                        wait_ms,
+                        limit,
+                    }
+                } else {
+                    Request::Events {
+                        conversation,
+                        after,
+                        wait_ms,
+                    }
+                }
+            }
+            WireRequest::Sessions { conversation } => Request::Sessions { conversation },
+            WireRequest::History {
+                conversation,
+                after,
+                limit,
+            } => Request::History {
+                conversation,
+                after,
+                limit,
+            },
+            WireRequest::Mail { conversation } => Request::Mail { conversation },
+        }
+    }
+}
+
+impl Serialize for Request {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        WireRequest::from(self.clone()).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Request {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        WireRequest::deserialize(deserializer).map(Request::from)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -238,16 +706,72 @@ fn handle(
             require(!core.busy(), "the daemon is executing work")?;
             Value::Null
         }
-        Request::Conversations => json!(core.store.conversations()?),
+        Request::Conversations => json!(core.conversations()?),
         Request::Start => json!(core.start(project)?),
-        Request::Send { conversation, text } => core.submit(&conversation, &text)?,
+        Request::Send { conversation, text } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.submit_addressed(&conversation, &text, None)?
+        }
+        Request::SendAddressed {
+            conversation,
+            text,
+            to,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.submit_addressed(&conversation, &text, to.as_deref())?
+        }
         Request::Accept { conversation, plan } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.accept_plan(&conversation, &plan)?.len())
+        }
+        Request::AcceptScoped {
+            conversation,
+            plan,
+            scope_hash,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            if let Some(expected) = &scope_hash {
+                match core.plan_scope_hash(&conversation, &plan) {
+                    Ok(current) => require(expected == &current, "stale_scope")?,
+                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
+                }
+            }
             json!(core.accept_plan(&conversation, &plan)?.len())
         }
         Request::Resume { conversation, plan } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.resume_plan(&conversation, &plan)?.len())
+        }
+        Request::ResumeScoped {
+            conversation,
+            plan,
+            scope_hash,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            if let Some(expected) = &scope_hash {
+                match core.plan_scope_hash(&conversation, &plan) {
+                    Ok(current) => require(expected == &current, "stale_scope")?,
+                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
+                }
+            }
             json!(core.resume_plan(&conversation, &plan)?.len())
         }
         Request::Cancel { conversation } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.cancel(&conversation);
+            Value::Null
+        }
+        Request::CancelScoped {
+            conversation,
+            scope_hash,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            if let Some(expected) = &scope_hash {
+                match core.conversation_scope_hash(&conversation) {
+                    Ok(current) => require(expected == &current, "stale_scope")?,
+                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
+                }
+            }
             core.cancel(&conversation);
             Value::Null
         }
@@ -255,6 +779,7 @@ fn handle(
             conversation,
             paused,
         } => {
+            validate_project_conversation(core, project, &conversation)?;
             core.pause(&conversation, paused)?;
             Value::Null
         }
@@ -262,6 +787,7 @@ fn handle(
             conversation,
             autonomous,
         } => {
+            validate_project_conversation(core, project, &conversation)?;
             core.set_mode(&conversation, autonomous)?;
             Value::Null
         }
@@ -269,23 +795,49 @@ fn handle(
             conversation,
             target,
             text,
-        } => json!(core.comment(&conversation, &target, &text)?),
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.comment(&conversation, &target, &text)?)
+        }
         Request::CommentStatus {
             conversation,
             id,
             status,
-        } => json!(core.set_comment(&conversation, id, &status)?),
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.set_comment(&conversation, id, &status)?)
+        }
         Request::Task { plan, id } => json!(core.task(&plan, &id)?),
         Request::Diff {
             conversation,
             plan,
             id,
-        } => core.diff(&conversation, &plan, &id)?,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.diff(&conversation, &plan, &id)?
+        }
         Request::Review {
             conversation,
             plan,
             id,
         } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.review_change(&conversation, &plan, &id)?;
+            Value::Null
+        }
+        Request::ReviewScoped {
+            conversation,
+            plan,
+            id,
+            scope_hash,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            if let Some(expected) = &scope_hash {
+                match core.diff_scope_hash(&conversation, &plan, &id) {
+                    Ok(current) => require(expected == &current, "stale_scope")?,
+                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
+                }
+            }
             core.review_change(&conversation, &plan, &id)?;
             Value::Null
         }
@@ -293,35 +845,90 @@ fn handle(
             conversation,
             after,
             wait_ms,
+        } => handle_events(core, project, &conversation, after, wait_ms, None)?,
+        Request::EventsPaged {
+            conversation,
+            after,
+            wait_ms,
+            limit,
+        } => handle_events(core, project, &conversation, after, wait_ms, limit)?,
+        Request::Sessions { conversation } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.sessions(&conversation)?)
+        }
+        Request::History {
+            conversation,
+            after,
+            limit,
         } => {
-            core.store.conversation(&conversation)?;
-            let deadline = Instant::now() + Duration::from_millis(wait_ms).min(LONGEST_WAIT);
-            let events = loop {
-                let events = core
-                    .store
-                    .events_since(&conversation, after, EVENTS_PER_REPLY)?;
-                if !events.is_empty() || Instant::now() >= deadline {
-                    break events;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            };
-            let mut bytes = 0;
-            let events: Vec<_> = events
-                .into_iter()
-                .enumerate()
-                .take_while(|(index, event)| {
-                    bytes += event.payload.to_string().len();
-                    *index == 0 || bytes <= REPLY_BYTES
-                })
-                .map(|(_, event)| event)
-                .collect();
-            json!({
-                "events": events,
-                "idle": core.is_idle(&conversation),
-                "autonomous": core.autonomous(&conversation)?,
-            })
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.history(&conversation, after, limit)?)
+        }
+        Request::Mail { conversation } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.store.mail(&conversation)?)
         }
     })
+}
+
+fn validate_project_conversation(core: &Core, project: &Path, conversation: &str) -> Result<()> {
+    let conv = core.store.conversation(conversation)?;
+    require(
+        conv.project == project.to_string_lossy(),
+        &format!(
+            "conversation {conversation} does not belong to project {}",
+            project.display()
+        ),
+    )?;
+    Ok(())
+}
+
+fn handle_events(
+    core: &Core,
+    project: &Path,
+    conversation: &str,
+    after: u64,
+    wait_ms: u64,
+    limit: Option<usize>,
+) -> Result<Value> {
+    validate_project_conversation(core, project, conversation)?;
+    let lim = limit.unwrap_or(EVENTS_PER_REPLY).min(EVENTS_PER_REPLY);
+    let deadline = Instant::now() + Duration::from_millis(wait_ms).min(LONGEST_WAIT);
+    let events = loop {
+        let events = core.store.events_since(conversation, after, lim)?;
+        if !events.is_empty() || Instant::now() >= deadline {
+            break events;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut bytes = 0;
+    let events: Vec<_> = events
+        .into_iter()
+        .enumerate()
+        .take_while(|(index, event)| {
+            bytes += event.payload.to_string().len();
+            *index == 0 || bytes <= REPLY_BYTES
+        })
+        .map(|(_, event)| event)
+        .collect();
+    let (oldest_seq, latest_seq, total) = core.store.event_bounds(conversation)?;
+    let next_after = events.last().map(|e| e.seq);
+    let has_more = match next_after {
+        Some(last_seq) => last_seq < latest_seq,
+        None => false,
+    };
+    let history_unavailable = total > 0
+        && (after > latest_seq || (oldest_seq > 1 && after < oldest_seq.saturating_sub(1)));
+    Ok(json!({
+        "events": events,
+        "idle": core.is_idle(conversation),
+        "autonomous": core.autonomous(conversation)?,
+        "has_more": has_more,
+        "history_unavailable": history_unavailable,
+        "oldest_seq": oldest_seq,
+        "latest_seq": latest_seq,
+        "total": total,
+    }))
 }
 
 /// When the configuration file last changed, so a daemon running on an
@@ -449,7 +1056,7 @@ impl Client {
         match (self.call_once(request), &self.origin) {
             (Err(error), Some((project, config, state)))
                 // State the user deleted stays deleted.
-                if matches!(request, Request::Events { .. })
+                if matches!(request, Request::Events { .. } | Request::EventsPaged { .. })
                     && lost(&error)
                     && state.join("core.db").exists() =>
             {
@@ -463,7 +1070,9 @@ impl Client {
     fn call_once(&self, request: &Request) -> Result<Value> {
         let mut stream = UnixStream::connect(&self.socket)?;
         let wait = match request {
-            Request::Events { wait_ms, .. } => Duration::from_millis(*wait_ms).min(LONGEST_WAIT),
+            Request::Events { wait_ms, .. } | Request::EventsPaged { wait_ms, .. } => {
+                Duration::from_millis(*wait_ms).min(LONGEST_WAIT)
+            }
             _ => Duration::ZERO,
         };
         stream.set_read_timeout(Some(wait + Duration::from_secs(10)))?;

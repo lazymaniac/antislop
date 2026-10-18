@@ -25,6 +25,56 @@ use std::sync::{Arc, Mutex};
 use store::{Comment, Conversation, Mail, Message, Store, Task, TurnStatus};
 use tasks::{TaskSpec, Verdict, status};
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConversationSummary {
+    pub id: String,
+    pub project: String,
+    pub created_ms: i64,
+    pub status: String,
+    pub active_plan: Option<String>,
+    pub tasks_total: usize,
+    pub tasks_done: usize,
+    pub scope_hash: String,
+}
+
+/// Scope hash of a plan, capturing its task ids, specs, statuses and rounds.
+pub fn plan_scope_hash(tasks: &[Task]) -> String {
+    let mut data = String::new();
+    for task in tasks {
+        data.push_str(&task.id);
+        data.push('\0');
+        data.push_str(&task.plan_id);
+        data.push('\0');
+        data.push_str(&task.status);
+        data.push('\0');
+        data.push_str(&task.round.to_string());
+        data.push('\0');
+        data.push_str(&task.spec.to_string());
+        data.push('\n');
+    }
+    if data.is_empty() {
+        crate::hash("empty-plan".as_bytes())
+    } else {
+        crate::hash(data.as_bytes())
+    }
+}
+
+/// Scope hash of a diff, capturing the commit range and file changes.
+pub fn diff_scope_hash(
+    conversation: &str,
+    plan: &str,
+    id: &str,
+    base: &str,
+    head: Option<&str>,
+) -> String {
+    crate::hash(format!("{conversation}\0{plan}\0{id}\0{base}\0{:?}", head).as_bytes())
+}
+
+/// Scope hash of a task stage.
+pub fn task_scope_hash(task: &Task) -> String {
+    crate::hash(format!("{}:{}:{}:{}", task.id, task.status, task.round, task.spec).as_bytes())
+}
+
 const ORCHESTRATOR: &str = "orchestrator";
 const RUNTIME: &str = "runtime";
 /// Author of a code review's findings, and how its message starts.
@@ -150,29 +200,52 @@ impl Core {
         Ok(message)
     }
 
-    /// A message from the user: `@t2 text` goes to that task's worker (with
-    /// a copy for the orchestrator), anything else to the orchestrator.
+    /// A message from the user: with explicit recipient or `@recipient text` prefix,
+    /// validates recipient role, plan, and broadcast targets, reporting real delivery states.
     pub fn submit(self: &Arc<Self>, conversation: &str, text: &str) -> Result<serde_json::Value> {
-        if let Some((to, body)) = text
+        self.submit_addressed(conversation, text, None)
+    }
+
+    pub fn submit_addressed(
+        self: &Arc<Self>,
+        conversation: &str,
+        text: &str,
+        explicit_to: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        self.store.conversation(conversation)?;
+        let (to, body) = if let Some(to) = explicit_to {
+            (to.trim().trim_start_matches('@'), text.trim())
+        } else if let Some((to, rest)) = text
             .strip_prefix('@')
-            .and_then(|rest| rest.split_once(char::is_whitespace))
-            && let Some(task) = self
-                .store
-                .latest_plan(conversation)?
-                .into_iter()
-                .find(|task| task.spec["id"] == to)
+            .and_then(|r| r.split_once(char::is_whitespace))
         {
-            let body = body.trim();
-            require(!body.is_empty(), "the message is empty")?;
+            (to.trim(), rest.trim())
+        } else if text.starts_with('@') {
+            return Err(crate::Error::Invalid("the message is empty".into()));
+        } else {
+            return Ok(json!(self.send(conversation, text)?.seq));
+        };
+
+        require(!body.is_empty(), "the message is empty")?;
+
+        if to == ORCHESTRATOR {
+            return Ok(json!(self.send(conversation, body)?.seq));
+        }
+
+        if to == PLAN_VERIFIER || to == AUDITOR {
             let mail = self.store.add_mail(
                 conversation,
-                &format!("worker:{}", task.id),
+                to,
                 &Mail {
                     id: 0,
                     sender: "user".into(),
                     recipient: to.into(),
                     kind: "user_instruction".into(),
                     text: body.into(),
+                    created_ms: 0,
+                    delivered_turn: None,
+                    delivered_ms: None,
+                    state: "queued".into(),
                 },
             )?;
             self.store.add_mail(
@@ -184,13 +257,251 @@ impl Core {
                     recipient: ORCHESTRATOR.into(),
                     kind: "copy".into(),
                     text: format!("(the user wrote to {to}) {body}"),
+                    created_ms: 0,
+                    delivered_turn: None,
+                    delivered_ms: None,
+                    state: "queued".into(),
                 },
             )?;
-            return Ok(
-                json!({"mail": mail.id, "recipient_finished": status::finished(&task.status)}),
-            );
+            return Ok(json!({
+                "mail": mail.id,
+                "state": "queued",
+                "recipient": to,
+                "recipient_finished": false,
+            }));
         }
-        Ok(json!(self.send(conversation, text)?.seq))
+
+        if to == "all" {
+            let plan = self.store.latest_plan(conversation)?;
+            let targets: Vec<_> = plan
+                .iter()
+                .filter(|task| !status::finished(&task.status))
+                .collect();
+            if targets.is_empty() {
+                self.store.append_event(
+                    conversation,
+                    None,
+                    "mail_rejected",
+                    &json!({
+                        "sender": "user",
+                        "recipient": "all",
+                        "text": body,
+                        "reason": "no valid recipients for broadcast in current plan",
+                    }),
+                )?;
+                return Err(crate::Error::Invalid(
+                    "no valid recipients for broadcast in current plan".into(),
+                ));
+            }
+            let mut mail_ids = Vec::new();
+            for task in targets {
+                let mail = self.store.add_mail(
+                    conversation,
+                    &format!("worker:{}", task.id),
+                    &Mail {
+                        id: 0,
+                        sender: "user".into(),
+                        recipient: task.spec["id"].as_str().unwrap_or_default().into(),
+                        kind: "broadcast".into(),
+                        text: body.into(),
+                        created_ms: 0,
+                        delivered_turn: None,
+                        delivered_ms: None,
+                        state: "queued".into(),
+                    },
+                )?;
+                mail_ids.push(mail.id);
+            }
+            self.store.add_mail(
+                conversation,
+                ORCHESTRATOR,
+                &Mail {
+                    id: 0,
+                    sender: "user".into(),
+                    recipient: ORCHESTRATOR.into(),
+                    kind: "copy".into(),
+                    text: format!("(the user broadcast to all) {body}"),
+                    created_ms: 0,
+                    delivered_turn: None,
+                    delivered_ms: None,
+                    state: "queued".into(),
+                },
+            )?;
+            return Ok(json!({
+                "mail": mail_ids.first().copied().unwrap_or(0),
+                "mail_ids": mail_ids,
+                "state": "queued",
+                "recipient": "all",
+                "recipient_finished": false,
+            }));
+        }
+
+        let plan = self.store.latest_plan(conversation)?;
+        let (task_id_str, is_verifier) = if let Some(id) = to.strip_prefix("verifier:") {
+            (id, true)
+        } else if let Some(id) = to.strip_prefix("worker:") {
+            (id, false)
+        } else {
+            (to, false)
+        };
+
+        if let Some(task) = plan.iter().find(|t| t.spec["id"] == task_id_str) {
+            let target_role = if is_verifier {
+                format!("verifier:{}", task.id)
+            } else {
+                format!("worker:{}", task.id)
+            };
+            let mail = self.store.add_mail(
+                conversation,
+                &target_role,
+                &Mail {
+                    id: 0,
+                    sender: "user".into(),
+                    recipient: to.into(),
+                    kind: "user_instruction".into(),
+                    text: body.into(),
+                    created_ms: 0,
+                    delivered_turn: None,
+                    delivered_ms: None,
+                    state: "queued".into(),
+                },
+            )?;
+            self.store.add_mail(
+                conversation,
+                ORCHESTRATOR,
+                &Mail {
+                    id: 0,
+                    sender: "user".into(),
+                    recipient: ORCHESTRATOR.into(),
+                    kind: "copy".into(),
+                    text: format!("(the user wrote to {to}) {body}"),
+                    created_ms: 0,
+                    delivered_turn: None,
+                    delivered_ms: None,
+                    state: "queued".into(),
+                },
+            )?;
+            return Ok(json!({
+                "mail": mail.id,
+                "state": "queued",
+                "recipient": to,
+                "recipient_finished": status::finished(&task.status),
+            }));
+        }
+
+        // Recipient not recognized
+        self.store.append_event(
+            conversation,
+            None,
+            "mail_rejected",
+            &json!({
+                "sender": "user",
+                "recipient": to,
+                "text": body,
+                "reason": format!("unknown recipient or role: {to}"),
+            }),
+        )?;
+        Err(crate::Error::Invalid(format!(
+            "unknown recipient or role: {to}"
+        )))
+    }
+
+    pub fn conversation_scope_hash(&self, conversation: &str) -> Result<String> {
+        let latest_seq = self.store.latest_event_seq(conversation)?;
+        let paused = self.store.paused(conversation)?;
+        let idle = self.is_idle(conversation);
+        let active_plan = self
+            .store
+            .latest_plan(conversation)?
+            .first()
+            .map(|t| t.plan_id.clone());
+        Ok(crate::hash(
+            format!(
+                "{conversation}:{latest_seq}:{paused}:{idle}:{:?}",
+                active_plan
+            )
+            .as_bytes(),
+        ))
+    }
+
+    pub fn plan_scope_hash(&self, _conversation: &str, plan_id: &str) -> Result<String> {
+        let tasks = self.store.plan(plan_id)?;
+        Ok(plan_scope_hash(&tasks))
+    }
+
+    pub fn diff_scope_hash(&self, conversation: &str, plan: &str, id: &str) -> Result<String> {
+        let task = self.task(plan, id)?;
+        let (_, base, result) = self.change(conversation, &task)?;
+        Ok(diff_scope_hash(
+            conversation,
+            plan,
+            id,
+            &base,
+            result.as_deref(),
+        ))
+    }
+
+    pub fn conversations(&self) -> Result<Vec<ConversationSummary>> {
+        let conversations = self.store.conversations()?;
+        let mut summaries = Vec::with_capacity(conversations.len());
+        for conv in conversations {
+            let tasks = self.store.latest_plan(&conv.id)?;
+            let active_plan = tasks.first().map(|t| t.plan_id.clone());
+            let tasks_total = tasks.len();
+            let tasks_done = tasks
+                .iter()
+                .filter(|t| t.status == status::APPROVED)
+                .count();
+            let paused = self.store.paused(&conv.id).unwrap_or(false);
+            let idle = self.is_idle(&conv.id);
+            let status = if paused {
+                "paused".to_owned()
+            } else if !idle {
+                "working".to_owned()
+            } else if tasks.is_empty() {
+                "idle".to_owned()
+            } else if tasks.iter().all(|t| t.status == status::PROPOSED) {
+                "proposed".to_owned()
+            } else if tasks.iter().any(|t| t.status == status::NEEDS_USER) {
+                "needs_user".to_owned()
+            } else if tasks.iter().any(|t| t.status == status::WAITING) {
+                "waiting".to_owned()
+            } else if tasks.iter().any(|t| t.status == status::FAILED) {
+                "failed".to_owned()
+            } else if tasks.iter().any(|t| t.status == status::CANCELLED) {
+                "cancelled".to_owned()
+            } else if tasks.iter().all(|t| t.status == status::APPROVED) {
+                "done".to_owned()
+            } else {
+                "idle".to_owned()
+            };
+            let scope_hash = self.conversation_scope_hash(&conv.id).unwrap_or_default();
+            summaries.push(ConversationSummary {
+                id: conv.id,
+                project: conv.project,
+                created_ms: conv.created_ms,
+                status,
+                active_plan,
+                tasks_total,
+                tasks_done,
+                scope_hash,
+            });
+        }
+        Ok(summaries)
+    }
+
+    pub fn sessions(&self, conversation: &str) -> Result<Vec<store::SessionInfo>> {
+        self.store.sessions(conversation)
+    }
+
+    pub fn history(
+        &self,
+        conversation: &str,
+        after: u64,
+        limit: Option<usize>,
+    ) -> Result<store::HistoryPage> {
+        let lim = limit.unwrap_or(500).min(500);
+        self.store.history_page(conversation, after, lim)
     }
 
     /// The user's comment on one element: it reaches the orchestrator as a
@@ -335,12 +646,14 @@ impl Core {
             }
             patch.truncate(end);
         }
+        let scope_hash = diff_scope_hash(conversation, plan, id, &base, result.as_deref());
         Ok(json!({
             "task": id,
             "base": base,
             "head": result,
             "files": diff::parse(&patch),
             "truncated": truncated,
+            "scope_hash": scope_hash,
         }))
     }
 
@@ -734,6 +1047,7 @@ impl Core {
         } else {
             None
         };
+        let scope_hash = plan_scope_hash(&tasks);
         self.store.append_event(
             conversation,
             None,
@@ -744,6 +1058,7 @@ impl Core {
                 "review": review_json(&review),
                 "automatic": autonomous && waiting.is_none(),
                 "waiting": waiting,
+                "scope_hash": scope_hash,
             }),
         )?;
         if autonomous && waiting.is_none() {
@@ -907,12 +1222,14 @@ impl Core {
 
     /// The task's state for frontends; `reason` says why it stopped.
     fn announce_task(&self, conversation: &str, task: &Task, reason: Option<&str>) {
+        let scope_hash = task_scope_hash(task);
         let _ = self.store.append_event(
             conversation,
             None,
             "task",
             &json!({"id": task.spec["id"], "task": task.id, "title": task.spec["title"],
-                    "status": task.status, "round": task.round, "reason": reason}),
+                    "status": task.status, "round": task.round, "reason": reason,
+                    "scope_hash": scope_hash}),
         );
     }
 
@@ -1041,10 +1358,10 @@ impl Core {
         if in_place && task.base.is_none() {
             task.base = Some(git::snapshot(&project, &format!("before {}", spec.title))?);
         }
-        // What the user had not committed when the writer started: theirs,
-        // not the writer's to change.
+        // Earlier approved results may still be uncommitted. Exempt only
+        // paths that still match their latest approved version.
         let user_edits = match (&task.base, in_place) {
-            (Some(base), true) => git::changed_files(&project, &format!("{base}^"), base)?,
+            (Some(base), true) => self.in_place_user_edits(&project, base)?,
             _ => vec![],
         };
         // A writer works in its own worktree (in place: in the project);
@@ -1381,6 +1698,8 @@ impl Core {
         let own_task = sender.split('/').next().unwrap_or(sender);
         let targets: Vec<(String, String)> = match message.to.as_str() {
             ORCHESTRATOR => vec![(ORCHESTRATOR.into(), ORCHESTRATOR.into())],
+            PLAN_VERIFIER => vec![(PLAN_VERIFIER.into(), PLAN_VERIFIER.into())],
+            AUDITOR => vec![(AUDITOR.into(), AUDITOR.into())],
             "all" => plan
                 .iter()
                 .filter(|task| !status::finished(&task.status) && task.spec["id"] != own_task)
@@ -1391,11 +1710,26 @@ impl Core {
                     )
                 })
                 .collect(),
-            to => plan
-                .iter()
-                .filter(|task| task.spec["id"] == to)
-                .map(|task| (to.to_owned(), format!("worker:{}", task.id)))
-                .collect(),
+            to => {
+                let (target_id, is_verifier) = if let Some(id) = to.strip_prefix("verifier:") {
+                    (id, true)
+                } else if let Some(id) = to.strip_prefix("worker:") {
+                    (id, false)
+                } else {
+                    (to, false)
+                };
+                plan.iter()
+                    .filter(|task| task.spec["id"] == target_id)
+                    .map(|task| {
+                        let role = if is_verifier {
+                            format!("verifier:{}", task.id)
+                        } else {
+                            format!("worker:{}", task.id)
+                        };
+                        (to.to_owned(), role)
+                    })
+                    .collect()
+            }
         };
         if targets.is_empty() {
             self.store.append_event(
@@ -1416,6 +1750,10 @@ impl Core {
                     recipient: label,
                     kind: message.kind.clone(),
                     text: message.text.clone(),
+                    created_ms: 0,
+                    delivered_turn: None,
+                    delivered_ms: None,
+                    state: "queued".into(),
                 },
             )?;
         }
@@ -1518,6 +1856,40 @@ impl Core {
             return self.set_status(conversation, task, status);
         }
         self.stop(conversation, task, status, Some(&text))
+    }
+
+    /// Protect dirty paths unless their starting version is exactly the
+    /// last approved writer's output for that path. Only paths that writer
+    /// changed count: an approved snapshot also contains unrelated user edits.
+    fn in_place_user_edits(&self, project: &Path, base: &str) -> Result<Vec<String>> {
+        let mut protected = git::changed_files(project, &format!("{base}^"), base)?;
+        if protected.is_empty() {
+            return Ok(protected);
+        }
+        let mut unresolved = protected.clone();
+        for (before, result) in self
+            .store
+            .approved_writer_results(&project.to_string_lossy())?
+        {
+            let changed = git::changed_files(project, &before, &result)?;
+            let candidates: Vec<String> = unresolved
+                .iter()
+                .filter(|path| changed.contains(path))
+                .cloned()
+                .collect();
+            if candidates.is_empty() {
+                continue;
+            }
+            let owned = git::matching_paths(project, &result, base, &candidates)?;
+            protected.retain(|path| !owned.contains(path));
+            // A user revert to an older result is still an edit: never fall
+            // back to an earlier approval after the latest one differs.
+            unresolved.retain(|path| !candidates.contains(path));
+            if unresolved.is_empty() {
+                break;
+            }
+        }
+        Ok(protected)
     }
 
     /// An approved in-place change is already in the project; with commit

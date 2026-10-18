@@ -627,6 +627,56 @@ impl Canvas {
     }
 }
 
+/// Computes the overlay rectangle for the 'teraz' progress box so that
+/// it does not collide with the currently selected node in the viewport.
+///
+/// Default position is bottom-right. If the selected node intersects that
+/// area, the overlay dynamically flips to top-right (or alternative corners)
+/// so that the selected node remains visible.
+pub fn compute_progress_overlay(
+    inner: Rect,
+    selected_node: Option<&Node>,
+    offset: (u16, u16),
+    progress_width: u16,
+    progress_height: u16,
+) -> Option<Rect> {
+    if inner.height < progress_height + 2 || inner.width < progress_width {
+        return None;
+    }
+    let default_x = inner.right().saturating_sub(progress_width);
+    let bottom_y = inner.bottom().saturating_sub(progress_height);
+    let mut overlay = Rect::new(default_x, bottom_y, progress_width, progress_height);
+
+    if let Some(node) = selected_node {
+        let screen_x = inner.x as i32 + node.x as i32 - offset.0 as i32;
+        let screen_y = inner.y as i32 + node.y as i32 - offset.1 as i32;
+
+        let node_rect = Rect::new(
+            screen_x.max(0) as u16,
+            screen_y.max(0) as u16,
+            WIDTH,
+            HEIGHT,
+        );
+
+        if node_rect.intersects(overlay) {
+            // Collision on bottom-right! Flip to top-right corner
+            overlay.y = inner.y;
+            if node_rect.intersects(overlay) {
+                // Collision on top-right as well! Flip to top-left
+                overlay.x = inner.x;
+                if node_rect.intersects(overlay) {
+                    // Collision on top-left! Flip to bottom-left
+                    overlay.y = bottom_y;
+                    if node_rect.intersects(overlay) {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+    Some(overlay)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,5 +767,67 @@ mod tests {
         canvas.path(&[(2, 0), (2, 4)], Style::default());
         canvas.path(&[(0, 0), (1, 0), (1, 1)], Style::default());
         assert_eq!(canvas.lines(), ["─┐│", " ││", "──┼──", "  │", "  │"]);
+    }
+
+    #[test]
+    fn ac_resp_04_progress_overlay_collision_flip() {
+        let inner = Rect::new(0, 0, 80, 25);
+        let progress_width = 30;
+        let progress_height = 6;
+
+        // 1. Node in bottom-right corner intersects default bottom-right overlay
+        // Default bottom-right overlay: x = 80 - 30 = 50, y = 25 - 6 = 19, w = 30, h = 6.
+        let colliding_node = Node {
+            key: "worker:t1".into(),
+            x: 52,
+            y: 20,
+        };
+        let overlay = compute_progress_overlay(
+            inner,
+            Some(&colliding_node),
+            (0, 0),
+            progress_width,
+            progress_height,
+        )
+        .expect("overlay fits");
+        // Flips to top-right corner without obscuring selection
+        assert_eq!(overlay.x, 50);
+        assert_eq!(overlay.y, inner.y);
+
+        // 2. Node in top-left does NOT collide with bottom-right overlay
+        let non_colliding_node = Node {
+            key: "orchestrator".into(),
+            x: 5,
+            y: 2,
+        };
+        let overlay2 = compute_progress_overlay(
+            inner,
+            Some(&non_colliding_node),
+            (0, 0),
+            progress_width,
+            progress_height,
+        )
+        .expect("overlay fits");
+        // Stays at bottom-right
+        assert_eq!(overlay2.x, 50);
+        assert_eq!(overlay2.y, 19);
+
+        // 3. Tiny area returns None
+        let tiny = Rect::new(0, 0, 20, 5);
+        assert!(
+            compute_progress_overlay(tiny, None, (0, 0), progress_width, progress_height).is_none()
+        );
+
+        // 4. Centered node intersecting all 4 potential overlay placements returns None
+        let small_inner = Rect::new(0, 0, 40, 10);
+        let center_node = Node {
+            key: "worker:t2".into(),
+            x: 10,
+            y: 2,
+        };
+        assert!(
+            compute_progress_overlay(small_inner, Some(&center_node), (0, 0), 25, 5,).is_none(),
+            "when all four corners intersect selected node, overlay is hidden"
+        );
     }
 }

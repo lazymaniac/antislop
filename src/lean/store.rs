@@ -60,13 +60,51 @@ pub struct Event {
 /// A message to one agent, delivered into its next turn. `sender` and
 /// `recipient` are display names (`user`, `orchestrator`, a task id such as
 /// `t2`); `role` is the recipient's session role.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Mail {
     pub id: u64,
     pub sender: String,
     pub recipient: String,
     pub kind: String,
     pub text: String,
+    #[serde(default)]
+    pub created_ms: i64,
+    #[serde(default)]
+    pub delivered_turn: Option<String>,
+    #[serde(default)]
+    pub delivered_ms: Option<i64>,
+    #[serde(default = "default_mail_state")]
+    pub state: String,
+}
+
+fn default_mail_state() -> String {
+    "queued".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub turn_id: String,
+    pub role: String,
+    pub provider: String,
+    pub session_id: Option<String>,
+    pub status: String,
+    pub error: Option<String>,
+    pub upto_message: u64,
+    pub started_ms: i64,
+    pub finished_ms: Option<i64>,
+    pub pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryPage {
+    pub events: Vec<Event>,
+    pub after: u64,
+    pub next_after: Option<u64>,
+    pub has_more: bool,
+    pub total: usize,
+    pub oldest_seq: u64,
+    pub latest_seq: u64,
+    pub history_unavailable: bool,
 }
 
 /// The user's comment on one element of the team panel or of a diff.
@@ -695,24 +733,40 @@ impl Store {
         Ok(())
     }
 
+    /// Approved writers for this project, most recently approved first.
+    /// Task events give completion order, including writers from older plans
+    /// and conversations; creation order need not match execution order.
+    pub fn approved_writer_results(&self, project: &str) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT t.base,t.result FROM events e
+             JOIN tasks t ON t.id=json_extract(e.payload,'$.task')
+             JOIN conversations c ON c.id=t.conversation_id
+             WHERE c.project=?1 AND e.conversation_id=t.conversation_id
+               AND e.kind='task' AND json_extract(e.payload,'$.status')='approved'
+               AND t.status='approved' AND t.base IS NOT NULL AND t.result IS NOT NULL
+             GROUP BY t.id ORDER BY max(e.seq) DESC",
+        )?;
+        let rows = statement.query_map([project], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// Records a message for `role` and announces it.
     pub fn add_mail(&self, conversation: &str, role: &str, mail: &Mail) -> Result<Mail> {
         let mut db = self.db();
         let tx = db.transaction()?;
+        let now = now_ms();
         tx.execute(
             "INSERT INTO mail(conversation_id,sender,recipient,kind,text,created_ms)
              VALUES(?1,?2,?3,?4,?5,?6)",
-            params![
-                conversation,
-                mail.sender,
-                role,
-                mail.kind,
-                mail.text,
-                now_ms()
-            ],
+            params![conversation, mail.sender, role, mail.kind, mail.text, now],
         )?;
         let mail = Mail {
             id: tx.last_insert_rowid() as u64,
+            created_ms: now,
+            delivered_turn: None,
+            delivered_ms: None,
+            state: "queued".into(),
             ..mail.clone()
         };
         tx.execute(
@@ -916,16 +970,49 @@ impl Store {
     pub fn pending_mail(&self, conversation: &str, role: &str) -> Result<Vec<Mail>> {
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT id,sender,kind,text FROM mail
+            "SELECT id,sender,recipient,kind,text,created_ms FROM mail
              WHERE conversation_id=?1 AND recipient=?2 AND delivered_turn IS NULL ORDER BY id",
         )?;
         let rows = statement.query_map(params![conversation, role], |row| {
             Ok(Mail {
                 id: row.get::<_, i64>(0)? as u64,
                 sender: row.get(1)?,
-                recipient: String::new(),
-                kind: row.get(2)?,
-                text: row.get(3)?,
+                recipient: row.get(2)?,
+                kind: row.get(3)?,
+                text: row.get(4)?,
+                created_ms: row.get(5)?,
+                delivered_turn: None,
+                delivered_ms: None,
+                state: "queued".into(),
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// All mail in the conversation with queue and delivery states, oldest first.
+    pub fn mail(&self, conversation: &str) -> Result<Vec<Mail>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT id,sender,recipient,kind,text,created_ms,delivered_turn,delivered_ms FROM mail
+             WHERE conversation_id=?1 ORDER BY id",
+        )?;
+        let rows = statement.query_map([conversation], |row| {
+            let delivered_turn: Option<String> = row.get(6)?;
+            let state = if delivered_turn.is_some() {
+                "delivered"
+            } else {
+                "queued"
+            };
+            Ok(Mail {
+                id: row.get::<_, i64>(0)? as u64,
+                sender: row.get(1)?,
+                recipient: row.get(2)?,
+                kind: row.get(3)?,
+                text: row.get(4)?,
+                created_ms: row.get(5)?,
+                delivered_turn,
+                delivered_ms: row.get(7)?,
+                state: state.into(),
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -938,18 +1025,99 @@ impl Store {
         }
         let mut db = self.db();
         let tx = db.transaction()?;
+        let now = now_ms();
         for id in ids {
             tx.execute(
                 "UPDATE mail SET delivered_turn=?2,delivered_ms=?3 WHERE id=?1",
-                params![*id as i64, turn, now_ms()],
+                params![*id as i64, turn, now],
             )?;
         }
         tx.execute(
             "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,?2,'mail_delivered',?3,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, turn, serde_json::json!({"ids": ids}).to_string()],
+            params![conversation, turn, serde_json::json!({"ids": ids, "delivered_ms": now, "state": "delivered"}).to_string()],
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn sessions(&self, conversation: &str) -> Result<Vec<SessionInfo>> {
+        self.conversation(conversation)?;
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid
+             FROM turns WHERE conversation_id=?1 ORDER BY started_ms ASC, rowid ASC",
+        )?;
+        let rows = statement.query_map([conversation], |row| {
+            Ok(SessionInfo {
+                turn_id: row.get(0)?,
+                role: row.get(1)?,
+                provider: row.get(2)?,
+                session_id: row.get(3)?,
+                status: row.get(4)?,
+                error: row.get(5)?,
+                upto_message: row.get::<_, i64>(6)? as u64,
+                started_ms: row.get(7)?,
+                finished_ms: row.get(8)?,
+                pid: row.get(9)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn latest_event_seq(&self, conversation: &str) -> Result<u64> {
+        let db = self.db();
+        let seq: Option<i64> = db
+            .query_row(
+                "SELECT seq FROM events WHERE conversation_id=?1 ORDER BY seq DESC LIMIT 1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(seq.unwrap_or(0) as u64)
+    }
+
+    pub fn event_bounds(&self, conversation: &str) -> Result<(u64, u64, usize)> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0), COUNT(*)
+             FROM events WHERE conversation_id=?1",
+        )?;
+        let row = statement.query_row([conversation], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as u64,
+                row.get::<_, i64>(1)? as u64,
+                row.get::<_, i64>(2)? as usize,
+            ))
+        })?;
+        Ok(row)
+    }
+
+    pub fn history_page(
+        &self,
+        conversation: &str,
+        after: u64,
+        limit: usize,
+    ) -> Result<HistoryPage> {
+        self.conversation(conversation)?;
+        let (oldest_seq, latest_seq, total) = self.event_bounds(conversation)?;
+        let events = self.events_since(conversation, after, limit)?;
+        let next_after = events.last().map(|e| e.seq);
+        let has_more = match next_after {
+            Some(last_seq) => last_seq < latest_seq,
+            None => false,
+        };
+        let history_unavailable = total > 0
+            && (after > latest_seq || (oldest_seq > 1 && after < oldest_seq.saturating_sub(1)));
+        Ok(HistoryPage {
+            events,
+            after,
+            next_after,
+            has_more,
+            total,
+            oldest_seq,
+            latest_seq,
+            history_unavailable,
+        })
     }
 
     pub fn append_event(
@@ -1000,6 +1168,61 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approved_outputs_follow_completion_order_and_stay_with_their_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("core.db")).unwrap();
+        let conversation = store.create_conversation("/project").unwrap();
+        let specs = [
+            serde_json::json!({"id": "t1"}),
+            serde_json::json!({"id": "t2"}),
+        ];
+        let mut tasks = store.add_plan(&conversation.id, &specs).unwrap();
+        for index in [1, 0] {
+            let task = &mut tasks[index];
+            task.status = "approved".into();
+            task.base = Some(format!("base-{index}"));
+            task.result = Some(format!("result-{index}"));
+            store.update_task(task).unwrap();
+            store
+                .append_event(
+                    &conversation.id,
+                    None,
+                    "task",
+                    &serde_json::json!({"task": task.id, "status": "approved"}),
+                )
+                .unwrap();
+        }
+        let other = store.create_conversation("/other-project").unwrap();
+        let mut task = store.add_plan(&other.id, &specs[..1]).unwrap().remove(0);
+        task.status = "approved".into();
+        task.base = Some("other-base".into());
+        task.result = Some("other-result".into());
+        store.update_task(&task).unwrap();
+        store
+            .append_event(
+                &other.id,
+                None,
+                "task",
+                &serde_json::json!({"task": task.id, "status": "approved"}),
+            )
+            .unwrap();
+        assert_eq!(
+            store.approved_writer_results("/project").unwrap(),
+            [
+                ("base-0".into(), "result-0".into()),
+                ("base-1".into(), "result-1".into()),
+            ]
+        );
+        // An old approval cannot qualify a task that now needs a decision.
+        tasks[0].status = "needs_user".into();
+        store.update_task(&tasks[0]).unwrap();
+        assert_eq!(
+            store.approved_writer_results("/project").unwrap(),
+            [("base-1".into(), "result-1".into()),]
+        );
+    }
 
     #[test]
     fn a_newer_schema_is_refused_not_rewritten() {

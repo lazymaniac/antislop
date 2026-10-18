@@ -9,7 +9,7 @@ mode = "supervised"
 revision = 1
 local_write = true
 local_checks = true
-local_commits = false
+local_commits = true
 
 [providers.codex]
 binary = "/opt/homebrew/bin/codex"

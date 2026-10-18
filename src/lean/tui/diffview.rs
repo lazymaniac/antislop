@@ -134,6 +134,9 @@ impl DiffView {
 
     pub fn draw(&mut self, frame: &mut Frame, view: &View) {
         let area = frame.area();
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
         let [header, body, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(1),
@@ -145,43 +148,36 @@ impl DiffView {
             .iter()
             .fold((0, 0), |(a, r), file| (a + file.added, r + file.removed));
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!(" {} diff ", self.task),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(
-                        "{} · plików: {} · +{added} −{removed}{}",
-                        self.range,
-                        self.files().len(),
-                        if self.truncated {
-                            " · obcięty (za duży)"
-                        } else {
-                            ""
-                        }
-                    ),
-                    dim(),
-                ),
-            ])),
+            Paragraph::new(diff_header(
+                &self.task,
+                &self.range,
+                self.files().len(),
+                added,
+                removed,
+                self.truncated,
+                usize::from(header.width),
+            )),
             header,
         );
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "↑/↓ wybór · ←/→ plik · Tab pliki/linie · c komentarz · R recenzja kodu · r odśwież · ? pomoc · Esc powrót",
+                diff_footer_hint(usize::from(footer.width)),
                 dim(),
             )),
             footer,
         );
         let files = match &self.files {
             None => {
-                frame.render_widget(Paragraph::new(Span::styled("Pobieram…", dim())), body);
+                frame.render_widget(
+                    Paragraph::new(Span::styled("Pobieram diff zadania z demona…", dim())),
+                    body,
+                );
                 return;
             }
             Some(Err(error)) => {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
-                        format!("✗ {error}"),
+                        format!("✗ Błąd pobierania zmian: {error}"),
                         Style::default().fg(Color::Red),
                     )),
                     body,
@@ -189,24 +185,38 @@ impl DiffView {
                 return;
             }
             Some(Ok(files)) if files.is_empty() => {
-                frame.render_widget(Paragraph::new(Span::styled("Brak zmian.", dim())), body);
+                frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        "Brak zmian w tym zadaniu. Zadanie nie zmodyfikowało żadnych plików.",
+                        dim(),
+                    )),
+                    body,
+                );
                 return;
             }
             Some(Ok(_)) => self.files(),
         };
-        let lines_area = if body.width >= 90 {
+        if body.width >= 90 {
             let width = (body.width / 3).min(44);
             let [list, rest] =
                 Layout::horizontal([Constraint::Length(width), Constraint::Min(1)]).areas(body);
-            draw_files(frame, list, files, self.file, self.on_files);
-            rest
+            draw_files(frame, list, files, self.file, self.on_files, false);
+            self.draw_lines(frame, rest, view, false, files.len());
+        } else if self.on_files {
+            draw_files(frame, body, files, self.file, true, true);
         } else {
-            body
-        };
-        self.draw_lines(frame, lines_area, view);
+            self.draw_lines(frame, body, view, true, files.len());
+        }
     }
 
-    fn draw_lines(&mut self, frame: &mut Frame, area: Rect, view: &View) {
+    fn draw_lines(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        view: &View,
+        compact: bool,
+        file_count: usize,
+    ) {
         let Some(file) = self.files().get(self.file) else {
             return;
         };
@@ -240,7 +250,16 @@ impl DiffView {
         };
         let width = usize::from(area.width);
         let mut rows: Vec<Line> = vec![];
-        let mut title = format!(" {}", file.path);
+        let mut title = if compact && file_count > 1 {
+            format!(
+                " [{}/{}] {} [Tab: pliki]",
+                self.file + 1,
+                file_count,
+                file.path
+            )
+        } else {
+            format!(" {}", file.path)
+        };
         if let Some(old) = &file.old_path {
             title = format!(" {old} → {}", file.path);
         }
@@ -315,8 +334,73 @@ impl DiffView {
     }
 }
 
-fn draw_files(frame: &mut Frame, area: Rect, files: &[FileDiff], selected: usize, focused: bool) {
-    let block = Block::default().borders(Borders::RIGHT);
+pub fn diff_header(
+    task: &str,
+    range: &str,
+    file_count: usize,
+    added: usize,
+    removed: usize,
+    truncated: bool,
+    width: usize,
+) -> Line<'static> {
+    let trunc_str = if truncated { " · obcięty" } else { "" };
+    let task_badge = format!(" {task} diff ");
+    if width >= 75 && !range.is_empty() {
+        Line::from(vec![
+            Span::styled(task_badge, Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{range} · plików: {file_count} · +{added} −{removed}{trunc_str}"),
+                dim(),
+            ),
+        ])
+    } else if width >= 50 {
+        Line::from(vec![
+            Span::styled(task_badge, Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("+{added} −{removed} · {file_count} plik(i){trunc_str}"),
+                dim(),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(task_badge, Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(format!("+{added} −{removed}"), dim()),
+        ])
+    }
+}
+
+pub fn diff_footer_hint(width: usize) -> &'static str {
+    if width >= 95 {
+        "↑/↓ wybór · ←/→ plik · Tab pliki/linie · c komentarz · R recenzja kodu · r odśwież · ? pomoc · Esc powrót"
+    } else if width >= 65 {
+        "↑/↓ wybór · ←/→ plik · Tab przełącz · c kom. · R recenzja · r odśwież · Esc powrót"
+    } else if width >= 45 {
+        "↑/↓ · ←/→ · Tab przełącz · c kom · Esc powrót"
+    } else {
+        "Tab · c · Esc"
+    }
+}
+
+fn draw_files(
+    frame: &mut Frame,
+    area: Rect,
+    files: &[FileDiff],
+    selected: usize,
+    focused: bool,
+    compact: bool,
+) {
+    let block = if compact {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(if focused {
+                Style::default().fg(Color::Cyan)
+            } else {
+                dim()
+            })
+            .title(" Zmienione pliki [Tab: przełącz na diff] ")
+    } else {
+        Block::default().borders(Borders::RIGHT)
+    };
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let width = usize::from(inner.width);
@@ -352,4 +436,80 @@ fn draw_files(frame: &mut Frame, area: Rect, files: &[FileDiff], selected: usize
         })
         .collect();
     frame.render_widget(Paragraph::new(rows), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn diff_header_and_footer_hints_prioritized_by_width() {
+        // Wide: 100 columns
+        let header = diff_header("t1", "base..head", 3, 10, 5, false, 100);
+        let header_text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(header_text.contains("plików: 3"));
+        assert!(header_text.contains("+10 −5"));
+
+        // Narrow: 40 columns
+        let header_narrow = diff_header("t1", "base..head", 3, 10, 5, false, 40);
+        let narrow_text: String = header_narrow
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(narrow_text.contains("+10 −5"));
+
+        // Footer hints
+        assert!(diff_footer_hint(100).contains("recenzja kodu"));
+        assert!(!diff_footer_hint(40).contains("recenzja kodu"));
+        assert!(diff_footer_hint(40).contains("Esc"));
+    }
+
+    #[test]
+    fn diff_responsive_split_and_compact_rendering() {
+        let view = View::default();
+        let mut diff = DiffView::new("t2".into());
+        diff.files = Some(Ok(vec![FileDiff {
+            path: "src/main.rs".into(),
+            old_path: None,
+            status: "modified".into(),
+            binary: false,
+            added: 5,
+            removed: 2,
+            lines: vec![],
+        }]));
+
+        // Wide terminal (120x30): side-by-side files & diff
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                diff.draw(frame, &view);
+            })
+            .unwrap();
+
+        // Narrow terminal (80x24): compact mode
+        diff.on_files = true;
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                diff.draw(frame, &view);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered: String = buffer.content.iter().map(|c| c.symbol()).collect();
+        assert!(rendered.contains("Zmienione pliki"));
+
+        // Tiny terminal (10x4)
+        let backend = TestBackend::new(10, 4);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                diff.draw(frame, &view);
+            })
+            .unwrap();
+    }
 }

@@ -215,7 +215,61 @@ pub fn patch(dir: &Path, base: &str, rev: Option<&str>) -> Result<String> {
 }
 
 pub fn changed_files(dir: &Path, base: &str, result: &str) -> Result<Vec<String>> {
-    Ok(ok(dir, &["diff", "--name-only", "-z", base, result])?
+    changed_paths(dir, base, result, None)
+}
+
+/// Paths with identical content, type and mode in two snapshots. Compare
+/// snapshots rather than the live tree, so a task's starting protection is
+/// stable across its turns and resumes. Literal pathspecs keep filenames
+/// containing glob characters from widening the comparison.
+pub fn matching_paths(
+    dir: &Path,
+    left: &str,
+    right: &str,
+    paths: &[String],
+) -> Result<Vec<String>> {
+    if paths.is_empty() {
+        return Ok(vec![]);
+    }
+    let changed: std::collections::HashSet<String> = changed_paths(dir, left, right, Some(paths))?
+        .into_iter()
+        .collect();
+    Ok(paths
+        .iter()
+        .filter(|path| !changed.contains(*path))
+        .cloned()
+        .collect())
+}
+
+fn changed_paths(
+    dir: &Path,
+    left: &str,
+    right: &str,
+    paths: Option<&[String]>,
+) -> Result<Vec<String>> {
+    let mut args = vec![
+        "--literal-pathspecs",
+        "diff",
+        "--no-renames",
+        "--name-only",
+        "-z",
+        left,
+        right,
+        "--",
+    ];
+    if let Some(paths) = paths {
+        args.extend(paths.iter().map(String::as_str));
+    }
+    let output = git(dir, &args)?;
+    crate::require(
+        output.status.success(),
+        &format!(
+            "git diff: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    )?;
+    Ok(std::str::from_utf8(&output.stdout)
+        .map_err(|error| Error::Invalid(format!("git paths: {error}")))?
         .split('\0')
         .filter(|path| !path.is_empty())
         .map(str::to_owned)
@@ -566,6 +620,38 @@ mod snapshot_tests {
         )
         .unwrap();
         dir
+    }
+
+    #[test]
+    fn snapshot_path_comparisons_preserve_modes_deletions_and_literal_names() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = repo();
+        let path = dir.path();
+        ok(path, &["config", "core.filemode", "true"]).unwrap();
+        std::fs::write(path.join(" file[1].txt"), "literal\n").unwrap();
+        std::fs::write(path.join(" file1.txt"), "glob neighbour\n").unwrap();
+        let before = snapshot(path, "before").unwrap();
+        std::fs::rename(path.join("a.txt"), path.join("renamed.txt")).unwrap();
+        std::fs::set_permissions(path.join("b.txt"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::write(path.join(" file1.txt"), "changed neighbour\n").unwrap();
+        let after = snapshot(path, "after").unwrap();
+        let paths = [
+            " file[1].txt",
+            " file1.txt",
+            "a.txt",
+            "b.txt",
+            "renamed.txt",
+            "absent.txt",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            matching_paths(path, &before, &after, &paths).unwrap(),
+            [" file[1].txt", "absent.txt"]
+        );
+        let mut changed = changed_files(path, &before, &after).unwrap();
+        changed.sort();
+        assert_eq!(changed, [" file1.txt", "a.txt", "b.txt", "renamed.txt"]);
     }
 
     #[test]

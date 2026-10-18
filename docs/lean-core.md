@@ -157,8 +157,14 @@ directory instead of worktrees, for users who want to watch the files change.
 - Before the worker starts, the runtime records a snapshot commit of the
   working tree (tracked and untracked files, through a scratch index; the
   user's index, branch and files are untouched). Its parent is `HEAD`; the
-  files it differs in are the user's own edits, and the worker is told not to
-  modify them.
+  files it differs in are protected, except for paths still identical to the
+  latest approved writer's output for that path in this project. Approval
+  order comes from persisted task events, across plans, conversations and
+  daemon restarts. Only paths the approved writer changed qualify; unrelated
+  user files merely present in its snapshot do not. Later user edits (including
+  reverts to an older approved version) and unapproved results stay protected,
+  and the worker is told not to modify them. This lets sequential writers
+  extend approved uncommitted changes with `local_commits = false`.
 - After each worker turn another snapshot is the task's `result`; the
   verifier and the code review read `git diff base result`, the diff view
   shows the same range.
@@ -247,11 +253,28 @@ replaced when idle. The socket is `<state>/core.sock`, or
   status and +/− counts beside the unified diff with old and new line numbers;
   `c` comments on the selected line (or file), comments show under their lines,
   `R` asks for a code review and `r` reloads.
-  Keys: Enter send, Alt+Enter
-  new line, Ctrl+A run the proposed plan, Ctrl+R resume what the plan left
-  unfinished, Ctrl+X cancel, PgUp/PgDn scroll, Ctrl+N new conversation,
-  Ctrl+P commands, F1 help, Esc
-  back (from the chat: detach), `q` in the graph detaches.
+  Keys: Enter send, Alt+Enter or Ctrl+J new line in draft, ↑/↓ navigate wrapped
+  lines in draft (or scroll transcript when empty), PgUp/PgDn scroll transcript,
+  Ctrl+A run proposed plan (on empty draft) or Home, Ctrl+R resume plan (on empty
+  draft) or search history, Ctrl+U/Ctrl+K delete to start/end of line, Ctrl+W or
+  Alt+Backspace delete word backward, Ctrl+E move to end of line, Alt/Ctrl+Left
+  and Alt/Ctrl+Right word navigation, Ctrl+X cancel, Ctrl+N new conversation,
+  Ctrl+P commands, F1 help in every view (including comments and search lists;
+  ? also opens help in the graph, details and diff). Help scrolls with ↑/↓, k/j,
+  PgUp/PgDn, Home, End and closes with Esc, F1 or ?; other typing, paste and
+  action shortcuts stay blocked, preserving the drafts and search query beneath
+  it, with no cursor showing through. Ctrl+C detaches from any view.
+  Outside help: Esc clears the draft (or detaches when empty), `q` in the graph detaches.
+  Input editing, visual wrapping and deletions maintain strict UTF-8 character
+  boundary alignment (`is_char_boundary`), supporting double-width CJK ideographs
+  and multi-byte symbols. Drafts reserve a display column for the insertion cursor;
+  cursor rows and viewport offsets support more than 65,535 lines. Search queries
+  and activity labels are bounded to the viewport before conversion to terminal
+  coordinates. Bracketed paste normalizes CRLF/CR to LF, sanitizes control
+  characters, caps length at 64 KB at character boundaries, and routes paste
+  according to modal ownership (blocked during help, routed to comment editor
+  when active). The layout enforces a 60x12 minimum terminal guard and a 100-column
+  breakpoint switching between side-by-side split and single-panel compact views.
 - `antislop chat "message"` (or piped input) prints events line by line and
   exits once the conversation is idle; `/accept` and `/cancel` lines work too.
 - `antislop export` writes the conversation's history (`--conversation ID`,
