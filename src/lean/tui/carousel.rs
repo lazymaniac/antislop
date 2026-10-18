@@ -74,10 +74,19 @@ impl Carousel {
 
         if view.tasks.is_empty() {
             let empty_text = vec![
-                Line::styled("Brak zadań w bieżącym planie.", Style::default().add_modifier(Modifier::BOLD)),
+                Line::styled(
+                    "Brak zadań w bieżącym planie.",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Line::styled("", Style::default()),
-                Line::styled("Orkiestrator zaproponuje zadania po analizie Twojego zapytania w czacie.", dim()),
-                Line::styled("Naciśnij Tab, aby wrócić do zespołu lub Esc, aby pisać w czacie.", dim()),
+                Line::styled(
+                    "Orkiestrator zaproponuje zadania po analizie Twojego zapytania w czacie.",
+                    dim(),
+                ),
+                Line::styled(
+                    "Naciśnij Tab, aby wrócić do zespołu lub Esc, aby pisać w czacie.",
+                    dim(),
+                ),
             ];
             let block = Block::default()
                 .borders(Borders::ALL)
@@ -117,7 +126,10 @@ impl Carousel {
             let is_cur = i == self.selected;
             let (m, col) = mark(&t.status);
             let style = if is_cur {
-                Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::Blue)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(col)
             };
@@ -167,20 +179,44 @@ impl Carousel {
 
         // Header line
         lines.push(Line::from(vec![
-            Span::styled(format!("Zadanie {}: ", task.id), Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(task.title.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("Zadanie {}: ", task.id),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                task.title.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]));
         lines.push(Line::styled("", Style::default()));
 
         // Real counters section
-        lines.push(Line::from(vec![
-            Span::styled("● Rzeczywiste liczniki i stan:", theme.accent()),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "● Rzeczywiste liczniki i stan:",
+            theme.accent(),
+        )]));
         lines.push(Line::from(vec![
             Span::styled("  Stan: ", theme.dim()),
-            Span::styled(format!("{status_mark} {}", polish(&task.status)), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  ·  Runda: r{}", task.round), Style::default().fg(Color::Yellow)),
-            Span::styled(format!("  ·  Komentarze: ✎{open_comments} otwartych ({total_comments} łącznie)"), Style::default().fg(if open_comments > 0 { Color::Cyan } else { Color::DarkGray })),
+            Span::styled(
+                format!("{status_mark} {}", polish(&task.status)),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  ·  Runda: r{}", task.round),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                format!("  ·  Komentarze: ✎{open_comments} otwartych ({total_comments} łącznie)"),
+                Style::default().fg(if open_comments > 0 {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                }),
+            ),
         ]));
 
         let deps_str = if task.depends_on.is_empty() {
@@ -190,7 +226,10 @@ impl Carousel {
         };
         lines.push(Line::from(vec![
             Span::styled("  Zależności [D]: ", theme.dim()),
-            Span::styled(format!("{} (liczba: {})", deps_str, task.depends_on.len()), Style::default().fg(Color::Blue)),
+            Span::styled(
+                format!("{} (liczba: {})", deps_str, task.depends_on.len()),
+                Style::default().fg(Color::Blue),
+            ),
         ]));
 
         let scope_str = if task.scope.is_empty() {
@@ -200,16 +239,42 @@ impl Carousel {
         };
         lines.push(Line::from(vec![
             Span::styled("  Zakres plików: ", theme.dim()),
-            Span::styled(format!("{} ścieżek ({scope_str})", task.scope.len()), Style::default()),
-            Span::styled(if task.writes { " · modyfikuje pliki" } else { " · tylko do odczytu" }, Style::default().fg(if task.writes { Color::Yellow } else { Color::Green })),
+            Span::styled(
+                format!("{} ścieżek ({scope_str})", task.scope.len()),
+                Style::default(),
+            ),
+            Span::styled(
+                if task.writes {
+                    " · modyfikuje pliki"
+                } else {
+                    " · tylko do odczytu"
+                },
+                Style::default().fg(if task.writes {
+                    Color::Yellow
+                } else {
+                    Color::Green
+                }),
+            ),
         ]));
 
         // Agents information
         let worker_info = worker_agent.map_or("nieuruchomiony", |a| {
-            if a.running { "● pracuje" } else if !a.activity.is_empty() { a.activity.as_str() } else { "bezczynny" }
+            if a.running {
+                "● pracuje"
+            } else if !a.activity.is_empty() {
+                a.activity.as_str()
+            } else {
+                "bezczynny"
+            }
         });
         let verifier_info = verifier_agent.map_or("nieuruchomiony", |a| {
-            if a.running { "● sprawdza" } else if !a.activity.is_empty() { a.activity.as_str() } else { "bezczynny" }
+            if a.running {
+                "● sprawdza"
+            } else if !a.activity.is_empty() {
+                a.activity.as_str()
+            } else {
+                "bezczynny"
+            }
         });
         lines.push(Line::from(vec![
             Span::styled("  Worker: ", theme.dim()),
@@ -256,7 +321,10 @@ impl Carousel {
                 )
             })
             .count();
-        let unclassified = view.tasks.len().saturating_sub(approved + working + queued + problems);
+        let unclassified = view
+            .tasks
+            .len()
+            .saturating_sub(approved + working + queued + problems);
         let problems = problems + unclassified;
 
         lines.push(Line::styled("", Style::default()));
@@ -276,17 +344,47 @@ impl Carousel {
     fn draw_actions(&self, frame: &mut Frame, area: Rect, _task: &TaskRow, theme: &Theme) {
         let spans = vec![
             Span::styled("Skróty: ", theme.dim()),
-            Span::styled("[w] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[w] ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Przejdź do workera na grafie  ", Style::default()),
-            Span::styled("[v] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[v] ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Przejdź do weryfikatora  ", Style::default()),
-            Span::styled("[Enter] ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[Enter] ",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Szczegóły  ", Style::default()),
-            Span::styled("[d] ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[d] ",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Diff  ", Style::default()),
-            Span::styled("[c] ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[c] ",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Komentarz  ", Style::default()),
-            Span::styled("[←/→] ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[←/→] ",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Nawigacja karuzeli", Style::default()),
         ];
         let p = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: true });

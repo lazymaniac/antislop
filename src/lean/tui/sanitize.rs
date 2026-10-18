@@ -39,7 +39,11 @@ pub fn sanitize(input: &str) -> String {
                 // U+2066..=U+2069 (LRI, RLI, FSI, PDI)
                 // U+200E, U+200F (LRM, RLM)
                 // U+061C (ALM)
-                '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{061c}' => State::Text,
+                '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{061c}' => State::Text,
                 // Other control characters (C0: 0x00..=0x1F, 0x7F; C1: 0x80..=0x9F)
                 c if c.is_control() => State::Text,
                 c => {
@@ -87,7 +91,10 @@ mod tests {
     #[test]
     fn plain_text_and_newlines_preserved() {
         assert_eq!(sanitize("Hello world!"), "Hello world!");
-        assert_eq!(sanitize("Line 1\nLine 2\n\nLine 4"), "Line 1\nLine 2\n\nLine 4");
+        assert_eq!(
+            sanitize("Line 1\nLine 2\n\nLine 4"),
+            "Line 1\nLine 2\n\nLine 4"
+        );
         assert_eq!(sanitize("col1\tcol2"), "col1    col2");
     }
 
@@ -121,28 +128,16 @@ mod tests {
 
     #[test]
     fn dcs_and_apc_stripped() {
-        assert_eq!(
-            sanitize("\x1bP1$txxxxx\x1b\\Data"),
-            "Data"
-        );
-        assert_eq!(
-            sanitize("\x1b_Gpayload\x07Visible"),
-            "Visible"
-        );
+        assert_eq!(sanitize("\x1bP1$txxxxx\x1b\\Data"), "Data");
+        assert_eq!(sanitize("\x1b_Gpayload\x07Visible"), "Visible");
     }
 
     #[test]
     fn bidi_override_controls_stripped() {
         // RLO (Right-to-Left Override) U+202E spoofing filename
-        assert_eq!(
-            sanitize("report\u{202e}txt.exe"),
-            "reporttxt.exe"
-        );
+        assert_eq!(sanitize("report\u{202e}txt.exe"), "reporttxt.exe");
         // LRI / RLI / FSI isolates
-        assert_eq!(
-            sanitize("\u{2066}admin\u{2069}"),
-            "admin"
-        );
+        assert_eq!(sanitize("\u{2066}admin\u{2069}"), "admin");
     }
 
     #[test]

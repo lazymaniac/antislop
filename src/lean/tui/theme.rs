@@ -104,7 +104,11 @@ pub fn tone(status: &str) -> Tone {
         "failed" | "blocked" | "rejected" | "cancelled" | "changes_requested" | "error" => {
             Tone::Failed
         }
-        "paused" | "waiting" | "waiting_agent" | "awaiting_verification" | "needs_user"
+        "paused"
+        | "waiting"
+        | "waiting_agent"
+        | "awaiting_verification"
+        | "needs_user"
         | "pending_unknown" => Tone::Waiting,
         _ => Tone::Queued,
     }
@@ -415,7 +419,14 @@ pub fn split_row(
 }
 
 /// A thin scroll indicator; nothing is drawn when everything fits.
-pub fn scrollbar(buf: &mut Buffer, theme: &Theme, area: Rect, total: usize, top: usize, view: usize) {
+pub fn scrollbar(
+    buf: &mut Buffer,
+    theme: &Theme,
+    area: Rect,
+    total: usize,
+    top: usize,
+    view: usize,
+) {
     let height = area.height as usize;
     if area.width == 0 || height == 0 || total <= view {
         return;
@@ -431,9 +442,7 @@ pub fn scrollbar(buf: &mut Buffer, theme: &Theme, area: Rect, total: usize, top:
         };
         let py = area.y + y as u16;
         if py < area.bottom() && area.x < area.right() {
-            buf[(area.x, py)]
-                .set_symbol(symbol)
-                .set_style(style);
+            buf[(area.x, py)].set_symbol(symbol).set_style(style);
         }
     }
 }
@@ -461,6 +470,7 @@ pub fn section(theme: &Theme, title: &str, meta: String, focused: bool, width: u
 }
 
 /// A card: a colored accent bar, a heading row, wrapped body rows and a gap.
+#[allow(clippy::too_many_arguments)]
 pub fn card(
     theme: &Theme,
     fill: Style,
@@ -503,7 +513,11 @@ pub fn card(
         };
         out.push(Row::new(
             fill,
-            vec![bar_span(), Span::styled(" ", fill), Span::styled(line, fill.patch(theme.text()))],
+            vec![
+                bar_span(),
+                Span::styled(" ", fill),
+                Span::styled(line, fill.patch(theme.text())),
+            ],
         ));
     }
     out.push(Row::gap());

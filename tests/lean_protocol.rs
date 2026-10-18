@@ -404,19 +404,28 @@ fn test_sessions_structured_data() {
         }))
         .unwrap();
 
-    std::thread::sleep(Duration::from_millis(500));
-
-    let sessions_resp = daemon
-        .call_raw(&json!({
-            "op": "sessions",
-            "conversation": conv_id
-        }))
-        .unwrap();
-    let sessions = sessions_resp.as_array().expect("sessions must be array");
-    assert!(!sessions.is_empty(), "turn should have recorded a session");
-    let sess = &sessions[0];
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_status = String::new();
+    let mut sess = Value::Null;
+    while Instant::now() < deadline {
+        let sessions_resp = daemon
+            .call_raw(&json!({
+                "op": "sessions",
+                "conversation": conv_id
+            }))
+            .unwrap();
+        let sessions = sessions_resp.as_array().expect("sessions must be array");
+        if !sessions.is_empty() {
+            sess = sessions[0].clone();
+            last_status = sess["status"].as_str().unwrap_or("").to_string();
+            if last_status == "done" {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(last_status, "done");
     assert_eq!(sess["role"], "orchestrator");
-    assert_eq!(sess["status"], "done");
     assert!(sess["started_ms"].as_u64().unwrap() > 0);
     assert!(sess["finished_ms"].as_u64().unwrap() > 0);
 }
@@ -549,4 +558,118 @@ fn test_wire_request_deny_unknown_fields_and_defaults() {
         }))
         .unwrap();
     assert!(send_ok.as_u64().unwrap() > 0);
+}
+
+#[test]
+fn test_stale_scope_forced_change_between_read_and_execution_has_no_side_effects() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().canonicalize().unwrap();
+    let project = dir_path.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(&dir_path);
+    let agy = fake_agy(&dir_path);
+    let config = write_config(&dir_path, &codex, &agy);
+    let state = dir_path.join("state");
+
+    let daemon = DaemonGuard::start(&project, &config, &state);
+
+    let started = daemon.call_raw(&json!({"op": "start"})).unwrap();
+    let conv_id = started["id"].as_str().unwrap();
+
+    // 1. Read current conversation scope hash
+    let convs = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
+    let scope_at_read = convs[0]["scope_hash"].as_str().unwrap().to_string();
+
+    // 2. Force a scope change between read and execution by sending a new turn
+    let send_res = daemon
+        .call_raw(&json!({
+            "op": "send",
+            "conversation": conv_id,
+            "text": "force state change"
+        }))
+        .unwrap();
+    assert!(send_res.as_u64().unwrap() > 0);
+
+    // Wait until daemon processes turn and returns to idle
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut scope_after_change = scope_at_read.clone();
+    while Instant::now() < deadline {
+        let updated = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
+        if updated[0]["status"] == "idle"
+            && updated[0]["scope_hash"].as_str().unwrap() != scope_at_read
+        {
+            scope_after_change = updated[0]["scope_hash"].as_str().unwrap().to_string();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_ne!(
+        scope_at_read, scope_after_change,
+        "scope must have changed on daemon"
+    );
+
+    // 3. Execution attempt with scope_at_read (stale scope)
+    let stale_err = daemon
+        .call_raw(&json!({
+            "op": "cancel",
+            "conversation": conv_id,
+            "scope_hash": scope_at_read
+        }))
+        .unwrap_err();
+    assert!(
+        stale_err.contains("stale_scope"),
+        "error must be stale_scope, got: {stale_err}"
+    );
+
+    // 4. Verify ZERO side effects: conversation was not cancelled, events remain intact
+    let convs_after = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
+    assert_eq!(convs_after[0]["id"], conv_id);
+    assert_eq!(
+        convs_after[0]["scope_hash"].as_str().unwrap(),
+        scope_after_change,
+        "state must remain untouched after stale scope error"
+    );
+
+    // 5. Test plan accept with stale scope:
+    let plan_stale_err = daemon
+        .call_raw(&json!({
+            "op": "accept",
+            "conversation": conv_id,
+            "plan": "P_nonexistent",
+            "scope_hash": "outdated_plan_hash"
+        }))
+        .unwrap_err();
+    assert!(
+        plan_stale_err.contains("stale_scope"),
+        "error must be stale_scope, got: {plan_stale_err}"
+    );
+
+    // 6. Test resume with stale scope:
+    let resume_stale_err = daemon
+        .call_raw(&json!({
+            "op": "resume",
+            "conversation": conv_id,
+            "plan": "P_nonexistent",
+            "scope_hash": "outdated_resume_hash"
+        }))
+        .unwrap_err();
+    assert!(
+        resume_stale_err.contains("stale_scope"),
+        "error must be stale_scope, got: {resume_stale_err}"
+    );
+
+    // 7. Test review with stale scope:
+    let review_stale_err = daemon
+        .call_raw(&json!({
+            "op": "review",
+            "conversation": conv_id,
+            "plan": "P_nonexistent",
+            "id": "T_nonexistent",
+            "scope_hash": "outdated_diff_hash"
+        }))
+        .unwrap_err();
+    assert!(
+        review_stale_err.contains("stale_scope"),
+        "error must be stale_scope, got: {review_stale_err}"
+    );
 }

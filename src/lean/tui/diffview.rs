@@ -1,8 +1,4 @@
-//! A writer's change full screen: changed files with their counts beside
-//! the unified diff with old and new line numbers, the user's comments under
-//! the lines they are on.
-
-use super::super::diff::FileDiff;
+use super::super::diff::{FileDiff, ReviewerProfile};
 use super::view::{Comment, View, clean, dim, truncate};
 use ratatui::{
     Frame,
@@ -27,6 +23,7 @@ pub struct DiffView {
     /// Whether arrows move through files rather than lines.
     on_files: bool,
     scroll: usize,
+    pub reviewer: Option<ReviewerProfile>,
 }
 
 impl DiffView {
@@ -40,6 +37,7 @@ impl DiffView {
             line: 0,
             on_files: false,
             scroll: 0,
+            reviewer: None,
         }
     }
 
@@ -56,6 +54,9 @@ impl DiffView {
                 _ => String::new(),
             };
             self.truncated = value["truncated"] == true;
+            if let Ok(rev) = serde_json::from_value::<ReviewerProfile>(value["reviewer"].clone()) {
+                self.reviewer = Some(rev);
+            }
             serde_json::from_value(value["files"].clone()).map_err(|error| error.to_string())
         }));
         let count = self.files().len();
@@ -148,13 +149,14 @@ impl DiffView {
             .iter()
             .fold((0, 0), |(a, r), file| (a + file.added, r + file.removed));
         frame.render_widget(
-            Paragraph::new(diff_header(
+            Paragraph::new(diff_header_with_reviewer(
                 &self.task,
                 &self.range,
                 self.files().len(),
                 added,
                 removed,
                 self.truncated,
+                self.reviewer.as_ref(),
                 usize::from(header.width),
             )),
             header,
@@ -334,22 +336,41 @@ impl DiffView {
     }
 }
 
-pub fn diff_header(
+#[allow(clippy::too_many_arguments)]
+pub fn diff_header_with_reviewer(
     task: &str,
     range: &str,
     file_count: usize,
     added: usize,
     removed: usize,
     truncated: bool,
+    reviewer: Option<&ReviewerProfile>,
     width: usize,
 ) -> Line<'static> {
     let trunc_str = if truncated { " · obcięty" } else { "" };
     let task_badge = format!(" {task} diff ");
-    if width >= 75 && !range.is_empty() {
+    let reviewer_str = match reviewer {
+        Some(r) => match &r.model {
+            Some(m) => format!(" · recenzent: {} ({m})", r.provider),
+            None => format!(" · recenzent: {}", r.provider),
+        },
+        None => String::new(),
+    };
+    if width >= 85 && !range.is_empty() {
         Line::from(vec![
             Span::styled(task_badge, Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
-                format!("{range} · plików: {file_count} · +{added} −{removed}{trunc_str}"),
+                format!(
+                    "{range} · plików: {file_count} · +{added} −{removed}{trunc_str}{reviewer_str}"
+                ),
+                dim(),
+            ),
+        ])
+    } else if width >= 50 && !range.is_empty() {
+        Line::from(vec![
+            Span::styled(task_badge, Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{range} · +{added} −{removed}{trunc_str}{reviewer_str}"),
                 dim(),
             ),
         ])
@@ -367,6 +388,20 @@ pub fn diff_header(
             Span::styled(format!("+{added} −{removed}"), dim()),
         ])
     }
+}
+
+pub fn diff_header(
+    task: &str,
+    range: &str,
+    file_count: usize,
+    added: usize,
+    removed: usize,
+    truncated: bool,
+    width: usize,
+) -> Line<'static> {
+    diff_header_with_reviewer(
+        task, range, file_count, added, removed, truncated, None, width,
+    )
 }
 
 pub fn diff_footer_hint(width: usize) -> &'static str {

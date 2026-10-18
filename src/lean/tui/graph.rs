@@ -179,7 +179,12 @@ fn row_y(row: u16) -> u16 {
 
 impl Graph {
     pub fn new(view: &View) -> Self {
-        Self::new_with_options(view, None, &std::collections::HashSet::new(), GroupingMode::Dependency)
+        Self::new_with_options(
+            view,
+            None,
+            &std::collections::HashSet::new(),
+            GroupingMode::Dependency,
+        )
     }
 
     pub fn new_with_options(
@@ -304,13 +309,16 @@ impl Graph {
                 let slot = slot as u16;
                 let task = &view.tasks[task_idx];
                 let id = &task.id;
-                let is_task_collapsed = collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
+                let is_task_collapsed =
+                    collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
 
-                let mut worker = Node::new(format!("worker:{id}"), column_x(col), row_y(1 + 2 * slot));
+                let mut worker =
+                    Node::new(format!("worker:{id}"), column_x(col), row_y(1 + 2 * slot));
                 worker.collapsed = is_task_collapsed;
                 worker.group = Some(format!("task:{id}"));
 
-                let mut verifier = Node::new(format!("verifier:{id}"), column_x(col), row_y(2 + 2 * slot));
+                let mut verifier =
+                    Node::new(format!("verifier:{id}"), column_x(col), row_y(2 + 2 * slot));
                 verifier.group = Some(format!("task:{id}"));
                 if is_task_collapsed {
                     verifier.visible = false;
@@ -359,7 +367,12 @@ impl Graph {
             Kind::Verifies,
             Some("V".into()),
         );
-        edge(AUDITOR.into(), ORCHESTRATOR.into(), Kind::Verifies, Some("V".into()));
+        edge(
+            AUDITOR.into(),
+            ORCHESTRATOR.into(),
+            Kind::Verifies,
+            Some("V".into()),
+        );
         for task in &view.tasks {
             let worker = format!("worker:{}", task.id);
             edge(ORCHESTRATOR.into(), worker.clone(), Kind::Supervises, None);
@@ -392,7 +405,14 @@ impl Graph {
                 Some(format!("M✉{}", link.count)),
             );
         }
-        graph.width = graph.nodes.iter().filter(|n| n.visible).map(Node::right).max().unwrap_or(0) + MARGIN;
+        graph.width = graph
+            .nodes
+            .iter()
+            .filter(|n| n.visible)
+            .map(Node::right)
+            .max()
+            .unwrap_or(0)
+            + MARGIN;
         graph.height = graph
             .nodes
             .iter()
@@ -506,7 +526,9 @@ impl Graph {
                     canvas.text(x + 1, *y, label, edge.kind.style());
                 } else {
                     let lx = if *next_x < *x {
-                        x.saturating_sub(unicode_width::UnicodeWidthStr::width(label.as_str()) as u16)
+                        x.saturating_sub(
+                            unicode_width::UnicodeWidthStr::width(label.as_str()) as u16
+                        )
                     } else {
                         x + 1
                     };
@@ -635,16 +657,14 @@ fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
     canvas.put(right, bottom, corners[3], border);
     let inner = usize::from(WIDTH - 4);
     let title_badge = if node.collapsed {
-        format!(" {} [+] ", truncate(&agent_name(&node.key), inner.saturating_sub(6)))
+        format!(
+            " {} [+] ",
+            truncate(&agent_name(&node.key), inner.saturating_sub(6))
+        )
     } else {
         format!(" {} ", truncate(&agent_name(&node.key), inner - 2))
     };
-    canvas.text(
-        x + 2,
-        y,
-        &title_badge,
-        border,
-    );
+    canvas.text(x + 2, y, &title_badge, border);
     // Badges for relations V/D/M on the bottom border
     let mut rel_badges = String::new();
     if let Some((_, id)) = node.key.split_once(':')
@@ -654,7 +674,11 @@ fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
             rel_badges.push_str("D ");
         }
         rel_badges.push_str("V ");
-        if view.links.keys().any(|(from, to)| from == &node.key || to == &node.key) {
+        if view
+            .links
+            .keys()
+            .any(|(from, to)| from == &node.key || to == &node.key)
+        {
             rel_badges.push('M');
         }
     }

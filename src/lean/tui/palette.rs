@@ -33,9 +33,11 @@ pub enum Command {
     Filter,
     Help,
     Quit,
+    AddressMessage,
+    ConversationDetails,
 }
 
-const COMMANDS: [(Command, &str); 18] = [
+const COMMANDS: [(Command, &str); 20] = [
     (Command::Accept, "Uruchom zaproponowany plan · Ctrl+A"),
     (Command::Resume, "Wznów plan · Ctrl+R"),
     (Command::Cancel, "Anuluj trwającą pracę · Ctrl+X"),
@@ -58,6 +60,11 @@ const COMMANDS: [(Command, &str); 18] = [
     (Command::Find, "Znajdź agenta · /"),
     (Command::Search, "Szukaj w rozmowie · Ctrl+F"),
     (Command::Details, "Szczegóły wybranego agenta · Enter"),
+    (
+        Command::ConversationDetails,
+        "Szczegóły rozmowy (inspektor) · Ctrl+I",
+    ),
+    (Command::AddressMessage, "Adresuj wiadomość · @"),
     (Command::Diff, "Diff zadania wybranego agenta · d"),
     (Command::Comment, "Skomentuj wybrany element · c"),
     (Command::Filter, "Następny filtr relacji grafu · f"),
@@ -81,6 +88,8 @@ pub enum Action {
     Show(usize),
     /// Switch to another conversation.
     SwitchConversation(String),
+    /// Address a message to a recipient.
+    Address(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +98,7 @@ pub enum Kind {
     Agents,
     History,
     Conversations,
+    Recipients,
 }
 
 #[derive(Debug)]
@@ -146,6 +156,46 @@ impl Picker {
                 .iter()
                 .map(|c| (c.title.clone(), Action::SwitchConversation(c.id.clone())))
                 .collect(),
+            Kind::Recipients => {
+                let mut list = vec![
+                    (
+                        "orkiestrator · domyślny adresat".to_owned(),
+                        Action::Address("orchestrator".into()),
+                    ),
+                    (
+                        "all · broadcast do wszystkich aktywnych zadań".to_owned(),
+                        Action::Address("all".into()),
+                    ),
+                    (
+                        "plan-verifier · weryfikator planu".to_owned(),
+                        Action::Address("plan-verifier".into()),
+                    ),
+                    (
+                        "auditor · audytor końcowy".to_owned(),
+                        Action::Address("auditor".into()),
+                    ),
+                ];
+                for task in &view.tasks {
+                    list.push((
+                        format!(
+                            "worker:{} · {} ({})",
+                            task.id,
+                            task.title,
+                            if task.writes {
+                                "zmienia pliki"
+                            } else {
+                                "tylko odczyt"
+                            }
+                        ),
+                        Action::Address(format!("worker:{}", task.id)),
+                    ));
+                    list.push((
+                        format!("verifier:{} · weryfikator zadania {}", task.id, task.title),
+                        Action::Address(format!("verifier:{}", task.id)),
+                    ));
+                }
+                list
+            }
         };
         let words: Vec<String> = self
             .query
@@ -200,6 +250,7 @@ impl Picker {
                     Kind::Agents => "Brak agentów w grafie.",
                     Kind::History => "Brak wpisów w historii rozmowy.",
                     Kind::Conversations => "Brak innych rozmów w tym projekcie.",
+                    Kind::Recipients => "Brak odbiorców pasujących do zapytania.",
                 }
             } else {
                 "Nic nie pasuje do zapytania."
@@ -227,6 +278,9 @@ impl Picker {
             Kind::Conversations if width >= 45 => " przełącz rozmowę · Enter otwórz · Esc zamknij ",
             Kind::Conversations if width >= 20 => " rozmowy · Esc ",
             Kind::Conversations => " rozmowy ",
+            Kind::Recipients if width >= 45 => " adresat wiadomości · Enter wybierz · Esc zamknij ",
+            Kind::Recipients if width >= 20 => " adresaci · Esc ",
+            Kind::Recipients => " adresaci ",
         };
         frame.render_widget(Clear, box_area);
         frame.render_widget(

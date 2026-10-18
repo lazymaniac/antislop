@@ -20,10 +20,10 @@ pub use editor::{InputBuffer, sanitize_paste, sanitize_single_line_paste, visual
 pub use graph::{Filter, GroupingMode};
 pub use palette::{Help, Kind, Picker};
 pub use sanitize::sanitize;
-pub use theme::{
-    Glyphs, Row, Theme, Tone, card, draw_rows, scrollbar, section, split_row, tone,
+pub use theme::{Glyphs, Row, Theme, Tone, card, draw_rows, scrollbar, section, split_row, tone};
+pub use view::{
+    ConfirmationAction, ConfirmationCard, ConfirmationStatus, MessageEntry, TranscriptCard,
 };
-pub use view::{MessageEntry, TranscriptCard};
 
 use super::cli::Options;
 use super::daemon::{Client, Request};
@@ -138,6 +138,9 @@ pub struct ConversationState {
     pub graph_filter: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
+    pub confirmation: Option<ConfirmationCard>,
+    pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
+    pub details_query_memory: std::collections::HashMap<(String, usize), String>,
 }
 
 pub struct App {
@@ -195,6 +198,9 @@ pub struct App {
     pub graph_filter: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
+    pub confirmation: Option<ConfirmationCard>,
+    pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
+    pub details_query_memory: std::collections::HashMap<(String, usize), String>,
 }
 
 impl App {
@@ -262,6 +268,9 @@ impl App {
             graph_filter: None,
             graph_collapsed: std::collections::HashSet::new(),
             graph_grouping: graph::GroupingMode::default(),
+            confirmation: None,
+            details_scroll_memory: std::collections::HashMap::new(),
+            details_query_memory: std::collections::HashMap::new(),
         }
     }
 
@@ -366,6 +375,9 @@ impl App {
                     graph_filter: self.graph_filter.clone(),
                     graph_collapsed: self.graph_collapsed.clone(),
                     graph_grouping: self.graph_grouping,
+                    confirmation: self.confirmation.clone(),
+                    details_scroll_memory: self.details_scroll_memory.clone(),
+                    details_query_memory: self.details_query_memory.clone(),
                 },
             );
         }
@@ -399,6 +411,9 @@ impl App {
             self.graph_filter = state.graph_filter;
             self.graph_collapsed = state.graph_collapsed;
             self.graph_grouping = state.graph_grouping;
+            self.confirmation = state.confirmation;
+            self.details_scroll_memory = state.details_scroll_memory;
+            self.details_query_memory = state.details_query_memory;
         } else {
             let restored_draft = self
                 .conversation_drafts
@@ -409,6 +424,7 @@ impl App {
             self.details = None;
             self.diff = None;
             self.editor = None;
+            self.confirmation = None;
             self.selected = ORCHESTRATOR.into();
             self.filter = Filter::All;
             self.offset = (0, 0);
@@ -527,6 +543,187 @@ impl App {
                 Err(error) => Update::Notice(format!("✗ {error}")),
             });
         });
+    }
+
+    pub fn open_details(&mut self, key: String) {
+        if let Some(details) = &mut self.details {
+            details.switch_key(key);
+        } else {
+            let mut details = Details::new(key);
+            details.scroll_memory = self.details_scroll_memory.clone();
+            details.query_memory = self.details_query_memory.clone();
+            details.restore_current_tab();
+            self.details = Some(details);
+        }
+        self.fetch_task();
+    }
+
+    pub fn request_confirmation(&mut self, mut card: ConfirmationCard) {
+        if card.scope_hash.is_empty() {
+            card.scope_hash = match card.action {
+                ConfirmationAction::AcceptPlan | ConfirmationAction::ResumePlan => self
+                    .view
+                    .plan_scope_hash
+                    .clone()
+                    .or_else(|| card.plan_id.clone())
+                    .unwrap_or_default(),
+                ConfirmationAction::ReviewDiff => {
+                    if let Some(tid) = &card.task_id {
+                        self.view
+                            .tasks
+                            .iter()
+                            .find(|t| &t.id == tid)
+                            .and_then(|t| t.scope_hash.clone())
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    }
+                }
+                ConfirmationAction::CancelWork => self
+                    .view
+                    .conversation_scope_hash
+                    .clone()
+                    .unwrap_or_default(),
+            };
+        }
+        self.confirmation = Some(card.clone());
+        self.view.cards.push(TranscriptCard::Confirmation(card));
+    }
+
+    pub fn is_confirmation_stale(&self, card: &ConfirmationCard) -> bool {
+        match card.action {
+            ConfirmationAction::AcceptPlan | ConfirmationAction::ResumePlan => {
+                if let Some(plan) = &card.plan_id
+                    && self.view.plan.as_ref() != Some(plan)
+                {
+                    return true;
+                }
+                if let Some(current_hash) = &self.view.plan_scope_hash
+                    && !card.scope_hash.is_empty()
+                    && current_hash != &card.scope_hash
+                {
+                    return true;
+                }
+                false
+            }
+            ConfirmationAction::ReviewDiff => {
+                if let Some(plan) = &card.plan_id
+                    && self.view.plan.as_ref() != Some(plan)
+                {
+                    return true;
+                }
+                if let Some(tid) = &card.task_id
+                    && let Some(task) = self.view.tasks.iter().find(|t| &t.id == tid)
+                    && let Some(current_hash) = &task.scope_hash
+                    && !card.scope_hash.is_empty()
+                    && current_hash != &card.scope_hash
+                {
+                    return true;
+                }
+                false
+            }
+            ConfirmationAction::CancelWork => {
+                if let Some(current_hash) = &self.view.conversation_scope_hash
+                    && !card.scope_hash.is_empty()
+                    && current_hash != &card.scope_hash
+                {
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
+    pub fn confirm_action(&mut self) {
+        if let Some(mut card) = self.confirmation.take() {
+            if self.is_confirmation_stale(&card) {
+                card.status = ConfirmationStatus::Stale;
+                for c in self.view.cards.iter_mut().rev() {
+                    if let TranscriptCard::Confirmation(existing) = c
+                        && existing.id == card.id
+                    {
+                        existing.status = ConfirmationStatus::Stale;
+                        break;
+                    }
+                }
+                self.notice = Some("✗ stale_scope: zakres uległ zmianie, akcja odrzucona".into());
+                return;
+            }
+            let conversation = self.conversation.clone();
+            let scope_hash = Some(card.scope_hash.clone());
+            card.status = ConfirmationStatus::Confirmed;
+            for c in self.view.cards.iter_mut().rev() {
+                if let TranscriptCard::Confirmation(existing) = c
+                    && existing.id == card.id
+                {
+                    existing.status = ConfirmationStatus::Confirmed;
+                    break;
+                }
+            }
+            match card.action {
+                ConfirmationAction::AcceptPlan => {
+                    if let Some(plan) = card.plan_id {
+                        self.request(
+                            Request::AcceptScoped {
+                                conversation,
+                                plan,
+                                scope_hash,
+                            },
+                            Some("plan uruchomiony"),
+                        );
+                    }
+                }
+                ConfirmationAction::ResumePlan => {
+                    if let Some(plan) = card.plan_id {
+                        self.request(
+                            Request::ResumeScoped {
+                                conversation,
+                                plan,
+                                scope_hash,
+                            },
+                            Some("plan wznowiony"),
+                        );
+                    }
+                }
+                ConfirmationAction::ReviewDiff => {
+                    if let (Some(plan), Some(id)) = (card.plan_id, card.task_id) {
+                        self.request(
+                            Request::ReviewScoped {
+                                conversation,
+                                plan,
+                                id,
+                                scope_hash,
+                            },
+                            Some("zmiany zatwierdzone"),
+                        );
+                    }
+                }
+                ConfirmationAction::CancelWork => {
+                    self.request(
+                        Request::CancelScoped {
+                            conversation,
+                            scope_hash,
+                        },
+                        Some("anulowano"),
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn reject_confirmation(&mut self) {
+        if let Some(mut card) = self.confirmation.take() {
+            card.status = ConfirmationStatus::Rejected;
+            for c in self.view.cards.iter_mut().rev() {
+                if let TranscriptCard::Confirmation(existing) = c
+                    && existing.id == card.id
+                {
+                    existing.status = ConfirmationStatus::Rejected;
+                    break;
+                }
+            }
+            self.notice = Some("Odrzucono działanie".into());
+        }
     }
 
     pub fn open_diff(&mut self, key: &str) {
@@ -754,10 +951,49 @@ impl App {
                     }
                     self.view.idle = idle;
                     self.view.autonomous = Some(autonomous);
+                    let stale = self
+                        .confirmation
+                        .as_ref()
+                        .is_some_and(|c| self.is_confirmation_stale(c));
+                    if stale && let Some(mut card) = self.confirmation.take() {
+                        card.status = ConfirmationStatus::Stale;
+                        for c in self.view.cards.iter_mut().rev() {
+                            if let TranscriptCard::Confirmation(existing) = c
+                                && existing.id == card.id
+                            {
+                                existing.status = ConfirmationStatus::Stale;
+                                break;
+                            }
+                        }
+                        self.notice = Some("✗ stale_scope: zakres uległ zmianie".into());
+                    }
                 }
             }
             Update::Conversation(id) => self.open(id),
-            Update::Notice(text) => self.notice = Some(text),
+            Update::Notice(text) => {
+                if text.contains("stale_scope") {
+                    if let Some(mut card) = self.confirmation.take() {
+                        card.status = ConfirmationStatus::Stale;
+                        for c in self.view.cards.iter_mut().rev() {
+                            if let TranscriptCard::Confirmation(existing) = c
+                                && existing.id == card.id
+                            {
+                                existing.status = ConfirmationStatus::Stale;
+                                break;
+                            }
+                        }
+                    }
+                    for c in self.view.cards.iter_mut().rev() {
+                        if let TranscriptCard::Confirmation(existing) = c
+                            && existing.status == ConfirmationStatus::Confirmed
+                        {
+                            existing.status = ConfirmationStatus::Stale;
+                            break;
+                        }
+                    }
+                }
+                self.notice = Some(text);
+            }
             Update::Task {
                 conversation,
                 plan,
@@ -769,12 +1005,14 @@ impl App {
                 if conversation == self.conversation
                     && request_id == self.task_request_id
                     && self.view.plan.as_ref() == plan.as_ref()
-                    && let Some(details) = self.details.as_mut().filter(|details| details.key == key)
+                    && let Some(details) =
+                        self.details.as_mut().filter(|details| details.key == key)
                 {
                     details.task = Some(task);
                 } else if let Some(state) = self.conversation_states.get_mut(&conversation)
                     && state.task_request_id == request_id
-                    && let Some(details) = state.details.as_mut().filter(|details| details.key == key)
+                    && let Some(details) =
+                        state.details.as_mut().filter(|details| details.key == key)
                 {
                     details.task = Some(task);
                 }
@@ -820,9 +1058,8 @@ impl App {
                                 self.notice = Some(format!("✗ {error} (szkic przywrócony)"));
                             } else {
                                 self.failed_send = Some(sent_text);
-                                self.notice = Some(format!(
-                                    "✗ {error} (niewysłana wiadomość zachowana)"
-                                ));
+                                self.notice =
+                                    Some(format!("✗ {error} (niewysłana wiadomość zachowana)"));
                             }
                         }
                     }
@@ -867,7 +1104,10 @@ impl App {
                                     if active_editor.input.is_empty() {
                                         active_editor.input = editor.input;
                                     } else {
-                                        self.save_comment_draft(&editor.target, editor.input.clone());
+                                        self.save_comment_draft(
+                                            &editor.target,
+                                            editor.input.clone(),
+                                        );
                                         self.failed_comment = Some(editor);
                                     }
                                 } else {
@@ -877,9 +1117,7 @@ impl App {
                             } else {
                                 self.editor = Some(editor);
                             }
-                            self.notice = Some(format!(
-                                "✗ {error} (szkic komentarza zachowany)"
-                            ));
+                            self.notice = Some(format!("✗ {error} (szkic komentarza zachowany)"));
                         }
                     }
                 } else if let Some(state) = self.conversation_states.get_mut(&conversation)
@@ -890,7 +1128,8 @@ impl App {
                     match result {
                         Ok(_) => {
                             state.failed_comment = None;
-                            let key = Self::comment_key(&conversation, plan.as_deref(), &editor.target);
+                            let key =
+                                Self::comment_key(&conversation, plan.as_deref(), &editor.target);
                             state.comment_drafts.remove(&key);
                             state.comment_draft_cursors.remove(&key);
                         }
@@ -898,9 +1137,17 @@ impl App {
                             if state.editor.is_none() {
                                 state.editor = Some(editor);
                             } else {
-                                let key = Self::comment_key(&conversation, plan.as_deref(), &editor.target);
-                                state.comment_drafts.insert(key.clone(), editor.input.text.clone());
-                                state.comment_draft_cursors.insert(key, (editor.input.cursor, editor.input.preferred_col));
+                                let key = Self::comment_key(
+                                    &conversation,
+                                    plan.as_deref(),
+                                    &editor.target,
+                                );
+                                state
+                                    .comment_drafts
+                                    .insert(key.clone(), editor.input.text.clone());
+                                state
+                                    .comment_draft_cursors
+                                    .insert(key, (editor.input.cursor, editor.input.preferred_col));
                                 state.failed_comment = Some(editor);
                             }
                         }
@@ -1052,6 +1299,24 @@ impl App {
                         }
                         true
                     }
+                    Some(Action::Address(recipient)) => {
+                        self.details = None;
+                        self.diff = None;
+                        self.focus = Focus::Chat;
+                        let formatted = format!("@{recipient} ");
+                        let text = self.input.text.trim_end();
+                        if text.is_empty() {
+                            self.input.clear();
+                            self.input.insert_str(&formatted);
+                        } else if text.ends_with('@') {
+                            self.input.text.truncate(text.len() - 1);
+                            self.input.cursor = self.input.text.len();
+                            self.input.insert_str(&formatted);
+                        } else {
+                            self.input.insert_str(&format!(" @{recipient} "));
+                        }
+                        true
+                    }
                     None => true,
                 };
             }
@@ -1077,8 +1342,13 @@ impl App {
             Command::Find => self.picker = Some(Picker::new(Kind::Agents)),
             Command::Search => self.picker = Some(Picker::new(Kind::History)),
             Command::Details => {
-                self.details = Some(Details::new(selected));
-                self.fetch_task();
+                self.open_details(selected);
+            }
+            Command::ConversationDetails => {
+                self.open_details("conversation".into());
+            }
+            Command::AddressMessage => {
+                self.picker = Some(Picker::new(Kind::Recipients));
             }
             Command::Diff => self.open_diff(&selected),
             Command::Comment => {
@@ -1166,6 +1436,24 @@ impl App {
             return true;
         }
 
+        if self
+            .confirmation
+            .as_ref()
+            .is_some_and(|c| c.status == ConfirmationStatus::Pending)
+        {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.confirm_action();
+                    return true;
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.reject_confirmation();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
         // Base layout global shortcuts
         match key.code {
             KeyCode::Char('p') if control => {
@@ -1182,6 +1470,10 @@ impl App {
             }
             KeyCode::Char('o') if control => {
                 self.open_conversation_picker();
+                return true;
+            }
+            KeyCode::Char('i') if control => {
+                self.open_details("conversation".into());
                 return true;
             }
             KeyCode::BackTab => {
@@ -1316,6 +1608,9 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('@') if !control && self.input.is_empty() => {
+                self.picker = Some(Picker::new(Kind::Recipients));
+            }
             KeyCode::Char(ch) if !control => self.input.insert_char(ch),
             _ => {}
         }
@@ -1349,14 +1644,22 @@ impl App {
                     let worker_key = format!("worker:{id}");
                     if graph.node(&worker_key).is_some_and(|n| n.visible) {
                         self.selected = worker_key;
-                    } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                    } else if let Some(vis) = graph
+                        .nodes
+                        .iter()
+                        .find(|n| n.visible && n.key == ORCHESTRATOR)
+                    {
                         self.selected = vis.key.clone();
                     } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
                         self.selected = first_vis.key.clone();
                     } else {
                         self.selected = ORCHESTRATOR.into();
                     }
-                } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                } else if let Some(vis) = graph
+                    .nodes
+                    .iter()
+                    .find(|n| n.visible && n.key == ORCHESTRATOR)
+                {
                     self.selected = vis.key.clone();
                 } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
                     self.selected = first_vis.key.clone();
@@ -1488,19 +1791,31 @@ impl App {
             &self.graph_collapsed,
             self.graph_grouping,
         );
-        if !graph.nodes.iter().any(|n| n.visible && n.key == self.selected) {
+        if !graph
+            .nodes
+            .iter()
+            .any(|n| n.visible && n.key == self.selected)
+        {
             if let Some((_, id)) = self.selected.split_once(':') {
                 let worker_key = format!("worker:{id}");
                 if graph.node(&worker_key).is_some_and(|n| n.visible) {
                     self.selected = worker_key;
-                } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                } else if let Some(vis) = graph
+                    .nodes
+                    .iter()
+                    .find(|n| n.visible && n.key == ORCHESTRATOR)
+                {
                     self.selected = vis.key.clone();
                 } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
                     self.selected = first_vis.key.clone();
                 } else {
                     self.selected = ORCHESTRATOR.into();
                 }
-            } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+            } else if let Some(vis) = graph
+                .nodes
+                .iter()
+                .find(|n| n.visible && n.key == ORCHESTRATOR)
+            {
                 self.selected = vis.key.clone();
             } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
                 self.selected = first_vis.key.clone();
@@ -1526,7 +1841,11 @@ impl App {
                 let status = val["status"].as_str().unwrap_or("idle");
                 let total = val["tasks_total"].as_u64().unwrap_or(0);
                 let done = val["tasks_done"].as_u64().unwrap_or(0);
-                let active_mark = if id == self.conversation { " (bieżąca)" } else { "" };
+                let active_mark = if id == self.conversation {
+                    " (bieżąca)"
+                } else {
+                    ""
+                };
                 let title = if total > 0 {
                     format!("{id}{active_mark} · {status} · {done}/{total} zadań")
                 } else {
@@ -1542,7 +1861,11 @@ impl App {
 
         for id in self.conversation_states.keys() {
             if !items.iter().any(|item| &item.id == id) {
-                let active_mark = if id == &self.conversation { " (bieżąca)" } else { "" };
+                let active_mark = if id == &self.conversation {
+                    " (bieżąca)"
+                } else {
+                    ""
+                };
                 items.push(palette::ConversationItem {
                     id: id.clone(),
                     project: self.project.clone(),
@@ -1628,10 +1951,64 @@ impl App {
         let Some(details) = &mut self.details else {
             return;
         };
+
+        if details.searching {
+            match key.code {
+                KeyCode::Esc => {
+                    details.searching = false;
+                    details.query.clear();
+                    details.scroll = 0;
+                }
+                KeyCode::Enter => {
+                    details.searching = false;
+                }
+                KeyCode::Backspace => {
+                    details.query.pop();
+                    details.scroll = 0;
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    details.query.push(c);
+                    details.scroll = 0;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         let comment = details.selected_comment(&self.view);
         let on_comments = details.tab == COMMENTS;
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.details = None,
+            KeyCode::Esc | KeyCode::Char('q') => {
+                details.save_current_tab();
+                self.details_scroll_memory
+                    .extend(details.scroll_memory.clone());
+                self.details_query_memory
+                    .extend(details.query_memory.clone());
+                self.details = None;
+                return;
+            }
+            KeyCode::Char('/') => {
+                details.searching = true;
+                details.query.clear();
+                details.scroll = 0;
+                return;
+            }
+            KeyCode::Char('v') => {
+                details.raw = !details.raw;
+                return;
+            }
+            KeyCode::Char('n') => {
+                details.next_session_page();
+                return;
+            }
+            KeyCode::Char('p') => {
+                details.prev_session_page();
+                return;
+            }
+            KeyCode::Char(c @ '1'..='5') => {
+                let tab = (c as usize) - ('1' as usize);
+                details.switch_tab(tab);
+            }
             KeyCode::Char('?') => self.show_help(Help::Details),
             KeyCode::Char('c') => {
                 let target = details.key.clone();
@@ -1654,12 +2031,10 @@ impl App {
                 return;
             }
             KeyCode::Right | KeyCode::Tab => {
-                details.tab = (details.tab + 1) % TABS.len();
-                details.scroll = 0;
+                details.switch_tab((details.tab + 1) % TABS.len());
             }
             KeyCode::Left | KeyCode::BackTab => {
-                details.tab = (details.tab + TABS.len() - 1) % TABS.len();
-                details.scroll = 0;
+                details.switch_tab((details.tab + TABS.len() - 1) % TABS.len());
             }
             KeyCode::Down => details.scroll += 1,
             KeyCode::Up => details.scroll = details.scroll.saturating_sub(1),
@@ -1772,6 +2147,53 @@ impl App {
             let max_scroll = help.max_scroll(frame.area());
             self.help_scroll = self.help_scroll.min(max_scroll);
             help.draw_scroll(frame, self.help_scroll);
+        }
+        if let Some(conf) = &self.confirmation
+            && conf.status == ConfirmationStatus::Pending
+            && self.picker.is_none()
+            && self.help.is_none()
+        {
+            let area = frame.area();
+            let height = 5u16;
+            if area.height >= height + 2 && area.width >= 20 {
+                let box_area = Rect::new(
+                    area.x + 2,
+                    area.bottom().saturating_sub(height + 2),
+                    area.width.saturating_sub(4),
+                    height,
+                );
+                frame.render_widget(Clear, box_area);
+                let lines = vec![
+                    Line::from(vec![
+                        Span::styled(
+                            " Potwierdzenie: ",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(&conf.title),
+                    ]),
+                    Line::from(vec![Span::styled(
+                        format!(" Zakres: {}", conf.scope_hash),
+                        Style::default().fg(Color::DarkGray),
+                    )]),
+                    Line::from(vec![Span::styled(
+                        " [Enter / y] Potwierdź   [Esc / n] Odrzuć",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )]),
+                ];
+                frame.render_widget(
+                    Paragraph::new(lines).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::Yellow))
+                            .title(" Wymagane potwierdzenie "),
+                    ),
+                    box_area,
+                );
+            }
         }
     }
 
@@ -2034,7 +2456,10 @@ impl App {
                         theme,
                         fill,
                         accent,
-                        vec![Span::styled(theme.clean(title), accent.patch(theme.title()))],
+                        vec![Span::styled(
+                            theme.clean(title),
+                            accent.patch(theme.title()),
+                        )],
                         theme.clean(meta),
                         text,
                         usize::MAX,
@@ -2062,6 +2487,50 @@ impl App {
                         )],
                         theme.clean(status),
                         text,
+                        usize::MAX,
+                        width,
+                    ));
+                }
+                TranscriptCard::Confirmation(conf) => {
+                    let mut fill = theme.card();
+                    if is_found {
+                        top = Some(cards.len());
+                        fill = fill.add_modifier(Modifier::REVERSED);
+                    }
+                    let (accent, status_str) = match conf.status {
+                        ConfirmationStatus::Pending => {
+                            (theme.warning(), "[oczekuje na potwierdzenie]")
+                        }
+                        ConfirmationStatus::Confirmed => {
+                            (theme.status("completed"), "[potwierdzone]")
+                        }
+                        ConfirmationStatus::Stale => (theme.error(), "[nieaktualne: stale_scope]"),
+                        ConfirmationStatus::Rejected => (theme.dim(), "[odrzucone]"),
+                    };
+                    let title_span = vec![
+                        Span::styled("Potwierdzenie: ", theme.faint()),
+                        Span::styled(theme.clean(&conf.title), accent.patch(theme.title())),
+                    ];
+                    let mut body = conf.detail.clone();
+                    if let Some(plan) = &conf.plan_id {
+                        body.push_str(&format!("\nPlan: {plan}"));
+                    }
+                    if let Some(task) = &conf.task_id {
+                        body.push_str(&format!("\nZadanie: {task}"));
+                    }
+                    if let Some(candidate) = &conf.candidate {
+                        body.push_str(&format!("\nKandydat diffu: {candidate}"));
+                    }
+                    if !conf.scope_hash.is_empty() {
+                        body.push_str(&format!("\nZakres (hash): {}", conf.scope_hash));
+                    }
+                    cards.extend(card(
+                        theme,
+                        fill,
+                        accent,
+                        title_span,
+                        status_str.to_string(),
+                        &body,
                         usize::MAX,
                         width,
                     ));
@@ -2157,14 +2626,22 @@ impl App {
                 let worker_key = format!("worker:{id}");
                 if graph.node(&worker_key).is_some_and(|n| n.visible) {
                     self.selected = worker_key;
-                } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+                } else if let Some(vis) = graph
+                    .nodes
+                    .iter()
+                    .find(|n| n.visible && n.key == ORCHESTRATOR)
+                {
                     self.selected = vis.key.clone();
                 } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
                     self.selected = first_vis.key.clone();
                 } else {
                     self.selected = ORCHESTRATOR.into();
                 }
-            } else if let Some(vis) = graph.nodes.iter().find(|n| n.visible && n.key == ORCHESTRATOR) {
+            } else if let Some(vis) = graph
+                .nodes
+                .iter()
+                .find(|n| n.visible && n.key == ORCHESTRATOR)
+            {
                 self.selected = vis.key.clone();
             } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
                 self.selected = first_vis.key.clone();
@@ -2361,6 +2838,9 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         graph_filter: None,
         graph_collapsed: std::collections::HashSet::new(),
         graph_grouping: graph::GroupingMode::default(),
+        confirmation: None,
+        details_scroll_memory: std::collections::HashMap::new(),
+        details_query_memory: std::collections::HashMap::new(),
     };
     app.open(conversation);
 

@@ -578,6 +578,15 @@ impl Core {
         }
     }
 
+    pub fn cancel_scoped(&self, conversation: &str, scope_hash: Option<&str>) -> Result<()> {
+        if let Some(expected) = scope_hash {
+            let current = self.conversation_scope_hash(conversation)?;
+            require(expected == current, "stale_scope")?;
+        }
+        self.cancel(conversation);
+        Ok(())
+    }
+
     pub fn is_idle(&self, conversation: &str) -> bool {
         !self
             .running
@@ -647,6 +656,19 @@ impl Core {
             patch.truncate(end);
         }
         let scope_hash = diff_scope_hash(conversation, plan, id, &base, result.as_deref());
+        let spec: Option<TaskSpec> = serde_json::from_value(task.spec.clone()).ok();
+        let reviewer = spec.and_then(|s| {
+            self.config
+                .resolve(s.kind, RoleKind::Verifier)
+                .ok()
+                .map(|profile| {
+                    json!({
+                        "provider": profile.provider,
+                        "model": profile.model,
+                        "effort": profile.effort,
+                    })
+                })
+        });
         Ok(json!({
             "task": id,
             "base": base,
@@ -654,6 +676,7 @@ impl Core {
             "files": diff::parse(&patch),
             "truncated": truncated,
             "scope_hash": scope_hash,
+            "reviewer": reviewer,
         }))
     }
 
@@ -750,6 +773,20 @@ impl Core {
         Ok(())
     }
 
+    pub fn review_change_scoped(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan: &str,
+        id: &str,
+        scope_hash: Option<&str>,
+    ) -> Result<()> {
+        if let Some(expected) = scope_hash {
+            let current = self.diff_scope_hash(conversation, plan, id)?;
+            require(expected == current, "stale_scope")?;
+        }
+        self.review_change(conversation, plan, id)
+    }
+
     /// Starts the proposed plan `plan_id`: exactly the one the user saw, even
     /// if the orchestrator has proposed another since.
     pub fn accept_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<Vec<Task>> {
@@ -769,6 +806,32 @@ impl Core {
                 "this plan has nothing to resume",
             )
         })
+    }
+
+    pub fn accept_plan_scoped(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: &str,
+        scope_hash: Option<&str>,
+    ) -> Result<Vec<Task>> {
+        if let Some(expected) = scope_hash {
+            let current = self.plan_scope_hash(conversation, plan_id)?;
+            require(expected == current, "stale_scope")?;
+        }
+        self.accept_plan(conversation, plan_id)
+    }
+
+    pub fn resume_plan_scoped(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: &str,
+        scope_hash: Option<&str>,
+    ) -> Result<Vec<Task>> {
+        if let Some(expected) = scope_hash {
+            let current = self.plan_scope_hash(conversation, plan_id)?;
+            require(expected == current, "stale_scope")?;
+        }
+        self.resume_plan(conversation, plan_id)
     }
 
     fn start_plan(
@@ -2046,7 +2109,7 @@ fn branch(task: &Task) -> String {
 }
 
 /// What a comment's target is, in the orchestrator's words.
-fn comment_label(target: &str, plan: &[Task]) -> String {
+pub fn comment_label(target: &str, plan: &[Task]) -> String {
     let task = |id: &str| {
         plan.iter()
             .find(|task| task.spec["id"] == id)
@@ -2058,6 +2121,33 @@ fn comment_label(target: &str, plan: &[Task]) -> String {
             })
             .unwrap_or_else(|| format!("task {id}"))
     };
+    if let Some(rest) = target.strip_prefix("plan:") {
+        return format!("the plan {rest}");
+    }
+    if let Some(rest) = target.strip_prefix("task:") {
+        return format!("specification of {}", task(rest));
+    }
+    if let Some(rest) = target.strip_prefix("check:") {
+        if let Some((task_id, check_id)) = rest.split_once(':') {
+            return format!("check {check_id} of {}", task(task_id));
+        }
+        return format!("check {rest}");
+    }
+    if let Some(rest) = target.strip_prefix("finding:") {
+        if let Some((task_id, finding_id)) = rest.split_once(':') {
+            return format!("finding #{finding_id} of {}", task(task_id));
+        }
+        return format!("finding {rest}");
+    }
+    if let Some(rest) = target.strip_prefix("report:") {
+        return format!("report of {}", task(rest));
+    }
+    if let Some(rest) = target.strip_prefix("artifact:") {
+        if let Some((task_id, path)) = rest.split_once(':') {
+            return format!("artifact {path} of {}", task(task_id));
+        }
+        return format!("artifact {rest}");
+    }
     match target.split_once(':') {
         Some(("worker", id)) => format!("the worker of {}", task(id)),
         Some(("verifier", id)) => format!("the verifier of {}", task(id)),
