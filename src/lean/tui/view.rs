@@ -9,11 +9,10 @@ use ratatui::widgets::{Clear, Paragraph};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub const MIN_TERM_WIDTH: u16 = 60;
-pub const MIN_TERM_HEIGHT: u16 = 12;
-pub const SIDE_BY_SIDE_BREAKPOINT: u16 = 100;
+pub const MIN_TERM_WIDTH: u16 = 12;
+pub const MIN_TERM_HEIGHT: u16 = 5;
+pub const SIDE_BY_SIDE_BREAKPOINT: u16 = 85;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelFocus {
@@ -41,6 +40,38 @@ const SESSION_LINES: usize = 400;
 pub struct Entry {
     pub style: Style,
     pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageEntry {
+    pub id: String,
+    pub sender: String,
+    pub target: String,
+    pub text: String,
+    pub state: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TranscriptCard {
+    Message(MessageEntry),
+    Plan {
+        plan: String,
+        tasks: usize,
+        text: String,
+    },
+    System {
+        title: String,
+        meta: String,
+        text: String,
+        tone: super::theme::Tone,
+    },
+    Comment {
+        id: u64,
+        target: String,
+        text: String,
+        status: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -155,6 +186,10 @@ pub struct View {
     pub paused: bool,
     /// The conversation's mode, once the daemon said it.
     pub autonomous: Option<bool>,
+    /// Structured messages with observed actual states.
+    pub messages: Vec<MessageEntry>,
+    /// Structured cards for rendering the conversation.
+    pub cards: Vec<TranscriptCard>,
     /// Agent key of each running turn.
     roles: HashMap<String, String>,
     /// Recipient of each shown message to an agent, by mail id.
@@ -237,6 +272,16 @@ impl View {
                 "user" if text("text").starts_with(super::super::COMMENT_PREFIX) => {}
                 "code-review" => {}
                 "user" => {
+                    let msg = MessageEntry {
+                        id: format!("m{}", self.after),
+                        sender: "Ty".to_owned(),
+                        target: "orkiestrator".to_owned(),
+                        text: text("text"),
+                        state: "wysłano".to_owned(),
+                        kind: "user".to_owned(),
+                    };
+                    self.messages.push(msg.clone());
+                    self.cards.push(TranscriptCard::Message(msg));
                     self.push(
                         Style::default()
                             .fg(Color::Cyan)
@@ -247,19 +292,36 @@ impl View {
                     self.push(Style::default(), "");
                 }
                 "runtime" => {
+                    self.cards.push(TranscriptCard::System {
+                        title: "Runtime".into(),
+                        meta: String::new(),
+                        text: "· wyniki zadań przekazane orkiestratorowi".into(),
+                        tone: super::theme::Tone::Queued,
+                    });
                     self.push(dim(), "· wyniki zadań przekazane orkiestratorowi");
                     self.push(Style::default(), "");
                 }
                 author => {
+                    let display_author = match author {
+                        ORCHESTRATOR => "orkiestrator".to_owned(),
+                        PLAN_VERIFIER => "weryfikator planu".to_owned(),
+                        author => author.to_owned(),
+                    };
+                    let msg = MessageEntry {
+                        id: format!("m{}", self.after),
+                        sender: display_author.clone(),
+                        target: "Ty".to_owned(),
+                        text: text("text"),
+                        state: "doręczono".to_owned(),
+                        kind: "agent".to_owned(),
+                    };
+                    self.messages.push(msg.clone());
+                    self.cards.push(TranscriptCard::Message(msg));
                     self.push(
                         Style::default()
                             .fg(Color::Green)
                             .add_modifier(Modifier::BOLD),
-                        match author {
-                            ORCHESTRATOR => "orkiestrator".to_owned(),
-                            PLAN_VERIFIER => "weryfikator planu".to_owned(),
-                            author => author.to_owned(),
-                        },
+                        display_author,
                     );
                     self.push(Style::default(), text("text"));
                     self.push(Style::default(), "");
@@ -408,17 +470,32 @@ impl View {
                         .unwrap_or_default();
                     format!("{waiting}Ctrl+A uruchamia, albo napisz, co zmienić.")
                 };
+                let plan_text = format!("Plan: {} zadań. {next}", self.tasks.len());
+                self.cards.push(TranscriptCard::Plan {
+                    plan: self.plan.clone().unwrap_or_default(),
+                    tasks: self.tasks.len(),
+                    text: plan_text.clone(),
+                });
                 self.push(
                     Style::default().fg(Color::Yellow),
-                    format!("Plan: {} zadań. {next}", self.tasks.len()),
+                    plan_text,
                 );
                 self.push(Style::default(), "");
             }
             "plan_review" => self.review(PLAN_VERIFIER, payload),
-            "plan_invalid" => self.push(
-                Style::default().fg(Color::Red),
-                format!("✗ plan odrzucony: {}", text("error")),
-            ),
+            "plan_invalid" => {
+                let err = text("error");
+                self.cards.push(TranscriptCard::System {
+                    title: "Plan odrzucony".into(),
+                    meta: String::new(),
+                    text: format!("✗ {err}"),
+                    tone: super::theme::Tone::Failed,
+                });
+                self.push(
+                    Style::default().fg(Color::Red),
+                    format!("✗ plan odrzucony: {err}"),
+                );
+            }
             "task" => {
                 let id = text("id");
                 let index = self.tasks.iter().position(|row| row.id == id);
@@ -441,19 +518,35 @@ impl View {
             }
             "paused" => {
                 self.paused = payload["paused"] == true;
+                let txt = if self.paused {
+                    "⏸ wstrzymano: nowe kroki czekają (/continue wznawia)"
+                } else {
+                    "▶ wznowiono"
+                };
+                self.cards.push(TranscriptCard::System {
+                    title: "Wstrzymanie".into(),
+                    meta: String::new(),
+                    text: txt.into(),
+                    tone: super::theme::Tone::Waiting,
+                });
                 self.push(
                     Style::default().fg(Color::Yellow),
-                    if self.paused {
-                        "⏸ wstrzymano: nowe kroki czekają (/continue wznawia)"
-                    } else {
-                        "▶ wznowiono"
-                    },
+                    txt,
                 );
             }
-            "notice" => self.push(
-                Style::default().fg(Color::Yellow),
-                format!("⚠ {}", text("text")),
-            ),
+            "notice" => {
+                let txt = text("text");
+                self.cards.push(TranscriptCard::System {
+                    title: "Uwaga".into(),
+                    meta: String::new(),
+                    text: txt.clone(),
+                    tone: super::theme::Tone::Waiting,
+                });
+                self.push(
+                    Style::default().fg(Color::Yellow),
+                    format!("⚠ {txt}"),
+                );
+            }
             "mode" => {
                 self.autonomous = Some(payload["autonomous"] == true);
                 self.push(
@@ -465,18 +558,28 @@ impl View {
                     },
                 );
             }
-            "integration" => self.push(
-                if payload["status"] == "approved" {
-                    dim()
-                } else {
-                    Style::default().fg(Color::Yellow)
-                },
-                format!("· [{}] {}: {}", text("id"), text("title"), text("detail")),
-            ),
+            "integration" => {
+                let approved = payload["status"] == "approved";
+                self.cards.push(TranscriptCard::System {
+                    title: format!("[{}] {}", text("id"), text("title")),
+                    meta: if approved { "zatwierdzono".into() } else { "weryfikacja".into() },
+                    text: text("detail"),
+                    tone: if approved { super::theme::Tone::Done } else { super::theme::Tone::Waiting },
+                });
+                self.push(
+                    if approved {
+                        dim()
+                    } else {
+                        Style::default().fg(Color::Yellow)
+                    },
+                    format!("· [{}] {}: {}", text("id"), text("title"), text("detail")),
+                );
+            }
             "mail" if payload["kind"] != "copy" => {
                 let recipient = text("recipient");
+                let mail_id = payload["id"].as_u64().unwrap_or_default();
                 self.mail.insert(
-                    payload["id"].as_u64().unwrap_or_default(),
+                    mail_id,
                     recipient.clone(),
                 );
                 let sender = match text("sender").as_str() {
@@ -484,6 +587,17 @@ impl View {
                     ORCHESTRATOR => "orkiestrator".to_owned(),
                     sender => sender.to_owned(),
                 };
+                let id_str = if mail_id > 0 { format!("{mail_id}") } else { format!("m{}", self.after) };
+                let msg = MessageEntry {
+                    id: id_str,
+                    sender: sender.clone(),
+                    target: recipient.clone(),
+                    text: text("text"),
+                    state: "czeka na turę".to_owned(),
+                    kind: text("kind"),
+                };
+                self.messages.push(msg.clone());
+                self.cards.push(TranscriptCard::Message(msg));
                 let line = format!(
                     "{sender} → {recipient} ({}): {}",
                     text("kind"),
@@ -510,20 +624,58 @@ impl View {
             }
             "mail_delivered" => {
                 for id in payload["ids"].as_array().into_iter().flatten() {
-                    if let Some(recipient) = id.as_u64().and_then(|id| self.mail.remove(&id)) {
-                        self.push(dim(), format!("✓ {recipient} otrzymał wiadomość"));
+                    if let Some(mail_id) = id.as_u64() {
+                        let id_str = format!("{mail_id}");
+                        for msg in &mut self.messages {
+                            if msg.id == id_str {
+                                msg.state = "dostarczono".to_owned();
+                            }
+                        }
+                        for card in &mut self.cards {
+                            if let TranscriptCard::Message(msg) = card {
+                                if msg.id == id_str {
+                                    msg.state = "dostarczono".to_owned();
+                                }
+                            }
+                        }
+                        if let Some(recipient) = self.mail.remove(&mail_id) {
+                            self.push(dim(), format!("✓ {recipient} otrzymał wiadomość"));
+                        }
                     }
                 }
             }
-            "mail_rejected" => self.push(
-                Style::default().fg(Color::Red),
-                format!(
-                    "✗ wiadomość od {} do {} niedostarczalna: {}",
-                    text("sender"),
-                    text("recipient"),
-                    text("reason")
-                ),
-            ),
+            "mail_rejected" => {
+                let sender = text("sender");
+                let recipient = text("recipient");
+                let norm_sender = match sender.as_str() {
+                    "user" => "Ty",
+                    ORCHESTRATOR => "orkiestrator",
+                    s => s,
+                };
+                for msg in self.messages.iter_mut().rev() {
+                    if (msg.sender == sender || msg.sender == norm_sender) && msg.target == recipient {
+                        msg.state = "odrzucono".to_owned();
+                        break;
+                    }
+                }
+                for card in self.cards.iter_mut().rev() {
+                    if let TranscriptCard::Message(msg) = card {
+                        if (msg.sender == sender || msg.sender == norm_sender) && msg.target == recipient {
+                            msg.state = "odrzucono".to_owned();
+                            break;
+                        }
+                    }
+                }
+                self.push(
+                    Style::default().fg(Color::Red),
+                    format!(
+                        "✗ wiadomość od {} do {} niedostarczalna: {}",
+                        text("sender"),
+                        text("recipient"),
+                        text("reason")
+                    ),
+                );
+            }
             "audit" => {
                 for line in super::super::cli::review_lines("audyt", payload) {
                     self.push(Style::default().fg(Color::Yellow), line);
@@ -548,14 +700,20 @@ impl View {
                     return;
                 };
                 let name = target_name(&comment.target);
-                let line = match comment.status.as_str() {
+                let (line, card_status) = match comment.status.as_str() {
                     "open" if !self.comments.contains_key(&comment.id) => {
-                        format!("✎ #{} do {name}: {}", comment.id, comment.text)
+                        (format!("✎ #{} do {name}: {}", comment.id, comment.text), "otwarty".into())
                     }
-                    "open" => format!("✎ #{} otwarty ponownie", comment.id),
-                    "resolved" => format!("✎ #{} rozwiązany", comment.id),
-                    _ => format!("✎ #{} usunięty", comment.id),
+                    "open" => (format!("✎ #{} otwarty ponownie", comment.id), "ponownie otwarty".into()),
+                    "resolved" => (format!("✎ #{} rozwiązany", comment.id), "rozwiązany".into()),
+                    _ => (format!("✎ #{} usunięty", comment.id), "usunięty".into()),
                 };
+                self.cards.push(TranscriptCard::Comment {
+                    id: comment.id,
+                    target: name,
+                    text: comment.text.clone(),
+                    status: card_status,
+                });
                 self.push(Style::default().fg(Color::Cyan), line);
                 self.comments.insert(comment.id, comment);
             }
@@ -603,27 +761,30 @@ impl View {
             lines.push("⏸ wstrzymane: nowe kroki czekają".into());
         }
         if let Some(activity) = &self.activity {
-            lines.push(activity.clone());
+            lines.push(clean(activity));
         }
         for task in &self.tasks {
             match task.status.as_str() {
-                "working" | "verifying" => lines.push(format!(
-                    "{} {}: {}",
-                    task.id,
-                    polish(&task.status),
-                    if task.activity.is_empty() {
-                        "…"
+                "working" | "verifying" => {
+                    let act = if task.activity.is_empty() {
+                        "…".to_string()
                     } else {
-                        &task.activity
-                    }
-                )),
+                        clean(&task.activity)
+                    };
+                    lines.push(format!(
+                        "{} {}: {}",
+                        task.id,
+                        polish(&task.status),
+                        act
+                    ));
+                }
                 "waiting" => lines.push(format!("{} czeka na logowanie/limit", task.id)),
                 _ => {}
             }
         }
         for key in [PLAN_VERIFIER, AUDITOR] {
             if let Some(agent) = self.agents.get(key).filter(|agent| agent.running) {
-                lines.push(format!("{}: {}", agent_name(key), agent.activity));
+                lines.push(format!("{}: {}", agent_name(key), clean(&agent.activity)));
             }
         }
         if lines.is_empty() {
@@ -704,77 +865,34 @@ pub fn duration(ms: u64) -> String {
 
 /// Agents' text may carry terminal escapes; keep it printable.
 pub fn clean(text: &str) -> String {
-    text.chars()
-        .filter_map(|ch| match ch {
-            '\n' => Some('\n'),
-            '\t' => Some(' '),
-            ch if ch.is_control() => None,
-            ch => Some(ch),
-        })
-        .collect()
+    super::sanitize::sanitize(text)
 }
 
-/// Word-wraps `text` to `width` columns, breaking long words.
+/// Word-wraps `text` to `width` columns, breaking long words safely by grapheme clusters.
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut lines = vec![];
-    for paragraph in clean(text).split('\n') {
-        let mut line = String::new();
-        let mut used = 0;
-        for word in paragraph.split_inclusive(' ') {
-            let size = word.width();
-            if used > 0 && used + size.min(width) > width {
-                lines.push(std::mem::take(&mut line));
-                used = 0;
-            }
-            for ch in word.chars() {
-                let size = ch.width().unwrap_or(0);
-                if used + size > width {
-                    lines.push(std::mem::take(&mut line));
-                    used = 0;
-                }
-                line.push(ch);
-                used += size;
-            }
-        }
-        lines.push(line);
-    }
-    lines
+    super::theme::wrap(text, width)
 }
 
 /// One line of at most `width` columns.
 pub fn truncate(text: &str, width: usize) -> String {
-    let text = clean(text).replace('\n', " ");
-    if text.width() <= width {
-        return text;
-    }
-    let mut out = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let size = ch.width().unwrap_or(0);
-        if used + size + 1 > width {
-            break;
-        }
-        out.push(ch);
-        used += size;
-    }
-    out.push('…');
-    out
+    let t = super::theme::Theme::new(true, false);
+    t.fit(text, width)
 }
 
-/// Renders the minimum terminal size warning guard when terminal is smaller than 60x12.
+/// Renders the minimum terminal size warning guard when terminal is smaller than 12x5.
 /// Returns true if the guard was triggered and drawn.
 pub fn draw_min_term_guard(frame: &mut ratatui::Frame, area: Rect) -> bool {
     if area.width < MIN_TERM_WIDTH || area.height < MIN_TERM_HEIGHT {
         let msg = format!("Terminal zbyt mały (wymagane min. {MIN_TERM_WIDTH}x{MIN_TERM_HEIGHT})");
         frame.render_widget(Clear, area);
         frame.render_widget(
-            Paragraph::new(Line::styled(
-                msg,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )),
+            Paragraph::new(msg)
+                .wrap(ratatui::widgets::Wrap { trim: false })
+                .style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
             area,
         );
         true
@@ -792,6 +910,13 @@ pub fn render_header(
     focus: PanelFocus,
     width: u16,
 ) -> Line<'static> {
+    if width < 25 {
+        return Line::from(vec![Span::styled(
+            " antislop ",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]);
+    }
+
     let short = conversation.get(..8).unwrap_or(conversation);
     let mode_str = match mode {
         Some(true) => "autonomiczny · ",
@@ -827,12 +952,12 @@ pub fn render_header(
         spans.push(Span::styled(format!("{graph_label} "), graph_style));
         if width >= 70 {
             spans.push(Span::styled("(Tab: przełącz) · ", dim()));
-        } else {
+        } else if width >= 40 {
             spans.push(Span::styled("· ", dim()));
         }
     }
 
-    if width >= 80 {
+    if width >= SIDE_BY_SIDE_BREAKPOINT {
         spans.push(Span::styled(
             format!("{project} · {short} · {mode_str}"),
             dim(),
@@ -841,10 +966,12 @@ pub fn render_header(
         spans.push(Span::styled(format!("{short} · {mode_str}"), dim()));
     }
 
-    spans.push(Span::styled(
-        status.to_string(),
-        Style::default().fg(Color::Yellow),
-    ));
+    if width >= 40 {
+        spans.push(Span::styled(
+            clean(status),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
     Line::from(spans)
 }
 
@@ -1058,8 +1185,46 @@ mod tests {
         assert_eq!(wrap("ala ma kota", 7), ["ala ma ", "kota"]);
         assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
         assert_eq!(wrap("a\n\nb", 10), ["a", "", "b"]);
-        assert_eq!(clean("a\u{1b}[31mb\tc"), "a[31mb c");
-        assert_eq!(wrap("a\u{1b}]0;x\u{7}b", 10), ["a]0;xb"]);
+        assert_eq!(clean("a\u{1b}[31mb\tc"), "ab    c");
+        assert_eq!(wrap("a\u{1b}]0;x\u{7}b", 10), ["ab"]);
+    }
+
+    #[test]
+    fn messages_and_cards_are_stored_structurally_with_actual_states() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "message",
+            json!({"author": "user", "text": "start"}),
+        ));
+        assert_eq!(view.messages.len(), 1);
+        assert_eq!(view.messages[0].sender, "Ty");
+        assert_eq!(view.messages[0].target, "orkiestrator");
+        assert_eq!(view.messages[0].state, "wysłano");
+
+        view.apply(&event(
+            2,
+            None,
+            "mail",
+            json!({"id": 101, "sender": "user", "recipient": "t1", "kind": "instruction", "text": "do it"}),
+        ));
+        assert_eq!(view.messages.len(), 2);
+        assert_eq!(view.messages[1].id, "101");
+        assert_eq!(view.messages[1].state, "czeka na turę");
+
+        view.apply(&event(
+            3,
+            Some("turn"),
+            "mail_delivered",
+            json!({"ids": [101]}),
+        ));
+        assert_eq!(view.messages[1].state, "dostarczono");
+        if let TranscriptCard::Message(msg) = &view.cards[1] {
+            assert_eq!(msg.state, "dostarczono");
+        } else {
+            panic!("Expected message card");
+        }
     }
 
     #[test]
@@ -1243,14 +1408,14 @@ mod tests {
 
     #[test]
     fn ac_resp_01_responsive_breakpoint_compact_switch() {
-        // Breakpoint: width 99 (< 100) -> compact mode with banner
+        // Breakpoint: width 84 (< 85) -> compact mode with banner
         let header_chat = render_header(
             "proj",
             "conv-12345",
             Some(true),
             "gotowy",
             PanelFocus::Chat,
-            99,
+            84,
         );
         let chat_text: String = header_chat
             .spans
@@ -1267,7 +1432,7 @@ mod tests {
             Some(true),
             "gotowy",
             PanelFocus::Graph,
-            99,
+            84,
         );
         let graph_text: String = header_graph
             .spans
@@ -1281,14 +1446,14 @@ mod tests {
 
     #[test]
     fn ac_resp_02_wide_header() {
-        // Wide: width 120 (>= 100) -> side-by-side mode, no compact toggle badge
+        // Wide: width 85 (>= 85) -> side-by-side mode, no compact toggle badge
         let header_wide = render_header(
             "proj",
             "conv-12345",
             Some(true),
             "gotowy",
             PanelFocus::Chat,
-            120,
+            85,
         );
         let wide_text: String = header_wide
             .spans
@@ -1308,8 +1473,8 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        // Terminal size 50x10 is smaller than 60x12 guard floor
-        let backend = TestBackend::new(50, 10);
+        // Terminal size 11x4 is smaller than 12x5 guard floor
+        let backend = TestBackend::new(11, 4);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut guard_triggered = false;
         terminal
@@ -1320,10 +1485,11 @@ mod tests {
         assert!(guard_triggered);
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("Terminal zbyt mały (wymagane min. 60x12)"));
+        let norm = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(norm.contains("Terminal zbyt mały (wymagane min. 12x5)"));
 
-        // Terminal size 60x12 meets minimum guard
-        let backend = TestBackend::new(60, 12);
+        // Terminal size 12x5 meets minimum guard
+        let backend = TestBackend::new(12, 5);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut guard_triggered_ok = false;
         terminal

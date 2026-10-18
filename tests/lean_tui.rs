@@ -1,12 +1,13 @@
 use architect::lean::{
     daemon::{Client, Request, socket},
     tui::{
-        App, Details, DiffView, Editor, Filter, Focus, Help, InputBuffer, Kind, Picker, Update,
+        App, Details, DiffView, Editor, Filter, Focus, Help, InputBuffer, Kind, Picker, Theme,
+        TranscriptCard, Update, card, draw_rows,
         editor::{
             MAX_PASTE_BYTES, compute_visual_lines, sanitize_paste, sanitize_single_line_paste,
             visual_text_lines,
         },
-        in_ascii,
+        in_ascii, sanitize,
         view::{
             MIN_TERM_HEIGHT, MIN_TERM_WIDTH, PanelFocus, SIDE_BY_SIDE_BREAKPOINT,
             draw_min_term_guard, main_footer_hint, render_header, transcript_empty_state,
@@ -21,6 +22,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
+    text::Span,
 };
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -225,12 +227,12 @@ fn tui_paste_sanitization_and_character_boundary_capping() {
 
 #[test]
 fn tui_responsive_breakpoints_and_terminal_guard() {
-    assert_eq!(MIN_TERM_WIDTH, 60);
-    assert_eq!(MIN_TERM_HEIGHT, 12);
-    assert_eq!(SIDE_BY_SIDE_BREAKPOINT, 100);
+    assert_eq!(MIN_TERM_WIDTH, 12);
+    assert_eq!(MIN_TERM_HEIGHT, 5);
+    assert_eq!(SIDE_BY_SIDE_BREAKPOINT, 85);
 
-    // Below 60x12 guard
-    let backend_small = TestBackend::new(59, 11);
+    // Below 12x5 guard
+    let backend_small = TestBackend::new(11, 4);
     let mut term_small = Terminal::new(backend_small).unwrap();
     let mut triggered = false;
     term_small
@@ -241,10 +243,11 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
     assert!(triggered);
     let buf = term_small.backend().buffer();
     let rendered: String = buf.content.iter().map(|c| c.symbol()).collect();
-    assert!(rendered.contains("Terminal zbyt mały (wymagane min. 60x12)"));
+    let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(normalized.contains("Terminal zbyt mały (wymagane min. 12x5)"));
 
-    // At 60x12 minimum guard passes
-    let backend_ok = TestBackend::new(60, 12);
+    // At 12x5 minimum guard passes
+    let backend_ok = TestBackend::new(12, 5);
     let mut term_ok = Terminal::new(backend_ok).unwrap();
     let mut triggered_ok = false;
     term_ok
@@ -254,14 +257,14 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
         .unwrap();
     assert!(!triggered_ok);
 
-    // Breakpoint at 99 (<100) -> compact banner
+    // Breakpoint at 84 (<85) -> compact banner
     let header_compact = render_header(
         "projekt",
         "conv-test",
         Some(true),
         "gotowy",
         PanelFocus::Chat,
-        99,
+        84,
     );
     let text_compact: String = header_compact
         .spans
@@ -272,14 +275,14 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
     assert!(text_compact.contains("Zespół"));
     assert!(text_compact.contains("(Tab: przełącz)"));
 
-    // Breakpoint at 100 (>=100) -> side by side mode
+    // Breakpoint at 85 (>=85) -> side by side mode
     let header_wide = render_header(
         "projekt",
         "conv-test",
         Some(true),
         "gotowy",
         PanelFocus::Chat,
-        100,
+        85,
     );
     let text_wide: String = header_wide
         .spans
@@ -954,8 +957,8 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .collect();
     assert!(text_compact.contains("[Czat]"));
 
-    // 50x10 (below minimum 60x12)
-    let mut term_tiny = Terminal::new(TestBackend::new(50, 10)).unwrap();
+    // 11x4 (below minimum 12x5)
+    let mut term_tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
     term_tiny
         .draw(|f| {
             app.draw(f);
@@ -968,7 +971,8 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_tiny.contains("Terminal zbyt mały (wymagane min. 60x12)"));
+    let text_tiny_norm = text_tiny.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(text_tiny_norm.contains("Terminal zbyt mały (wymagane min. 12x5)"));
 
     // 2. Cursor bounds at 60x12
     let mut term_min = Terminal::new(TestBackend::new(60, 12)).unwrap();
@@ -2270,5 +2274,208 @@ fn tui_preferred_column_memory_and_grapheme_editing() {
     assert!(pol.backspace()); // backspace 'ł'
     assert_eq!(pol.text, "zażóć");
     assert_eq!(pol.cursor, 6);
+}
+
+#[test]
+fn tui_cards_structural_entries_and_actual_delivery_states() {
+    let mut app = App::test_app();
+    // 1. Initial mail event
+    app.view.apply(&serde_json::json!({
+        "kind": "mail",
+        "payload": {
+            "sender": "user",
+            "recipient": "orchestrator",
+            "text": "Pierwsza prośba użytkownika",
+            "kind": "request",
+            "id": 101,
+        }
+    }));
+    assert_eq!(app.view.messages.len(), 1);
+    assert_eq!(app.view.messages[0].sender, "Ty");
+    assert_eq!(app.view.messages[0].state, "czeka na turę");
+    assert_eq!(app.view.cards.len(), 1);
+
+    // 2. Delivery confirmation alters actual state
+    app.view.apply(&serde_json::json!({
+        "kind": "mail_delivered",
+        "payload": {
+            "ids": [101],
+        }
+    }));
+    assert_eq!(app.view.messages[0].state, "dostarczono");
+    if let TranscriptCard::Message(msg) = &app.view.cards[0] {
+        assert_eq!(msg.state, "dostarczono");
+    } else {
+        panic!("expected TranscriptCard::Message");
+    }
+
+    // 3. Rejected mail event
+    app.view.apply(&serde_json::json!({
+        "kind": "mail",
+        "payload": {
+            "sender": "orchestrator",
+            "recipient": "worker:t9",
+            "text": "Zadanie t9 do wykonania",
+            "kind": "task",
+            "id": 102,
+        }
+    }));
+    assert_eq!(app.view.messages[1].state, "czeka na turę");
+    app.view.apply(&serde_json::json!({
+        "kind": "mail_rejected",
+        "payload": {
+            "sender": "orchestrator",
+            "recipient": "worker:t9",
+            "reason": "agent niedostępny",
+        }
+    }));
+    assert_eq!(app.view.messages[1].state, "odrzucono");
+
+    // 4. Render on a terminal and verify buffer symbols
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    term.draw(|f| app.draw(f)).unwrap();
+    let text: String = term.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    assert!(text.contains("Ty"));
+    assert!(text.contains("orkiestrator"));
+    assert!(text.contains("dostarczono"));
+    assert!(text.contains("odrzucono"));
+    assert!(text.contains("Pierwsza prośba użytkownika"));
+}
+
+#[test]
+fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
+    let mut app = App::test_app();
+    app.input = InputBuffer::with_text("komenda testowa");
+
+    // 11x4: Below floor triggers guard
+    let mut term_11x4 = Terminal::new(TestBackend::new(11, 4)).unwrap();
+    term_11x4.draw(|f| app.draw(f)).unwrap();
+    let text_11x4: String = term_11x4.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    let norm_11x4 = text_11x4.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(norm_11x4.contains("Terminal zbyt mały (wymagane min. 12x5)"));
+
+    // 12x5: Minimal working terminal renders without crashing
+    let mut term_12x5 = Terminal::new(TestBackend::new(12, 5)).unwrap();
+    term_12x5.draw(|f| app.draw(f)).unwrap();
+    let (cx, cy) = term_12x5.get_cursor_position().unwrap().into();
+    assert!((1..=10).contains(&cx), "Cursor x ({cx}) must be inside 12-col terminal bounds");
+    assert!((1..=4).contains(&cy), "Cursor y ({cy}) must be inside 5-row terminal bounds");
+
+    // Can toggle panel focus via Tab even in compact mode
+    assert_eq!(app.focus, Focus::Chat);
+    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.focus, Focus::Graph);
+    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.focus, Focus::Chat);
+
+    // Can open Help via F1 and dismiss with Esc on 12x5
+    assert!(app.key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE)));
+    assert!(app.help.is_some());
+    term_12x5.draw(|f| app.draw(f)).unwrap();
+    assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    assert!(app.help.is_none());
+
+    // 84 cols (< 85): Compact header badge
+    let mut term_84 = Terminal::new(TestBackend::new(84, 20)).unwrap();
+    term_84.draw(|f| app.draw(f)).unwrap();
+    let text_84: String = term_84.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    assert!(text_84.contains("[Czat]"));
+    assert!(text_84.contains("Zespół"));
+
+    // 85 cols (>= 85): Split side-by-side with vertical separator
+    let mut term_85 = Terminal::new(TestBackend::new(85, 20)).unwrap();
+    term_85.draw(|f| app.draw(f)).unwrap();
+    let text_85: String = term_85.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    assert!(!text_85.contains("[Czat]"));
+    // The separator column contains vertical glyph
+    let sep_col = (85 / 3).max(34);
+    assert_eq!(term_85.backend().buffer()[(sep_col, 5)].symbol(), "│");
+}
+
+#[test]
+fn tui_ascii_mode_and_theme_glyphs() {
+    let t_ascii = Theme::new(false, true);
+    assert_eq!(t_ascii.glyphs().vertical, "|");
+    assert_eq!(t_ascii.glyphs().bar, "|");
+    assert_eq!(t_ascii.glyphs().to, ">");
+    assert_eq!(t_ascii.glyphs().done, "x");
+
+    // Polish diacritics stand-ins in ASCII mode
+    assert_eq!(t_ascii.clean("Zażółć gęślą jaźń"), "Zazolc gesla jazn");
+    assert_eq!(t_ascii.clean("Krok 1: ✓ zatwierdzono → gotowe…"), "Krok 1: + zatwierdzono > gotowe.");
+
+    // Rendering in ASCII mode
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 40, 5));
+    let rows = card(
+        &t_ascii,
+        t_ascii.card(),
+        t_ascii.accent(),
+        vec![Span::raw("Ty"), Span::raw(" > "), Span::raw("orkiestrator")],
+        "dostarczono".into(),
+        "Zażółć gęślą jaźń",
+        usize::MAX,
+        40,
+    );
+    draw_rows(&mut buffer, Rect::new(0, 0, 40, 5), &rows);
+    let rendered: String = buffer.content.iter().map(|c| c.symbol()).collect();
+    assert!(rendered.contains("|"));
+    assert!(rendered.contains("Zazolc gesla jazn"));
+    assert!(!rendered.contains("▌"));
+}
+
+#[test]
+fn tui_no_color_mode_preserves_modifiers_and_clears_colors() {
+    let t_nc = Theme::new(false, false);
+    assert_eq!(t_nc.text().fg, None);
+    assert_eq!(t_nc.text().bg, None);
+    assert_eq!(t_nc.card().bg, None);
+    assert_eq!(t_nc.raised().bg, None);
+    assert!(t_nc.title().add_modifier.contains(Modifier::BOLD));
+    assert!(t_nc.dim().add_modifier.contains(Modifier::DIM));
+
+    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 3));
+    let rows = card(
+        &t_nc,
+        t_nc.card(),
+        t_nc.accent(),
+        vec![Span::raw("Nagłówek")],
+        "meta".into(),
+        "Treść karty",
+        usize::MAX,
+        30,
+    );
+    draw_rows(&mut buf, Rect::new(0, 0, 30, 3), &rows);
+    assert!(buf.content.iter().all(|c| c.fg == Color::Reset && c.bg == Color::Reset));
+}
+
+#[test]
+fn tui_malicious_output_sanitization_on_buffer() {
+    let malicious = "Normalny \x1b]52;c;c3RlYWw=\x07tekst \x1bPpayload\x1b\\z \u{202e}bidi\u{202c} i \u{9b}31mkolor\u{9c}";
+    let cleaned = sanitize(malicious);
+    assert!(!cleaned.contains('\x1b'));
+    assert!(!cleaned.contains("c3RlYWw="));
+    assert!(!cleaned.contains('\u{202e}'));
+    assert_eq!(cleaned, "Normalny tekst z bidi i kolor");
+
+    let mut app = App::test_app();
+    app.view.apply(&serde_json::json!({
+        "kind": "mail",
+        "payload": {
+            "sender": "user",
+            "recipient": "orchestrator",
+            "text": malicious,
+            "kind": "request",
+            "id": 999,
+        }
+    }));
+    app.view.activity = Some(malicious.into());
+
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    term.draw(|f| app.draw(f)).unwrap();
+    let text: String = term.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    assert!(!text.contains('\x1b'));
+    assert!(!text.contains("c3RlYWw="));
+    assert!(!text.contains('\u{202e}'));
+    assert!(text.contains("Normalny tekst"));
 }
 

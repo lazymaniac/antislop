@@ -8,6 +8,8 @@ pub mod diffview;
 pub mod editor;
 pub mod graph;
 pub mod palette;
+pub mod sanitize;
+pub mod theme;
 pub mod view;
 
 pub use details::Details;
@@ -15,6 +17,11 @@ pub use diffview::DiffView;
 pub use editor::{InputBuffer, sanitize_paste, sanitize_single_line_paste, visual_text_lines};
 pub use graph::Filter;
 pub use palette::{Help, Kind, Picker};
+pub use sanitize::sanitize;
+pub use theme::{
+    Glyphs, Row, Theme, Tone, card, draw_rows, scrollbar, section, split_row, tone,
+};
+pub use view::{MessageEntry, TranscriptCard};
 
 use super::cli::Options;
 use super::daemon::{Client, Request};
@@ -39,7 +46,7 @@ use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 use view::{
     ORCHESTRATOR, PanelFocus, SIDE_BY_SIDE_BREAKPOINT, View, dim, draw_min_term_guard,
-    main_footer_hint, render_header, target_name, transcript_empty_state, truncate, wrap,
+    main_footer_hint, render_header, target_name, truncate, wrap,
 };
 
 pub enum Update {
@@ -1540,14 +1547,26 @@ impl App {
             header,
         );
 
+        let theme = Theme::from_env();
         if body.width >= SIDE_BY_SIDE_BREAKPOINT {
-            let [chat, team] =
-                Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
-                    .areas(body);
-            self.draw_chat(frame, chat);
+            let chat_width = (body.width / 3).max(34);
+            let [chat, sep_col, team] = Layout::horizontal([
+                Constraint::Length(chat_width),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ])
+            .areas(body);
+            self.draw_chat(frame, chat, &theme);
+            let separator = theme.glyphs().vertical;
+            let buf = frame.buffer_mut();
+            for y in sep_col.top()..sep_col.bottom() {
+                buf[(sep_col.x, y)]
+                    .set_symbol(separator)
+                    .set_style(theme.separator(false));
+            }
             self.draw_graph(frame, team);
         } else if self.focus == Focus::Chat {
-            self.draw_chat(frame, body);
+            self.draw_chat(frame, body, &theme);
         } else {
             self.draw_graph(frame, body);
         }
@@ -1562,15 +1581,19 @@ impl App {
         frame.render_widget(Paragraph::new(Span::styled(hint, dim())), footer);
     }
 
-    fn draw_chat(&mut self, frame: &mut Frame, area: Rect) {
+    fn draw_chat(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
         // Leave a column for the insertion cursor after a full line.
         let input_width = area.width.saturating_sub(3) as usize;
         self.input_width = input_width.max(1);
         let input_lines = visual_text_lines(&self.input.text, self.input_width);
-        let input_height = input_lines.len().clamp(1, 6) as u16 + 2;
+        let max_input_height = area.height.saturating_sub(1).max(1);
+        let input_height = (input_lines.len().clamp(1, 6) as u16 + 2).min(max_input_height);
         let [transcript, input] =
             Layout::vertical([Constraint::Min(1), Constraint::Length(input_height)]).areas(area);
-        self.draw_transcript(frame, transcript);
+        self.draw_transcript(frame, transcript, theme);
 
         let visible_box_lines = (input.height.saturating_sub(2) as usize).max(1);
         let (cursor_col, cursor_row) = self.input.visual_cursor(self.input_width);
@@ -1594,6 +1617,42 @@ impl App {
             && self.diff.is_none()
             && self.details.is_none();
 
+        let fill = if focused {
+            theme.raised()
+        } else {
+            theme.card()
+        };
+        let accent = if focused {
+            theme.accent()
+        } else {
+            theme.faint()
+        };
+        let bar = theme.glyphs().bar;
+
+        let buf = frame.buffer_mut();
+        for y in input.top()..input.bottom() {
+            for x in input.left()..input.right() {
+                buf[(x, y)].set_style(fill);
+            }
+            if input.width > 0 {
+                buf[(input.x, y)]
+                    .set_symbol(bar)
+                    .set_style(fill.patch(accent));
+            }
+        }
+
+        if input.height > 0 && input.width > 2 {
+            let title = " wiadomość ";
+            let title_style = fill.patch(if focused { theme.accent() } else { theme.dim() });
+            buf.set_string(input.x + 1, input.y, title, title_style);
+        }
+
+        let inner = Rect::new(
+            input.x + 1,
+            input.y + 1,
+            input.width.saturating_sub(2),
+            input.height.saturating_sub(1),
+        );
         frame.render_widget(
             Paragraph::new(
                 shown_lines
@@ -1601,56 +1660,196 @@ impl App {
                     .map(|line| Line::raw(line.clone()))
                     .collect::<Vec<_>>(),
             )
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(if focused { Style::default() } else { dim() })
-                    .title(" wiadomość "),
-            ),
-            input,
+            .style(fill.patch(theme.text())),
+            inner,
         );
-        if focused && input.width >= 3 && input.height >= 3 {
+        if focused && input.width >= 3 && input.height >= 2 {
             let min_x = input.x + 1;
-            let max_x = input.right().saturating_sub(2);
+            let max_x = input.right().saturating_sub(2).max(min_x);
             let min_y = input.y + 1;
-            let max_y = input.bottom().saturating_sub(2);
+            let max_y = input.bottom().saturating_sub(1).max(min_y);
             let cursor_x = (input.x + 1 + cursor_col).clamp(min_x, max_x);
             let visible_row = cursor_row
                 .saturating_sub(self.input_shown)
-                .min(visible_box_lines - 1);
+                .min(visible_box_lines.saturating_sub(1));
             let cursor_y = (input.y + 1 + visible_row as u16).clamp(min_y, max_y);
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
 
-    fn draw_transcript(&mut self, frame: &mut Frame, area: Rect) {
-        let width = area.width.saturating_sub(1) as usize;
+    fn draw_transcript(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let width = area.width.saturating_sub(1);
+        let glyphs = theme.glyphs();
+        let mut cards: Vec<Row> = vec![];
         let mut top = None;
-        let mut lines: Vec<Line> = vec![];
-        if self.view.transcript.is_empty() {
-            lines.extend(transcript_empty_state(width));
+
+        for (index, card_entry) in self.view.cards.iter().enumerate() {
+            let is_found = self.found == Some(index);
+            match card_entry {
+                TranscriptCard::Message(msg) => {
+                    let is_user = msg.sender == "Ty" || msg.sender == "user";
+                    let mut fill = if is_user {
+                        theme.raised()
+                    } else {
+                        theme.card()
+                    };
+                    if is_found {
+                        top = Some(cards.len());
+                        fill = fill.add_modifier(Modifier::REVERSED);
+                    }
+                    let accent = theme.person(&msg.sender);
+                    let head = vec![
+                        Span::styled(
+                            theme.clean(&msg.sender),
+                            theme.person(&msg.sender).patch(theme.title()),
+                        ),
+                        Span::styled(format!(" {} ", glyphs.to), theme.faint()),
+                        Span::styled(theme.clean(&msg.target), theme.person(&msg.target)),
+                    ];
+                    let right = format!(
+                        "{} {} {}",
+                        theme.clean(&msg.state),
+                        glyphs.dot,
+                        theme.clean(&msg.id)
+                    );
+                    cards.extend(card(
+                        theme,
+                        fill,
+                        accent,
+                        head,
+                        right,
+                        &msg.text,
+                        usize::MAX,
+                        width,
+                    ));
+                }
+                TranscriptCard::Plan { plan, tasks, text } => {
+                    let mut fill = theme.card();
+                    if is_found {
+                        top = Some(cards.len());
+                        fill = fill.add_modifier(Modifier::REVERSED);
+                    }
+                    cards.extend(card(
+                        theme,
+                        fill,
+                        theme.accent(),
+                        vec![Span::styled(
+                            format!("Plan {}", theme.clean(plan)),
+                            theme.accent().patch(theme.title()),
+                        )],
+                        format!("{tasks} zadań"),
+                        text,
+                        usize::MAX,
+                        width,
+                    ));
+                }
+                TranscriptCard::System {
+                    title,
+                    meta,
+                    text,
+                    tone,
+                } => {
+                    let mut fill = theme.card();
+                    if is_found {
+                        top = Some(cards.len());
+                        fill = fill.add_modifier(Modifier::REVERSED);
+                    }
+                    let accent = match tone {
+                        Tone::Active => theme.accent(),
+                        Tone::Done => theme.status("completed"),
+                        Tone::Failed => theme.error(),
+                        Tone::Waiting => theme.warning(),
+                        Tone::Queued => theme.dim(),
+                    };
+                    cards.extend(card(
+                        theme,
+                        fill,
+                        accent,
+                        vec![Span::styled(theme.clean(title), accent.patch(theme.title()))],
+                        theme.clean(meta),
+                        text,
+                        usize::MAX,
+                        width,
+                    ));
+                }
+                TranscriptCard::Comment {
+                    id,
+                    target,
+                    text,
+                    status,
+                } => {
+                    let mut fill = theme.card();
+                    if is_found {
+                        top = Some(cards.len());
+                        fill = fill.add_modifier(Modifier::REVERSED);
+                    }
+                    cards.extend(card(
+                        theme,
+                        fill,
+                        theme.person("user"),
+                        vec![Span::styled(
+                            format!("Komentarz #{} do {}", id, theme.clean(target)),
+                            theme.accent().patch(theme.title()),
+                        )],
+                        theme.clean(status),
+                        text,
+                        usize::MAX,
+                        width,
+                    ));
+                }
+            }
         }
-        for (index, entry) in self.view.transcript.iter().enumerate() {
-            let style = if self.found == Some(index) {
-                top = Some(lines.len());
-                entry.style.add_modifier(Modifier::REVERSED)
-            } else {
-                entry.style
-            };
-            lines.extend(
-                wrap(&entry.text, width)
-                    .into_iter()
-                    .map(|line| Line::styled(line, style)),
-            );
+
+        if cards.is_empty() && !self.view.transcript.is_empty() {
+            for (index, entry) in self.view.transcript.iter().enumerate() {
+                let style = if self.found == Some(index) {
+                    top = Some(cards.len());
+                    entry.style.add_modifier(Modifier::REVERSED)
+                } else {
+                    entry.style
+                };
+                for line in wrap(&entry.text, width as usize) {
+                    cards.push(Row::new(
+                        theme.card(),
+                        vec![Span::styled(theme.clean(&line), style)],
+                    ));
+                }
+            }
         }
+
+        if cards.is_empty() {
+            cards.extend(card(
+                theme,
+                theme.card(),
+                theme.accent(),
+                vec![Span::styled(
+                    "Brak wiadomości w tej rozmowie.",
+                    theme.title(),
+                )],
+                String::new(),
+                "Wpisz wiadomość w kompozytorze poniżej lub naciśnij Ctrl+P, aby otworzyć paletę.",
+                usize::MAX,
+                width,
+            ));
+        }
+
         let height = area.height as usize;
-        if let Some(top) = top.take().filter(|_| self.scroll == usize::MAX) {
-            self.scroll = lines.len().saturating_sub(top + height);
+        if let Some(top_idx) = top.take().filter(|_| self.scroll == usize::MAX) {
+            self.scroll = cards.len().saturating_sub(top_idx + height);
         }
-        self.scroll = self.scroll.min(lines.len().saturating_sub(height));
-        let end = lines.len() - self.scroll;
+        self.scroll = self.scroll.min(cards.len().saturating_sub(height));
+        let end = cards.len().saturating_sub(self.scroll);
         let start = end.saturating_sub(height);
-        frame.render_widget(Paragraph::new(lines[start..end].to_vec()), area);
+
+        let buf = frame.buffer_mut();
+        let body_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+        draw_rows(buf, body_area, &cards[start..end]);
+
+        let scroll_area = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
+        scrollbar(buf, theme, scroll_area, cards.len(), start, height);
     }
 
     fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
@@ -2114,7 +2313,7 @@ pub mod tests {
         use ratatui::backend::TestBackend;
 
         let mut app = test_app();
-        let backend = TestBackend::new(50, 10);
+        let backend = TestBackend::new(11, 4);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
@@ -2123,17 +2322,18 @@ pub mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("Terminal zbyt mały (wymagane min. 60x12)"));
+        let norm = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(norm.contains("Terminal zbyt mały (wymagane min. 12x5)"));
     }
 
     #[test]
-    fn ac_resp_01_app_draw_main_compact_switch_at_99_cols() {
+    fn ac_resp_01_app_draw_main_compact_switch_at_84_cols() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
         let mut app = test_app();
         app.focus = Focus::Chat;
-        let backend = TestBackend::new(99, 24);
+        let backend = TestBackend::new(84, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
