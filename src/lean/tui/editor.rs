@@ -147,6 +147,7 @@ pub fn visual_text_lines(text: &str, width: usize) -> Vec<String> {
 pub struct InputBuffer {
     pub text: String,
     pub cursor: usize, // Byte offset in text
+    pub preferred_col: Option<u16>,
 }
 
 impl InputBuffer {
@@ -154,18 +155,24 @@ impl InputBuffer {
         Self {
             text: String::new(),
             cursor: 0,
+            preferred_col: None,
         }
     }
 
     pub fn with_text(text: impl Into<String>) -> Self {
         let text = text.into();
         let cursor = text.len();
-        Self { text, cursor }
+        Self {
+            text,
+            cursor,
+            preferred_col: None,
+        }
     }
 
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
+        self.preferred_col = None;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -201,6 +208,7 @@ impl InputBuffer {
     }
 
     pub fn insert_str(&mut self, s: &str) {
+        self.preferred_col = None;
         self.clamp_cursor();
         self.text.insert_str(self.cursor, s);
         self.cursor += s.len();
@@ -213,6 +221,7 @@ impl InputBuffer {
     }
 
     pub fn backspace(&mut self) -> bool {
+        self.preferred_col = None;
         self.clamp_cursor();
         if self.cursor == 0 {
             return false;
@@ -227,6 +236,7 @@ impl InputBuffer {
     }
 
     pub fn delete(&mut self) -> bool {
+        self.preferred_col = None;
         self.clamp_cursor();
         if self.cursor >= self.text.len() {
             return false;
@@ -240,6 +250,7 @@ impl InputBuffer {
     }
 
     pub fn delete_word_back(&mut self) {
+        self.preferred_col = None;
         self.clamp_cursor();
         if self.cursor == 0 {
             return;
@@ -268,6 +279,7 @@ impl InputBuffer {
     }
 
     pub fn delete_to_start(&mut self) {
+        self.preferred_col = None;
         self.clamp_cursor();
         let before = &self.text[..self.cursor];
         let start = before.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
@@ -276,6 +288,7 @@ impl InputBuffer {
     }
 
     pub fn delete_to_end(&mut self) {
+        self.preferred_col = None;
         self.clamp_cursor();
         if self.cursor >= self.text.len() {
             return;
@@ -292,6 +305,7 @@ impl InputBuffer {
     // Navigation actions
 
     pub fn move_left(&mut self) {
+        self.preferred_col = None;
         self.clamp_cursor();
         self.cursor = self.text[..self.cursor]
             .grapheme_indices(true)
@@ -300,6 +314,7 @@ impl InputBuffer {
     }
 
     pub fn move_right(&mut self) {
+        self.preferred_col = None;
         self.clamp_cursor();
         self.cursor = self.text[self.cursor..]
             .graphemes(true)
@@ -308,6 +323,7 @@ impl InputBuffer {
     }
 
     pub fn move_word_left(&mut self) {
+        self.preferred_col = None;
         self.clamp_cursor();
         if self.cursor == 0 {
             return;
@@ -340,6 +356,7 @@ impl InputBuffer {
     }
 
     pub fn move_word_right(&mut self) {
+        self.preferred_col = None;
         self.clamp_cursor();
         if self.cursor >= self.text.len() {
             return;
@@ -370,12 +387,14 @@ impl InputBuffer {
     }
 
     pub fn move_home(&mut self) {
+        self.preferred_col = None;
         self.clamp_cursor();
         let before = &self.text[..self.cursor];
         self.cursor = before.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
     }
 
     pub fn move_end(&mut self) {
+        self.preferred_col = None;
         self.clamp_cursor();
         let after = &self.text[self.cursor..];
         self.cursor = after
@@ -385,10 +404,12 @@ impl InputBuffer {
     }
 
     pub fn move_buffer_start(&mut self) {
+        self.preferred_col = None;
         self.cursor = 0;
     }
 
     pub fn move_buffer_end(&mut self) {
+        self.preferred_col = None;
         self.cursor = self.text.len();
     }
 
@@ -398,10 +419,12 @@ impl InputBuffer {
         if current_row == 0 {
             return;
         }
+        let target_col = self.preferred_col.unwrap_or(current_col);
+        self.preferred_col = Some(target_col);
         let lines = compute_visual_lines(&self.text, width);
         let target_row = current_row - 1;
         let target_line = &lines[target_row];
-        self.cursor = Self::find_byte_for_col(target_line, current_col, &self.text);
+        self.cursor = Self::find_byte_for_col(target_line, target_col, &self.text);
     }
 
     pub fn move_down(&mut self, width: usize) {
@@ -411,9 +434,11 @@ impl InputBuffer {
         if current_row + 1 >= lines.len() {
             return;
         }
+        let target_col = self.preferred_col.unwrap_or(current_col);
+        self.preferred_col = Some(target_col);
         let target_row = current_row + 1;
         let target_line = &lines[target_row];
-        self.cursor = Self::find_byte_for_col(target_line, current_col, &self.text);
+        self.cursor = Self::find_byte_for_col(target_line, target_col, &self.text);
     }
 
     fn find_byte_for_col(line: &VisualLineInfo, target_col: u16, text: &str) -> usize {
@@ -746,5 +771,74 @@ mod tests {
         assert_eq!(buf.cursor, "start ".len());
         buf.move_right();
         assert_eq!(buf.cursor, "start ".len() + family.len());
+    }
+
+    #[test]
+    fn preferred_column_memory_across_short_lines() {
+        // Line 0: "0123456789" (10 chars, cols 0..10)
+        // Line 1: "01" (2 chars, cols 0..2)
+        // Line 2: "0123456789" (10 chars, cols 0..10)
+        let text = "0123456789\n01\n0123456789";
+        let mut buf = InputBuffer::with_text(text);
+        buf.cursor = 8; // On '8' in line 0 (col 8, row 0)
+        assert_eq!(buf.visual_cursor(20), (8, 0));
+
+        // Move down to Line 1 (short line with max col 2)
+        buf.move_down(20);
+        assert_eq!(buf.visual_cursor(20), (2, 1));
+        assert_eq!(buf.preferred_col, Some(8));
+
+        // Move down to Line 2 (longer line: should jump back to col 8!)
+        buf.move_down(20);
+        assert_eq!(buf.visual_cursor(20), (8, 2));
+        assert_eq!(buf.preferred_col, Some(8));
+
+        // Move up back to Line 1 (clamped to col 2)
+        buf.move_up(20);
+        assert_eq!(buf.visual_cursor(20), (2, 1));
+        assert_eq!(buf.preferred_col, Some(8));
+
+        // Move up to Line 0 (should jump back to col 8!)
+        buf.move_up(20);
+        assert_eq!(buf.visual_cursor(20), (8, 0));
+        assert_eq!(buf.preferred_col, Some(8));
+
+        // Horizontal movement resets preferred col
+        buf.move_left();
+        assert_eq!(buf.visual_cursor(20), (7, 0));
+        assert_eq!(buf.preferred_col, None);
+
+        // Subsequent move down now uses col 7
+        buf.move_down(20);
+        assert_eq!(buf.visual_cursor(20), (2, 1));
+        assert_eq!(buf.preferred_col, Some(7));
+
+        buf.move_down(20);
+        assert_eq!(buf.visual_cursor(20), (7, 2));
+    }
+
+    #[test]
+    fn preferred_column_with_graphemes_and_double_width() {
+        // Line 0: "zażółć 12345" -> col 8 is '2'
+        // Line 1: "漢" (width 2)
+        // Line 2: "zażółć 12345"
+        let text = "zażółć 12345\n漢\nzażółć 12345";
+        let mut buf = InputBuffer::with_text(text);
+        // Find byte offset corresponding to visual col 8 in line 0
+        buf.cursor = 0;
+        while buf.visual_cursor(20).0 < 8 {
+            buf.move_right();
+        }
+        assert_eq!(buf.visual_cursor(20), (8, 0));
+
+        // Move down to Line 1 (clamped to CJK width 2)
+        buf.move_down(20);
+        assert_eq!(buf.visual_cursor(20), (2, 1));
+        assert_eq!(buf.preferred_col, Some(8));
+
+        // Move down to Line 2 (restores visual col 8)
+        buf.move_down(20);
+        assert_eq!(buf.visual_cursor(20), (8, 2));
+        assert_eq!(buf.preferred_col, Some(8));
     }
 }

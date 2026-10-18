@@ -14,7 +14,7 @@ use ratatui::{
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiffView {
     /// The task's id in its plan (`t2`).
     pub task: String,

@@ -44,6 +44,7 @@ use view::{
 
 pub enum Update {
     Events {
+        conversation: String,
         generation: u64,
         events: Vec<Value>,
         idle: bool,
@@ -53,23 +54,34 @@ pub enum Update {
     Notice(String),
     /// A task's change, for the diff view of `task`.
     Diff {
+        conversation: String,
+        plan: Option<String>,
         generation: u64,
+        request_id: u64,
         task: String,
         reply: std::result::Result<Value, String>,
     },
     /// A task as the daemon stores it, for the details of `key`.
     Task {
+        conversation: String,
+        plan: Option<String>,
         generation: u64,
+        request_id: u64,
         key: String,
         task: Value,
     },
     SendResult {
+        conversation: String,
         generation: u64,
+        request_id: u64,
         sent_text: String,
         result: std::result::Result<(), String>,
     },
     CommentResult {
+        conversation: String,
+        plan: Option<String>,
         generation: u64,
+        request_id: u64,
         editor: Editor,
         result: std::result::Result<(), String>,
     },
@@ -86,6 +98,31 @@ pub struct Editor {
 pub enum Focus {
     Chat,
     Graph,
+}
+
+/// Full preserved state of a conversation across switches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationState {
+    pub input: InputBuffer,
+    pub editor: Option<Editor>,
+    pub sending: bool,
+    pub pending_send: Option<String>,
+    pub send_request_id: u64,
+    pub failed_send: Option<String>,
+    pub sending_comment: bool,
+    pub pending_comment: Option<Editor>,
+    pub comment_request_id: u64,
+    pub failed_comment: Option<Editor>,
+    pub comment_drafts: std::collections::HashMap<String, String>,
+    pub comment_draft_cursors: std::collections::HashMap<String, (usize, Option<u16>)>,
+    pub selected: String,
+    pub filter: Filter,
+    pub offset: (u16, u16),
+    pub details: Option<Details>,
+    pub diff: Option<DiffView>,
+    pub scroll: usize,
+    pub task_request_id: u64,
+    pub diff_request_id: u64,
 }
 
 pub struct App {
@@ -122,12 +159,23 @@ pub struct App {
     pub history: Vec<String>,
     pub history_index: Option<usize>,
     pub history_draft: String,
+    pub history_draft_cursor: usize,
+    pub history_draft_preferred_col: Option<u16>,
+    pub history_item_cursors: std::collections::HashMap<usize, usize>,
     pub sending: bool,
     pub sending_comment: bool,
     pub pending_send: Option<String>,
     pub pending_comment: Option<Editor>,
+    pub send_request_id: u64,
+    pub comment_request_id: u64,
+    pub diff_request_id: u64,
+    pub task_request_id: u64,
+    pub failed_send: Option<String>,
+    pub failed_comment: Option<Editor>,
     pub conversation_drafts: std::collections::HashMap<String, String>,
     pub comment_drafts: std::collections::HashMap<String, String>,
+    pub comment_draft_cursors: std::collections::HashMap<String, (usize, Option<u16>)>,
+    pub conversation_states: std::collections::HashMap<String, ConversationState>,
 }
 
 impl App {
@@ -174,12 +222,23 @@ impl App {
             history: vec![],
             history_index: None,
             history_draft: String::new(),
+            history_draft_cursor: 0,
+            history_draft_preferred_col: None,
+            history_item_cursors: std::collections::HashMap::new(),
             sending: false,
             sending_comment: false,
             pending_send: None,
             pending_comment: None,
+            send_request_id: 0,
+            comment_request_id: 0,
+            diff_request_id: 0,
+            task_request_id: 0,
+            failed_send: None,
+            failed_comment: None,
             conversation_drafts: std::collections::HashMap::new(),
             comment_drafts: std::collections::HashMap::new(),
+            comment_draft_cursors: std::collections::HashMap::new(),
+            conversation_states: std::collections::HashMap::new(),
         }
     }
 
@@ -191,37 +250,156 @@ impl App {
         }
     }
 
+    pub fn comment_key(conversation: &str, plan: Option<&str>, target: &str) -> String {
+        match plan {
+            Some(p) => format!("{conversation}:{p}:{target}"),
+            None => format!("{conversation}::{target}"),
+        }
+    }
+
+    pub fn get_comment_draft(&mut self, target: &str) -> InputBuffer {
+        let key = Self::comment_key(&self.conversation, self.view.plan.as_deref(), target);
+        if let Some(text) = self.comment_drafts.remove(&key) {
+            let (cursor, preferred_col) = self
+                .comment_draft_cursors
+                .remove(&key)
+                .unwrap_or((text.len(), None));
+            let mut buf = InputBuffer::with_text(text);
+            buf.cursor = cursor.min(buf.text.len());
+            buf.preferred_col = preferred_col;
+            return buf;
+        }
+        let fallback_key = format!("{}::{target}", self.conversation);
+        if let Some(text) = self.comment_drafts.remove(&fallback_key) {
+            let (cursor, preferred_col) = self
+                .comment_draft_cursors
+                .remove(&fallback_key)
+                .unwrap_or((text.len(), None));
+            let mut buf = InputBuffer::with_text(text);
+            buf.cursor = cursor.min(buf.text.len());
+            buf.preferred_col = preferred_col;
+            return buf;
+        }
+        if let Some(text) = self.comment_drafts.remove(target) {
+            let (cursor, preferred_col) = self
+                .comment_draft_cursors
+                .remove(target)
+                .unwrap_or((text.len(), None));
+            let mut buf = InputBuffer::with_text(text);
+            buf.cursor = cursor.min(buf.text.len());
+            buf.preferred_col = preferred_col;
+            return buf;
+        }
+        InputBuffer::new()
+    }
+
+    pub fn save_comment_draft(&mut self, target: &str, input: InputBuffer) {
+        let key = Self::comment_key(&self.conversation, self.view.plan.as_deref(), target);
+        self.comment_draft_cursors
+            .insert(key.clone(), (input.cursor, input.preferred_col));
+        self.comment_drafts.insert(key, input.text);
+    }
+
+    pub fn remove_comment_draft(&mut self, target: &str) {
+        let key = Self::comment_key(&self.conversation, self.view.plan.as_deref(), target);
+        self.comment_drafts.remove(&key);
+        self.comment_draft_cursors.remove(&key);
+        let fallback_key = format!("{}::{target}", self.conversation);
+        self.comment_drafts.remove(&fallback_key);
+        self.comment_draft_cursors.remove(&fallback_key);
+        self.comment_drafts.remove(target);
+        self.comment_draft_cursors.remove(target);
+    }
+
     pub fn open(&mut self, conversation: String) {
         if !self.conversation.is_empty() {
             self.conversation_drafts
                 .insert(self.conversation.clone(), self.input.text.clone());
+            self.conversation_states.insert(
+                self.conversation.clone(),
+                ConversationState {
+                    input: self.input.clone(),
+                    editor: self.editor.clone(),
+                    sending: self.sending,
+                    pending_send: self.pending_send.clone(),
+                    send_request_id: self.send_request_id,
+                    failed_send: self.failed_send.clone(),
+                    sending_comment: self.sending_comment,
+                    pending_comment: self.pending_comment.clone(),
+                    comment_request_id: self.comment_request_id,
+                    failed_comment: self.failed_comment.clone(),
+                    comment_drafts: self.comment_drafts.clone(),
+                    comment_draft_cursors: self.comment_draft_cursors.clone(),
+                    selected: self.selected.clone(),
+                    filter: self.filter,
+                    offset: self.offset,
+                    details: self.details.clone(),
+                    diff: self.diff.clone(),
+                    scroll: self.scroll,
+                    task_request_id: self.task_request_id,
+                    diff_request_id: self.diff_request_id,
+                },
+            );
         }
         self.stop_poller.store(true, Ordering::SeqCst);
         self.generation += 1;
         self.conversation = conversation.clone();
         self.view = View::default();
-        let restored_draft = self
-            .conversation_drafts
-            .get(&conversation)
-            .cloned()
-            .unwrap_or_default();
-        self.input = InputBuffer::with_text(restored_draft);
+        if let Some(state) = self.conversation_states.get(&conversation).cloned() {
+            self.input = state.input;
+            self.editor = state.editor;
+            self.sending = state.sending;
+            self.pending_send = state.pending_send;
+            self.send_request_id = state.send_request_id;
+            self.failed_send = state.failed_send;
+            self.sending_comment = state.sending_comment;
+            self.pending_comment = state.pending_comment;
+            self.comment_request_id = state.comment_request_id;
+            self.failed_comment = state.failed_comment;
+            self.comment_drafts = state.comment_drafts;
+            self.comment_draft_cursors = state.comment_draft_cursors;
+            self.selected = state.selected;
+            self.filter = state.filter;
+            self.offset = state.offset;
+            self.details = state.details;
+            self.diff = state.diff;
+            self.scroll = state.scroll;
+            self.task_request_id = state.task_request_id;
+            self.diff_request_id = state.diff_request_id;
+        } else {
+            let restored_draft = self
+                .conversation_drafts
+                .get(&conversation)
+                .cloned()
+                .unwrap_or_default();
+            self.input = InputBuffer::with_text(restored_draft);
+            self.details = None;
+            self.diff = None;
+            self.editor = None;
+            self.selected = ORCHESTRATOR.into();
+            self.filter = Filter::All;
+            self.offset = (0, 0);
+            self.scroll = 0;
+            self.sending = false;
+            self.pending_send = None;
+            self.send_request_id = 0;
+            self.failed_send = None;
+            self.sending_comment = false;
+            self.pending_comment = None;
+            self.comment_request_id = 0;
+            self.failed_comment = None;
+            self.task_request_id = 0;
+            self.diff_request_id = 0;
+        }
         self.input_shown = 0;
-        self.scroll = 0;
-        self.details = None;
-        self.diff = None;
-        self.editor = None;
         self.picker = None;
         self.help = None;
         self.help_scroll = 0;
-        self.selected = ORCHESTRATOR.into();
-        self.offset = (0, 0);
         self.history_index = None;
         self.history_draft.clear();
-        self.sending = false;
-        self.pending_send = None;
-        self.sending_comment = false;
-        self.pending_comment = None;
+        self.history_draft_cursor = 0;
+        self.history_draft_preferred_col = None;
+        self.history_item_cursors.clear();
         let stop = Arc::new(AtomicBool::new(false));
         self.stop_poller = stop.clone();
         let client = self.client.clone();
@@ -244,6 +422,7 @@ impl App {
                             after = last["seq"].as_u64().unwrap_or(after);
                         }
                         Update::Events {
+                            conversation: conversation.clone(),
                             generation,
                             events,
                             idle: reply["idle"] == true,
@@ -278,25 +457,32 @@ impl App {
     }
 
     /// Fetches the stored task behind the open details.
-    fn fetch_task(&self) {
+    fn fetch_task(&mut self) {
         let (Some(details), Some(plan)) = (&self.details, &self.view.plan) else {
             return;
         };
         let Some(id) = details.task_id() else {
             return;
         };
+        self.task_request_id += 1;
+        let request_id = self.task_request_id;
         let request = Request::Task {
             plan: plan.clone(),
             id: id.to_owned(),
         };
         let key = details.key.clone();
+        let plan_id = plan.clone();
+        let conversation = self.conversation.clone();
         let generation = self.generation;
         let client = self.client.clone();
         let updates = self.updates.clone();
         std::thread::spawn(move || {
             let _ = updates.send(match client.call(&request) {
                 Ok(task) => Update::Task {
+                    conversation,
+                    plan: Some(plan_id),
                     generation,
+                    request_id,
                     key,
                     task,
                 },
@@ -312,23 +498,30 @@ impl App {
         }
     }
 
-    fn fetch_diff(&self) {
+    fn fetch_diff(&mut self) {
         let (Some(diff), Some(plan)) = (&self.diff, &self.view.plan) else {
             return;
         };
+        self.diff_request_id += 1;
+        let request_id = self.diff_request_id;
         let request = Request::Diff {
             conversation: self.conversation.clone(),
             plan: plan.clone(),
             id: diff.task.clone(),
         };
         let task = diff.task.clone();
+        let plan_id = plan.clone();
+        let conversation = self.conversation.clone();
         let generation = self.generation;
         let client = self.client.clone();
         let updates = self.updates.clone();
         std::thread::spawn(move || {
             let reply = client.call(&request).map_err(|error| error.to_string());
             let _ = updates.send(Update::Diff {
+                conversation,
+                plan: Some(plan_id),
                 generation,
+                request_id,
                 task,
                 reply,
             });
@@ -344,11 +537,8 @@ impl App {
             KeyCode::Char('?') => self.show_help(Help::Diff),
             KeyCode::Char('c') => {
                 if let Some(target) = diff.target() {
-                    let text = self.comment_drafts.remove(&target).unwrap_or_default();
-                    self.editor = Some(Editor {
-                        target,
-                        input: InputBuffer::with_text(text),
-                    });
+                    let input = self.get_comment_draft(&target);
+                    self.editor = Some(Editor { target, input });
                 }
             }
             KeyCode::Char('r') => self.fetch_diff(),
@@ -370,9 +560,14 @@ impl App {
         if self.history.is_empty() {
             return;
         }
+        if let Some(curr) = self.history_index {
+            self.history_item_cursors.insert(curr, self.input.cursor);
+        }
         let index = match (self.history_index, older) {
             (None, true) => {
                 self.history_draft = self.input.text.clone();
+                self.history_draft_cursor = self.input.cursor;
+                self.history_draft_preferred_col = self.input.preferred_col;
                 Some(self.history.len() - 1)
             }
             (None, false) => return,
@@ -381,16 +576,33 @@ impl App {
             (Some(_), false) => None,
         };
         self.history_index = index;
-        let text = match index {
-            Some(i) => self.history[i].clone(),
-            None => std::mem::take(&mut self.history_draft),
+        match index {
+            Some(i) => {
+                let text = self.history[i].clone();
+                let saved_cursor = self.history_item_cursors.get(&i).copied();
+                let mut buf = InputBuffer::with_text(text);
+                if let Some(c) = saved_cursor {
+                    buf.cursor = c.min(buf.text.len());
+                }
+                self.input = buf;
+            }
+            None => {
+                let text = std::mem::take(&mut self.history_draft);
+                let cursor = self.history_draft_cursor.min(text.len());
+                let mut buf = InputBuffer::with_text(text);
+                buf.cursor = cursor;
+                buf.preferred_col = self.history_draft_preferred_col;
+                self.input = buf;
+            }
         };
-        self.input = InputBuffer::with_text(text);
     }
 
     pub fn record_history(&mut self, text: &str) {
         self.history_index = None;
         self.history_draft.clear();
+        self.history_draft_cursor = 0;
+        self.history_draft_preferred_col = None;
+        self.history_item_cursors.clear();
         let trimmed = text.trim();
         if !trimmed.is_empty() && self.history.last().map(String::as_str) != Some(trimmed) {
             self.history.push(trimmed.to_owned());
@@ -409,19 +621,24 @@ impl App {
         if trimmed.starts_with('/') {
             let text = std::mem::take(&mut self.input.text);
             self.input.cursor = 0;
+            self.input.preferred_col = None;
             self.input_shown = 0;
             self.dispatch(text.trim());
             return;
         }
 
+        self.send_request_id += 1;
+        let request_id = self.send_request_id;
         let text = self.input.text.clone();
         self.record_history(&text);
         let sent_text = std::mem::take(&mut self.input.text);
         self.input.cursor = 0;
+        self.input.preferred_col = None;
         self.input_shown = 0;
         self.scroll = 0;
         self.sending = true;
         self.pending_send = Some(sent_text.clone());
+        self.failed_send = None;
 
         let client = self.client.clone();
         let updates = self.updates.clone();
@@ -430,11 +647,13 @@ impl App {
 
         std::thread::spawn(move || {
             let reply = client.call(&Request::Send {
-                conversation,
+                conversation: conversation.clone(),
                 text: sent_text.clone(),
             });
             let _ = updates.send(Update::SendResult {
+                conversation,
                 generation,
+                request_id,
                 sent_text,
                 result: reply.map(|_| ()).map_err(|e| e.to_string()),
             });
@@ -452,23 +671,30 @@ impl App {
         if editor.input.text.trim().is_empty() {
             return;
         }
+        self.comment_request_id += 1;
+        let request_id = self.comment_request_id;
         let editor = self.editor.take().expect("editing");
         self.sending_comment = true;
         self.pending_comment = Some(editor.clone());
+        self.failed_comment = None;
 
         let client = self.client.clone();
         let updates = self.updates.clone();
         let conversation = self.conversation.clone();
+        let plan = self.view.plan.clone();
         let generation = self.generation;
 
         std::thread::spawn(move || {
             let reply = client.call(&Request::Comment {
-                conversation,
+                conversation: conversation.clone(),
                 target: editor.target.clone(),
                 text: editor.input.text.clone(),
             });
             let _ = updates.send(Update::CommentResult {
+                conversation,
+                plan,
                 generation,
+                request_id,
                 editor,
                 result: reply.map(|_| ()).map_err(|e| e.to_string()),
             });
@@ -478,111 +704,170 @@ impl App {
     pub fn apply_update(&mut self, update: Update) {
         match update {
             Update::Events {
+                conversation,
                 generation,
                 events,
                 idle,
                 autonomous,
-            } if generation == self.generation => {
-                for event in &events {
-                    self.view.apply(event);
+            } => {
+                if conversation == self.conversation && generation == self.generation {
+                    for event in &events {
+                        self.view.apply(event);
+                    }
+                    self.view.idle = idle;
+                    self.view.autonomous = Some(autonomous);
                 }
-                self.view.idle = idle;
-                self.view.autonomous = Some(autonomous);
             }
-            Update::Events { .. } => {}
             Update::Conversation(id) => self.open(id),
             Update::Notice(text) => self.notice = Some(text),
             Update::Task {
-                generation,
+                conversation,
+                plan,
+                generation: _,
+                request_id,
                 key,
                 task,
-            } if generation == self.generation => {
-                if let Some(details) = self.details.as_mut().filter(|details| details.key == key) {
+            } => {
+                if conversation == self.conversation
+                    && request_id == self.task_request_id
+                    && self.view.plan.as_ref() == plan.as_ref()
+                    && let Some(details) = self.details.as_mut().filter(|details| details.key == key)
+                {
+                    details.task = Some(task);
+                } else if let Some(state) = self.conversation_states.get_mut(&conversation)
+                    && state.task_request_id == request_id
+                    && let Some(details) = state.details.as_mut().filter(|details| details.key == key)
+                {
                     details.task = Some(task);
                 }
             }
-            Update::Task { .. } => {}
             Update::Diff {
-                generation,
+                conversation,
+                plan,
+                generation: _,
+                request_id,
                 task,
                 reply,
-            } if generation == self.generation => {
-                if let Some(diff) = self.diff.as_mut().filter(|diff| diff.task == task) {
+            } => {
+                if conversation == self.conversation
+                    && request_id == self.diff_request_id
+                    && self.view.plan.as_ref() == plan.as_ref()
+                    && let Some(diff) = self.diff.as_mut().filter(|diff| diff.task == task)
+                {
+                    diff.load(reply);
+                } else if let Some(state) = self.conversation_states.get_mut(&conversation)
+                    && state.diff_request_id == request_id
+                    && let Some(diff) = state.diff.as_mut().filter(|diff| diff.task == task)
+                {
                     diff.load(reply);
                 }
             }
-            Update::Diff { .. } => {}
             Update::SendResult {
-                generation,
+                conversation,
+                generation: _,
+                request_id,
                 sent_text,
                 result,
-            } if generation == self.generation => {
-                self.sending = false;
-                self.pending_send = None;
-                match result {
-                    Ok(_) => {}
-                    Err(error) => {
-                        if self.input.is_empty() {
-                            self.input = InputBuffer::with_text(sent_text);
-                        } else {
-                            let mut merged = sent_text;
-                            if !merged.ends_with('\n')
-                                && !self.input.text.starts_with('\n')
-                                && !merged.ends_with(' ')
-                                && !self.input.text.starts_with(' ')
-                            {
-                                merged.push(' ');
-                            }
-                            merged.push_str(&self.input.text);
-                            self.input = InputBuffer::with_text(merged);
+            } => {
+                if conversation == self.conversation && request_id == self.send_request_id {
+                    self.sending = false;
+                    self.pending_send = None;
+                    match result {
+                        Ok(_) => {
+                            self.failed_send = None;
                         }
-                        self.notice = Some(format!("✗ {error} (szkic przywrócony)"));
+                        Err(error) => {
+                            if self.input.is_empty() {
+                                self.input = InputBuffer::with_text(sent_text);
+                                self.notice = Some(format!("✗ {error} (szkic przywrócony)"));
+                            } else {
+                                self.failed_send = Some(sent_text);
+                                self.notice = Some(format!(
+                                    "✗ {error} (niewysłana wiadomość zachowana)"
+                                ));
+                            }
+                        }
+                    }
+                } else if let Some(state) = self.conversation_states.get_mut(&conversation)
+                    && state.send_request_id == request_id
+                {
+                    state.sending = false;
+                    state.pending_send = None;
+                    match result {
+                        Ok(_) => {
+                            state.failed_send = None;
+                        }
+                        Err(_) => {
+                            if state.input.is_empty() {
+                                state.input = InputBuffer::with_text(sent_text);
+                            } else {
+                                state.failed_send = Some(sent_text);
+                            }
+                        }
                     }
                 }
-            }
-            Update::SendResult { .. } => {
-                self.sending = false;
-                self.pending_send = None;
             }
             Update::CommentResult {
-                generation,
+                conversation,
+                plan,
+                generation: _,
+                request_id,
                 editor,
                 result,
-            } if generation == self.generation => {
-                self.sending_comment = false;
-                self.pending_comment = None;
-                match result {
-                    Ok(_) => {
-                        self.comment_drafts.remove(&editor.target);
-                    }
-                    Err(error) => {
-                        if let Some(active_editor) = &mut self.editor {
-                            if active_editor.target == editor.target {
-                                if active_editor.input.is_empty() {
-                                    active_editor.input = editor.input;
-                                } else {
-                                    let mut merged = editor.input.text;
-                                    if !merged.ends_with('\n')
-                                        && !active_editor.input.text.starts_with('\n')
-                                        && !merged.ends_with(' ')
-                                        && !active_editor.input.text.starts_with(' ')
-                                    {
-                                        merged.push(' ');
-                                    }
-                                    merged.push_str(&active_editor.input.text);
-                                    active_editor.input = InputBuffer::with_text(merged);
-                                }
-                            }
-                        } else {
-                            self.editor = Some(editor);
+            } => {
+                if conversation == self.conversation && request_id == self.comment_request_id {
+                    self.sending_comment = false;
+                    self.pending_comment = None;
+                    match result {
+                        Ok(_) => {
+                            self.failed_comment = None;
+                            self.remove_comment_draft(&editor.target);
                         }
-                        self.notice = Some(format!("✗ {error} (szkic komentarza zachowany)"));
+                        Err(error) => {
+                            if let Some(active_editor) = &mut self.editor {
+                                if active_editor.target == editor.target {
+                                    if active_editor.input.is_empty() {
+                                        active_editor.input = editor.input;
+                                    } else {
+                                        self.save_comment_draft(&editor.target, editor.input.clone());
+                                        self.failed_comment = Some(editor);
+                                    }
+                                } else {
+                                    self.save_comment_draft(&editor.target, editor.input.clone());
+                                    self.failed_comment = Some(editor);
+                                }
+                            } else {
+                                self.editor = Some(editor);
+                            }
+                            self.notice = Some(format!(
+                                "✗ {error} (szkic komentarza zachowany)"
+                            ));
+                        }
+                    }
+                } else if let Some(state) = self.conversation_states.get_mut(&conversation)
+                    && state.comment_request_id == request_id
+                {
+                    state.sending_comment = false;
+                    state.pending_comment = None;
+                    match result {
+                        Ok(_) => {
+                            state.failed_comment = None;
+                            let key = Self::comment_key(&conversation, plan.as_deref(), &editor.target);
+                            state.comment_drafts.remove(&key);
+                            state.comment_draft_cursors.remove(&key);
+                        }
+                        Err(_) => {
+                            if state.editor.is_none() {
+                                state.editor = Some(editor);
+                            } else {
+                                let key = Self::comment_key(&conversation, plan.as_deref(), &editor.target);
+                                state.comment_drafts.insert(key.clone(), editor.input.text.clone());
+                                state.comment_draft_cursors.insert(key, (editor.input.cursor, editor.input.preferred_col));
+                                state.failed_comment = Some(editor);
+                            }
+                        }
                     }
                 }
-            }
-            Update::CommentResult { .. } => {
-                self.sending_comment = false;
-                self.pending_comment = None;
             }
         }
     }
@@ -752,11 +1037,8 @@ impl App {
             Command::Diff => self.open_diff(&selected),
             Command::Comment => {
                 let target = selected;
-                let text = self.comment_drafts.remove(&target).unwrap_or_default();
-                self.editor = Some(Editor {
-                    target,
-                    input: InputBuffer::with_text(text),
-                })
+                let input = self.get_comment_draft(&target);
+                self.editor = Some(Editor { target, input });
             }
             Command::Filter => self.filter = self.filter.next(),
             Command::Help => {
@@ -877,10 +1159,16 @@ impl App {
             KeyCode::Esc => {
                 if self.history_index.is_some() {
                     self.history_index = None;
-                    let draft = std::mem::take(&mut self.history_draft);
-                    self.input = InputBuffer::with_text(draft);
+                    let text = std::mem::take(&mut self.history_draft);
+                    let cursor = self.history_draft_cursor.min(text.len());
+                    let mut buf = InputBuffer::with_text(text);
+                    buf.cursor = cursor;
+                    buf.preferred_col = self.history_draft_preferred_col;
+                    self.input = buf;
                 } else if !self.input.is_empty() {
                     self.history_draft = self.input.text.clone();
+                    self.history_draft_cursor = self.input.cursor;
+                    self.history_draft_preferred_col = self.input.preferred_col;
                     self.input.clear();
                     self.input_shown = 0;
                 } else {
@@ -1000,11 +1288,8 @@ impl App {
             }
             KeyCode::Char('c') => {
                 let target = self.selected.clone();
-                let text = self.comment_drafts.remove(&target).unwrap_or_default();
-                self.editor = Some(Editor {
-                    target,
-                    input: InputBuffer::with_text(text),
-                })
+                let input = self.get_comment_draft(&target);
+                self.editor = Some(Editor { target, input });
             }
             KeyCode::Enter => {
                 self.details = Some(Details::new(self.selected.clone()));
@@ -1024,7 +1309,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 if let Some(editor) = self.editor.take().filter(|e| !e.input.is_empty()) {
-                    self.comment_drafts.insert(editor.target, editor.input.text);
+                    self.save_comment_draft(&editor.target, editor.input);
                 }
             }
             KeyCode::Enter if alt => editor.input.insert_char('\n'),
@@ -1084,11 +1369,8 @@ impl App {
             KeyCode::Char('?') => self.show_help(Help::Details),
             KeyCode::Char('c') => {
                 let target = details.key.clone();
-                let text = self.comment_drafts.remove(&target).unwrap_or_default();
-                self.editor = Some(Editor {
-                    target,
-                    input: InputBuffer::with_text(text),
-                })
+                let input = self.get_comment_draft(&target);
+                self.editor = Some(Editor { target, input });
             }
             KeyCode::Down if on_comments => details.comment += 1,
             KeyCode::Up if on_comments => details.comment = details.comment.saturating_sub(1),
@@ -1556,12 +1838,23 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         history: vec![],
         history_index: None,
         history_draft: String::new(),
+        history_draft_cursor: 0,
+        history_draft_preferred_col: None,
+        history_item_cursors: std::collections::HashMap::new(),
         sending: false,
         sending_comment: false,
         pending_send: None,
         pending_comment: None,
+        send_request_id: 0,
+        comment_request_id: 0,
+        diff_request_id: 0,
+        task_request_id: 0,
+        failed_send: None,
+        failed_comment: None,
         conversation_drafts: std::collections::HashMap::new(),
         comment_drafts: std::collections::HashMap::new(),
+        comment_draft_cursors: std::collections::HashMap::new(),
+        conversation_states: std::collections::HashMap::new(),
     };
     app.open(conversation);
 

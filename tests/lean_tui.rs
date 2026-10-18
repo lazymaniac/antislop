@@ -1339,20 +1339,49 @@ fn tui_send_reliability_draft_retention_on_error_and_in_flight_typing() {
     app.input.insert_str("nowy dopisek podczas oczekiwania");
 
     // 3. Daemon fails with network error
+    let req_id = app.send_request_id;
     app.apply_update(Update::SendResult {
+        conversation: app.conversation.clone(),
         generation: app.generation,
+        request_id: req_id,
         sent_text: "oryginalna treść wiadomości".into(),
         result: Err("połączenie zerwane".into()),
     });
 
     assert!(!app.sending);
     assert_eq!(app.pending_send, None);
-    // Both original message and new typing are preserved and merged!
-    assert!(app.input.text.contains("oryginalna treść wiadomości"));
-    assert!(app.input.text.contains("nowy dopisek podczas oczekiwania"));
+    // Crucial requirement: DO NOT automatically glue old message with new draft!
+    // Active typing remains pristine:
+    assert_eq!(app.input.text, "nowy dopisek podczas oczekiwania");
+    // Failed message is preserved in failed_send without concatenating:
+    assert_eq!(
+        app.failed_send.as_deref(),
+        Some("oryginalna treść wiadomości")
+    );
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ połączenie zerwane (szkic przywrócony)")
+        Some("✗ połączenie zerwane (niewysłana wiadomość zachowana)")
+    );
+
+    // 4. When input was empty upon error, draft is restored directly to input
+    app.input.clear();
+    app.failed_send = None;
+    app.input = InputBuffer::with_text("inna wiadomość");
+    app.submit();
+    let req_id_2 = app.send_request_id;
+    assert!(app.input.is_empty());
+    app.apply_update(Update::SendResult {
+        conversation: app.conversation.clone(),
+        generation: app.generation,
+        request_id: req_id_2,
+        sent_text: "inna wiadomość".into(),
+        result: Err("błąd sieci".into()),
+    });
+    assert!(!app.sending);
+    assert_eq!(app.input.text, "inna wiadomość");
+    assert_eq!(
+        app.notice.as_deref(),
+        Some("✗ błąd sieci (szkic przywrócony)")
     );
 }
 
@@ -1378,8 +1407,12 @@ fn tui_comment_send_retention_and_protection_on_error() {
 
     // Daemon returns an error
     let editor = app.pending_comment.clone().unwrap();
+    let req_id = app.comment_request_id;
     app.apply_update(Update::CommentResult {
+        conversation: app.conversation.clone(),
+        plan: app.view.plan.clone(),
         generation: app.generation,
+        request_id: req_id,
         editor,
         result: Err("baza zablokowana".into()),
     });
@@ -1394,6 +1427,34 @@ fn tui_comment_send_retention_and_protection_on_error() {
     assert_eq!(
         app.notice.as_deref(),
         Some("✗ baza zablokowana (szkic komentarza zachowany)")
+    );
+
+    // User submits comment, but then opens a new editor while send is in flight
+    app.submit_comment();
+    let req_id_2 = app.comment_request_id;
+    let editor_2 = app.pending_comment.clone().unwrap();
+    app.editor = Some(Editor {
+        target: "worker:t2".into(),
+        input: InputBuffer::with_text("inny edytor otwarty"),
+    });
+    app.apply_update(Update::CommentResult {
+        conversation: app.conversation.clone(),
+        plan: app.view.plan.clone(),
+        generation: app.generation,
+        request_id: req_id_2,
+        editor: editor_2,
+        result: Err("błąd zapisu".into()),
+    });
+    assert!(!app.sending_comment);
+    // Active editor is NOT replaced or glued
+    assert_eq!(app.editor.as_ref().unwrap().target, "worker:t2");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "inny edytor otwarty");
+    // Failed comment was preserved in drafts
+    let saved = app.get_comment_draft("worker:t1");
+    assert_eq!(saved.text, "szkic ważnego komentarza");
+    assert_eq!(
+        app.failed_comment.as_ref().map(|e| e.target.as_str()),
+        Some("worker:t1")
     );
 }
 
@@ -1530,3 +1591,684 @@ fn tui_established_keymap_ctrl_s_and_newlines() {
         "komentarz linia1\nkomentarz linia2\nkomentarz linia3"
     );
 }
+
+#[test]
+fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_active_state() {
+    let mut app = App::test_app();
+
+    // 1. In Conv-A: send message and comment, open details and diff
+    app.conversation = "conv-A".into();
+    app.input = InputBuffer::with_text("wiadomość z A");
+    app.submit();
+    let conv_a_send_id = app.send_request_id;
+    assert!(app.sending);
+
+    app.editor = Some(Editor {
+        target: "worker:t1".into(),
+        input: InputBuffer::with_text("komentarz z A"),
+    });
+    app.submit_comment();
+    let conv_a_comment_id = app.comment_request_id;
+    assert!(app.sending_comment);
+
+    app.details = Some(Details::new("worker:t1".into()));
+    let conv_a_task_id = app.task_request_id;
+    app.diff = Some(DiffView::new("t1".into()));
+    let conv_a_diff_id = app.diff_request_id;
+
+    // 2. Switch to Conv-B
+    app.open("conv-B".into());
+    assert_eq!(app.conversation, "conv-B");
+    assert!(!app.sending);
+    assert!(!app.sending_comment);
+
+    // Active state in Conv-B
+    app.input = InputBuffer::with_text("szkic aktywny w B");
+    app.editor = Some(Editor {
+        target: "worker:t9".into(),
+        input: InputBuffer::with_text("komentarz aktywny w B"),
+    });
+    app.details = Some(Details::new("worker:t9".into()));
+    app.diff = Some(DiffView::new("t9".into()));
+
+    // 3. Delayed responses from Conv-A arrive while in Conv-B:
+    // 3a. SendResult for Conv-A
+    app.apply_update(Update::SendResult {
+        conversation: "conv-A".into(),
+        generation: 1,
+        request_id: conv_a_send_id,
+        sent_text: "wiadomość z A".into(),
+        result: Err("błąd wysyłki w starej rozmowie".into()),
+    });
+    // Active Conv-B state remains pristine:
+    assert_eq!(app.input.text, "szkic aktywny w B");
+    assert!(!app.sending);
+    assert_eq!(app.pending_send, None);
+    assert_eq!(app.failed_send, None);
+    // Preserved Conv-A state was updated:
+    let state_a = app.conversation_states.get("conv-A").unwrap();
+    assert!(!state_a.sending);
+    assert_eq!(state_a.pending_send, None);
+    assert_eq!(state_a.input.text, "wiadomość z A");
+    assert_eq!(state_a.failed_send, None);
+
+    // 3b. CommentResult for Conv-A
+    app.apply_update(Update::CommentResult {
+        conversation: "conv-A".into(),
+        plan: None,
+        generation: 1,
+        request_id: conv_a_comment_id,
+        editor: Editor {
+            target: "worker:t1".into(),
+            input: InputBuffer::with_text("komentarz z A"),
+        },
+        result: Err("błąd komentarza w starej rozmowie".into()),
+    });
+    // Active Conv-B comment editor remains pristine:
+    assert_eq!(app.editor.as_ref().unwrap().target, "worker:t9");
+    assert_eq!(
+        app.editor.as_ref().unwrap().input.text,
+        "komentarz aktywny w B"
+    );
+    assert!(!app.sending_comment);
+
+    // 3c. Task update for Conv-A
+    app.apply_update(Update::Task {
+        conversation: "conv-A".into(),
+        plan: None,
+        generation: 1,
+        request_id: conv_a_task_id,
+        key: "worker:t1".into(),
+        task: json!({"id": "t1", "title": "stare zadanie"}),
+    });
+    // Active Conv-B details remains pristine (for worker:t9):
+    assert_eq!(app.details.as_ref().unwrap().key, "worker:t9");
+    assert!(app.details.as_ref().unwrap().task.is_none());
+
+    // 3d. Diff update for Conv-A
+    app.apply_update(Update::Diff {
+        conversation: "conv-A".into(),
+        plan: None,
+        generation: 1,
+        request_id: conv_a_diff_id,
+        task: "t1".into(),
+        reply: Ok(json!([])),
+    });
+    // Active Conv-B diff remains pristine (for t9):
+    assert_eq!(app.diff.as_ref().unwrap().task, "t9");
+
+    // 4. Within the same conversation (Conv-B), older request IDs are ignored:
+    app.input.clear();
+    app.input = InputBuffer::with_text("żądanie 1 w B");
+    app.submit();
+    let b_req1 = app.send_request_id;
+    // Request 1 succeeds
+    app.apply_update(Update::SendResult {
+        conversation: "conv-B".into(),
+        generation: app.generation,
+        request_id: b_req1,
+        sent_text: "żądanie 1 w B".into(),
+        result: Ok(()),
+    });
+    assert!(!app.sending);
+
+    // Start request 2
+    app.input = InputBuffer::with_text("żądanie 2 w B");
+    app.submit();
+    let b_req2 = app.send_request_id;
+    assert!(b_req2 > b_req1);
+    assert!(app.sending);
+    assert_eq!(app.pending_send.as_deref(), Some("żądanie 2 w B"));
+
+    // User types new draft while waiting for request 2
+    app.input.insert_str("nowy dopisek w toku żądania 2");
+
+    // Stale/delayed response for request 1 arrives late:
+    app.apply_update(Update::SendResult {
+        conversation: "conv-B".into(),
+        generation: app.generation,
+        request_id: b_req1,
+        sent_text: "żądanie 1 w B".into(),
+        result: Err("opóźniony błąd starego żądania".into()),
+    });
+    // Must NOT alter request 2 in flight or overwrite draft:
+    assert!(app.sending);
+    assert_eq!(app.pending_send.as_deref(), Some("żądanie 2 w B"));
+    assert_eq!(app.input.text, "nowy dopisek w toku żądania 2");
+}
+
+#[test]
+fn tui_identical_sends_correlation() {
+    let mut app = App::test_app();
+    app.conversation = "conv-idem".into();
+
+    // 1. Send identical text first time
+    app.input = InputBuffer::with_text("identyczna treść");
+    app.submit();
+    let req1 = app.send_request_id;
+    assert!(app.sending);
+    assert_eq!(app.pending_send.as_deref(), Some("identyczna treść"));
+
+    // In-flight typing during send 1
+    app.input.insert_str("wpis podczas oczekiwania 1");
+
+    // Out-of-order older response with wrong ID arrives:
+    app.apply_update(Update::SendResult {
+        conversation: "conv-idem".into(),
+        generation: app.generation,
+        request_id: req1 - 1,
+        sent_text: "identyczna treść".into(),
+        result: Err("stary błąd".into()),
+    });
+    assert!(app.sending);
+    assert_eq!(app.pending_send.as_deref(), Some("identyczna treść"));
+    assert_eq!(app.input.text, "wpis podczas oczekiwania 1");
+
+    // Send 1 fails with network error
+    app.apply_update(Update::SendResult {
+        conversation: "conv-idem".into(),
+        generation: app.generation,
+        request_id: req1,
+        sent_text: "identyczna treść".into(),
+        result: Err("przekroczono limit czasu".into()),
+    });
+    assert!(!app.sending);
+    assert_eq!(app.pending_send, None);
+    // Crucial: not glued, active draft kept intact, failed preserved in failed_send
+    assert_eq!(app.input.text, "wpis podczas oczekiwania 1");
+    assert_eq!(app.failed_send.as_deref(), Some("identyczna treść"));
+
+    // 2. User submits identical text second time
+    app.input = InputBuffer::with_text("identyczna treść");
+    app.submit();
+    let req2 = app.send_request_id;
+    assert!(req2 > req1);
+    assert!(app.sending);
+    assert_eq!(app.pending_send.as_deref(), Some("identyczna treść"));
+
+    // A delayed duplicate response for req1 arrives:
+    app.apply_update(Update::SendResult {
+        conversation: "conv-idem".into(),
+        generation: app.generation,
+        request_id: req1,
+        sent_text: "identyczna treść".into(),
+        result: Ok(()),
+    });
+    // Request 2 must still be in flight!
+    assert!(app.sending);
+    assert_eq!(app.pending_send.as_deref(), Some("identyczna treść"));
+
+    // When the real response for req2 arrives:
+    app.apply_update(Update::SendResult {
+        conversation: "conv-idem".into(),
+        generation: app.generation,
+        request_id: req2,
+        sent_text: "identyczna treść".into(),
+        result: Ok(()),
+    });
+    assert!(!app.sending);
+    assert_eq!(app.pending_send, None);
+}
+
+#[test]
+fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
+    let mut app = App::test_app();
+
+    // 1. Set up rich state in Conv-A
+    app.open("conv-a".into());
+    app.input = InputBuffer::with_text("wiersz 1\nwiersz 2 ze szkicem");
+    app.input.cursor = 12;
+    app.input.preferred_col = Some(15);
+
+    app.editor = Some(Editor {
+        target: "worker:t1".into(),
+        input: InputBuffer::with_text("komentarz roboczy"),
+    });
+    app.editor.as_mut().unwrap().input.cursor = 5;
+    app.editor.as_mut().unwrap().input.preferred_col = Some(5);
+
+    app.save_comment_draft("worker:t2", InputBuffer::with_text("inny szkic t2"));
+
+    app.sending = true;
+    app.pending_send = Some("wysyłana treść A".into());
+    app.send_request_id = 101;
+
+    app.sending_comment = true;
+    app.pending_comment = Some(Editor {
+        target: "worker:t3".into(),
+        input: InputBuffer::with_text("wysyłany komentarz t3"),
+    });
+    app.comment_request_id = 102;
+
+    app.details = Some(Details::new("worker:t1".into()));
+    app.diff = Some(DiffView::new("t1".into()));
+
+    // 2. Switch to Conv-B (A -> B)
+    app.open("conv-b".into());
+    assert_eq!(app.conversation, "conv-b");
+    assert!(app.input.is_empty());
+    assert!(app.editor.is_none());
+    assert!(!app.sending);
+    assert!(!app.sending_comment);
+    assert!(app.details.is_none());
+    assert!(app.diff.is_none());
+
+    // In Conv-B: user starts a different draft
+    app.input = InputBuffer::with_text("szkic rozmowy B");
+
+    // 3. Switch back to Conv-A (B -> A)
+    app.open("conv-a".into());
+    assert_eq!(app.conversation, "conv-a");
+    // Full input buffer state preserved:
+    assert_eq!(app.input.text, "wiersz 1\nwiersz 2 ze szkicem");
+    assert_eq!(app.input.cursor, 12);
+    assert_eq!(app.input.preferred_col, Some(15));
+
+    // Full comment editor state preserved:
+    assert!(app.editor.is_some());
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.target, "worker:t1");
+    assert_eq!(ed.input.text, "komentarz roboczy");
+    assert_eq!(ed.input.cursor, 5);
+    assert_eq!(ed.input.preferred_col, Some(5));
+
+    // Comment drafts preserved:
+    assert_eq!(app.get_comment_draft("worker:t2").text, "inny szkic t2");
+
+    // In-flight sending state preserved:
+    assert!(app.sending);
+    assert_eq!(app.pending_send.as_deref(), Some("wysyłana treść A"));
+    assert_eq!(app.send_request_id, 101);
+
+    // In-flight comment state preserved:
+    assert!(app.sending_comment);
+    assert_eq!(
+        app.pending_comment.as_ref().map(|e| e.target.as_str()),
+        Some("worker:t3")
+    );
+    assert_eq!(app.comment_request_id, 102);
+
+    // Details and Diff preserved:
+    assert_eq!(app.details.as_ref().unwrap().key, "worker:t1");
+    assert_eq!(app.diff.as_ref().unwrap().task, "t1");
+
+    // 4. In-flight operations resolve AFTER switching A -> B -> A
+    // (Note: generation has incremented twice, but request_id correlates them!)
+    assert_ne!(app.generation, 1);
+
+    // 4a. SendResult arrives for request 101 with error
+    app.apply_update(Update::SendResult {
+        conversation: "conv-a".into(),
+        generation: 1, // original generation before switch
+        request_id: 101,
+        sent_text: "wysyłana treść A".into(),
+        result: Err("błąd sieci po A->B->A".into()),
+    });
+    // Flight flag cleared - no permanent lock!
+    assert!(!app.sending);
+    assert_eq!(app.pending_send, None);
+    // Draft retained without automatic gluing:
+    assert_eq!(app.input.text, "wiersz 1\nwiersz 2 ze szkicem");
+    assert_eq!(app.failed_send.as_deref(), Some("wysyłana treść A"));
+    assert_eq!(
+        app.notice.as_deref(),
+        Some("✗ błąd sieci po A->B->A (niewysłana wiadomość zachowana)")
+    );
+
+    // 4b. CommentResult arrives for request 102 with error
+    app.apply_update(Update::CommentResult {
+        conversation: "conv-a".into(),
+        plan: None,
+        generation: 1,
+        request_id: 102,
+        editor: Editor {
+            target: "worker:t3".into(),
+            input: InputBuffer::with_text("wysyłany komentarz t3"),
+        },
+        result: Err("błąd bazy po A->B->A".into()),
+    });
+    // Comment flight flag cleared:
+    assert!(!app.sending_comment);
+    assert_eq!(app.pending_comment, None);
+    // Active editor for worker:t1 not overwritten or glued:
+    assert_eq!(app.editor.as_ref().unwrap().target, "worker:t1");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "komentarz roboczy");
+    // Failed comment for worker:t3 preserved in drafts and failed_comment:
+    assert_eq!(
+        app.get_comment_draft("worker:t3").text,
+        "wysyłany komentarz t3"
+    );
+    assert_eq!(
+        app.failed_comment.as_ref().map(|e| e.target.as_str()),
+        Some("worker:t3")
+    );
+
+    // 4c. Details and Diff arrive after A -> B -> A
+    app.apply_update(Update::Task {
+        conversation: "conv-a".into(),
+        plan: None,
+        generation: 1,
+        request_id: app.task_request_id,
+        key: "worker:t1".into(),
+        task: json!({"id": "t1", "title": "zadanie po A->B->A"}),
+    });
+    assert_eq!(
+        app.details.as_ref().unwrap().task.as_ref().unwrap()["title"],
+        "zadanie po A->B->A"
+    );
+
+    app.apply_update(Update::Diff {
+        conversation: "conv-a".into(),
+        plan: None,
+        generation: 1,
+        request_id: app.diff_request_id,
+        task: "t1".into(),
+        reply: Ok(json!([])),
+    });
+    assert_eq!(app.diff.as_ref().unwrap().task, "t1");
+
+    // 5. Switch back to Conv-B: its draft is preserved:
+    app.open("conv-b".into());
+    assert_eq!(app.conversation, "conv-b");
+    assert_eq!(app.input.text, "szkic rozmowy B");
+}
+
+#[test]
+fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
+    let mut app = App::test_app();
+    app.open("conv-flight-a".into());
+
+    // 1. Send message: input is cleared and message is in flight
+    app.input = InputBuffer::with_text("pierwotna treść wiadomości");
+    app.submit();
+    let send_req = app.send_request_id;
+    assert!(app.sending);
+    assert!(app.input.is_empty());
+    let gen_before_switch = app.generation;
+
+    // 2. Cycle A -> B -> A
+    app.open("conv-flight-b".into());
+    assert_eq!(app.conversation, "conv-flight-b");
+    app.open("conv-flight-a".into());
+    assert_eq!(app.conversation, "conv-flight-a");
+    assert_ne!(app.generation, gen_before_switch);
+    assert!(app.sending);
+    assert!(app.input.is_empty());
+
+    // 3. Delayed network error arrives after A -> B -> A cycle
+    app.apply_update(Update::SendResult {
+        conversation: "conv-flight-a".into(),
+        generation: gen_before_switch,
+        request_id: send_req,
+        sent_text: "pierwotna treść wiadomości".into(),
+        result: Err("awaria sieci".into()),
+    });
+
+    // Verification: sending flag is cleared, draft is restored to input!
+    assert!(!app.sending, "sending must be cleared after A->B->A error");
+    assert_eq!(app.pending_send, None);
+    assert_eq!(app.input.text, "pierwotna treść wiadomości");
+    assert_eq!(
+        app.notice.as_deref(),
+        Some("✗ awaria sieci (szkic przywrócony)")
+    );
+
+    // 4. Send comment: editor is cleared and comment is in flight
+    app.editor = Some(Editor {
+        target: "task:t5".into(),
+        input: InputBuffer::with_text("ważna uwaga do zadania"),
+    });
+    app.submit_comment();
+    let comment_req = app.comment_request_id;
+    assert!(app.sending_comment);
+    assert!(app.editor.is_none());
+    let gen_comment_start = app.generation;
+
+    // 5. Cycle A -> B -> A
+    app.open("conv-flight-b".into());
+    app.open("conv-flight-a".into());
+    assert_ne!(app.generation, gen_comment_start);
+    assert!(app.sending_comment);
+    assert!(app.editor.is_none());
+
+    // 6. Comment error arrives after A -> B -> A cycle
+    let pending_editor = app.pending_comment.clone().unwrap();
+    app.apply_update(Update::CommentResult {
+        conversation: "conv-flight-a".into(),
+        plan: None,
+        generation: gen_comment_start,
+        request_id: comment_req,
+        editor: pending_editor,
+        result: Err("odrzucono komentarz".into()),
+    });
+
+    // Verification: sending_comment flag is cleared, comment editor is restored!
+    assert!(
+        !app.sending_comment,
+        "sending_comment must be cleared after A->B->A error"
+    );
+    assert_eq!(app.pending_comment, None);
+    assert!(app.editor.is_some());
+    let ed = app.editor.as_ref().unwrap();
+    assert_eq!(ed.target, "task:t5");
+    assert_eq!(ed.input.text, "ważna uwaga do zadania");
+    assert_eq!(
+        app.notice.as_deref(),
+        Some("✗ odrzucono komentarz (szkic komentarza zachowany)")
+    );
+
+    // 7. Verify response arriving while user is in B (A -> B), then returns to A (B -> A)
+    app.input = InputBuffer::with_text("wiadomość rozstrzygana w tle");
+    app.submit();
+    let send_req_bg = app.send_request_id;
+    assert!(app.sending);
+
+    app.open("conv-flight-b".into());
+    assert_eq!(app.conversation, "conv-flight-b");
+    assert!(!app.sending);
+
+    // While in B, background failure arrives for A
+    app.apply_update(Update::SendResult {
+        conversation: "conv-flight-a".into(),
+        generation: 999,
+        request_id: send_req_bg,
+        sent_text: "wiadomość rozstrzygana w tle".into(),
+        result: Err("timeout serwera".into()),
+    });
+
+    // Switch back to A: draft was restored into state.input and sending is false!
+    app.open("conv-flight-a".into());
+    assert_eq!(app.conversation, "conv-flight-a");
+    assert!(!app.sending);
+    assert_eq!(app.input.text, "wiadomość rozstrzygana w tle");
+}
+
+#[test]
+fn tui_comments_with_same_target_in_different_conversations_and_plans() {
+    let mut app = App::test_app();
+
+    // 1. (conv1, None, "worker:t1")
+    app.open("conv1".into());
+    app.view.plan = None;
+    app.save_comment_draft(
+        "worker:t1",
+        InputBuffer::with_text("szkic conv1 bez planu"),
+    );
+
+    // 2. (conv1, Some("plan-alpha"), "worker:t1")
+    app.view.plan = Some("plan-alpha".into());
+    app.save_comment_draft(
+        "worker:t1",
+        InputBuffer::with_text("szkic conv1 plan alpha"),
+    );
+
+    // 3. (conv1, Some("plan-beta"), "worker:t1")
+    app.view.plan = Some("plan-beta".into());
+    app.save_comment_draft(
+        "worker:t1",
+        InputBuffer::with_text("szkic conv1 plan beta"),
+    );
+
+    // 4. (conv2, Some("plan-alpha"), "worker:t1")
+    app.open("conv2".into());
+    app.view.plan = Some("plan-alpha".into());
+    app.save_comment_draft(
+        "worker:t1",
+        InputBuffer::with_text("szkic conv2 plan alpha"),
+    );
+
+    // Verify all 4 are isolated and accessible without collision:
+    assert_eq!(
+        app.get_comment_draft("worker:t1").text,
+        "szkic conv2 plan alpha"
+    );
+
+    // Switch back to conv1
+    app.open("conv1".into());
+    // Under plan-beta:
+    app.view.plan = Some("plan-beta".into());
+    assert_eq!(
+        app.get_comment_draft("worker:t1").text,
+        "szkic conv1 plan beta"
+    );
+
+    // Under plan-alpha:
+    app.view.plan = Some("plan-alpha".into());
+    assert_eq!(
+        app.get_comment_draft("worker:t1").text,
+        "szkic conv1 plan alpha"
+    );
+
+    // Under None:
+    app.view.plan = None;
+    assert_eq!(
+        app.get_comment_draft("worker:t1").text,
+        "szkic conv1 bez planu"
+    );
+}
+
+#[test]
+fn tui_history_recall_with_cursor_restoration() {
+    let mut app = App::test_app();
+
+    app.record_history("pierwsze polecenie");
+    app.record_history("drugie polecenie");
+
+    // Draft in progress with specific cursor position and preferred_col
+    app.input = InputBuffer::with_text("szkic z kursorem w środku");
+    app.input.cursor = 7;
+    app.input.preferred_col = Some(7);
+
+    // Up arrow navigates into history
+    app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.history_index, Some(1));
+    assert_eq!(app.input.text, "drugie polecenie");
+
+    // Up arrow again to older history
+    app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.history_index, Some(0));
+    assert_eq!(app.input.text, "pierwsze polecenie");
+
+    // Down arrow navigates back down
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.history_index, Some(1));
+    assert_eq!(app.input.text, "drugie polecenie");
+
+    // Down arrow returns to draft with exact cursor and preferred_col restored!
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.history_index, None);
+    assert_eq!(app.input.text, "szkic z kursorem w środku");
+    assert_eq!(app.input.cursor, 7);
+    assert_eq!(app.input.preferred_col, Some(7));
+
+    // Also test Esc cancels history browsing and restores the draft:
+    app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.history_index, Some(1));
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.history_index, None);
+    assert_eq!(app.input.text, "szkic z kursorem w środku");
+    assert_eq!(app.input.cursor, 7);
+    assert_eq!(app.input.preferred_col, Some(7));
+}
+
+#[test]
+fn tui_preferred_column_memory_and_grapheme_editing() {
+    // 1. Preferred column memory across lines of differing lengths
+    let text = "linia pierwsza ma dwadzieścia znaków\nkrótka\ntrzecia linia jest znowu bardzo długa";
+    let mut buf = InputBuffer::with_text(text);
+    // Position cursor at col 20 on line 0
+    buf.cursor = 20;
+    let (c, r) = buf.visual_cursor(80);
+    assert_eq!(r, 0);
+    assert_eq!(c, 20);
+
+    // Move down to short line (width = 6)
+    buf.move_down(80);
+    let (c2, r2) = buf.visual_cursor(80);
+    assert_eq!(r2, 1);
+    assert_eq!(c2, 6); // Clamped to line end
+    assert_eq!(buf.preferred_col, Some(20)); // Memory maintained!
+
+    // Move down to long line (line 2)
+    buf.move_down(80);
+    let (c3, r3) = buf.visual_cursor(80);
+    assert_eq!(r3, 2);
+    assert_eq!(c3, 20); // Restored back to col 20!
+
+    // Moving up back to short line:
+    buf.move_up(80);
+    let (c4, r4) = buf.visual_cursor(80);
+    assert_eq!(r4, 1);
+    assert_eq!(c4, 6);
+    assert_eq!(buf.preferred_col, Some(20));
+
+    // Moving up back to line 0:
+    buf.move_up(80);
+    let (c5, r5) = buf.visual_cursor(80);
+    assert_eq!(r5, 0);
+    assert_eq!(c5, 20);
+
+    // Horizontal movement resets preferred_col
+    buf.move_left();
+    assert_eq!(buf.preferred_col, None);
+
+    // 2. Grapheme cluster editing: Polish diacritics & composite emojis
+    let mut gbuf = InputBuffer::with_text("Zażółć 🚀 👨‍👩‍👧‍👦 koniec");
+    // Position cursor right after the family emoji
+    let family_idx = gbuf.text.find(" 👨‍👩‍👧‍👦").unwrap() + " 👨‍👩‍👧‍👦".len();
+    gbuf.cursor = family_idx;
+
+    // Backspace must remove the entire 18-byte ZWJ sequence atomically:
+    assert!(gbuf.backspace());
+    assert_eq!(gbuf.text, "Zażółć 🚀  koniec");
+
+    // Position cursor right before 🚀
+    let rocket_idx = gbuf.text.find('🚀').unwrap();
+    gbuf.cursor = rocket_idx;
+    // Delete must remove the 4-byte rocket emoji atomically:
+    assert!(gbuf.delete());
+    assert_eq!(gbuf.text, "Zażółć   koniec");
+
+    // Stepping left/right across multi-byte Polish characters:
+    let mut pol = InputBuffer::with_text("zażółć");
+    pol.move_buffer_start();
+    assert_eq!(pol.cursor, 0);
+    pol.move_right(); // 'z'
+    assert_eq!(pol.cursor, 1);
+    pol.move_right(); // 'a'
+    assert_eq!(pol.cursor, 2);
+    pol.move_right(); // 'ż' (2 bytes)
+    assert_eq!(pol.cursor, 4);
+    pol.move_right(); // 'ó' (2 bytes)
+    assert_eq!(pol.cursor, 6);
+    pol.move_right(); // 'ł' (2 bytes)
+    assert_eq!(pol.cursor, 8);
+    pol.move_right(); // 'ć' (2 bytes)
+    assert_eq!(pol.cursor, 10);
+    pol.move_left(); // back over 'ć'
+    assert_eq!(pol.cursor, 8);
+    assert!(pol.backspace()); // backspace 'ł'
+    assert_eq!(pol.text, "zażóć");
+    assert_eq!(pol.cursor, 6);
+}
+

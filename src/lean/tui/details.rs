@@ -24,7 +24,7 @@ pub const RESULT: usize = 3;
 pub const CHECKS: usize = 4;
 pub const COMMENTS: usize = 5;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Details {
     pub key: String,
     pub tab: usize,
