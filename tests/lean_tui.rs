@@ -4127,7 +4127,29 @@ fn test_adaptive_graph_collision_and_routing_safety() {
             }
         }
 
-        // 2. Rendering into Canvas and verifying bounded window
+        // 2. Routing safety: Every visible edge route under every filter must never intersect any visible card
+        for filter in [
+            Filter::All,
+            Filter::Supervises,
+            Filter::Depends,
+            Filter::Verifies,
+            Filter::Mail,
+        ] {
+            let routes = graph.edge_routes(filter);
+            for (from, to, path) in routes {
+                for node in &visible_nodes {
+                    assert!(
+                        !Graph::route_intersects_card(&path, node),
+                        "Edge {from} -> {to} (filter {filter:?}) intersects card {} at ({}, {}) in terminal {w}x{h}!\nPath: {path:?}",
+                        node.key,
+                        node.x,
+                        node.y
+                    );
+                }
+            }
+        }
+
+        // 3. Rendering into Canvas and verifying bounded window
         let mut canvas = Canvas::new_window(0, 0, w, h);
         graph.render(&view, &mut canvas, Filter::All, "worker:t1");
     }
@@ -4263,4 +4285,507 @@ fn test_canvas_memory_bounded_for_large_graphs() {
     // Canvas::new cap check: 60,000 x 60,000 does not OOM
     let capped_canvas = Canvas::new(60_000, 60_000);
     assert_eq!(capped_canvas.lines().len(), 1024);
+}
+
+#[test]
+fn test_adaptive_graph_non_adjacent_same_column_bypass_routing() {
+    use architect::lean::tui::graph::{Filter, Graph, GroupingMode, HEIGHT, WIDTH};
+    use architect::lean::tui::view::{AUDITOR, ORCHESTRATOR, TaskRow, View};
+
+    // Construct a scenario where:
+    // 1. Column 1 contains: ORCHESTRATOR (row 0), AUDITOR (row 1), worker:t2 (row 2).
+    //    Orchestrator supervises worker:t2. Both are in column 1, separated by Auditor.
+    // 2. Column 0 contains: worker:t1 (row 1), verifier:t1 (row 2), worker:t3 (row 3).
+    //    worker:t3 depends on worker:t1. Both are in column 0, separated by verifier:t1.
+    let tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "T1".into(),
+            depends_on: vec![],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "T2".into(),
+            depends_on: vec![],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t3".into(),
+            title: "T3".into(),
+            depends_on: vec!["t1".into()],
+            ..TaskRow::default()
+        },
+    ];
+    let mut view = View::default();
+    view.tasks = tasks;
+
+    // Viewport 78x20 (80x24 compact)
+    let graph = Graph::new_with_viewport(
+        &view,
+        None,
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((78, 20)),
+    );
+
+    let orch = graph.node(ORCHESTRATOR).expect("orchestrator present");
+    let aud = graph.node(AUDITOR).expect("auditor present");
+    let w2 = graph.node("worker:t2").expect("worker:t2 present");
+
+    assert_eq!(orch.x, aud.x, "Orchestrator and Auditor in same column");
+    assert_eq!(orch.x, w2.x, "Orchestrator and worker:t2 in same column");
+    assert_eq!(orch.y, 0);
+    assert_eq!(aud.y, 6);
+    assert_eq!(w2.y, 12);
+
+    // Supervision edge route: ORCHESTRATOR -> worker:t2
+    let sup_routes = graph.edge_routes(Filter::Supervises);
+    let orch_to_w2 = sup_routes
+        .iter()
+        .find(|(from, to, _)| *from == ORCHESTRATOR && *to == "worker:t2")
+        .expect("supervision edge ORCHESTRATOR -> worker:t2 exists");
+
+    let path = &orch_to_w2.2;
+    // Must bypass Auditor via side corridor instead of passing straight through x = 35 + 13
+    assert!(
+        !Graph::route_intersects_card(path, aud),
+        "Supervision edge must NOT intersect Auditor card!"
+    );
+    assert!(
+        !Graph::route_intersects_card(path, orch),
+        "Supervision edge must NOT intersect Orchestrator interior!"
+    );
+    assert!(
+        !Graph::route_intersects_card(path, w2),
+        "Supervision edge must NOT intersect worker:t2 interior!"
+    );
+
+    // Check specific path points: corridor must run at from.right() + GAP_X / 2
+    let half = 6 / 2;
+    let expected_lane = orch.x + WIDTH + half;
+    assert_eq!(path[0], (orch.x + WIDTH, orch.y + HEIGHT / 2));
+    assert_eq!(path[1], (expected_lane, orch.y + HEIGHT / 2));
+    assert_eq!(path[2], (expected_lane, w2.y + HEIGHT / 2));
+    assert_eq!(path[3], (w2.x + WIDTH, w2.y + HEIGHT / 2));
+
+    // Check dependency edge route: worker:t1 -> worker:t3
+    let dep_routes = graph.edge_routes(Filter::Depends);
+    let t1_to_t3 = dep_routes
+        .iter()
+        .find(|(from, to, _)| *from == "worker:t1" && *to == "worker:t3");
+    if let Some((_, _, path_dep)) = t1_to_t3 {
+        let v1 = graph.node("verifier:t1").expect("verifier:t1 present");
+        assert!(
+            !Graph::route_intersects_card(path_dep, v1),
+            "Dependency edge must NOT intersect verifier:t1 card!"
+        );
+    }
+}
+
+#[test]
+fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
+    use architect::lean::tui::graph::{Graph, GroupingMode};
+    use architect::lean::tui::view::{AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, TaskRow, View};
+
+    let tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "Task 1".into(),
+            depends_on: vec![],
+            status: "proposed".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "Task 2".into(),
+            depends_on: vec!["t1".into()],
+            status: "approved".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t3".into(),
+            title: "Task 3".into(),
+            depends_on: vec!["t2".into()],
+            status: "approved".into(),
+            ..TaskRow::default()
+        },
+    ];
+    let mut view = View::default();
+    view.tasks = tasks;
+
+    // 1. Filter out all administrative nodes (filter: "task 1")
+    // When admin nodes are hidden, row 0 must be compacted: worker:t1 sits at row 0
+    let filtered_graph = Graph::new_with_viewport(
+        &view,
+        Some("task 1"),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((78, 20)),
+    );
+
+    assert!(!filtered_graph.node(PLAN_VERIFIER).unwrap().visible);
+    assert!(!filtered_graph.node(ORCHESTRATOR).unwrap().visible);
+    assert!(!filtered_graph.node(AUDITOR).unwrap().visible);
+
+    let w1 = filtered_graph.node("worker:t1").unwrap();
+    assert!(w1.visible);
+    assert_eq!(w1.x, 3, "Column 0 used");
+    assert_eq!(w1.y, 0, "Compacted to row 0 when admin nodes hidden!");
+
+    let v1 = filtered_graph.node("verifier:t1").unwrap();
+    assert!(v1.visible);
+    assert_eq!(v1.y, 6, "Verifier at row 1 immediately below worker:t1");
+
+    // 2. Column selection according to visible tasks:
+    // Only "task 3" visible (raw topological depth was 2).
+    // Visible task selection compacts active column depth to column 0!
+    let t3_graph = Graph::new_with_viewport(
+        &view,
+        Some("task 3"),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((78, 20)),
+    );
+    let w3 = t3_graph.node("worker:t3").unwrap();
+    assert!(w3.visible);
+    assert_eq!(
+        w3.x, 3,
+        "Task 3 compacted to column 0 (no empty preceding columns)!"
+    );
+    assert_eq!(
+        w3.y, 0,
+        "Task 3 compacted to row 0 (no empty preceding rows)!"
+    );
+
+    // 3. Status grouping column compaction:
+    // Filter "approved": only t2 and t3 match. Raw status column was 2.
+    // Must be compacted to column 0!
+    let status_graph = Graph::new_with_viewport(
+        &view,
+        Some("approved"),
+        &Default::default(),
+        GroupingMode::Status,
+        Some((78, 20)),
+    );
+    let w2_status = status_graph.node("worker:t2").unwrap();
+    assert!(w2_status.visible);
+    assert_eq!(
+        w2_status.x, 3,
+        "Approved tasks compacted to column 0 in Status mode!"
+    );
+}
+
+#[test]
+fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
+    use architect::lean::tui::graph::{Graph, GroupingMode};
+    use architect::lean::tui::view::{TaskRow, View};
+
+    // 6 tasks in two stages
+    let tasks = vec![
+        TaskRow {
+            id: "a1".into(),
+            title: "A1".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "a2".into(),
+            title: "A2".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "a3".into(),
+            title: "A3".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "b1".into(),
+            title: "B1".into(),
+            depends_on: vec!["a1".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "b2".into(),
+            title: "B2".into(),
+            depends_on: vec!["a2".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "b3".into(),
+            title: "B3".into(),
+            depends_on: vec!["a3".into()],
+            ..TaskRow::default()
+        },
+    ];
+    let mut view = View::default();
+    view.tasks = tasks;
+
+    // Terminals: 80x24 (h=20), 120x30 (h=26), 160x50 (h=46)
+    let g_short = Graph::new_with_viewport(
+        &view,
+        None,
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((78, 20)),
+    );
+    let g_mid = Graph::new_with_viewport(
+        &view,
+        None,
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((77, 26)),
+    );
+    let g_tall = Graph::new_with_viewport(
+        &view,
+        None,
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((104, 46)),
+    );
+
+    let whole_short = count_whole_cards(&g_short, 78, 20);
+    let whole_mid = count_whole_cards(&g_mid, 77, 26);
+    let whole_tall = count_whole_cards(&g_tall, 104, 46);
+
+    // Height utilization: larger panel height fits strictly more whole readable cards
+    assert!(
+        whole_mid > whole_short,
+        "Height 26 ({whole_mid}) must fit more whole cards than height 20 ({whole_short})"
+    );
+    assert!(
+        whole_tall > whole_mid,
+        "Height 46 ({whole_tall}) must fit more whole cards than height 26 ({whole_mid})"
+    );
+
+    // Taller height allows all tasks to be visible without vertical scrolling
+    assert_eq!(
+        whole_tall,
+        g_tall.nodes.iter().filter(|n| n.visible).count(),
+        "On 160x50 all nodes fit completely without scroll"
+    );
+}
+
+#[test]
+fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
+    use architect::lean::tui::graph::{Filter, Graph};
+    use architect::lean::tui::view::TaskRow;
+
+    // Terminal sizes to test:
+    // 80x24 (compact: 78x20)
+    // 85x24 (split: 48x20)
+    // 120x30 (split: 77x26)
+    // 160x50 (split: 104x46)
+    let terminal_configs = [
+        ("80x24", 80u16, 24u16, 78u16, 20u16),
+        ("85x24", 85u16, 24u16, 48u16, 20u16),
+        ("120x30", 120u16, 30u16, 77u16, 26u16),
+        ("160x50", 160u16, 50u16, 104u16, 46u16),
+    ];
+
+    for &(term_name, term_w, term_h, inner_w, inner_h) in &terminal_configs {
+        let (mut app, _rx) =
+            App::test_app_with_client(Client::at(std::path::Path::new("/dev/null")));
+        app.focus = Focus::Graph;
+
+        // 1. Long chain: c1 -> c2 -> c3 -> c4
+        app.view.tasks = vec![
+            TaskRow {
+                id: "c1".into(),
+                title: "Chain 1".into(),
+                depends_on: vec![],
+                ..TaskRow::default()
+            },
+            TaskRow {
+                id: "c2".into(),
+                title: "Chain 2".into(),
+                depends_on: vec!["c1".into()],
+                ..TaskRow::default()
+            },
+            TaskRow {
+                id: "c3".into(),
+                title: "Chain 3".into(),
+                depends_on: vec!["c2".into()],
+                ..TaskRow::default()
+            },
+            TaskRow {
+                id: "c4".into(),
+                title: "Chain 4".into(),
+                depends_on: vec!["c3".into()],
+                ..TaskRow::default()
+            },
+        ];
+        app.selected = "worker:c1".into();
+
+        let mut term = Terminal::new(TestBackend::new(term_w, term_h)).unwrap();
+        term.draw(|f| app.draw(f)).unwrap();
+
+        assert_eq!(
+            app.graph_viewport,
+            Some((inner_w, inner_h)),
+            "Viewport matches terminal {term_name}"
+        );
+
+        let g_chain = Graph::new_with_viewport(
+            &app.view,
+            app.graph_filter.as_deref(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+        );
+        let visible_chain: Vec<_> = g_chain.nodes.iter().filter(|n| n.visible).collect();
+
+        // Verify routing safety on chains
+        for filter in [
+            Filter::All,
+            Filter::Supervises,
+            Filter::Depends,
+            Filter::Verifies,
+        ] {
+            for (from, to, path) in g_chain.edge_routes(filter) {
+                for node in &visible_chain {
+                    assert!(
+                        !Graph::route_intersects_card(&path, node),
+                        "Chain in {term_name}: Edge {from}->{to} ({filter:?}) intersects card {}",
+                        node.key
+                    );
+                }
+            }
+        }
+
+        // 2. Branching: b1 root branching to b2, b3, b4
+        app.view.tasks = vec![
+            TaskRow {
+                id: "b1".into(),
+                title: "Branch root".into(),
+                depends_on: vec![],
+                ..TaskRow::default()
+            },
+            TaskRow {
+                id: "b2".into(),
+                title: "Branch child 1".into(),
+                depends_on: vec!["b1".into()],
+                ..TaskRow::default()
+            },
+            TaskRow {
+                id: "b3".into(),
+                title: "Branch child 2".into(),
+                depends_on: vec!["b1".into()],
+                ..TaskRow::default()
+            },
+            TaskRow {
+                id: "b4".into(),
+                title: "Branch child 3".into(),
+                depends_on: vec!["b1".into()],
+                ..TaskRow::default()
+            },
+        ];
+        term.draw(|f| app.draw(f)).unwrap();
+        let g_branch = Graph::new_with_viewport(
+            &app.view,
+            app.graph_filter.as_deref(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+        );
+        let visible_branch: Vec<_> = g_branch.nodes.iter().filter(|n| n.visible).collect();
+
+        for filter in [
+            Filter::All,
+            Filter::Supervises,
+            Filter::Depends,
+            Filter::Verifies,
+        ] {
+            for (from, to, path) in g_branch.edge_routes(filter) {
+                for node in &visible_branch {
+                    assert!(
+                        !Graph::route_intersects_card(&path, node),
+                        "Branch in {term_name}: Edge {from}->{to} ({filter:?}) intersects card {}",
+                        node.key
+                    );
+                }
+            }
+        }
+
+        // 3. Cycles: cy1 <-> cy2
+        app.view.tasks = vec![
+            TaskRow {
+                id: "cy1".into(),
+                title: "Cycle 1".into(),
+                depends_on: vec!["cy2".into()],
+                ..TaskRow::default()
+            },
+            TaskRow {
+                id: "cy2".into(),
+                title: "Cycle 2".into(),
+                depends_on: vec!["cy1".into()],
+                ..TaskRow::default()
+            },
+        ];
+        term.draw(|f| app.draw(f)).unwrap();
+        let g_cycle = Graph::new_with_viewport(
+            &app.view,
+            app.graph_filter.as_deref(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+        );
+        assert_eq!(g_cycle.nodes.len(), 3 + 2 * 2);
+
+        // 4. Filtering and compaction through App:
+        app.set_graph_filter(Some("cy1".into()));
+        term.draw(|f| app.draw(f)).unwrap();
+        let g_filtered = Graph::new_with_viewport(
+            &app.view,
+            app.graph_filter.as_deref(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+        );
+        let cy1_w = g_filtered.node("worker:cy1").unwrap();
+        assert!(cy1_w.visible);
+        assert_eq!(cy1_w.x, 3, "Filtered cy1 compacted to column 0");
+        assert_eq!(cy1_w.y, 0, "Filtered cy1 compacted to row 0");
+
+        // 5. Collapsing:
+        app.set_graph_filter(None);
+        app.graph_collapsed.insert("cy1".into());
+        term.draw(|f| app.draw(f)).unwrap();
+        let g_collapsed = Graph::new_with_viewport(
+            &app.view,
+            app.graph_filter.as_deref(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+        );
+        assert!(g_collapsed.node("worker:cy1").unwrap().collapsed);
+        assert!(
+            !g_collapsed.node("verifier:cy1").unwrap().visible,
+            "Collapsed verifier is hidden and compacted"
+        );
+
+        // 6. Stability on selection and activity updates:
+        let initial_coords: Vec<_> = g_collapsed
+            .nodes
+            .iter()
+            .map(|n| (n.key.clone(), n.x, n.y))
+            .collect();
+        app.selected = "worker:cy2".into();
+        app.view.activity = Some("Praca w toku".into());
+        term.draw(|f| app.draw(f)).unwrap();
+        let after_coords: Vec<_> = Graph::new_with_viewport(
+            &app.view,
+            app.graph_filter.as_deref(),
+            &app.graph_collapsed,
+            app.graph_grouping,
+            app.graph_viewport,
+        )
+        .nodes
+        .iter()
+        .map(|n| (n.key.clone(), n.x, n.y))
+        .collect();
+        assert_eq!(
+            initial_coords, after_coords,
+            "Selection/activity must not displace nodes in {term_name}"
+        );
+    }
 }

@@ -1794,11 +1794,12 @@ impl App {
 
     pub fn set_graph_filter(&mut self, query: Option<String>) {
         self.graph_filter = query;
-        let graph = Graph::new_with_options(
+        let graph = Graph::new_with_viewport(
             &self.view,
             self.graph_filter.as_deref(),
             &self.graph_collapsed,
             self.graph_grouping,
+            self.graph_viewport,
         );
         if !graph
             .nodes
@@ -2671,6 +2672,13 @@ impl App {
             } else {
                 self.selected = ORCHESTRATOR.into();
             }
+        }
+        // Reset scroll offset if the entire graph fits into the panel
+        if graph.width <= inner.width {
+            self.offset.0 = 0;
+        }
+        if graph.height <= inner.height {
+            self.offset.1 = 0;
         }
         // Scroll only as far as needed to keep the selected node in view.
         if let Some(node) = graph.node(&self.selected) {

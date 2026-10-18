@@ -177,6 +177,8 @@ fn row_y(row: u16) -> u16 {
     row * (HEIGHT + GAP_Y)
 }
 
+pub type EdgeRoute<'a> = (&'a str, &'a str, Vec<(u16, u16)>);
+
 impl Graph {
     pub fn new(view: &View) -> Self {
         Self::new_with_options(
@@ -316,44 +318,122 @@ impl Graph {
                     })
         };
 
-        if let Some((vp_w, _vp_h)) = viewport {
-            let max_cols = ((vp_w.saturating_sub(MARGIN) + GAP_X) / (WIDTH + GAP_X)).max(1);
-            let mut col_next_row: Vec<u16> = match max_cols {
-                1 => vec![1],
-                2 => vec![1, 2],
-                _ => vec![1; max_cols as usize],
-            };
+        let pv_vis = matches_query(PLAN_VERIFIER);
+        let orch_vis = matches_query(ORCHESTRATOR);
+        let aud_vis = matches_query(AUDITOR);
+        let admin_vis = pv_vis || orch_vis || aud_vis;
 
-            let mut place_admin = |key: &str, col: u16, row: u16| {
+        // Determine which tasks are visible
+        let mut visible_tasks: Vec<(usize, u16)> = Vec::new();
+        for (i, task) in view.tasks.iter().enumerate() {
+            let id = &task.id;
+            let is_task_collapsed =
+                collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
+            let worker_vis = matches_query(&format!("worker:{id}"));
+            let verifier_vis = !is_task_collapsed && matches_query(&format!("verifier:{id}"));
+            if worker_vis || verifier_vis {
+                visible_tasks.push((i, columns[i]));
+            }
+        }
+
+        // Active distinct raw column depths among visible tasks
+        let active_raw_cols: Vec<u16> = visible_tasks
+            .iter()
+            .map(|&(_, col)| col)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        // Group visible tasks by relative depth
+        let mut rel_depth_tasks: HashMap<u16, Vec<usize>> = HashMap::new();
+        for &(task_idx, raw_col) in &visible_tasks {
+            let rel_depth = active_raw_cols
+                .iter()
+                .position(|&c| c == raw_col)
+                .unwrap_or(0) as u16;
+            rel_depth_tasks.entry(rel_depth).or_default().push(task_idx);
+        }
+
+        let mut sorted_rel_depths: Vec<u16> = rel_depth_tasks.keys().copied().collect();
+        sorted_rel_depths.sort_unstable();
+
+        let mut placed_tasks = std::collections::HashSet::new();
+
+        if let Some((vp_w, vp_h)) = viewport {
+            let max_cols = ((vp_w.saturating_sub(MARGIN) + GAP_X) / (WIDTH + GAP_X)).max(1);
+            let visible_rows = ((vp_h + GAP_Y) / (HEIGHT + GAP_Y)).max(1);
+            let mut col_next_row: Vec<u16> = vec![0; max_cols as usize];
+
+            let mut place_admin = |key: &str, col: u16, row: u16, vis: bool| {
                 graph.nodes.push(Node {
                     key: key.to_string(),
-                    x: column_x(col),
-                    y: row_y(row),
-                    visible: matches_query(key),
+                    x: if vis { column_x(col) } else { 0 },
+                    y: if vis { row_y(row) } else { 0 },
+                    visible: vis,
                     group: None,
                     collapsed: false,
                 });
             };
 
             if max_cols >= 3 {
-                place_admin(PLAN_VERIFIER, 0, 0);
-                place_admin(ORCHESTRATOR, 1, 0);
-                place_admin(AUDITOR, 2, 0);
+                if pv_vis {
+                    place_admin(PLAN_VERIFIER, 0, 0, true);
+                    col_next_row[0] = 1;
+                } else {
+                    place_admin(PLAN_VERIFIER, 0, 0, false);
+                }
+                if orch_vis {
+                    place_admin(ORCHESTRATOR, 1, 0, true);
+                    col_next_row[1] = 1;
+                } else {
+                    place_admin(ORCHESTRATOR, 0, 0, false);
+                }
+                if aud_vis {
+                    place_admin(AUDITOR, 2, 0, true);
+                    col_next_row[2] = 1;
+                } else {
+                    place_admin(AUDITOR, 0, 0, false);
+                }
             } else if max_cols == 2 {
-                place_admin(PLAN_VERIFIER, 0, 0);
-                place_admin(ORCHESTRATOR, 1, 0);
-                place_admin(AUDITOR, 1, 1);
+                if pv_vis {
+                    place_admin(PLAN_VERIFIER, 0, 0, true);
+                    col_next_row[0] = 1;
+                } else {
+                    place_admin(PLAN_VERIFIER, 0, 0, false);
+                }
+                if orch_vis && aud_vis {
+                    place_admin(ORCHESTRATOR, 1, 0, true);
+                    place_admin(AUDITOR, 1, 1, true);
+                    col_next_row[1] = 2;
+                } else if orch_vis {
+                    place_admin(ORCHESTRATOR, 1, 0, true);
+                    place_admin(AUDITOR, 0, 0, false);
+                    col_next_row[1] = 1;
+                } else if aud_vis {
+                    place_admin(AUDITOR, 1, 0, true);
+                    place_admin(ORCHESTRATOR, 0, 0, false);
+                    col_next_row[1] = 1;
+                } else {
+                    place_admin(ORCHESTRATOR, 0, 0, false);
+                    place_admin(AUDITOR, 0, 0, false);
+                }
             } else {
-                place_admin(ORCHESTRATOR, 0, 0);
-                place_admin(PLAN_VERIFIER, 1, 0);
-                place_admin(AUDITOR, 1, 1);
+                if orch_vis {
+                    place_admin(ORCHESTRATOR, 0, 0, true);
+                    col_next_row[0] = 1;
+                } else {
+                    place_admin(ORCHESTRATOR, 0, 0, false);
+                }
+                place_admin(PLAN_VERIFIER, 1, 0, pv_vis);
+                place_admin(AUDITOR, 1, 1, aud_vis);
             }
 
-            for &depth in &cols {
-                let tasks_in_col = column_tasks.get_mut(&depth).unwrap();
-                tasks_in_col.sort_unstable();
+            for &rel_depth in &sorted_rel_depths {
+                let tasks_at_depth = rel_depth_tasks.get_mut(&rel_depth).unwrap();
+                tasks_at_depth.sort_unstable();
 
-                for (slot, &task_idx) in tasks_in_col.iter().enumerate() {
+                for (slot, &task_idx) in tasks_at_depth.iter().enumerate() {
+                    placed_tasks.insert(task_idx);
                     let task = &view.tasks[task_idx];
                     let id = &task.id;
                     let is_task_collapsed =
@@ -362,28 +442,23 @@ impl Graph {
                     let verifier_key = format!("verifier:{id}");
                     let worker_vis = matches_query(&worker_key);
                     let verifier_vis = !is_task_collapsed && matches_query(&verifier_key);
+                    let task_rows =
+                        (if worker_vis { 1 } else { 0 }) + (if verifier_vis { 1 } else { 0 });
 
-                    if !worker_vis && !verifier_vis {
-                        graph.nodes.push(Node {
-                            key: worker_key,
-                            x: 0,
-                            y: 0,
-                            visible: false,
-                            group: Some(format!("task:{id}")),
-                            collapsed: is_task_collapsed,
-                        });
-                        graph.nodes.push(Node {
-                            key: verifier_key,
-                            x: 0,
-                            y: 0,
-                            visible: false,
-                            group: Some(format!("task:{id}")),
-                            collapsed: false,
-                        });
-                        continue;
-                    }
+                    let pref_col = (rel_depth + slot as u16) % max_cols;
+                    let target_col = if col_next_row[pref_col as usize] + task_rows <= visible_rows
+                    {
+                        pref_col
+                    } else if let Some(alt_col) = (0..max_cols)
+                        .find(|&c| col_next_row[c as usize] + task_rows <= visible_rows)
+                    {
+                        alt_col
+                    } else {
+                        (0..max_cols)
+                            .min_by_key(|&c| (col_next_row[c as usize], c != pref_col))
+                            .unwrap_or(pref_col)
+                    };
 
-                    let target_col = (depth + slot as u16) % max_cols;
                     let row = col_next_row[target_col as usize];
 
                     let mut worker = Node::new(worker_key, column_x(target_col), row_y(row));
@@ -405,46 +480,81 @@ impl Graph {
                 }
             }
         } else {
-            let mut place = |key: String, column: u16, row: u16| {
-                let visible = matches_query(&key);
+            let mut place_admin = |key: &str, col: u16, row: u16, vis: bool| {
                 graph.nodes.push(Node {
-                    key,
-                    x: column_x(column),
-                    y: row_y(row),
-                    visible,
+                    key: key.to_string(),
+                    x: if vis { column_x(col) } else { 0 },
+                    y: if vis { row_y(row) } else { 0 },
+                    visible: vis,
                     group: None,
                     collapsed: false,
                 });
             };
-            place(PLAN_VERIFIER.into(), 0, 0);
-            place(ORCHESTRATOR.into(), 1, 0);
-            place(AUDITOR.into(), 2, 0);
+            place_admin(PLAN_VERIFIER, 0, 0, pv_vis);
+            place_admin(ORCHESTRATOR, 1, 0, orch_vis);
+            place_admin(AUDITOR, 2, 0, aud_vis);
 
-            for &col in &cols {
-                let tasks_in_col = column_tasks.get_mut(&col).unwrap();
-                tasks_in_col.sort_unstable();
+            for &rel_depth in &sorted_rel_depths {
+                let tasks_at_depth = rel_depth_tasks.get_mut(&rel_depth).unwrap();
+                tasks_at_depth.sort_unstable();
+                let mut current_row = if admin_vis { 1 } else { 0 };
 
-                for (slot, &task_idx) in tasks_in_col.iter().enumerate() {
-                    let slot = slot as u16;
+                for &task_idx in tasks_at_depth.iter() {
+                    placed_tasks.insert(task_idx);
                     let task = &view.tasks[task_idx];
                     let id = &task.id;
                     let is_task_collapsed =
                         collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
+                    let worker_key = format!("worker:{id}");
+                    let verifier_key = format!("verifier:{id}");
+                    let worker_vis = matches_query(&worker_key);
+                    let verifier_vis = !is_task_collapsed && matches_query(&verifier_key);
 
-                    let mut worker =
-                        Node::new(format!("worker:{id}"), column_x(col), row_y(1 + 2 * slot));
+                    let mut worker = Node::new(worker_key, column_x(rel_depth), row_y(current_row));
                     worker.collapsed = is_task_collapsed;
                     worker.group = Some(format!("task:{id}"));
-                    worker.visible = matches_query(&worker.key);
+                    worker.visible = worker_vis;
+                    graph.nodes.push(worker);
+
+                    let next_row = if worker_vis {
+                        current_row + 1
+                    } else {
+                        current_row
+                    };
 
                     let mut verifier =
-                        Node::new(format!("verifier:{id}"), column_x(col), row_y(2 + 2 * slot));
+                        Node::new(verifier_key, column_x(rel_depth), row_y(next_row));
                     verifier.group = Some(format!("task:{id}"));
-                    verifier.visible = !is_task_collapsed && matches_query(&verifier.key);
-
-                    graph.nodes.push(worker);
+                    verifier.visible = verifier_vis;
                     graph.nodes.push(verifier);
+
+                    current_row = if verifier_vis { next_row + 1 } else { next_row };
                 }
+            }
+        }
+
+        // Retain remaining hidden tasks as non-visible nodes for graph querying
+        for (i, task) in view.tasks.iter().enumerate() {
+            if !placed_tasks.contains(&i) {
+                let id = &task.id;
+                let is_task_collapsed =
+                    collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
+                graph.nodes.push(Node {
+                    key: format!("worker:{id}"),
+                    x: 0,
+                    y: 0,
+                    visible: false,
+                    group: Some(format!("task:{id}")),
+                    collapsed: is_task_collapsed,
+                });
+                graph.nodes.push(Node {
+                    key: format!("verifier:{id}"),
+                    x: 0,
+                    y: 0,
+                    visible: false,
+                    group: Some(format!("task:{id}")),
+                    collapsed: false,
+                });
             }
         }
 
@@ -507,7 +617,7 @@ impl Graph {
             .map(Node::right)
             .max()
             .unwrap_or(0)
-            + MARGIN;
+            + GAP_X;
         graph.height = graph
             .nodes
             .iter()
@@ -556,16 +666,27 @@ impl Graph {
     }
 
     /// The orthogonal path of an edge, through the gaps between boxes only.
-    fn route(from: &Node, to: &Node) -> Vec<(u16, u16)> {
+    pub fn route(from: &Node, to: &Node) -> Vec<(u16, u16)> {
         let half = GAP_X / 2;
         // Same column
         if from.x == to.x {
-            let x = to.x + WIDTH / 2;
-            if from.y > to.y {
-                return vec![(x, from.y - 1), (x, to.y + HEIGHT)];
-            }
-            if from.y < to.y {
-                return vec![(x, from.y + HEIGHT), (x, to.y.saturating_sub(1))];
+            let is_adjacent = (from.y as i32 - to.y as i32).abs() <= (HEIGHT + GAP_Y) as i32;
+            if is_adjacent {
+                let x = to.x + WIDTH / 2;
+                if from.y > to.y {
+                    return vec![(x, from.y - 1), (x, to.y + HEIGHT)];
+                }
+                if from.y < to.y {
+                    return vec![(x, from.y + HEIGHT), (x, to.y.saturating_sub(1))];
+                }
+            } else {
+                let lane = from.right() + half;
+                return vec![
+                    (from.right(), from.mid_y()),
+                    (lane, from.mid_y()),
+                    (lane, to.mid_y()),
+                    (to.right(), to.mid_y()),
+                ];
             }
         }
         // Neighbours on one row face each other.
@@ -594,6 +715,46 @@ impl Graph {
         path.push((into, to.mid_y()));
         path.push((to.x.saturating_sub(1), to.mid_y()));
         path
+    }
+
+    /// Returns actual routes for visible edges under the given filter.
+    pub fn edge_routes(&self, filter: Filter) -> Vec<EdgeRoute<'_>> {
+        let nodes: HashMap<&str, &Node> = self
+            .nodes
+            .iter()
+            .map(|node| (node.key.as_str(), node))
+            .collect();
+        self.edges
+            .iter()
+            .filter(|edge| filter.shows(edge.kind))
+            .filter_map(|edge| {
+                let from = nodes.get(edge.from.as_str())?;
+                let to = nodes.get(edge.to.as_str())?;
+                if !from.visible || !to.visible {
+                    return None;
+                }
+                Some((edge.from.as_str(), edge.to.as_str(), Self::route(from, to)))
+            })
+            .collect()
+    }
+
+    /// Checks whether any segment of a route penetrates the interior or border of a node card.
+    pub fn route_intersects_card(path: &[(u16, u16)], node: &Node) -> bool {
+        for pair in path.windows(2) {
+            let (p1, p2) = (pair[0], pair[1]);
+            let x_min = p1.0.min(p2.0);
+            let x_max = p1.0.max(p2.0);
+            let y_min = p1.1.min(p2.1);
+            let y_max = p1.1.max(p2.1);
+            for x in x_min..=x_max {
+                for y in y_min..=y_max {
+                    if x >= node.x && x < node.x + WIDTH && y >= node.y && y < node.y + HEIGHT {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn arrow(path: &[(u16, u16)]) -> char {
