@@ -3,8 +3,9 @@ use architect::lean::{
     daemon::{Client, Request, socket},
     diff::ReviewerProfile,
     tui::{
-        App, ConfirmationAction, ConfirmationCard, ConfirmationStatus, Details, DiffView, Editor,
-        Filter, Focus, Help, InputBuffer, Kind, Picker, Theme, TranscriptCard, Update, card,
+        App, CardProps, ConfirmationAction, ConfirmationCard, ConfirmationStatus, Details,
+        DiffView, Editor, Filter, Focus, Help, InputBuffer, Kind, Picker, Theme, TranscriptCard,
+        Update, card,
         diffview::diff_header_with_reviewer,
         draw_rows,
         editor::{
@@ -2444,13 +2445,15 @@ fn tui_ascii_mode_and_theme_glyphs() {
     let mut buffer = Buffer::empty(Rect::new(0, 0, 40, 5));
     let rows = card(
         &t_ascii,
-        t_ascii.card(),
-        t_ascii.accent(),
-        vec![Span::raw("Ty"), Span::raw(" > "), Span::raw("orkiestrator")],
-        "dostarczono".into(),
-        "Zażółć gęślą jaźń",
-        usize::MAX,
-        40,
+        CardProps {
+            fill: t_ascii.card(),
+            accent: t_ascii.accent(),
+            head: vec![Span::raw("Ty"), Span::raw(" > "), Span::raw("orkiestrator")],
+            right: "dostarczono".into(),
+            body: "Zażółć gęślą jaźń",
+            max_body: usize::MAX,
+            width: 40,
+        },
     );
     draw_rows(&mut buffer, Rect::new(0, 0, 40, 5), &rows);
     let rendered: String = buffer.content.iter().map(|c| c.symbol()).collect();
@@ -2472,13 +2475,15 @@ fn tui_no_color_mode_preserves_modifiers_and_clears_colors() {
     let mut buf = Buffer::empty(Rect::new(0, 0, 30, 3));
     let rows = card(
         &t_nc,
-        t_nc.card(),
-        t_nc.accent(),
-        vec![Span::raw("Nagłówek")],
-        "meta".into(),
-        "Treść karty",
-        usize::MAX,
-        30,
+        CardProps {
+            fill: t_nc.card(),
+            accent: t_nc.accent(),
+            head: vec![Span::raw("Nagłówek")],
+            right: "meta".into(),
+            body: "Treść karty",
+            max_body: usize::MAX,
+            width: 30,
+        },
     );
     draw_rows(&mut buf, Rect::new(0, 0, 30, 3), &rows);
     assert!(
@@ -3818,4 +3823,444 @@ fn test_stale_confirmation_handling_and_rendering() {
         rendered.contains("[nieaktualne: stale_scope]"),
         "rendered transcript must include stale notice: {rendered}"
     );
+}
+
+fn count_whole_cards(
+    graph: &architect::lean::tui::graph::Graph,
+    inner_w: u16,
+    inner_h: u16,
+) -> usize {
+    use architect::lean::tui::graph::{HEIGHT, WIDTH};
+    graph
+        .nodes
+        .iter()
+        .filter(|n| n.visible && n.x + WIDTH <= inner_w && n.y + HEIGHT <= inner_h)
+        .count()
+}
+
+#[test]
+fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
+    use architect::lean::tui::graph::{Graph, GroupingMode};
+    use architect::lean::tui::view::{TaskRow, View};
+
+    // Terminal dimensions and inner graph panel interiors
+    // 80x24 (compact): inner 78x20
+    // 85x24 (split): inner 48x20
+    // 120x30 (split): inner 77x26
+    // 160x50 (split): inner 104x46
+    let terminals = [
+        ("80x24", 78u16, 20u16),
+        ("85x24", 48u16, 20u16),
+        ("120x30", 77u16, 26u16),
+        ("160x50", 104u16, 46u16),
+    ];
+
+    // 1. Parallel tasks (4 independent tasks)
+    let parallel_tasks = vec![
+        TaskRow {
+            id: "p1".into(),
+            title: "P1".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "p2".into(),
+            title: "P2".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "p3".into(),
+            title: "P3".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "p4".into(),
+            title: "P4".into(),
+            ..TaskRow::default()
+        },
+    ];
+    let mut par_view = View::default();
+    par_view.tasks = parallel_tasks;
+
+    let legacy_par = Graph::new_with_viewport(
+        &par_view,
+        None,
+        &Default::default(),
+        GroupingMode::Dependency,
+        None,
+    );
+
+    for &(name, w, h) in &terminals {
+        let adaptive_par = Graph::new_with_viewport(
+            &par_view,
+            None,
+            &Default::default(),
+            GroupingMode::Dependency,
+            Some((w, h)),
+        );
+        let legacy_whole = count_whole_cards(&legacy_par, w, h);
+        let adaptive_whole = count_whole_cards(&adaptive_par, w, h);
+        assert!(
+            adaptive_whole >= legacy_whole,
+            "Terminal {name}: adaptive ({adaptive_whole}) should have >= whole cards than legacy ({legacy_whole})"
+        );
+        if w >= 70 {
+            // Terminals with >= 2 columns (80x24, 120x30, 160x50) utilize the second column,
+            // strictly outperforming legacy single-column stacking.
+            assert!(
+                adaptive_whole > legacy_whole,
+                "Terminal {name}: adaptive ({adaptive_whole}) must have strictly more whole cards than legacy ({legacy_whole})"
+            );
+        }
+    }
+
+    // 2. Long chain (4 tasks sequential)
+    let chain_tasks = vec![
+        TaskRow {
+            id: "c1".into(),
+            title: "C1".into(),
+            depends_on: vec![],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "c2".into(),
+            title: "C2".into(),
+            depends_on: vec!["c1".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "c3".into(),
+            title: "C3".into(),
+            depends_on: vec!["c2".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "c4".into(),
+            title: "C4".into(),
+            depends_on: vec!["c3".into()],
+            ..TaskRow::default()
+        },
+    ];
+    let mut chain_view = View::default();
+    chain_view.tasks = chain_tasks;
+    let legacy_chain = Graph::new_with_viewport(
+        &chain_view,
+        None,
+        &Default::default(),
+        GroupingMode::Dependency,
+        None,
+    );
+
+    for &(name, w, h) in &terminals {
+        let adaptive_chain = Graph::new_with_viewport(
+            &chain_view,
+            None,
+            &Default::default(),
+            GroupingMode::Dependency,
+            Some((w, h)),
+        );
+        let legacy_whole = count_whole_cards(&legacy_chain, w, h);
+        let adaptive_chain_whole = count_whole_cards(&adaptive_chain, w, h);
+        assert!(
+            adaptive_chain_whole >= legacy_whole,
+            "Terminal {name} long chain: adaptive ({adaptive_chain_whole}) >= legacy ({legacy_whole})"
+        );
+    }
+
+    // 3. Branching (1 root branching to 3 parallel tasks)
+    let branch_tasks = vec![
+        TaskRow {
+            id: "b1".into(),
+            title: "B1".into(),
+            depends_on: vec![],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "b2".into(),
+            title: "B2".into(),
+            depends_on: vec!["b1".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "b3".into(),
+            title: "B3".into(),
+            depends_on: vec!["b1".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "b4".into(),
+            title: "B4".into(),
+            depends_on: vec!["b1".into()],
+            ..TaskRow::default()
+        },
+    ];
+    let mut branch_view = View::default();
+    branch_view.tasks = branch_tasks;
+    let adaptive_branch = Graph::new_with_viewport(
+        &branch_view,
+        None,
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((78, 20)),
+    );
+    assert!(adaptive_branch.nodes.iter().all(|n| n.visible));
+
+    // 4. Cycles
+    let cycle_tasks = vec![
+        TaskRow {
+            id: "cy1".into(),
+            title: "CY1".into(),
+            depends_on: vec!["cy2".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "cy2".into(),
+            title: "CY2".into(),
+            depends_on: vec!["cy1".into()],
+            ..TaskRow::default()
+        },
+    ];
+    let mut cycle_view = View::default();
+    cycle_view.tasks = cycle_tasks;
+    let adaptive_cycle = Graph::new_with_viewport(
+        &cycle_view,
+        None,
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((78, 20)),
+    );
+    assert_eq!(adaptive_cycle.nodes.len(), 3 + 2 * 2);
+
+    // 5. Compaction after collapsing and filtering
+    let mut collapsed = std::collections::HashSet::new();
+    collapsed.insert("p1".into());
+    let collapsed_graph = Graph::new_with_viewport(
+        &par_view,
+        None,
+        &collapsed,
+        GroupingMode::Dependency,
+        Some((78, 20)),
+    );
+    let p1_w = collapsed_graph.node("worker:p1").unwrap();
+    let p1_v = collapsed_graph.node("verifier:p1").unwrap();
+    assert!(p1_w.visible && p1_w.collapsed);
+    assert!(!p1_v.visible);
+
+    // Filter compaction
+    let filtered_graph = Graph::new_with_viewport(
+        &par_view,
+        Some("p1"),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((78, 20)),
+    );
+    assert!(filtered_graph.node("worker:p1").unwrap().visible);
+    assert!(!filtered_graph.node("worker:p2").unwrap().visible);
+}
+
+#[test]
+fn test_adaptive_graph_collision_and_routing_safety() {
+    use architect::lean::tui::graph::{
+        Canvas, Graph, GroupingMode, HEIGHT, WIDTH, compute_progress_overlay_with_nodes,
+    };
+    use architect::lean::tui::view::{Link, TaskRow, View};
+
+    let tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "T1".into(),
+            depends_on: vec![],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "T2".into(),
+            depends_on: vec!["t1".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t3".into(),
+            title: "T3".into(),
+            depends_on: vec!["t1".into()],
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t4".into(),
+            title: "T4".into(),
+            depends_on: vec!["t2".into(), "t3".into()],
+            ..TaskRow::default()
+        },
+    ];
+    let mut view = View::default();
+    view.tasks = tasks;
+    view.links.insert(
+        ("worker:t1".into(), "worker:t4".into()),
+        Link {
+            count: 1,
+            last: std::time::Instant::now(),
+        },
+    );
+
+    for &(w, h) in &[(78, 20), (48, 20), (77, 26), (104, 46)] {
+        let graph = Graph::new_with_viewport(
+            &view,
+            None,
+            &Default::default(),
+            GroupingMode::Dependency,
+            Some((w, h)),
+        );
+
+        // 1. Collision check: No two visible nodes may overlap
+        let visible_nodes: Vec<_> = graph.nodes.iter().filter(|n| n.visible).collect();
+        for i in 0..visible_nodes.len() {
+            for j in (i + 1)..visible_nodes.len() {
+                let a = visible_nodes[i];
+                let b = visible_nodes[j];
+                let separate = a.x + WIDTH <= b.x
+                    || b.x + WIDTH <= a.x
+                    || a.y + HEIGHT <= b.y
+                    || b.y + HEIGHT <= a.y;
+                assert!(
+                    separate,
+                    "Nodes {} at ({},{}) and {} at ({},{}) collide!",
+                    a.key, a.x, a.y, b.key, b.x, b.y
+                );
+            }
+        }
+
+        // 2. Rendering into Canvas and verifying bounded window
+        let mut canvas = Canvas::new_window(0, 0, w, h);
+        graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+    }
+
+    // 3. Progress overlay yields when cards occupy all candidate corners
+    let inner = Rect::new(0, 0, 78, 20);
+    let full_nodes = [
+        architect::lean::tui::graph::Node::new("br".into(), 50, 14),
+        architect::lean::tui::graph::Node::new("tr".into(), 50, 0),
+        architect::lean::tui::graph::Node::new("tl".into(), 0, 0),
+        architect::lean::tui::graph::Node::new("bl".into(), 0, 14),
+    ];
+    let refs: Vec<&_> = full_nodes.iter().collect();
+    let overlay = compute_progress_overlay_with_nodes(inner, None, &refs, (0, 0), 24, 6);
+    assert_eq!(
+        overlay, None,
+        "Overlay must yield (return None) when all corners collide"
+    );
+}
+
+#[test]
+fn test_adaptive_graph_navigation_and_resize_stability() {
+    use architect::lean::tui::graph::Graph;
+    use architect::lean::tui::view::TaskRow;
+
+    let (mut app, _rx) = App::test_app_with_client(Client::at(std::path::Path::new("/dev/null")));
+    app.view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "T1".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "T2".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t3".into(),
+            title: "T3".into(),
+            ..TaskRow::default()
+        },
+    ];
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+
+    // 1. Initial draw on 80x24 terminal
+    let mut term_small = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    term_small.draw(|f| app.draw(f)).unwrap();
+
+    let initial_viewport = app.graph_viewport.expect("viewport set after draw");
+    assert_eq!(initial_viewport, (78, 20));
+
+    // Capture node coordinates
+    let g1 = Graph::new_with_viewport(
+        &app.view,
+        None,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+    );
+    let coords_initial: Vec<(String, u16, u16)> =
+        g1.nodes.iter().map(|n| (n.key.clone(), n.x, n.y)).collect();
+
+    // 2. Selection changes and activity updates do NOT shift nodes
+    app.selected = "worker:t2".into();
+    app.view.activity = Some("Przetwarzanie danych w toku...".into());
+    term_small.draw(|f| app.draw(f)).unwrap();
+
+    let g2 = Graph::new_with_viewport(
+        &app.view,
+        None,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+    );
+    let coords_after: Vec<(String, u16, u16)> =
+        g2.nodes.iter().map(|n| (n.key.clone(), n.x, n.y)).collect();
+    assert_eq!(
+        coords_initial, coords_after,
+        "Selection or activity must not displace graph nodes"
+    );
+
+    // 3. Arrow navigation
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.selected, "verifier:t2");
+
+    // 4. Resize terminal to 160x50: viewport dynamically adapts
+    let mut term_large = Terminal::new(TestBackend::new(160, 50)).unwrap();
+    term_large.draw(|f| app.draw(f)).unwrap();
+    let resized_viewport = app.graph_viewport.expect("viewport updated after resize");
+    assert_eq!(resized_viewport, (104, 46));
+}
+
+#[test]
+fn test_canvas_memory_bounded_for_large_graphs() {
+    use architect::lean::tui::graph::{Canvas, Graph, GroupingMode};
+    use architect::lean::tui::view::TaskRow;
+
+    // Generate a 500-task graph
+    let mut tasks = Vec::with_capacity(500);
+    for i in 0..500 {
+        tasks.push(TaskRow {
+            id: format!("task_{i}"),
+            title: format!("Task {i}"),
+            depends_on: if i > 0 {
+                vec![format!("task_{}", i - 1)]
+            } else {
+                vec![]
+            },
+            ..TaskRow::default()
+        });
+    }
+    let mut view = architect::lean::tui::view::View::default();
+    view.tasks = tasks;
+
+    // Viewport-based layout for 120x30 terminal (inner: 77x26)
+    let graph = Graph::new_with_viewport(
+        &view,
+        None,
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((77, 26)),
+    );
+
+    // Windowed canvas allocates strictly O(inner.width * inner.height) = 77 * 26 = 2002 cells
+    let mut window_canvas = Canvas::new_window(0, 0, 77, 26);
+    graph.render(&view, &mut window_canvas, Filter::All, "worker:task_0");
+
+    let lines = window_canvas.lines();
+    assert_eq!(lines.len(), 26);
+
+    // Canvas::new cap check: 60,000 x 60,000 does not OOM
+    let capped_canvas = Canvas::new(60_000, 60_000);
+    assert_eq!(capped_canvas.lines().len(), 1024);
 }

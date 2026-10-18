@@ -193,6 +193,16 @@ impl Graph {
         collapsed: &std::collections::HashSet<String>,
         grouping: GroupingMode,
     ) -> Self {
+        Self::new_with_viewport(view, filter_query, collapsed, grouping, None)
+    }
+
+    pub fn new_with_viewport(
+        view: &View,
+        filter_query: Option<&str>,
+        collapsed: &std::collections::HashSet<String>,
+        grouping: GroupingMode,
+        viewport: Option<(u16, u16)>,
+    ) -> Self {
         let mut graph = Graph {
             nodes: Vec::new(),
             edges: Vec::new(),
@@ -202,20 +212,6 @@ impl Graph {
             collapsed: collapsed.clone(),
             grouping,
         };
-
-        let mut place = |key: String, column: u16, row: u16| {
-            graph.nodes.push(Node {
-                key,
-                x: column_x(column),
-                y: row_y(row),
-                visible: true,
-                group: None,
-                collapsed: false,
-            });
-        };
-        place(PLAN_VERIFIER.into(), 0, 0);
-        place(ORCHESTRATOR.into(), 1, 0);
-        place(AUDITOR.into(), 2, 0);
 
         let n = view.tasks.len();
         let index: HashMap<&str, usize> = view
@@ -301,54 +297,153 @@ impl Graph {
         let mut cols: Vec<u16> = column_tasks.keys().copied().collect();
         cols.sort_unstable();
 
-        for &col in &cols {
-            let tasks_in_col = column_tasks.get_mut(&col).unwrap();
-            tasks_in_col.sort_unstable();
+        let query_clean = filter_query.map(str::trim).filter(|s| !s.is_empty());
+        let matches_query = |key: &str| -> bool {
+            let Some(q) = query_clean else {
+                return true;
+            };
+            let q_lower = q.to_lowercase();
+            key.to_lowercase().contains(&q_lower)
+                || agent_name(key).to_lowercase().contains(&q_lower)
+                || key
+                    .split_once(':')
+                    .and_then(|(_, id)| view.tasks.iter().find(|t| t.id == id))
+                    .is_some_and(|t| {
+                        t.title.to_lowercase().contains(&q_lower)
+                            || t.status.to_lowercase().contains(&q_lower)
+                            || t.goal.to_lowercase().contains(&q_lower)
+                            || t.focus.to_lowercase().contains(&q_lower)
+                    })
+        };
 
-            for (slot, &task_idx) in tasks_in_col.iter().enumerate() {
-                let slot = slot as u16;
-                let task = &view.tasks[task_idx];
-                let id = &task.id;
-                let is_task_collapsed =
-                    collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
+        if let Some((vp_w, _vp_h)) = viewport {
+            let max_cols = ((vp_w.saturating_sub(MARGIN) + GAP_X) / (WIDTH + GAP_X)).max(1);
+            let mut col_next_row: Vec<u16> = match max_cols {
+                1 => vec![1],
+                2 => vec![1, 2],
+                _ => vec![1; max_cols as usize],
+            };
 
-                let mut worker =
-                    Node::new(format!("worker:{id}"), column_x(col), row_y(1 + 2 * slot));
-                worker.collapsed = is_task_collapsed;
-                worker.group = Some(format!("task:{id}"));
+            let mut place_admin = |key: &str, col: u16, row: u16| {
+                graph.nodes.push(Node {
+                    key: key.to_string(),
+                    x: column_x(col),
+                    y: row_y(row),
+                    visible: matches_query(key),
+                    group: None,
+                    collapsed: false,
+                });
+            };
 
-                let mut verifier =
-                    Node::new(format!("verifier:{id}"), column_x(col), row_y(2 + 2 * slot));
-                verifier.group = Some(format!("task:{id}"));
-                if is_task_collapsed {
-                    verifier.visible = false;
-                }
-
-                graph.nodes.push(worker);
-                graph.nodes.push(verifier);
+            if max_cols >= 3 {
+                place_admin(PLAN_VERIFIER, 0, 0);
+                place_admin(ORCHESTRATOR, 1, 0);
+                place_admin(AUDITOR, 2, 0);
+            } else if max_cols == 2 {
+                place_admin(PLAN_VERIFIER, 0, 0);
+                place_admin(ORCHESTRATOR, 1, 0);
+                place_admin(AUDITOR, 1, 1);
+            } else {
+                place_admin(ORCHESTRATOR, 0, 0);
+                place_admin(PLAN_VERIFIER, 1, 0);
+                place_admin(AUDITOR, 1, 1);
             }
-        }
 
-        // Text query filtering
-        if let Some(query) = filter_query {
-            let q = query.trim().to_lowercase();
-            if !q.is_empty() {
-                for node in &mut graph.nodes {
-                    let matches = node.key.to_lowercase().contains(&q)
-                        || agent_name(&node.key).to_lowercase().contains(&q)
-                        || node
-                            .key
-                            .split_once(':')
-                            .and_then(|(_, id)| view.tasks.iter().find(|t| t.id == id))
-                            .is_some_and(|t| {
-                                t.title.to_lowercase().contains(&q)
-                                    || t.status.to_lowercase().contains(&q)
-                                    || t.goal.to_lowercase().contains(&q)
-                                    || t.focus.to_lowercase().contains(&q)
-                            });
-                    if !matches {
-                        node.visible = false;
+            for &depth in &cols {
+                let tasks_in_col = column_tasks.get_mut(&depth).unwrap();
+                tasks_in_col.sort_unstable();
+
+                for (slot, &task_idx) in tasks_in_col.iter().enumerate() {
+                    let task = &view.tasks[task_idx];
+                    let id = &task.id;
+                    let is_task_collapsed =
+                        collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
+                    let worker_key = format!("worker:{id}");
+                    let verifier_key = format!("verifier:{id}");
+                    let worker_vis = matches_query(&worker_key);
+                    let verifier_vis = !is_task_collapsed && matches_query(&verifier_key);
+
+                    if !worker_vis && !verifier_vis {
+                        graph.nodes.push(Node {
+                            key: worker_key,
+                            x: 0,
+                            y: 0,
+                            visible: false,
+                            group: Some(format!("task:{id}")),
+                            collapsed: is_task_collapsed,
+                        });
+                        graph.nodes.push(Node {
+                            key: verifier_key,
+                            x: 0,
+                            y: 0,
+                            visible: false,
+                            group: Some(format!("task:{id}")),
+                            collapsed: false,
+                        });
+                        continue;
                     }
+
+                    let target_col = (depth + slot as u16) % max_cols;
+                    let row = col_next_row[target_col as usize];
+
+                    let mut worker = Node::new(worker_key, column_x(target_col), row_y(row));
+                    worker.collapsed = is_task_collapsed;
+                    worker.group = Some(format!("task:{id}"));
+                    worker.visible = worker_vis;
+                    graph.nodes.push(worker);
+
+                    let next_row = if worker_vis { row + 1 } else { row };
+
+                    let mut verifier =
+                        Node::new(verifier_key, column_x(target_col), row_y(next_row));
+                    verifier.group = Some(format!("task:{id}"));
+                    verifier.visible = verifier_vis;
+                    graph.nodes.push(verifier);
+
+                    let end_row = if verifier_vis { next_row + 1 } else { next_row };
+                    col_next_row[target_col as usize] = end_row;
+                }
+            }
+        } else {
+            let mut place = |key: String, column: u16, row: u16| {
+                let visible = matches_query(&key);
+                graph.nodes.push(Node {
+                    key,
+                    x: column_x(column),
+                    y: row_y(row),
+                    visible,
+                    group: None,
+                    collapsed: false,
+                });
+            };
+            place(PLAN_VERIFIER.into(), 0, 0);
+            place(ORCHESTRATOR.into(), 1, 0);
+            place(AUDITOR.into(), 2, 0);
+
+            for &col in &cols {
+                let tasks_in_col = column_tasks.get_mut(&col).unwrap();
+                tasks_in_col.sort_unstable();
+
+                for (slot, &task_idx) in tasks_in_col.iter().enumerate() {
+                    let slot = slot as u16;
+                    let task = &view.tasks[task_idx];
+                    let id = &task.id;
+                    let is_task_collapsed =
+                        collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
+
+                    let mut worker =
+                        Node::new(format!("worker:{id}"), column_x(col), row_y(1 + 2 * slot));
+                    worker.collapsed = is_task_collapsed;
+                    worker.group = Some(format!("task:{id}"));
+                    worker.visible = matches_query(&worker.key);
+
+                    let mut verifier =
+                        Node::new(format!("verifier:{id}"), column_x(col), row_y(2 + 2 * slot));
+                    verifier.group = Some(format!("task:{id}"));
+                    verifier.visible = !is_task_collapsed && matches_query(&verifier.key);
+
+                    graph.nodes.push(worker);
+                    graph.nodes.push(verifier);
                 }
             }
         }
@@ -463,28 +558,41 @@ impl Graph {
     /// The orthogonal path of an edge, through the gaps between boxes only.
     fn route(from: &Node, to: &Node) -> Vec<(u16, u16)> {
         let half = GAP_X / 2;
-        // A verifier sits right below its worker.
-        if from.x == to.x && from.y == to.y + HEIGHT + GAP_Y {
+        // Same column
+        if from.x == to.x {
             let x = to.x + WIDTH / 2;
-            return vec![(x, from.y - 1), (x, to.y + HEIGHT)];
+            if from.y > to.y {
+                return vec![(x, from.y - 1), (x, to.y + HEIGHT)];
+            }
+            if from.y < to.y {
+                return vec![(x, from.y + HEIGHT), (x, to.y.saturating_sub(1))];
+            }
         }
         // Neighbours on one row face each other.
-        if from.y == to.y && from.x + WIDTH + GAP_X == to.x {
-            return vec![(from.right(), from.mid_y()), (to.x - 1, to.mid_y())];
-        }
-        if from.y == to.y && to.x + WIDTH + GAP_X == from.x {
-            return vec![(from.x - 1, from.mid_y()), (to.right(), to.mid_y())];
+        if from.y == to.y {
+            if from.x + WIDTH + GAP_X == to.x {
+                return vec![(from.right(), from.mid_y()), (to.x - 1, to.mid_y())];
+            }
+            if to.x + WIDTH + GAP_X == from.x {
+                return vec![(from.x - 1, from.mid_y()), (to.right(), to.mid_y())];
+            }
         }
         let out = from.right() + half;
-        let into = to.x - half;
+        let into = to.x.saturating_sub(half);
         let mut path = vec![(from.right(), from.mid_y()), (out, from.mid_y())];
         if out != into {
-            let lane = if to.y == 0 { HEIGHT } else { to.y - 1 };
+            let lane = if to.y == 0 {
+                HEIGHT
+            } else if to.y > from.y {
+                to.y.saturating_sub(1)
+            } else {
+                to.y + HEIGHT
+            };
             path.push((out, lane));
             path.push((into, lane));
         }
         path.push((into, to.mid_y()));
-        path.push((to.x - 1, to.mid_y()));
+        path.push((to.x.saturating_sub(1), to.mid_y()));
         path
     }
 
@@ -494,6 +602,7 @@ impl Graph {
         };
         match (bx.cmp(ax), by.cmp(ay)) {
             (std::cmp::Ordering::Less, _) => '◀',
+            (std::cmp::Ordering::Greater, _) => '▶',
             (_, std::cmp::Ordering::Less) => '▲',
             (_, std::cmp::Ordering::Greater) => '▼',
             _ => '▶',
@@ -522,18 +631,19 @@ impl Graph {
             }
             // Beside where the edge leaves its source, inside the gap.
             if let (Some(label), [(x, y), (next_x, _), ..]) = (&edge.label, path.as_slice()) {
-                if *next_x == *x {
-                    canvas.text(x + 1, *y, label, edge.kind.style());
+                let lx = if *next_x == *x {
+                    x + 1
+                } else if *next_x < *x {
+                    x.saturating_sub(unicode_width::UnicodeWidthStr::width(label.as_str()) as u16)
                 } else {
-                    let lx = if *next_x < *x {
-                        x.saturating_sub(
-                            unicode_width::UnicodeWidthStr::width(label.as_str()) as u16
-                        )
-                    } else {
-                        x + 1
-                    };
-                    canvas.text(lx, y.saturating_sub(1), label, edge.kind.style());
-                }
+                    x + 1
+                };
+                let ly = if *next_x == *x {
+                    *y
+                } else {
+                    y.saturating_sub(1)
+                };
+                canvas.text(lx, ly, label, edge.kind.style());
             }
         }
         for node in self.nodes.iter().filter(|n| n.visible) {
@@ -730,9 +840,11 @@ struct Cell {
     style: Style,
 }
 
-/// A character grid the size of the whole graph; the frame shows a window
-/// of it.
+/// A character grid for rendering graph nodes and orthogonal edges.
+/// Memory is strictly bounded to the viewport window when windowing is used.
 pub struct Canvas {
+    origin_x: u16,
+    origin_y: u16,
     width: u16,
     height: u16,
     cells: Vec<Cell>,
@@ -740,7 +852,15 @@ pub struct Canvas {
 
 impl Canvas {
     pub fn new(width: u16, height: u16) -> Self {
+        let cap_w = width.min(2048);
+        let cap_h = height.min(1024);
+        Self::new_window(0, 0, cap_w, cap_h)
+    }
+
+    pub fn new_window(origin_x: u16, origin_y: u16, width: u16, height: u16) -> Self {
         Canvas {
+            origin_x,
+            origin_y,
             width,
             height,
             cells: vec![
@@ -755,8 +875,31 @@ impl Canvas {
     }
 
     fn cell(&mut self, x: u16, y: u16) -> Option<&mut Cell> {
-        (x < self.width && y < self.height)
-            .then(|| &mut self.cells[usize::from(y) * usize::from(self.width) + usize::from(x)])
+        if x >= self.origin_x
+            && x < self.origin_x.saturating_add(self.width)
+            && y >= self.origin_y
+            && y < self.origin_y.saturating_add(self.height)
+        {
+            let lx = usize::from(x - self.origin_x);
+            let ly = usize::from(y - self.origin_y);
+            Some(&mut self.cells[ly * usize::from(self.width) + lx])
+        } else {
+            None
+        }
+    }
+
+    fn get_cell(&self, x: u16, y: u16) -> Option<&Cell> {
+        if x >= self.origin_x
+            && x < self.origin_x.saturating_add(self.width)
+            && y >= self.origin_y
+            && y < self.origin_y.saturating_add(self.height)
+        {
+            let lx = usize::from(x - self.origin_x);
+            let ly = usize::from(y - self.origin_y);
+            Some(&self.cells[ly * usize::from(self.width) + lx])
+        } else {
+            None
+        }
     }
 
     fn put(&mut self, x: u16, y: u16, ch: char, style: Style) {
@@ -826,11 +969,9 @@ impl Canvas {
         for row in 0..area.height {
             for column in 0..area.width {
                 let (x, y) = (left + column, top + row);
-                if x >= self.width || y >= self.height {
-                    continue;
-                }
-                let cell = &self.cells[usize::from(y) * usize::from(self.width) + usize::from(x)];
-                if let Some(target) = buffer.cell_mut((area.x + column, area.y + row)) {
+                if let Some(cell) = self.get_cell(x, y)
+                    && let Some(target) = buffer.cell_mut((area.x + column, area.y + row))
+                {
                     target.set_char(Self::glyph(cell)).set_style(cell.style);
                 }
             }
@@ -855,13 +996,32 @@ impl Canvas {
 
 /// Computes the overlay rectangle for the 'teraz' progress box so that
 /// it does not collide with the currently selected node in the viewport.
-///
-/// Default position is bottom-right. If the selected node intersects that
-/// area, the overlay dynamically flips to top-right (or alternative corners)
-/// so that the selected node remains visible.
 pub fn compute_progress_overlay(
     inner: Rect,
     selected_node: Option<&Node>,
+    offset: (u16, u16),
+    progress_width: u16,
+    progress_height: u16,
+) -> Option<Rect> {
+    compute_progress_overlay_with_nodes(
+        inner,
+        selected_node,
+        &[],
+        offset,
+        progress_width,
+        progress_height,
+    )
+}
+
+/// Computes the overlay rectangle for the 'teraz' progress box checking against
+/// both selected node and all visible nodes in the viewport.
+///
+/// Default position is bottom-right. If collisions exist, it tests top-right,
+/// top-left, and bottom-left. If all corners collide, it yields and returns None.
+pub fn compute_progress_overlay_with_nodes(
+    inner: Rect,
+    selected_node: Option<&Node>,
+    visible_nodes: &[&Node],
     offset: (u16, u16),
     progress_width: u16,
     progress_height: u16,
@@ -871,36 +1031,54 @@ pub fn compute_progress_overlay(
     }
     let default_x = inner.right().saturating_sub(progress_width);
     let bottom_y = inner.bottom().saturating_sub(progress_height);
-    let mut overlay = Rect::new(default_x, bottom_y, progress_width, progress_height);
 
-    if let Some(node) = selected_node.filter(|n| n.visible) {
-        let screen_x = inner.x as i32 + node.x as i32 - offset.0 as i32;
-        let screen_y = inner.y as i32 + node.y as i32 - offset.1 as i32;
+    let candidates = [
+        Rect::new(default_x, bottom_y, progress_width, progress_height), // bottom-right
+        Rect::new(default_x, inner.y, progress_width, progress_height),  // top-right
+        Rect::new(inner.x, inner.y, progress_width, progress_height),    // top-left
+        Rect::new(inner.x, bottom_y, progress_width, progress_height),   // bottom-left
+    ];
 
-        let node_rect = Rect::new(
-            screen_x.max(0) as u16,
-            screen_y.max(0) as u16,
-            WIDTH,
-            HEIGHT,
-        );
+    for overlay in candidates {
+        let collides_selected = selected_node.filter(|n| n.visible).is_some_and(|node| {
+            let screen_x = inner.x as i32 + node.x as i32 - offset.0 as i32;
+            let screen_y = inner.y as i32 + node.y as i32 - offset.1 as i32;
+            let node_rect = Rect::new(
+                screen_x.max(0) as u16,
+                screen_y.max(0) as u16,
+                WIDTH,
+                HEIGHT,
+            );
+            node_rect.intersects(overlay)
+        });
+        if collides_selected {
+            continue;
+        }
 
-        if node_rect.intersects(overlay) {
-            // Collision on bottom-right! Flip to top-right corner
-            overlay.y = inner.y;
-            if node_rect.intersects(overlay) {
-                // Collision on top-right as well! Flip to top-left
-                overlay.x = inner.x;
-                if node_rect.intersects(overlay) {
-                    // Collision on top-left! Flip to bottom-left
-                    overlay.y = bottom_y;
-                    if node_rect.intersects(overlay) {
-                        return None;
-                    }
-                }
+        let collides_any_visible = visible_nodes.iter().any(|node| {
+            let screen_x = inner.x as i32 + node.x as i32 - offset.0 as i32;
+            let screen_y = inner.y as i32 + node.y as i32 - offset.1 as i32;
+            if screen_x + WIDTH as i32 > inner.x as i32
+                && screen_x < inner.right() as i32
+                && screen_y + HEIGHT as i32 > inner.y as i32
+                && screen_y < inner.bottom() as i32
+            {
+                let node_rect = Rect::new(
+                    screen_x.max(0) as u16,
+                    screen_y.max(0) as u16,
+                    WIDTH,
+                    HEIGHT,
+                );
+                node_rect.intersects(overlay)
+            } else {
+                false
             }
+        });
+        if !collides_any_visible {
+            return Some(overlay);
         }
     }
-    Some(overlay)
+    None
 }
 
 #[cfg(test)]

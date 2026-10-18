@@ -65,12 +65,29 @@ Paste and Unicode semantics:
 - Chat and comment drafts reserve a display column for the insertion cursor, so it stays after the final character of a full line. Multiline drafts keep their cursor and viewport position beyond 65,535 lines; long pasted search queries and activity labels are clipped to the available display width.
 - Modals isolate key ownership: Help ignores typing, paste and action shortcuts until explicitly closed, hides the cursor beneath it and preserves drafts and search queries. Comment editor modal routes paste and key events to comment text. `Ctrl+C` detaches from any view.
 
-Responsive layout and display:
-- Minimum terminal size: 60x12 columns and rows; smaller viewports display a centered guard (`Terminal zbyt mały (wymagane min. 60x12)`).
-- Breakpoint at 100 columns: `>= 100` columns renders side-by-side split (Chat and Team Graph); `< 100` columns renders single-panel compact mode with active panel toggle badge `[Czat]` / `[Zespół] (Tab: przełącz)`.
+Responsive layout, carousel and adaptive team graph:
+- Minimum terminal size: 12x5 columns and rows; smaller viewports display a centered guard (`Terminal zbyt mały (wymagane min. 12x5)`).
+- Breakpoint at 85 columns: `>= 85` columns renders side-by-side split (Chat beside Team Graph or Tasks Carousel); `< 85` columns renders single-panel compact mode with active panel toggle badge `[Czat]` / `[Zadania]` / `[Zespół] (Tab: przełącz)`.
+- Tasks Carousel (`t` key): dedicated full-screen or side-by-side panel for cycling through tasks with `←`/`→`, `h`/`l`, jumping to worker (`w`) or verifier (`v`), and quick actions (`Enter` for Details, `d` for Diff, `c` for Comment).
+- Adaptive Graph Geometry: node layout dynamically adapts to the actual interior dimensions of the graph panel (`inner.width`, `inner.height`), utilizing free columns and rows for parallel tasks, long chains, branches, and cycles.
+- Compaction on folding and filtering: collapsing verifiers (`z`/Space) or filtering by text query removes empty gaps, pulling subsequent tasks upward and compacting the layout.
+- Unified geometry: rendering, orthogonal edge routing (routed strictly outside card interiors with explicit direction markers `▲`, `▼`, `◀`, `▶`), arrow key navigation, and scrolling share the exact same spatial model.
+- Stability: selecting a node or streaming activity updates never shifts or displaces graph nodes.
+- Progress overlay collision avoidance: the 'teraz' progress box tests all four viewport corners and automatically yields (hides) if visible cards occupy candidate corners.
+- Bounded Canvas memory: viewport windowing (`Canvas::new_window`) limits buffer allocation to `O(viewport_area)` (~99 KB–300 KB) regardless of graph size, preventing OOM crashes on large plans (e.g. 500+ tasks).
 - Main footer action hints dynamically adapt to available terminal width (at 115+, 75+, 50+, <50 columns).
-- Progress overlay dynamically moves between corners or hides to avoid collisions with the selected graph node.
 - `NO_COLOR=1` disables ANSI color while preserving `dim` and `reversed` modifiers; `ANTISLOP_ASCII=1` (or non-UTF-8 locales) renders borders and status icons in plain ASCII.
+
+### Graph screen utilization: Before vs After
+
+| Terminal | Inner panel | Scenario | Before (whole visible cards) | After (whole visible cards) | Redundant empty area |
+|---|---|---|---|---|---|
+| **80x24** (compact) | 78 x 20 | Parallel (4 tasks) | 3 cards (PV, Orch, w1; col 1 empty) | **8 cards** (+166% increase) | Col 1 empty area eliminated |
+| **80x24** (compact) | 78 x 20 | Long chain (4 tasks) | 4 cards (c3/c4 clipped offscreen) | **6–8 cards** (wrapped columns) | Horizontal overflow eliminated |
+| **85x24** (split) | 48 x 20 | Parallel (4 tasks) | 2 cards (Orch clipped horizontally) | **4 cards** (+100%, Orch readable) | 0 clipped cards |
+| **120x30** (split) | 77 x 26 | Parallel (4 tasks) | 5 cards (col 1 empty below row 0) | **10 cards** (+100% increase) | Col 1 empty area eliminated |
+| **160x50** (split) | 104 x 46 | Parallel (4 tasks) | 7 cards (cols 1 & 2 empty below row 0) | **11 cards** (100% visible, no scroll) | >3,500 empty cells eliminated |
+| Any terminal | Any inner | Collapsed verifiers | 6-line blank gaps per task | **0 blank gaps** (compacted vertically) | Empty vertical gaps eliminated |
 
 Commands:
 - `/pause` stops starting new work (running turns finish) until `/continue`.

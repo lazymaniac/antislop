@@ -469,54 +469,60 @@ pub fn section(theme: &Theme, title: &str, meta: String, focused: bool, width: u
     )
 }
 
+/// Properties for constructing a visual card.
+pub struct CardProps<'a> {
+    pub fill: Style,
+    pub accent: Style,
+    pub head: Vec<Span<'static>>,
+    pub right: String,
+    pub body: &'a str,
+    pub max_body: usize,
+    pub width: u16,
+}
+
 /// A card: a colored accent bar, a heading row, wrapped body rows and a gap.
-#[allow(clippy::too_many_arguments)]
-pub fn card(
-    theme: &Theme,
-    fill: Style,
-    accent: Style,
-    head: Vec<Span<'static>>,
-    right: String,
-    body: &str,
-    max_body: usize,
-    width: u16,
-) -> Vec<Row> {
-    let w = usize::from(width);
+pub fn card(theme: &Theme, props: CardProps<'_>) -> Vec<Row> {
+    let w = usize::from(props.width);
     if w == 0 {
         return vec![];
     }
-    let bar_span = || Span::styled(theme.glyphs().bar, fill.patch(accent));
-    let mut left = vec![bar_span(), Span::styled(" ", fill)];
+    let bar_span = || Span::styled(theme.glyphs().bar, props.fill.patch(props.accent));
+    let mut left = vec![bar_span(), Span::styled(" ", props.fill)];
     left.extend(
-        head.into_iter()
-            .map(|span| Span::styled(span.content.into_owned(), fill.patch(span.style))),
+        props
+            .head
+            .into_iter()
+            .map(|span| Span::styled(span.content.into_owned(), props.fill.patch(span.style))),
     );
     let right_width = w / 2;
     let mut out = vec![split_row(
-        fill,
+        props.fill,
         left,
-        Span::styled(theme.fit(&right, right_width), fill.patch(theme.dim())),
+        Span::styled(
+            theme.fit(&props.right, right_width),
+            props.fill.patch(theme.dim()),
+        ),
         w,
     )];
     let room = w.saturating_sub(3);
-    let lines = if body.is_empty() {
+    let lines = if props.body.is_empty() {
         vec![]
     } else {
-        wrap(&theme.clean(body), room)
+        wrap(&theme.clean(props.body), room)
     };
-    let cut = lines.len() > max_body;
-    for (i, line) in lines.iter().take(max_body).enumerate() {
-        let line = if cut && i + 1 == max_body {
+    let cut = lines.len() > props.max_body;
+    for (i, line) in lines.iter().take(props.max_body).enumerate() {
+        let line = if cut && i + 1 == props.max_body {
             theme.fit(&format!("{line}{}", theme.glyphs().ellipsis), room)
         } else {
             line.clone()
         };
         out.push(Row::new(
-            fill,
+            props.fill,
             vec![
                 bar_span(),
-                Span::styled(" ", fill),
-                Span::styled(line, fill.patch(theme.text())),
+                Span::styled(" ", props.fill),
+                Span::styled(line, props.fill.patch(theme.text())),
             ],
         ));
     }

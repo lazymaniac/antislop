@@ -20,7 +20,9 @@ pub use editor::{InputBuffer, sanitize_paste, sanitize_single_line_paste, visual
 pub use graph::{Filter, GroupingMode};
 pub use palette::{Help, Kind, Picker};
 pub use sanitize::sanitize;
-pub use theme::{Glyphs, Row, Theme, Tone, card, draw_rows, scrollbar, section, split_row, tone};
+pub use theme::{
+    CardProps, Glyphs, Row, Theme, Tone, card, draw_rows, scrollbar, section, split_row, tone,
+};
 pub use view::{
     ConfirmationAction, ConfirmationCard, ConfirmationStatus, MessageEntry, TranscriptCard,
 };
@@ -141,6 +143,7 @@ pub struct ConversationState {
     pub confirmation: Option<ConfirmationCard>,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
+    pub graph_viewport: Option<(u16, u16)>,
 }
 
 pub struct App {
@@ -201,6 +204,7 @@ pub struct App {
     pub confirmation: Option<ConfirmationCard>,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
+    pub graph_viewport: Option<(u16, u16)>,
 }
 
 impl App {
@@ -271,6 +275,7 @@ impl App {
             confirmation: None,
             details_scroll_memory: std::collections::HashMap::new(),
             details_query_memory: std::collections::HashMap::new(),
+            graph_viewport: None,
         }
     }
 
@@ -378,6 +383,7 @@ impl App {
                     confirmation: self.confirmation.clone(),
                     details_scroll_memory: self.details_scroll_memory.clone(),
                     details_query_memory: self.details_query_memory.clone(),
+                    graph_viewport: self.graph_viewport,
                 },
             );
         }
@@ -414,6 +420,7 @@ impl App {
             self.confirmation = state.confirmation;
             self.details_scroll_memory = state.details_scroll_memory;
             self.details_query_memory = state.details_query_memory;
+            self.graph_viewport = state.graph_viewport;
         } else {
             let restored_draft = self
                 .conversation_drafts
@@ -444,6 +451,7 @@ impl App {
             self.graph_filter = None;
             self.graph_collapsed.clear();
             self.graph_grouping = graph::GroupingMode::default();
+            self.graph_viewport = None;
         }
         self.input_shown = 0;
         self.picker = None;
@@ -1623,11 +1631,12 @@ impl App {
         {
             self.graph_collapsed.remove(id);
         }
-        let graph = Graph::new_with_options(
+        let graph = Graph::new_with_viewport(
             &self.view,
             self.graph_filter.as_deref(),
             &self.graph_collapsed,
             self.graph_grouping,
+            self.graph_viewport,
         );
         let step = match key.code {
             KeyCode::Left => Some((-1, 0)),
@@ -2405,13 +2414,15 @@ impl App {
                     );
                     cards.extend(card(
                         theme,
-                        fill,
-                        accent,
-                        head,
-                        right,
-                        &msg.text,
-                        usize::MAX,
-                        width,
+                        CardProps {
+                            fill,
+                            accent,
+                            head,
+                            right,
+                            body: &msg.text,
+                            max_body: usize::MAX,
+                            width,
+                        },
                     ));
                 }
                 TranscriptCard::Plan { plan, tasks, text } => {
@@ -2422,16 +2433,18 @@ impl App {
                     }
                     cards.extend(card(
                         theme,
-                        fill,
-                        theme.accent(),
-                        vec![Span::styled(
-                            format!("Plan {}", theme.clean(plan)),
-                            theme.accent().patch(theme.title()),
-                        )],
-                        format!("{tasks} zadań"),
-                        text,
-                        usize::MAX,
-                        width,
+                        CardProps {
+                            fill,
+                            accent: theme.accent(),
+                            head: vec![Span::styled(
+                                format!("Plan {}", theme.clean(plan)),
+                                theme.accent().patch(theme.title()),
+                            )],
+                            right: format!("{tasks} zadań"),
+                            body: text,
+                            max_body: usize::MAX,
+                            width,
+                        },
                     ));
                 }
                 TranscriptCard::System {
@@ -2454,16 +2467,18 @@ impl App {
                     };
                     cards.extend(card(
                         theme,
-                        fill,
-                        accent,
-                        vec![Span::styled(
-                            theme.clean(title),
-                            accent.patch(theme.title()),
-                        )],
-                        theme.clean(meta),
-                        text,
-                        usize::MAX,
-                        width,
+                        CardProps {
+                            fill,
+                            accent,
+                            head: vec![Span::styled(
+                                theme.clean(title),
+                                accent.patch(theme.title()),
+                            )],
+                            right: theme.clean(meta),
+                            body: text,
+                            max_body: usize::MAX,
+                            width,
+                        },
                     ));
                 }
                 TranscriptCard::Comment {
@@ -2479,16 +2494,18 @@ impl App {
                     }
                     cards.extend(card(
                         theme,
-                        fill,
-                        theme.person("user"),
-                        vec![Span::styled(
-                            format!("Komentarz #{} do {}", id, theme.clean(target)),
-                            theme.accent().patch(theme.title()),
-                        )],
-                        theme.clean(status),
-                        text,
-                        usize::MAX,
-                        width,
+                        CardProps {
+                            fill,
+                            accent: theme.person("user"),
+                            head: vec![Span::styled(
+                                format!("Komentarz #{} do {}", id, theme.clean(target)),
+                                theme.accent().patch(theme.title()),
+                            )],
+                            right: theme.clean(status),
+                            body: text,
+                            max_body: usize::MAX,
+                            width,
+                        },
                     ));
                 }
                 TranscriptCard::Confirmation(conf) => {
@@ -2526,13 +2543,15 @@ impl App {
                     }
                     cards.extend(card(
                         theme,
-                        fill,
-                        accent,
-                        title_span,
-                        status_str.to_string(),
-                        &body,
-                        usize::MAX,
-                        width,
+                        CardProps {
+                            fill,
+                            accent,
+                            head: title_span,
+                            right: status_str.to_string(),
+                            body: &body,
+                            max_body: usize::MAX,
+                            width,
+                        },
                     ));
                 }
             }
@@ -2558,16 +2577,18 @@ impl App {
         if cards.is_empty() {
             cards.extend(card(
                 theme,
-                theme.card(),
-                theme.accent(),
-                vec![Span::styled(
-                    "Brak wiadomości w tej rozmowie.",
-                    theme.title(),
-                )],
-                String::new(),
-                "Wpisz wiadomość w kompozytorze poniżej lub naciśnij Ctrl+P, aby otworzyć paletę.",
-                usize::MAX,
-                width,
+                CardProps {
+                    fill: theme.card(),
+                    accent: theme.accent(),
+                    head: vec![Span::styled(
+                        "Brak wiadomości w tej rozmowie.",
+                        theme.title(),
+                    )],
+                    right: String::new(),
+                    body: "Wpisz wiadomość w kompozytorze poniżej lub naciśnij Ctrl+P, aby otworzyć paletę.",
+                    max_body: usize::MAX,
+                    width,
+                },
             ));
         }
 
@@ -2613,11 +2634,13 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let graph = Graph::new_with_options(
+        self.graph_viewport = Some((inner.width, inner.height));
+        let graph = Graph::new_with_viewport(
             &self.view,
             self.graph_filter.as_deref(),
             &self.graph_collapsed,
             self.graph_grouping,
+            self.graph_viewport,
         );
         if graph.node(&self.selected).is_none()
             || !graph.node(&self.selected).is_some_and(|n| n.visible)
@@ -2663,7 +2686,8 @@ impl App {
                 *top = (node.y + graph::HEIGHT).saturating_sub(inner.height);
             }
         }
-        let mut canvas = Canvas::new(graph.width, graph.height);
+        let mut canvas =
+            Canvas::new_window(self.offset.0, self.offset.1, inner.width, inner.height);
         graph.render(&self.view, &mut canvas, self.filter, &self.selected);
         canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
 
@@ -2677,9 +2701,11 @@ impl App {
             .clamp(16, 48) as u16;
         let width = width.min(inner.width);
         let height = progress.len().min(6) as u16 + 2;
-        let Some(overlay) = graph::compute_progress_overlay(
+        let visible_nodes: Vec<&graph::Node> = graph.nodes.iter().filter(|n| n.visible).collect();
+        let Some(overlay) = graph::compute_progress_overlay_with_nodes(
             inner,
             graph.node(&self.selected),
+            &visible_nodes,
             self.offset,
             width,
             height,
@@ -2841,6 +2867,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         confirmation: None,
         details_scroll_memory: std::collections::HashMap::new(),
         details_query_memory: std::collections::HashMap::new(),
+        graph_viewport: None,
     };
     app.open(conversation);
 

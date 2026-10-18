@@ -234,8 +234,8 @@ replaced when idle. The socket is `<state>/core.sock`, or
   events arrive. A "teraz" overlay in a corner lists the steps actually running,
   or says that the plan waits for the user, or that nothing runs; it moves to
   the other corner rather than cover the selected node. Tab moves focus between
-  the panels (on terminals narrower than 100 columns it switches which one is
-  shown); in the graph, arrows select the nearest node in that direction and
+  the panels (on terminals narrower than 85 columns it switches which one is
+  shown in compact mode); in the graph, arrows select the nearest node in that direction and
   Enter opens its details full screen: Przegląd (task, scope, goal, the
   verifier's focus and, for a verifier, its risks), Sesja (the agent's turns
   and tool calls), Wiadomości (mail to and from it), Wynik (the worker's
@@ -273,7 +273,7 @@ replaced when idle. The socket is `<state>/core.sock`, or
   coordinates. Bracketed paste normalizes CRLF/CR to LF, sanitizes control
   characters, caps length at 64 KB at character boundaries, and routes paste
   according to modal ownership (blocked during help, routed to comment editor
-  when active). The layout enforces a 60x12 minimum terminal guard and a 100-column
+  when active). The layout enforces a 12x5 minimum terminal guard and an 85-column
   breakpoint switching between side-by-side split and single-panel compact views.
 - `antislop chat "message"` (or piped input) prints events line by line and
   exits once the conversation is idle; `/accept` and `/cancel` lines work too.
@@ -388,6 +388,24 @@ replaced when idle. The socket is `<state>/core.sock`, or
   left out shows `nieznane`, and turns it did not report for are counted as
   such: missing data is never a zero (design §14). Tokens are not turned
   into money.
+- Team graph geometry dynamically adapts to the actual interior dimensions of
+  the graph panel (`inner.width`, `inner.height`), utilizing free columns and
+  rows for parallel tasks, long chains, branches, and cycles while keeping
+  worker–verifier pairs together.
+- Collapsing tasks (`z`/Space) or filtering by text query compacts vertical
+  spacing without leaving blank gaps, pulling subsequent tasks upward.
+- A single unified geometry powers rendering, orthogonal edge routing (strictly
+  outside card interiors with explicit direction markers `▲`, `▼`, `◀`, `▶`),
+  arrow key navigation, and scrolling. Selecting a node or updating streaming
+  activity never shifts or displaces graph nodes.
+- The 'teraz' progress overlay tests all candidate viewport corners and
+  automatically yields (hides) if visible cards occupy candidate corners.
+- Canvas memory is strictly bounded: `Canvas::new_window` allocates only
+  `O(inner.width * inner.height)` viewport memory, remaining independent of
+  graph size and preventing OOM crashes on large graphs (500+ tasks).
+- Tasks Carousel (`Focus::Tasks`, `t` key) provides a dedicated browsing view
+  for cycling through tasks with `←`/`→`, jumping to worker (`w`) or verifier
+  (`v`), and initiating diff (`d`), details (`Enter`) or comment (`c`) actions.
 
 ## Known limits
 
@@ -450,8 +468,9 @@ replaced when idle. The socket is `<state>/core.sock`, or
    `tests/lean_core.rs`).
 8. ✅ Messages between agents and from the user to one agent
    (`tests/lean_messages.rs`).
-9. ✅ TUI team graph, progress overlay and agent details (design §8.1–8.4;
-   unit tests in `src/lean/tui`).
+9. ✅ TUI team graph, adaptive viewport layout, tasks carousel, progress
+   overlay and agent details (design §8.1–8.4; comprehensive App and rendering
+   tests in `tests/lean_tui.rs` and `src/lean/tui`).
 10. ✅ Persistent comments on agents and diffs (design §8.5;
    `tests/lean_messages.rs`).
 11. ✅ Diff view with line comments and a code review on request (design §8.6;
