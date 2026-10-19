@@ -713,3 +713,650 @@ fn in_place_a_writer_that_touches_the_users_edits_stops_and_keeps_their_version(
     let calls = std::fs::read_to_string(dir.path().join("calls.jsonl")).unwrap();
     assert!(calls.contains("do not modify them") && calls.contains("- hello.txt"));
 }
+
+/// The card feedback a task ended with, and the last `task` event that
+/// carried it.
+fn card(core: &Core, conversation: &str, spec_id: &str) -> (Value, Value) {
+    let task = core
+        .store
+        .latest_plan(conversation)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == spec_id)
+        .unwrap();
+    let last = core
+        .store
+        .events_since(conversation, 0, 10_000)
+        .unwrap()
+        .into_iter()
+        .rfind(|event| event.kind == "task" && event.payload["id"] == spec_id)
+        .expect("no task event");
+    (
+        task.feedback.expect("the task ended with card feedback"),
+        last.payload["feedback"].clone(),
+    )
+}
+
+#[test]
+fn an_applied_change_gives_its_card_the_effect_and_the_full_coverage() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core
+        .store
+        .latest_plan(&conversation)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "t1")
+        .unwrap();
+
+    let (feedback, from_event) = card(&core, &conversation, "t1");
+    assert_eq!(
+        from_event, feedback,
+        "the card is announced, not only stored"
+    );
+    assert_eq!(feedback["round"], task.round);
+    assert_eq!(feedback["integration"]["outcome"], "applied");
+    assert_eq!(feedback["integration"]["source"], "run");
+    assert_eq!(
+        feedback["integration"]["files"],
+        serde_json::json!(["hello.txt"])
+    );
+    assert!(
+        feedback["integration"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("not committed")
+    );
+    // The effect names the change, bounded, never the full report.
+    assert_eq!(
+        feedback["effect"],
+        "1 file changed, 1 insertion(+) — hello.txt"
+    );
+    // Coverage accounts for the verifier's real obligations: its one risk,
+    // the common checks and the kind's checklist — all answered ok.
+    let spec: antislop::lean::tasks::TaskSpec = serde_json::from_value(task.spec.clone()).unwrap();
+    let obligations = antislop::lean::tasks::obligations(&spec);
+    assert_eq!(feedback["coverage"]["total"], obligations.len());
+    assert_eq!(
+        feedback["coverage"]["ok"].as_u64().unwrap()
+            + feedback["coverage"]["issue"].as_u64().unwrap()
+            + feedback["coverage"]["blocked"].as_u64().unwrap()
+            + feedback["coverage"]["na"].as_u64().unwrap()
+            + feedback["coverage"]["missing"].as_u64().unwrap(),
+        obligations.len() as u64
+    );
+    assert_eq!(feedback["coverage"]["missing"], 0);
+    assert_eq!(feedback["coverage"]["unknown"], serde_json::json!([]));
+}
+
+#[test]
+fn a_committed_change_names_its_commit_on_the_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, |text| {
+            text.replace("local_commits = false", "local_commits = true")
+        }),
+    )
+    .unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let (feedback, _) = card(&core, &conversation, "t1");
+    let head = git(&project, &["rev-parse", "HEAD"]);
+    assert_eq!(feedback["integration"]["outcome"], "committed");
+    assert_eq!(feedback["integration"]["commit"], head);
+    assert_eq!(
+        feedback["integration"]["files"],
+        serde_json::json!(["hello.txt"])
+    );
+    assert_eq!(git(&project, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn without_write_permission_the_card_says_the_branch_and_keeps_the_project_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let head = git(&project, &["rev-parse", "HEAD"]);
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, |text| {
+            text.replace("local_write = true", "local_write = false")
+        }),
+    )
+    .unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "left_on_branch");
+    assert_eq!(
+        feedback["integration"]["branch"],
+        format!("antislop/{}", &task.id[..8])
+    );
+    assert!(
+        feedback["integration"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("local writes are not allowed"),
+        "the raw reason reaches the card"
+    );
+    assert_eq!(git(&project, &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&project, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_writer_that_changes_nothing_reports_no_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    // The worker no longer writes: its round commits nothing on top of base.
+    let script = std::fs::read_to_string(&agy).unwrap().replace(
+        "with open(\"hello.txt\", \"w\")",
+        "with open(os.devnull, \"w\")",
+    );
+    std::fs::write(&agy, script).unwrap();
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "no_changes");
+    assert_eq!(feedback["effect"], "no file changes");
+    assert_eq!(feedback["integration"]["detail"], "no file changes");
+    assert!(!feedback.as_object().unwrap().contains_key("files"));
+}
+
+#[test]
+fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "needs_user");
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["round"], task.round);
+    assert_eq!(feedback["integration"]["outcome"], "user_edits");
+    assert_eq!(
+        feedback["integration"]["files"],
+        serde_json::json!(["hello.txt"])
+    );
+    assert_eq!(
+        feedback["integration"]["branch"],
+        format!("antislop/{}", &task.id[..8])
+    );
+    assert!(
+        feedback["integration"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("uncommitted edits in hello.txt"),
+        "the raw reason reaches the card"
+    );
+    assert!(feedback["effect"].as_str().unwrap().contains("hello.txt"));
+}
+
+#[test]
+fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    assert_eq!(task.status, "needs_user");
+
+    // The user commits their own version of the line the change also writes:
+    // the approved change no longer applies cleanly.
+    git(&project, &["add", "hello.txt"]);
+    git(&project, &["commit", "--quiet", "-m", "user version"]);
+    core.resume_plan(&conversation, &task.plan_id).unwrap();
+    wait_idle(&core, &conversation);
+
+    let task = &core.store.plan(&task.plan_id).unwrap()[0];
+    assert_eq!(task.status, "needs_user", "{:?}", task.report);
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "conflict");
+    assert_eq!(
+        feedback["integration"]["files"],
+        serde_json::json!(["hello.txt"])
+    );
+    assert!(
+        feedback["integration"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("conflicts with the current branch in hello.txt"),
+        "the raw conflict reason is kept"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user draft\n",
+        "the user's committed content is not overwritten by a conflict"
+    );
+}
+
+#[test]
+fn in_place_work_is_named_as_such_on_the_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let base = git(&project, &["rev-parse", "HEAD"]);
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, in_place),
+    )
+    .unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "in_place_applied");
+    assert!(
+        feedback["integration"]["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("applied in place"),
+        "{feedback}"
+    );
+    assert_eq!(
+        feedback["integration"]["files"],
+        serde_json::json!(["hello.txt"])
+    );
+    assert_eq!(git(&project, &["rev-parse", "HEAD"]), base);
+}
+
+#[test]
+fn an_in_place_commit_names_its_commit_on_the_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, |text| {
+            in_place(text).replace("local_commits = false", "local_commits = true")
+        }),
+    )
+    .unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "in_place_committed");
+    assert_eq!(
+        feedback["integration"]["commit"],
+        git(&project, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(git(&project, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn an_in_place_worker_over_the_users_edits_names_the_protection_on_the_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(
+        &project.join(".antislop"),
+        config_with(&codex, &agy, in_place),
+    )
+    .unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "in_place_user_edits");
+    assert_eq!(
+        feedback["integration"]["files"],
+        serde_json::json!(["hello.txt"])
+    );
+    assert!(
+        feedback["integration"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("files you were editing: hello.txt"),
+        "the raw reason reaches the card"
+    );
+}
+
+/// One read-only task and a verifier whose coverage adds an invented id:
+/// a read-only card must say `not_applicable` and count only real obligations.
+fn read_only_clis(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (codex, agy) = fake_clis(dir);
+    let plan = serde_json::json!({"tasks": [
+        {"id": "t1", "title": "Audit greetings", "goal": "Report on README",
+         "kind": "analysis", "verifier": {"focus": "coverage of the audit",
+         "risks": ["a missed file"]}}
+    ]});
+    let script = std::fs::read_to_string(&codex).unwrap();
+    let start = script.find("plan = ").unwrap();
+    let end = script[start..].find("\nanswer = ").unwrap() + start;
+    std::fs::write(
+        &codex,
+        format!(
+            "{}plan = json.loads({:?}){}",
+            &script[..start],
+            plan.to_string(),
+            &script[end..]
+        ),
+    )
+    .unwrap();
+    let script = std::fs::read_to_string(&agy)
+        .unwrap()
+        .replace(
+            r#"data["coverage"] = {i: {"status": "ok", "note": "checked"} for i in ids}"#,
+            r#"data["coverage"] = {i: {"status": "ok", "note": "checked"} for i in ids}
+    data["coverage"]["X9"] = {"status": "ok", "note": "invented"}
+    data["coverage"]["V1"] = {"status": "n/a", "note": "no build here"}
+    data["coverage"]["R1"] = {"status": "issue", "note": "one file unreadable"}"#,
+        )
+        .replace(
+            "answer = \"wrote hello.txt\"",
+            "answer = \"README read; 3 notes filed\"",
+        )
+        .replace("\"approved\": \"git diff\" in prompt", "\"approved\": True");
+    std::fs::write(&agy, script).unwrap();
+    (codex, agy)
+}
+
+#[test]
+fn a_read_only_card_says_not_applicable_and_counts_only_real_obligations() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = read_only_clis(dir.path());
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let task = core
+        .store
+        .latest_plan(&conversation)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "t1")
+        .unwrap();
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "not_applicable");
+    assert_eq!(feedback["integration"]["source"], "run");
+    // The read-only effect is the report's opening line, not the report.
+    assert_eq!(feedback["effect"], "README read; 3 notes filed");
+    let spec: antislop::lean::tasks::TaskSpec = serde_json::from_value(task.spec.clone()).unwrap();
+    let obligations = antislop::lean::tasks::obligations(&spec);
+    assert_eq!(feedback["coverage"]["total"], obligations.len());
+    // The invented id is reported and counted nowhere. The `issue` on the
+    // read-only risk describes the code, so it is counted but does not reject.
+    assert_eq!(feedback["coverage"]["unknown"], serde_json::json!(["X9"]));
+    assert_eq!(feedback["coverage"]["na"], 1);
+    assert_eq!(feedback["coverage"]["issue"], 1);
+    assert_eq!(feedback["coverage"]["blocked"], 0);
+    assert_eq!(feedback["coverage"]["missing"], 0);
+}
+
+#[test]
+fn a_retry_invalidates_the_earlier_rounds_card_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    // A retried round resumes the verifier's session, so its prompt is a
+    // follow-up; the stub must answer those as a verifier, not a worker.
+    let script = std::fs::read_to_string(&agy).unwrap().replace(
+        "elif \"You verify\" in prompt:",
+        "elif (\"You verify\" in prompt or \"account again\" in prompt or \"does not account for\" in prompt):",
+    );
+    std::fs::write(&agy, script).unwrap();
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    assert_eq!(task.status, "needs_user");
+    let (blocked, _) = card(&core, &conversation, "t1");
+    assert_eq!(blocked["integration"]["outcome"], "user_edits");
+
+    // The user resolves the block; a retry with guidance starts a new round.
+    std::fs::remove_file(project.join("hello.txt")).unwrap();
+    core.recover_task(antislop::lean::TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: task.plan_id.clone(),
+        task: "t1".into(),
+        action: antislop::lean::RecoveryAction::RetryWithGuidance,
+        consent_files: None,
+        freshness_token: core
+            .task_freshness_token(&conversation, &task.plan_id, &task.id)
+            .unwrap(),
+        message: Some("first ask the user".into()),
+    })
+    .unwrap();
+    wait_idle(&core, &conversation);
+
+    let task = core.task(&task.plan_id, "t1").unwrap();
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert!(task.round >= 2, "the retry ran a later round");
+    let events: Vec<Value> = core
+        .store
+        .events_since(&conversation, 0, 10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "task" && event.payload["id"] == "t1")
+        .map(|event| event.payload)
+        .collect();
+    // The retry's own announcements carry no earlier round's card data.
+    let queued = events
+        .iter()
+        .rfind(|event| event["status"] == "queued")
+        .expect("the retry queued the task");
+    assert_eq!(queued["feedback"], serde_json::Value::Null);
+    for event in events.iter().filter(|e| e["round"].as_u64() >= Some(2)) {
+        if event["status"] != "approved" {
+            assert_ne!(
+                event["feedback"]["integration"]["outcome"], "user_edits",
+                "{event}"
+            );
+        }
+    }
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["round"], task.round);
+    assert_eq!(feedback["integration"]["outcome"], "applied");
+}
+
+#[test]
+fn a_recovery_integration_names_itself_on_the_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    assert_eq!(task.status, "needs_user");
+
+    // The user consents away their edit and lets the runtime land the work.
+    std::fs::write(project.join("hello.txt"), "from worker\n").unwrap();
+    let recovery = core
+        .recover_task(antislop::lean::TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: task.plan_id.clone(),
+            task: "t1".into(),
+            action: antislop::lean::RecoveryAction::IntegrateWithConsent,
+            consent_files: Some(vec!["hello.txt".into()]),
+            freshness_token: core
+                .task_freshness_token(&conversation, &task.plan_id, &task.id)
+                .unwrap(),
+            message: None,
+        })
+        .unwrap();
+    assert!(recovery.integrated_files.contains(&"hello.txt".to_owned()));
+
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "applied");
+    assert_eq!(feedback["integration"]["source"], "recovery");
+    assert_eq!(
+        feedback["integration"]["files"],
+        serde_json::json!(["hello.txt"])
+    );
+    let kept = core
+        .recover_task(antislop::lean::TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: task.plan_id.clone(),
+            task: "t1".into(),
+            action: antislop::lean::RecoveryAction::ForceApprove,
+            consent_files: None,
+            freshness_token: core
+                .task_freshness_token(&conversation, &task.plan_id, &task.id)
+                .unwrap(),
+            message: None,
+        })
+        .is_err();
+    assert!(kept, "an approved task needs no further recovery");
+}
+
+#[test]
+fn keeping_the_branch_by_recovery_reports_the_branch_on_the_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let branch = format!("antislop/{}", &task.id[..8]);
+
+    core.recover_task(antislop::lean::TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: task.plan_id.clone(),
+        task: "t1".into(),
+        action: antislop::lean::RecoveryAction::KeepOnBranch,
+        consent_files: None,
+        freshness_token: core
+            .task_freshness_token(&conversation, &task.plan_id, &task.id)
+            .unwrap(),
+        message: None,
+    })
+    .unwrap();
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "left_on_branch");
+    assert_eq!(feedback["integration"]["source"], "recovery");
+    assert_eq!(feedback["integration"]["branch"], branch);
+    // The work is on the branch, and the user's file is untouched.
+    assert_eq!(
+        git(&project, &["show", &format!("{branch}:hello.txt")]),
+        "from worker"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user draft\n"
+    );
+}
+
+#[test]
+fn a_force_approval_puts_the_users_word_on_the_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    assert_eq!(task.status, "needs_user");
+
+    core.recover_task(antislop::lean::TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: task.plan_id.clone(),
+        task: "t1".into(),
+        action: antislop::lean::RecoveryAction::ForceApprove,
+        consent_files: None,
+        freshness_token: core
+            .task_freshness_token(&conversation, &task.plan_id, &task.id)
+            .unwrap(),
+        message: Some("the draft is fine".into()),
+    })
+    .unwrap();
+
+    let task = core.task(&task.plan_id, "t1").unwrap();
+    assert_eq!(task.status, "approved");
+    let (feedback, from_event) = card(&core, &conversation, "t1");
+    assert_eq!(
+        from_event, feedback,
+        "the card is announced, not only stored"
+    );
+    assert_eq!(feedback["round"], task.round);
+    assert_eq!(feedback["integration"]["outcome"], "force_approved");
+    assert_eq!(feedback["integration"]["source"], "recovery");
+    assert!(
+        feedback["integration"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("the draft is fine"),
+        "{}",
+        feedback["integration"]["detail"]
+    );
+    // The user's own file still holds their version; nothing was forced in.
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user draft\n"
+    );
+}
+
+#[test]
+fn cancelling_a_dependency_cancels_the_dependent_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    // The plan now has a second task waiting on the first.
+    let script = std::fs::read_to_string(&codex).unwrap().replace(
+        r#""verifier": {"focus": "file content"}}]}"#,
+        r#""verifier": {"focus": "file content"}}, {"id": "t2", "title": "Extend greeting",
+           "goal": "Extend the greeting", "writes": True, "scope": ["."],
+           "kind": "implementation", "verifier": {"focus": "file content"},
+           "depends_on": ["t1"]}]}"#,
+    );
+    std::fs::write(&codex, script).unwrap();
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    assert_eq!(task.status, "needs_user");
+    // t2 waited on t1, never ran, and the scheduler skipped it once t1 blocked.
+    assert_eq!(core.task(&task.plan_id, "t2").unwrap().status, "skipped");
+
+    core.recover_task(antislop::lean::TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: task.plan_id.clone(),
+        task: "t1".into(),
+        action: antislop::lean::RecoveryAction::CancelTask,
+        consent_files: None,
+        freshness_token: core
+            .task_freshness_token(&conversation, &task.plan_id, &task.id)
+            .unwrap(),
+        message: None,
+    })
+    .unwrap();
+
+    let cancelled = core.task(&task.plan_id, "t1").unwrap();
+    assert_eq!(cancelled.status, "cancelled");
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["integration"]["outcome"], "cancelled");
+    assert_eq!(feedback["integration"]["source"], "recovery");
+
+    let dependent = core.task(&task.plan_id, "t2").unwrap();
+    assert_eq!(dependent.status, "cancelled");
+    let (feedback, from_event) = card(&core, &conversation, "t2");
+    assert_eq!(
+        from_event, feedback,
+        "the card is announced, not only stored"
+    );
+    assert_eq!(feedback["round"], dependent.round);
+    assert_eq!(feedback["integration"]["outcome"], "cancelled");
+    assert!(
+        feedback["integration"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("cancelled due to cancelled dependency"),
+        "{}",
+        feedback["integration"]["detail"]
+    );
+}

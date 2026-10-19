@@ -197,6 +197,12 @@ pub struct Task {
     /// A writer's starting commit and its latest squashed result.
     pub base: Option<String>,
     pub result: Option<String>,
+    /// The compact feedback a card shows for the current round: a bounded
+    /// effect summary, coverage of the real obligations, and one unambiguous
+    /// integration outcome. `None` until a round produces any of it; a new
+    /// round or retry clears it, so a card never shows an earlier round's data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freshness_token: Option<String>,
 }
@@ -233,7 +239,7 @@ impl TurnStatus {
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Tables only ever get added; a change to an existing one raises it and
 /// migrates from the version found.
-const SCHEMA: u32 = 4;
+const SCHEMA: u32 = 5;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -271,12 +277,12 @@ impl Store {
              CREATE INDEX IF NOT EXISTS turns_by_conversation ON turns(conversation_id, role, started_ms);
              CREATE INDEX IF NOT EXISTS events_by_conversation ON events(conversation_id, seq);
              CREATE TABLE IF NOT EXISTS tasks(
-               id TEXT PRIMARY KEY,
-               conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               plan_id TEXT NOT NULL, position INTEGER NOT NULL, spec TEXT NOT NULL,
-               status TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 0,
-               report TEXT, verdict TEXT, base TEXT, result TEXT,
-               created_ms INTEGER NOT NULL);
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL REFERENCES conversations(id),
+                plan_id TEXT NOT NULL, position INTEGER NOT NULL, spec TEXT NOT NULL,
+                status TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 0,
+                report TEXT, verdict TEXT, base TEXT, result TEXT, feedback TEXT,
+                created_ms INTEGER NOT NULL);
              CREATE INDEX IF NOT EXISTS tasks_by_plan ON tasks(conversation_id, plan_id, position);
              CREATE TABLE IF NOT EXISTS mail(
                id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -345,6 +351,16 @@ impl Store {
         )?;
         if !comment_plan {
             connection.execute_batch("ALTER TABLE comments ADD COLUMN plan_id TEXT")?;
+        }
+        // 4 → 5: tasks carry compact card feedback, tied to its round.
+        // Older rows keep `None`: their cards show no result, not a wrong one.
+        let card_feedback: bool = connection.query_row(
+            "SELECT count(*) FROM pragma_table_info('tasks') WHERE name='feedback'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !card_feedback {
+            connection.execute_batch("ALTER TABLE tasks ADD COLUMN feedback TEXT")?;
         }
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS plans(
@@ -849,6 +865,7 @@ impl Store {
                 verdict: None,
                 base: None,
                 result: None,
+                feedback: None,
                 freshness_token: None,
             };
             tx.execute(
@@ -910,7 +927,7 @@ impl Store {
     pub fn plan(&self, plan_id: &str) -> Result<Vec<Task>> {
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT id,plan_id,spec,status,round,report,verdict,base,result FROM tasks
+            "SELECT id,plan_id,spec,status,round,report,verdict,base,result,feedback FROM tasks
              WHERE plan_id=?1 ORDER BY position",
         )?;
         let rows = statement.query_map([plan_id], |row| {
@@ -924,10 +941,11 @@ impl Store {
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         })?;
         rows.map(|row| {
-            let (id, plan_id, spec, status, round, report, verdict, base, result) = row?;
+            let (id, plan_id, spec, status, round, report, verdict, base, result, feedback) = row?;
             Ok(Task {
                 id,
                 plan_id,
@@ -938,6 +956,7 @@ impl Store {
                 verdict: verdict.map(|v| serde_json::from_str(&v)).transpose()?,
                 base,
                 result,
+                feedback: feedback.map(|v| serde_json::from_str(&v)).transpose()?,
                 freshness_token: None,
             })
         })
@@ -946,7 +965,7 @@ impl Store {
 
     pub fn update_task(&self, task: &Task) -> Result<()> {
         self.db().execute(
-            "UPDATE tasks SET status=?2,round=?3,report=?4,verdict=?5,base=?6,result=?7 WHERE id=?1",
+            "UPDATE tasks SET status=?2,round=?3,report=?4,verdict=?5,base=?6,result=?7,feedback=?8 WHERE id=?1",
             params![
                 task.id,
                 task.status,
@@ -954,7 +973,8 @@ impl Store {
                 task.report,
                 task.verdict.as_ref().map(Value::to_string),
                 task.base,
-                task.result
+                task.result,
+                task.feedback.as_ref().map(Value::to_string)
             ],
         )?;
         Ok(())
@@ -1606,7 +1626,7 @@ impl Store {
     pub fn task_by_id(&self, task_id: &str) -> Result<Option<Task>> {
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT id,plan_id,spec,status,round,report,verdict,base,result FROM tasks
+            "SELECT id,plan_id,spec,status,round,report,verdict,base,result,feedback FROM tasks
              WHERE id=?1 LIMIT 1",
         )?;
         let task = statement
@@ -1621,11 +1641,12 @@ impl Store {
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
                 ))
             })
             .optional()?;
         task.map(
-            |(id, plan_id, spec, status, round, report, verdict, base, result)| {
+            |(id, plan_id, spec, status, round, report, verdict, base, result, feedback)| {
                 Ok(Task {
                     id,
                     plan_id,
@@ -1636,6 +1657,7 @@ impl Store {
                     verdict: verdict.map(|v| serde_json::from_str(&v)).transpose()?,
                     base,
                     result,
+                    feedback: feedback.map(|v| serde_json::from_str(&v)).transpose()?,
                     freshness_token: None,
                 })
             },
@@ -2051,6 +2073,66 @@ mod tests {
         let events = store.events_since("c", 0, 10).unwrap();
         assert_eq!(events[0].created_ms, 0, "unknown, not invented");
         assert!(events[1].created_ms > 1_700_000_000_000);
+    }
+
+    #[test]
+    fn card_feedback_round_trips_and_rows_without_it_stay_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core.db");
+        // A database from before tasks carried card feedback.
+        let old = Connection::open(&path).unwrap();
+        old.execute_batch(
+            "CREATE TABLE conversations(id TEXT PRIMARY KEY, project TEXT NOT NULL, created_ms INTEGER NOT NULL);
+             CREATE TABLE tasks(id TEXT PRIMARY KEY,
+               conversation_id TEXT NOT NULL REFERENCES conversations(id),
+               plan_id TEXT NOT NULL, position INTEGER NOT NULL, spec TEXT NOT NULL,
+               status TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 0,
+               report TEXT, verdict TEXT, base TEXT, result TEXT,
+               created_ms INTEGER NOT NULL);
+             INSERT INTO conversations VALUES('c', '/p', 0);
+             INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms)
+               VALUES('u1','c','p1',0,'{\"id\":\"t1\"}','queued',0);
+             PRAGMA user_version=4;",
+        )
+        .unwrap();
+        drop(old);
+        let store = Store::open(&path).unwrap();
+        let before = store.plan("p1").unwrap().remove(0);
+        assert_eq!(before.status, "queued");
+        assert_eq!(before.feedback, None, "an old row shows no card result");
+        assert_eq!(store.task_by_id("u1").unwrap().unwrap().feedback, None);
+
+        // The new column round-trips through both read paths.
+        let feedback = serde_json::json!({"round": 2, "integration": {"outcome": "applied"}});
+        store
+            .update_task(&Task {
+                feedback: Some(feedback.clone()),
+                ..before.clone()
+            })
+            .unwrap();
+        assert_eq!(
+            store.plan("p1").unwrap()[0].feedback.as_ref(),
+            Some(&feedback)
+        );
+        assert_eq!(
+            store.task_by_id("u1").unwrap().unwrap().feedback.as_ref(),
+            Some(&feedback)
+        );
+        // Clearing a retry's card really clears the stored row.
+        store
+            .update_task(&Task {
+                feedback: None,
+                ..before.clone()
+            })
+            .unwrap();
+        assert_eq!(store.plan("p1").unwrap()[0].feedback, None);
+        // The task row serializes without the key when there is no card data.
+        assert!(
+            serde_json::to_value(&before)
+                .unwrap()
+                .get("feedback")
+                .is_none()
+        );
     }
 
     #[test]

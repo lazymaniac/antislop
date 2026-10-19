@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use store::{
     Comment, Conversation, Mail, Message, PlanHistory, PlansPage, Store, Task, TurnStatus,
 };
-use tasks::{TaskSpec, Verdict, status};
+use tasks::{Outcome, TaskSpec, Verdict, status};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConversationSummary {
@@ -1160,10 +1160,12 @@ impl Core {
                     req.consent_files.as_deref(),
                     self.config.policy.local_commits,
                 )?;
+                let mut card = (Outcome::Applied, None);
                 match outcome {
                     git::Integration::Committed(commit) => {
                         task.status = status::APPROVED.to_string();
                         notice = format!("committed as {commit}");
+                        card = (Outcome::Committed, Some(commit));
                         let worktree = self.state.join("worktrees").join(&task.id);
                         let _ = git::remove_worktree(&project, &worktree, &branch(&task));
                     }
@@ -1187,6 +1189,15 @@ impl Core {
                     }
                 }
                 integrated_files = req.consent_files.unwrap_or(all_changed);
+                land(
+                    &mut task,
+                    card.0,
+                    "recovery",
+                    &notice,
+                    card.1.as_deref(),
+                    None,
+                    &integrated_files,
+                );
                 note(&mut task, notice.clone());
                 self.store.update_task(&task)?;
                 self.announce_task(&req.conversation, &task, None);
@@ -1211,6 +1222,15 @@ impl Core {
                 preserved_branch = Some(b.clone());
                 notice = format!("change preserved on branch {b}; working tree untouched");
                 task.status = status::APPROVED.to_string();
+                land(
+                    &mut task,
+                    Outcome::LeftOnBranch,
+                    "recovery",
+                    &notice,
+                    None,
+                    Some(&b),
+                    &[],
+                );
                 let worktree = self.state.join("worktrees").join(&task.id);
                 let _ = git::remove_worktree_keep_branch(&project, &worktree);
                 note(&mut task, notice.clone());
@@ -1282,11 +1302,26 @@ impl Core {
                     obj.insert("result".into(), json!(snapshot));
                 }
                 task.verdict = Some(v_val);
+                let fixed = git::changed_files(&project, &base, &snapshot).unwrap_or_default();
+                task.feedback = Some(json!({
+                    "round": task.round,
+                    "effect": tasks::effect(&stat, &fixed),
+                    "coverage": tasks::coverage(&verdict, &obligations),
+                }));
 
                 if verdict.approved {
                     task.result = Some(snapshot.clone());
                     task.status = status::APPROVED.to_string();
                     notice = format!("manual fixes verified and approved on snapshot {snapshot}");
+                    land(
+                        &mut task,
+                        Outcome::InPlaceCommitted,
+                        "recovery",
+                        &notice,
+                        Some(&snapshot),
+                        None,
+                        &fixed,
+                    );
                     note(&mut task, notice.clone());
                     self.store.update_task(&task)?;
                     self.announce_task(&req.conversation, &task, None);
@@ -1313,6 +1348,15 @@ impl Core {
                         "{}\n\n[manual fix verification]\n{findings}",
                         task.report.as_deref().unwrap_or("")
                     ));
+                    land(
+                        &mut task,
+                        Outcome::InPlaceCommitted,
+                        "recovery",
+                        &notice,
+                        Some(&snapshot),
+                        None,
+                        &fixed,
+                    );
                     self.store.update_task(&task)?;
                     self.announce_task(&req.conversation, &task, Some(&findings));
                     self.store.append_event(
@@ -1351,6 +1395,8 @@ impl Core {
                 }
                 task.status = status::QUEUED.to_string();
                 task.verdict = None;
+                // A retry invalidates the earlier round's card result.
+                task.feedback = None;
                 notice = "retrying task with guidance".to_string();
                 self.store.update_task(&task)?;
                 self.announce_task(&req.conversation, &task, None);
@@ -1371,6 +1417,7 @@ impl Core {
             RecoveryAction::ExtendRounds => {
                 task.status = status::QUEUED.to_string();
                 task.verdict = None;
+                task.feedback = None;
                 notice = "extended rounds for task".to_string();
                 self.store.update_task(&task)?;
                 self.announce_task(&req.conversation, &task, None);
@@ -1394,6 +1441,15 @@ impl Core {
                     .as_deref()
                     .map(|m| format!("force approved by user: {m}"))
                     .unwrap_or_else(|| "force approved by user".to_string());
+                land(
+                    &mut task,
+                    Outcome::ForceApproved,
+                    "recovery",
+                    &notice,
+                    None,
+                    None,
+                    &[],
+                );
                 note(&mut task, notice.clone());
                 self.store.update_task(&task)?;
                 self.announce_task(&req.conversation, &task, None);
@@ -1415,6 +1471,15 @@ impl Core {
             RecoveryAction::CancelTask => {
                 task.status = status::CANCELLED.to_string();
                 notice = "cancelled by user recovery".to_string();
+                land(
+                    &mut task,
+                    Outcome::Cancelled,
+                    "recovery",
+                    &notice,
+                    None,
+                    None,
+                    &[],
+                );
                 self.store.update_task(&task)?;
                 self.announce_task(&req.conversation, &task, Some(&notice));
                 self.store.append_event(
@@ -1478,12 +1543,18 @@ impl Core {
                     serde_json::from_value(t.spec["depends_on"].clone()).unwrap_or_default();
                 if depends.iter().any(|d| cancelled_ids.contains(d)) {
                     t.status = status::CANCELLED.to_string();
-                    self.store.update_task(&t)?;
-                    self.announce_task(
-                        conversation,
-                        &t,
-                        Some("cancelled due to cancelled dependency"),
+                    let reason = "cancelled due to cancelled dependency";
+                    land(
+                        &mut t,
+                        Outcome::Cancelled,
+                        "recovery",
+                        reason,
+                        None,
+                        None,
+                        &[],
                     );
+                    self.store.update_task(&t)?;
+                    self.announce_task(conversation, &t, Some(reason));
                     let spec_id = t.spec["id"].as_str().unwrap_or_default().to_owned();
                     if !spec_id.is_empty() {
                         cancelled_ids.insert(spec_id);
@@ -1534,6 +1605,8 @@ impl Core {
         }
         for mut task in to_unblock {
             task.status = status::QUEUED.to_string();
+            // Whatever it showed while blocked no longer stands.
+            task.feedback = None;
             self.store.update_task(&task)?;
             self.announce_task(conversation, &task, None);
         }
@@ -2254,6 +2327,8 @@ impl Core {
     }
 
     /// The task's state for frontends; `reason` says why it stopped.
+    /// `feedback` is the card's bounded result for the announced round:
+    /// `null` when that round has produced none yet.
     fn announce_task(&self, conversation: &str, task: &Task, reason: Option<&str>) {
         let scope_hash = task_scope_hash(task);
         let _ = self.store.append_event(
@@ -2263,7 +2338,7 @@ impl Core {
             "task",
             &json!({"id": task.spec["id"], "task": task.id, "title": task.spec["title"],
                     "status": task.status, "round": task.round, "reason": reason,
-                    "scope_hash": scope_hash}),
+                    "scope_hash": scope_hash, "feedback": task.feedback}),
         );
     }
 
@@ -2527,6 +2602,8 @@ impl Core {
         for round in first_round..=last_round {
             task.round = round;
             task.verdict = None;
+            // A new round starts without an earlier round's card result.
+            task.feedback = None;
             self.set_status(conversation, task, status::WORKING)?;
             let worker_setup = || TurnSetup {
                 conversation,
@@ -2574,21 +2651,24 @@ impl Core {
                 report = self.post(conversation, Some(&task.plan_id), &spec.id, &next)?;
             }
             task.report = Some(report.clone());
+            let mut effect_text: Option<String> = None;
             let changes = match (&worktree, &task.base) {
                 (Some(path), Some(base)) => {
                     let result = git::commit_all(path, &format!("{} (round {round})", spec.title))?;
                     task.result = Some(result.clone());
-                    Some(tasks::changes_text(
-                        base,
-                        &result,
-                        &git::diff_stat(path, base, &result)?,
-                    ))
+                    let stat = git::diff_stat(path, base, &result)?;
+                    let files = git::changed_files(path, base, &result)?;
+                    effect_text = Some(tasks::effect(&stat, &files));
+                    Some(tasks::changes_text(base, &result, &stat))
                 }
                 (None, Some(base)) if in_place => {
                     let result =
                         git::snapshot(&project, &format!("{} (round {round})", spec.title))?;
                     task.result = Some(result.clone());
-                    let touched: Vec<String> = git::changed_files(&project, base, &result)?
+                    let stat = git::diff_stat(&project, base, &result)?;
+                    let files = git::changed_files(&project, base, &result)?;
+                    effect_text = Some(tasks::effect(&stat, &files));
+                    let touched: Vec<String> = files
                         .into_iter()
                         .filter(|file| user_edits.contains(file))
                         .collect();
@@ -2607,13 +2687,19 @@ impl Core {
                                     "status": status::NEEDS_USER, "detail": text}),
                         );
                         task.report = Some(format!("{report}\n\n[in place] {text}"));
+                        task.feedback = Some(json!({"round": task.round, "effect": effect_text}));
+                        land(
+                            task,
+                            Outcome::InPlaceUserEdits,
+                            "run",
+                            &text,
+                            None,
+                            None,
+                            &touched,
+                        );
                         return self.stop(conversation, task, status::NEEDS_USER, Some(&text));
                     }
-                    Some(tasks::changes_text(
-                        base,
-                        &result,
-                        &git::diff_stat(&project, base, &result)?,
-                    ))
+                    Some(tasks::changes_text(base, &result, &stat))
                 }
                 _ => None,
             };
@@ -2685,6 +2771,19 @@ impl Core {
                 }
             }
             task.verdict = Some(v_val);
+            // The round's card data: what landed, and how every real
+            // obligation was accounted for. The integration outcome is
+            // added when the result lands (or is ruled out).
+            let effect = match (&effect_text, spec.writes) {
+                (Some(effect), _) => Some(effect.clone()),
+                (None, false) => Some(tasks::report_effect(&report)),
+                (None, true) => None,
+            };
+            task.feedback = Some(json!({
+                "round": task.round,
+                "effect": effect,
+                "coverage": tasks::coverage(&verdict, &obligations),
+            }));
             if incomplete {
                 // The worker cannot fix a verifier that skips its checks.
                 return self.stop(
@@ -2698,7 +2797,18 @@ impl Core {
                 return match &worktree {
                     Some(path) => self.integrate(conversation, task, &spec, &project, path),
                     None if in_place => self.finish_in_place(conversation, task, &spec, &project),
-                    None => self.set_status(conversation, task, status::APPROVED),
+                    None => {
+                        land(
+                            task,
+                            Outcome::NotApplicable,
+                            "run",
+                            "read-only task; nothing needs to land",
+                            None,
+                            None,
+                            &[],
+                        );
+                        self.set_status(conversation, task, status::APPROVED)
+                    }
                 };
             }
             let text = tasks::findings_key(&verdict.findings);
@@ -2910,16 +3020,32 @@ impl Core {
         if result == base {
             note(task, "no file changes".into());
             git::remove_worktree(project, worktree, &branch(task))?;
+            land(
+                task,
+                Outcome::NoChanges,
+                "run",
+                "no file changes",
+                None,
+                None,
+                &[],
+            );
             return self.set_status(conversation, task, status::APPROVED);
         }
         let policy = &self.config.policy;
         if !policy.local_write {
-            note(
+            let text = format!(
+                "local writes are not allowed; the change is on branch {}",
+                branch(task)
+            );
+            note(task, text.clone());
+            land(
                 task,
-                format!(
-                    "local writes are not allowed; the change is on branch {}",
-                    branch(task)
-                ),
+                Outcome::LeftOnBranch,
+                "run",
+                &text,
+                None,
+                Some(&branch(task)),
+                &[],
             );
             return self.set_status(conversation, task, status::APPROVED);
         }
@@ -2929,30 +3055,69 @@ impl Core {
             let _one_at_a_time = self.integrating.lock().expect("integration mutex");
             git::integrate(project, &base, &change, policy.local_commits)?
         };
+        let landed = git::changed_files(project, &base, &change).unwrap_or_default();
         let (status, text) = match outcome {
             git::Integration::Committed(commit) => {
+                land(
+                    task,
+                    Outcome::Committed,
+                    "run",
+                    &format!("committed as {commit}"),
+                    Some(&commit),
+                    None,
+                    &landed,
+                );
                 (status::APPROVED, format!("committed as {commit}"))
             }
-            git::Integration::Applied => (
-                status::APPROVED,
-                "applied to the working tree, not committed".into(),
-            ),
-            git::Integration::Conflict(files) => (
-                status::NEEDS_USER,
-                format!(
+            git::Integration::Applied => {
+                land(
+                    task,
+                    Outcome::Applied,
+                    "run",
+                    "applied to the working tree, not committed",
+                    None,
+                    None,
+                    &landed,
+                );
+                (
+                    status::APPROVED,
+                    "applied to the working tree, not committed".into(),
+                )
+            }
+            git::Integration::Conflict(files) => {
+                let text = format!(
                     "conflicts with the current branch in {}; the change is on branch {}",
                     files.join(", "),
                     branch(task)
-                ),
-            ),
-            git::Integration::UserEdits(files) => (
-                status::NEEDS_USER,
-                format!(
+                );
+                land(
+                    task,
+                    Outcome::Conflict,
+                    "run",
+                    &text,
+                    None,
+                    Some(&branch(task)),
+                    &files,
+                );
+                (status::NEEDS_USER, text)
+            }
+            git::Integration::UserEdits(files) => {
+                let text = format!(
                     "you have uncommitted edits in {}; the change is on branch {}",
                     files.join(", "),
                     branch(task)
-                ),
-            ),
+                );
+                land(
+                    task,
+                    Outcome::UserEdits,
+                    "run",
+                    &text,
+                    None,
+                    Some(&branch(task)),
+                    &files,
+                );
+                (status::NEEDS_USER, text)
+            }
         };
         let _ = self.store.append_event(
             conversation,
@@ -3013,20 +3178,41 @@ impl Core {
         project: &Path,
     ) -> Result<()> {
         let (Some(base), Some(result)) = (task.base.clone(), task.result.clone()) else {
+            land(
+                task,
+                Outcome::NoChanges,
+                "run",
+                "no file changes",
+                None,
+                None,
+                &[],
+            );
             return self.set_status(conversation, task, status::APPROVED);
         };
         let files = git::changed_files(project, &base, &result)?;
-        let text = if files.is_empty() {
-            "no file changes".to_owned()
+        let commit = if files.is_empty() {
+            None
         } else if self.config.policy.local_commits {
             let _one_at_a_time = self.integrating.lock().expect("integration mutex");
-            format!(
-                "committed in place as {}",
-                git::commit_paths(project, &files, &spec.title)?
-            )
+            Some(git::commit_paths(project, &files, &spec.title)?)
+        } else {
+            None
+        };
+        let text = if files.is_empty() {
+            "no file changes".to_owned()
+        } else if let Some(commit) = &commit {
+            format!("committed in place as {commit}")
         } else {
             format!("applied in place, not committed: {}", files.join(", "))
         };
+        let outcome = if files.is_empty() {
+            Outcome::NoChanges
+        } else if commit.is_some() {
+            Outcome::InPlaceCommitted
+        } else {
+            Outcome::InPlaceApplied
+        };
+        land(task, outcome, "run", &text, commit.as_deref(), None, &files);
         let _ = self.store.append_event(
             conversation,
             None,
@@ -3200,6 +3386,47 @@ fn note(task: &mut Task, text: impl AsRef<str>) {
             .trim_start()
             .to_owned(),
     );
+}
+
+/// Attaches one unambiguous integration outcome to the task's card feedback.
+/// Feedback from another round is stale and dropped; the kept part is the
+/// current round's effect and coverage. The detail keeps the raw reason,
+/// bounded so no event ever carries a full report.
+fn land(
+    task: &mut Task,
+    outcome: Outcome,
+    source: &str,
+    detail: &str,
+    commit: Option<&str>,
+    on_branch: Option<&str>,
+    files: &[String],
+) {
+    let mut feedback = task
+        .feedback
+        .take()
+        .filter(|feedback| feedback["round"].as_u64() == Some(u64::from(task.round)))
+        .unwrap_or_else(|| json!({"round": task.round}));
+    let mut integration = json!({
+        "outcome": outcome,
+        "source": source,
+        "detail": tasks::bound(detail, tasks::DETAIL_LIMIT),
+    });
+    if let Some(commit) = commit {
+        integration["commit"] = json!(commit);
+    }
+    if let Some(branch) = on_branch {
+        integration["branch"] = json!(branch);
+    }
+    if !files.is_empty() {
+        let shown = files.len().min(tasks::FILE_LIMIT);
+        integration["files"] = json!(&files[..shown]);
+        if files.len() > shown {
+            integration["files_more"] = json!(files.len() - shown);
+        }
+    }
+    feedback["round"] = json!(task.round);
+    feedback["integration"] = integration;
+    task.feedback = Some(feedback);
 }
 
 /// The branch a writer's worktree is on.

@@ -712,6 +712,143 @@ pub fn coverage_followup(missing: &[&(String, String)]) -> String {
     )
 }
 
+/// The longest effect summary a card gets, in characters.
+pub const EFFECT_LIMIT: usize = 240;
+/// The longest integration detail a card gets, in characters.
+pub const DETAIL_LIMIT: usize = 600;
+/// How many file names a card lists; the rest are only counted.
+pub const FILE_LIMIT: usize = 20;
+
+/// Cuts text at a character boundary, marking the cut with `…` so a card
+/// never splits a character and never grows past `limit`.
+pub fn bound(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    format!("{}…", cut.trim_end())
+}
+
+/// How a task's result landed on the user's project: exactly one outcome
+/// per finished card. `NotApplicable` is the n/a of a read-only task,
+/// which has nothing to land.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Committed,
+    Applied,
+    LeftOnBranch,
+    NoChanges,
+    Conflict,
+    UserEdits,
+    InPlaceCommitted,
+    InPlaceApplied,
+    InPlaceUserEdits,
+    NotApplicable,
+    ForceApproved,
+    Cancelled,
+}
+
+/// How one obligation of a verdict counts on a card. An entry with a valid
+/// status but no note is no answer, like `unaccounted` treats it.
+fn counted_status(entry: &Value) -> &'static str {
+    let status = entry["status"].as_str().map(str::to_ascii_lowercase);
+    let noted = entry["note"]
+        .as_str()
+        .is_some_and(|note| !note.trim().is_empty());
+    match (noted, status.as_deref()) {
+        (true, Some("ok")) => "ok",
+        (true, Some("issue")) => "issue",
+        (true, Some("blocked")) => "blocked",
+        (true, Some("n/a" | "na")) => "na",
+        _ => "missing",
+    }
+}
+
+/// The coverage a card shows: counts over the task's real obligations only.
+/// Ids the verdict adds that are not obligations are listed as `unknown`
+/// and counted nowhere; obligations without a usable answer are `missing`.
+pub fn coverage(verdict: &Verdict, obligations: &[(String, String)]) -> Value {
+    let mut counts: std::collections::BTreeMap<&str, u32> = std::collections::BTreeMap::new();
+    for (id, _) in obligations {
+        let entry = verdict
+            .coverage
+            .get(id.as_str())
+            .cloned()
+            .unwrap_or_default();
+        *counts.entry(counted_status(&entry)).or_default() += 1;
+    }
+    let real: std::collections::HashSet<&str> =
+        obligations.iter().map(|(id, _)| id.as_str()).collect();
+    let unknown: Vec<&String> = verdict
+        .coverage
+        .keys()
+        .filter(|id| !real.contains(id.as_str()))
+        .collect();
+    serde_json::json!({
+        "total": obligations.len(),
+        "ok": counts.get("ok").copied().unwrap_or_default(),
+        "issue": counts.get("issue").copied().unwrap_or_default(),
+        "blocked": counts.get("blocked").copied().unwrap_or_default(),
+        "na": counts.get("na").copied().unwrap_or_default(),
+        "missing": counts.get("missing").copied().unwrap_or_default(),
+        "unknown": unknown,
+    })
+}
+
+/// The bounded effect a card shows for a writer's change: what the diff
+/// summed to and which files it touched, never the diff or the report.
+/// Names are dropped from the end, never the counts, so a cut never hides
+/// that there are more files.
+pub fn effect(stat: &str, files: &[String]) -> String {
+    if files.is_empty() {
+        return "no file changes".into();
+    }
+    let summary = stat
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.contains("changed") || line.contains("insertion"))
+        .map_or_else(|| format!("{} file(s) changed", files.len()), str::to_owned);
+    let mut shown = files.len().min(FILE_LIMIT);
+    loop {
+        let dropped = files.len() - shown;
+        let candidate = if shown == 0 {
+            format!("{summary} (+{dropped} more files)")
+        } else {
+            let names: Vec<&str> = files.iter().take(shown).map(String::as_str).collect();
+            let more = if dropped > 0 {
+                format!(" (+{dropped} more)")
+            } else {
+                String::new()
+            };
+            format!("{summary} — {}{more}", names.join(", "))
+        };
+        if shown == 0 || candidate.chars().count() <= EFFECT_LIMIT {
+            return bound(&candidate, EFFECT_LIMIT);
+        }
+        shown -= 1;
+    }
+}
+
+/// The bounded effect a card shows for a read-only task: the first text
+/// line of its report outside code fences, not the report.
+pub fn report_effect(report: &str) -> String {
+    let mut in_fence = false;
+    for line in report.lines() {
+        let line = line.trim();
+        if line.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence || line.is_empty() {
+            continue;
+        }
+        return bound(line, EFFECT_LIMIT);
+    }
+    String::new()
+}
+
 pub fn orchestrator_instructions() -> String {
     let kinds = [
         "context",
@@ -1294,6 +1431,7 @@ pub fn findings_text(findings: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn plan_block_is_split_from_the_answer() {
@@ -1635,5 +1773,121 @@ mod tests {
         let fallback = parse_verdict("I could not decide.");
         assert!(!fallback.approved);
         assert_eq!(findings_text(&fallback.findings), "- I could not decide.");
+    }
+
+    #[test]
+    fn bound_cuts_at_character_boundaries() {
+        assert_eq!(bound("short", 10), "short");
+        assert_eq!(bound("abcd", 4), "abcd");
+        assert_eq!(bound("abcd", 3), "ab…");
+        // A cut never splits a multi-byte character.
+        let text = "zażółć gęślą jaźń";
+        let cut = bound(text, 5);
+        assert!(cut.chars().count() <= 5 && cut.is_char_boundary(cut.len()));
+        assert_eq!(cut, "zażó…");
+    }
+
+    fn verdict_with(coverage: serde_json::Map<String, Value>) -> Verdict {
+        Verdict {
+            approved: true,
+            findings: vec![],
+            coverage,
+        }
+    }
+
+    #[test]
+    fn coverage_counts_real_obligations_and_splits_their_answers() {
+        let obligations = vec![
+            ("R1".to_owned(), "risk".to_owned()),
+            ("V1".to_owned(), "check".to_owned()),
+            ("V2".to_owned(), "check".to_owned()),
+            ("C1".to_owned(), "check".to_owned()),
+        ];
+        let mut entries = serde_json::Map::new();
+        entries.insert("R1".into(), json!({"status": "ok", "note": "fine"}));
+        entries.insert("V1".into(), json!({"status": "ISSUE", "note": "breaks"}));
+        entries.insert("V2".into(), json!({"status": "n/a", "note": "no i18n"}));
+        entries.insert("C1".into(), json!({"status": "blocked", "note": ""}));
+        let counted = coverage(&verdict_with(entries), &obligations);
+        // C1's empty note is no answer, not an answer of another kind.
+        assert_eq!(
+            counted,
+            json!({"total": 4, "ok": 1, "issue": 1, "blocked": 0,
+                   "na": 1, "missing": 1, "unknown": []})
+        );
+    }
+
+    #[test]
+    fn coverage_never_counts_an_unknown_id_as_an_obligation() {
+        let obligations = vec![("R1".to_owned(), "risk".to_owned())];
+        let mut entries = serde_json::Map::new();
+        entries.insert("R1".into(), json!({"status": "ok", "note": "fine"}));
+        entries.insert("X9".into(), json!({"status": "ok", "note": "invented"}));
+        entries.insert(
+            "R0".into(),
+            json!({"status": "ok", "note": "before the first"}),
+        );
+        let counted = coverage(&verdict_with(entries), &obligations);
+        assert_eq!(
+            counted,
+            json!({"total": 1, "ok": 1, "issue": 0, "blocked": 0,
+                   "na": 0, "missing": 0, "unknown": ["R0", "X9"]})
+        );
+        // No verdict yet: the obligations are missing, not silently ok.
+        let none = coverage(&verdict_with(serde_json::Map::new()), &obligations);
+        assert_eq!(none["total"], 1);
+        assert_eq!(none["missing"], 1);
+        assert_eq!(none["ok"], 0);
+    }
+
+    #[test]
+    fn card_outcomes_have_one_stable_name_each() {
+        for (outcome, name) in [
+            (Outcome::Committed, "committed"),
+            (Outcome::Applied, "applied"),
+            (Outcome::LeftOnBranch, "left_on_branch"),
+            (Outcome::NoChanges, "no_changes"),
+            (Outcome::Conflict, "conflict"),
+            (Outcome::UserEdits, "user_edits"),
+            (Outcome::InPlaceCommitted, "in_place_committed"),
+            (Outcome::InPlaceApplied, "in_place_applied"),
+            (Outcome::InPlaceUserEdits, "in_place_user_edits"),
+            (Outcome::NotApplicable, "not_applicable"),
+            (Outcome::ForceApproved, "force_approved"),
+            (Outcome::Cancelled, "cancelled"),
+        ] {
+            assert_eq!(serde_json::to_value(outcome).unwrap(), json!(name));
+        }
+    }
+
+    #[test]
+    fn the_effect_summary_is_bounded_and_names_the_files() {
+        let files: Vec<String> = (0..25).map(|i| format!("src/m{i}.rs")).collect();
+        let stat = " src/m0.rs | 2 ++\n 25 files changed, 50 insertions(+)";
+        let summary = effect(stat, &files);
+        assert!(summary.chars().count() <= EFFECT_LIMIT, "{summary}");
+        // The counts survive the cut; only trailing names are dropped, and
+        // the summary always says how many more there are.
+        assert!(summary.starts_with("25 files changed, 50 insertions(+)"));
+        assert!(summary.contains("src/m0.rs"), "{summary}");
+        assert!(summary.contains("more)"), "{summary}");
+        let named = files
+            .iter()
+            .filter(|f| summary.contains(f.as_str()))
+            .count();
+        assert!(named >= 1 && named < files.len(), "named {named}");
+        // A diff stat without a summary line still reports the file count.
+        let odd = effect("binary files differ", &["a.png".to_owned()]);
+        assert_eq!(odd, "1 file(s) changed — a.png");
+        assert_eq!(effect("", &[]), "no file changes");
+    }
+
+    #[test]
+    fn a_read_only_effect_is_the_reports_opening_line() {
+        let report = "```json\n{}\n```\nFound 3 leaks in store.rs.\nDetails follow.";
+        assert_eq!(report_effect(report), "Found 3 leaks in store.rs.");
+        assert_eq!(report_effect("  \n\n"), "");
+        let long = "x".repeat(EFFECT_LIMIT + 50);
+        assert_eq!(report_effect(&long).chars().count(), EFFECT_LIMIT);
     }
 }
