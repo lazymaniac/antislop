@@ -1,53 +1,32 @@
-# Example: Codex orchestrates; Antigravity (agy) works and verifies.
-# Copy to your project as architect.toml and adjust binaries and models.
-# Supported CLIs: codex, agy, claude, gemini, opencode. Each task kind names a worker profile
-# and a verifier profile; every verifier gets its own session.
+# Local routing: Codex orchestrates; OpenCode via oMLX executes and verifies.
 schema_version = 1
 
-# task-worktrees: each writer works in its own git worktree and its approved
-# change is integrated into your branch. in-place: writers work in this
-# directory itself, one at a time; a writer that touches a file you were
-# editing stops for you.
 [workspace]
 mode = "task-worktrees"
 
-# supervised: you accept every plan. autonomous: a checked plan runs on its own.
-# This is the default; `/mode` changes it for one conversation.
-# local_write lets workers change files (in their own worktrees); with
-# local_commits each approved change is committed on your branch, otherwise it
-# is left as uncommitted changes in the project.
 [policy]
 mode = "supervised"
 revision = 1
 local_write = true
 local_checks = true
-local_commits = false
-# Plans that change code always get the static analysis, testing and
-# integration gates they lack from the predefined agent pool.
-required_gates = true
-# Most tasks of a plan that run at the same time.
-max_parallel = 4
+local_commits = true
 
 [providers.codex]
-binary = "codex"
+binary = "/opt/homebrew/bin/codex"
 isolation = "read_only"
 
 [providers.agy]
-binary = "agy"
+binary = "/Users/sebastian/.local/bin/agy"
 isolation = "tool_free"
 
-# To use OpenCode via oMLX, configure this provider and set worker/verifier
-# profile providers and role_providers to "opencode". Pin --model to avoid
-# the launcher's interactive model picker; -- forwards the remaining CLI flags.
-# [providers.opencode]
-# command = ["omlx", "launch", "opencode", "--model", "YOUR_MODEL", "--"]
-# isolation = "read_only"
-# Set profile model = "omlx/YOUR_MODEL" to pin the OpenCode model per turn.
+[providers.opencode]
+command = ["omlx", "launch", "opencode", "--model", "Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp", "--"]
+isolation = "read_only"
 
 [role_providers]
 orchestrator = ["codex"]
-executor = ["agy"]
-verifier = ["agy"]
+executor = ["opencode"]
+verifier = ["opencode"]
 
 [profiles.orchestrator]
 provider = "codex"
@@ -56,23 +35,23 @@ work_kinds = ["orchestration"]
 roles = ["orchestrator"]
 
 [profiles.reasoning]
-provider = "agy"
+provider = "opencode"
+model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
 effort = "deep"
 work_kinds = ["context", "requirements", "options", "planning", "architecture", "dependencies", "security", "performance", "analysis"]
 roles = ["executor"]
 
 [profiles.execution]
-provider = "agy"
+provider = "opencode"
+model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
 effort = "deep"
 work_kinds = ["implementation", "refactoring", "static_analysis", "test_design", "testing", "integration", "research", "writing", "delivery"]
 roles = ["executor"]
 
-# Measured (docs/calibration.md): verifiers at light and at deep gave the same
-# verdicts on every case, deep at about three times light's time on agy.
-# standard keeps a margin for code harder than the measured cases.
 [profiles.review]
-provider = "agy"
-effort = "standard"
+provider = "opencode"
+model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
+effort = "deep"
 work_kinds = ["orchestration", "context", "requirements", "options", "planning", "architecture", "dependencies", "implementation", "refactoring", "static_analysis", "test_design", "testing", "security", "performance", "integration", "research", "writing", "analysis", "delivery"]
 roles = ["verifier"]
 

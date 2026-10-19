@@ -1,4 +1,4 @@
-use architect::{config::Config, lean::Core};
+use antislop::{config::Config, lean::Core};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
@@ -79,7 +79,7 @@ def message(to, kind, text):
     );
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(

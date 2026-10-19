@@ -1,5 +1,5 @@
 /target/
-/.architect/
+/.antislop/
 /.antislop/
 __pycache__/
 *.db-wal

@@ -75,10 +75,10 @@ pub fn connect(path: &Path, registry: &Registry) -> Result<ProjectConn, ConnectE
     if !registry.is_trusted(&path) {
         return Err(ConnectError::NotTrusted(path));
     }
-    let config = path.join("architect.toml");
+    let config = path.join("antislop.toml");
     if !config.is_file() {
         return Err(fail(&format!(
-            "no configuration at {}: a project needs its own architect.toml",
+            "no configuration at {}: a project needs its own antislop.toml",
             config.display()
         )));
     }
@@ -171,7 +171,7 @@ mod tests {
         registry.trust(project.path()).unwrap();
         let error = connect(project.path(), &registry).err().unwrap();
         assert!(
-            matches!(&error, ConnectError::Failed(text) if text.contains("architect.toml")),
+            matches!(&error, ConnectError::Failed(text) if text.contains("antislop.toml")),
             "{error:?}"
         );
         assert!(!project.path().join(".antislop").exists());

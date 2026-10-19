@@ -1,4 +1,4 @@
-use architect::{config::Config, lean::Core};
+use antislop::{config::Config, lean::Core};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
@@ -57,7 +57,7 @@ fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Co
     let agy = write("agy", format!("{header}{agent}\n"));
     let mut text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(

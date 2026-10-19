@@ -1,5 +1,5 @@
 mod common;
-use architect::lean::daemon::{Client, Request};
+use antislop::lean::daemon::{Client, Request};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -43,10 +43,10 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "worker-1", "
 }
 
 fn write_config(dir: &Path, codex: &Path, agy: &Path) -> PathBuf {
-    let config_path = dir.join("architect.toml");
+    let config_path = dir.join("antislop.toml");
     let content = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(
@@ -101,7 +101,7 @@ impl DaemonGuard {
     }
 
     fn call_raw(&self, json_payload: &Value) -> std::result::Result<Value, String> {
-        let socket_path = architect::lean::daemon::socket(&self.state);
+        let socket_path = antislop::lean::daemon::socket(&self.state);
         let mut stream = UnixStream::connect(&socket_path).unwrap();
         let mut bytes = serde_json::to_vec(json_payload).unwrap();
         bytes.push(b'\n');
@@ -843,7 +843,7 @@ fn nothing_is_created_or_started_in_a_directory_that_is_not_trusted() {
     let codex = fake_codex(&dir_path);
     let agy = fake_agy(&dir_path);
     let config = write_config(&dir_path, &codex, &agy);
-    std::fs::copy(&config, project.join("architect.toml")).unwrap();
+    std::fs::copy(&config, project.join("antislop.toml")).unwrap();
     let list = dir_path.join("config");
 
     // The CLI without a terminal and without --trust refuses, leaving no state.

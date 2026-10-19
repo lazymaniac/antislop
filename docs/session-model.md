@@ -10,7 +10,7 @@ Every runtime entity belongs to a strict, unambiguous hierarchy:
 
 ```
 Project (canonical filesystem path)
-  └── Endpoint / Config / State (`core.sock`, `architect.toml`, `<state>/core.db`)
+  └── Endpoint / Config / State (`core.sock`, `antislop.toml`, `<state>/core.db`)
         └── Conversation (`conversation_id`, UUID)
               ├── Plan (`plan_id`, UUID)
               │     ├── Task (`task_uuid`, UUID)  [Local label: `t1`, `t2`, ...]
@@ -29,7 +29,7 @@ Project (canonical filesystem path)
 1. **Project**: The absolute, canonical path to the repository directory (e.g., `/Users/.../project`). A daemon serves exactly one project; a screen may be connected to several daemons, one per project (see `docs/lean-core.md`).
 2. **Endpoint / Config / State**:
    - Unix domain socket: `<state>/core.sock` (or `/tmp/antislop-<uid>/<hash>.sock` when state path is long).
-   - Configuration file: `architect.toml` with loaded timestamp for hot reload detection.
+   - Configuration file: `antislop.toml` with loaded timestamp for hot reload detection.
    - Persistence directory: `<state>/core.db` (SQLite in WAL mode).
 3. **Conversation (`conversation_id`)**: A unique UUID identifying a collaborative user-agent thread.
 4. **Plan (`plan_id`)**: A unique UUID generated upon plan proposal (`tasks[0].plan_id`). All tasks proposed together share this `plan_id`.

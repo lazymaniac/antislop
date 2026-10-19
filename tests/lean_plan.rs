@@ -1,4 +1,4 @@
-use architect::{config::Config, lean::Core};
+use antislop::{config::Config, lean::Core};
 use serde_json::Value;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -85,7 +85,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
 fn config(codex: &Path, agy: &Path) -> Config {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(
@@ -109,7 +109,7 @@ fn wait_idle(core: &Core, conversation: &str) {
 
 #[test]
 fn plan_summaries_survive_core_storage_and_event_replay() {
-    use architect::lean::{store::Store, tui::view::View};
+    use antislop::lean::{store::Store, tui::view::View};
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
     let (codex, agy) = fake_clis(dir.path());
@@ -181,7 +181,7 @@ fn a_plan_comment_gets_an_independent_revision_and_verification() {
     );
     assert!(
         core.store
-            .last_turn(&conversation.id, architect::lean::COMMENT_ORCHESTRATOR)
+            .last_turn(&conversation.id, antislop::lean::COMMENT_ORCHESTRATOR)
             .unwrap()
             .is_none()
     );
@@ -215,10 +215,10 @@ fn a_plan_comment_gets_an_independent_revision_and_verification() {
     );
     let turn = core
         .store
-        .last_turn(&conversation.id, architect::lean::COMMENT_ORCHESTRATOR)
+        .last_turn(&conversation.id, antislop::lean::COMMENT_ORCHESTRATOR)
         .unwrap()
         .unwrap();
-    assert_eq!(turn.status, architect::lean::store::TurnStatus::Done);
+    assert_eq!(turn.status, antislop::lean::store::TurnStatus::Done);
     let calls = calls(dir.path());
     let revision = calls
         .iter()
@@ -378,7 +378,7 @@ fn one_review_sends_all_draft_comments_to_a_single_turn() {
         .sessions(&conversation.id)
         .unwrap()
         .into_iter()
-        .filter(|turn| turn.role == architect::lean::COMMENT_ORCHESTRATOR)
+        .filter(|turn| turn.role == antislop::lean::COMMENT_ORCHESTRATOR)
         .count();
     assert_eq!(turns, 1, "both comments are answered in one turn");
     let prompt = calls(dir.path())

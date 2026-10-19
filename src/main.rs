@@ -1,4 +1,4 @@
-use architect::Result;
+use antislop::Result;
 
 const HELP: &str = "\
 antislop — a team of CLI agents working on your project
@@ -13,7 +13,7 @@ With no message in a terminal it opens the TUI; with a message, or when
 input is not a terminal, it prints the conversation line by line.
 
 options:
-  --config FILE        configuration (default: ./architect.toml)
+  --config FILE        configuration (default: ./antislop.toml)
   --state DIR          private state directory (default: ./.antislop)
   --conversation ID    continue this conversation
   --new                start a new conversation
@@ -40,21 +40,21 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some("__core") => {
-            architect::require(args.len() == 4, "__core requires PROJECT CONFIG STATE")?;
-            architect::lean::daemon::serve(
+            antislop::require(args.len() == 4, "__core requires PROJECT CONFIG STATE")?;
+            antislop::lean::daemon::serve(
                 std::path::Path::new(&args[1]),
                 std::path::Path::new(&args[2]),
                 std::path::Path::new(&args[3]),
             )
         }
         // A lone `export` is the removed subcommand, not a message.
-        Some("export") if args.len() == 1 => Err(architect::Error::Invalid(
+        Some("export") if args.len() == 1 => Err(antislop::Error::Invalid(
             "export was removed: conversations live in the state directory (.antislop/); \
              to send a message that starts with \"export\", add more words"
                 .into(),
         )),
-        Some("chat") => architect::lean::cli::chat(&args[1..]),
-        Some("eval") => architect::lean::eval::eval(&args[1..]),
-        _ => architect::lean::cli::chat(&args),
+        Some("chat") => antislop::lean::cli::chat(&args[1..]),
+        Some("eval") => antislop::lean::eval::eval(&args[1..]),
+        _ => antislop::lean::cli::chat(&args),
     }
 }

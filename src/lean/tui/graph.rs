@@ -372,12 +372,12 @@ impl Graph {
 
         let mut placed_tasks = std::collections::HashSet::new();
 
-        if let Some((vp_w, vp_h)) = viewport {
+        if let Some((vp_w, _)) = viewport {
+            // Flow: the first row holds the orchestrator and its verifiers, the
+            // workers it spawns follow, wrapping at the viewport width, and
+            // the agents that check them come after.
             let max_cols = ((vp_w.saturating_sub(MARGIN) + GAP_X) / (WIDTH + GAP_X)).max(1);
-            let visible_rows = ((vp_h + GAP_Y) / (HEIGHT + GAP_Y)).max(1);
-            let mut col_next_row: Vec<u16> = vec![0; max_cols as usize];
-
-            let mut place_admin = |key: &str, col: u16, row: u16, vis: bool| {
+            let mut push = |key: &str, col: u16, row: u16, vis: bool| {
                 graph.nodes.push(Node {
                     key: key.to_string(),
                     x: if vis { column_x(col) } else { 0 },
@@ -389,109 +389,62 @@ impl Graph {
                 });
             };
 
-            if max_cols >= 3 {
-                if pv_vis {
-                    place_admin(PLAN_VERIFIER, 0, 0, true);
-                    col_next_row[0] = 1;
-                } else {
-                    place_admin(PLAN_VERIFIER, 0, 0, false);
+            let admin = [
+                (PLAN_VERIFIER, pv_vis),
+                (ORCHESTRATOR, orch_vis),
+                (AUDITOR, aud_vis),
+            ];
+            let admin_rows = if max_cols >= 3 {
+                for (slot, &(key, vis)) in admin.iter().enumerate() {
+                    push(key, slot as u16, 0, vis);
                 }
-                if orch_vis {
-                    place_admin(ORCHESTRATOR, 1, 0, true);
-                    col_next_row[1] = 1;
-                } else {
-                    place_admin(ORCHESTRATOR, 0, 0, false);
-                }
-                if aud_vis {
-                    place_admin(AUDITOR, 2, 0, true);
-                    col_next_row[2] = 1;
-                } else {
-                    place_admin(AUDITOR, 0, 0, false);
-                }
-            } else if max_cols == 2 {
-                if pv_vis {
-                    place_admin(PLAN_VERIFIER, 0, 0, true);
-                    col_next_row[0] = 1;
-                } else {
-                    place_admin(PLAN_VERIFIER, 0, 0, false);
-                }
-                if orch_vis && aud_vis {
-                    place_admin(ORCHESTRATOR, 1, 0, true);
-                    place_admin(AUDITOR, 1, 1, true);
-                    col_next_row[1] = 2;
-                } else if orch_vis {
-                    place_admin(ORCHESTRATOR, 1, 0, true);
-                    place_admin(AUDITOR, 0, 0, false);
-                    col_next_row[1] = 1;
-                } else if aud_vis {
-                    place_admin(AUDITOR, 1, 0, true);
-                    place_admin(ORCHESTRATOR, 0, 0, false);
-                    col_next_row[1] = 1;
-                } else {
-                    place_admin(ORCHESTRATOR, 0, 0, false);
-                    place_admin(AUDITOR, 0, 0, false);
-                }
+                u16::from(admin_vis)
             } else {
-                if orch_vis {
-                    place_admin(ORCHESTRATOR, 0, 0, true);
-                    col_next_row[0] = 1;
-                } else {
-                    place_admin(ORCHESTRATOR, 0, 0, false);
-                }
-                place_admin(PLAN_VERIFIER, 1, 0, pv_vis);
-                place_admin(AUDITOR, 1, 1, aud_vis);
-            }
-
-            for &rel_depth in &sorted_rel_depths {
-                let tasks_at_depth = rel_depth_tasks.get_mut(&rel_depth).unwrap();
-                tasks_at_depth.sort_unstable();
-
-                for (slot, &task_idx) in tasks_at_depth.iter().enumerate() {
-                    placed_tasks.insert(task_idx);
-                    let task = &view.tasks[task_idx];
-                    let id = &task.id;
-                    let is_task_collapsed =
-                        collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
-                    let worker_key = format!("worker:{id}");
-                    let verifier_key = format!("verifier:{id}");
-                    let worker_vis = matches_query(&worker_key);
-                    let verifier_vis = !is_task_collapsed && matches_query(&verifier_key);
-                    let task_rows =
-                        (if worker_vis { 1 } else { 0 }) + (if verifier_vis { 1 } else { 0 });
-
-                    let pref_col = (rel_depth + slot as u16) % max_cols;
-                    let target_col = if col_next_row[pref_col as usize] + task_rows <= visible_rows
-                    {
-                        pref_col
-                    } else if let Some(alt_col) = (0..max_cols)
-                        .find(|&c| col_next_row[c as usize] + task_rows <= visible_rows)
-                    {
-                        alt_col
+                let mut shown = 0u16;
+                for &(key, vis) in &admin {
+                    if vis {
+                        push(key, shown % max_cols, shown / max_cols, true);
+                        shown += 1;
                     } else {
-                        (0..max_cols)
-                            .min_by_key(|&c| (col_next_row[c as usize], c != pref_col))
-                            .unwrap_or(pref_col)
-                    };
-
-                    let row = col_next_row[target_col as usize];
-
-                    let mut worker = Node::new(worker_key, column_x(target_col), row_y(row));
-                    worker.collapsed = is_task_collapsed;
-                    worker.group = Some(format!("task:{id}"));
-                    worker.visible = worker_vis;
-                    graph.nodes.push(worker);
-
-                    let next_row = if worker_vis { row + 1 } else { row };
-
-                    let mut verifier =
-                        Node::new(verifier_key, column_x(target_col), row_y(next_row));
-                    verifier.group = Some(format!("task:{id}"));
-                    verifier.visible = verifier_vis;
-                    graph.nodes.push(verifier);
-
-                    let end_row = if verifier_vis { next_row + 1 } else { next_row };
-                    col_next_row[target_col as usize] = end_row;
+                        push(key, 0, 0, false);
+                    }
                 }
+                shown.div_ceil(max_cols)
+            };
+
+            let ordered: Vec<usize> = sorted_rel_depths
+                .iter()
+                .flat_map(|depth| {
+                    let tasks = rel_depth_tasks.get_mut(depth).unwrap();
+                    tasks.sort_unstable();
+                    tasks.clone()
+                })
+                .collect();
+            let task_rows = (ordered.len() as u16).div_ceil(max_cols);
+            let (worker_base, verifier_base) = (admin_rows, admin_rows + task_rows);
+
+            for (slot, &task_idx) in ordered.iter().enumerate() {
+                placed_tasks.insert(task_idx);
+                let id = &view.tasks[task_idx].id;
+                let is_task_collapsed =
+                    collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
+                let (col, offset) = (slot as u16 % max_cols, slot as u16 / max_cols);
+                let worker_key = format!("worker:{id}");
+                let verifier_key = format!("verifier:{id}");
+                let worker_vis = matches_query(&worker_key);
+                let verifier_vis = !is_task_collapsed && matches_query(&verifier_key);
+
+                let mut worker = Node::new(worker_key, column_x(col), row_y(worker_base + offset));
+                worker.collapsed = is_task_collapsed;
+                worker.group = Some(format!("task:{id}"));
+                worker.visible = worker_vis;
+                graph.nodes.push(worker);
+
+                let mut verifier =
+                    Node::new(verifier_key, column_x(col), row_y(verifier_base + offset));
+                verifier.group = Some(format!("task:{id}"));
+                verifier.visible = verifier_vis;
+                graph.nodes.push(verifier);
             }
         } else {
             let mut place_admin = |key: &str, col: u16, row: u16, vis: bool| {

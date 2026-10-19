@@ -3,9 +3,9 @@
 
 mod common;
 
-use architect::lean::daemon::{Client, Request};
-use architect::lean::tui::workspace::{self, ProjectConn};
-use architect::lean::tui::{App, Update};
+use antislop::lean::daemon::{Client, Request};
+use antislop::lean::tui::workspace::{self, ProjectConn};
+use antislop::lean::tui::{App, Update};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -38,7 +38,7 @@ print(json.dumps({{"type": "turn.completed", "usage": {{}}}}))
     );
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(
@@ -49,7 +49,7 @@ print(json.dumps({{"type": "turn.completed", "usage": {{}}}}))
         "binary = \"agy\"",
         &format!("binary = {:?}", dir.join("agy").to_string_lossy()),
     );
-    std::fs::write(dir.join("architect.toml"), text).unwrap();
+    std::fs::write(dir.join("antislop.toml"), text).unwrap();
     dir.canonicalize().unwrap()
 }
 
@@ -68,7 +68,7 @@ impl Daemon {
         let child = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
             .arg("__core")
             .arg(project)
-            .arg(project.join("architect.toml"))
+            .arg(project.join("antislop.toml"))
             .arg(&state)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -131,7 +131,7 @@ fn switching_projects_keeps_each_ones_conversation_draft_and_daemon() {
     assert!(!conversation_a.is_empty());
 
     // Words typed but not sent belong to the conversation they were typed in.
-    app.input = architect::lean::tui::InputBuffer::with_text("draft in alpha");
+    app.input = antislop::lean::tui::InputBuffer::with_text("draft in alpha");
     let second = app.register_project(b.conn.clone());
     assert_eq!((first, second), (0, 1));
     assert_eq!(app.register_project(b.conn.clone()), 1, "registered once");
@@ -141,7 +141,7 @@ fn switching_projects_keeps_each_ones_conversation_draft_and_daemon() {
     assert_eq!(app.input.text, "", "beta starts with an empty draft");
 
     // Messages go to the daemon of the project on screen.
-    app.input = architect::lean::tui::InputBuffer::with_text("hello beta");
+    app.input = antislop::lean::tui::InputBuffer::with_text("hello beta");
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     pump(&mut app, &rx, |app| {
         app.view
@@ -224,7 +224,7 @@ fn an_untrusted_directory_is_asked_about_before_anything_is_created_there() {
     assert!(!stranger.join(".antislop").exists());
 
     // The same checks the screen makes, without starting a daemon.
-    let registry = architect::lean::trust::Registry::from_env().unwrap();
+    let registry = antislop::lean::trust::Registry::from_env().unwrap();
     assert!(matches!(
         workspace::connect(&stranger, &registry),
         Err(workspace::ConnectError::NotTrusted(_))

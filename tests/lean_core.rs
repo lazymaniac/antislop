@@ -1,5 +1,5 @@
 mod common;
-use architect::{
+use antislop::{
     config::Config,
     lean::{Core, store::TurnStatus},
 };
@@ -36,7 +36,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
 fn config(codex: &std::path::Path) -> Config {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(
@@ -90,7 +90,7 @@ echo '{{"type":"turn.completed"}}'
 
 #[test]
 fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
-    use architect::lean::COMMENT_ORCHESTRATOR;
+    use antislop::lean::COMMENT_ORCHESTRATOR;
     let dir = tempfile::tempdir().unwrap();
     let core = Core::open(
         &dir.path().join("state"),
@@ -173,7 +173,7 @@ fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
 
 #[test]
 fn failed_comments_keep_the_raw_error_and_reopening_retries_them() {
-    use architect::lean::{COMMENT_ORCHESTRATOR, tui::view::View};
+    use antislop::lean::{COMMENT_ORCHESTRATOR, tui::view::View};
     let dir = tempfile::tempdir().unwrap();
     let core = Core::open(
         &dir.path().join("state"),
@@ -240,7 +240,7 @@ fn failed_comments_keep_the_raw_error_and_reopening_retries_them() {
 
 #[test]
 fn plan_revision_resolves_only_comments_in_its_answered_snapshot() {
-    use architect::lean::store::{Comment, Store};
+    use antislop::lean::store::{Comment, Store};
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
@@ -298,14 +298,14 @@ fn plan_revision_resolves_only_comments_in_its_answered_snapshot() {
 
 #[test]
 fn interrupted_comment_sessions_resume_after_daemon_restart() {
-    use architect::lean::{
+    use antislop::lean::{
         COMMENT_ORCHESTRATOR,
         store::{Comment, Store},
         tui::view::View,
     };
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
-    architect::lean::daemon::private_directory(&state).unwrap();
+    antislop::lean::daemon::private_directory(&state).unwrap();
     let store = Store::open(&state.join("core.db")).unwrap();
     let conversation = store
         .create_conversation(dir.path().to_str().unwrap())
@@ -457,7 +457,7 @@ fn chat(dir: &std::path::Path, project: &std::path::Path, message: &str) -> Stri
         .current_dir(project)
         .arg("chat")
         .arg("--config")
-        .arg(dir.join("architect.toml"))
+        .arg(dir.join("antislop.toml"))
         .arg("--state")
         .arg(dir.join("state"))
         .arg(message)
@@ -476,10 +476,10 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     std::fs::create_dir(&project).unwrap();
     let codex = fake_codex(&dir);
     std::fs::write(
-        dir.join("architect.toml"),
+        dir.join("antislop.toml"),
         std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/examples/architect.toml"
+            "/examples/antislop.toml"
         ))
         .unwrap()
         .replace(
@@ -492,8 +492,8 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     let first = chat(&dir, &project, "pierwsza");
     assert!(first.contains("answer: pierwsza"), "{first}");
     let pid = |state: &std::path::Path| {
-        architect::lean::daemon::Client::at(state)
-            .call(&architect::lean::daemon::Request::Identity)
+        antislop::lean::daemon::Client::at(state)
+            .call(&antislop::lean::daemon::Request::Identity)
             .unwrap()["pid"]
             .clone()
     };
@@ -511,8 +511,8 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
         "{calls}"
     );
 
-    architect::lean::daemon::Client::at(&dir.join("state"))
-        .call(&architect::lean::daemon::Request::Shutdown)
+    antislop::lean::daemon::Client::at(&dir.join("state"))
+        .call(&antislop::lean::daemon::Request::Shutdown)
         .unwrap();
 }
 
@@ -572,18 +572,18 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let codex = fake_codex(&dir);
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(
         "binary = \"codex\"",
         &format!("binary = {:?}", codex.to_string_lossy()),
     );
-    std::fs::write(dir.join("architect.toml"), &text).unwrap();
+    std::fs::write(dir.join("antislop.toml"), &text).unwrap();
     let state = dir.join("state");
     let identity = || {
-        architect::lean::daemon::Client::at(&state)
-            .call(&architect::lean::daemon::Request::Identity)
+        antislop::lean::daemon::Client::at(&state)
+            .call(&antislop::lean::daemon::Request::Identity)
             .ok()
     };
     let current_build = std::path::Path::new(env!("CARGO_BIN_EXE_antislop"));
@@ -598,7 +598,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
             .current_dir(&project)
             .arg("chat")
             .arg("--config")
-            .arg(dir.join("architect.toml"))
+            .arg(dir.join("antislop.toml"))
             .arg("--state")
             .arg(&state)
             .arg(message)
@@ -634,10 +634,10 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let other_config = dir.join("other.toml");
     std::fs::write(&other_config, &text).unwrap();
     for (project, config) in [
-        (other_project.as_path(), dir.join("architect.toml")),
+        (other_project.as_path(), dir.join("antislop.toml")),
         (project.as_path(), other_config),
     ] {
-        let error = architect::lean::daemon::Client::connect(project, &config, &state)
+        let error = antislop::lean::daemon::Client::connect(project, &config, &state)
             .err()
             .expect("a busy daemon must reject another project or configuration path");
         assert!(error.to_string().contains("different --state directory"));
@@ -645,7 +645,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     if edit_config {
         // The user edits the configuration while the work runs.
         std::thread::sleep(Duration::from_millis(20));
-        std::fs::write(dir.join("architect.toml"), format!("{text}\n# edited\n")).unwrap();
+        std::fs::write(dir.join("antislop.toml"), format!("{text}\n# edited\n")).unwrap();
     }
     let second = run(current_build, "druga").wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&second.stderr);
@@ -654,7 +654,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
         stderr.contains(if rebuilt {
             "connected to the running daemon"
         } else {
-            "architect.toml changed"
+            "antislop.toml changed"
         }),
         "{stderr}"
     );
@@ -671,8 +671,8 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let third = chat(&dir, &project, "trzecia");
     assert!(third.contains("answer: trzecia"), "{third}");
     assert_ne!(identity().unwrap()["pid"], daemon);
-    architect::lean::daemon::Client::at(&state)
-        .call(&architect::lean::daemon::Request::Shutdown)
+    antislop::lean::daemon::Client::at(&state)
+        .call(&antislop::lean::daemon::Request::Shutdown)
         .unwrap();
 }
 
@@ -684,10 +684,10 @@ fn a_daemon_whose_state_is_deleted_leaves() {
     std::fs::create_dir(&project).unwrap();
     let codex = fake_codex(&dir);
     std::fs::write(
-        dir.join("architect.toml"),
+        dir.join("antislop.toml"),
         std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/examples/architect.toml"
+            "/examples/antislop.toml"
         ))
         .unwrap()
         .replace(
@@ -697,8 +697,8 @@ fn a_daemon_whose_state_is_deleted_leaves() {
     )
     .unwrap();
     chat(&dir, &project, "pierwsza");
-    let pid = architect::lean::daemon::Client::at(&dir.join("state"))
-        .call(&architect::lean::daemon::Request::Identity)
+    let pid = antislop::lean::daemon::Client::at(&dir.join("state"))
+        .call(&antislop::lean::daemon::Request::Identity)
         .unwrap()["pid"]
         .as_i64()
         .unwrap() as libc::pid_t;
@@ -760,10 +760,10 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
     std::fs::create_dir(&project).unwrap();
     let codex = fake_codex(&dir);
     std::fs::write(
-        dir.join("architect.toml"),
+        dir.join("antislop.toml"),
         std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/examples/architect.toml"
+            "/examples/antislop.toml"
         ))
         .unwrap()
         .replace(
@@ -777,7 +777,7 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
         .current_dir(&project)
         .arg("chat")
         .arg("--config")
-        .arg(dir.join("architect.toml"))
+        .arg(dir.join("antislop.toml"))
         .arg("--state")
         .arg(dir.join("state"))
         .arg("sleepy pytanie")
@@ -794,8 +794,8 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
         assert!(Instant::now() < deadline, "the orchestrator never started");
         std::thread::sleep(Duration::from_millis(20));
     }
-    let daemon = architect::lean::daemon::Client::at(&dir.join("state"))
-        .call(&architect::lean::daemon::Request::Identity)
+    let daemon = antislop::lean::daemon::Client::at(&dir.join("state"))
+        .call(&antislop::lean::daemon::Request::Identity)
         .unwrap()["pid"]
         .as_i64()
         .unwrap() as libc::pid_t;

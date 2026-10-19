@@ -12,12 +12,10 @@ runtime, is in [docs/acceptance.md](docs/acceptance.md); the full TUI parity
 matrix and verified contract evidence against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8`
 is in [docs/parity.md](docs/parity.md).
 
-The library keeps the `architect` crate name.
-
 ## Use
 
-Put an `architect.toml` in the project (start from
-[examples/architect.toml](examples/architect.toml)) and run:
+Put an `antislop.toml` in the project (start from
+[examples/antislop.toml](examples/antislop.toml)) and run:
 
 ```sh
 antislop                         # TUI on the project's latest conversation

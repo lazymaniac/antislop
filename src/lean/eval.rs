@@ -385,7 +385,7 @@ fn judge(
                 }
             }
             let unaccounted = tasks::unaccounted(&verdict, &obligations).len();
-            tasks::settle(&mut verdict, &obligations);
+            tasks::settle(&mut verdict, &obligations, !case.task.writes);
             Ok((verdict, turns, tokens, unaccounted))
         }
     }

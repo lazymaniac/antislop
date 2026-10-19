@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn the_example_routes_every_kind_to_a_worker_and_a_verifier() {
-        let text = include_str!("../examples/architect.toml");
+        let text = include_str!("../examples/antislop.toml");
         let config = Config::from_toml(text).unwrap();
         for kind in config
             .routing
@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn profile_command_supports_platform_launchers_for_workers_and_verifiers() {
-        let text = include_str!("../examples/architect.toml")
+        let text = include_str!("../examples/antislop.toml")
             .replace(
                 "executor = [\"agy\"]",
                 "executor = [\"codex\", \"agy\"]",
@@ -614,7 +614,7 @@ mod tests {
 
     #[test]
     fn a_route_to_a_missing_profile_is_rejected() {
-        let text = include_str!("../examples/architect.toml").replacen(
+        let text = include_str!("../examples/antislop.toml").replacen(
             "executor = \"reasoning\"",
             "executor = \"nobody\"",
             1,
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn local_workers_and_verifiers_use_opencode_through_omlx() {
-        let config = Config::from_toml(include_str!("../architect.toml")).unwrap();
+        let config = Config::from_toml(include_str!("../antislop.toml")).unwrap();
         let orchestrator = config
             .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
             .unwrap();
@@ -658,7 +658,7 @@ mod tests {
 
     #[test]
     fn max_parallel_defaults_to_four_and_must_be_positive() {
-        let text = include_str!("../examples/architect.toml");
+        let text = include_str!("../examples/antislop.toml");
         let default = Config::from_toml(&text.replace("max_parallel = 4\n", "")).unwrap();
         assert_eq!(default.policy.max_parallel, 4);
         assert!(Config::from_toml(&text.replace("max_parallel = 4", "max_parallel = 0")).is_err());
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn an_old_effort_map_gets_a_message_that_says_what_changed() {
-        let text = include_str!("../examples/architect.toml");
+        let text = include_str!("../examples/antislop.toml");
         let old = format!("{text}\n[providers.codex.effort_map]\nlight = \"low\"\n");
         let error = Config::from_toml(&old).unwrap_err().to_string();
         assert!(
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn required_gates_need_routes_for_the_work_they_add() {
-        let text = include_str!("../examples/architect.toml");
+        let text = include_str!("../examples/antislop.toml");
         assert!(Config::from_toml(text).is_ok());
         // Find the first route table of a gate kind and take it away.
         let header = text

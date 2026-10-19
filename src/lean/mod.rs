@@ -1273,7 +1273,7 @@ impl Core {
                 )?;
                 let mut verdict = tasks::parse_verdict(&answer);
                 let obligations = tasks::obligations(&spec);
-                tasks::settle(&mut verdict, &obligations);
+                tasks::settle(&mut verdict, &obligations, !spec.writes);
                 task.round += 1;
 
                 let mut v_val = serde_json::to_value(&verdict)?;
@@ -2675,7 +2675,7 @@ impl Core {
                 }
             }
             let incomplete = !tasks::unaccounted(&verdict, &obligations).is_empty();
-            tasks::settle(&mut verdict, &obligations);
+            tasks::settle(&mut verdict, &obligations, !spec.writes);
             let mut v_val = serde_json::to_value(&verdict)?;
             if let Some(obj) = v_val.as_object_mut() {
                 obj.insert("round".into(), json!(task.round));
@@ -2700,7 +2700,7 @@ impl Core {
                     None => self.set_status(conversation, task, status::APPROVED),
                 };
             }
-            let text = tasks::findings_text(&verdict.findings);
+            let text = tasks::findings_key(&verdict.findings);
             if previous.as_deref() == Some(text.as_str()) {
                 let report = task.report.take().unwrap_or_default();
                 task.report = Some(format!(

@@ -1,5 +1,5 @@
 mod common;
-use architect::{
+use antislop::{
     config::Config,
     lean::{
         Core,
@@ -42,7 +42,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "c1", "status
 fn test_config(codex: &Path, agy: &Path) -> Config {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(
@@ -460,10 +460,10 @@ fn daemon_rejects_foreign_scope_requests() {
     std::fs::create_dir_all(&project_a).unwrap();
     std::fs::create_dir_all(&project_b).unwrap();
     let (codex, agy) = fake_clis(dir.path());
-    let config_path = dir.path().join("architect.toml");
+    let config_path = dir.path().join("antislop.toml");
     let content = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(

@@ -52,7 +52,7 @@ impl Options {
                 _ => words.push(arg.clone()),
             }
         }
-        let config = config.unwrap_or_else(|| project.join("architect.toml"));
+        let config = config.unwrap_or_else(|| project.join("antislop.toml"));
         require(
             config.is_file(),
             &format!("no configuration at {}", config.display()),

@@ -1,4 +1,4 @@
-# AGENTS.md — Development Guidelines for antislop / architect
+# AGENTS.md — Development Guidelines for antislop
 
 This document specifies the rules, design constraints, and engineering practices that all AI coding agents must follow when working in this repository.
 
@@ -7,7 +7,7 @@ This document specifies the rules, design constraints, and engineering practices
 ## 1. Project Overview & Crate Layout
 
 - **Binary Crate**: `antislop` (`src/main.rs`) — Terminal UI and daemon entrypoint.
-- **Library Crate**: `architect` (`src/lib.rs`) — Core scheduling, storage, agent drivers, and TUI engine.
+- **Library Crate**: `antislop` (`src/lib.rs`) — Core scheduling, storage, agent drivers, and TUI engine.
 - **Subsystems**:
   - `src/lean/`: The lean core runtime, SQLite event store, task DAG manager, daemon, and Git worktree coordinator.
   - `src/lean/tui/`: TUI implemented with `ratatui` and `crossterm`.

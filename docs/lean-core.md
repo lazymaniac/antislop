@@ -418,7 +418,7 @@ directory to run both. The socket is `<state>/core.sock`, or
   Only following is repeated; a request that changes something is not
   (state the user deleted is not recreated either).
 - The daemon runs with the configuration it read at start. A frontend that
-  finds `architect.toml` changed restarts an idle daemon; a busy one keeps
+  finds `antislop.toml` changed restarts an idle daemon; a busy one keeps
   its configuration for the running work and the frontend says the new one
   applies once that work is done (scenario 17).
 - With `NO_COLOR` set the TUI draws no color. Nothing depends on color
@@ -476,7 +476,7 @@ directory to run both. The socket is `<state>/core.sock`, or
 `Ctrl+G` (or `/project`, or the palette) lists the projects open on the screen
 and those opened before (`~/.config/antislop/projects.json`); choosing one
 switches to it, and typing a directory path (`/…`, `~/…`, `./…`) opens it. A
-project is its own directory: its `architect.toml`, its `.antislop/` state and
+project is its own directory: its `antislop.toml`, its `.antislop/` state and
 its own daemon, started as when antislop is run there alone, so nothing of one
 project's configuration, plans or sessions reaches another. A directory that is
 not trusted yet is asked about first and nothing is created in it before the
@@ -601,6 +601,5 @@ kept per conversation, so switching back finds them as they were.
 
 Design §20's open decisions stand as follows. Isolation and the supported
 CLI versions (1) and session resume per CLI (2) are settled above and in
-[Known limits](#known-limits). The name (3) is `antislop`, with
-`architect` as the library. The licence and distribution (4) are left to
+[Known limits](#known-limits). The name (3) is `antislop`. The licence and distribution (4) are left to
 the owner, as the design asks.

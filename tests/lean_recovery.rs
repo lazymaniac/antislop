@@ -1,4 +1,4 @@
-use architect::{
+use antislop::{
     config::Config,
     lean::{Core, RecoveryAction, TaskRecoveryRequest},
 };
@@ -87,7 +87,7 @@ fn open_in_mode(dir: &Path, mode: &str) -> std::sync::Arc<Core> {
     let (codex, agy) = fake_clis(dir);
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/architect.toml"
+        "/examples/antislop.toml"
     ))
     .unwrap()
     .replace(

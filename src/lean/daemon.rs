@@ -1463,7 +1463,7 @@ impl Client {
             }
             if same_context && identity["busy"] == true {
                 client.notice = Some(if same_build {
-                    "architect.toml changed: running work keeps its configuration, \
+                    "antislop.toml changed: running work keeps its configuration, \
                      the new one applies once it finishes and you reopen"
                         .into()
                 } else {

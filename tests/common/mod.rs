@@ -1,7 +1,7 @@
 //! Helpers shared by the integration tests.
 #![allow(dead_code)]
 
-use architect::lean::trust::Registry;
+use antislop::lean::trust::Registry;
 use std::path::Path;
 use std::sync::{Mutex, Once};
 

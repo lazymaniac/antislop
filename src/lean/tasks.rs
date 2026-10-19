@@ -597,8 +597,11 @@ pub fn unaccounted<'a>(
 
 /// A verdict counts only with every obligation accounted for; one marked
 /// `issue` or `blocked` (it could not be settled; missing data is not `ok`)
-/// rejects it, and its note reaches the worker as a finding.
-pub fn settle(verdict: &mut Verdict, obligations: &[(String, String)]) {
+/// rejects it, and its note reaches the worker as a finding. For a read-only
+/// task (`read_only`) an `issue` on a risk (`R…`) describes the state of the
+/// code the report analyses, which the worker cannot change; it stays in the
+/// verdict's coverage and does not reject the report.
+pub fn settle(verdict: &mut Verdict, obligations: &[(String, String)], read_only: bool) {
     let missing = unaccounted(verdict, obligations);
     if !missing.is_empty() {
         verdict.approved = false;
@@ -623,6 +626,7 @@ pub fn settle(verdict: &mut Verdict, obligations: &[(String, String)]) {
             .unwrap_or_default();
         let status = entry["status"].as_str().map(str::to_ascii_lowercase);
         let unsettled = match status.as_deref() {
+            Some("issue") if read_only && id.starts_with('R') => continue,
             Some("issue") => "",
             Some("blocked") => "could not be settled: ",
             _ => continue,
@@ -1170,7 +1174,10 @@ const COVERAGE_FORMAT: &str = "Your verdict must also account for every \
      \"note\": \"what you checked, or why it does not apply\"}, \"V1\": {...}, \"C1\": {...}}. \
      Use blocked when you could not settle it (missing data is not ok) and n/a \
      only with a reason tied to this task. A verdict that leaves one out, or \
-     marks one issue or blocked, does not approve the task.";
+     marks one issue or blocked, does not approve the task. When the task is \
+     read-only analysis, judge the report, not the code: ok means the report \
+     covers the obligation correctly (including defects it rightly reports in \
+     the code); issue means the report is wrong, incomplete or unsupported.";
 
 fn scope_text(scope: &[String]) -> String {
     if scope.is_empty() {
@@ -1178,6 +1185,35 @@ fn scope_text(scope: &[String]) -> String {
     } else {
         scope.join(", ")
     }
+}
+
+/// What identifies a set of findings across rounds: severity, place and the
+/// first sentence of each issue, so rewording of the notes does not hide a
+/// repeat.
+pub fn findings_key(findings: &[Value]) -> String {
+    findings
+        .iter()
+        .map(|finding| match finding {
+            Value::String(text) => first_sentence(text),
+            other => format!(
+                "{}|{}|{}",
+                other["severity"].as_str().unwrap_or("?"),
+                other["where"].as_str().unwrap_or_default(),
+                first_sentence(other["issue"].as_str().unwrap_or_default())
+            ),
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn first_sentence(text: &str) -> String {
+    let end = text
+        .find([';', ':'])
+        .or_else(|| text.find(". "))
+        .unwrap_or(text.len());
+    text[..end].trim().to_lowercase()
 }
 
 pub fn findings_text(findings: &[Value]) -> String {
@@ -1385,7 +1421,7 @@ mod tests {
 
         let mut skipped = parse_verdict("```verdict\n{\"approved\": true}\n```");
         assert_eq!(unaccounted(&skipped, &obligations).len(), obligations.len());
-        settle(&mut skipped, &obligations);
+        settle(&mut skipped, &obligations, false);
         assert!(!skipped.approved, "a skipped obligation never approves");
 
         let mut coverage = serde_json::Map::new();
@@ -1414,7 +1450,7 @@ mod tests {
         verdict.coverage["R1"] = serde_json::json!({"status": "issue", "note": "EUR + PLN"});
         verdict.coverage["V2"] =
             serde_json::json!({"status": "blocked", "note": "no data to rerun"});
-        settle(&mut verdict, &obligations);
+        settle(&mut verdict, &obligations, false);
         assert!(!verdict.approved);
         assert_eq!(
             findings_text(&verdict.findings),
@@ -1422,6 +1458,84 @@ mod tests {
                 "- [medium] units: EUR + PLN (R1)\n- [medium] could not be settled: {}: no data to rerun (V2)",
                 obligations[2].1
             )
+        );
+    }
+
+    #[test]
+    fn a_read_only_report_is_not_rejected_for_defects_it_rightly_reports() {
+        let task: TaskSpec = serde_json::from_value(serde_json::json!({
+            "id": "t1", "title": "Audit", "goal": "g", "kind": "analysis",
+            "verifier": {"focus": "f", "risks": ["stale consent"]}
+        }))
+        .unwrap();
+        let obligations = obligations(&task);
+        let coverage = |c: &str| {
+            let mut map = serde_json::Map::new();
+            for (id, _) in &obligations {
+                map.insert(
+                    id.clone(),
+                    serde_json::json!({"status": "ok", "note": "checked"}),
+                );
+            }
+            map.insert(
+                "R1".into(),
+                serde_json::json!({"status": c, "note": "open in code"}),
+            );
+            map.insert(
+                "V1".into(),
+                serde_json::json!({"status": c, "note": "report gap"}),
+            );
+            map
+        };
+        let mut verdict = Verdict {
+            approved: true,
+            findings: vec![],
+            coverage: coverage("issue"),
+        };
+        settle(&mut verdict, &obligations, true);
+        assert!(
+            !verdict.approved,
+            "an issue on a common check still rejects"
+        );
+        assert_eq!(verdict.findings.len(), 1);
+        assert_eq!(verdict.findings[0]["where"], "V1");
+
+        let mut only_risk = Verdict {
+            approved: true,
+            findings: vec![],
+            coverage: coverage("ok"),
+        };
+        only_risk.coverage["R1"] = serde_json::json!({"status": "issue", "note": "open in code"});
+        settle(&mut only_risk, &obligations, true);
+        assert!(only_risk.approved && only_risk.findings.is_empty());
+        let mut writer = Verdict {
+            approved: true,
+            findings: vec![],
+            coverage: only_risk.coverage.clone(),
+        };
+        settle(&mut writer, &obligations, false);
+        assert!(
+            !writer.approved,
+            "a writing task still needs its risks settled"
+        );
+    }
+
+    #[test]
+    fn repeated_findings_are_recognised_despite_reworded_notes() {
+        let round = |note: &str| {
+            vec![serde_json::json!({
+                "severity": "high",
+                "issue": format!("Consent subset is approved: {note}"),
+                "where": "mod.rs:1110"
+            })]
+        };
+        assert_eq!(
+            findings_key(&round("seen in v8")),
+            findings_key(&round("still open in v9, checked again"))
+        );
+        assert_ne!(
+            findings_key(&round("x")),
+            findings_key(&[serde_json::json!({"severity": "low", "issue": "Other", "where": "a"})])
         );
     }
 
