@@ -156,6 +156,8 @@ pub struct App {
     pub conversation: String,
     pub generation: u64,
     pub stop_poller: Arc<AtomicBool>,
+    /// Frames drawn so far: advances spinners; tests set it directly.
+    pub tick: u64,
     pub view: View,
     pub input: InputBuffer,
     pub input_shown: usize,
@@ -234,6 +236,7 @@ impl App {
             conversation: "test-conv".into(),
             generation: 1,
             stop_poller: Arc::new(AtomicBool::new(false)),
+            tick: 0,
             view: View::default(),
             input: InputBuffer::new(),
             input_shown: 0,
@@ -936,12 +939,16 @@ impl App {
         let Some(editor) = &mut self.editor else {
             return;
         };
-        if editor.input.text.trim().is_empty() {
+        let rejecting = editor.target.starts_with("reject:");
+        if editor.input.text.trim().is_empty() && !rejecting {
             return;
         }
         self.comment_request_id += 1;
         let request_id = self.comment_request_id;
         let editor = self.editor.take().expect("editing");
+        if rejecting {
+            self.plan_view = None;
+        }
         self.sending_comment = true;
         self.pending_comment = Some(editor.clone());
         self.failed_comment = None;
@@ -951,14 +958,39 @@ impl App {
         let conversation = self.conversation.clone();
         let plan = self.view.plan.clone();
         let generation = self.generation;
+        // A comment on a plan line carries the line itself, so the agent need
+        // not count lines in the document.
+        let quote = editor
+            .target
+            .rsplit_once(":line:")
+            .and_then(|(_, line)| line.parse::<usize>().ok())
+            .and_then(|line| {
+                let doc = PlanView::new(String::new()).build_lines(&self.view);
+                doc.into_iter().find(|l| l.number == line).map(|l| l.text)
+            })
+            .map(|text| text.trim().chars().take(200).collect::<String>())
+            .filter(|text| !text.is_empty());
+        let text = match quote {
+            Some(quote) => format!("> {quote}\n{}", editor.input.text),
+            None => editor.input.text.clone(),
+        };
 
         std::thread::spawn(move || {
-            let reply = client.call(&Request::CommentScoped {
-                conversation: conversation.clone(),
-                plan: plan.clone(),
-                target: editor.target.clone(),
-                text: editor.input.text.clone(),
-            });
+            let reply = if let Some(rejected) = editor.target.strip_prefix("reject:") {
+                let reason = Some(text.trim().to_owned()).filter(|reason| !reason.is_empty());
+                client.call(&Request::Reject {
+                    conversation: conversation.clone(),
+                    plan: rejected.to_owned(),
+                    reason,
+                })
+            } else {
+                client.call(&Request::CommentScoped {
+                    conversation: conversation.clone(),
+                    plan: plan.clone(),
+                    target: editor.target.clone(),
+                    text,
+                })
+            };
             let _ = updates.send(Update::CommentResult {
                 conversation,
                 plan,
@@ -1499,8 +1531,14 @@ impl App {
                 }
             }
             PlanAction::Reject => {
-                self.plan_view = None;
-                self.command("/reject");
+                // The reason is optional: an empty one rejects as is.
+                if let Some(plan) = self.view.plan.clone().filter(|_| self.view.plan_proposed()) {
+                    let target = format!("reject:{plan}");
+                    let input = self.get_comment_draft(&target);
+                    self.editor = Some(Editor { target, input });
+                } else {
+                    self.notice = Some("✗ there is no plan to reject".into());
+                }
             }
             PlanAction::None => {}
             PlanAction::CommentLine { line, .. } => {
@@ -1524,7 +1562,32 @@ impl App {
     }
 
     /// Returns false when the user quits.
+    /// The graph and task panels are not shown before work runs, so focus
+    /// cannot rest on them then.
+    fn settle_focus(&mut self) {
+        if self.view.graph_hidden() && self.focus != Focus::Chat {
+            self.focus = Focus::Chat;
+        }
+    }
+
+    /// The header's status text: the stage, then what is going on.
+    fn header_status(&self) -> String {
+        let status = match (self.view.orchestrator_activity(), self.view.idle) {
+            (Some(activity), _) => activity,
+            (None, _) if self.view.paused => "paused".into(),
+            (None, true) => "ready".into(),
+            (None, false) => "tasks in progress…".into(),
+        };
+        let stage = self.view.stage();
+        if stage == view::Stage::Fresh {
+            status
+        } else {
+            format!("{} · {status}", stage.label())
+        }
+    }
+
     pub fn key(&mut self, key: event::KeyEvent) -> bool {
+        self.settle_focus();
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         if self.picker.is_none() {
@@ -1548,7 +1611,12 @@ impl App {
                 && self.details.is_none()
                 && self.diff.is_none()
                 && !self.input.is_empty());
-        if key.code == KeyCode::Char('q') && !control && !alt && !editing {
+        if key.code == KeyCode::Char('q')
+            && !control
+            && !alt
+            && !editing
+            && self.plan_view.is_none()
+        {
             return false;
         }
 
@@ -1672,6 +1740,10 @@ impl App {
             }
             KeyCode::Char('i') if control => {
                 self.open_details("conversation".into());
+                return true;
+            }
+            KeyCode::Char('l') if control => {
+                self.command("/plan");
                 return true;
             }
             KeyCode::BackTab => {
@@ -2302,6 +2374,7 @@ impl App {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
+        self.settle_focus();
         self.terminal_area = frame.area();
         if draw_min_term_guard(frame, frame.area()) {
             return;
@@ -2349,10 +2422,16 @@ impl App {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::Cyan))
-                        .title(format!(
-                            " comment on {} · Enter send · Alt+Enter newline · Esc cancel ",
-                            target_name(&editor.target)
-                        )),
+                        .title(if let Some(plan) = editor.target.strip_prefix("reject:") {
+                            format!(
+                                " reject plan {plan} · optional reason · Enter reject · Alt+Enter newline · Esc cancel "
+                            )
+                        } else {
+                            format!(
+                                " comment on {} · Enter send · Alt+Enter newline · Esc cancel ",
+                                target_name(&editor.target)
+                            )
+                        }),
                 ),
                 box_area,
             );
@@ -2498,12 +2577,7 @@ impl App {
         ])
         .areas(area);
 
-        let status = match (self.view.orchestrator_activity(), self.view.idle) {
-            (Some(activity), _) => activity,
-            (None, _) if self.view.paused => "paused".into(),
-            (None, true) => "ready".into(),
-            (None, false) => "tasks in progress…".into(),
-        };
+        let status = self.header_status();
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
             Focus::Tasks => PanelFocus::Tasks,
@@ -3033,7 +3107,14 @@ impl App {
         }
         let mut canvas =
             Canvas::new_window(self.offset.0, self.offset.1, inner.width, inner.height);
-        graph.render(&self.view, &mut canvas, self.filter, &self.selected);
+        graph.render_with(
+            &self.view,
+            &mut canvas,
+            self.filter,
+            &self.selected,
+            &Theme::from_env(),
+            self.tick,
+        );
         canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
 
         // What is happening now, in a corner that leaves the selection free.
@@ -3076,6 +3157,7 @@ impl App {
     }
 
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        self.settle_focus();
         if self.trust_prompt.is_some() {
             return true;
         }
@@ -3151,12 +3233,7 @@ impl App {
                     return true;
                 }
                 if row == area.y && area.width > 0 {
-                    let status = match (self.view.orchestrator_activity(), self.view.idle) {
-                        (Some(activity), _) => activity,
-                        (None, _) if self.view.paused => "paused".into(),
-                        (None, true) => "ready".into(),
-                        (None, false) => "tasks in progress…".into(),
-                    };
+                    let status = self.header_status();
                     let panel_focus = match self.focus {
                         Focus::Chat => PanelFocus::Chat,
                         Focus::Tasks => PanelFocus::Tasks,
@@ -3256,6 +3333,16 @@ fn ascii(ch: char) -> char {
         '…' => '.',
         '○' => 'o',
         '●' => '*',
+        '▌' => '|',
+        '█' => '#',
+        '✕' => 'x',
+        '‖' => '=',
+        '◆' => 'O',
+        '◇' => 'P',
+        '≡' => 'A',
+        '▸' | '◂' => '>',
+        '◈' => 'V',
+        '⠋' | '⠙' | '⠹' | '⠸' | '⠼' | '⠴' | '⠦' | '⠧' | '⠇' | '⠏' => '*',
         '✓' => '+',
         '✗' => 'x',
         '⚠' => '!',
@@ -3315,6 +3402,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         conversation: String::new(),
         generation: 0,
         stop_poller: Arc::new(AtomicBool::new(false)),
+        tick: 0,
         view: View::default(),
         input: InputBuffer::with_text(options.message.clone().unwrap_or_default()),
         input_shown: 0,
@@ -3384,6 +3472,10 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         loop {
             while let Ok(update) = received.try_recv() {
                 app.apply_update(update);
+            }
+            app.tick = app.tick.wrapping_add(1);
+            if let Some(plan) = &mut app.plan_view {
+                plan.tick = app.tick;
             }
             terminal.draw(|frame| {
                 app.draw(frame);
@@ -3980,6 +4072,11 @@ pub mod tests {
         // 1. Render App with active progress in wide mode (100x30)
         let mut app = test_app();
         app.view.activity = Some("compiling tests".into());
+        app.view.tasks = vec![view::TaskRow {
+            id: "t1".into(),
+            status: "working".into(),
+            ..view::TaskRow::default()
+        }];
         app.focus = Focus::Graph;
         app.selected = ORCHESTRATOR.into();
 
@@ -4012,6 +4109,7 @@ pub mod tests {
         // When compute_progress_overlay returns None, App::draw hides the overlay
         let mut app_compact = test_app();
         app_compact.view.activity = Some("very long activity line".into());
+        app_compact.view.tasks = app.view.tasks.clone();
         app_compact.focus = Focus::Graph;
 
         // Create a fake test terminal where inner area forces collision
@@ -4027,5 +4125,67 @@ pub mod tests {
         let tiny_text: String = tiny_buf.content.iter().map(|c| c.symbol()).collect();
         // Even at 60x12 in graph focus, orchestrator node remains visible
         assert!(tiny_text.contains("orchestrator") || tiny_text.contains(ORCHESTRATOR));
+    }
+
+    #[test]
+    fn the_plan_opens_from_every_panel_and_rejecting_asks_for_a_reason() {
+        let mut app = test_app();
+        app.view.plan = Some("p1".into());
+        app.view.tasks = vec![view::TaskRow {
+            id: "t1".into(),
+            status: "proposed".into(),
+            ..view::TaskRow::default()
+        }];
+        app.key(key_ctrl('l'));
+        assert!(
+            app.plan_view.is_some(),
+            "Ctrl+L opens the plan from the chat"
+        );
+        app.plan_view = None;
+        // Even with the cursor in the draft, the shortcut does not type.
+        app.input.insert_char('x');
+        app.key(key_ctrl('l'));
+        assert!(app.plan_view.is_some());
+        assert_eq!(app.input.text, "x");
+
+        app.handle_plan_action(PlanAction::Reject);
+        let editor = app.editor.as_ref().expect("a reason editor opens");
+        assert_eq!(editor.target, "reject:p1");
+        // An empty reason may be submitted; the plan view closes.
+        app.submit_comment();
+        assert!(app.plan_view.is_none());
+        assert!(app.editor.is_none());
+
+        // Nothing to reject once the plan is decided.
+        let mut decided = test_app();
+        decided.view.plan = Some("p1".into());
+        decided.handle_plan_action(PlanAction::Reject);
+        assert!(decided.editor.is_none());
+    }
+
+    #[test]
+    fn the_narrow_header_keeps_a_clickable_plan_button() {
+        for width in [50, 70, 94] {
+            let line = render_header(
+                "p",
+                "conversation-id",
+                Some(false),
+                "ready",
+                PanelFocus::Chat,
+                width,
+            );
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(text.contains("[Plan]"), "{width}: {text}");
+        }
+        let wide = render_header(
+            "p",
+            "conversation-id",
+            Some(false),
+            "ready",
+            PanelFocus::Chat,
+            120,
+        );
+        let text: String = wide.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text.matches("[Plan]").count(), 1);
     }
 }

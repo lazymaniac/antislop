@@ -11,6 +11,9 @@ pub struct TaskSpec {
     pub id: String,
     pub title: String,
     pub goal: String,
+    /// One concise sentence describing the worker's task on the graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     /// Optional section heading in the plan document that this task implements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
@@ -30,6 +33,9 @@ pub struct TaskSpec {
 #[serde(deny_unknown_fields)]
 pub struct VerifierSpec {
     pub focus: String,
+    /// One concise sentence describing what the verifier checks on the graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     #[serde(default)]
     pub risks: Vec<String>,
 }
@@ -459,9 +465,25 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
             depends_on.extend(gates.iter().cloned());
         }
         gates.push(id.clone());
+        let (summary, verifier_summary) = match agent.kind {
+            WorkKind::StaticAnalysis => (
+                "Check formatting, compilation and lint warnings.",
+                "Verify that all static checks passed without warnings.",
+            ),
+            WorkKind::Testing => (
+                "Run regression tests and exercise relevant edge cases.",
+                "Verify test results and coverage of the changed behavior.",
+            ),
+            WorkKind::Integration => (
+                "Check the combined change against every requirement.",
+                "Verify integration results and delivery of all requirements.",
+            ),
+            _ => (agent.title, agent.focus),
+        };
         tasks.push(TaskSpec {
             id,
             title: agent.title.to_owned(),
+            summary: Some(summary.to_owned()),
             goal: format!(
                 "Required quality gate for the whole change: {}. Report every problem \
                  found with evidence; fix only what is needed to pass the gate.",
@@ -476,6 +498,7 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
             kind: agent.kind,
             verifier: VerifierSpec {
                 focus: agent.focus.to_owned(),
+                summary: Some(verifier_summary.to_owned()),
                 risks: Vec::new(),
             },
         });
@@ -663,11 +686,18 @@ pub fn orchestrator_instructions() -> String {
          block mapping tasks to those sections:\n\
          ```plan\n\
          {{\"tasks\":[{{\"id\":\"t1\",\"title\":\"short title\",\"section\":\"Section heading in the plan\",\
+         \"summary\":\"one short sentence summarizing what the worker will do\",\
          \"goal\":\"what to achieve and report, and how to tell it is done\",\
          \"scope\":[\"paths relative to the project, or absolute paths of related projects or services\"],\
          \"writes\":false,\"depends_on\":[],\"kind\":\"analysis\",\
-         \"verifier\":{{\"focus\":\"what the verifier must check\",\"risks\":[\"risks specific to this task's domain\"]}}}}]}}\n\
+         \"verifier\":{{\"summary\":\"one short sentence summarizing what to verify\",\"focus\":\"what the verifier must check\",\"risks\":[\"risks specific to this task's domain\"]}}}}]}}\n\
          ```\n\
+         For tasks you author, write both `summary` fields in the user's language. \
+         Standard descriptions of built-in roles and automatically added quality gates \
+         may use the interface language. Each summary is one concise semantic sentence \
+         of about 60–80 characters. Describe the worker's action and \
+         the verifier's check; do not copy the first sentence of the goal or focus. \
+         Keep the full instructions in `goal` and `verifier.focus`.\n\n\
          Each task gets a worker that reads the files itself (give scope, not \
          content) and a verifier that checks the worker's result. Give each \
          verifier only the risks relevant to its own task. `kind` is one of: {}. \
@@ -1052,7 +1082,11 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      the same files or contract are not unordered); no ordering or intermediate \
      state is assumed that the system does not guarantee; no unknown that \
      matters is assumed instead of being established first; each goal is \
-     checkable; scope names the places that matter, including related projects \
+     checkable; both task.summary and verifier.summary are concise single-sentence \
+     semantic summaries (about 60–80 characters), rather than the first sentence \
+     of goal or focus; summaries authored by the orchestrator use the user's language, \
+     while standard descriptions of built-in roles and automatically added quality gates \
+     may use the interface language; scope names the places that matter, including related projects \
      or services; tasks that change files are marked `writes`; key quality and \
      verification agents from the predefined pool are included so touched code \
      is left in a better state; each verifier's focus and risks fit its own task. ";
@@ -1179,6 +1213,68 @@ mod tests {
         assert_eq!(plan.len(), 2);
         assert_eq!(plan[1].depends_on, ["t1"]);
         assert!(!plan[0].writes);
+    }
+
+    #[test]
+    fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
+        let base = serde_json::json!({
+            "id": "t1", "title": "Storage", "goal": "A detailed storage analysis.",
+            "kind": "analysis", "verifier": {"focus": "Check the analysis in detail."}
+        });
+        let parse = |task: &Value| {
+            parse_plan(&format!(
+                "```plan\n{}\n```",
+                serde_json::json!({"tasks": [task]})
+            ))
+            .1
+            .unwrap()
+        };
+        let legacy = parse(&base).unwrap();
+        assert!(legacy[0].summary.is_none());
+        assert!(legacy[0].verifier.summary.is_none());
+        let legacy_json = serde_json::to_value(&legacy[0]).unwrap();
+        assert!(legacy_json.get("summary").is_none());
+        assert!(legacy_json["verifier"].get("summary").is_none());
+        for summary in [
+            Value::Null,
+            Value::String(" \n\t ".into()),
+            Value::String("Oceń zapis danych.".into()),
+        ] {
+            let mut spec = base.clone();
+            spec["summary"] = summary.clone();
+            spec["verifier"]["summary"] = summary.clone();
+            let tasks = parse(&spec).unwrap();
+            assert_eq!(tasks[0].summary, summary.as_str().map(str::to_owned));
+            assert_eq!(tasks[0].verifier.summary, tasks[0].summary);
+            let roundtrip: TaskSpec =
+                serde_json::from_value(serde_json::to_value(&tasks[0]).unwrap()).unwrap();
+            assert_eq!(roundtrip, tasks[0]);
+        }
+        let mut unknown = base.clone();
+        unknown["summery"] = Value::String("typo".into());
+        assert!(parse(&unknown).is_err());
+        unknown = base.clone();
+        unknown["verifier"]["summery"] = Value::String("typo".into());
+        assert!(parse(&unknown).is_err());
+    }
+
+    #[test]
+    fn automatically_added_quality_gates_have_distinct_concise_summaries() {
+        let task: TaskSpec = serde_json::from_value(serde_json::json!({
+            "id": "t1", "title": "Change storage", "goal": "Implement and document the change.",
+            "kind": "implementation", "writes": true, "verifier": {"focus": "Check the storage change."}
+        })).unwrap();
+        let full = with_required_agents(vec![task]);
+        assert_eq!(full.len(), 4);
+        for task in &full[1..] {
+            let summary = task.summary.as_deref().unwrap();
+            let verifier_summary = task.verifier.summary.as_deref().unwrap();
+            assert!(!summary.is_empty() && summary.len() <= 80);
+            assert!(!verifier_summary.is_empty() && verifier_summary.len() <= 80);
+            assert_ne!(summary, verifier_summary);
+            assert_ne!(summary, task.goal);
+            assert_ne!(verifier_summary, task.verifier.focus);
+        }
     }
 
     #[test]

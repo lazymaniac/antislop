@@ -15,6 +15,7 @@ pub enum ProviderKind {
     Codex,
     Claude,
     Gemini,
+    Opencode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -104,7 +105,7 @@ impl ProviderKind {
     /// Built-in reasoning effort scale for each supported CLI.
     pub fn native_effort(self, effort: Effort) -> Option<&'static str> {
         match self {
-            Self::Codex | Self::Agy | Self::Claude => Some(match effort {
+            Self::Codex | Self::Agy | Self::Claude | Self::Opencode => Some(match effort {
                 Effort::Light => "low",
                 Effort::Standard => "medium",
                 Effort::Deep => "high",
@@ -584,5 +585,39 @@ mod tests {
             1,
         );
         assert!(Config::from_toml(&text).is_err());
+    }
+
+    #[test]
+    fn local_workers_and_verifiers_use_opencode_through_omlx() {
+        let config = Config::from_toml(include_str!("../architect.toml")).unwrap();
+        let orchestrator = config
+            .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
+            .unwrap();
+        assert_eq!(orchestrator.provider, ProviderKind::Codex);
+        for kind in config.routing.keys() {
+            for role in [RoleKind::Executor, RoleKind::Verifier] {
+                if *kind == WorkKind::Orchestration && role == RoleKind::Executor {
+                    continue;
+                }
+                let profile = config.resolve(*kind, role).unwrap();
+                assert_eq!(profile.provider, ProviderKind::Opencode);
+                assert_eq!(profile.binary, PathBuf::from("omlx"));
+                assert_eq!(
+                    profile.args,
+                    [
+                        "launch",
+                        "opencode",
+                        "--model",
+                        "Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp",
+                        "--"
+                    ]
+                );
+                assert_eq!(
+                    profile.model.as_deref(),
+                    Some("omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp")
+                );
+                assert_eq!(profile.native_effort.as_deref(), Some("high"));
+            }
+        }
     }
 }

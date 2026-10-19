@@ -1,4 +1,4 @@
-# Local routing: Codex orchestrates; Antigravity executes and verifies.
+# Local routing: Codex orchestrates; OpenCode via oMLX executes and verifies.
 schema_version = 1
 
 [workspace]
@@ -19,10 +19,14 @@ isolation = "read_only"
 binary = "/Users/sebastian/.local/bin/agy"
 isolation = "tool_free"
 
+[providers.opencode]
+command = ["omlx", "launch", "opencode", "--model", "Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp", "--"]
+isolation = "read_only"
+
 [role_providers]
 orchestrator = ["codex"]
-executor = ["agy"]
-verifier = ["agy"]
+executor = ["opencode"]
+verifier = ["opencode"]
 
 [profiles.orchestrator]
 provider = "codex"
@@ -31,22 +35,22 @@ work_kinds = ["orchestration"]
 roles = ["orchestrator"]
 
 [profiles.reasoning]
-provider = "agy"
-model = "gemini-3.8-flash-high"
+provider = "opencode"
+model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
 effort = "deep"
 work_kinds = ["context", "requirements", "options", "planning", "architecture", "dependencies", "security", "performance", "analysis"]
 roles = ["executor"]
 
 [profiles.execution]
-provider = "agy"
-model = "gemini-3.8-flash-high"
+provider = "opencode"
+model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
 effort = "deep"
 work_kinds = ["implementation", "refactoring", "static_analysis", "test_design", "testing", "integration", "research", "writing", "delivery"]
 roles = ["executor"]
 
 [profiles.review]
-provider = "agy"
-model = "gemini-3.8-flash-high"
+provider = "opencode"
+model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
 effort = "deep"
 work_kinds = ["orchestration", "context", "requirements", "options", "planning", "architecture", "dependencies", "implementation", "refactoring", "static_analysis", "test_design", "testing", "security", "performance", "integration", "research", "writing", "analysis", "delivery"]
 roles = ["verifier"]

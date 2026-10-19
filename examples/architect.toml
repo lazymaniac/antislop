@@ -1,6 +1,6 @@
 # Example: Codex orchestrates; Antigravity (agy) works and verifies.
 # Copy to your project as architect.toml and adjust binaries and models.
-# Supported CLIs: codex, agy, claude, gemini. Each task kind names a worker profile
+# Supported CLIs: codex, agy, claude, gemini, opencode. Each task kind names a worker profile
 # and a verifier profile; every verifier gets its own session.
 schema_version = 1
 
@@ -33,6 +33,14 @@ isolation = "read_only"
 [providers.agy]
 binary = "agy"
 isolation = "tool_free"
+
+# To use OpenCode via oMLX, configure this provider and set worker/verifier
+# profile providers and role_providers to "opencode". Pin --model to avoid
+# the launcher's interactive model picker; -- forwards the remaining CLI flags.
+# [providers.opencode]
+# command = ["omlx", "launch", "opencode", "--model", "YOUR_MODEL", "--"]
+# isolation = "read_only"
+# Set profile model = "omlx/YOUR_MODEL" to pin the OpenCode model per turn.
 
 [role_providers]
 orchestrator = ["codex"]

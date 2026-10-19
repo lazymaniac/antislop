@@ -114,6 +114,7 @@ pub fn run(
         }
     });
     let mut parser = Parser::new(spec.provider);
+    let mut diagnostics = String::new();
     let mut exited: Option<std::time::Instant> = None;
     loop {
         if cancel.load(Ordering::SeqCst) {
@@ -131,6 +132,9 @@ pub fn run(
         match received.recv_timeout(Duration::from_millis(100)) {
             Ok(line) => {
                 let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                    // Launchers such as oMLX also report startup failures on
+                    // stdout. Preserve a bounded tail when no result arrives.
+                    diagnostics = tail(&format!("{diagnostics}\n{line}"), 2000);
                     continue;
                 };
                 for event in parser.feed(&value) {
@@ -146,6 +150,11 @@ pub fn run(
     // SAFETY: signals the process group this runtime created for the turn.
     unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
     let stderr = errors.join().unwrap_or_default();
+    let stderr = if stderr.trim().is_empty() {
+        diagnostics
+    } else {
+        stderr
+    };
     match parser.finish() {
         Finish::Done(text) if status.success() => Ok(Outcome {
             session: parser.session,
@@ -277,8 +286,63 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
             }
             command.arg("-p").arg(prompt);
         }
+        ProviderKind::Opencode => {
+            // A dedicated primary agent prevents user-defined build/plan agents
+            // from overriding this turn's permissions. Keep inline provider
+            // configuration (including launcher configuration) intact.
+            let mut config = match std::env::var("OPENCODE_CONFIG_CONTENT") {
+                Ok(text) => serde_json::from_str::<Value>(&text).map_err(|error| {
+                    Error::Invalid(format!("invalid OPENCODE_CONFIG_CONTENT: {error}"))
+                })?,
+                Err(std::env::VarError::NotPresent) => serde_json::json!({}),
+                Err(error) => return Err(Error::Invalid(error.to_string())),
+            };
+            require_object(&mut config, "OPENCODE_CONFIG_CONTENT")?;
+            let agents = config
+                .as_object_mut()
+                .expect("checked object")
+                .entry("agent")
+                .or_insert_with(|| serde_json::json!({}));
+            require_object(agents, "OpenCode agent configuration")?;
+            let mut permission = serde_json::json!({
+                "*": if read_only { "deny" } else { "allow" },
+                "read": "allow", "glob": "allow", "grep": "allow",
+                "list": "allow", "webfetch": "allow", "websearch": "allow",
+                "task": "deny", "question": "deny",
+                "plan_enter": "deny", "plan_exit": "deny",
+                "external_directory": { "*": "deny" }
+            });
+            for dir in &spec.add_dirs {
+                permission["external_directory"][format!("{}/*", dir.display())] =
+                    Value::String("allow".into());
+            }
+            agents["antislop"] = serde_json::json!({
+                "description": "Antislop managed agent",
+                "mode": "primary",
+                "permission": permission
+            });
+            command.env("OPENCODE_CONFIG_CONTENT", config.to_string());
+            command.args(["run", "--format", "json", "--agent", "antislop"]);
+            if let Some(session) = &spec.resume {
+                command.arg("--session").arg(session);
+            }
+            if let Some(model) = &spec.model {
+                command.arg("--model").arg(model);
+            }
+            if let Some(effort) = &spec.effort {
+                command.arg("--variant").arg(effort);
+            }
+            command.arg("--").arg(prompt);
+        }
     }
     Ok(command)
+}
+
+fn require_object(value: &mut Value, name: &str) -> Result<()> {
+    if !value.is_object() {
+        return Err(Error::Invalid(format!("{name} must be a JSON object")));
+    }
+    Ok(())
 }
 
 fn model_args(command: &mut Command, spec: &Spec, model_flag: &str, effort_key: &str) {
@@ -369,6 +433,7 @@ pub fn name(provider: ProviderKind) -> &'static str {
         ProviderKind::Codex => "codex",
         ProviderKind::Claude => "claude",
         ProviderKind::Gemini => "gemini",
+        ProviderKind::Opencode => "opencode",
     }
 }
 
@@ -429,6 +494,7 @@ impl Parser {
             ProviderKind::Agy => self.agy(line, &mut events),
             ProviderKind::Claude => self.claude(line, &mut events),
             ProviderKind::Gemini => self.gemini(line, &mut events),
+            ProviderKind::Opencode => self.opencode(line, &mut events),
         }
         events
     }
@@ -637,7 +703,73 @@ impl Parser {
             _ => {}
         }
     }
+    fn opencode(&mut self, line: &Value, events: &mut Vec<Event>) {
+        self.session(line["sessionID"].as_str(), events);
+        let part = &line["part"];
+        match line["type"].as_str().unwrap_or_default() {
+            "step_start" => {
+                // Each model step can contain commentary before tool calls.
+                // Only the final step is the answer to the runtime protocol.
+                self.text.clear();
+                self.finish = None;
+            }
+            "text" => {
+                if let Some(text) = part["text"].as_str() {
+                    self.text.push_str(text);
+                    events.push(Event::Text { delta: text.into() });
+                }
+            }
+            "tool_use" => {
+                let input = &part["state"]["input"];
+                let detail = input["command"]
+                    .as_str()
+                    .or(input["filePath"].as_str())
+                    .or_else(|| input.as_object()?.values().find_map(Value::as_str))
+                    .unwrap_or_default();
+                events.push(Event::Tool {
+                    name: part["tool"].as_str().unwrap_or("tool").into(),
+                    detail: short(detail),
+                });
+            }
+            "step_finish" => {
+                let tokens = &part["tokens"];
+                let cached = ["read", "write"]
+                    .iter()
+                    .filter_map(|key| tokens["cache"][*key].as_u64())
+                    .sum::<u64>();
+                events.push(Event::Usage {
+                    input: tokens["input"].as_u64().map(|input| input + cached),
+                    output: tokens["output"].as_u64(),
+                });
+                self.finish = match part["reason"].as_str() {
+                    Some("stop") => Some(Ok(self.text.clone())),
+                    Some("tool-calls") => None,
+                    Some(reason) => Some(Err(Error::Invalid(format!(
+                        "opencode: step ended with {reason}"
+                    )))),
+                    None => None,
+                };
+            }
+            "error" => {
+                let error = &line["error"];
+                let message = error["data"]["message"]
+                    .as_str()
+                    .or(error["message"].as_str())
+                    .or(error.as_str())
+                    .or(error["name"].as_str())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| error.to_string());
+                self.error = Some(format!("opencode: {message}"));
+            }
+            _ => {}
+        }
+    }
     fn finish(&mut self) -> Finish {
+        if self.provider == ProviderKind::Opencode
+            && let Some(error) = self.error.take()
+        {
+            return Finish::Failed(error);
+        }
         match self.finish.take() {
             Some(Ok(text)) => Finish::Done(text),
             Some(Err(error)) => Finish::Failed(error.to_string()),
@@ -757,6 +889,167 @@ mod tests {
         assert!(matches!(&events[1], Event::Tool { name, .. } if name == "bash"));
         assert!(
             matches!(parser.finish(), Finish::Failed(error) if error.contains("quota exceeded"))
+        );
+    }
+
+    #[test]
+    fn opencode_keeps_only_the_final_step_and_reports_usage() {
+        let (events, mut parser) = feed(
+            ProviderKind::Opencode,
+            &[
+                json!({"type":"step_start","sessionID":"ses_1"}),
+                json!({"type":"text","sessionID":"ses_1","part":{"text":"Checking files."}}),
+                json!({"type":"tool_use","sessionID":"ses_1","part":{"tool":"read","state":{"status":"completed","input":{"filePath":"src/lib.rs"}}}}),
+                json!({"type":"step_finish","part":{"reason":"tool-calls","tokens":{"input":10,"output":2,"cache":{"read":5,"write":3}}}}),
+                json!({"type":"step_start","sessionID":"ses_1"}),
+                json!({"type":"text","part":{"text":"{\"approved\":"}}),
+                json!({"type":"text","part":{"text":"true}"}}),
+                json!({"type":"step_finish","part":{"reason":"stop","tokens":{"input":20,"output":4}}}),
+            ],
+        );
+        assert_eq!(events[0], Event::Session { id: "ses_1".into() });
+        assert_eq!(
+            events[2],
+            Event::Tool {
+                name: "read".into(),
+                detail: "src/lib.rs".into()
+            }
+        );
+        assert_eq!(
+            events[3],
+            Event::Usage {
+                input: Some(18),
+                output: Some(2)
+            }
+        );
+        assert_eq!(
+            events.last(),
+            Some(&Event::Usage {
+                input: Some(20),
+                output: Some(4)
+            })
+        );
+        assert!(matches!(parser.finish(), Finish::Done(text) if text == "{\"approved\":true}"));
+    }
+
+    #[test]
+    fn opencode_does_not_accept_errors_or_incomplete_steps_as_success() {
+        for reason in ["tool-calls", "length"] {
+            let (_, mut parser) = feed(
+                ProviderKind::Opencode,
+                &[
+                    json!({"type":"text","part":{"text":"partial"}}),
+                    json!({"type":"step_finish","part":{"reason":reason}}),
+                ],
+            );
+            assert!(!matches!(parser.finish(), Finish::Done(_)));
+        }
+        for lines in [
+            vec![json!({"type":"text","part":{"text":"partial"}})],
+            vec![json!({"type":"step_start"})],
+        ] {
+            let (_, mut parser) = feed(ProviderKind::Opencode, &lines);
+            assert!(matches!(parser.finish(), Finish::Missing));
+        }
+        let (_, mut parser) = feed(
+            ProviderKind::Opencode,
+            &[
+                json!({"type":"step_finish","part":{"reason":"stop"}}),
+                json!({"type":"error","sessionID":"ses_2","error":{"name":"APIError","data":{"message":"model not found"}}}),
+                json!({"type":"step_finish","part":{"reason":"stop"}}),
+            ],
+        );
+        assert!(
+            matches!(parser.finish(), Finish::Failed(error) if error == "opencode: model not found")
+        );
+    }
+
+    #[test]
+    fn opencode_launcher_runs_and_resumes_with_role_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("omlx");
+        std::fs::write(
+            &script,
+            r##"#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+assert args[:6] == ['launch', 'opencode', '--model', 'local-model', '--', 'run'], args
+assert args[6:10] == ['--format', 'json', '--agent', 'antislop'], args
+assert args[-2:] == ['--', '--prompt with flags and unicode: żółw 👩‍💻'], args
+assert args[args.index('--model', 6) + 1] == 'omlx/local-model', args
+assert args[args.index('--variant') + 1] == 'high', args
+permission = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])['agent']['antislop']['permission']
+assert permission['task'] == 'deny'
+assert permission['external_directory']['*'] == 'deny'
+if '--session' in args:
+    assert args[args.index('--session') + 1] == 'ses_test', args
+    assert permission['*'] == 'deny', permission
+    assert permission['read'] == 'allow', permission
+    assert permission['external_directory']['/extra scope/*'] == 'allow', permission
+else:
+    assert permission['*'] == 'allow', permission
+print(json.dumps({'type':'step_start', 'sessionID':'ses_test'}))
+print(json.dumps({'type':'text', 'part':{'text':'done'}}))
+print(json.dumps({'type':'step_finish', 'part':{'reason':'stop'}}))
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut spec = Spec {
+            provider: ProviderKind::Opencode,
+            binary: script,
+            args: ["launch", "opencode", "--model", "local-model", "--"]
+                .map(str::to_owned)
+                .to_vec(),
+            model: Some("omlx/local-model".into()),
+            effort: Some("high".into()),
+            cwd: dir.path().into(),
+            add_dirs: vec![],
+            access: Access::Write,
+            resume: None,
+        };
+        let prompt = "--prompt with flags and unicode: żółw 👩‍💻";
+        let outcome = run(&spec, prompt, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        assert_eq!(outcome.text, "done");
+        assert_eq!(outcome.session.as_deref(), Some("ses_test"));
+        spec.resume = outcome.session;
+        spec.access = Access::ReadOnly;
+        spec.add_dirs = vec!["/extra scope".into()];
+        assert_eq!(
+            run(&spec, prompt, &AtomicBool::new(false), &mut |_| {})
+                .unwrap()
+                .text,
+            "done"
+        );
+    }
+
+    #[test]
+    fn launcher_stdout_failures_are_actionable() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("omlx");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho 'oMLX server is not running at http://127.0.0.1:8000'\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let spec = Spec {
+            provider: ProviderKind::Opencode,
+            binary: script,
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: dir.path().into(),
+            add_dirs: vec![],
+            access: Access::ReadOnly,
+            resume: None,
+        };
+        let error = run(&spec, "hi", &AtomicBool::new(false), &mut |_| {}).unwrap_err();
+        assert!(
+            error.to_string().contains("oMLX server is not running"),
+            "{error}"
         );
     }
 

@@ -19,3 +19,12 @@ TODO list:
 - [x] funkcjonalnosc eksportu powinna zostac usunieta.
 - [x] UI musi wspierac myszke / touchpad.
 - [x] Dodac mozliwosc pracy nad kilkoma projektami na raz.
+- [ ] okno z planem projektu nie zawija wierszy i nie da sie przeczytac dlugich linii tekstu. Trzeba dodac word wrap.
+- [ ] Agent ktory ma problem powinien zostac oznaczone kolorem czerwonym
+- [ ] Aplikacja powinna udostepnic mechanizm odblokowywania krokow miedzy agentami kiedy jest jakis problem ktory bolkuje ppstep prac.
+- [ ] W widoku sesji w szczegolach agenta nie widac wszystkich wiadomosci wyslanych do i od agenta. Brak np wpisow reasoning. Terminal takze nie wyglada jak originalna aplikacja.
+- [ ] W widoku szczegolow agenta powinny wyswietalc sie zakladki ktore maja sens dla danego agenta.
+- [ ] Agenci w widoku grafu powinni miec zaimplementowany color coding tak zeby mozna bylo ich latwo rozroznic.
+- [ ] Brakuje uzycia ikonek, loaderow tak zeby uzytkownik mogl wizualnie odroznic rodzaje agentow i czy aktualnie pracuje, czekaja, maja problem itp. Tak samo stan orkiestratora powinien byc aktualizowany w oknie czatu bo teraz po wyslaniu wiadomosci brakuj jakiegokolwiek feedbacku do uzytkownika czy aplikacja cos robi.
+- [ ] W widoku grafu nie chce uzywac ramek wokol kart agentow, samo tlo karty powinno ich odroznic od tla canvasa
+- [ ] orkiestrator powinien reagowac na zmiany stanow w grafie i informowac uzytkownika o pistepach zakonczonych rund w pustaci krtokich komunikatow. problemy ktore boluja pistep rowniez powinny byc raportowane do orliestratora. 

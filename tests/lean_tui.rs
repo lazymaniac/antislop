@@ -124,7 +124,7 @@ fn plan_comments_show_queue_current_id_and_raw_failure_inside_the_plan() {
 }
 
 #[test]
-fn graph_cards_keep_full_specs_graphemes_and_allow_reading_tall_nodes() {
+fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
     use architect::lean::tui::{
         graph::{Canvas, Graph, WIDTH},
         view::{Agent, TaskRow, View},
@@ -134,60 +134,104 @@ fn graph_cards_keep_full_specs_graphemes_and_allow_reading_tall_nodes() {
         id: "t1".into(),
         title: "Full task title".into(),
         status: "working".into(),
-        goal: format!(
-            "{} 👩‍💻 e\u{301} TASK_END",
-            "Long task description ".repeat(35)
-        ),
+        summary: Some("Popraw  zapis\n danych 👩‍💻 e\u{301}.".into()),
+        verifier_summary: Some("Sprawdź poprawność zapisu.".into()),
+        goal: format!("{} TASK_END", "Long task description ".repeat(35)),
         scope: vec!["src/file.rs".into()],
         focus: format!("{} VERIFY_END", "Verify all required behavior ".repeat(12)),
         risks: vec!["RISK_END".into()],
         ..Default::default()
     });
-    view.agents.insert(
-        "worker:t1".into(),
-        Agent {
-            running: true,
-            activity: "exec cargo check".into(),
-            ..Default::default()
-        },
-    );
-    let graph = Graph::new(&view);
-    let worker = graph.node("worker:t1").unwrap();
-    let verifier = graph.node("verifier:t1").unwrap();
-    assert!(verifier.y >= worker.y + worker.height);
-    for (key, end) in [("worker:t1", "TASK_END"), ("verifier:t1", "RISK_END")] {
-        let node = graph.node(key).unwrap();
-        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-        graph.render(&view, &mut canvas, Filter::All, key);
-        let text = canvas.lines().join("\n");
-        assert!(text.contains(end), "full specification must render: {text}");
-        if key == "worker:t1" {
-            assert!(text.contains("👩‍💻"));
-            assert!(text.contains("e\u{301}"));
-            assert!(text.contains("src/file.rs"));
+    for active_role in ["worker", "verifier"] {
+        view.tasks[0].status = if active_role == "worker" {
+            "working"
         } else {
-            assert!(text.contains("VERIFY_END"));
+            "verifying"
+        }
+        .into();
+        view.agents.insert(
+            format!("{active_role}:t1"),
+            Agent {
+                running: true,
+                activity: "exec cargo check".into(),
+                ..Default::default()
+            },
+        );
+        let graph = Graph::new(&view);
+        let worker = graph.node("worker:t1").unwrap();
+        let verifier = graph.node("verifier:t1").unwrap();
+        assert!(verifier.y >= worker.y + worker.height);
+        for key in ["worker:t1", "verifier:t1"] {
+            let node = graph.node(key).unwrap();
+            assert!((4..=7).contains(&node.height));
+            let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+            graph.render(&view, &mut canvas, Filter::All, key);
+            let text = canvas.lines().join("\n");
+            assert!(
+                !text.contains("TASK_END")
+                    && !text.contains("VERIFY_END")
+                    && !text.contains("RISK_END")
+            );
+            assert!(!text.contains("src/file.rs"));
+            assert!(!text.contains("exec cargo check"));
+            if key == "worker:t1" {
+                assert!(text.contains("Popraw zapis"), "{text}");
+                assert!(text.contains("👩‍💻") && text.contains("e\u{301}"), "{text}");
+            } else {
+                assert!(text.contains("Sprawdź poprawność"), "{text}");
+                assert!(text.contains("zapisu."), "{text}");
+            }
+            let mut details = Details::new(key.into());
+            let full = details
+                .lines(&view)
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                full.contains("TASK_END")
+                    && full.contains("VERIFY_END")
+                    && full.contains("src/file.rs")
+            );
+            if key.starts_with("verifier") {
+                assert!(full.contains("RISK_END"));
+            }
+        }
+        for (_, _, path) in graph.edge_routes(Filter::All) {
+            for node in graph.nodes.iter().filter(|node| node.visible) {
+                assert!(!Graph::route_intersects_card(&path, node));
+            }
         }
     }
-    for (_, _, path) in graph.edge_routes(Filter::All) {
-        for node in graph.nodes.iter().filter(|node| node.visible) {
-            assert!(!Graph::route_intersects_card(&path, node));
-        }
-    }
+}
+
+#[test]
+fn graph_scrolls_through_many_short_cards() {
+    use architect::lean::tui::{graph::Graph, view::TaskRow};
     let mut app = App::test_app();
-    app.view = view;
+    app.view.tasks = (0..12)
+        .map(|i| TaskRow {
+            id: format!("t{i}"),
+            title: format!("Task {i}"),
+            summary: Some(format!("Perform task {i}.")),
+            verifier_summary: Some(format!("Check task {i}.")),
+            ..Default::default()
+        })
+        .collect();
     app.focus = Focus::Graph;
-    app.selected = "worker:t1".into();
+    app.selected = "worker:t0".into();
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let start = app.offset.1;
     assert!(app.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)));
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(app.offset.1 > start);
-    for _ in 0..20 {
-        app.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+    for _ in 0..30 {
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
     terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.offset.1 > start);
+    assert_eq!(app.selected, "verifier:t11");
     let text: String = terminal
         .backend()
         .buffer()
@@ -195,7 +239,12 @@ fn graph_cards_keep_full_specs_graphemes_and_allow_reading_tall_nodes() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(text.contains("TASK_END"));
+    assert!(
+        text.contains("Check task 11."),
+        "the final short card must be reachable: {text}"
+    );
+    let graph = Graph::new(&app.view);
+    assert!(graph.nodes.iter().all(|node| node.height <= 7));
     assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
     assert_eq!(app.focus, Focus::Chat);
 }
@@ -4427,6 +4476,9 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
             ..TaskRow::default()
         },
     ];
+    for task in &mut app.view.tasks {
+        task.status = "working".into();
+    }
     app.focus = Focus::Graph;
     app.selected = "worker:t1".into();
 

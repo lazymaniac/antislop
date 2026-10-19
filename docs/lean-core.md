@@ -41,10 +41,25 @@ streams normalized events: `Session(id)`, `Text(delta)`, `Tool{name, detail}`,
 | agy | `-p --output-format stream-json --mode plan` | `--mode accept-edits --sandbox` |
 | claude | `-p --output-format stream-json --permission-mode plan` | `acceptEdits` |
 | gemini | `-p --output-format stream-json --approval-mode plan` | `auto_edit` (no shell, no sandbox) |
+| opencode | `run --format json --agent antislop` (read/search/web tools, no edits or shell) | same transport, editing and shell enabled |
 
 Extra scope directories go through `--add-dir` (gemini: `--include-directories`). Follow-up turns resume the
 CLI's own session (`codex exec resume <id>`, `agy --conversation <id>`,
-`claude --resume <id>`, `gemini --resume <id>`), so earlier context is never re-sent.
+`claude --resume <id>`, `gemini --resume <id>`, `opencode run --session <id>`), so earlier context is never re-sent.
+
+OpenCode uses a dedicated primary agent in `OPENCODE_CONFIG_CONTENT`; other
+inline configuration is preserved. Native `task` subagents and interactive
+questions are denied. Additional scope paths are allowed through its
+`external_directory` permission; other external paths are denied. This is a
+CLI permission policy, not an OS sandbox. Effort maps to `--variant`
+(`low`/`medium`/`high`), whose effect depends on the selected model/provider.
+The JSON parser records session IDs, completed tool calls and per-step token
+usage, and returns only the final model step's text after a `stop` finish.
+Tool-call steps alone, truncated responses and error events do not count as
+successful turns. Provider commands may prefix the transport, for example
+`["omlx", "launch", "opencode", "--model", "MODEL", "--"]`; the profile model
+should then be `omlx/MODEL`. Non-JSON launcher diagnostics are retained in a
+bounded tail so startup failures on stdout remain actionable.
 
 Read-only modes are not a confinement: agy's plan mode was observed running
 `ls ..`. Writes are confined by the worktree and the CLI sandbox; reads are not.
@@ -216,7 +231,11 @@ its report, verdict and commits), `comment{conversation, target, text}`,
 writer's change as files with counts and numbered lines, at most 2 MB of
 patch), `review{conversation, plan, id}` (a code review now), and `events{conversation, after, wait_ms}`,
 a long poll returning at most 500 events / 1 MB. A daemon from another build is
-replaced when idle. The socket is `<state>/core.sock`, or
+replaced when idle. While busy, frontends for the same project and configuration
+path reconnect with a notice; work keeps its original build and configuration
+until it finishes and the frontend is reopened. A busy daemon for another
+project or configuration path cannot be reused; use a separate `--state`
+directory to run both. The socket is `<state>/core.sock`, or
 `/tmp/antislop-<uid>/<hash>.sock` when that path is too long for Unix sockets.
 
 - `antislop chat` in a terminal opens the TUI on the project's latest

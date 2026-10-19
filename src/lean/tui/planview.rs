@@ -61,8 +61,19 @@ pub struct DocLine {
     pub task_id: Option<String>,
     /// Whether this line is a Markdown heading.
     pub is_heading: bool,
-    /// Whether the section/task for this line is completed (`approved`).
-    pub completed: bool,
+    /// How the tasks of this line's section are doing.
+    pub state: SectionState,
+}
+
+/// The combined state of the tasks assigned to a plan section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectionState {
+    /// No task is assigned, or none has started.
+    Open,
+    Working,
+    Problem,
+    /// Every assigned task is approved.
+    Done,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +86,21 @@ pub struct PlanView {
     pub button_rects: [Rect; 3],
     /// Inner document area for mouse line selection.
     pub doc_area: Rect,
+    /// The document line each screen row belongs to, from the last draw.
+    pub row_docs: Vec<Option<usize>>,
+    /// Accept was activated once from its button; a second activation accepts.
+    pub confirm_accept: bool,
+    /// Advances the in-progress spinner; the app sets it before drawing.
+    pub tick: u64,
+}
+
+/// Columns taken by the line number and its separator.
+const GUTTER: usize = 7;
+
+struct VisualRow {
+    /// The document line the row shows or comments on.
+    doc: Option<usize>,
+    line: Line<'static>,
 }
 
 impl PlanView {
@@ -83,9 +109,12 @@ impl PlanView {
             plan_id,
             cursor: 0,
             scroll: 0,
-            button: BottomButton::Accept,
+            button: BottomButton::CommentWholePlan,
             button_rects: [Rect::default(); 3],
             doc_area: Rect::default(),
+            row_docs: Vec::new(),
+            confirm_accept: false,
+            tick: 0,
         }
     }
 
@@ -100,33 +129,32 @@ impl PlanView {
 
         let mut lines = Vec::new();
         let mut current_section: Option<String> = None;
-        let mut current_task_id: Option<String> = None;
+        let mut current_level = 0;
+        let mut current_tasks: Vec<String> = Vec::new();
 
         for (idx, raw_line) in raw_doc.lines().enumerate() {
             let line_no = idx + 1;
             let trimmed = raw_line.trim();
             let is_heading = trimmed.starts_with('#');
             if is_heading {
+                let level = trimmed.chars().take_while(|ch| *ch == '#').count();
                 let heading_text = trimmed.trim_start_matches('#').trim();
-                current_section = Some(heading_text.to_owned());
-                current_task_id = extract_bracket_task_id(heading_text, &view.tasks);
-            } else if let Some(tid) = extract_line_task_id(trimmed, &view.tasks) {
-                current_task_id = Some(tid);
+                let matched = section_tasks(heading_text, &view.tasks);
+                // A subheading without tasks of its own stays in its section.
+                if !matched.is_empty() || level <= current_level || current_section.is_none() {
+                    current_tasks = matched;
+                    current_section = Some(heading_text.to_owned());
+                    current_level = level;
+                }
             }
-
-            let completed = is_section_or_task_completed(
-                current_section.as_deref(),
-                current_task_id.as_deref(),
-                &view.tasks,
-            );
 
             lines.push(DocLine {
                 number: line_no,
                 text: clean(raw_line),
                 section: current_section.clone(),
-                task_id: current_task_id.clone(),
+                task_id: current_tasks.first().cloned(),
                 is_heading,
-                completed,
+                state: section_state(&current_tasks, &view.tasks),
             });
         }
 
@@ -137,7 +165,7 @@ impl PlanView {
                 section: None,
                 task_id: None,
                 is_heading: true,
-                completed: false,
+                state: SectionState::Open,
             });
         }
         lines
@@ -173,10 +201,16 @@ impl PlanView {
         let max_cursor = lines.len().saturating_sub(1);
         self.cursor = self.cursor.min(max_cursor);
 
+        // Only a proposed plan can be accepted or rejected; otherwise the
+        // view is a document to read and comment on.
+        let decidable = view.plan_proposed();
+        let confirming = std::mem::take(&mut self.confirm_accept);
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('a') => return PlanAction::Accept,
-                KeyCode::Char('x') | KeyCode::Char('r') => return PlanAction::Reject,
+                KeyCode::Char('a') if decidable => return PlanAction::Accept,
+                KeyCode::Char('x') | KeyCode::Char('r') if decidable => {
+                    return PlanAction::Reject;
+                }
                 _ => {}
             }
         }
@@ -215,8 +249,8 @@ impl PlanView {
                 self.button = self.button.prev();
                 PlanAction::None
             }
-            KeyCode::Char('a') | KeyCode::Char('1') => PlanAction::Accept,
-            KeyCode::Char('x') | KeyCode::Char('2') => PlanAction::Reject,
+            KeyCode::Char('a') | KeyCode::Char('1') if decidable => PlanAction::Accept,
+            KeyCode::Char('x') | KeyCode::Char('2') if decidable => PlanAction::Reject,
             KeyCode::Char('C') | KeyCode::Char('3') => PlanAction::CommentWholePlan,
             KeyCode::Char('c') => {
                 let line_no = self.cursor + 1;
@@ -236,12 +270,17 @@ impl PlanView {
                     .into_iter()
                     .find(|c| c.status == "open")
                     .or_else(|| self.line_comments(view, line_no).into_iter().next())
+                    // Whole-plan comments are listed at the top of the document.
                     .or_else(|| {
-                        self.whole_plan_comments(view)
-                            .into_iter()
-                            .find(|c| c.status == "open")
+                        (self.cursor == 0)
+                            .then(|| {
+                                self.whole_plan_comments(view)
+                                    .into_iter()
+                                    .find(|c| c.status == "open")
+                                    .or_else(|| self.whole_plan_comments(view).into_iter().next())
+                            })
+                            .flatten()
                     })
-                    .or_else(|| self.whole_plan_comments(view).into_iter().next())
                 {
                     let next_status = if ch == 'o' {
                         "open".to_owned()
@@ -258,37 +297,177 @@ impl PlanView {
                     PlanAction::None
                 }
             }
-            KeyCode::Enter => match self.button {
-                BottomButton::Accept => PlanAction::Accept,
-                BottomButton::Reject => PlanAction::Reject,
-                BottomButton::CommentWholePlan => PlanAction::CommentWholePlan,
-            },
+            KeyCode::Enter => self.activate(self.button, decidable, confirming),
             _ => PlanAction::None,
+        }
+    }
+
+    /// A button was pressed: Accept asks for a second press first.
+    fn activate(&mut self, button: BottomButton, decidable: bool, confirming: bool) -> PlanAction {
+        match button {
+            BottomButton::Accept if !decidable => PlanAction::None,
+            BottomButton::Accept if confirming => PlanAction::Accept,
+            BottomButton::Accept => {
+                self.confirm_accept = true;
+                PlanAction::None
+            }
+            BottomButton::Reject if decidable => PlanAction::Reject,
+            BottomButton::Reject => PlanAction::None,
+            BottomButton::CommentWholePlan => PlanAction::CommentWholePlan,
         }
     }
 
     /// Handle mouse click at `(col, row)`.
     pub fn mouse_click(&mut self, col: u16, row: u16, view: &View) -> PlanAction {
         let pos = ratatui::layout::Position::new(col, row);
-        if self.button_rects[0].contains(pos) {
-            self.button = BottomButton::Accept;
-            return PlanAction::Accept;
-        }
-        if self.button_rects[1].contains(pos) {
-            self.button = BottomButton::Reject;
-            return PlanAction::Reject;
-        }
-        if self.button_rects[2].contains(pos) {
-            self.button = BottomButton::CommentWholePlan;
-            return PlanAction::CommentWholePlan;
+        let decidable = view.plan_proposed();
+        let confirming = std::mem::take(&mut self.confirm_accept);
+        for (rect, button) in self.button_rects.into_iter().zip([
+            BottomButton::Accept,
+            BottomButton::Reject,
+            BottomButton::CommentWholePlan,
+        ]) {
+            if rect.contains(pos) {
+                self.button = button;
+                return self.activate(button, decidable, confirming);
+            }
         }
         if self.doc_area.contains(pos) {
-            let lines = self.build_lines(view);
-            let rel_y = (row.saturating_sub(self.doc_area.y)) as usize;
-            let idx = (self.scroll + rel_y).min(lines.len().saturating_sub(1));
-            self.cursor = idx;
+            let rel_y = usize::from(row.saturating_sub(self.doc_area.y));
+            if let Some(Some(idx)) = self.row_docs.get(self.scroll + rel_y) {
+                self.cursor = (*idx).min(self.build_lines(view).len().saturating_sub(1));
+            }
         }
         PlanAction::None
+    }
+
+    /// The document as screen rows: long lines are word-wrapped, and the
+    /// comments follow the line they are on. Returns the rows and the
+    /// first and last row of the cursor's line.
+    fn layout_rows(
+        &self,
+        view: &View,
+        doc_lines: &[DocLine],
+        width: u16,
+        theme: &Theme,
+    ) -> (Vec<VisualRow>, (usize, usize)) {
+        let width = usize::from(width);
+        let text_width = width.saturating_sub(GUTTER).max(1);
+        let comment_style = |c: &Comment| {
+            if c.status == "open" {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                theme.dim()
+            }
+        };
+        let comment_rows = |c: &Comment, indent: &str| {
+            let badge = view.comment_state(c.id);
+            let mut text = format!("{indent}✎ #{} [{badge}]: {}", c.id, clean(&c.text));
+            if let Some(error) = view.comment_error(c.id) {
+                text.push_str(&format!("\n{indent}  Error: {}", clean(error)));
+            }
+            let style = comment_style(c);
+            super::view::wrap(&text, width.max(1))
+                .into_iter()
+                .map(move |line| (line, style))
+                .collect::<Vec<_>>()
+        };
+
+        let mut rows = Vec::new();
+        for c in self.whole_plan_comments(view) {
+            for (line, style) in comment_rows(c, "     ") {
+                rows.push(VisualRow {
+                    doc: None,
+                    line: Line::styled(line, style),
+                });
+            }
+        }
+        let mut cursor_rows = (0, 0);
+        for (idx, dline) in doc_lines.iter().enumerate() {
+            let selected = idx == self.cursor;
+            let start = rows.len();
+            let mut text_style = if dline.is_heading {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            match dline.state {
+                SectionState::Done => {
+                    text_style = text_style
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::UNDERLINED);
+                }
+                SectionState::Problem => text_style = text_style.fg(Color::Red),
+                SectionState::Working => text_style = text_style.fg(Color::Cyan),
+                SectionState::Open => {}
+            }
+            if selected {
+                text_style = text_style.add_modifier(Modifier::REVERSED);
+            }
+            let gutter_style = if selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                theme.dim()
+            };
+            let pieces = super::view::wrap(&dline.text, text_width);
+            let count = pieces.len();
+            for (n, piece) in pieces.into_iter().enumerate() {
+                let gutter = if n == 0 {
+                    let marker = if selected { "▶" } else { " " };
+                    format!("{marker}{:>3} │ ", dline.number)
+                } else {
+                    "     │ ".to_owned()
+                };
+                let mut spans = vec![
+                    Span::styled(gutter, gutter_style),
+                    Span::styled(piece, text_style),
+                ];
+                if n + 1 == count && dline.is_heading {
+                    let badge = match dline.state {
+                        SectionState::Done => {
+                            Some((format!(" {} COMPLETED", theme.glyphs().done), Color::Green))
+                        }
+                        SectionState::Working => Some((
+                            format!(" {} IN PROGRESS", theme.spinner(self.tick)),
+                            Color::Cyan,
+                        )),
+                        SectionState::Problem => Some((
+                            format!(" {} NEEDS ATTENTION", theme.glyphs().problem),
+                            Color::Red,
+                        )),
+                        SectionState::Open => None,
+                    };
+                    if let Some((text, color)) = badge {
+                        spans.push(Span::styled(
+                            text,
+                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                }
+                rows.push(VisualRow {
+                    doc: Some(idx),
+                    line: Line::from(spans),
+                });
+            }
+            if selected {
+                cursor_rows = (start, rows.len() - 1);
+            }
+            for c in self.line_comments(view, dline.number) {
+                for (line, style) in comment_rows(c, "     │   ") {
+                    rows.push(VisualRow {
+                        doc: Some(idx),
+                        line: Line::styled(line, style),
+                    });
+                }
+            }
+        }
+        (rows, cursor_rows)
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
@@ -389,109 +568,23 @@ impl PlanView {
         let max_cursor = doc_lines.len().saturating_sub(1);
         self.cursor = self.cursor.min(max_cursor);
 
-        let visible_h = doc_rect.height as usize;
-        if self.cursor < self.scroll {
-            self.scroll = self.cursor;
-        } else if visible_h > 0 && self.cursor >= self.scroll + visible_h {
-            self.scroll = self.cursor + 1 - visible_h;
+        let (rows, cursor_rows) = self.layout_rows(view, &doc_lines, doc_rect.width, theme);
+        let visible_h = usize::from(doc_rect.height);
+        let (first, last) = cursor_rows;
+        if first < self.scroll {
+            self.scroll = first;
+        } else if visible_h > 0 && last >= self.scroll + visible_h {
+            // Show the whole cursor line, or at least its start.
+            self.scroll = (last + 1 - visible_h).min(first);
         }
-
-        let mut rendered: Vec<Line<'static>> = Vec::new();
-        // Whole-plan comments at top when scrolled to top
-        if self.scroll == 0 {
-            for c in self.whole_plan_comments(view) {
-                let badge = view.comment_state(c.id);
-                let style = if c.status == "open" {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    theme.dim()
-                };
-                let mut text = format!("     ✎ #{} [{badge}]: {}", c.id, clean(&c.text));
-                if let Some(error) = view.comment_error(c.id) {
-                    text.push_str(&format!("\n       Error: {}", clean(error)));
-                }
-                for line in super::view::wrap(&text, usize::from(doc_rect.width)) {
-                    if rendered.len() >= visible_h {
-                        break;
-                    }
-                    rendered.push(Line::styled(line, style));
-                }
-            }
-        }
-
-        for (idx, dline) in doc_lines.iter().enumerate().skip(self.scroll) {
-            if rendered.len() >= visible_h {
-                break;
-            }
-            let selected = idx == self.cursor;
-            let cursor_marker = if selected { "▶" } else { " " };
-            let line_num = format!("{cursor_marker}{:>3} │ ", dline.number);
-
-            let mut text_style = if dline.is_heading {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            if dline.completed {
-                text_style = text_style
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::UNDERLINED);
-            }
-            if selected {
-                text_style = text_style.add_modifier(Modifier::REVERSED);
-            }
-
-            let mut spans = vec![
-                Span::styled(
-                    line_num,
-                    if selected {
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        theme.dim()
-                    },
-                ),
-                Span::styled(dline.text.clone(), text_style),
-            ];
-            if dline.completed && dline.is_heading {
-                spans.push(Span::styled(
-                    " ✓ COMPLETED",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                ));
-            }
-            rendered.push(Line::from(spans));
-
-            for c in self.line_comments(view, dline.number) {
-                if rendered.len() >= visible_h {
-                    break;
-                }
-                let status_badge = view.comment_state(c.id);
-                let c_style = if c.status == "open" {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    theme.dim()
-                };
-                let mut text = format!("     │   ✎ #{} [{status_badge}]: {}", c.id, clean(&c.text));
-                if let Some(error) = view.comment_error(c.id) {
-                    text.push_str(&format!("\n       Error: {}", clean(error)));
-                }
-                for line in super::view::wrap(&text, usize::from(doc_rect.width)) {
-                    if rendered.len() >= visible_h {
-                        break;
-                    }
-                    rendered.push(Line::styled(line, c_style));
-                }
-            }
-        }
+        self.scroll = self.scroll.min(rows.len().saturating_sub(visible_h.max(1)));
+        self.row_docs = rows.iter().map(|row| row.doc).collect();
+        let rendered: Vec<Line<'static>> = rows
+            .into_iter()
+            .skip(self.scroll)
+            .take(visible_h)
+            .map(|row| row.line)
+            .collect();
         frame.render_widget(Paragraph::new(rendered), doc_rect);
 
         // Fixed bottom bar with 3 buttons: Accept / Reject / Comment whole plan
@@ -506,28 +599,41 @@ impl PlanView {
             .split(bar_area);
         self.button_rects = [btn_cols[0], btn_cols[1], btn_cols[2]];
 
-        let can_accept = open_comments.is_empty() && view.plan_proposed();
+        let decidable = view.plan_proposed();
+        let can_accept = open_comments.is_empty() && decidable;
         let buttons = [
             (
                 BottomButton::Accept,
-                if can_accept {
-                    " [ Accept (Ctrl+A / a) ] "
+                if !decidable {
+                    " [ Accept (plan already decided) ] "
                 } else if !open_comments.is_empty() {
                     " [ Accept (resolve comments first) ] "
+                } else if self.confirm_accept {
+                    " [ Press again to accept ] "
                 } else {
-                    " [ Accept (Ctrl+A / a) ] "
+                    " [ Accept (Enter twice / a) ] "
                 },
                 if can_accept {
                     Tone::Done
-                } else {
+                } else if decidable {
                     Tone::Waiting
+                } else {
+                    Tone::Queued
                 },
                 btn_cols[0],
             ),
             (
                 BottomButton::Reject,
-                " [ Reject (Ctrl+X / x) ] ",
-                Tone::Failed,
+                if decidable {
+                    " [ Reject (Ctrl+X / x) ] "
+                } else {
+                    " [ Reject (plan already decided) ] "
+                },
+                if decidable {
+                    Tone::Failed
+                } else {
+                    Tone::Queued
+                },
                 btn_cols[1],
             ),
             (
@@ -613,55 +719,246 @@ fn synthesize_document(tasks: &[TaskRow]) -> String {
     out.trim_end().to_owned()
 }
 
-fn extract_bracket_task_id(heading: &str, tasks: &[TaskRow]) -> Option<String> {
-    for task in tasks {
-        if heading.contains(&format!("[{}]", task.id)) {
-            return Some(task.id.clone());
-        }
+/// The tasks a heading stands for: the one it names as `[id]`, otherwise
+/// every task assigned to a section of exactly that name, otherwise the task
+/// titled like the heading.
+fn section_tasks(heading: &str, tasks: &[TaskRow]) -> Vec<String> {
+    if let Some(task) = tasks
+        .iter()
+        .find(|task| heading.contains(&format!("[{}]", task.id)))
+    {
+        return vec![task.id.clone()];
+    }
+    let named = |name: &str| heading.eq_ignore_ascii_case(name.trim());
+    let by_section: Vec<String> = tasks
+        .iter()
+        .filter(|task| {
+            task.section
+                .as_deref()
+                .is_some_and(|section| !section.trim().is_empty() && named(section))
+        })
+        .map(|task| task.id.clone())
+        .collect();
+    if !by_section.is_empty() {
+        return by_section;
     }
     tasks
         .iter()
-        .find(|t| {
-            t.section
-                .as_deref()
-                .is_some_and(|s| !s.is_empty() && heading.eq_ignore_ascii_case(s.trim()))
-                || heading.eq_ignore_ascii_case(t.title.trim())
-        })
-        .map(|t| t.id.clone())
+        .filter(|task| !task.title.trim().is_empty() && named(&task.title))
+        .map(|task| task.id.clone())
+        .collect()
 }
 
-fn extract_line_task_id(line: &str, tasks: &[TaskRow]) -> Option<String> {
-    for task in tasks {
-        if line.contains(&format!("`{}`", task.id)) || line.contains(&format!("[{}]", task.id)) {
-            return Some(task.id.clone());
-        }
-    }
-    None
-}
-
-fn is_section_or_task_completed(
-    section: Option<&str>,
-    task_id: Option<&str>,
-    tasks: &[TaskRow],
-) -> bool {
-    if let Some(tid) = task_id
-        && let Some(t) = tasks.iter().find(|t| t.id == tid)
+fn section_state(ids: &[String], tasks: &[TaskRow]) -> SectionState {
+    let statuses: Vec<&str> = ids
+        .iter()
+        .filter_map(|id| tasks.iter().find(|task| &task.id == id))
+        .map(|task| task.status.as_str())
+        .collect();
+    if statuses.is_empty() {
+        SectionState::Open
+    } else if statuses
+        .iter()
+        .any(|s| matches!(*s, "failed" | "needs_user"))
     {
-        return t.status == "approved";
+        SectionState::Problem
+    } else if statuses.iter().all(|s| *s == "approved") {
+        SectionState::Done
+    } else if statuses
+        .iter()
+        .any(|s| matches!(*s, "working" | "verifying"))
+    {
+        SectionState::Working
+    } else {
+        SectionState::Open
     }
-    if let Some(sec) = section {
-        let matching: Vec<&TaskRow> = tasks
-            .iter()
-            .filter(|t| {
-                t.section
-                    .as_deref()
-                    .is_some_and(|s| !s.is_empty() && sec.contains(s.trim()))
-                    || sec.contains(&t.title)
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn screen(term: &Terminal<TestBackend>) -> Vec<String> {
+        let buffer = term.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn view_of(doc: &str) -> View {
+        let mut view = View::default();
+        view.plan_doc = doc.into();
+        view
+    }
+
+    #[test]
+    fn long_lines_wrap_and_every_word_stays_readable() {
+        let words: Vec<String> = (0..30).map(|n| format!("word{n}")).collect();
+        let view = view_of(&format!("# Title\n{}\nlast", words.join(" ")));
+        let mut plan = PlanView::new("p".into());
+        let mut term = Terminal::new(TestBackend::new(40, 16)).unwrap();
+        term.draw(|f| plan.draw(f, f.area(), &view, &Theme::new(true, false)))
+            .unwrap();
+        let text = screen(&term).join("\n");
+        for word in &words {
+            assert!(text.contains(word.as_str()), "{word} missing in\n{text}");
+        }
+        // Continuation rows carry a bare separator instead of a number.
+        assert!(text.contains("     │ "));
+    }
+
+    #[test]
+    fn wrapped_graphemes_are_never_split() {
+        let view = view_of(&"👩‍💻e\u{301}".repeat(40));
+        let mut plan = PlanView::new("p".into());
+        let mut term = Terminal::new(TestBackend::new(30, 14)).unwrap();
+        term.draw(|f| plan.draw(f, f.area(), &view, &Theme::new(true, false)))
+            .unwrap();
+        let text = screen(&term).join("");
+        assert!(!text.contains('\u{fffd}'));
+        assert!(text.contains("👩‍💻"));
+    }
+
+    #[test]
+    fn the_cursor_line_stays_in_view_and_clicks_pick_the_wrapped_line() {
+        let long = "alpha beta gamma delta epsilon ".repeat(8);
+        let doc: Vec<String> = (0..12)
+            .map(|n| {
+                if n == 5 {
+                    long.clone()
+                } else {
+                    format!("line {n}")
+                }
             })
             .collect();
-        if !matching.is_empty() {
-            return matching.iter().all(|t| t.status == "approved");
+        let view = view_of(&doc.join("\n"));
+        let mut plan = PlanView::new("p".into());
+        let theme = Theme::new(true, false);
+        let mut term = Terminal::new(TestBackend::new(40, 14)).unwrap();
+        plan.cursor = 11;
+        term.draw(|f| plan.draw(f, f.area(), &view, &theme))
+            .unwrap();
+        assert!(screen(&term).join("\n").contains("line 11"));
+
+        plan.cursor = 0;
+        term.draw(|f| plan.draw(f, f.area(), &view, &theme))
+            .unwrap();
+        // Find a continuation row of the long line and click it.
+        let continuation = plan
+            .row_docs
+            .iter()
+            .enumerate()
+            .skip(plan.scroll)
+            .filter(|(_, doc)| **doc == Some(5))
+            .map(|(row, _)| row)
+            .nth(1)
+            .expect("the long line wraps");
+        let row = plan.doc_area.y + (continuation - plan.scroll) as u16;
+        plan.mouse_click(plan.doc_area.x + 3, row, &view);
+        assert_eq!(plan.cursor, 5);
+    }
+
+    fn proposed(doc: &str) -> View {
+        let mut view = view_of(doc);
+        view.tasks.push(TaskRow {
+            id: "t1".into(),
+            status: "proposed".into(),
+            ..TaskRow::default()
+        });
+        view
+    }
+
+    fn press(plan: &mut PlanView, view: &View, code: KeyCode) -> PlanAction {
+        plan.key(KeyEvent::new(code, KeyModifiers::NONE), view)
+    }
+
+    #[test]
+    fn enter_needs_a_second_press_to_accept_and_reads_only_once_decided() {
+        let view = proposed("# Plan\nbody");
+        let mut plan = PlanView::new("p".into());
+        // Comment is the default button, so Enter never accepts by accident.
+        assert_eq!(
+            press(&mut plan, &view, KeyCode::Enter),
+            PlanAction::CommentWholePlan
+        );
+        plan.button = BottomButton::Accept;
+        assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::None);
+        assert!(plan.confirm_accept);
+        assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::Accept);
+        // Any other key withdraws the first press.
+        assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::None);
+        press(&mut plan, &view, KeyCode::Down);
+        assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::None);
+        // The explicit shortcut accepts at once.
+        assert_eq!(
+            press(&mut plan, &view, KeyCode::Char('a')),
+            PlanAction::Accept
+        );
+
+        let mut decided = view_of("# Plan\nbody");
+        decided.tasks.push(TaskRow {
+            id: "t1".into(),
+            status: "working".into(),
+            ..TaskRow::default()
+        });
+        for code in [KeyCode::Char('a'), KeyCode::Char('x'), KeyCode::Char('1')] {
+            assert_eq!(press(&mut plan, &decided, code), PlanAction::None);
+        }
+        assert_eq!(press(&mut plan, &decided, KeyCode::Esc), PlanAction::Close);
+    }
+
+    fn task_in(id: &str, section: &str, status: &str) -> TaskRow {
+        TaskRow {
+            id: id.into(),
+            title: format!("Title {id}"),
+            section: Some(section.into()),
+            status: status.into(),
+            ..TaskRow::default()
         }
     }
-    false
+
+    fn states(view: &View) -> Vec<(String, SectionState)> {
+        PlanView::new("p".into())
+            .build_lines(view)
+            .into_iter()
+            .map(|line| (line.text, line.state))
+            .collect()
+    }
+
+    #[test]
+    fn a_section_is_done_only_when_all_its_tasks_are_and_subheadings_inherit() {
+        let mut view = view_of("## Storage\ntext `t2` mentioned\n### Details\n## Other\nbody");
+        view.tasks = vec![
+            task_in("t1", "Storage", "approved"),
+            task_in("t2", "Storage", "working"),
+            task_in("t3", "Other", "failed"),
+        ];
+        let got = states(&view);
+        // One of two tasks is still working: the section is not completed,
+        // and a mention of a task id in prose does not change the section.
+        assert_eq!(got[0].1, SectionState::Working);
+        assert_eq!(got[1].1, SectionState::Working);
+        assert_eq!(got[2].1, SectionState::Working);
+        assert_eq!(got[3].1, SectionState::Problem);
+        assert_eq!(got[4].1, SectionState::Problem);
+
+        view.tasks[1].status = "approved".into();
+        assert_eq!(states(&view)[0].1, SectionState::Done);
+        assert_eq!(states(&view)[2].1, SectionState::Done);
+    }
+
+    #[test]
+    fn headings_match_sections_exactly_not_by_substring() {
+        let mut view = view_of("## Storage layer rewrite\n## Storage");
+        view.tasks = vec![task_in("t1", "Storage", "approved")];
+        let got = states(&view);
+        assert_eq!(got[0].1, SectionState::Open);
+        assert_eq!(got[1].1, SectionState::Done);
+    }
 }

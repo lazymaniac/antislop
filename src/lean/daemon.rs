@@ -1352,9 +1352,9 @@ impl Client {
     }
 
     /// Connects to the project's daemon, starting it (or replacing an idle one
-    /// from another build or configuration) as needed. A busy daemon keeps
-    /// the configuration its work started with: a changed `architect.toml`
-    /// applies once the work is done, and the frontend says so.
+    /// from another build or configuration) as needed. For the same project
+    /// and configuration path, a busy daemon keeps the build and configuration
+    /// its work started with; the frontend reconnects and explains the delay.
     pub fn connect(project: &Path, config: &Path, state: &Path) -> Result<Self> {
         private_directory(state)?;
         let mut client = Self::at(state);
@@ -1365,25 +1365,32 @@ impl Client {
         }
         let executable = std::env::current_exe()?;
         if let Ok(identity) = client.call(&Request::Identity) {
-            let same = identity["build"].as_str() == Some(build_identity(&executable)?.as_str())
-                && identity["project"].as_str() == project.to_str()
+            let same_build =
+                identity["build"].as_str() == Some(build_identity(&executable)?.as_str());
+            let same_context = identity["project"].as_str() == project.to_str()
                 && identity["config"].as_str() == config.to_str();
             let config_current = identity["config_modified"].as_u64() == Some(modified(config));
-            if same && config_current {
+            if same_context && same_build && config_current {
                 return Ok(client);
             }
-            if same && identity["busy"] == true {
-                client.notice = Some(
+            if same_context && identity["busy"] == true {
+                client.notice = Some(if same_build {
                     "architect.toml changed: running work keeps its configuration, \
                      the new one applies once it finishes and you reopen"
-                        .into(),
-                );
+                        .into()
+                } else {
+                    format!(
+                        "connected to the running daemon (pid {}): running work keeps its build and configuration; \
+                         the current build and configuration apply once it finishes and you reopen",
+                        identity["pid"]
+                    )
+                });
                 return Ok(client);
             }
             require(
                 identity["busy"] != true,
                 &format!(
-                    "the daemon (pid {}) runs another build, project or configuration and is executing work; reopen after it finishes",
+                    "the daemon (pid {}) runs another project or configuration path and is executing work; reopen after it finishes or use a different --state directory",
                     identity["pid"]
                 ),
             )?;

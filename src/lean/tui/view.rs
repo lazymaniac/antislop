@@ -113,6 +113,8 @@ pub struct TaskRow {
     /// The task's database id, once it is queued.
     pub uuid: Option<String>,
     pub title: String,
+    pub summary: Option<String>,
+    pub verifier_summary: Option<String>,
     /// Optional section heading in the plan document this task is assigned to.
     pub section: Option<String>,
     pub kind: String,
@@ -252,6 +254,32 @@ pub struct View {
     task_rows: HashMap<String, usize>,
 }
 
+/// The conversation's step, shown in the header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    Fresh,
+    Interview,
+    Planning,
+    Review,
+    Executing,
+    Blocked,
+    Done,
+}
+
+impl Stage {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fresh => "new",
+            Self::Interview => "interview",
+            Self::Planning => "planning",
+            Self::Review => "plan review",
+            Self::Executing => "executing",
+            Self::Blocked => "blocked",
+            Self::Done => "done",
+        }
+    }
+}
+
 pub fn dim() -> Style {
     Style::default().fg(Color::DarkGray)
 }
@@ -306,15 +334,48 @@ impl View {
         !self.tasks.is_empty() && self.tasks.iter().all(|task| task.status == "proposed")
     }
 
-    /// The agent graph view is hidden during the initial interview and while a plan
-    /// is still in the proposed/review document stage before execution starts.
-    /// A fresh conversation, before the user sent a task, still shows the layout.
-    pub fn graph_hidden(&self) -> bool {
+    /// Where the conversation is: the graph only makes sense once work runs.
+    pub fn stage(&self) -> Stage {
         let started = self.activity.is_some()
             || !self.transcript.is_empty()
             || !self.messages.is_empty()
             || !self.cards.is_empty();
-        (self.tasks.is_empty() && started) || self.plan_proposed()
+        if self.plan_proposed() {
+            return Stage::Review;
+        }
+        let running = |status: &str| matches!(status, "queued" | "working" | "verifying");
+        if self.tasks.iter().any(|task| running(&task.status)) {
+            return Stage::Executing;
+        }
+        if self.activity.is_some() && !self.tasks.iter().all(|t| t.status == "approved") {
+            // The orchestrator is on its own again: asking, or revising a plan.
+            return if self.tasks.is_empty() {
+                Stage::Interview
+            } else {
+                Stage::Planning
+            };
+        }
+        if self.tasks.is_empty() {
+            return if started {
+                Stage::Interview
+            } else {
+                Stage::Fresh
+            };
+        }
+        if self.tasks.iter().all(|task| task.status == "approved") {
+            Stage::Done
+        } else {
+            Stage::Blocked
+        }
+    }
+
+    /// The agent graph is hidden while the user is interviewed and while a
+    /// plan is written or reviewed, whichever panel has the focus.
+    pub fn graph_hidden(&self) -> bool {
+        matches!(
+            self.stage(),
+            Stage::Interview | Stage::Planning | Stage::Review
+        )
     }
 
     /// Unresolved comments targeting the current plan document or whole plan.
@@ -431,7 +492,7 @@ impl View {
                         title: "Runtime".into(),
                         meta: String::new(),
                         text: "· task results handed to orchestrator".into(),
-                        tone: super::theme::Tone::Queued,
+                        tone: crate::lean::tui::Tone::Queued,
                     });
                     self.push(dim(), "· task results handed to orchestrator");
                     self.push(Style::default(), "");
@@ -654,6 +715,10 @@ impl View {
                             id,
                             uuid: None,
                             title: task["title"].as_str().unwrap_or_default().to_owned(),
+                            summary: task["summary"].as_str().map(str::to_owned),
+                            verifier_summary: task["verifier"]["summary"]
+                                .as_str()
+                                .map(str::to_owned),
                             section: task["section"].as_str().map(str::to_owned),
                             kind: task["kind"].as_str().unwrap_or_default().to_owned(),
                             goal: task["goal"].as_str().unwrap_or_default().to_owned(),
@@ -1312,6 +1377,10 @@ pub fn render_header(
         spans.push(Span::styled(format!("{short} · {mode_str}"), dim()));
     }
 
+    if (50..95).contains(&width) {
+        // The wide header lists it with the other buttons.
+        spans.push(Span::styled("[Plan] ", Style::default().fg(Color::Cyan)));
+    }
     if width >= 40 {
         spans.push(Span::styled(
             clean(status),
@@ -1410,6 +1479,88 @@ mod tests {
 
     fn event(seq: u64, turn: Option<&str>, kind: &str, payload: Value) -> Value {
         json!({"seq": seq, "turn_id": turn, "kind": kind, "payload": payload})
+    }
+
+    fn staged(statuses: &[&str], activity: bool) -> View {
+        let mut view = View::default();
+        view.cards.push(TranscriptCard::System {
+            title: "t".into(),
+            meta: String::new(),
+            text: "x".into(),
+            tone: crate::lean::tui::Tone::Queued,
+        });
+        view.tasks = statuses
+            .iter()
+            .enumerate()
+            .map(|(i, status)| TaskRow {
+                id: format!("t{i}"),
+                status: (*status).into(),
+                ..TaskRow::default()
+            })
+            .collect();
+        view.activity = activity.then(|| "working".to_owned());
+        view
+    }
+
+    #[test]
+    fn the_stage_hides_the_graph_until_work_runs_and_again_when_replanning() {
+        assert_eq!(View::default().stage(), Stage::Fresh);
+        assert!(!View::default().graph_hidden());
+        for (statuses, activity, stage) in [
+            (vec![], false, Stage::Interview),
+            (vec![], true, Stage::Interview),
+            (vec!["proposed"], false, Stage::Review),
+            (vec!["working", "queued"], true, Stage::Executing),
+            // A rejected plan is revised: the graph goes away again.
+            (vec!["cancelled"], true, Stage::Planning),
+            (vec!["cancelled"], false, Stage::Blocked),
+            (vec!["approved", "needs_user"], false, Stage::Blocked),
+            (vec!["approved"], false, Stage::Done),
+            // The orchestrator reporting on a finished plan keeps the graph.
+            (vec!["approved"], true, Stage::Done),
+        ] {
+            let view = staged(&statuses, activity);
+            assert_eq!(view.stage(), stage, "{statuses:?} {activity}");
+            assert_eq!(
+                view.graph_hidden(),
+                matches!(stage, Stage::Interview | Stage::Planning | Stage::Review)
+            );
+        }
+    }
+
+    #[test]
+    fn plan_projection_preserves_summaries_and_legacy_empty_values() {
+        for summary in [
+            Value::Null,
+            json!(" \n\t "),
+            json!("\x1b[31m\x1b[0m"),
+            json!("Popraw zapis danych."),
+        ] {
+            let mut view = View::default();
+            view.apply(&event(
+                1,
+                None,
+                "plan_proposed",
+                json!({"tasks": [{
+                    "id": "t1", "title": "Storage", "summary": summary, "goal": "Full goal",
+                    "verifier": {"summary": summary, "focus": "Full focus", "risks": ["Data loss"]}
+                }]}),
+            ));
+            assert_eq!(view.tasks[0].summary.as_deref(), summary.as_str());
+            assert_eq!(view.tasks[0].verifier_summary.as_deref(), summary.as_str());
+            assert_eq!(view.tasks[0].goal, "Full goal");
+            assert_eq!(view.tasks[0].focus, "Full focus");
+            assert_eq!(view.tasks[0].risks, ["Data loss"]);
+        }
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "plan_proposed",
+            json!({"tasks": [{"id": "old"}]}),
+        ));
+        assert!(view.tasks[0].summary.is_none());
+        assert!(view.tasks[0].verifier_summary.is_none());
     }
 
     #[test]

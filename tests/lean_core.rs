@@ -540,6 +540,20 @@ fn a_question_cut_off_by_a_restart_is_answered_after_it() {
 
 #[test]
 fn a_changed_configuration_waits_for_running_work_and_says_so() {
+    reconnect_to_busy_daemon(false, true);
+}
+
+#[test]
+fn a_rebuilt_frontend_reconnects_to_running_work() {
+    reconnect_to_busy_daemon(true, false);
+}
+
+#[test]
+fn a_rebuilt_frontend_with_changed_configuration_reconnects_to_running_work() {
+    reconnect_to_busy_daemon(true, true);
+}
+
+fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let dir = tempfile::tempdir().unwrap();
     let dir = dir.path().canonicalize().unwrap();
     let project = dir.join("project");
@@ -561,8 +575,15 @@ fn a_changed_configuration_waits_for_running_work_and_says_so() {
             .call(&architect::lean::daemon::Request::Identity)
             .ok()
     };
-    let run = |message: &str| {
-        std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+    let current_build = std::path::Path::new(env!("CARGO_BIN_EXE_antislop"));
+    let old_build = dir.join("antislop-old");
+    if rebuilt {
+        // A different executable path has a different build identity, just
+        // like a rebuilt or reinstalled frontend.
+        std::fs::copy(current_build, &old_build).unwrap();
+    }
+    let run = |binary: &std::path::Path, message: &str| {
+        std::process::Command::new(binary)
             .current_dir(&project)
             .arg("chat")
             .arg("--config")
@@ -577,22 +598,56 @@ fn a_changed_configuration_waits_for_running_work_and_says_so() {
             .unwrap()
     };
 
-    let first = run("slow: pierwsza");
+    let mut first = run(
+        if rebuilt { &old_build } else { current_build },
+        "sleepy: pierwsza",
+    );
     let deadline = Instant::now() + Duration::from_secs(10);
     let daemon = loop {
         if let Some(identity) = identity().filter(|identity| identity["busy"] == true) {
             break identity["pid"].clone();
         }
+        if first.try_wait().unwrap().is_some() {
+            panic!(
+                "the first frontend exited: {:?}",
+                first.wait_with_output().unwrap()
+            );
+        }
         assert!(Instant::now() < deadline, "the daemon never got busy");
         std::thread::sleep(Duration::from_millis(10));
     };
-    // The user edits the configuration while the work runs.
-    std::thread::sleep(Duration::from_millis(20));
-    std::fs::write(dir.join("architect.toml"), format!("{text}\n# edited\n")).unwrap();
-    let second = run("druga").wait_with_output().unwrap();
+    // Other projects and configuration paths must not silently use this daemon.
+    let other_project = dir.join("other-project");
+    std::fs::create_dir(&other_project).unwrap();
+    let other_config = dir.join("other.toml");
+    std::fs::write(&other_config, &text).unwrap();
+    for (project, config) in [
+        (other_project.as_path(), dir.join("architect.toml")),
+        (project.as_path(), other_config),
+    ] {
+        let error = architect::lean::daemon::Client::connect(project, &config, &state)
+            .err()
+            .expect("a busy daemon must reject another project or configuration path");
+        assert!(error.to_string().contains("different --state directory"));
+    }
+    if edit_config {
+        // The user edits the configuration while the work runs.
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(dir.join("architect.toml"), format!("{text}\n# edited\n")).unwrap();
+    }
+    let second = run(current_build, "druga").wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(second.status.success(), "{stderr}");
-    assert!(stderr.contains("architect.toml changed"), "{stderr}");
+    assert!(
+        stderr.contains(if rebuilt {
+            "connected to the running daemon"
+        } else {
+            "architect.toml changed"
+        }),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&second.stdout);
+    assert!(stdout.contains("answer: druga"), "{stdout}");
     assert_eq!(
         identity().unwrap()["pid"],
         daemon,
@@ -600,7 +655,7 @@ fn a_changed_configuration_waits_for_running_work_and_says_so() {
     );
     assert!(first.wait_with_output().unwrap().status.success());
 
-    // Once the work is done, the next frontend gets the new configuration.
+    // Once the work is done, the next frontend gets the new build/configuration.
     let third = chat(&dir, &project, "trzecia");
     assert!(third.contains("answer: trzecia"), "{third}");
     assert_ne!(identity().unwrap()["pid"], daemon);

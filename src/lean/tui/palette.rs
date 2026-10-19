@@ -42,7 +42,7 @@ pub enum Command {
 const COMMANDS: [(Command, &str); 22] = [
     (Command::Accept, "Accept proposed plan · Ctrl+A"),
     (Command::Reject, "Reject proposed plan · /reject"),
-    (Command::Plan, "Open plan document viewer · p / /plan"),
+    (Command::Plan, "Open plan document viewer · Ctrl+L / /plan"),
     (Command::Resume, "Resume plan · Ctrl+R"),
     (Command::Cancel, "Cancel running work · Ctrl+X"),
     (
@@ -337,7 +337,7 @@ impl Help {
                 "/mode autonomous   autonomous mode for next plans",
                 "/mode supervised   supervised mode for next plans",
                 "Ctrl+N / Ctrl+O  new / switch conversation",
-                "Ctrl+F           search conversation",
+                "Ctrl+F / Ctrl+L  search conversation / open plan",
                 "Ctrl+P           command palette",
                 "Esc              back/clear draft (daemon runs)",
                 "Ctrl+C / q       quit (q when not editing text)",

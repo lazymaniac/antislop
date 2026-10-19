@@ -1,7 +1,7 @@
 # antislop
 
 A local team of AI agents that works on your project through the CLIs you
-already use (Codex, Antigravity `agy`, Claude Code, Gemini CLI). You talk to an
+already use (Codex, Antigravity `agy`, Claude Code, Gemini CLI, OpenCode). You talk to an
 orchestrator; it answers, or proposes a plan of tasks. Each task is done by a
 worker and checked by its own verifier, and approved changes land on your
 branch. The product specification is [design.md](design.md); how the runtime
@@ -31,6 +31,26 @@ antislop eval evals --cli codex  # verifiers on seeded cases vs a plain review
 `antislop eval` runs real CLIs on the cases in [evals/](evals) and compares
 the verifier antislop gives a task with one agent asked plainly to review;
 [docs/calibration.md](docs/calibration.md) reports what it measured.
+
+OpenCode is supported directly (`binary = "opencode"`) or through oMLX:
+
+```toml
+[providers.opencode]
+command = ["omlx", "launch", "opencode", "--model", "YOUR_MODEL", "--"]
+isolation = "read_only"
+```
+
+Set executor/verifier entries in `[role_providers]` and their profiles to
+`"opencode"`, with profile `model = "omlx/YOUR_MODEL"`. The launcher model
+avoids an interactive picker; the profile model pins each turn. Both CLIs must
+be on `PATH`, and the oMLX server must already be running. This repository's
+configuration uses OpenCode workers and verifiers with the existing Qwen
+model, while Codex orchestrates. OpenCode runs with a dedicated agent:
+writers can edit and use shell tools, read-only agents can read/search and
+fetch web sources, and native subagents are disabled. Its
+[JSON transport and session resume](https://docs.opencode.ai/docs/cli/)
+use `run --format json` and `--session`; permissions are set through
+[inline configuration](https://docs.opencode.ai/docs/config/).
 
 The first call starts the project's daemon (state in `PROJECT/.antislop`), so
 agents keep working when the frontend exits; the next call reattaches.

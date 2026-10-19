@@ -82,7 +82,7 @@ struct Grading {
     files: Vec<PathBuf>,
 }
 
-const USAGE: &str = "usage: antislop eval SUITE --cli codex|claude|agy|gemini \
+const USAGE: &str = "usage: antislop eval SUITE --cli codex|claude|agy|gemini|opencode \
      [--binary PATH] [--model M] [--effort E] [--arm verifier|baseline] \
      [--case NAME]... [--jobs N]\n       antislop eval SUITE --grade RESULTS.jsonl...";
 
@@ -127,6 +127,7 @@ fn parse(args: &[String]) -> Result<Options> {
                     "claude" => ProviderKind::Claude,
                     "agy" => ProviderKind::Agy,
                     "gemini" => ProviderKind::Gemini,
+                    "opencode" => ProviderKind::Opencode,
                     other => return Err(Error::Invalid(format!("unknown CLI {other}"))),
                 })
             }

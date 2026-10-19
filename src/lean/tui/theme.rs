@@ -32,6 +32,15 @@ pub struct Glyphs {
     pub thumb: &'static str,
     pub track: &'static str,
     pub pointer: &'static str,
+    pub waiting: &'static str,
+    pub problem: &'static str,
+    pub orchestrator: &'static str,
+    pub plan_verifier: &'static str,
+    pub auditor: &'static str,
+    pub worker: &'static str,
+    pub verifier: &'static str,
+    /// Frames of the busy indicator, advanced by the UI tick.
+    pub spinner: &'static [&'static str],
     /// Junctions indexed by a N=1, S=2, E=4, W=8 mask.
     pub junctions: [&'static str; 16],
 }
@@ -56,6 +65,14 @@ pub const UNICODE: Glyphs = Glyphs {
     thumb: "┃",
     track: "│",
     pointer: "▸",
+    waiting: "‖",
+    problem: "✕",
+    orchestrator: "◆",
+    plan_verifier: "◇",
+    auditor: "≡",
+    worker: "▸",
+    verifier: "◈",
+    spinner: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
     junctions: [
         " ", "│", "│", "│", "─", "╰", "╭", "├", "─", "╯", "╮", "┤", "─", "┴", "┬", "┼",
     ],
@@ -81,6 +98,14 @@ pub const ASCII: Glyphs = Glyphs {
     thumb: "#",
     track: "|",
     pointer: ">",
+    waiting: "=",
+    problem: "x",
+    orchestrator: "O",
+    plan_verifier: "P",
+    auditor: "A",
+    worker: ">",
+    verifier: "V",
+    spinner: &["|", "/", "-", "\\"],
     junctions: [
         " ", "|", "|", "|", "-", "+", "+", "+", "-", "+", "+", "+", "-", "+", "+", "+",
     ],
@@ -152,6 +177,52 @@ impl Theme {
 
     pub fn glyphs(&self) -> &'static Glyphs {
         if self.ascii { &ASCII } else { &UNICODE }
+    }
+
+    /// One frame of the busy indicator for the given UI tick.
+    pub fn spinner(&self, tick: u64) -> &'static str {
+        let frames = self.glyphs().spinner;
+        frames[(tick as usize) % frames.len()]
+    }
+
+    /// The icon that tells agent kinds apart: `key` is a graph node key.
+    pub fn role_icon(&self, key: &str) -> &'static str {
+        let g = self.glyphs();
+        match key.split_once(':').map_or(key, |(role, _)| role) {
+            "worker" => g.worker,
+            "verifier" => g.verifier,
+            "plan_verifier" | "plan-verifier" => g.plan_verifier,
+            "auditor" => g.auditor,
+            _ => g.orchestrator,
+        }
+    }
+
+    /// The accent color of an agent kind; `kind` is the task's work kind.
+    pub fn role_accent(&self, key: &str, kind: &str) -> Style {
+        let role = key.split_once(':').map_or(key, |(role, _)| role);
+        let color = match role {
+            "plan_verifier" | "plan-verifier" => 141,
+            "auditor" => 73,
+            "worker" | "verifier" => {
+                let base = match kind {
+                    "analysis" => 110,
+                    "implementation" => 114,
+                    "static_analysis" => 179,
+                    "testing" => 215,
+                    "integration" => 175,
+                    _ => 109,
+                };
+                // A verifier shares its worker's hue, dimmed below.
+                base
+            }
+            _ => 176,
+        };
+        let style = self.pick(fg(color), Style::default());
+        if role == "verifier" {
+            style.add_modifier(Modifier::DIM)
+        } else {
+            style
+        }
     }
 
     fn pick(&self, color: Style, plain: Style) -> Style {
@@ -580,5 +651,46 @@ mod tests {
         let fit_res = t.fit("bardzodlugitekst", 10);
         assert!(fit_res.ends_with('…'));
         assert_eq!(fit_res.width(), 10);
+    }
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+
+    #[test]
+    fn role_icons_and_spinner_frames_are_one_column_wide() {
+        for glyphs in [&UNICODE, &ASCII] {
+            let icons = [
+                glyphs.waiting,
+                glyphs.problem,
+                glyphs.orchestrator,
+                glyphs.plan_verifier,
+                glyphs.auditor,
+                glyphs.worker,
+                glyphs.verifier,
+            ];
+            for icon in icons.iter().chain(glyphs.spinner) {
+                assert_eq!(icon.width(), 1, "{icon}");
+            }
+        }
+        assert!(ASCII.spinner.iter().all(|frame| frame.is_ascii()));
+    }
+
+    #[test]
+    fn spinner_wraps_and_roles_get_distinct_icons() {
+        let theme = Theme::new(true, false);
+        let frames = UNICODE.spinner.len() as u64;
+        assert_eq!(theme.spinner(0), theme.spinner(frames));
+        let keys = [
+            "orchestrator",
+            "plan_verifier",
+            "auditor",
+            "worker:t1",
+            "verifier:t1",
+        ];
+        let icons: std::collections::BTreeSet<_> =
+            keys.iter().map(|key| theme.role_icon(key)).collect();
+        assert_eq!(icons.len(), keys.len());
     }
 }

@@ -25,8 +25,8 @@ with open({log:?}, "a") as f:
         common.clone()
             + r#"
 plan = {"tasks": [
-  {"id": "t1", "title": "Storage", "goal": "Assess storage", "scope": ["src"],
-   "kind": "architecture", "verifier": {"focus": "claims", "risks": ["r-storage"]}},
+  {"id": "t1", "title": "Storage", "summary": "Oceń sposób zapisu danych.", "goal": "Assess storage", "scope": ["src"],
+   "kind": "architecture", "verifier": {"summary": "Sprawdź wnioski o zapisie danych.", "focus": "claims", "risks": ["r-storage"]}},
   {"id": "t2", "title": "TUI", "goal": "Assess TUI", "depends_on": ["t1"],
    "kind": "analysis", "verifier": {"focus": "claims", "risks": ["r-tui"]}}]}
 if "[runtime]" in prompt:
@@ -105,6 +105,50 @@ fn wait_idle(core: &Core, conversation: &str) {
         assert!(Instant::now() < deadline, "conversation never went idle");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn plan_summaries_survive_core_storage_and_event_replay() {
+    use architect::lean::{store::Store, tui::view::View};
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&state, config(&codex, &agy)).unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    core.send(&conversation.id, "Oceń zapis danych i interfejs.")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let original = core.store.latest_plan(&conversation.id).unwrap();
+    assert_eq!(original[0].spec["summary"], "Oceń sposób zapisu danych.");
+    assert_eq!(
+        original[0].spec["verifier"]["summary"],
+        "Sprawdź wnioski o zapisie danych."
+    );
+    assert!(
+        original[1].spec.get("summary").is_none(),
+        "legacy task remains readable"
+    );
+    drop(core);
+    let store = Store::open(&state.join("core.db")).unwrap();
+    assert_eq!(store.latest_plan(&conversation.id).unwrap(), original);
+    let events = store.events_since(&conversation.id, 0, 1000).unwrap();
+    let mut replay = View::default();
+    for event in &events {
+        replay.apply(&serde_json::to_value(event).unwrap());
+    }
+    assert_eq!(
+        replay.tasks[0].summary.as_deref(),
+        Some("Oceń sposób zapisu danych.")
+    );
+    assert_eq!(
+        replay.tasks[0].verifier_summary.as_deref(),
+        Some("Sprawdź wnioski o zapisie danych.")
+    );
+    assert!(replay.tasks[1].summary.is_none());
+    assert!(replay.tasks[1].verifier_summary.is_none());
+    assert_eq!(replay.tasks[0].goal, "Assess storage");
+    assert_eq!(replay.tasks[0].focus, "claims");
+    assert_eq!(replay.tasks[0].risks, ["r-storage"]);
 }
 
 #[test]

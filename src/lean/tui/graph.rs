@@ -2,6 +2,7 @@
 //! what relates them. The layout depends only on the plan's shape, so nodes
 //! stay put while events arrive.
 
+use super::theme::Theme;
 use super::view::{
     AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, View, agent_name, clean, polish, truncate, wrap,
 };
@@ -15,6 +16,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub const WIDTH: u16 = 26;
 pub const HEIGHT: u16 = 4;
+const MAX_SUMMARY_LINES: usize = 4;
 const GAP_X: u16 = 6;
 const GAP_Y: u16 = 2;
 /// Room left of the first column for edges entering it.
@@ -320,6 +322,12 @@ impl Graph {
                             || t.status.to_lowercase().contains(&q_lower)
                             || t.goal.to_lowercase().contains(&q_lower)
                             || t.focus.to_lowercase().contains(&q_lower)
+                            || t.summary
+                                .as_ref()
+                                .is_some_and(|s| s.to_lowercase().contains(&q_lower))
+                            || t.verifier_summary
+                                .as_ref()
+                                .is_some_and(|s| s.to_lowercase().contains(&q_lower))
                     })
         };
 
@@ -569,12 +577,7 @@ impl Graph {
 
         let mut row_heights = std::collections::BTreeMap::<u16, u16>::new();
         for node in graph.nodes.iter_mut().filter(|node| node.visible) {
-            if let Some(text) = task_text(view, &node.key) {
-                node.height = u16::try_from(wrap(&text, usize::from(WIDTH - 4)).len())
-                    .unwrap_or(u16::MAX - 3)
-                    .saturating_add(3)
-                    .max(HEIGHT);
-            }
+            node.height = (card_lines(view, &node.key).len() as u16 + 3).max(HEIGHT);
             row_heights
                 .entry(node.y)
                 .and_modify(|height| *height = (*height).max(node.height))
@@ -819,6 +822,18 @@ impl Graph {
     }
 
     pub fn render(&self, view: &View, canvas: &mut Canvas, filter: Filter, selected: &str) {
+        self.render_with(view, canvas, filter, selected, &Theme::new(true, false), 0);
+    }
+
+    pub fn render_with(
+        &self,
+        view: &View,
+        canvas: &mut Canvas,
+        filter: Filter,
+        selected: &str,
+        theme: &Theme,
+        tick: u64,
+    ) {
         let nodes: HashMap<&str, &Node> = self
             .nodes
             .iter()
@@ -856,13 +871,51 @@ impl Graph {
             }
         }
         for node in self.nodes.iter().filter(|n| n.visible) {
-            draw_node(view, canvas, node, node.key == selected);
+            draw_node(view, canvas, node, node.key == selected, theme, tick);
         }
     }
 }
 
-/// What a node shows: its border color, mark, status line and detail line.
-fn describe(view: &View, key: &str) -> (Color, String, String) {
+/// How an agent is doing, which decides its icon and color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Health {
+    Idle,
+    Working,
+    Waiting,
+    Problem,
+    Done,
+}
+
+pub fn health(view: &View, key: &str) -> Health {
+    if let Some((who, id)) = key.split_once(':') {
+        let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
+            return Health::Idle;
+        };
+        let verifier = who != "worker";
+        return match task.status.as_str() {
+            "failed" | "needs_user" => Health::Problem,
+            "waiting" => Health::Waiting,
+            "approved" => Health::Done,
+            "working" if !verifier => Health::Working,
+            "verifying" if verifier => Health::Working,
+            _ => Health::Idle,
+        };
+    }
+    let Some(agent) = view.agents.get(key) else {
+        return Health::Idle;
+    };
+    if agent.running {
+        Health::Working
+    } else if agent.activity.starts_with('✗') || agent.activity.starts_with('⚠') {
+        Health::Problem
+    } else {
+        Health::Idle
+    }
+}
+
+/// The node's status text (without an icon), including its provider and,
+/// while it works, what it is doing.
+fn describe(view: &View, key: &str) -> String {
     let agent = view.agents.get(key);
     let provider = agent
         .map(|agent| agent.provider.as_str())
@@ -871,92 +924,110 @@ fn describe(view: &View, key: &str) -> (Color, String, String) {
         Some(provider) => format!("{text} · {provider}"),
         None => text,
     };
-    let activity = agent.map_or("", |agent| agent.activity.as_str());
-    if let Some((who, id)) = key.split_once(':') {
+    let working = health(view, key) == Health::Working;
+    let doing = agent
+        .filter(|agent| agent.running)
+        .map(|agent| clean(&agent.activity))
+        .filter(|activity| working && !activity.is_empty() && activity != "starting turn");
+    let text = if let Some((who, id)) = key.split_once(':') {
         let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
-            return (Color::DarkGray, "?".into(), String::new());
+            return "?".into();
         };
-        let (mark, color) = mark(&task.status);
         let round = if task.round > 1 {
             format!(" r{}", task.round)
         } else {
             String::new()
         };
-        return if who == "worker" {
-            let active = task.status == "working";
-            let state = if task.status == "verifying" {
-                format!("○ waiting for verdict{round}")
+        if who == "worker" {
+            if task.status == "verifying" {
+                format!("waiting for verdict{round}")
             } else {
-                format!("{mark} {}{round}", polish(&task.status))
-            };
-            (
-                if active { Color::Cyan } else { color },
-                with_provider(state),
-                if active && !activity.is_empty() {
-                    activity.to_owned()
-                } else {
-                    task.title.clone()
-                },
-            )
+                format!("{}{round}", polish(&task.status))
+            }
         } else {
-            let active = task.status == "verifying";
-            let state = match task.status.as_str() {
-                "verifying" => "● checking".to_owned(),
-                "approved" => "✓ approved".to_owned(),
-                "needs_user" | "failed" => "✗ rejected".to_owned(),
-                "proposed" | "queued" | "working" => "○ waiting for worker".to_owned(),
-                other => format!("– {}", polish(other)),
-            };
-            (
-                if active { Color::Cyan } else { color },
-                with_provider(state),
-                if active && !activity.is_empty() {
-                    activity.to_owned()
-                } else {
-                    task.focus.clone()
-                },
-            )
-        };
-    }
-    let running = agent.is_some_and(|agent| agent.running);
-    let state = if running {
-        "● working".to_owned()
-    } else if activity.is_empty() {
-        "○ idle".to_owned()
+            match task.status.as_str() {
+                "verifying" => "checking".to_owned(),
+                "approved" => "approved".to_owned(),
+                "needs_user" | "failed" => "rejected".to_owned(),
+                "proposed" | "queued" | "working" => "waiting for worker".to_owned(),
+                other => polish(other).to_owned(),
+            }
+        }
+    } else if working {
+        "working".to_owned()
     } else {
-        activity.to_owned()
-    };
-    (
-        if running { Color::Cyan } else { Color::Gray },
-        with_provider(state),
-        if running {
-            activity.to_owned()
+        let activity = agent.map_or("", |agent| agent.activity.as_str());
+        let activity = activity.trim_start_matches(['✗', '⚠', '✓', ' ']);
+        if activity.is_empty() {
+            "idle".to_owned()
         } else {
-            String::new()
-        },
-    )
+            activity.to_owned()
+        }
+    };
+    match doing {
+        Some(doing) => format!("{} · {doing}", with_provider(text)),
+        None => with_provider(text),
+    }
 }
 
-fn task_text(view: &View, key: &str) -> Option<String> {
-    let (role, id) = key.split_once(':')?;
-    let task = view.tasks.iter().find(|task| task.id == id)?;
-    let mut text = task.title.clone();
-    if role == "worker" {
-        if !task.goal.is_empty() {
-            text.push_str(&format!("\n{}", task.goal));
+/// The same bounded, grapheme-safe text drives both layout and rendering.
+fn card_lines(view: &View, key: &str) -> Vec<String> {
+    let normalize = |text: &str| clean(text).split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = match key {
+        ORCHESTRATOR => "Coordinates the plan.".to_owned(),
+        PLAN_VERIFIER => "Checks the plan.".to_owned(),
+        AUDITOR => "Audits task results.".to_owned(),
+        super::super::COMMENT_ORCHESTRATOR => "Addresses comments.".to_owned(),
+        _ => {
+            let Some((role, task)) = key.split_once(':').and_then(|(role, id)| {
+                view.tasks
+                    .iter()
+                    .find(|task| task.id == id)
+                    .map(|task| (role, task))
+            }) else {
+                return vec![normalize(&agent_name(key))];
+            };
+            let summary = if role == "worker" {
+                &task.summary
+            } else {
+                &task.verifier_summary
+            };
+            summary
+                .as_deref()
+                .map(normalize)
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| {
+                    let label = [&task.title, &task.kind, &task.id]
+                        .into_iter()
+                        .map(|text| normalize(text))
+                        .find(|text| !text.is_empty())
+                        .unwrap_or_else(|| "task".to_owned());
+                    if role == "worker" {
+                        label
+                    } else {
+                        format!("Verify {label}.")
+                    }
+                })
         }
-        if !task.scope.is_empty() {
-            text.push_str(&format!("\nScope: {}", task.scope.join(", ")));
-        }
-    } else {
-        if !task.focus.is_empty() {
-            text.push_str(&format!("\n{}", task.focus));
-        }
-        for risk in &task.risks {
-            text.push_str(&format!("\nRisk: {risk}"));
-        }
+    };
+    let width = usize::from(WIDTH - 4);
+    let mut lines = wrap(&text, width);
+    if lines.len() > MAX_SUMMARY_LINES {
+        lines.truncate(MAX_SUMMARY_LINES);
+        let last = lines.last_mut().expect("summary has at least one line");
+        // Force an ellipsis even when the final visible line has spare columns.
+        let mut used = 0;
+        let prefix: String = last
+            .trim_end()
+            .graphemes(true)
+            .take_while(|g| {
+                used += g.width();
+                used < width
+            })
+            .collect();
+        *last = format!("{prefix}…");
     }
-    Some(clean(&text))
+    lines
 }
 
 pub fn mark(status: &str) -> (&'static str, Color) {
@@ -970,7 +1041,14 @@ pub fn mark(status: &str) -> (&'static str, Color) {
     }
 }
 
-fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
+fn draw_node(
+    view: &View,
+    canvas: &mut Canvas,
+    node: &Node,
+    selected: bool,
+    theme: &Theme,
+    tick: u64,
+) {
     if node.x >= canvas.origin_x.saturating_add(canvas.width)
         || node.x.saturating_add(WIDTH) <= canvas.origin_x
         || node.y >= canvas.origin_y.saturating_add(canvas.height)
@@ -978,74 +1056,57 @@ fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
     {
         return;
     }
-    let (color, state, detail) = describe(view, &node.key);
-    let mut border = Style::default().fg(color);
-    if selected {
-        border = border.fg(Color::White).add_modifier(Modifier::BOLD);
-    }
-    let (h, v, corners) = if selected {
-        ('═', '║', ['╔', '╗', '╚', '╝'])
+    let health = health(view, &node.key);
+    let task = node
+        .key
+        .split_once(':')
+        .and_then(|(_, id)| view.tasks.iter().find(|task| task.id == id));
+    let accent = theme.role_accent(&node.key, task.map_or("", |task| task.kind.as_str()));
+    let fill = if selected {
+        theme.raised()
     } else {
-        ('─', '│', ['╭', '╮', '╰', '╯'])
+        theme.card()
     };
+    let (icon, tone) = match health {
+        Health::Working => (theme.spinner(tick), theme.status("working")),
+        Health::Problem => (theme.glyphs().problem, theme.error()),
+        Health::Waiting => (theme.glyphs().waiting, theme.warning()),
+        Health::Done => (theme.glyphs().done, theme.status("approved")),
+        Health::Idle => (theme.glyphs().queued, theme.dim()),
+    };
+    let title_style = match health {
+        Health::Problem => theme.error(),
+        Health::Waiting => theme.warning(),
+        _ => accent,
+    }
+    .add_modifier(Modifier::BOLD);
     let (x, y) = (node.x, node.y);
     let right = x + WIDTH - 1;
     let bottom = y.saturating_add(node.height).saturating_sub(1);
-    for cx in x..=right {
-        canvas.put(cx, y, h, border);
-        canvas.put(cx, bottom, h, border);
+    // The card is its background; no frame is drawn around it.
+    for cy in y..=bottom {
+        for cx in x..=right {
+            canvas.put(cx, cy, ' ', fill);
+        }
+        // A bar at the left edge carries the agent kind (and the selection
+        // when colors are off).
+        let bar = if selected { '█' } else { '▌' };
+        canvas.put(x, cy, bar, fill.patch(accent));
     }
-    for cy in y.max(canvas.origin_y)..=bottom.min(canvas.origin_y.saturating_add(canvas.height)) {
-        canvas.put(x, cy, v, border);
-        canvas.put(right, cy, v, border);
-    }
-    canvas.put(x, y, corners[0], border);
-    canvas.put(right, y, corners[1], border);
-    canvas.put(x, bottom, corners[2], border);
-    canvas.put(right, bottom, corners[3], border);
     let inner = usize::from(WIDTH - 4);
-    let title_badge = if node.collapsed {
-        format!(
-            " {} [+] ",
-            truncate(&agent_name(&node.key), inner.saturating_sub(6))
-        )
+    let name = agent_name(&node.key);
+    let title = if node.collapsed {
+        format!("{} [+]", truncate(&name, inner.saturating_sub(7)))
     } else {
-        format!(" {} ", truncate(&agent_name(&node.key), inner - 2))
+        truncate(&name, inner.saturating_sub(2))
     };
-    canvas.text(x + 2, y, &title_badge, border);
-    // Badges for relations V/D/M on the bottom border
-    let mut rel_badges = String::new();
-    if let Some((_, id)) = node.key.split_once(':')
-        && let Some(t) = view.tasks.iter().find(|t| t.id == id)
-    {
-        if !t.depends_on.is_empty() {
-            rel_badges.push_str("D ");
-        }
-        rel_badges.push_str("V ");
-        if view
-            .links
-            .keys()
-            .any(|(from, to)| from == &node.key || to == &node.key)
-        {
-            rel_badges.push('M');
-        }
-    }
-    let rel_badges = rel_badges.trim();
-    if !rel_badges.is_empty() && inner >= rel_badges.len() + 2 {
-        canvas.text(
-            right.saturating_sub(rel_badges.len() as u16 + 2),
-            bottom,
-            &format!(" {rel_badges} "),
-            Style::default().fg(Color::DarkGray),
-        );
-    }
-    for cy in
-        (y + 1).max(canvas.origin_y)..bottom.min(canvas.origin_y.saturating_add(canvas.height))
-    {
-        for cx in x + 1..right {
-            canvas.put(cx, cy, ' ', Style::default());
-        }
-    }
+    canvas.text(x + 2, y, theme.role_icon(&node.key), fill.patch(accent));
+    canvas.text(
+        x + 4,
+        y,
+        &truncate(&title, inner.saturating_sub(2)),
+        fill.patch(title_style),
+    );
     let open = view
         .comments_on(&node.key)
         .iter()
@@ -1053,28 +1114,46 @@ fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
         .count();
     if open > 0 {
         canvas.text(
-            right - 4,
+            right - 3,
             y,
             &format!("✎{}", open.min(9)),
-            Style::default().fg(Color::Cyan),
+            fill.patch(theme.accent()),
         );
     }
-    canvas.text(x + 2, y + 1, &truncate(&state, inner), Style::default());
-    if let Some(text) = task_text(view, &node.key) {
-        for (row, line) in wrap(&text, inner).iter().enumerate() {
-            let row = u16::try_from(row).unwrap_or(u16::MAX);
-            let cy = y.saturating_add(2).saturating_add(row);
-            if cy >= bottom {
-                break;
-            }
-            canvas.text(x + 2, cy, line, Style::default());
+    canvas.text(x + 2, y + 1, icon, fill.patch(tone));
+    canvas.text(
+        x + 4,
+        y + 1,
+        &truncate(&describe(view, &node.key), inner.saturating_sub(2)),
+        fill.patch(if health == Health::Idle {
+            theme.dim()
+        } else {
+            tone
+        }),
+    );
+    for (row, line) in card_lines(view, &node.key).iter().enumerate() {
+        canvas.text(x + 2, y + 2 + row as u16, line, fill.patch(theme.text()));
+    }
+    // Relations: depends on (D), verified (V), messages (M).
+    if let Some(t) = task {
+        let mut badges = String::new();
+        if !t.depends_on.is_empty() {
+            badges.push_str("D ");
         }
-    } else {
+        badges.push_str("V ");
+        if view
+            .links
+            .keys()
+            .any(|(from, to)| from == &node.key || to == &node.key)
+        {
+            badges.push('M');
+        }
+        let badges = badges.trim();
         canvas.text(
-            x + 2,
-            y + 2,
-            &truncate(&detail, inner),
-            Style::default().fg(Color::DarkGray),
+            right.saturating_sub(badges.len() as u16 + 1),
+            bottom,
+            badges,
+            fill.patch(theme.faint()),
         );
     }
 }
@@ -1367,6 +1446,162 @@ mod tests {
     }
 
     #[test]
+    fn summaries_are_bounded_and_truncated_at_grapheme_boundaries() {
+        let mut row = task("t1", &[]);
+        row.summary = Some("👩‍💻e\u{301}".repeat(100));
+        row.verifier_summary = Some("Check the summary.".into());
+        let view = view(vec![row]);
+        let lines = card_lines(&view, "worker:t1");
+        assert_eq!(lines.len(), MAX_SUMMARY_LINES);
+        assert!(lines.last().unwrap().ends_with('…'));
+        for line in &lines {
+            assert!(line.width() <= usize::from(WIDTH - 4));
+            assert!(
+                line.graphemes(true)
+                    .all(|g| ["👩‍💻", "e\u{301}", "…"].contains(&g))
+            );
+        }
+        let graph = Graph::new(&view);
+        assert_eq!(graph.node("worker:t1").unwrap().height, 7);
+        let worker = graph.node("worker:t1").unwrap();
+        let verifier = graph.node("verifier:t1").unwrap();
+        assert!(verifier.y >= worker.y + worker.height + GAP_Y);
+        for (_, _, path) in graph.edge_routes(Filter::All) {
+            assert!(
+                graph
+                    .nodes
+                    .iter()
+                    .filter(|n| n.visible)
+                    .all(|node| !Graph::route_intersects_card(&path, node))
+            );
+        }
+    }
+
+    #[test]
+    fn missing_or_cleaned_empty_summaries_use_short_legacy_fallbacks() {
+        for summary in [None, Some(""), Some(" \n\t "), Some("\x1b[31m\x1b[0m")] {
+            let mut row = task("t1", &[]);
+            row.title = "Storage".into();
+            row.goal = "A long and unrelated goal.".repeat(40);
+            row.focus = "A long verification specification.".repeat(40);
+            row.summary = summary.map(str::to_owned);
+            row.verifier_summary = summary.map(str::to_owned);
+            let view = view(vec![row]);
+            assert_eq!(card_lines(&view, "worker:t1"), ["Storage"]);
+            assert_eq!(card_lines(&view, "verifier:t1"), ["Verify Storage."]);
+            assert!(
+                Graph::new(&view)
+                    .nodes
+                    .iter()
+                    .all(|node| node.height == HEIGHT)
+            );
+        }
+        let mut row = task("t1", &[]);
+        row.title.clear();
+        row.kind = "analysis".into();
+        assert_eq!(
+            card_lines(&view(vec![row.clone()]), "worker:t1"),
+            ["analysis"]
+        );
+        row.kind.clear();
+        assert_eq!(card_lines(&view(vec![row]), "verifier:t1"), ["Verify t1."]);
+    }
+
+    #[test]
+    fn summary_only_search_finds_tasks_and_admin_descriptions_stay_fixed() {
+        let mut row = task("t1", &[]);
+        row.summary = Some("Repair data storage.".into());
+        row.verifier_summary = Some("Validate roundtrips.".into());
+        let mut view = view(vec![row]);
+        for query in ["data storage", "roundtrips"] {
+            let graph = Graph::new_with_options(
+                &view,
+                Some(query),
+                &Default::default(),
+                GroupingMode::Dependency,
+            );
+            assert!(graph.node("worker:t1").unwrap().visible);
+            assert!(graph.node("verifier:t1").unwrap().visible);
+        }
+        for (key, description) in [
+            (ORCHESTRATOR, "Coordinates the plan."),
+            (PLAN_VERIFIER, "Checks the plan."),
+            (AUDITOR, "Audits task results."),
+            (
+                super::super::super::COMMENT_ORCHESTRATOR,
+                "Addresses comments.",
+            ),
+        ] {
+            view.agents.insert(
+                key.into(),
+                super::super::view::Agent {
+                    running: true,
+                    activity: "exec a command".into(),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(card_lines(&view, key), [description]);
+        }
+    }
+
+    #[test]
+    fn health_marks_problems_and_cards_have_no_frame() {
+        let mut failed = task("t1", &[]);
+        failed.status = "failed".into();
+        let mut waiting = task("t2", &[]);
+        waiting.status = "waiting".into();
+        let mut working = task("t3", &[]);
+        working.status = "working".into();
+        let mut done = task("t4", &[]);
+        done.status = "approved".into();
+        let mut view = view(vec![failed, waiting, working, done]);
+        assert_eq!(health(&view, "worker:t1"), Health::Problem);
+        assert_eq!(health(&view, "verifier:t1"), Health::Problem);
+        assert_eq!(health(&view, "worker:t2"), Health::Waiting);
+        assert_eq!(health(&view, "worker:t3"), Health::Working);
+        assert_eq!(health(&view, "verifier:t3"), Health::Idle);
+        assert_eq!(health(&view, "worker:t4"), Health::Done);
+        // An orchestrator turn that failed is a problem until it runs again.
+        view.agents.insert(
+            ORCHESTRATOR.into(),
+            super::super::view::Agent {
+                activity: "✗ failed: boom".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(health(&view, ORCHESTRATOR), Health::Problem);
+        assert!(describe(&view, ORCHESTRATOR).contains("failed: boom"));
+
+        let graph = Graph::new(&view);
+        let mut canvas = Canvas::new(graph.width, graph.height);
+        let theme = Theme::new(true, false);
+        graph.render_with(&view, &mut canvas, Filter::All, "worker:t1", &theme, 0);
+        let text = canvas.lines().join("\n");
+        for frame in ['╭', '╮', '╰', '╯', '╔', '╗', '╚', '╝', '║'] {
+            assert!(!text.contains(frame), "{frame} in\n{text}");
+        }
+        assert!(text.contains(theme.glyphs().problem));
+    }
+
+    #[test]
+    fn working_cards_animate_with_the_tick_and_stay_ascii_safe() {
+        let mut row = task("t1", &[]);
+        row.status = "working".into();
+        let view = view(vec![row]);
+        let graph = Graph::new(&view);
+        let frame = |theme: &Theme, tick| {
+            let mut canvas = Canvas::new(graph.width, graph.height);
+            graph.render_with(&view, &mut canvas, Filter::All, "", theme, tick);
+            canvas.lines().join("\n")
+        };
+        let unicode = Theme::new(true, false);
+        assert_ne!(frame(&unicode, 0), frame(&unicode, 1));
+        assert!(frame(&unicode, 3).contains(unicode.spinner(3)));
+        let ascii = Theme::new(false, true);
+        assert!(frame(&ascii, 2).contains(ascii.spinner(2)));
+    }
+
+    #[test]
     fn tasks_sit_in_columns_by_dependency_depth_with_their_verifier_below() {
         let view = view(vec![task("t1", &[]), task("t2", &["t1"]), task("t3", &[])]);
         let graph = Graph::new(&view);
@@ -1415,7 +1650,7 @@ mod tests {
         // t1 → t2 straight across the gap, ending in an arrow at t2's border.
         assert_eq!(chars[usize::from(next.x - 1)], '▶', "{row}");
         assert_eq!(chars[usize::from(worker.right())], '─', "{row}");
-        assert_eq!(chars[usize::from(next.x)], '║', "the selected box");
+        assert_eq!(chars[usize::from(next.x)], '█', "the selected card's bar");
         // The verifier's edge points up into its worker.
         let x = usize::from(worker.x + WIDTH / 2);
         assert_eq!(
