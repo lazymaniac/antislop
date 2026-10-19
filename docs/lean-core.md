@@ -250,21 +250,24 @@ directory to run both. The socket is `<state>/core.sock`, or
   highlighted for 10 s after one is sent) and supervision; `f` cycles which
   relations are shown (supervision only on its own, since it reaches every
   worker). The layout depends only on the plan's shape, so nodes never jump as
-  events arrive. A "teraz" overlay in a corner lists the steps actually running,
+  events arrive. A "now" overlay in a corner lists the steps actually running,
   or says that the plan waits for the user, or that nothing runs; it moves to
   the other corner rather than cover the selected node.  Tab moves focus between
-  the panels (`[Czat]`, `[Zadania]`, `[Zespół]`; on terminals narrower than 85 columns it switches
+  the panels (`[Chat]`, `[Tasks]`, `[Team]`; on terminals narrower than 85 columns it switches
   the single visible panel in compact mode); in the graph, arrows select the nearest node in that
-  direction and Enter opens its details full screen across 6 tabs: Przegląd (task, scope, goal, the
-  verifier's focus and, for a verifier, its risks), Sesja (the agent's turns, tool calls, and paginated
-  sessions history with `n`/`p`), Wiadomości (mail to and from it), Wynik (the worker's report and
-  commits, or the verifier's verdict), Kontrole (each obligation of the task's verifier, risks and
-  checklist, with how the latest verdict accounted for it) and Komentarze. A dedicated conversation
+  direction and Enter opens its details full screen. The tabs depend on the agent
+  (`tabs_for` in `details.rs`): Overview (task, scope, goal, the verifier's focus and,
+  for a verifier, its risks), Session (the CLI's transcript drawn like that CLI does:
+  prompt, reasoning, commands with their output, answers; it follows the newest entry
+  until the user scrolls up, and `Enter` folds prompts), Messages (mail to and from it),
+  Result (a worker's report and commits) or Checks (each obligation of a verifier's
+  task, risks and checklist, with how the latest verdict accounted for it), Review (the
+  plan verifier's and the auditor's latest verdict) and Comments. A dedicated conversation
   inspector opens via `Ctrl+I` or palette (`Ctrl+P`). Within inspectors, `v` toggles between Readable
   and Raw JSON view, `/` searches whole records (`DetailRecord`) with query highlighting, and per-tab
   scroll and search memory is preserved across tab and conversation switches. Explicit notices state
-  historical data gaps (`[brak danych historycznych...]`, `niedostępne (CLI ich nie zgłosił)`).
-  `/` in the graph finds an agent by role or task title; `@` on an empty draft or `Ctrl+P > Adresuj wiadomość`
+  historical data gaps (`unavailable (CLI did not report them)`, `unknown`).
+  `/` in the graph finds an agent by role or task title; `@` on an empty draft or `Ctrl+P > Address a message`
   opens a recipient picker (`@orchestrator`, `@all`, `@worker:t1`, `@verifier:t1`), validated by the daemon.
   Ctrl+F searches the conversation (newest first; Enter brings the entry to the top, highlighted);
   Ctrl+P opens a palette of every command; `?` (F1 anywhere) shows the keys of the active view. `c` comments
@@ -310,12 +313,8 @@ directory to run both. The socket is `<state>/core.sock`, or
   split and single-panel compact views.
 - `antislop chat "message"` (or piped input) prints events line by line and
   exits once the conversation is idle; `/accept` and `/cancel` lines work too.
-- `antislop export` writes the conversation's history (`--conversation ID`,
-  else the project's latest) to stdout as JSON lines: a header, then every
-  event, including which CLI, model and effort each turn ran with. Private
-  keys, bearer tokens, well-known token formats and `password=`-like values
-  are redacted; that is best effort, so the export stays where the user puts
-  it (design §15, §13).
+- There is no export command: the history is in the state directory (`.antislop/`).
+  `antislop export` says so instead of sending a message.
 
 ## Guarantees
 
@@ -349,7 +348,7 @@ directory to run both. The socket is `<state>/core.sock`, or
   conversation resumes its cut-off plan.
 - A task that stops short of approval (`needs_user`, `waiting`, `failed`,
   `cancelled`) says why in its event; the chat, the line mode and the task's
-  Przegląd show the reason (design §8.4).
+  Overview show the reason (design §8.4).
 - Before writers start in worktrees, the user is told which files have
   uncommitted changes: writers start from the last commit and do not see
   them, and a change landing on one of them waits for the user (design
@@ -418,13 +417,13 @@ directory to run both. The socket is `<state>/core.sock`, or
   kind at a time (design §17).
 - Without a UTF-8 locale, or with `ANTISLOP_ASCII` set, the TUI draws in
   ASCII: box lines become `-|+`, the selected node's border `=`, marks
-  `+ x ! * o`, Polish letters lose their diacritics and other characters
+  `+ x ! * o`, accented letters lose their diacritics and other characters
   become `?` (design §8.3).
 - Agents' text is stripped of control characters before it reaches the
   terminal, in the TUI and in line mode (design §13).
 - Token use is what the CLI reported, summed per agent in its details
-  (Przegląd). A CLI that reported nothing shows `niedostępne`, a side it
-  left out shows `nieznane`, and turns it did not report for are counted as
+  (Overview). A CLI that reported nothing shows `unavailable`, a side it
+  left out shows `unknown`, and turns it did not report for are counted as
   such: missing data is never a zero (design §14). Tokens are not turned
   into money.
 - Team graph geometry dynamically adapts to the actual interior dimensions of
@@ -445,7 +444,7 @@ directory to run both. The socket is `<state>/core.sock`, or
   same column bypass intermediate cards through a side corridor lane
   (`from.right() + GAP_X / 2`), with 0 card interior intersections verified across
   240 node pairs on a 4x4 grid and in all filter modes.
-- The 'teraz' progress overlay tests all candidate viewport corners and
+- The 'now' progress overlay tests all candidate viewport corners and
   automatically yields (hides) if visible cards occupy candidate corners.
 - Canvas memory is strictly bounded: `Canvas::new_window` allocates only
   `O(inner.width * inner.height)` viewport memory, remaining independent of
@@ -545,7 +544,7 @@ directory to run both. The socket is `<state>/core.sock`, or
 
 14. ✅ Control and observability: pause and continue, a conversation's mode
    switched for what comes next, why a task stopped, token use as reported,
-   an export of the history with secrets redacted, agents' escapes kept off
+   agents' escapes kept off
    the terminal, `NO_COLOR` and ASCII drawing, conversation search, common
    verifier checks with a `blocked` status, the CLIs' own subagents off,
    a warning about uncommitted changes writers do not see, a versioned

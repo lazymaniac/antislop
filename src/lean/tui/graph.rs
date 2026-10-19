@@ -4,7 +4,7 @@
 
 use super::theme::Theme;
 use super::view::{
-    AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, View, agent_name, clean, polish, truncate, wrap,
+    AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, View, agent_name, clean, status_label, truncate, wrap,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -942,7 +942,7 @@ fn describe(view: &View, key: &str) -> String {
             if task.status == "verifying" {
                 format!("waiting for verdict{round}")
             } else {
-                format!("{}{round}", polish(&task.status))
+                format!("{}{round}", status_label(&task.status))
             }
         } else {
             match task.status.as_str() {
@@ -950,7 +950,7 @@ fn describe(view: &View, key: &str) -> String {
                 "approved" => "approved".to_owned(),
                 "needs_user" | "failed" => "rejected".to_owned(),
                 "proposed" | "queued" | "working" => "waiting for worker".to_owned(),
-                other => polish(other).to_owned(),
+                other => status_label(other).to_owned(),
             }
         }
     } else if working {

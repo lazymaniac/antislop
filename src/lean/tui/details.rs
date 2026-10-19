@@ -2,7 +2,7 @@
 //! its session history, messages, deliverables, obligations, and comments.
 
 use super::super::tasks::{TaskSpec, obligations, status};
-use super::view::{View, agent_name, dim, duration, polish, wrap};
+use super::view::{View, agent_name, dim, duration, status_label, wrap};
 use crate::lean::store::SessionInfo;
 use ratatui::{
     Frame,
@@ -231,7 +231,7 @@ impl Details {
                 text.to_owned(),
             )
         };
-        let is_conv = self.key == "conversation" || self.key == "rozmowa";
+        let is_conv = self.key == "conversation";
         let agent = view.agents.get(&self.key);
         let task = self
             .task_id()
@@ -347,7 +347,7 @@ impl Details {
                         let mut task_lines = vec![];
                         task_lines.push(plain(format!(
                             "Task status: {}{}",
-                            polish(&task.status),
+                            status_label(&task.status),
                             if task.round > 0 {
                                 format!(" (round {})", task.round)
                             } else {
@@ -1002,7 +1002,7 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     #[test]
-    fn ac_copy_01_polish_tab_names_preserved_and_windowed_when_narrow() {
+    fn ac_copy_01_tab_names_preserved_and_windowed_when_narrow() {
         // Wide: 100 columns -> all tabs rendered
         let line = format_tabs("orchestrator", 0, 100);
         let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
@@ -1035,7 +1035,7 @@ mod tests {
     }
 
     #[test]
-    fn details_empty_states_in_polish() {
+    fn details_empty_states() {
         let view = View::default();
         let mut details = Details::new("worker:t1".into());
 

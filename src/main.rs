@@ -47,6 +47,12 @@ fn run() -> Result<()> {
                 std::path::Path::new(&args[3]),
             )
         }
+        // A lone `export` is the removed subcommand, not a message.
+        Some("export") if args.len() == 1 => Err(architect::Error::Invalid(
+            "export was removed: conversations live in the state directory (.antislop/); \
+             to send a message that starts with \"export\", add more words"
+                .into(),
+        )),
         Some("chat") => architect::lean::cli::chat(&args[1..]),
         Some("eval") => architect::lean::eval::eval(&args[1..]),
         _ => architect::lean::cli::chat(&args),

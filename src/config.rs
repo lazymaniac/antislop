@@ -307,6 +307,13 @@ impl Config {
     pub fn from_toml(source: &str) -> Result<Self> {
         // TOML errors can render the input and expose accidental credentials.
         let config: Self = toml::from_str(source).map_err(|error: toml::de::Error| {
+            if source.contains("effort_map") || source.contains("native_effort") {
+                return Error::Invalid(
+                    "effort_map and native_effort were removed from the configuration: \
+                     each CLI's reasoning ladder (light, standard, deep) is built in"
+                        .into(),
+                );
+            }
             let location = error
                 .span()
                 .map(|span| format!(" at bytes {}..{}", span.start, span.end))
@@ -640,5 +647,21 @@ mod tests {
         assert!(Config::from_toml(&text.replace("max_parallel = 4", "max_parallel = 0")).is_err());
         let one = Config::from_toml(&text.replace("max_parallel = 4", "max_parallel = 1")).unwrap();
         assert_eq!(one.policy.max_parallel, 1);
+    }
+
+    #[test]
+    fn an_old_effort_map_gets_a_message_that_says_what_changed() {
+        let text = include_str!("../examples/architect.toml");
+        let old = format!("{text}\n[providers.codex.effort_map]\nlight = \"low\"\n");
+        let error = Config::from_toml(&old).unwrap_err().to_string();
+        assert!(
+            error.contains("effort_map") && error.contains("built in"),
+            "{error}"
+        );
+        // Other mistakes keep the generic message that never echoes the input.
+        let other = Config::from_toml(&text.replace("schema_version = 1", "oops = 1"))
+            .unwrap_err()
+            .to_string();
+        assert!(other.contains("invalid TOML configuration"), "{other}");
     }
 }

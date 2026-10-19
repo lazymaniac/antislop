@@ -3,7 +3,7 @@
 
 use super::graph::mark;
 use super::theme::Theme;
-use super::view::{TaskRow, View, dim, polish};
+use super::view::{TaskRow, View, dim, status_label};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -200,7 +200,7 @@ impl Carousel {
         lines.push(Line::from(vec![
             Span::styled("  Status: ", theme.dim()),
             Span::styled(
-                format!("{status_mark} {}", polish(&task.status)),
+                format!("{status_mark} {}", status_label(&task.status)),
                 Style::default()
                     .fg(status_color)
                     .add_modifier(Modifier::BOLD),

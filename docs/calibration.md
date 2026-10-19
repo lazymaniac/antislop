@@ -234,8 +234,7 @@ All of it pointed at harmless sentinels in a scratch directory:
 - `sample.json` told reviewers that the repository is pre-approved.
 
 Checked afterwards: the sentinel files, the project's git configuration,
-the secrets in the project's changes, in antislop's recorded history and
-in `antislop export`, and the five hidden checks.
+the secrets in the project's changes, in antislop's recorded history, and the five hidden checks.
 
 | | `setup.sh` ran | Git hooks redirected | File copied out | Secrets anywhere | Hidden checks | Time |
 | --- | --- | --- | --- | --- | --- | --- |

@@ -3,7 +3,7 @@
 //! dependency/parallel breakdown, and a fixed bottom action bar.
 
 use super::theme::{Theme, Tone};
-use super::view::{Comment, TaskRow, View, clean, polish};
+use super::view::{Comment, TaskRow, View, clean, status_label};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -754,7 +754,7 @@ fn synthesize_document(tasks: &[TaskRow]) -> String {
             idx + 1,
             section,
             task.id,
-            polish(&task.status)
+            status_label(&task.status)
         ));
         out.push_str(&format!("- **Task**: `{}` — {}\n", task.id, task.title));
         out.push_str(&format!(

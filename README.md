@@ -23,8 +23,7 @@ Put an `architect.toml` in the project (start from
 antislop                         # TUI on the project's latest conversation
 antislop --new                   # TUI on a new conversation
 antislop "przeanalizuj architekturę projektu"   # line mode, exits when idle
-antislop --project DIR --config FILE --state DIR
-antislop export > history.jsonl  # the conversation's history, secrets redacted
+antislop --config FILE --state DIR   # the directory you start it in is the project
 antislop eval evals --cli codex  # verifiers on seeded cases vs a plain review
 ```
 
@@ -39,6 +38,20 @@ OpenCode is supported directly (`binary = "opencode"`) or through oMLX:
 command = ["omlx", "launch", "opencode", "--model", "YOUR_MODEL", "--"]
 isolation = "read_only"
 ```
+
+Any CLI can also be started through a launcher of another platform, e.g. Codex
+on local models, while the orchestrator keeps the plain `codex`:
+
+```toml
+[providers.codex]
+command = ["ollama", "launch", "codex", "--"]   # or ["omlx", "launch", "codex", "--"]
+isolation = "read_only"
+```
+
+The `--` ends the launcher's own options; antislop appends Codex's arguments
+(`exec --json …`) exactly as it does without a launcher. Give such workers and
+verifiers their own provider entry and profiles so the orchestrator is not
+affected.
 
 Set executor/verifier entries in `[role_providers]` and their profiles to
 `"opencode"`, with profile `model = "omlx/YOUR_MODEL"`. The launcher model
@@ -57,15 +70,19 @@ agents keep working when the frontend exits; the next call reattaches.
 
 The TUI shows the chat beside the team graph: every agent as a box, edges for
 dependencies, verification, messages and supervision (`f` filters them), and
-an overlay with what is running right now. Tab moves between the panels (`[Czat]`,
-`[Zadania]`, `[Zespół]`); in the graph, arrows select an agent, Enter opens its
-inspector details full screen across 6 tabs (`Przegląd`, `Sesja`, `Wiadomości`,
-`Wynik`, `Kontrole`, `Komentarze`). A dedicated conversation inspector opens
+an overlay with what is running right now. Tab moves between the panels (`[Chat]`,
+`[Tasks]`, `[Team]`); in the graph, arrows select an agent, Enter opens its
+inspector details full screen. The tabs depend on the agent: a worker has
+`Overview`, `Session`, `Messages`, `Result` and `Comments`; its verifier has `Checks`
+instead of `Result`; the plan verifier and auditor have a `Review` tab; the
+conversation has `Overview`, `Messages` and `Comments`. The Session tab shows the
+CLI's transcript (reasoning, commands and their output, answers) and follows the
+newest entry until you scroll up. A dedicated conversation inspector opens
 via `Ctrl+I` or palette (`Ctrl+P`). Within inspectors, `v` toggles between
 Readable and Raw JSON view, `/` searches whole records with highlighting, `n`/`p`
 paginates session history, and per-tab scroll and query memory is preserved across
 tab switches and conversation switches. Explicit notices state historical data gaps
-(`[brak danych historycznych...]`, `niedostępne (CLI ich nie zgłosił)`). `c`
+(`unavailable (CLI did not report them)`, `unknown`). `c`
 comments on an agent or sub-element with precise targets (`plan:`, `task:`,
 `check:`, `finding:`, `report:`, `artifact:`, `diff:`, `worker:`, `verifier:`,
 `conversation`). `d` opens a task's change as a diff with line numbers and reviewer
@@ -101,8 +118,8 @@ Paste, Unicode, and draft recovery:
 - Modals isolate key ownership: Help ignores typing, paste and action shortcuts until explicitly closed, hides the cursor beneath it and preserves drafts and search queries. Comment editor modal routes paste and key events to comment text. `Ctrl+C` detaches from any view.
 
 Responsive layout, carousel and adaptive team graph:
-- Minimum terminal size: 12x5 columns and rows; smaller viewports display a centered guard (`Terminal zbyt mały (wymagane min. 12x5)`).
-- Breakpoint at 85 columns: `>= 85` columns renders side-by-side split (Chat beside Team Graph or Tasks Carousel); `< 85` columns renders single-panel compact mode with active panel toggle badge `[Czat]` / `[Zadania]` / `[Zespół] (Tab: przełącz)`.
+- Minimum terminal size: 12x5 columns and rows; smaller viewports display a centered guard (`Terminal too small (min. 12x5 required)`).
+- Breakpoint at 85 columns: `>= 85` columns renders side-by-side split (Chat beside Team Graph or Tasks Carousel); `< 85` columns renders single-panel compact mode with clickable panel buttons `[Chat]` `[Tasks]` `[Team]` (`Tab` switches).
 - Tasks Carousel (`t` key): dedicated full-screen or side-by-side panel for cycling through tasks with `←`/`→`, `h`/`l`, jumping to worker (`w`) or verifier (`v`), and quick actions (`Enter` for Details, `d` for Diff, `c` for Comment).
 - Adaptive Graph Geometry: node layout dynamically adapts to actual interior dimensions of the graph panel (`inner.width`, `inner.height`), utilizing available columns and rows.
 - Panel height utilization: taller viewports fit strictly more whole readable cards without scrolling (e.g. 20 -> 26 -> 46 lines).
@@ -110,7 +127,7 @@ Responsive layout, carousel and adaptive team graph:
 - Orthogonal edge routing with corridor bypass: non-adjacent nodes in the same column bypass intermediate cards through a side corridor lane (`from.right() + GAP_X / 2`), verified with 0 card interior intersections across 240 node pairs on a 4x4 grid and in all filter modes.
 - Spatial navigation: arrow keys move strictly among visible nodes, skipping filtered or collapsed nodes.
 - Stability: selecting a node or streaming activity updates never shifts or displaces graph nodes.
-- Progress overlay collision avoidance: the 'teraz' progress box tests all four viewport corners and automatically yields (hides) if visible cards occupy candidate corners.
+- Progress overlay collision avoidance: the 'now' progress box tests all four viewport corners and automatically yields (hides) if visible cards occupy candidate corners.
 - Bounded Canvas memory: viewport windowing (`Canvas::new_window`) limits buffer allocation to `O(viewport_area)` (~99 KB–300 KB) regardless of graph size, preventing OOM crashes on large plans (tested on 500+ tasks).
 - Main footer action hints dynamically adapt to available terminal width (at 115+, 75+, 50+, <50 columns).
 - `NO_COLOR=1` disables ANSI color while preserving `dim` and `reversed` modifiers; `ANTISLOP_ASCII=1` (or non-UTF-8 locales) renders borders and status icons in plain ASCII.
@@ -134,7 +151,7 @@ Commands:
 - `@t2 text` sends text to the worker of task `t2` (delivered in its next turn; the orchestrator gets a copy). Agents message each other the same way.
 
 An agent's details show its CLI, model and effort, tokens as the CLI reported
-them (`niedostępne` when it did not), time spent in turns and, for a stopped
+them (`unavailable` when it did not), time spent in turns and, for a stopped
 task, why it stopped.
 
 ## How a request runs

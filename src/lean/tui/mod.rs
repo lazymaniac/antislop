@@ -2929,7 +2929,7 @@ impl App {
             let is_found = self.found == Some(index);
             match card_entry {
                 TranscriptCard::Message(msg) => {
-                    let is_user = msg.sender == "You" || msg.sender == "Ty" || msg.sender == "user";
+                    let is_user = msg.sender == "You" || msg.sender == "user";
                     let mut fill = if is_user {
                         theme.raised()
                     } else {

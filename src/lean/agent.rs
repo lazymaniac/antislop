@@ -1208,6 +1208,52 @@ mod tests {
     }
 
     #[test]
+    fn codex_runs_through_a_launcher_that_forwards_its_arguments() {
+        for launcher in ["omlx", "ollama"] {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join(launcher);
+            std::fs::write(
+                &script,
+                r##"#!/usr/bin/env python3
+import json, sys
+args = sys.argv[1:]
+# The launcher's own words come first, then the CLI's exactly as without it.
+assert args[:3] == ['launch', 'codex', '--'], args
+assert args[3] == 'exec', args
+assert '--json' in args and '-s' in args and 'read-only' in args, args
+assert args[-1] == '--leading dash and unicode: żółw', args
+print(json.dumps({'type': 'thread.started', 'thread_id': 'th1'}))
+print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'via launcher'}}))
+print(json.dumps({'type': 'turn.completed', 'usage': {}}))
+"##,
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let spec = Spec {
+                provider: ProviderKind::Codex,
+                binary: script,
+                args: ["launch", "codex", "--"].map(str::to_owned).to_vec(),
+                model: None,
+                effort: None,
+                cwd: dir.path().into(),
+                add_dirs: vec![],
+                access: Access::ReadOnly,
+                resume: None,
+            };
+            let outcome = run(
+                &spec,
+                "--leading dash and unicode: żółw",
+                &AtomicBool::new(false),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert_eq!(outcome.text, "via launcher");
+            assert_eq!(outcome.session.as_deref(), Some("th1"));
+        }
+    }
+
+    #[test]
     fn opencode_launcher_runs_and_resumes_with_role_permissions() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("omlx");

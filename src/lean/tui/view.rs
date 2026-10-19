@@ -1042,8 +1042,12 @@ impl View {
                         row.activity.clear();
                     }
                     if let Some(reason) = row.reason.clone() {
-                        let line =
-                            format!("! {} {}: {} — {reason}", id, row.title, polish(&row.status));
+                        let line = format!(
+                            "! {} {}: {} — {reason}",
+                            id,
+                            row.title,
+                            status_label(&row.status)
+                        );
                         self.push(Style::default().fg(Color::Yellow), line);
                     }
                     let (title, was, was_round, status, round) = progress;
@@ -1355,7 +1359,12 @@ impl View {
                     } else {
                         clean(&task.activity)
                     };
-                    lines.push(format!("{} {}: {}", task.id, polish(&task.status), act));
+                    lines.push(format!(
+                        "{} {}: {}",
+                        task.id,
+                        status_label(&task.status),
+                        act
+                    ));
                 }
                 "waiting" => lines.push(format!("{} waiting for login/limit", task.id)),
                 _ => {}
@@ -1444,13 +1453,13 @@ pub fn agent_name(key: &str) -> String {
             ORCHESTRATOR => "orchestrator".into(),
             PLAN_VERIFIER => "plan verifier".into(),
             AUDITOR => "auditor".into(),
-            "conversation" | "rozmowa" => "conversation".into(),
+            "conversation" => "conversation".into(),
             other => other.into(),
         },
     }
 }
 
-pub fn polish(status: &str) -> &str {
+pub fn status_label(status: &str) -> &str {
     match status {
         "proposed" => "proposed",
         "queued" => "queued",
@@ -2595,7 +2604,7 @@ mod tests {
     }
 
     #[test]
-    fn ac_copy_02_polish_status_strings() {
+    fn ac_copy_02_status_strings() {
         let header = render_header(
             "test-proj",
             "conv-12345",
@@ -2650,7 +2659,7 @@ mod tests {
     }
 
     #[test]
-    fn transcript_empty_state_polish() {
+    fn transcript_empty_state_text() {
         let lines = transcript_empty_state(80);
         let text = lines[0].spans[0].content.as_ref();
         assert_eq!(text, "No messages in this conversation.");
