@@ -25,6 +25,8 @@ local_commits = false
 # Plans that change code always get the static analysis, testing and
 # integration gates they lack from the predefined agent pool.
 required_gates = true
+# Most tasks of a plan that run at the same time.
+max_parallel = 4
 
 [providers.codex]
 binary = "codex"

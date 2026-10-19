@@ -7,6 +7,11 @@ use std::time::{Duration, Instant};
 /// Fake codex (orchestrator) and agy (everyone else). Both log every prompt
 /// to `prompts.jsonl`; `answer` comes from the given Python statements.
 fn open(dir: &Path, orchestrator: &str, agent: &str) -> Arc<Core> {
+    open_limited(dir, orchestrator, agent, 4)
+}
+
+/// Like [`open`], with at most `max_parallel` tasks of a plan at a time.
+fn open_limited(dir: &Path, orchestrator: &str, agent: &str, max_parallel: usize) -> Arc<Core> {
     let log = dir.join("prompts.jsonl");
     let header = format!(
         r#"#!/usr/bin/env python3
@@ -66,6 +71,10 @@ def message(to, kind, text):
     .replace(
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
+    )
+    .replace(
+        "max_parallel = 4",
+        &format!("max_parallel = {max_parallel}"),
     );
     std::fs::create_dir_all(dir.join("project")).unwrap();
     Core::open(&dir.join("state"), Config::from_toml(&text).unwrap()).unwrap()
@@ -415,4 +424,66 @@ else:
         core.store.latest_plan(&conversation).unwrap()[0].plan_id,
         plan
     );
+}
+
+/// Two independent read-only tasks whose workers log when they start and end.
+fn timed_plan(dir: &Path, max_parallel: usize) -> Vec<(f64, f64)> {
+    let log = dir.join("times.log");
+    let core = open_limited(
+        dir,
+        r#"
+answer = plan(task("t1", "One"), task("t2", "Two")) if "[runtime]" not in prompt else "done"
+"#,
+        &format!(
+            r#"    import time
+    start = time.time()
+    time.sleep(0.8)
+    with open({log:?}, "a") as f:
+        f.write(f"{{start}} {{time.time()}}\n")
+    answer = "report""#,
+            log = log.to_string_lossy()
+        ),
+        max_parallel,
+    );
+    let conversation = core.start(&dir.join("project")).unwrap().id;
+    core.send(&conversation, "two things").unwrap();
+    wait_until("plan proposed", || core.is_idle(&conversation));
+    let plan = core.store.latest_plan(&conversation).unwrap()[0]
+        .plan_id
+        .clone();
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_until("plan done", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .plan(&plan)
+                .unwrap()
+                .iter()
+                .all(|t| t.status == "approved")
+    });
+    std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let (a, b) = line.split_once(' ').unwrap();
+            (a.parse().unwrap(), b.parse().unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn independent_tasks_overlap_in_time_unless_the_limit_says_otherwise() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut spans = timed_plan(dir.path(), 4);
+    spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    assert_eq!(spans.len(), 2);
+    assert!(
+        spans[1].0 < spans[0].1,
+        "the second started before the first ended: {spans:?}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut spans = timed_plan(dir.path(), 1);
+    spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    assert!(spans[1].0 >= spans[0].1, "one at a time: {spans:?}");
 }

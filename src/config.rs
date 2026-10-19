@@ -210,10 +210,17 @@ pub struct Policy {
     /// predefined agent pool (static analysis, testing, integration) it lacks.
     #[serde(default = "default_required_gates")]
     pub required_gates: bool,
+    /// Most tasks of a plan that run at the same time.
+    #[serde(default = "default_max_parallel")]
+    pub max_parallel: usize,
 }
 
 fn default_required_gates() -> bool {
     true
+}
+
+fn default_max_parallel() -> usize {
+    4
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +325,10 @@ impl Config {
             "unsupported configuration schema version",
         )?;
         require(self.policy.revision > 0, "policy revision must be positive")?;
+        require(
+            self.policy.max_parallel > 0,
+            "policy max_parallel must be at least 1",
+        )?;
         require(
             !self.providers.is_empty(),
             "at least one explicit provider is required",
@@ -619,5 +630,15 @@ mod tests {
                 assert_eq!(profile.native_effort.as_deref(), Some("high"));
             }
         }
+    }
+
+    #[test]
+    fn max_parallel_defaults_to_four_and_must_be_positive() {
+        let text = include_str!("../examples/architect.toml");
+        let default = Config::from_toml(&text.replace("max_parallel = 4\n", "")).unwrap();
+        assert_eq!(default.policy.max_parallel, 4);
+        assert!(Config::from_toml(&text.replace("max_parallel = 4", "max_parallel = 0")).is_err());
+        let one = Config::from_toml(&text.replace("max_parallel = 4", "max_parallel = 1")).unwrap();
+        assert_eq!(one.policy.max_parallel, 1);
     }
 }

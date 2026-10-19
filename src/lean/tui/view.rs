@@ -914,13 +914,34 @@ impl View {
                             )
                         })
                         .collect();
+                    // Ordered through any chain of dependencies, as the core
+                    // computes it (`tasks::parallel_peers`).
+                    let direct: HashMap<&str, &[String]> = ids_and_deps
+                        .iter()
+                        .map(|(id, deps, _, _)| (id.as_str(), deps.as_slice()))
+                        .collect();
+                    let reaches = |from: &str, to: &str| {
+                        let mut stack = vec![from];
+                        let mut seen = std::collections::HashSet::new();
+                        while let Some(id) = stack.pop() {
+                            for dep in direct.get(id).copied().unwrap_or_default() {
+                                if dep == to {
+                                    return true;
+                                }
+                                if seen.insert(dep.as_str()) {
+                                    stack.push(dep);
+                                }
+                            }
+                        }
+                        false
+                    };
                     for row in &mut self.tasks {
                         row.parallel_with = ids_and_deps
                             .iter()
-                            .filter(|(oid, odeps, owrites, oscope)| {
+                            .filter(|(oid, _, owrites, oscope)| {
                                 *oid != row.id
-                                    && !row.depends_on.contains(oid)
-                                    && !odeps.contains(&row.id)
+                                    && !reaches(&row.id, oid)
+                                    && !reaches(oid, &row.id)
                                     && !(row.writes
                                         && *owrites
                                         && super::super::tasks::scopes_overlap(&row.scope, oscope))
@@ -1891,6 +1912,32 @@ mod tests {
         assert_eq!(view.comment_state(4), "addressed");
         view.apply(&event(4, None, "comment_replied", json!({"comments": [4]})));
         assert_eq!(view.comment_state(4), "answered");
+    }
+
+    #[test]
+    fn the_fallback_for_parallel_tasks_follows_chains_of_dependencies() {
+        let mut view = View::default();
+        // t3 depends on t2 which depends on t1: none of them can overlap.
+        // t4 is free of all of them.
+        view.apply(&event(
+            1,
+            None,
+            "plan_proposed",
+            json!({"tasks": [
+                {"id": "t1"}, {"id": "t2", "depends_on": ["t1"]},
+                {"id": "t3", "depends_on": ["t2"]}, {"id": "t4"}]}),
+        ));
+        let peers = |id: &str| -> Vec<String> {
+            view.tasks
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap()
+                .parallel_with
+                .clone()
+        };
+        assert_eq!(peers("t1"), ["t4"]);
+        assert_eq!(peers("t3"), ["t4"]);
+        assert_eq!(peers("t4"), ["t1", "t2", "t3"]);
     }
 
     #[test]

@@ -234,6 +234,51 @@ pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
     head(worktree)
 }
 
+/// A commit with the changes `(base, result)` of several writers laid on
+/// `onto`, made in a scratch worktree. A change already contained in `onto`
+/// (it was integrated and committed) is skipped; one that does not apply is
+/// an error saying which.
+pub fn combine(
+    project: &Path,
+    scratch: &Path,
+    onto: &str,
+    changes: &[(String, String)],
+) -> Result<String> {
+    let branch = format!(
+        "antislop/combine-{}",
+        scratch
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+    );
+    if scratch.exists() {
+        let _ = remove_worktree(project, scratch, &branch);
+    }
+    add_worktree(project, scratch, &branch, onto)?;
+    let result = (|| {
+        let file = scratch.with_extension("patch");
+        for (base, change) in changes {
+            let patch = patch(project, base, Some(change))?;
+            if patch.trim().is_empty() {
+                continue;
+            }
+            std::fs::write(&file, format!("{patch}\n"))?;
+            let path = file.to_string_lossy();
+            if ok(scratch, &["apply", "--3way", "--index", &path]).is_err() {
+                // Already there if it undoes cleanly.
+                ok(scratch, &["apply", "--check", "-R", &path]).map_err(|_| {
+                    Error::Invalid(format!(
+                        "the change {base}..{change} does not apply to {onto}"
+                    ))
+                })?;
+            }
+        }
+        let _ = std::fs::remove_file(&file);
+        commit_all(scratch, "Results of the tasks this one depends on")
+    })();
+    let _ = remove_worktree(project, scratch, &branch);
+    result
+}
+
 pub fn diff_stat(dir: &Path, base: &str, result: &str) -> Result<String> {
     ok(dir, &["diff", "--stat", base, result])
 }
@@ -558,14 +603,83 @@ mod tests {
         file: &str,
         text: &str,
     ) -> (tempfile::TempDir, String, String) {
+        worker_change_as(project, "t1", file, text)
+    }
+
+    fn worker_change_as(
+        project: &Path,
+        task: &str,
+        file: &str,
+        text: &str,
+    ) -> (tempfile::TempDir, String, String) {
         let trees = tempfile::tempdir().unwrap();
-        let worktree = trees.path().join("t1");
+        let worktree = trees.path().join(task);
         let base = head(project).unwrap();
-        add_worktree(project, &worktree, "antislop/t1", &base).unwrap();
+        add_worktree(project, &worktree, &format!("antislop/{task}"), &base).unwrap();
         std::fs::write(worktree.join(file), text).unwrap();
         commit_all(&worktree, "work").unwrap();
         let change = squash(&worktree, &base, "Task t1").unwrap();
         (trees, base, change)
+    }
+
+    #[test]
+    fn results_of_several_writers_are_laid_on_one_base() {
+        let project = repo();
+        let (_t1, base1, change1) = worker_change(project.path(), "a.txt", "from first\n");
+        let (_t2, base2, change2) =
+            worker_change_as(project.path(), "t2", "b.txt", "from second\n");
+        let scratch = tempfile::tempdir().unwrap();
+        let onto = head(project.path()).unwrap();
+        let combined = combine(
+            project.path(),
+            &scratch.path().join("base-t3"),
+            &onto,
+            &[(base1.clone(), change1.clone()), (base2, change2)],
+        )
+        .unwrap();
+        let show =
+            |file: &str| ok(project.path(), &["show", &format!("{combined}:{file}")]).unwrap();
+        assert_eq!(show("a.txt"), "from first");
+        assert_eq!(show("b.txt"), "from second");
+        // The user's working tree and branch are untouched.
+        assert_eq!(head(project.path()).unwrap(), onto);
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("a.txt")).unwrap(),
+            "one\n"
+        );
+        // A change that is already part of the base is skipped, not an error.
+        let again = combine(
+            project.path(),
+            &scratch.path().join("base-t4"),
+            &combined,
+            &[(base1, change1)],
+        )
+        .unwrap();
+        assert_eq!(
+            ok(project.path(), &["show", &format!("{again}:a.txt")]).unwrap(),
+            "from first"
+        );
+    }
+
+    #[test]
+    fn a_change_that_does_not_apply_is_named_in_the_error() {
+        let project = repo();
+        let (_t1, base1, change1) = worker_change(project.path(), "a.txt", "from first\n");
+        // The user changed the same line differently and committed.
+        std::fs::write(project.path().join("a.txt"), "user\n").unwrap();
+        commit_all(project.path(), "user edit").unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let onto = head(project.path()).unwrap();
+        let error = combine(
+            project.path(),
+            &scratch.path().join("base-t3"),
+            &onto,
+            &[(base1, change1)],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("does not apply"), "{error}");
+        assert!(!scratch.path().join("base-t3").exists(), "scratch removed");
     }
 
     #[test]

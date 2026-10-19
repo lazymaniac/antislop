@@ -2325,13 +2325,22 @@ impl Core {
                             settled = true;
                             continue;
                         }
+                        // The plan's limit on tasks running at once; the rest
+                        // stay queued until one finishes.
+                        if in_flight_ids.len() >= self.config.policy.max_parallel {
+                            continue;
+                        }
                         let writes = task.spec["writes"].as_bool().unwrap_or(false);
                         let task_scope: Vec<String> =
                             serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
+                        // In place, writers take turns in the user's directory
+                        // whatever their scopes; the others wait queued.
+                        let one_at_a_time = self.config.workspace.mode == WorkspaceMode::InPlace;
                         let write_conflict = writes
-                            && in_flight_writers.values().any(|active_scope| {
-                                tasks::scopes_overlap(&task_scope, active_scope)
-                            });
+                            && (one_at_a_time && !in_flight_writers.is_empty()
+                                || in_flight_writers.values().any(|active_scope| {
+                                    tasks::scopes_overlap(&task_scope, active_scope)
+                                }));
                         if !write_conflict {
                             in_flight_ids.insert(spec_id.clone());
                             if writes {
@@ -2829,8 +2838,11 @@ impl Core {
 
     /// A writer starts from its writing dependency's result, so it sees that
     /// work; otherwise from the project's current commit.
+    /// Where a writer starts: from the result of the one task it depends on,
+    /// from the user's HEAD when none of them wrote, and from HEAD with all
+    /// their results laid on it when several did.
     fn writer_base(&self, plan_id: &str, spec: &TaskSpec, project: &Path) -> Result<String> {
-        let results: Vec<String> = self
+        let changes: Vec<(String, String)> = self
             .store
             .plan(plan_id)?
             .into_iter()
@@ -2839,11 +2851,24 @@ impl Core {
                     .iter()
                     .any(|dependency| task.spec["id"] == dependency.as_str())
             })
-            .filter_map(|task| task.result)
+            .filter_map(|task| Some((task.base?, task.result?)))
             .collect();
-        match results.as_slice() {
-            [single] => Ok(single.clone()),
-            _ => git::head(project),
+        match changes.as_slice() {
+            [] => git::head(project),
+            [(_, single)] => Ok(single.clone()),
+            _ => {
+                let scratch = self
+                    .state
+                    .join("worktrees")
+                    .join(format!("base-{plan_id}-{}", spec.id));
+                git::combine(project, &scratch, &git::head(project)?, &changes).map_err(|error| {
+                    crate::Error::Invalid(format!(
+                        "could not combine the results of {} for {}: {error}",
+                        spec.depends_on.join(", "),
+                        spec.id
+                    ))
+                })
+            }
         }
     }
 
