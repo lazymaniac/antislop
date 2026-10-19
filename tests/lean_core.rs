@@ -229,7 +229,7 @@ fn failed_comments_keep_the_raw_error_and_reopening_retries_them() {
     {
         view.apply(&serde_json::to_value(event).unwrap());
     }
-    assert_eq!(view.comment_state(comment.id), "addressed");
+    assert_eq!(view.comment_state(comment.id), "answered");
     assert!(view.comment_error(comment.id).is_none());
     assert_eq!(
         core.store.comments(&conversation.id, "open").unwrap().len(),
@@ -352,7 +352,7 @@ fn interrupted_comment_sessions_resume_after_daemon_restart() {
     for event in core.store.events_since(&conversation.id, 0, 500).unwrap() {
         view.apply(&serde_json::to_value(event).unwrap());
     }
-    assert_eq!(view.comment_state(comment.id), "addressed");
+    assert_eq!(view.comment_state(comment.id), "answered");
     assert!(view.comment_activity().is_none());
 }
 

@@ -1203,6 +1203,17 @@ impl Store {
 
     /// Resolve only plan feedback included in the successful revision.
     pub fn resolve_plan_comments(&self, conversation: &str, upto: u64) -> Result<()> {
+        self.resolve_listed_plan_comments(conversation, upto, None)
+    }
+
+    /// Like [`Self::resolve_plan_comments`], but only the comments in `only`
+    /// when given: the ones the comment agent said its plan took care of.
+    pub fn resolve_listed_plan_comments(
+        &self,
+        conversation: &str,
+        upto: u64,
+        only: Option<&[u64]>,
+    ) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
         let comments = Self::comment_rows(
@@ -1211,6 +1222,9 @@ impl Store {
             params![conversation, upto as i64],
         )?;
         for mut comment in comments {
+            if only.is_some_and(|ids| !ids.contains(&comment.id)) {
+                continue;
+            }
             tx.execute(
                 "UPDATE comments SET status='resolved',updated_ms=?1 WHERE id=?2",
                 params![now_ms(), comment.id as i64],

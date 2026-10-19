@@ -1029,6 +1029,17 @@ impl View {
                     self.report_progress(&id, &title, (&was, was_round), (&status, round), reason);
                 }
             }
+            "comment_replied" => {
+                // Answered in words: the comment stays open for the user.
+                for id in payload["comments"].as_array().into_iter().flatten() {
+                    if let Some(id) = id.as_u64()
+                        && let Some(progress) = self.comment_progress.get_mut(&id)
+                        && progress.state == "addressed"
+                    {
+                        progress.state = "answered".into();
+                    }
+                }
+            }
             "paused" => {
                 self.paused = payload["paused"] == true;
                 let txt = if self.paused {
@@ -1853,6 +1864,33 @@ mod tests {
             })
             .collect();
         assert_eq!(states, ["draft", "sent"]);
+    }
+
+    #[test]
+    fn a_comment_answered_in_words_is_marked_answered_not_addressed() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "comment",
+            json!({"id": 4, "plan_id": "p", "target": "plan:p", "label": "plan", "text": "why?",
+                   "status": "open", "message": 3}),
+        ));
+        view.apply(&event(
+            2,
+            Some("c"),
+            "turn_started",
+            json!({"role": "comment-orchestrator", "provider": "codex", "comments": [4]}),
+        ));
+        view.apply(&event(
+            3,
+            Some("c"),
+            "turn_finished",
+            json!({"role": "comment-orchestrator", "status": "done"}),
+        ));
+        assert_eq!(view.comment_state(4), "addressed");
+        view.apply(&event(4, None, "comment_replied", json!({"comments": [4]})));
+        assert_eq!(view.comment_state(4), "answered");
     }
 
     #[test]

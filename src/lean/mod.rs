@@ -6,6 +6,7 @@ pub mod cli;
 pub mod daemon;
 pub mod diff;
 pub mod eval;
+pub mod feedback;
 pub mod git;
 pub mod store;
 pub mod tasks;
@@ -982,9 +983,13 @@ impl Core {
         comments.extend(self.store.comments(conversation, "draft")?);
         Ok(comments
             .into_iter()
+            // The same rule as the screen's (`View::open_plan_comments`).
             .filter(|c| {
-                c.plan_id.as_deref() == Some(plan_id)
-                    && (c.target == exact || c.target.starts_with(&prefix) || c.target == "plan")
+                (c.plan_id.is_none() || c.plan_id.as_deref() == Some(plan_id))
+                    && (c.target == "plan"
+                        || c.target == exact
+                        || c.target.starts_with(&prefix)
+                        || c.target.starts_with("plan:line:"))
             })
             .collect())
     }
@@ -1794,7 +1799,12 @@ impl Core {
                  produce a revised complete plan in the required plan format when changes are \
                  needed; otherwise explain your decision or ask a concrete question. Do not \
                  merely acknowledge or wait for plan acceptance. Only comments included in \
-                 this turn can be addressed.\n",
+                 this turn can be addressed.\n\n\
+                 End your answer with a ```comments block naming the comments your revised plan \
+                 took care of, for example \
+                 ```comments {\"addressed\":[{\"id\":3,\"how\":\"what changed\"}]}```. \
+                 A comment you only answered, or that needs the user's decision, stays out of \
+                 it and stays open.\n",
             );
             let comments = self.store.comments(conversation, "open")?;
             let mut plans: std::collections::BTreeSet<_> = comments
@@ -1836,6 +1846,12 @@ impl Core {
             ORCHESTRATOR,
             &answer,
         )?;
+        // The comment agent says which comments its plan took care of.
+        let (answer, addressed) = if is_comment {
+            feedback::split(&answer)
+        } else {
+            (answer, None)
+        };
         let (text, plan) = tasks::parse_plan(&answer);
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
         match plan {
@@ -1845,7 +1861,14 @@ impl Core {
                 } else {
                     specs
                 };
-                self.propose(conversation, &project, &text, &specs, cancel)?
+                self.propose(
+                    conversation,
+                    &project,
+                    &text,
+                    &specs,
+                    addressed.as_deref(),
+                    cancel,
+                )?
             }
             Some(Err(error)) => {
                 self.store.append_event(
@@ -1856,7 +1879,25 @@ impl Core {
                     &json!({"error": error.to_string()}),
                 )?;
             }
-            None => {}
+            None => {
+                // Answered in words only: the comments stay open for the user.
+                if is_comment {
+                    let replied: Vec<u64> = self
+                        .store
+                        .comments(conversation, "open")?
+                        .into_iter()
+                        .filter(|c| c.message > answered && c.message <= upto)
+                        .map(|c| c.id)
+                        .collect();
+                    self.store.append_event(
+                        conversation,
+                        None,
+                        None,
+                        "comment_replied",
+                        &json!({"comments": replied}),
+                    )?;
+                }
+            }
         }
         Ok(())
     }
@@ -1871,6 +1912,7 @@ impl Core {
         project: &Path,
         text: &str,
         specs: &[TaskSpec],
+        addressed: Option<&[u64]>,
         cancel: &AtomicBool,
     ) -> Result<()> {
         let values = specs
@@ -1926,7 +1968,9 @@ impl Core {
         }
         let checked = review.as_ref().is_ok_and(|verdict| verdict.approved);
         if checked {
-            self.store.resolve_plan_comments(conversation, answered)?;
+            // Only what the comment agent listed, else everything it was given.
+            self.store
+                .resolve_listed_plan_comments(conversation, answered, addressed)?;
         }
         let autonomous = self.autonomous(conversation)?;
         let waiting = if !autonomous {
@@ -3286,7 +3330,7 @@ fn orchestrator_prompt(
     if !open.is_empty() {
         prompt.push_str(
             "\n\nComments the user has not resolved yet (answer, ask, or propose work for \
-             them; only the user resolves a comment):",
+             them; a comment is resolved when a checked plan lists it as addressed, or by the user):",
         );
         for comment in open {
             prompt.push_str(&format!(

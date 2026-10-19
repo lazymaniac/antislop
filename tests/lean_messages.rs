@@ -310,3 +310,109 @@ answer = "First sentence.\nSecond line of the answer that is kept whole."
             .contains("Second line of the answer that is kept whole.")
     );
 }
+
+fn plan_with_two_draft_comments(core: &Arc<Core>, dir: &Path) -> (String, String, Vec<u64>) {
+    let conversation = core.start(&dir.join("project")).unwrap().id;
+    core.send(&conversation, "plan it").unwrap();
+    wait_until("plan proposed", || core.is_idle(&conversation));
+    let plan = core.store.latest_plan(&conversation).unwrap()[0]
+        .plan_id
+        .clone();
+    let ids = ["first remark", "second remark"]
+        .iter()
+        .enumerate()
+        .map(|(n, text)| {
+            core.comment_scoped(
+                &conversation,
+                Some(&plan),
+                &format!("plan:{plan}:line:{}", n + 1),
+                text,
+            )
+            .unwrap()
+            .id
+        })
+        .collect();
+    (conversation, plan, ids)
+}
+
+#[test]
+fn only_the_comments_the_agent_lists_as_addressed_are_resolved() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+import re
+if "Address each new user comment" in prompt:
+    ids = re.findall(r"user comment #(\d+) on", prompt)
+    answer = "Revised.\n```comments\n" + json.dumps({"addressed": [{"id": int(ids[0]), "how": "changed"}]}) + "\n```\n" + plan(task("t1", "Parser v2"))
+else:
+    answer = plan(task("t1", "Parser"))
+"#,
+        // The follow-up check of a revised plan is a review too.
+        "    answer = verdict(True) if \"new plan\" in prompt else 'unused'",
+    );
+    let (conversation, plan, ids) = plan_with_two_draft_comments(&core, dir.path());
+    core.review_comments(&conversation, &plan).unwrap();
+    wait_until("revised", || {
+        core.is_idle(&conversation)
+            && core.store.latest_plan(&conversation).unwrap()[0].plan_id != plan
+    });
+    let status = |id: u64| {
+        ["open", "resolved"]
+            .into_iter()
+            .find(|s| {
+                core.store
+                    .comments(&conversation, s)
+                    .unwrap()
+                    .iter()
+                    .any(|c| c.id == id)
+            })
+            .unwrap()
+    };
+    assert_eq!(status(ids[0]), "resolved", "the listed comment");
+    assert_eq!(
+        status(ids[1]),
+        "open",
+        "the unlisted one waits for the user"
+    );
+    // The block is not shown to the user.
+    let said = core
+        .store
+        .messages_by(&conversation, "orchestrator", 0)
+        .unwrap();
+    assert!(said.iter().all(|m| !m.text.contains("```comments")));
+}
+
+#[test]
+fn comments_answered_in_words_stay_open_and_are_reported_as_replied() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+if "Address each new user comment" in prompt:
+    answer = "Because the plan is split by module."
+else:
+    answer = plan(task("t1", "Parser"))
+"#,
+        "    answer = 'unused'",
+    );
+    let (conversation, plan, ids) = plan_with_two_draft_comments(&core, dir.path());
+    core.review_comments(&conversation, &plan).unwrap();
+    wait_until("answered", || {
+        core.is_idle(&conversation) && !events(&core, &conversation, "comment_replied").is_empty()
+    });
+    let open: Vec<u64> = core
+        .store
+        .comments(&conversation, "open")
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(open, ids);
+    let replied = &events(&core, &conversation, "comment_replied")[0];
+    assert_eq!(replied["comments"], serde_json::json!(ids));
+    assert_eq!(
+        core.store.latest_plan(&conversation).unwrap()[0].plan_id,
+        plan
+    );
+}
