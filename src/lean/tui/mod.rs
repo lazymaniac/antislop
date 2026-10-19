@@ -2302,6 +2302,10 @@ impl App {
                 details.raw = !details.raw;
                 return;
             }
+            KeyCode::Enter if details.tab == 1 => {
+                details.expand_prompts = !details.expand_prompts;
+                return;
+            }
             KeyCode::Char(c @ '1'..='5') => {
                 if let Some(tab) = details.nth_tab((c as usize) - ('1' as usize)) {
                     details.switch_tab(tab);
@@ -4192,5 +4196,36 @@ pub mod tests {
         );
         let text: String = wide.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text.matches("[Plan]").count(), 1);
+    }
+
+    #[test]
+    fn enter_folds_and_unfolds_prompts_on_the_session_tab_only() {
+        let mut app = test_app();
+        app.view.agents.insert(
+            "worker:t1".into(),
+            view::Agent {
+                provider: "codex".into(),
+                feed: vec![session::Block::Prompt(
+                    (0..20).map(|n| format!("p{n}\n")).collect::<String>(),
+                )],
+                ..view::Agent::default()
+            },
+        );
+        app.details = Some(details::Details::new("worker:t1".into()));
+        app.key(key_press(KeyCode::Enter));
+        assert!(!app.details.as_ref().unwrap().expand_prompts, "Overview");
+        app.details.as_mut().unwrap().switch_tab(1);
+        app.key(key_press(KeyCode::Enter));
+        let details = app.details.as_mut().unwrap();
+        assert!(details.expand_prompts);
+        let shown: String = details
+            .lines(&app.view)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(shown.contains("p19"));
+        app.key(key_press(KeyCode::Enter));
+        assert!(!app.details.as_ref().unwrap().expand_prompts);
     }
 }

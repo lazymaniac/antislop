@@ -152,7 +152,12 @@ fn block(
 }
 
 /// The blocks of one agent as styled lines, in the style of its `provider`.
-pub fn render(provider: &str, blocks: &[Block]) -> Vec<(Style, String)> {
+pub fn render(provider: &str, blocks: &[Block], expand_prompts: bool) -> Vec<(Style, String)> {
+    let prompt_lines = if expand_prompts {
+        usize::MAX
+    } else {
+        PROMPT_LINES
+    };
     let look = look(provider);
     let mut out = Vec::new();
     for item in blocks {
@@ -169,7 +174,7 @@ pub fn render(provider: &str, blocks: &[Block]) -> Vec<(Style, String)> {
                 ));
             }
             Block::Prompt(text) => {
-                block(&mut out, text, look.prompt, "  ", PROMPT_LINES, dim());
+                block(&mut out, text, look.prompt, "  ", prompt_lines, dim());
             }
             Block::User(text) => {
                 block(
@@ -303,16 +308,16 @@ mod tests {
 
     #[test]
     fn each_cli_is_drawn_in_its_own_style() {
-        let codex = text(&render("codex", &sample()));
+        let codex = text(&render("codex", &sample(), false));
         assert!(codex.contains("• Ran cargo check"), "{codex}");
         assert!(codex.contains("  └ error: boom"), "{codex}");
         assert!(codex.contains("exit code 101"));
         assert!(codex.contains("› Fix the bug"));
-        let claude = text(&render("claude", &sample()));
+        let claude = text(&render("claude", &sample(), false));
         assert!(claude.contains("⏺ shell(cargo check)"), "{claude}");
         assert!(claude.contains("  ⎿  error: boom"), "{claude}");
         assert!(claude.contains("✻ Look at main first"));
-        let other = text(&render("opencode", &sample()));
+        let other = text(&render("opencode", &sample(), false));
         assert!(other.contains("→ shell cargo check"), "{other}");
     }
 
@@ -329,6 +334,7 @@ mod tests {
                 text: long,
                 exit_code: Some(1),
             }],
+            false,
         );
         let shown = text(&lines);
         assert!(shown.contains("line 11"));
@@ -349,9 +355,25 @@ mod tests {
                     exit_code: None,
                 },
             ],
+            false,
         ));
         assert!(!shown.contains('\u{1b}'));
         assert!(shown.contains("hi red"));
         assert!(shown.contains("(no output)"));
+    }
+
+    #[test]
+    fn prompts_fold_until_expanded() {
+        let prompt = Block::Prompt(
+            (0..20)
+                .map(|n| format!("p{n}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let folded = text(&render("codex", std::slice::from_ref(&prompt), false));
+        assert!(folded.contains("p5") && !folded.contains("p6"));
+        assert!(folded.contains("… +14 more lines"));
+        let full = text(&render("codex", &[prompt], true));
+        assert!(full.contains("p19") && !full.contains("more lines"));
     }
 }

@@ -14,12 +14,13 @@ use ratatui::{
 use serde_json::Value;
 use std::collections::HashMap;
 
-pub const TABS: [&str; 6] = [
-    "Overview", "Session", "Messages", "Result", "Checks", "Comments",
+pub const TABS: [&str; 7] = [
+    "Overview", "Session", "Messages", "Result", "Checks", "Comments", "Review",
 ];
 pub const RESULT: usize = 3;
 pub const CHECKS: usize = 4;
 pub const COMMENTS: usize = 5;
+pub const REVIEW: usize = 6;
 
 /// The tabs that mean something for an agent: indexes into [`TABS`].
 /// A worker has a result but no checks; its verifier has checks but no
@@ -28,7 +29,7 @@ pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
         "worker" => vec![0, 1, 2, RESULT, COMMENTS],
         "verifier" => vec![0, 1, 2, CHECKS, COMMENTS],
-        "plan-verifier" | "auditor" => vec![0, 1, COMMENTS],
+        "plan-verifier" | "auditor" => vec![0, 1, REVIEW, COMMENTS],
         "orchestrator" | "comment-orchestrator" => vec![0, 1, 2, COMMENTS],
         _ => vec![0, 2, COMMENTS],
     }
@@ -65,6 +66,8 @@ pub struct Details {
     pub sessions: Vec<SessionInfo>,
     /// Explicit flag indicating missing/pruned historical data
     pub history_unavailable: bool,
+    /// Prompts of the Session tab are shown whole instead of folded.
+    pub expand_prompts: bool,
 }
 
 impl Details {
@@ -82,6 +85,7 @@ impl Details {
             raw: false,
             sessions: Vec::new(),
             history_unavailable: false,
+            expand_prompts: false,
         }
     }
 
@@ -393,20 +397,6 @@ impl Details {
                             raw_value: self.task.clone(),
                         });
                     }
-                    if let Some(review) = view.reviews.get(&self.key) {
-                        let mut rev_lines = vec![plain(String::new()), label("Latest result")];
-                        rev_lines.extend(review.iter().cloned().map(plain));
-                        let text = rev_lines
-                            .iter()
-                            .map(|(_, t)| t.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        records.push(DetailRecord {
-                            lines: rev_lines,
-                            search_text: text,
-                            raw_value: Some(serde_json::json!({ "review": review })),
-                        });
-                    }
                     if let Some(agent) = agent {
                         let mut act_lines = vec![plain(String::new()), label("Now")];
                         act_lines.push(plain(if agent.running {
@@ -465,6 +455,16 @@ impl Details {
                             "pid": agent.pid,
                         })),
                     });
+                    if agent.feed_dropped > 0 {
+                        records.push(DetailRecord {
+                            lines: vec![(
+                                dim(),
+                                format!("… {} earlier entries are not shown", agent.feed_dropped),
+                            )],
+                            search_text: "earlier entries".into(),
+                            raw_value: None,
+                        });
+                    }
                     if agent.feed.is_empty() {
                         // Older event logs only kept the short summary lines.
                         for line in &agent.session {
@@ -476,7 +476,7 @@ impl Details {
                         }
                     }
                     for block in &agent.feed {
-                        let lines = super::session::render(provider, std::slice::from_ref(block));
+                        let lines = super::session::render(provider, std::slice::from_ref(block), self.expand_prompts);
                         let search_text = lines
                             .iter()
                             .map(|(_, line)| line.as_str())
@@ -524,6 +524,24 @@ impl Details {
                     }
                 }
             }
+            REVIEW => match view.reviews.get(&self.key) {
+                Some(review) if !review.is_empty() => {
+                    records.push(DetailRecord {
+                        lines: review.iter().cloned().map(plain).collect(),
+                        search_text: review.join(" "),
+                        raw_value: Some(serde_json::json!({ "review": review })),
+                    });
+                }
+                _ => records.push(DetailRecord {
+                    lines: vec![(
+                        dim(),
+                        "No review yet. The latest verdict appears here once this agent has reviewed something."
+                            .into(),
+                    )],
+                    search_text: "no review".into(),
+                    raw_value: None,
+                }),
+            },
             COMMENTS => {
                 let comments = view.comments_on(&self.key);
                 if comments.is_empty() {
@@ -1074,8 +1092,14 @@ mod tests {
             names("verifier:t1"),
             ["Overview", "Session", "Messages", "Checks", "Comments"]
         );
-        assert_eq!(names("auditor"), ["Overview", "Session", "Comments"]);
-        assert_eq!(names("plan-verifier"), ["Overview", "Session", "Comments"]);
+        assert_eq!(
+            names("auditor"),
+            ["Overview", "Session", "Review", "Comments"]
+        );
+        assert_eq!(
+            names("plan-verifier"),
+            ["Overview", "Session", "Review", "Comments"]
+        );
         assert_eq!(names("conversation"), ["Overview", "Messages", "Comments"]);
 
         // Navigation skips what is not there and wraps around.
@@ -1094,5 +1118,26 @@ mod tests {
         assert_eq!(details.nth_tab(5), None);
         let verifier = Details::new("verifier:t1".into());
         assert_eq!(verifier.nth_tab(3), Some(CHECKS));
+    }
+
+    #[test]
+    fn reviewers_show_their_latest_verdict_on_the_review_tab() {
+        let mut view = View::default();
+        view.reviews
+            .insert("auditor".into(), vec!["✗ failed: missing tests".into()]);
+        let mut details = Details::new("auditor".into());
+        details.switch_tab(REVIEW);
+        let shown: Vec<String> = details.lines(&view).into_iter().map(|(_, l)| l).collect();
+        assert_eq!(shown, ["✗ failed: missing tests"]);
+        details.switch_tab(0);
+        assert!(
+            details
+                .lines(&view)
+                .iter()
+                .all(|(_, line)| !line.contains("missing tests"))
+        );
+        let mut empty = Details::new("plan-verifier".into());
+        empty.switch_tab(REVIEW);
+        assert!(empty.lines(&View::default())[0].1.contains("No review yet"));
     }
 }

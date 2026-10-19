@@ -374,6 +374,7 @@ impl Help {
                 "↑/↓ PgUp/PgDn    scroll; on Comments select",
                 "c                comment on agent",
                 "r / o / x        resolve / reopen / delete comment",
+                "Enter            fold / unfold prompts (Session)",
                 "d                task diff",
                 "Esc              back to graph",
             ],

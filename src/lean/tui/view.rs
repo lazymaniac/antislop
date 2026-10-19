@@ -36,7 +36,9 @@ pub const ORCHESTRATOR: &str = "orchestrator";
 pub const PLAN_VERIFIER: &str = "plan-verifier";
 pub const AUDITOR: &str = "auditor";
 /// Lines of session activity kept per agent.
-const SESSION_LINES: usize = 400;
+const SESSION_LINES: usize = 1500;
+/// Turns of one agent kept in its session view.
+const FEED_TURNS: usize = 12;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
@@ -153,6 +155,8 @@ pub struct Agent {
     pub session: Vec<String>,
     /// What the agent's CLI did and printed, drawn like that CLI does.
     pub feed: Vec<Block>,
+    /// Entries dropped from the start of `feed` to keep it bounded.
+    pub feed_dropped: usize,
     /// Finished turns, and how many of them the CLI reported tokens for.
     pub turns: u32,
     pub reported: u32,
@@ -445,10 +449,22 @@ impl View {
     }
 
     fn feed(&mut self, key: &str, block: Block) {
-        let feed = &mut self.agents.entry(key.to_owned()).or_default().feed;
-        feed.push(block);
-        if feed.len() > SESSION_LINES {
-            feed.drain(..feed.len() - SESSION_LINES);
+        let agent = self.agents.entry(key.to_owned()).or_default();
+        agent.feed.push(block);
+        // Keep the latest turns whole: drop from the oldest turn's start.
+        let turns = |feed: &[Block]| feed.iter().filter(|b| matches!(b, Block::Turn(_))).count();
+        while agent.feed.len() > SESSION_LINES || turns(&agent.feed) > FEED_TURNS {
+            let end = agent
+                .feed
+                .iter()
+                .skip(1)
+                .position(|b| matches!(b, Block::Turn(_)))
+                .map_or(agent.feed.len().saturating_sub(1), |at| at + 1);
+            if end == 0 {
+                break;
+            }
+            agent.feed.drain(..end);
+            agent.feed_dropped += end;
         }
     }
 
@@ -709,7 +725,15 @@ impl View {
                         &key,
                         Block::End {
                             ok: !failed,
-                            text: outcome.trim_start_matches(['✓', '✗', ' ']).to_owned(),
+                            text: {
+                                let mut text =
+                                    outcome.trim_start_matches(['✓', '✗', ' ']).to_owned();
+                                let agent = &self.agents[&key];
+                                if let Some(last) = agent.last_ms.filter(|_| !failed) {
+                                    text.push_str(&format!(" · {}", duration(last)));
+                                }
+                                text
+                            },
                         },
                     );
                 }
@@ -1524,6 +1548,31 @@ mod tests {
             .collect();
         view.activity = activity.then(|| "working".to_owned());
         view
+    }
+
+    #[test]
+    fn the_session_keeps_the_latest_turns_whole_and_counts_what_it_dropped() {
+        let mut view = View::default();
+        for turn in 0..(FEED_TURNS + 3) {
+            view.feed("worker:t1", Block::Turn(format!("turn {turn}")));
+            view.feed("worker:t1", Block::Text(format!("answer {turn}")));
+        }
+        let agent = &view.agents["worker:t1"];
+        assert_eq!(
+            agent
+                .feed
+                .iter()
+                .filter(|b| matches!(b, Block::Turn(_)))
+                .count(),
+            FEED_TURNS
+        );
+        // Whole turns go: the feed still starts with a turn header.
+        assert_eq!(agent.feed[0], Block::Turn("turn 3".into()));
+        assert_eq!(agent.feed_dropped, 6);
+        assert_eq!(
+            agent.feed.last(),
+            Some(&Block::Text(format!("answer {}", FEED_TURNS + 2)))
+        );
     }
 
     #[test]
