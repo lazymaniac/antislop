@@ -539,6 +539,32 @@ impl View {
         }
     }
 
+    fn system_card(&mut self, title: &str, text: String, tone: super::theme::Tone) {
+        self.cards.push(TranscriptCard::System {
+            title: title.into(),
+            meta: String::new(),
+            text,
+            tone,
+        });
+    }
+
+    /// Moves the user's messages from one delivery state to the next.
+    fn advance_messages(&mut self, from: &str, to: &str) {
+        for message in &mut self.messages {
+            if message.kind == "user" && message.state == from {
+                message.state = to.to_owned();
+            }
+        }
+        for card in &mut self.cards {
+            if let TranscriptCard::Message(message) = card
+                && message.kind == "user"
+                && message.state == from
+            {
+                message.state = to.to_owned();
+            }
+        }
+    }
+
     fn row_of(&mut self, key: &str) -> Option<&mut TaskRow> {
         let id = key.split_once(':')?.1;
         self.tasks.iter_mut().find(|task| task.id == id)
@@ -633,6 +659,7 @@ impl View {
                     }
                     self.comment_turns.insert(turn.to_owned(), comments);
                     self.activity = Some(format!("orchestrator ({provider}) is working…"));
+                    self.advance_messages("sent", "delivered");
                 } else if let Some(row) = self.row_of(&key) {
                     let who = key.split(':').next().unwrap_or_default();
                     row.activity = format!("{who} ({provider})");
@@ -738,6 +765,9 @@ impl View {
                 let failed = payload["status"] != "done";
                 if key == ORCHESTRATOR {
                     self.activity = None;
+                    if !failed {
+                        self.advance_messages("delivered", "answered");
+                    }
                     if let Some(comments) = self.comment_turns.remove(turn) {
                         for id in comments {
                             // Reopening while this turn ran queued a newer
@@ -763,10 +793,10 @@ impl View {
                         }
                     }
                     if failed {
-                        self.push(
-                            Style::default().fg(Color::Red),
-                            format!("✗ orchestrator: {} — {}", text("status"), text("error")),
-                        );
+                        let line =
+                            format!("✗ orchestrator: {} — {}", text("status"), text("error"));
+                        self.push(Style::default().fg(Color::Red), line.clone());
+                        self.system_card("Orchestrator", line, super::theme::Tone::Failed);
                     }
                 } else if let Some(row) = self.row_of(&key) {
                     row.activity = if failed {
@@ -1018,14 +1048,13 @@ impl View {
             }
             "mode" => {
                 self.autonomous = Some(payload["autonomous"] == true);
-                self.push(
-                    Style::default().fg(Color::Yellow),
-                    if payload["autonomous"] == true {
-                        "⚙ autonomous mode: next plans and rounds start automatically"
-                    } else {
-                        "⚙ supervised mode: next plans wait for approval (Ctrl+A)"
-                    },
-                );
+                let text = if payload["autonomous"] == true {
+                    "⚙ autonomous mode: next plans and rounds start automatically"
+                } else {
+                    "⚙ supervised mode: next plans wait for approval (Ctrl+A)"
+                };
+                self.push(Style::default().fg(Color::Yellow), text);
+                self.system_card("Mode", text.into(), super::theme::Tone::Queued);
             }
             "integration" => {
                 let approved = payload["status"] == "approved";
@@ -1159,9 +1188,16 @@ impl View {
                 );
             }
             "audit" => {
-                for line in super::super::cli::review_lines("audit", payload) {
-                    self.push(Style::default().fg(Color::Yellow), line);
+                let lines = super::super::cli::review_lines("audit", payload);
+                for line in &lines {
+                    self.push(Style::default().fg(Color::Yellow), line.clone());
                 }
+                let tone = if payload["approved"] == true {
+                    super::theme::Tone::Done
+                } else {
+                    super::theme::Tone::Waiting
+                };
+                self.system_card("Audit", lines.join("\n"), tone);
                 self.review(AUDITOR, payload);
             }
             "code_review" => {
@@ -1174,6 +1210,11 @@ impl View {
                     for line in &lines {
                         self.push(Style::default().fg(Color::Yellow), line.clone());
                     }
+                    self.system_card(
+                        &format!("Code review {task}"),
+                        lines.join("\n"),
+                        super::theme::Tone::Waiting,
+                    );
                     self.reviews.insert(format!("worker:{task}"), lines);
                 }
             }
@@ -1726,6 +1767,42 @@ mod tests {
             .filter(|c| matches!(c, TranscriptCard::System { title, .. } if title == "Progress"))
             .count();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn a_users_message_is_sent_then_delivered_then_answered() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "message",
+            json!({"author": "user", "text": "hi"}),
+        ));
+        let states = |view: &View| -> Vec<String> {
+            view.cards
+                .iter()
+                .filter_map(|c| match c {
+                    TranscriptCard::Message(m) if m.kind == "user" => Some(m.state.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(states(&view), ["sent"]);
+        view.apply(&event(
+            2,
+            Some("t"),
+            "turn_started",
+            json!({"role": "orchestrator", "provider": "codex"}),
+        ));
+        assert_eq!(states(&view), ["delivered"]);
+        view.apply(&event(
+            3,
+            Some("t"),
+            "turn_finished",
+            json!({"role": "orchestrator", "status": "done"}),
+        ));
+        assert_eq!(states(&view), ["answered"]);
+        assert_eq!(view.messages[0].state, "answered");
     }
 
     #[test]

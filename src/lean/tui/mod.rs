@@ -13,6 +13,7 @@ pub mod planview;
 pub mod sanitize;
 pub mod session;
 pub mod theme;
+pub mod unblock;
 pub mod view;
 
 pub use carousel::Carousel;
@@ -214,6 +215,8 @@ pub struct App {
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     pub graph_viewport: Option<(u16, u16)>,
     pub trust_prompt: Option<String>,
+    /// The way out for a stopped step, while the user picks one.
+    pub unblock: Option<unblock::Unblock>,
 }
 
 impl App {
@@ -288,6 +291,7 @@ impl App {
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,
             trust_prompt: None,
+            unblock: None,
         }
     }
 
@@ -940,7 +944,8 @@ impl App {
         let Some(editor) = &mut self.editor else {
             return;
         };
-        let rejecting = editor.target.starts_with("reject:");
+        let rejecting =
+            editor.target.starts_with("reject:") || editor.target.starts_with("unblock:");
         if editor.input.text.trim().is_empty() && !rejecting {
             return;
         }
@@ -977,7 +982,23 @@ impl App {
         };
 
         std::thread::spawn(move || {
-            let reply = if let Some(rejected) = editor.target.strip_prefix("reject:") {
+            let reply = if let Some(rest) = editor.target.strip_prefix("unblock:") {
+                // unblock:<action>:<plan>:<task>; the text is a hint or reason.
+                let mut parts = rest.splitn(3, ':');
+                let (action, plan, task) = (
+                    parts.next().unwrap_or_default(),
+                    parts.next().unwrap_or_default(),
+                    parts.next().unwrap_or_default(),
+                );
+                let message = Some(text.trim().to_owned()).filter(|m| !m.is_empty());
+                serde_json::from_value::<crate::lean::RecoveryAction>(serde_json::json!(action))
+                    .map_err(|e| crate::Error::Invalid(e.to_string()))
+                    .and_then(|action| {
+                        recover(&client, &conversation, plan, task, action, message)
+                            .map(|notice| serde_json::json!(notice))
+                            .map_err(crate::Error::Invalid)
+                    })
+            } else if let Some(rejected) = editor.target.strip_prefix("reject:") {
                 let reason = Some(text.trim().to_owned()).filter(|reason| !reason.is_empty());
                 client.call(&Request::Reject {
                     conversation: conversation.clone(),
@@ -1327,6 +1348,10 @@ impl App {
                     None,
                 );
             }
+            "/unblock" => self.open_unblock(None),
+            _ if text.starts_with("/unblock ") => {
+                self.open_unblock(Some(text.trim_start_matches("/unblock ").trim().to_owned()));
+            }
             _ if text.starts_with("/project ") => {
                 let proj = text.trim_start_matches("/project ").trim().to_string();
                 if !proj.is_empty() {
@@ -1338,6 +1363,69 @@ impl App {
                 self.request(Request::Send { conversation, text }, None);
             }
         }
+    }
+
+    /// Opens the way out for a stopped step: the named one, else the
+    /// selected one, else the first that is stopped.
+    pub fn open_unblock(&mut self, named: Option<String>) {
+        let Some(plan) = self.view.plan.clone() else {
+            self.notice = Some("✗ there is no plan, so nothing to unblock".into());
+            return;
+        };
+        let selected = self.selected.split_once(':').map(|(_, id)| id.to_owned());
+        let wanted = named.or(selected);
+        let task = wanted
+            .as_deref()
+            .and_then(|id| self.view.tasks.iter().find(|t| t.id == id))
+            .filter(|t| unblock::is_blocked(&t.status))
+            .or_else(|| {
+                self.view
+                    .tasks
+                    .iter()
+                    .find(|t| unblock::is_blocked(&t.status) && t.status != "skipped")
+            })
+            .or_else(|| {
+                self.view
+                    .tasks
+                    .iter()
+                    .find(|t| unblock::is_blocked(&t.status))
+            });
+        match task {
+            Some(task) => self.unblock = Some(unblock::Unblock::new(&plan, task)),
+            None => self.notice = Some("✗ no step is stopped; nothing to unblock".into()),
+        }
+    }
+
+    /// The user chose a way out: ask for a hint first where it takes one,
+    /// else ask the daemon at once.
+    fn unblock_choice(&mut self, state: unblock::Unblock, choice: unblock::Choice) {
+        if choice.asks_text {
+            let action = serde_json::to_value(&choice.action)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default();
+            let target = format!("unblock:{action}:{}:{}", state.plan, state.task);
+            let input = self.get_comment_draft(&target);
+            self.editor = Some(Editor { target, input });
+            return;
+        }
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        let conversation = self.conversation.clone();
+        std::thread::spawn(move || {
+            let notice = match recover(
+                &client,
+                &conversation,
+                &state.plan,
+                &state.task,
+                choice.action,
+                None,
+            ) {
+                Ok(notice) => format!("{}: {notice}", state.task),
+                Err(error) => format!("✗ {error}"),
+            };
+            let _ = updates.send(Update::Notice(notice));
+        });
     }
 
     fn new_conversation(&self) {
@@ -1580,10 +1668,11 @@ impl App {
             (None, false) => "tasks in progress…".into(),
         };
         let stage = self.view.stage();
-        if stage == view::Stage::Fresh {
-            status
-        } else {
-            format!("{} · {status}", stage.label())
+        match stage {
+            view::Stage::Fresh => status,
+            // The way out is one click away whenever something is stuck.
+            view::Stage::Blocked => format!("{} · {status} [Unblock]", stage.label()),
+            _ => format!("{} · {status}", stage.label()),
         }
     }
 
@@ -1676,6 +1765,18 @@ impl App {
         }
         if key.code == KeyCode::F(1) {
             self.show_help(self.help_here());
+            return true;
+        }
+        if let Some(modal) = &mut self.unblock {
+            match modal.key(key) {
+                unblock::Outcome::None => {}
+                unblock::Outcome::Close => self.unblock = None,
+                unblock::Outcome::Choose(choice) => {
+                    if let Some(state) = self.unblock.take() {
+                        self.unblock_choice(state, choice);
+                    }
+                }
+            }
             return true;
         }
         if self.picker.is_some() {
@@ -1956,6 +2057,7 @@ impl App {
             KeyCode::Char('?') => self.show_help(Help::Graph),
             KeyCode::Char('/') => self.picker = Some(Picker::new(Kind::Agents)),
             KeyCode::Char('p') => self.command("/plan"),
+            KeyCode::Char('u') => self.open_unblock(None),
             KeyCode::Char('t') => {
                 self.focus = Focus::Tasks;
             }
@@ -2011,6 +2113,10 @@ impl App {
                 }
             }
             KeyCode::Char('p') => self.command("/plan"),
+            KeyCode::Char('u') => {
+                let id = self.carousel.current_task(&self.view).map(|t| t.id.clone());
+                self.open_unblock(id);
+            }
             KeyCode::Char('w') | KeyCode::Char('W') => {
                 if let Some(task) = self.carousel.current_task(&self.view) {
                     self.select_node(format!("worker:{}", task.id));
@@ -2437,7 +2543,14 @@ impl App {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::Cyan))
-                        .title(if let Some(plan) = editor.target.strip_prefix("reject:") {
+                        .title(if let Some(rest) = editor.target.strip_prefix("unblock:") {
+                            let task = rest.rsplit(':').next().unwrap_or_default();
+                            let action = rest.split(':').next().unwrap_or_default();
+                            format!(
+                                " {} {task} · optional text · Enter send · Alt+Enter newline · Esc cancel ",
+                                action.replace('_', " ")
+                            )
+                        } else if let Some(plan) = editor.target.strip_prefix("reject:") {
                             format!(
                                 " reject plan {plan} · optional reason · Enter reject · Alt+Enter newline · Esc cancel "
                             )
@@ -2525,6 +2638,9 @@ impl App {
                     box_area,
                 );
             }
+        }
+        if let Some(modal) = &mut self.unblock {
+            modal.draw(frame);
         }
         if let Some(dir) = &self.trust_prompt {
             let area = frame.area();
@@ -2972,6 +3088,59 @@ impl App {
             }
         }
 
+        // The orchestrator's state, at the end of the conversation: sending,
+        // then thinking, with what it does and for how long.
+        let waiting_for_turn = !self.view.idle
+            && matches!(
+                self.view.stage(),
+                view::Stage::Interview | view::Stage::Planning
+            );
+        if self.sending || self.view.orchestrator_activity().is_some() || waiting_for_turn {
+            let (what, doing) = if self.sending {
+                ("sending…", String::new())
+            } else {
+                (
+                    "thinking…",
+                    self.view
+                        .orchestrator_activity()
+                        .unwrap_or_else(|| "waiting for the orchestrator to start".into()),
+                )
+            };
+            let elapsed = self
+                .view
+                .agents
+                .get(view::ORCHESTRATOR)
+                .and_then(|agent| agent.started_ms.filter(|_| agent.running))
+                .map(|started| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis() as i64);
+                    view::duration(now.saturating_sub(started).max(0) as u64)
+                })
+                .unwrap_or_default();
+            cards.extend(card(
+                theme,
+                CardProps {
+                    fill: theme.card(),
+                    accent: theme.person("orchestrator"),
+                    head: vec![
+                        Span::styled(
+                            format!("{} ", theme.spinner(self.tick)),
+                            theme.status("working"),
+                        ),
+                        Span::styled(
+                            format!("orchestrator {what}"),
+                            theme.person("orchestrator").patch(theme.title()),
+                        ),
+                    ],
+                    right: elapsed,
+                    body: &doing,
+                    max_body: 2,
+                    width,
+                },
+            ));
+        }
+
         if cards.is_empty() && !self.view.transcript.is_empty() {
             for (index, entry) in self.view.transcript.iter().enumerate() {
                 let style = if self.found == Some(index) {
@@ -3176,6 +3345,19 @@ impl App {
         if self.trust_prompt.is_some() {
             return true;
         }
+        if let Some(modal) = &mut self.unblock {
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                match modal.click(mouse.column, mouse.row) {
+                    unblock::Outcome::Choose(choice) => {
+                        if let Some(state) = self.unblock.take() {
+                            self.unblock_choice(state, choice);
+                        }
+                    }
+                    unblock::Outcome::Close | unblock::Outcome::None => {}
+                }
+            }
+            return true;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 if self.help.is_some() {
@@ -3289,6 +3471,7 @@ impl App {
                                     "[/resume]" => self.command("/resume"),
                                     "[/cancel]" => self.command("/cancel"),
                                     "[Plan]" => self.command("/plan"),
+                                    "[Unblock]" => self.command("/unblock"),
                                     "[chat]" => self.focus = Focus::Chat,
                                     "[tasks]" => self.focus = Focus::Tasks,
                                     "[team]" => self.focus = Focus::Graph,
@@ -3408,6 +3591,41 @@ pub fn without_color(buffer: &mut ratatui::buffer::Buffer) {
     }
 }
 
+/// Asks the daemon to unblock a task, with a freshly read token so the
+/// request is about the state the user is looking at. Returns what the
+/// daemon says happened.
+fn recover(
+    client: &Client,
+    conversation: &str,
+    plan: &str,
+    task: &str,
+    action: crate::lean::RecoveryAction,
+    message: Option<String>,
+) -> std::result::Result<String, String> {
+    let stored = client
+        .call(&Request::Task {
+            plan: plan.to_owned(),
+            id: task.to_owned(),
+        })
+        .map_err(|e| e.to_string())?;
+    let token = stored["freshness_token"]
+        .as_str()
+        .ok_or("the daemon gave no freshness token")?
+        .to_owned();
+    let reply = client
+        .call(&Request::Recover(crate::lean::TaskRecoveryRequest {
+            conversation: conversation.to_owned(),
+            plan: plan.to_owned(),
+            task: task.to_owned(),
+            action,
+            consent_files: None,
+            freshness_token: token,
+            message,
+        }))
+        .map_err(|e| e.to_string())?;
+    Ok(reply["notice"].as_str().unwrap_or("done").to_owned())
+}
+
 pub fn run(options: &Options, client: Client) -> Result<()> {
     let conversation = options.conversation(&client)?;
     let (updates, received) = mpsc::channel();
@@ -3470,6 +3688,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         details_scroll_memory: std::collections::HashMap::new(),
         details_query_memory: std::collections::HashMap::new(),
         graph_viewport: None,
+        unblock: None,
         trust_prompt: if options.trust {
             None
         } else {
@@ -4291,5 +4510,111 @@ pub mod tests {
         app.view.agents.insert("worker:t1".into(), agent(80));
         term.draw(|f| app.draw(f)).unwrap();
         assert!(screen(&term).contains("entry 79"));
+    }
+
+    #[test]
+    fn the_chat_shows_that_the_orchestrator_is_sending_then_thinking() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = test_app();
+        app.view
+            .cards
+            .push(view::TranscriptCard::Message(view::MessageEntry {
+                id: "m1".into(),
+                sender: "You".into(),
+                target: "orchestrator".into(),
+                text: "build it".into(),
+                state: "sent".into(),
+                kind: "user".into(),
+            }));
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let screen = |app: &mut App, term: &mut Terminal<TestBackend>| -> String {
+            term.draw(|f| app.draw(f)).unwrap();
+            term.backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+        assert!(!screen(&mut app, &mut term).contains("orchestrator sending"));
+
+        app.sending = true;
+        assert!(screen(&mut app, &mut term).contains("orchestrator sending…"));
+
+        app.sending = false;
+        app.view.activity = Some("orchestrator: exec ls".into());
+        let thinking = screen(&mut app, &mut term);
+        assert!(thinking.contains("orchestrator thinking…"));
+        assert!(thinking.contains("exec ls"));
+        // The spinner moves with the tick.
+        app.tick = 1;
+        assert_ne!(thinking, screen(&mut app, &mut term));
+
+        // Between the daemon taking the message and the turn starting.
+        app.view.activity = None;
+        app.view.idle = false;
+        assert!(screen(&mut app, &mut term).contains("waiting for the orchestrator to start"));
+        app.view.idle = true;
+        assert!(!screen(&mut app, &mut term).contains("orchestrator thinking"));
+    }
+
+    #[test]
+    fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
+        let mut app = test_app();
+        app.view.plan = Some("p1".into());
+        let task = |id: &str, status: &str| view::TaskRow {
+            id: id.into(),
+            title: format!("Task {id}"),
+            status: status.into(),
+            writes: true,
+            reason: Some("the verifier repeated itself".into()),
+            ..view::TaskRow::default()
+        };
+        app.view.tasks = vec![task("t1", "approved")];
+        app.command("/unblock");
+        assert!(app.unblock.is_none());
+        assert!(
+            app.notice
+                .as_deref()
+                .unwrap()
+                .contains("nothing to unblock")
+        );
+
+        app.view.tasks = vec![
+            task("t1", "approved"),
+            task("t2", "needs_user"),
+            task("t3", "skipped"),
+        ];
+        // The first stopped step that is not just skipped comes first.
+        app.command("/unblock");
+        assert_eq!(app.unblock.as_ref().unwrap().task, "t2");
+        app.key(key_press(KeyCode::Esc));
+        assert!(app.unblock.is_none());
+        app.command("/unblock t3");
+        assert_eq!(app.unblock.as_ref().unwrap().task, "t3");
+        app.key(key_press(KeyCode::Esc));
+
+        // The graph key acts on the selected step.
+        app.view.tasks.push(task("t4", "failed"));
+        app.focus = Focus::Graph;
+        app.selected = "verifier:t4".into();
+        // Stage Blocked keeps the graph visible: nothing is running.
+        app.key(key_press(KeyCode::Char('u')));
+        assert_eq!(app.unblock.as_ref().unwrap().task, "t4");
+
+        // A choice that takes a hint opens the editor for it.
+        app.key(key_press(KeyCode::Char('1')));
+        assert!(app.unblock.is_none());
+        assert_eq!(
+            app.editor.as_ref().unwrap().target,
+            "unblock:retry_with_guidance:p1:t4"
+        );
+        app.editor = None;
+
+        // The header offers it whenever a step is stuck.
+        assert!(app.header_status().ends_with("[Unblock]"));
+        app.view.tasks.retain(|t| t.status == "approved");
+        assert!(!app.header_status().contains("[Unblock]"));
     }
 }

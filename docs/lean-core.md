@@ -380,6 +380,12 @@ directory to run both. The socket is `<state>/core.sock`, or
 - A CLI's own subagents are turned off, so no team runs that no verifier
   checks (design §9.5): codex runs with `features.multi_agent=false`, claude
   without its `Task`/`Agent` tool.
+- `/unblock` (also `u` on a stopped step and the header's `[Unblock]`) offers
+  the recovery actions that fit why the task stopped (`recover` in the
+  protocol; the TUI reads a fresh `freshness_token` itself). When a plan ends
+  with blocked tasks the runtime messages the orchestrator once with the
+  stopped steps, their reasons and the ways out; the chat also keeps a short
+  Progress card of finished rounds and task outcomes.
 - `/pause` (or the palette) starts no new plan work: worker, verifier and
   audit turns wait, turns already running finish, the orchestrator still
   answers. `/continue` goes on; Ctrl+X cancels what waits too. A pause is

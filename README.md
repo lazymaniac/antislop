@@ -128,6 +128,8 @@ Responsive layout, carousel and adaptive team graph:
 
 Commands:
 - `/pause` stops starting new work (running turns finish) until `/continue`.
+- `/unblock [task]` (or `u` on a selected step, or the `[Unblock]` button in the header) opens the way out for a step that stopped: retry it with a hint, give it more rounds, apply or keep its change, approve it as it is, or cancel it. The orchestrator is told once when a plan is blocked and explains the problem in the chat.
+- `Ctrl+L` opens the plan document from any panel.
 - `/mode autonomous` or `/mode supervised` sets execution mode for subsequent plans (header displays mode). In line mode, type `/accept`, `/resume`, `/pause`, `/continue`, `/mode …` or `/cancel`.
 - `@t2 text` sends text to the worker of task `t2` (delivered in its next turn; the orchestrator gets a copy). Agents message each other the same way.
 
