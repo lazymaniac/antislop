@@ -3469,7 +3469,7 @@ impl App {
     }
 
     fn draw_carousel(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        self.carousel.draw(frame, area, &self.view, theme);
+        self.carousel.draw(frame, padded(area), &self.view, theme);
     }
 
     fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
@@ -3491,8 +3491,10 @@ impl App {
                 self.filter.name(),
                 self.graph_grouping.name()
             ));
-        let inner = block.inner(area);
+        let frame_inner = block.inner(area);
         frame.render_widget(block, area);
+        // Padding between the border and the graph; skipped when the panel is tiny.
+        let inner = padded(frame_inner);
 
         self.graph_viewport = Some((inner.width, inner.height));
         let graph = Graph::new_with_viewport(
@@ -3781,6 +3783,16 @@ impl App {
 
 /// Whether to draw in ASCII: asked for with `ANTISLOP_ASCII`, or the
 /// locale is not UTF-8.
+/// Shrinks `area` by one cell on every side so content sits centred with a margin.
+/// Tiny areas are returned unchanged.
+fn padded(area: Rect) -> Rect {
+    if area.width > 4 && area.height > 4 {
+        Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
+    } else {
+        area
+    }
+}
+
 fn ascii_terminal() -> bool {
     if std::env::var_os("ANTISLOP_ASCII").is_some_and(|value| !value.is_empty()) {
         return true;

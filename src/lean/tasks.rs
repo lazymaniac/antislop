@@ -380,7 +380,7 @@ pub const PREDEFINED_AGENT_POOL: &[PredefinedAgent] = &[
         kind: WorkKind::Refactoring,
         title: "Code Quality & Structure Guardian",
         focus: "Behavior preserved with evidence while simplifying touched modules and removing technical debt",
-        required_for_code_changes: false,
+        required_for_code_changes: true,
     },
     PredefinedAgent {
         id: "static-analyzer",
@@ -397,6 +397,20 @@ pub const PREDEFINED_AGENT_POOL: &[PredefinedAgent] = &[
         required_for_code_changes: true,
     },
     PredefinedAgent {
+        id: "security-auditor",
+        kind: WorkKind::Security,
+        title: "Security Audit",
+        focus: "Changed code paths examined for injection, unsafe input handling, secrets, privilege and trust-boundary problems",
+        required_for_code_changes: true,
+    },
+    PredefinedAgent {
+        id: "performance-auditor",
+        kind: WorkKind::Performance,
+        title: "Performance Audit",
+        focus: "Changed code paths examined for needless work, quadratic behavior, blocking calls and memory growth",
+        required_for_code_changes: true,
+    },
+    PredefinedAgent {
         id: "integration-gate",
         kind: WorkKind::Integration,
         title: "End-to-End Integration & Requirements Gate",
@@ -410,9 +424,25 @@ pub const PREDEFINED_AGENT_POOL: &[PredefinedAgent] = &[
 fn is_gate_kind(kind: WorkKind) -> bool {
     matches!(
         kind,
-        WorkKind::StaticAnalysis | WorkKind::Testing | WorkKind::Integration
+        WorkKind::Refactoring
+            | WorkKind::StaticAnalysis
+            | WorkKind::Testing
+            | WorkKind::Security
+            | WorkKind::Performance
+            | WorkKind::Integration
     )
 }
+
+/// The gate kinds `with_required_agents` appends, in the order the runtime
+/// works through them (see `gate_depends_on`).
+pub const GATE_KINDS: [WorkKind; 6] = [
+    WorkKind::Refactoring,
+    WorkKind::StaticAnalysis,
+    WorkKind::Testing,
+    WorkKind::Security,
+    WorkKind::Performance,
+    WorkKind::Integration,
+];
 
 /// Returns the required quality gates from `PREDEFINED_AGENT_POOL` that a plan
 /// modifying code (`writes == true`) lacks: no task of the gate's kind exists.
@@ -429,8 +459,10 @@ pub fn missing_quality_agents(tasks: &[TaskSpec]) -> Vec<&'static PredefinedAgen
 
 /// The plan with every missing required quality gate appended, so a plan that
 /// changes code is always statically checked, tested and checked against the
-/// user's requirements. Static analysis and testing run in parallel after all
-/// writing tasks; integration runs last, after them too.
+/// user's requirements, and audited for structure, security and performance.
+/// Refactoring runs first, after all writing tasks, since it changes code the
+/// other gates must judge; static analysis, testing and the read-only audits
+/// run in parallel after it; integration runs last, after them too.
 pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
     let missing = missing_quality_agents(&tasks);
     if missing.is_empty() {
@@ -450,9 +482,11 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
         }
     }
     let mut gates: Vec<String> = Vec::new();
-    // Integration is ordered last so it can depend on the other gates.
+    // Refactoring goes first and integration last, so the former is a
+    // dependency of the other gates and the latter depends on them all.
     let mut ordered = missing;
-    ordered.sort_by_key(|agent| agent.kind == WorkKind::Integration);
+    ordered.sort_by_key(|agent| GATE_KINDS.iter().position(|kind| *kind == agent.kind));
+    let mut refactoring: Option<String> = None;
     for agent in ordered {
         let mut id = agent.id.to_owned();
         let mut n = 2;
@@ -461,10 +495,14 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
             n += 1;
         }
         let mut depends_on = writers.clone();
-        if agent.kind == WorkKind::Integration {
-            depends_on.extend(gates.iter().cloned());
+        match agent.kind {
+            WorkKind::Integration => depends_on.extend(gates.iter().cloned()),
+            WorkKind::Refactoring => refactoring = Some(id.clone()),
+            _ => depends_on.extend(refactoring.iter().cloned()),
         }
         gates.push(id.clone());
+        // Audits report; the gates that run builds or restructure code write.
+        let audits = matches!(agent.kind, WorkKind::Security | WorkKind::Performance);
         let (summary, verifier_summary) = match agent.kind {
             WorkKind::StaticAnalysis => (
                 "Check formatting, compilation and lint warnings.",
@@ -478,22 +516,43 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
                 "Check the combined change against every requirement.",
                 "Verify integration results and delivery of all requirements.",
             ),
+            WorkKind::Refactoring => (
+                "Simplify the touched code without changing its behavior.",
+                "Verify behavior is preserved and the structure really improved.",
+            ),
+            WorkKind::Security => (
+                "Audit the changed code paths for security problems.",
+                "Verify the audit examined the real code paths and backs each finding.",
+            ),
+            WorkKind::Performance => (
+                "Audit the changed code paths for performance problems.",
+                "Verify the audit examined the real code paths and backs each finding.",
+            ),
             _ => (agent.title, agent.focus),
         };
         tasks.push(TaskSpec {
             id,
             title: agent.title.to_owned(),
             summary: Some(summary.to_owned()),
-            goal: format!(
-                "Required quality gate for the whole change: {}. Report every problem \
-                 found with evidence; fix only what is needed to pass the gate.",
-                agent.focus
-            ),
+            goal: if audits {
+                format!(
+                    "Required audit of the whole change: {}. Read the changed code and \
+                     report every problem found with file, line and evidence, ranked by \
+                     severity; change nothing.",
+                    agent.focus
+                )
+            } else {
+                format!(
+                    "Required quality gate for the whole change: {}. Report every problem \
+                     found with evidence; fix only what is needed to pass the gate.",
+                    agent.focus
+                )
+            },
             section: Some("Quality Gates".to_owned()),
             scope: scope.clone(),
             // Gates run builds and checks, which write; a gate that changes
             // nothing leaves the project as it was.
-            writes: true,
+            writes: !audits,
             depends_on,
             kind: agent.kind,
             verifier: VerifierSpec {
@@ -1301,7 +1360,7 @@ mod tests {
             "kind": "implementation", "writes": true, "verifier": {"focus": "Check the storage change."}
         })).unwrap();
         let full = with_required_agents(vec![task]);
-        assert_eq!(full.len(), 4);
+        assert_eq!(full.len(), 7);
         for task in &full[1..] {
             let summary = task.summary.as_deref().unwrap();
             let verifier_summary = task.verifier.summary.as_deref().unwrap();
@@ -1344,17 +1403,42 @@ mod tests {
             .iter()
             .map(|a| a.id)
             .collect();
-        assert_eq!(ids, vec!["static-analyzer", "integration-gate"]);
+        assert_eq!(
+            ids,
+            vec![
+                "quality-refactoring",
+                "static-analyzer",
+                "security-auditor",
+                "performance-auditor",
+                "integration-gate"
+            ]
+        );
         let full = with_required_agents(tasks);
-        assert_eq!(full.len(), 4);
+        assert_eq!(full.len(), 7);
         validate(&full).unwrap();
-        let lint = &full[2];
+        let refactor = &full[2];
+        assert_eq!(refactor.kind, WorkKind::Refactoring);
+        assert_eq!(refactor.depends_on, vec!["t1", "t2"]);
+        let lint = &full[3];
         assert_eq!(lint.kind, WorkKind::StaticAnalysis);
-        assert_eq!(lint.depends_on, vec!["t1", "t2"]);
+        assert_eq!(lint.depends_on, vec!["t1", "t2", "quality-refactoring"]);
         assert_eq!(lint.scope, vec!["src/a.rs", "tests/"]);
-        let gate = &full[3];
+        let security = &full[4];
+        assert_eq!(security.kind, WorkKind::Security);
+        assert!(!security.writes);
+        let gate = &full[6];
         assert_eq!(gate.kind, WorkKind::Integration);
-        assert_eq!(gate.depends_on, vec!["t1", "t2", "static-analyzer"]);
+        assert_eq!(
+            gate.depends_on,
+            vec![
+                "t1",
+                "t2",
+                "quality-refactoring",
+                "static-analyzer",
+                "security-auditor",
+                "performance-auditor"
+            ]
+        );
         assert!(missing_quality_agents(&full).is_empty());
 
         // A read-only plan needs no gates.

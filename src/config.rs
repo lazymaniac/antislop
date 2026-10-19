@@ -207,7 +207,8 @@ pub struct Policy {
     pub local_checks: bool,
     pub local_commits: bool,
     /// Every plan that changes code gets the required quality gates from the
-    /// predefined agent pool (static analysis, testing, integration) it lacks.
+    /// predefined agent pool (refactoring, static analysis, testing, security and
+    /// performance audits, integration) it lacks.
     #[serde(default = "default_required_gates")]
     pub required_gates: bool,
     /// Most tasks of a plan that run at the same time.
@@ -448,11 +449,7 @@ impl Config {
         // The gates added to plans that change code need their routes now,
         // not when a plan reaches them.
         if self.policy.required_gates {
-            for kind in [
-                WorkKind::StaticAnalysis,
-                WorkKind::Testing,
-                WorkKind::Integration,
-            ] {
+            for kind in crate::lean::tasks::GATE_KINDS {
                 require(
                     self.routing.contains_key(&kind),
                     &format!(

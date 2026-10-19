@@ -4475,7 +4475,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     term_small.draw(|f| app.draw(f)).unwrap();
 
     let initial_viewport = app.graph_viewport.expect("viewport set after draw");
-    assert_eq!(initial_viewport, (78, 20));
+    assert_eq!(initial_viewport, (76, 18));
 
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(
@@ -4515,7 +4515,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     let mut term_large = Terminal::new(TestBackend::new(160, 50)).unwrap();
     term_large.draw(|f| app.draw(f)).unwrap();
     let resized_viewport = app.graph_viewport.expect("viewport updated after resize");
-    assert_eq!(resized_viewport, (104, 46));
+    assert_eq!(resized_viewport, (102, 44));
 }
 
 #[test]
@@ -4865,7 +4865,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
 
         assert_eq!(
             app.graph_viewport,
-            Some((inner_w, inner_h)),
+            Some((inner_w - 2, inner_h - 2)),
             "Viewport matches terminal {term_name}"
         );
 

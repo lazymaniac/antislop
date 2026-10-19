@@ -160,10 +160,12 @@ fn required_gates_join_plans_that_write() {
         .iter()
         .map(|task| task.spec["kind"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(plan.len(), 4, "{kinds:?}");
+    assert_eq!(plan.len(), 7, "{kinds:?}");
     let writer = plan[0].spec["id"].clone();
     for gate in &plan[1..] {
-        assert_eq!(gate.spec["writes"], true);
+        // The security and performance audits only read.
+        let audit = matches!(gate.spec["kind"].as_str(), Some("security" | "performance"));
+        assert_eq!(gate.spec["writes"], !audit);
         assert!(
             gate.spec["depends_on"]
                 .as_array()
@@ -173,7 +175,17 @@ fn required_gates_join_plans_that_write() {
             gate.spec
         );
     }
-    assert_eq!(kinds[1..], ["static_analysis", "testing", "integration"]);
+    assert_eq!(
+        kinds[1..],
+        [
+            "refactoring",
+            "static_analysis",
+            "testing",
+            "security",
+            "performance",
+            "integration"
+        ]
+    );
 }
 
 #[test]

@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
@@ -85,7 +86,76 @@ pub struct Outcome {
 /// Longest tool detail kept in an event; agents read full output themselves.
 const DETAIL: usize = 240;
 
+/// OpenCode keeps one SQLite database per user; processes starting in the
+/// same instant can lose the race for its lock and exit at once.
+const OPENCODE_START_GAP: Duration = Duration::from_millis(1500);
+const OPENCODE_LOCK_RETRIES: u32 = 3;
+const OPENCODE_LOCK_ERROR: &str = "database is locked";
+
+/// Sleeps in short steps so cancellation stays prompt; false if cancelled.
+fn pause(total: Duration, cancel: &AtomicBool) -> bool {
+    let end = Instant::now() + total;
+    while Instant::now() < end {
+        if cancel.load(Ordering::SeqCst) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50).min(end - Instant::now()));
+    }
+    !cancel.load(Ordering::SeqCst)
+}
+
+/// Spaces out OpenCode starts process-wide; false if cancelled while waiting.
+fn debounce_start(provider: ProviderKind, cancel: &AtomicBool) -> bool {
+    static LAST_START: Mutex<Option<Instant>> = Mutex::new(None);
+    if provider != ProviderKind::Opencode {
+        return true;
+    }
+    // Holding the lock while waiting queues concurrent starts one gap apart.
+    let mut last = LAST_START.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(wait) = last.and_then(|at| OPENCODE_START_GAP.checked_sub(at.elapsed()))
+        && !pause(wait, cancel)
+    {
+        return false;
+    }
+    *last = Some(Instant::now());
+    true
+}
+
 pub fn run(
+    spec: &Spec,
+    prompt: &str,
+    cancel: &AtomicBool,
+    on_event: &mut dyn FnMut(Event),
+) -> Result<Outcome> {
+    let mut attempt = 0;
+    loop {
+        if !debounce_start(spec.provider, cancel) {
+            return Err(Error::Invalid("cancelled".into()));
+        }
+        // A retry is only safe while the turn has shown nothing but its pid.
+        let mut progressed = false;
+        let result = run_once(spec, prompt, cancel, &mut |event| {
+            progressed |= !matches!(event, Event::Process { .. });
+            on_event(event);
+        });
+        match &result {
+            Err(Error::Invalid(message))
+                if spec.provider == ProviderKind::Opencode
+                    && !progressed
+                    && attempt < OPENCODE_LOCK_RETRIES
+                    && message.contains(OPENCODE_LOCK_ERROR) =>
+            {
+                attempt += 1;
+                if !pause(Duration::from_millis(500 * u64::from(attempt)), cancel) {
+                    return Err(Error::Invalid("cancelled".into()));
+                }
+            }
+            _ => return result,
+        }
+    }
+}
+
+fn run_once(
     spec: &Spec,
     prompt: &str,
     cancel: &AtomicBool,
@@ -1311,6 +1381,39 @@ print(json.dumps({'type':'step_finish', 'part':{'reason':'stop'}}))
                 .text,
             "done"
         );
+    }
+
+    #[test]
+    fn opencode_retries_a_lost_database_lock_race() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("omlx");
+        let marker = dir.path().join("locked-once");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nif [ ! -e '{m}' ]; then touch '{m}'; echo 'Error: database is locked' >&2; exit 1; fi\n\
+                 echo '{{\"type\":\"step_start\",\"sessionID\":\"s\"}}'\n\
+                 echo '{{\"type\":\"text\",\"part\":{{\"text\":\"ok\"}}}}'\n\
+                 echo '{{\"type\":\"step_finish\",\"part\":{{\"reason\":\"stop\"}}}}'\n",
+                m = marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let spec = Spec {
+            provider: ProviderKind::Opencode,
+            binary: script,
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: dir.path().into(),
+            add_dirs: vec![],
+            access: Access::ReadOnly,
+            resume: None,
+        };
+        let outcome = run(&spec, "hi", &AtomicBool::new(false), &mut |_| {}).unwrap();
+        assert_eq!(outcome.text, "ok");
     }
 
     #[test]

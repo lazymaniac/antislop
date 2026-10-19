@@ -1935,7 +1935,8 @@ impl Core {
                 Some(&plan_id),
                 "notice",
                 &json!({"text": "policy.required_gates is off: this plan changes code but gets no \
-                                 static analysis, testing or integration check"}),
+                                 refactoring, static analysis, testing, security, performance \
+                                 or integration check"}),
             );
         }
         let review = self.review(
