@@ -11,6 +11,7 @@ pub mod graph;
 pub mod palette;
 pub mod planview;
 pub mod sanitize;
+pub mod session;
 pub mod theme;
 pub mod view;
 
@@ -36,7 +37,7 @@ use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
     Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
-use details::{CHECKS, COMMENTS, RESULT, TABS};
+use details::{CHECKS, COMMENTS, RESULT};
 use graph::{Canvas, Graph};
 use palette::{Action, Command};
 use ratatui::{
@@ -2302,8 +2303,9 @@ impl App {
                 return;
             }
             KeyCode::Char(c @ '1'..='5') => {
-                let tab = (c as usize) - ('1' as usize);
-                details.switch_tab(tab);
+                if let Some(tab) = details.nth_tab((c as usize) - ('1' as usize)) {
+                    details.switch_tab(tab);
+                }
             }
             KeyCode::Char('?') => self.show_help(Help::Details),
             KeyCode::Char('c') => {
@@ -2327,10 +2329,10 @@ impl App {
                 return;
             }
             KeyCode::Right | KeyCode::Tab => {
-                details.switch_tab((details.tab + 1) % TABS.len());
+                details.switch_tab(details.neighbour_tab(1));
             }
             KeyCode::Left | KeyCode::BackTab => {
-                details.switch_tab((details.tab + TABS.len() - 1) % TABS.len());
+                details.switch_tab(details.neighbour_tab(-1));
             }
             KeyCode::Down => details.scroll += 1,
             KeyCode::Up => details.scroll = details.scroll.saturating_sub(1),
@@ -3332,6 +3334,9 @@ fn ascii(ch: char) -> char {
         '▼' | '↓' => 'v',
         '…' => '.',
         '○' => 'o',
+        '•' | '⏺' | '✻' | '✦' => '*',
+        '⎿' => '+',
+        '›' => '>',
         '●' => '*',
         '▌' => '|',
         '█' => '#',

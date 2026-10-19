@@ -129,6 +129,33 @@ const PLAN_VERIFIER: &str = "plan-verifier";
 /// Checks, after a plan ran, that the user's request was fully delivered.
 const AUDITOR: &str = "auditor";
 /// Extra worker turns, per round, for messages that arrived while it worked.
+/// Most reasoning, tool output and text kept in the events of one turn.
+const TURN_BUDGET: usize = 64 * 1024;
+/// Longest block of agent text kept in one event.
+const TURN_TEXT: usize = 4000;
+
+/// What of a turn's stream is being recorded: fragments of text waiting to be
+/// stored as one block, and how much of the budget is used.
+#[derive(Default)]
+struct TurnLog {
+    text: String,
+    stored_text: bool,
+    used: usize,
+    /// The notice that output is no longer stored was given.
+    marked: bool,
+}
+
+impl TurnLog {
+    /// Whether `weight` more bytes fit in the turn's budget.
+    fn admit(&mut self, weight: usize) -> bool {
+        if self.used + weight <= TURN_BUDGET {
+            self.used += weight;
+            return true;
+        }
+        false
+    }
+}
+
 const MAIL_TURNS: usize = 2;
 /// Longest worker report handed back to the orchestrator per task.
 const REPORT_LIMIT: usize = 40_000;
@@ -2002,6 +2029,19 @@ impl Core {
                 &payload,
             );
         };
+        let log = std::cell::RefCell::new(TurnLog::default());
+        let flush_text = |log: &std::cell::RefCell<TurnLog>| {
+            let mut log = log.borrow_mut();
+            let text = std::mem::take(&mut log.text);
+            if text.trim().is_empty() || !log.admit(text.len().min(TURN_TEXT)) {
+                return;
+            }
+            log.stored_text = true;
+            announce(
+                "agent",
+                json!({"type": "text", "delta": agent::clip(&text, TURN_TEXT)}),
+            );
+        };
         // What ran, for the history and its export (design §15).
         announce(
             "turn_started",
@@ -2031,29 +2071,62 @@ impl Core {
                 tasks::inbox_text(&inbox)
             };
             text.push_str(&prompt(resume.is_none()));
+            // What the agent was asked, for its session view.
+            announce(
+                "agent",
+                serde_json::to_value(agent::Event::Prompt {
+                    text: agent::clip_tail(&text, agent::OUTPUT),
+                })
+                .unwrap_or_default(),
+            );
             agent::run(&spec, &text, cancel, &mut |event| {
                 match &event {
                     agent::Event::Session { id } => {
                         let _ = self.store.set_session(&turn.id, id);
                     }
-                    // Streamed fragments: the answer is recorded whole when
-                    // the turn ends, so a row per fragment is only weight.
-                    agent::Event::Text { .. } => return,
                     agent::Event::Process { pid } => {
                         let _ = self.store.set_turn_pid(&turn.id, *pid);
                     }
+                    // Streamed fragments are joined and stored as one block
+                    // when something else happens, not as a row each.
+                    agent::Event::Text { delta } => {
+                        log.borrow_mut().text.push_str(delta);
+                        return;
+                    }
                     _ => {}
+                }
+                flush_text(&log);
+                // Reasoning and tool output are bounded per turn.
+                let weight = match &event {
+                    agent::Event::Reasoning { delta } => delta.len(),
+                    agent::Event::Output { text, .. } => text.len(),
+                    _ => 0,
+                };
+                if weight > 0 && !log.borrow_mut().admit(weight) {
+                    if !std::mem::replace(&mut log.borrow_mut().marked, true) {
+                        announce(
+                            "agent",
+                            json!({"type": "output", "name": "antislop",
+                                   "text": "[further output of this turn is not stored]",
+                                   "exit_code": null}),
+                        );
+                    }
+                    return;
                 }
                 if let Ok(payload) = serde_json::to_value(&event) {
                     announce("agent", payload);
                 }
             })
         });
+        flush_text(&log);
         match outcome {
             Ok(outcome) => {
-                let preview: String = outcome.text.chars().take(240).collect();
-                if !preview.trim().is_empty() {
-                    announce("agent", json!({"type": "text", "delta": preview}));
+                // Some CLIs report the answer only at the end.
+                if !log.borrow().stored_text {
+                    let preview = agent::clip(&outcome.text, TURN_TEXT);
+                    if !preview.trim().is_empty() {
+                        announce("agent", json!({"type": "text", "delta": preview}));
+                    }
                 }
                 self.store.finish_turn(&turn.id, TurnStatus::Done, None)?;
                 let delivered: Vec<u64> = inbox.iter().map(|mail| mail.id).collect();

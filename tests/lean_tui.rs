@@ -3767,6 +3767,7 @@ fn test_inspector_explicit_missing_data_notices() {
 
 #[test]
 fn session_inspector_shows_only_the_terminal_transcript() {
+    use architect::lean::tui::session::Block;
     use architect::lean::tui::view::{Agent, View};
     let mut details = Details::new("worker:t1".into());
     details.tab = 1;
@@ -3788,10 +3789,14 @@ fn session_inspector_shows_only_the_terminal_transcript() {
     view.agents.insert(
         "worker:t1".into(),
         Agent {
-            terminal: vec![
-                "$ codex — turn started".into(),
-                "$ exec cargo check".into(),
-                "answer".into(),
+            provider: "codex".into(),
+            feed: vec![
+                Block::Turn("codex · default model".into()),
+                Block::Tool {
+                    name: "shell".into(),
+                    detail: "exec cargo check".into(),
+                },
+                Block::Text("answer".into()),
             ],
             session: vec![
                 "── turn".into(),
@@ -3807,7 +3812,8 @@ fn session_inspector_shows_only_the_terminal_transcript() {
         .map(|(_, line)| line)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Process Terminal"));
+    assert!(text.contains("codex · idle"));
+    assert!(text.contains("• Ran exec cargo check"), "{text}");
     assert_eq!(text.matches("exec cargo check").count(), 1);
     assert!(!text.contains("session mirror"));
     assert!(!text.contains("database-turn"));
@@ -3816,14 +3822,14 @@ fn session_inspector_shows_only_the_terminal_transcript() {
     assert!(!text.contains("archive"));
 
     // Older event logs without terminal data still have one transcript.
-    view.agents.get_mut("worker:t1").unwrap().terminal.clear();
+    view.agents.get_mut("worker:t1").unwrap().feed.clear();
     let text = details
         .lines(&view)
         .into_iter()
         .map(|(_, line)| line)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Process Terminal"));
+    assert!(text.contains("codex · idle"));
     assert_eq!(text.matches("exec cargo check").count(), 1);
     assert!(text.contains("session mirror"));
 }

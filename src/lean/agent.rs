@@ -55,6 +55,20 @@ pub enum Event {
         input: Option<u64>,
         output: Option<u64>,
     },
+    /// The model's reasoning, as far as the CLI shows it.
+    Reasoning {
+        delta: String,
+    },
+    /// What a tool printed; clipped, the agent reads files itself.
+    Output {
+        name: String,
+        text: String,
+        exit_code: Option<i64>,
+    },
+    /// What the agent was asked, clipped, at the start of a turn.
+    Prompt {
+        text: String,
+    },
     /// The CLI runs as this process group. Kept so that a daemon started
     /// after this one died can end a turn nobody is reading any more.
     Process {
@@ -445,6 +459,33 @@ fn tail(text: &str, max: usize) -> String {
     text[start..].to_owned()
 }
 
+/// Longest tool output or reasoning kept in an event.
+pub const OUTPUT: usize = 2000;
+
+/// The start of `text`, at most `limit` characters, marked when cut.
+pub fn clip(text: &str, limit: usize) -> String {
+    let text = text.trim_end();
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => format!("{}\n…[truncated]", &text[..end]),
+        None => text.to_owned(),
+    }
+}
+
+/// The end of `text`, at most `limit` characters, marked when cut: of a
+/// prompt, the last part is what differs from turn to turn.
+pub fn clip_tail(text: &str, limit: usize) -> String {
+    let text = text.trim();
+    let count = text.chars().count();
+    if count <= limit {
+        return text.to_owned();
+    }
+    let start = text
+        .char_indices()
+        .nth(count - limit)
+        .map_or(0, |(start, _)| start);
+    format!("[truncated]…\n{}", &text[start..])
+}
+
 fn short(text: &str) -> String {
     let line = text.trim().replace(['\r', '\n'], " ");
     match line.char_indices().nth(DETAIL) {
@@ -467,6 +508,8 @@ struct Parser {
     /// The last fatal error the CLI reported before its result.
     error: Option<String>,
     finish: Option<Result<String>>,
+    /// Name of each tool call by its id, to label the output that follows.
+    tools: std::collections::HashMap<String, String>,
 }
 
 impl Parser {
@@ -477,6 +520,7 @@ impl Parser {
             text: String::new(),
             error: None,
             finish: None,
+            tools: Default::default(),
         }
     }
     fn session(&mut self, id: Option<&str>, events: &mut Vec<Event>) {
@@ -513,6 +557,34 @@ impl Parser {
                     self.text = text.to_owned();
                     events.push(Event::Text { delta: text.into() });
                 }
+                "reasoning" => {
+                    let text = item["text"].as_str().unwrap_or_default();
+                    if !text.trim().is_empty() {
+                        events.push(Event::Reasoning {
+                            delta: clip(text, OUTPUT),
+                        });
+                    }
+                }
+                "command_execution" => events.push(Event::Output {
+                    name: "shell".into(),
+                    text: clip(
+                        item["aggregated_output"].as_str().unwrap_or_default(),
+                        OUTPUT,
+                    ),
+                    exit_code: item["exit_code"].as_i64(),
+                }),
+                "mcp_tool_call" => events.push(Event::Tool {
+                    name: format!(
+                        "{}.{}",
+                        item["server"].as_str().unwrap_or("mcp"),
+                        item["tool"].as_str().unwrap_or("tool")
+                    ),
+                    detail: short(&item["arguments"].to_string()),
+                }),
+                "web_search" => events.push(Event::Tool {
+                    name: "web_search".into(),
+                    detail: short(item["query"].as_str().unwrap_or_default()),
+                }),
                 "file_change" => events.push(Event::Tool {
                     name: "edit".into(),
                     detail: short(
@@ -567,6 +639,13 @@ impl Parser {
                             detail: short(detail),
                         });
                     }
+                    "thinking" | "reasoning" => {
+                        if let Some(delta) = step["text_delta"].as_str().or(step["text"].as_str()) {
+                            events.push(Event::Reasoning {
+                                delta: clip(delta, OUTPUT),
+                            });
+                        }
+                    }
                     "agent_response" => {
                         if let Some(delta) = step["text_delta"].as_str() {
                             self.text.push_str(delta);
@@ -609,18 +688,55 @@ impl Parser {
                             let text = block["text"].as_str().unwrap_or_default();
                             events.push(Event::Text { delta: text.into() });
                         }
+                        "thinking" => {
+                            let text = block["thinking"].as_str().unwrap_or_default();
+                            if !text.trim().is_empty() {
+                                events.push(Event::Reasoning {
+                                    delta: clip(text, OUTPUT),
+                                });
+                            }
+                        }
                         "tool_use" => {
                             let detail = block["input"]
                                 .as_object()
                                 .and_then(|input| input.values().find_map(Value::as_str))
                                 .unwrap_or_default();
+                            let name = block["name"].as_str().unwrap_or("tool");
+                            if let Some(id) = block["id"].as_str() {
+                                self.tools.insert(id.to_owned(), name.to_owned());
+                            }
                             events.push(Event::Tool {
-                                name: block["name"].as_str().unwrap_or("tool").into(),
+                                name: name.into(),
                                 detail: short(detail),
                             });
                         }
                         _ => {}
                     }
+                }
+            }
+            "user" => {
+                for block in line["message"]["content"].as_array().into_iter().flatten() {
+                    if block["type"] != "tool_result" {
+                        continue;
+                    }
+                    let text = match &block["content"] {
+                        Value::String(text) => text.clone(),
+                        Value::Array(parts) => parts
+                            .iter()
+                            .filter_map(|part| part["text"].as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        _ => String::new(),
+                    };
+                    events.push(Event::Output {
+                        name: block["tool_use_id"]
+                            .as_str()
+                            .and_then(|id| self.tools.get(id))
+                            .cloned()
+                            .unwrap_or_else(|| "tool".into()),
+                        text: clip(&text, OUTPUT),
+                        exit_code: (block["is_error"] == true).then_some(1),
+                    });
                 }
             }
             "result" => {
@@ -672,9 +788,31 @@ impl Parser {
                     .as_object()
                     .and_then(|p| p.values().find_map(Value::as_str))
                     .unwrap_or_default();
+                let name = field("tool_name", "name")
+                    .as_str()
+                    .unwrap_or("tool")
+                    .to_owned();
+                if let Some(id) = field("tool_id", "toolId").as_str() {
+                    self.tools.insert(id.to_owned(), name.clone());
+                }
                 events.push(Event::Tool {
-                    name: field("tool_name", "name").as_str().unwrap_or("tool").into(),
+                    name,
                     detail: short(detail),
+                });
+            }
+            "tool_result" => {
+                let output = field("output", "result");
+                let text = output
+                    .as_str()
+                    .map_or_else(|| output.to_string(), str::to_owned);
+                events.push(Event::Output {
+                    name: field("tool_id", "toolId")
+                        .as_str()
+                        .and_then(|id| self.tools.get(id))
+                        .cloned()
+                        .unwrap_or_else(|| "tool".into()),
+                    text: clip(&text, OUTPUT),
+                    exit_code: (line["status"] == "error").then_some(1),
                 });
             }
             "error" if line["severity"] == "error" => {
@@ -719,6 +857,13 @@ impl Parser {
                     events.push(Event::Text { delta: text.into() });
                 }
             }
+            "reasoning" => {
+                if let Some(text) = part["text"].as_str().filter(|t| !t.trim().is_empty()) {
+                    events.push(Event::Reasoning {
+                        delta: clip(text, OUTPUT),
+                    });
+                }
+            }
             "tool_use" => {
                 let input = &part["state"]["input"];
                 let detail = input["command"]
@@ -726,10 +871,21 @@ impl Parser {
                     .or(input["filePath"].as_str())
                     .or_else(|| input.as_object()?.values().find_map(Value::as_str))
                     .unwrap_or_default();
+                let name = part["tool"].as_str().unwrap_or("tool");
                 events.push(Event::Tool {
-                    name: part["tool"].as_str().unwrap_or("tool").into(),
+                    name: name.into(),
                     detail: short(detail),
                 });
+                if let Some(output) = part["state"]["output"]
+                    .as_str()
+                    .filter(|output| !output.trim().is_empty())
+                {
+                    events.push(Event::Output {
+                        name: name.into(),
+                        text: clip(output, OUTPUT),
+                        exit_code: part["state"]["metadata"]["exit"].as_i64(),
+                    });
+                }
             }
             "step_finish" => {
                 let tokens = &part["tokens"];
@@ -787,6 +943,93 @@ mod tests {
         let mut parser = Parser::new(provider);
         let events = lines.iter().flat_map(|line| parser.feed(line)).collect();
         (events, parser)
+    }
+
+    fn reasoning_and_output(events: &[Event]) -> Vec<Event> {
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Reasoning { .. } | Event::Output { .. }))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn every_cli_reports_reasoning_and_tool_output() {
+        let reasoning = |text: &str| Event::Reasoning { delta: text.into() };
+        let output = |name: &str, text: &str, exit_code| Event::Output {
+            name: name.into(),
+            text: text.into(),
+            exit_code,
+        };
+        let (events, _) = feed(
+            ProviderKind::Codex,
+            &[
+                json!({"type":"item.completed","item":{"type":"reasoning","text":"Plan the edit"}}),
+                json!({"type":"item.completed","item":{"type":"command_execution","command":"ls","aggregated_output":"a\nb\n","exit_code":2}}),
+            ],
+        );
+        assert_eq!(
+            reasoning_and_output(&events),
+            [reasoning("Plan the edit"), output("shell", "a\nb", Some(2))]
+        );
+        let (events, _) = feed(
+            ProviderKind::Claude,
+            &[
+                json!({"type":"assistant","message":{"content":[
+                    {"type":"thinking","thinking":"Look first"},
+                    {"type":"tool_use","id":"u1","name":"Read","input":{"file_path":"a.rs"}}]}}),
+                json!({"type":"user","message":{"content":[
+                    {"type":"tool_result","tool_use_id":"u1","content":[{"type":"text","text":"fn a() {}"}]}]}}),
+                json!({"type":"user","message":{"content":[
+                    {"type":"tool_result","tool_use_id":"u2","content":"boom","is_error":true}]}}),
+            ],
+        );
+        assert_eq!(
+            reasoning_and_output(&events),
+            [
+                reasoning("Look first"),
+                output("Read", "fn a() {}", None),
+                output("tool", "boom", Some(1)),
+            ]
+        );
+        let (events, _) = feed(
+            ProviderKind::Gemini,
+            &[
+                json!({"type":"tool_use","tool_name":"run_shell_command","tool_id":"g1","parameters":{"command":"ls"}}),
+                json!({"type":"tool_result","tool_id":"g1","status":"success","output":"done"}),
+            ],
+        );
+        assert_eq!(
+            reasoning_and_output(&events),
+            [output("run_shell_command", "done", None)]
+        );
+        let (events, _) = feed(
+            ProviderKind::Opencode,
+            &[
+                json!({"type":"reasoning","part":{"text":"Think"}}),
+                json!({"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"ls"},"output":"x","metadata":{"exit":0}}}}),
+            ],
+        );
+        assert_eq!(
+            reasoning_and_output(&events),
+            [reasoning("Think"), output("bash", "x", Some(0))]
+        );
+        let (events, _) = feed(
+            ProviderKind::Agy,
+            &[
+                json!({"event":"step_update","step_update":{"step_type":"thinking","text_delta":"hm"}}),
+            ],
+        );
+        assert_eq!(reasoning_and_output(&events), [reasoning("hm")]);
+    }
+
+    #[test]
+    fn long_output_is_clipped_and_marked() {
+        let long = "x".repeat(OUTPUT + 500);
+        let clipped = clip(&long, OUTPUT);
+        assert!(clipped.ends_with("…[truncated]"));
+        assert!(clipped.chars().count() < OUTPUT + 20);
+        assert_eq!(clip("short\n", OUTPUT), "short");
     }
 
     #[test]
@@ -1247,5 +1490,19 @@ echo '{"type":"turn.completed","usage":{}}'
         assert!(started.elapsed() < Duration::from_millis(4500));
         std::thread::sleep(Duration::from_millis(5500) - started.elapsed());
         assert!(!marker.exists(), "a descendant kept running");
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::*;
+
+    #[test]
+    fn a_prompt_keeps_its_end() {
+        let text = format!("{}END", "x".repeat(5000));
+        let clipped = clip_tail(&text, OUTPUT);
+        assert!(clipped.starts_with("[truncated]…"));
+        assert!(clipped.ends_with("xxxEND"));
+        assert_eq!(clip_tail("short", OUTPUT), "short");
     }
 }

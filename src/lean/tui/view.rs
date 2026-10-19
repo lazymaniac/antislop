@@ -2,6 +2,7 @@
 //! frontend that attaches later rebuilds the same state.
 
 use super::super::tasks::status;
+use super::session::Block;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -150,8 +151,8 @@ pub struct Agent {
     /// The current tool call while running, else the last outcome.
     pub activity: String,
     pub session: Vec<String>,
-    /// Emulated process terminal stream showing all commands, tool calls, messages, and output.
-    pub terminal: Vec<String>,
+    /// What the agent's CLI did and printed, drawn like that CLI does.
+    pub feed: Vec<Block>,
     /// Finished turns, and how many of them the CLI reported tokens for.
     pub turns: u32,
     pub reported: u32,
@@ -426,7 +427,8 @@ impl View {
     /// The agent key of a message's sender or recipient display name.
     fn mail_key(name: &str) -> String {
         match name {
-            ORCHESTRATOR | "user" => name.to_owned(),
+            ORCHESTRATOR | PLAN_VERIFIER | AUDITOR | "user" | "runtime" => name.to_owned(),
+            super::super::COMMENT_ORCHESTRATOR => ORCHESTRATOR.to_owned(),
             name => match name.split_once('/') {
                 Some((task, _)) => format!("verifier:{task}"),
                 None => format!("worker:{name}"),
@@ -442,11 +444,11 @@ impl View {
         }
     }
 
-    fn terminal(&mut self, key: &str, line: String) {
-        let term = &mut self.agents.entry(key.to_owned()).or_default().terminal;
-        term.push(clean(&line));
-        if term.len() > SESSION_LINES {
-            term.drain(..term.len() - SESSION_LINES);
+    fn feed(&mut self, key: &str, block: Block) {
+        let feed = &mut self.agents.entry(key.to_owned()).or_default().feed;
+        feed.push(block);
+        if feed.len() > SESSION_LINES {
+            feed.drain(..feed.len() - SESSION_LINES);
         }
     }
 
@@ -477,7 +479,7 @@ impl View {
                     };
                     self.messages.push(msg.clone());
                     self.cards.push(TranscriptCard::Message(msg));
-                    self.terminal(ORCHESTRATOR, format!("<< [user] {}", text("text")));
+                    self.feed(ORCHESTRATOR, Block::User(text("text")));
                     self.push(
                         Style::default()
                             .fg(Color::Cyan)
@@ -558,14 +560,13 @@ impl View {
                 agent.started_ms = event["created_ms"].as_i64().filter(|ms| *ms > 0);
                 agent.activity = "starting turn".into();
                 self.session(&key, "── turn".into());
-                self.terminal(
+                self.feed(
                     &key,
-                    format!(
-                        "$ {provider} [role={}, model={}, effort={}] — turn started",
-                        text("role"),
-                        model.as_deref().unwrap_or("default"),
+                    Block::Turn(format!(
+                        "{provider} · {} · effort {}",
+                        model.as_deref().unwrap_or("default model"),
                         effort.as_deref().unwrap_or("default")
-                    ),
+                    )),
                 );
                 self.roles.insert(turn.to_owned(), key);
             }
@@ -574,22 +575,40 @@ impl View {
                     && let Some(pid) = payload["pid"].as_u64()
                 {
                     self.agents.entry(key.clone()).or_default().pid = Some(pid as u32);
-                    self.terminal(&key, format!("[pid {pid}] process started"));
+                    self.feed(&key, Block::Note(format!("process {pid} started")));
                 }
             }
             "agent" if payload["type"] == "session" => {
                 if !key.is_empty() {
                     let sid = text("id");
-                    self.terminal(&key, format!("[session {sid}] attached"));
+                    self.feed(&key, Block::Note(format!("session {sid}")));
                 }
             }
             "agent" if payload["type"] == "text" => {
+                if !key.is_empty() && !text("delta").trim().is_empty() {
+                    self.feed(&key, Block::Text(text("delta")));
+                }
+            }
+            "agent" if payload["type"] == "reasoning" => {
+                if !key.is_empty() && !text("delta").trim().is_empty() {
+                    self.feed(&key, Block::Reasoning(text("delta")));
+                }
+            }
+            "agent" if payload["type"] == "prompt" => {
                 if !key.is_empty() {
-                    for line in text("delta").lines().take(6) {
-                        if !line.trim().is_empty() {
-                            self.terminal(&key, format!("> {}", line.trim()));
-                        }
-                    }
+                    self.feed(&key, Block::Prompt(text("text")));
+                }
+            }
+            "agent" if payload["type"] == "output" => {
+                if !key.is_empty() {
+                    self.feed(
+                        &key,
+                        Block::Output {
+                            name: text("name"),
+                            text: text("text"),
+                            exit_code: payload["exit_code"].as_i64(),
+                        },
+                    );
                 }
             }
             "agent" if payload["type"] == "tool" => {
@@ -604,7 +623,13 @@ impl View {
                 if !key.is_empty() {
                     self.agents.entry(key.clone()).or_default().activity = detail.clone();
                     self.session(&key, format!("↳ {detail}"));
-                    self.terminal(&key, format!("$ {detail}"));
+                    self.feed(
+                        &key,
+                        Block::Tool {
+                            name: text("name"),
+                            detail: text("detail"),
+                        },
+                    );
                 }
             }
             "agent" if payload["type"] == "usage" => {
@@ -619,14 +644,7 @@ impl View {
                     };
                     add(&mut agent.tokens_in, input);
                     add(&mut agent.tokens_out, output);
-                    self.terminal(
-                        &key,
-                        format!(
-                            "[tokens] in={} out={}",
-                            input.unwrap_or(0),
-                            output.unwrap_or(0)
-                        ),
-                    );
+                    self.feed(&key, Block::Tokens { input, output });
                 }
             }
             "turn_finished" => {
@@ -687,7 +705,13 @@ impl View {
                     }
                     agent.activity = outcome.clone();
                     self.session(&key, outcome.clone());
-                    self.terminal(&key, format!("── {outcome}"));
+                    self.feed(
+                        &key,
+                        Block::End {
+                            ok: !failed,
+                            text: outcome.trim_start_matches(['✓', '✗', ' ']).to_owned(),
+                        },
+                    );
                 }
             }
             "plan_proposed" => {
@@ -963,7 +987,7 @@ impl View {
                         .entry(key.clone())
                         .or_default()
                         .push(clean(&line));
-                    self.terminal(key, format!("✉ {line}"));
+                    self.feed(key, Block::Mail(line.clone()));
                 }
                 let link = self.links.entry((from, to)).or_insert(Link {
                     count: 0,
@@ -1500,6 +1524,64 @@ mod tests {
             .collect();
         view.activity = activity.then(|| "working".to_owned());
         view
+    }
+
+    #[test]
+    fn mail_for_the_reviewers_stays_with_the_reviewers() {
+        assert_eq!(View::mail_key("plan-verifier"), "plan-verifier");
+        assert_eq!(View::mail_key("auditor"), "auditor");
+        assert_eq!(View::mail_key("runtime"), "runtime");
+        assert_eq!(View::mail_key("comment-orchestrator"), "orchestrator");
+        assert_eq!(View::mail_key("t1"), "worker:t1");
+        assert_eq!(View::mail_key("t1/verifier"), "verifier:t1");
+    }
+
+    #[test]
+    fn the_session_keeps_prompts_reasoning_output_and_whole_answers() {
+        let mut view = View::default();
+        let key = "orchestrator";
+        let turn = Some("t");
+        let answer = "line one\nline two\nline three\nline four\nline five\nline six\nline seven";
+        for (seq, kind, payload) in [
+            (1, "turn_started", json!({"role": key, "provider": "codex"})),
+            (2, "agent", json!({"type": "prompt", "text": "Do it"})),
+            (3, "agent", json!({"type": "reasoning", "delta": "Think"})),
+            (
+                4,
+                "agent",
+                json!({"type": "tool", "name": "shell", "detail": "ls"}),
+            ),
+            (
+                5,
+                "agent",
+                json!({"type": "output", "name": "shell", "text": "a.rs", "exit_code": 0}),
+            ),
+            (6, "agent", json!({"type": "text", "delta": answer})),
+            (7, "turn_finished", json!({"role": key, "status": "done"})),
+        ] {
+            view.apply(&event(
+                seq,
+                turn.map(str::to_owned).as_deref(),
+                kind,
+                payload,
+            ));
+        }
+        let feed = &view.agents[key].feed;
+        assert!(matches!(feed[0], Block::Turn(_)));
+        assert_eq!(feed[1], Block::Prompt("Do it".into()));
+        assert_eq!(feed[2], Block::Reasoning("Think".into()));
+        assert!(matches!(&feed[3], Block::Tool { name, .. } if name == "shell"));
+        assert_eq!(
+            feed[4],
+            Block::Output {
+                name: "shell".into(),
+                text: "a.rs".into(),
+                exit_code: Some(0)
+            }
+        );
+        // The answer is kept whole, not cut to its first lines.
+        assert_eq!(feed[5], Block::Text(answer.into()));
+        assert!(matches!(feed[6], Block::End { ok: true, .. }));
     }
 
     #[test]

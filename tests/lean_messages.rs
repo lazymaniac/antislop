@@ -270,3 +270,43 @@ answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "dalej
     assert_eq!(statuses, ["open", "resolved"]);
     assert!(core.set_comment(&conversation, comment.id, "done").is_err());
 }
+
+#[test]
+fn a_turn_stores_its_prompt_reasoning_output_and_whole_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+print(json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": "Weigh the options"}}))
+print(json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "ls", "aggregated_output": "out-A\n" + "x" * 5000, "exit_code": 3}}))
+answer = "First sentence.\nSecond line of the answer that is kept whole."
+"#,
+        "    answer = 'unused'",
+    );
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    core.send(&conversation, "hello there").unwrap();
+    wait_until("answered", || core.is_idle(&conversation));
+    let agent: Vec<Value> = events(&core, &conversation, "agent");
+    let of = |kind: &str| -> Vec<&Value> { agent.iter().filter(|e| e["type"] == kind).collect() };
+    assert!(
+        of("prompt")[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("hello there")
+    );
+    assert_eq!(of("reasoning")[0]["delta"], "Weigh the options");
+    let output = of("output")[0];
+    assert_eq!(output["exit_code"], 3);
+    let text = output["text"].as_str().unwrap();
+    assert!(text.starts_with("out-A") && text.ends_with("…[truncated]"));
+    assert!(text.len() < 2100);
+    // The answer is one event with all its lines, and not repeated.
+    let answers = of("text");
+    assert_eq!(answers.len(), 1);
+    assert!(
+        answers[0]["delta"]
+            .as_str()
+            .unwrap()
+            .contains("Second line of the answer that is kept whole.")
+    );
+}

@@ -21,6 +21,19 @@ pub const RESULT: usize = 3;
 pub const CHECKS: usize = 4;
 pub const COMMENTS: usize = 5;
 
+/// The tabs that mean something for an agent: indexes into [`TABS`].
+/// A worker has a result but no checks; its verifier has checks but no
+/// result; the reviewers and the conversation have no task at all.
+pub fn tabs_for(key: &str) -> Vec<usize> {
+    match key.split_once(':').map_or(key, |(role, _)| role) {
+        "worker" => vec![0, 1, 2, RESULT, COMMENTS],
+        "verifier" => vec![0, 1, 2, CHECKS, COMMENTS],
+        "plan-verifier" | "auditor" => vec![0, 1, COMMENTS],
+        "orchestrator" | "comment-orchestrator" => vec![0, 1, 2, COMMENTS],
+        _ => vec![0, 2, COMMENTS],
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DetailRecord {
     pub lines: Vec<(Style, String)>,
@@ -70,6 +83,19 @@ impl Details {
             sessions: Vec::new(),
             history_unavailable: false,
         }
+    }
+
+    /// The tab `steps` places after (or, negative, before) the current one
+    /// among those this agent has.
+    pub fn neighbour_tab(&self, steps: isize) -> usize {
+        let tabs = tabs_for(&self.key);
+        let at = tabs.iter().position(|tab| *tab == self.tab).unwrap_or(0) as isize;
+        tabs[(at + steps).rem_euclid(tabs.len() as isize) as usize]
+    }
+
+    /// The tab a number key picks: the n-th (from 0) of this agent's tabs.
+    pub fn nth_tab(&self, n: usize) -> Option<usize> {
+        tabs_for(&self.key).get(n).copied()
     }
 
     pub fn switch_tab(&mut self, next: usize) {
@@ -412,58 +438,54 @@ impl Details {
             }
             1 => {
                 if let Some(agent) = agent
-                    && (!agent.terminal.is_empty()
-                        || !agent.session.is_empty()
-                        || agent.pid.is_some())
+                    && (!agent.feed.is_empty() || !agent.session.is_empty() || agent.pid.is_some())
                 {
                     let pid_label = agent
                         .pid
                         .map(|p| format!("PID {p}"))
                         .unwrap_or_else(|| "no active PID".into());
                     let state = if agent.running { "running" } else { "idle" };
-                    let term_header = format!(
-                        "┌─ Process Terminal: {} (status: {}, {}) ─┐",
-                        agent_name(&self.key),
-                        state,
-                        pid_label
-                    );
+                    let provider = if agent.provider.is_empty() {
+                        "agent"
+                    } else {
+                        agent.provider.as_str()
+                    };
+                    let header = format!("{provider} · {state} · {pid_label}");
                     records.push(DetailRecord {
                         lines: vec![(
                             Style::default()
                                 .fg(Color::Cyan)
                                 .add_modifier(Modifier::BOLD),
-                            term_header.clone(),
+                            header.clone(),
                         )],
-                        search_text: format!("process terminal {term_header}"),
+                        search_text: format!("session {header}"),
                         raw_value: Some(serde_json::json!({
                             "agent": self.key,
                             "status": state,
                             "pid": agent.pid,
                         })),
                     });
-                    // The terminal is the single session transcript. Legacy
-                    // session events are a fallback when no terminal was retained.
-                    let transcript = if agent.terminal.is_empty() {
-                        &agent.session
-                    } else {
-                        &agent.terminal
-                    };
-                    for line in transcript {
-                        let style = if line.starts_with("$ ") {
-                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-                        } else if line.starts_with("✉ ") {
-                            Style::default().fg(Color::Cyan)
-                        } else if line.starts_with("──") {
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                        } else if line.starts_with("[process") {
-                            dim()
-                        } else {
-                            Style::default()
-                        };
+                    if agent.feed.is_empty() {
+                        // Older event logs only kept the short summary lines.
+                        for line in &agent.session {
+                            records.push(DetailRecord {
+                                lines: vec![(Style::default(), line.clone())],
+                                search_text: line.clone(),
+                                raw_value: Some(serde_json::json!({ "session": line })),
+                            });
+                        }
+                    }
+                    for block in &agent.feed {
+                        let lines = super::session::render(provider, std::slice::from_ref(block));
+                        let search_text = lines
+                            .iter()
+                            .map(|(_, line)| line.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         records.push(DetailRecord {
-                            lines: vec![(style, format!("│ {line}"))],
-                            search_text: line.clone(),
-                            raw_value: Some(serde_json::json!({ "terminal": line })),
+                            raw_value: Some(serde_json::json!({ "session": search_text })),
+                            lines,
+                            search_text,
                         });
                     }
                 } else {
@@ -723,7 +745,7 @@ impl Details {
     }
 
     pub fn draw(&mut self, frame: &mut Frame, view: &View) {
-        if self.tab >= TABS.len() {
+        if !tabs_for(&self.key).contains(&self.tab) {
             self.tab = 0;
         }
         let area = frame.area();
@@ -811,11 +833,15 @@ pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
 pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> Line<'a> {
     let agent = format!(" {} ", agent_name(agent_key));
     let agent_w = agent.len();
+    let visible = tabs_for(agent_key);
+    let name = |slot: usize| TABS[visible[slot]];
+    let active = visible
+        .iter()
+        .position(|tab| *tab == active_tab)
+        .unwrap_or(0);
     let full_tabs_len: usize = agent_w
-        + TABS
-            .iter()
-            .enumerate()
-            .map(|(i, t)| t.len() + if i == active_tab { 4 } else { 3 })
+        + (0..visible.len())
+            .map(|i| name(i).len() + if i == active { 4 } else { 3 })
             .sum::<usize>();
 
     if full_tabs_len <= max_width {
@@ -823,17 +849,17 @@ pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> 
             agent,
             Style::default().add_modifier(Modifier::BOLD),
         )];
-        for (index, name) in TABS.iter().enumerate() {
+        for index in 0..visible.len() {
             spans.push(Span::raw(" "));
-            spans.push(if index == active_tab {
+            spans.push(if index == active {
                 Span::styled(
-                    format!("[{name}]"),
+                    format!("[{}]", name(index)),
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                Span::styled(format!(" {name} "), dim())
+                Span::styled(format!(" {} ", name(index)), dim())
             });
         }
         return Line::from(spans);
@@ -845,13 +871,13 @@ pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> 
         Style::default().add_modifier(Modifier::BOLD),
     )];
 
-    let mut left = active_tab;
-    let mut right = active_tab;
-    let mut current_len = agent_w + TABS[active_tab].len() + 4;
-    while left > 0 || right + 1 < TABS.len() {
+    let mut left = active;
+    let mut right = active;
+    let mut current_len = agent_w + name(active).len() + 4;
+    while left > 0 || right + 1 < visible.len() {
         let mut expanded = false;
-        if right + 1 < TABS.len() {
-            let next_len = TABS[right + 1].len() + 3;
+        if right + 1 < visible.len() {
+            let next_len = name(right + 1).len() + 3;
             if current_len + next_len + 2 <= max_width {
                 right += 1;
                 current_len += next_len;
@@ -859,7 +885,7 @@ pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> 
             }
         }
         if left > 0 {
-            let prev_len = TABS[left - 1].len() + 3;
+            let prev_len = name(left - 1).len() + 3;
             if current_len + prev_len + 2 <= max_width {
                 left -= 1;
                 current_len += prev_len;
@@ -874,19 +900,19 @@ pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> 
     if left > 0 {
         spans.push(Span::styled("◀ ", dim()));
     }
-    for (index, &name) in TABS.iter().enumerate().take(right + 1).skip(left) {
-        spans.push(if index == active_tab {
+    for index in left..=right {
+        spans.push(if index == active {
             Span::styled(
-                format!("[{name}] "),
+                format!("[{}] ", name(index)),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
-            Span::styled(format!("{name} "), dim())
+            Span::styled(format!("{} ", name(index)), dim())
         });
     }
-    if right + 1 < TABS.len() {
+    if right + 1 < visible.len() {
         spans.push(Span::styled("▶", dim()));
     }
 
@@ -950,9 +976,11 @@ mod tests {
         // Wide: 100 columns -> all tabs rendered
         let line = format_tabs("orchestrator", 0, 100);
         let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        for tab in TABS {
+        for tab in tabs_for("orchestrator") {
+            let tab = TABS[tab];
             assert!(rendered.contains(tab), "missing tab {tab} in {rendered}");
         }
+        assert!(!rendered.contains("Result") && !rendered.contains("Checks"));
 
         // Narrow: 50 columns -> active tab still visible
         let line = format_tabs("worker:t1", 3, 50);
@@ -1032,5 +1060,39 @@ mod tests {
                 details.draw(frame, &view);
             })
             .unwrap();
+    }
+
+    #[test]
+    fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
+        let names =
+            |key: &str| -> Vec<&str> { tabs_for(key).into_iter().map(|tab| TABS[tab]).collect() };
+        assert_eq!(
+            names("worker:t1"),
+            ["Overview", "Session", "Messages", "Result", "Comments"]
+        );
+        assert_eq!(
+            names("verifier:t1"),
+            ["Overview", "Session", "Messages", "Checks", "Comments"]
+        );
+        assert_eq!(names("auditor"), ["Overview", "Session", "Comments"]);
+        assert_eq!(names("plan-verifier"), ["Overview", "Session", "Comments"]);
+        assert_eq!(names("conversation"), ["Overview", "Messages", "Comments"]);
+
+        // Navigation skips what is not there and wraps around.
+        let mut details = Details::new("worker:t1".into());
+        details.switch_tab(details.neighbour_tab(1));
+        assert_eq!(details.tab, 1);
+        details.switch_tab(RESULT);
+        details.switch_tab(details.neighbour_tab(1));
+        assert_eq!(details.tab, COMMENTS);
+        details.switch_tab(details.neighbour_tab(1));
+        assert_eq!(details.tab, 0);
+        details.switch_tab(details.neighbour_tab(-1));
+        assert_eq!(details.tab, COMMENTS);
+        // Number keys count the visible tabs: 4 is Result for a worker.
+        assert_eq!(details.nth_tab(3), Some(RESULT));
+        assert_eq!(details.nth_tab(5), None);
+        let verifier = Details::new("verifier:t1".into());
+        assert_eq!(verifier.nth_tab(3), Some(CHECKS));
     }
 }
