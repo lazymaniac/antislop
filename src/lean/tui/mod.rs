@@ -55,7 +55,7 @@ use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 use view::{
     ORCHESTRATOR, PanelFocus, SIDE_BY_SIDE_BREAKPOINT, View, dim, draw_min_term_guard,
-    main_footer_hint, render_header, target_name, truncate, wrap,
+    main_footer_hint, target_name, truncate, wrap,
 };
 
 pub enum Update {
@@ -1327,8 +1327,8 @@ impl App {
                 None,
             ),
             "/mode" => {
+                // The header changes when the daemon says the mode changed.
                 let next_auto = self.view.autonomous != Some(true);
-                self.view.autonomous = Some(next_auto);
                 self.request(
                     Request::Mode {
                         conversation,
@@ -1339,7 +1339,6 @@ impl App {
             }
             "/mode autonomous" | "/mode supervised" => {
                 let next_auto = text.ends_with("autonomous");
-                self.view.autonomous = Some(next_auto);
                 self.request(
                     Request::Mode {
                         conversation,
@@ -1668,6 +1667,24 @@ impl App {
         }
     }
 
+    /// The header as drawn, which is also what a click on it is read from.
+    fn header_line(&self, width: u16) -> Line<'static> {
+        let panel_focus = match self.focus {
+            Focus::Chat => PanelFocus::Chat,
+            Focus::Tasks => PanelFocus::Tasks,
+            Focus::Graph => PanelFocus::Graph,
+        };
+        view::render_header_with(
+            &self.project,
+            &self.conversation,
+            self.view.autonomous,
+            &self.header_status(),
+            panel_focus,
+            width,
+            self.view.controls(),
+        )
+    }
+
     /// The header's status text: the stage, then what is going on.
     fn header_status(&self) -> String {
         let status = match (self.view.orchestrator_activity(), self.view.idle) {
@@ -1833,7 +1850,8 @@ impl App {
                 self.picker = Some(Picker::new(Kind::Commands));
                 return true;
             }
-            KeyCode::Char('m') if control => {
+            // Ctrl+M is Enter to a terminal, so the toggle is Ctrl+T.
+            KeyCode::Char('t') if control => {
                 self.command("/mode");
                 return true;
             }
@@ -2717,23 +2735,12 @@ impl App {
         ])
         .areas(area);
 
-        let status = self.header_status();
+        frame.render_widget(Paragraph::new(self.header_line(header.width)), header);
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
             Focus::Tasks => PanelFocus::Tasks,
             Focus::Graph => PanelFocus::Graph,
         };
-        frame.render_widget(
-            Paragraph::new(render_header(
-                &self.project,
-                &self.conversation,
-                self.view.autonomous,
-                &status,
-                panel_focus,
-                header.width,
-            )),
-            header,
-        );
 
         let theme = Theme::from_env();
         if self.view.graph_hidden() && self.focus == Focus::Chat {
@@ -3435,24 +3442,18 @@ impl App {
                     self.handle_plan_action(action);
                     return true;
                 }
-                if self.diff.is_some() || self.details.is_some() {
+                // Behind a dialog the header is not there to click.
+                if self.diff.is_some()
+                    || self.details.is_some()
+                    || self.picker.is_some()
+                    || self.editor.is_some()
+                    || self.help.is_some()
+                {
                     return true;
                 }
                 if row == area.y && area.width > 0 {
-                    let status = self.header_status();
-                    let panel_focus = match self.focus {
-                        Focus::Chat => PanelFocus::Chat,
-                        Focus::Tasks => PanelFocus::Tasks,
-                        Focus::Graph => PanelFocus::Graph,
-                    };
-                    let header_line = render_header(
-                        &self.project,
-                        &self.conversation,
-                        self.view.autonomous,
-                        &status,
-                        panel_focus,
-                        area.width,
-                    );
+                    let header_line = self.header_line(area.width);
+                    let controls = self.view.controls();
                     let header_text: String = header_line
                         .spans
                         .iter()
@@ -3475,15 +3476,23 @@ impl App {
                                     "[Mode: supervised]" | "[sup]" => {
                                         self.command("/mode autonomous");
                                     }
-                                    "[/pause]" => self.command("/pause"),
-                                    "[/continue]" => self.command("/continue"),
-                                    "[/resume]" => self.command("/resume"),
-                                    "[/cancel]" => self.command("/cancel"),
+                                    "[/pause]" | "[‖]" if controls.pause => {
+                                        self.command("/pause")
+                                    }
+                                    "[/continue]" | "[▶]" if controls.resume_paused => {
+                                        self.command("/continue")
+                                    }
+                                    "[/resume]" | "[↻]" if controls.resume_plan => {
+                                        self.command("/resume")
+                                    }
+                                    "[/cancel]" | "[✕]" if controls.cancel => {
+                                        self.command("/cancel")
+                                    }
                                     "[Plan]" => self.command("/plan"),
                                     "[Unblock]" => self.command("/unblock"),
-                                    "[chat]" => self.focus = Focus::Chat,
-                                    "[tasks]" => self.focus = Focus::Tasks,
-                                    "[team]" => self.focus = Focus::Graph,
+                                    "[Chat]" => self.focus = Focus::Chat,
+                                    "[Tasks]" => self.focus = Focus::Tasks,
+                                    "[Team]" => self.focus = Focus::Graph,
                                     _ => {}
                                 }
                             }
@@ -3764,6 +3773,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
 
 #[cfg(test)]
 pub mod tests {
+    use super::view::render_header;
     use super::*;
     use ratatui::buffer::Buffer;
 
@@ -4625,5 +4635,97 @@ pub mod tests {
         assert!(app.header_status().ends_with("[Unblock]"));
         app.view.tasks.retain(|t| t.status == "approved");
         assert!(!app.header_status().contains("[Unblock]"));
+    }
+
+    fn header_text(app: &App, width: u16) -> String {
+        app.header_line(width)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect()
+    }
+
+    fn click_header(app: &mut App, width: u16, token: &str) {
+        let text = header_text(app, width);
+        let at = text
+            .find(token)
+            .unwrap_or_else(|| panic!("{token} in {text}"));
+        let col = unicode_width::UnicodeWidthStr::width(&text[..at]) as u16 + 1;
+        app.terminal_area = Rect::new(0, 0, width, 24);
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(event::MouseButton::Left),
+            column: col,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    #[test]
+    fn the_header_buttons_exist_on_narrow_terminals_and_know_what_they_can_do() {
+        let mut app = test_app();
+        app.view.idle = true;
+        for width in [45, 60, 94, 95, 140] {
+            let text = header_text(&app, width);
+            let (pause, resume, cancel) = if width >= 95 {
+                ("[/pause]", "[/resume]", "[/cancel]")
+            } else {
+                ("[‖]", "[↻]", "[✕]")
+            };
+            for token in [pause, resume, cancel] {
+                assert!(text.contains(token), "{width}: {text}");
+            }
+        }
+        // Nothing runs: pause and cancel are dim, and a click does nothing.
+        let controls = app.view.controls();
+        assert!(!controls.pause && !controls.cancel && !controls.resume_plan);
+        // While work runs they light up; paused work offers to continue.
+        app.view.idle = false;
+        assert!(app.view.controls().pause && app.view.controls().cancel);
+        app.view.paused = true;
+        assert!(app.view.controls().resume_paused && !app.view.controls().pause);
+        assert!(header_text(&app, 60).contains("[▶]"));
+        assert!(!header_text(&app, 60).contains("[‖]"));
+        // Compact mode token at the narrowest widths.
+        app.view.autonomous = Some(true);
+        assert!(header_text(&app, 40).contains("[auto]"));
+    }
+
+    #[test]
+    fn panels_and_buttons_in_the_header_can_be_clicked() {
+        let mut app = test_app();
+        app.view.idle = false;
+        app.view.cards.push(view::TranscriptCard::System {
+            title: "x".into(),
+            meta: String::new(),
+            text: "x".into(),
+            tone: Tone::Queued,
+        });
+        app.view.tasks = vec![view::TaskRow {
+            id: "t1".into(),
+            status: "working".into(),
+            ..view::TaskRow::default()
+        }];
+        // Every panel is a button, not only the focused one.
+        click_header(&mut app, 80, "[Team]");
+        assert_eq!(app.focus, Focus::Graph);
+        click_header(&mut app, 80, "[Tasks]");
+        assert_eq!(app.focus, Focus::Tasks);
+        click_header(&mut app, 80, "[Chat]");
+        assert_eq!(app.focus, Focus::Chat);
+        // The mode does not flip until the daemon says so.
+        app.view.autonomous = Some(false);
+        app.command("/mode");
+        assert_eq!(app.view.autonomous, Some(false));
+        app.key(key_ctrl('t'));
+        assert_eq!(app.view.autonomous, Some(false));
+
+        // With a dialog open the header ignores clicks.
+        app.focus = Focus::Chat;
+        app.editor = Some(Editor {
+            target: "plan:p1".into(),
+            input: InputBuffer::new(),
+        });
+        click_header(&mut app, 80, "[Team]");
+        assert_eq!(app.focus, Focus::Chat);
     }
 }

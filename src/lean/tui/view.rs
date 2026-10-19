@@ -1516,6 +1516,39 @@ pub fn draw_min_term_guard(frame: &mut ratatui::Frame, area: Rect) -> bool {
 }
 
 /// Builds the responsive header line according to terminal width, mode, status, and compact panel toggle badge.
+/// Which of the header's buttons do something now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Controls {
+    pub pause: bool,
+    pub resume_paused: bool,
+    pub resume_plan: bool,
+    pub cancel: bool,
+}
+
+impl Default for Controls {
+    /// All of them, as before the header knew the state.
+    fn default() -> Self {
+        Self {
+            pause: true,
+            resume_paused: true,
+            resume_plan: true,
+            cancel: true,
+        }
+    }
+}
+
+impl View {
+    /// What the buttons can do in the state the conversation is in.
+    pub fn controls(&self) -> Controls {
+        Controls {
+            pause: !self.idle && !self.paused,
+            resume_paused: self.paused,
+            resume_plan: self.plan_resumable(),
+            cancel: !self.idle,
+        }
+    }
+}
+
 pub fn render_header(
     project: &str,
     conversation: &str,
@@ -1523,6 +1556,26 @@ pub fn render_header(
     status: &str,
     focus: PanelFocus,
     width: u16,
+) -> Line<'static> {
+    render_header_with(
+        project,
+        conversation,
+        mode,
+        status,
+        focus,
+        width,
+        Controls::default(),
+    )
+}
+
+pub fn render_header_with(
+    project: &str,
+    conversation: &str,
+    mode: Option<bool>,
+    status: &str,
+    focus: PanelFocus,
+    width: u16,
+    controls: Controls,
 ) -> Line<'static> {
     if width < 25 {
         return Line::from(vec![Span::styled(
@@ -1567,11 +1620,8 @@ pub fn render_header(
                     .add_modifier(Modifier::BOLD),
             ),
         };
-        let (chat_label, tasks_label, graph_label) = match focus {
-            PanelFocus::Chat => ("[Chat]", "Tasks", "Team"),
-            PanelFocus::Tasks => ("Chat", "[Tasks]", "Team"),
-            PanelFocus::Graph => ("Chat", "Tasks", "[Team]"),
-        };
+        // Every panel is a button; the focused one is lit.
+        let (chat_label, tasks_label, graph_label) = ("[Chat]", "[Tasks]", "[Team]");
         spans.push(Span::styled(format!(" {chat_label} "), chat_style));
         spans.push(Span::styled(format!("{tasks_label} "), tasks_style));
         spans.push(Span::styled(format!("{graph_label} "), graph_style));
@@ -1602,17 +1652,50 @@ pub fn render_header(
         // The wide header lists it with the other buttons.
         spans.push(Span::styled("[Plan] ", Style::default().fg(Color::Cyan)));
     }
+    if (35..50).contains(&width) {
+        match mode {
+            Some(true) => spans.push(Span::styled("[auto] ", dim())),
+            Some(false) => spans.push(Span::styled("[sup] ", dim())),
+            None => {}
+        }
+    }
     if width >= 40 {
         spans.push(Span::styled(
             clean(status),
             Style::default().fg(Color::Yellow),
         ));
     }
+    let button = |label: &str, enabled: bool| {
+        Span::styled(
+            label.to_owned(),
+            if enabled {
+                Style::default().fg(Color::Cyan)
+            } else {
+                dim()
+            },
+        )
+    };
     if width >= 95 {
-        spans.push(Span::styled(
-            " · [/pause] [/continue] [/resume] [/cancel] [Plan]",
-            Style::default().fg(Color::Cyan),
-        ));
+        spans.push(Span::styled(" · ", Style::default().fg(Color::Cyan)));
+        spans.push(button("[/pause]", controls.pause));
+        spans.push(Span::raw(" "));
+        spans.push(button("[/continue]", controls.resume_paused));
+        spans.push(Span::raw(" "));
+        spans.push(button("[/resume]", controls.resume_plan));
+        spans.push(Span::raw(" "));
+        spans.push(button("[/cancel]", controls.cancel));
+        spans.push(Span::styled(" [Plan]", Style::default().fg(Color::Cyan)));
+    } else if width >= 45 {
+        // One button for pause or continue, whichever applies.
+        let (label, enabled) = if controls.resume_paused {
+            ("[▶]", true)
+        } else {
+            ("[‖]", controls.pause)
+        };
+        spans.push(button(label, enabled));
+        spans.push(button("[↻]", controls.resume_plan));
+        spans.push(button("[✕]", controls.cancel));
+        spans.push(Span::raw(" "));
     }
     Line::from(spans)
 }

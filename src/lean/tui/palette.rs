@@ -335,7 +335,7 @@ impl Help {
                 "Ctrl+X           cancel running work",
                 "/pause, /continue  pause new steps / continue",
                 "/mode autonomous   autonomous mode for next plans",
-                "/mode supervised   supervised mode for next plans",
+                "/mode supervised   supervised mode (Ctrl+T toggles)",
                 "Ctrl+N / Ctrl+O  new / switch conversation",
                 "Ctrl+F / Ctrl+L  search conversation / open plan",
                 "Ctrl+P           command palette",
