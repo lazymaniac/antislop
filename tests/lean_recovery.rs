@@ -1,4 +1,7 @@
-use architect::{config::Config, lean::Core};
+use architect::{
+    config::Config,
+    lean::{Core, RecoveryAction, TaskRecoveryRequest},
+};
 use serde_json::json;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -12,15 +15,18 @@ fn fake_clis(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
         r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
-def task(id, title, depends=()):
+def task(id, title, depends=(), writes=False):
     return {"id": id, "title": title, "goal": "g", "depends_on": list(depends),
-            "kind": "analysis", "verifier": {"focus": "f"}}
+            "writes": writes, "scope": ["."], "kind": "implementation" if writes else "analysis",
+            "verifier": {"focus": "f"}}
 plans = {
   "chain": [task("t1", "Fail"), task("t2", "Second", ["t1"]), task("t3", "Third", ["t2"])],
   "first": [task("a1", "First plan")],
   "second": [task("b1", "Second plan")],
+  "write_chain": [task("w1", "Write file", writes=True), task("w2", "Follow up", ["w1"])],
+  "manual_fix": [task("m1", "Manual fix", writes=True)],
 }
-name = next((name for name in plans if name in prompt.splitlines()[-1]), None)
+name = next((name for name in sorted(plans, key=len, reverse=True) if name in prompt.splitlines()[-1]), None)
 answer = "Plan.\n```plan\n" + json.dumps({"tasks": plans[name]}) + "\n```" if name else "ok"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
@@ -44,6 +50,12 @@ if worker and "You verify" not in prompt and "You audit" not in prompt \
         and not os.path.exists(os.path.join(here, "logged-in")):
     print("Error: not logged in, run `agy login`", file=sys.stderr)
     sys.exit(1)
+if "Task: Write file" in prompt and "You verify" not in prompt and "You audit" not in prompt:
+    with open("hello.txt", "w") as f:
+        f.write("from worker\n")
+if "Task: Manual fix" in prompt and "You verify" not in prompt and "You audit" not in prompt:
+    with open("hello.txt", "w") as f:
+        f.write("from worker manual\n")
 def cover(answer):
     import re
     ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
@@ -85,9 +97,33 @@ fn open_in_mode(dir: &Path, mode: &str) -> std::sync::Arc<Core> {
     .replace(
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
-    );
+    )
+    .replace("required_gates = true", "required_gates = false");
     let text = text.replace("mode = \"supervised\"", &format!("mode = {mode:?}"));
     Core::open(&dir.join("state"), Config::from_toml(&text).unwrap()).unwrap()
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+fn init_git_project(dir: &Path) -> std::path::PathBuf {
+    let project = dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    git(&project, &["init", "-b", "main"]);
+    std::fs::write(project.join("README"), "readme\n").unwrap();
+    git(&project, &["add", "."]);
+    git(&project, &["commit", "-m", "init"]);
+    project.canonicalize().unwrap()
 }
 
 fn wait_idle(core: &Core, conversation: &str) {
@@ -238,4 +274,398 @@ fn an_autonomous_plan_cut_off_by_a_restart_resumes_by_itself() {
     let core = open_in_mode(dir.path(), "autonomous");
     wait_idle(&core, &conversation);
     assert_eq!(statuses(&core, &tasks[0].plan_id), ["approved"]);
+}
+
+#[test]
+fn test_freshness_token_staleness_and_rejection() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let spec = json!({
+        "id": "t1",
+        "title": "T1",
+        "goal": "g",
+        "kind": "analysis",
+        "scope": ["README"],
+        "verifier": {"focus": "f"}
+    });
+    let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
+    let plan = &tasks[0].plan_id;
+    let task_id = &tasks[0].id;
+
+    // 1. Initial freshness token
+    let token1 = core
+        .task_freshness_token(&conversation, plan, task_id)
+        .unwrap();
+    assert_eq!(token1.len(), 64, "token should be sha256 hex string");
+
+    // 2. Querying via core.task returns the same freshness token
+    let task_obj = core.task(plan, task_id).unwrap();
+    assert_eq!(task_obj.freshness_token.as_deref(), Some(token1.as_str()));
+
+    // 3. Dirty working tree changes the token
+    std::fs::write(project.join("README"), "modified content\n").unwrap();
+    let token2 = core
+        .task_freshness_token(&conversation, plan, task_id)
+        .unwrap();
+    assert_ne!(
+        token1, token2,
+        "freshness token must change when working tree is dirty"
+    );
+
+    // 4. Stale token rejection with zero side-effects
+    let mut task_waiting = tasks[0].clone();
+    task_waiting.status = "needs_user".into();
+    core.store.update_task(&task_waiting).unwrap();
+
+    let res = core.recover_task(TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: task_id.clone(),
+        action: RecoveryAction::CancelTask,
+        consent_files: None,
+        freshness_token: token1, // stale!
+        message: None,
+    });
+    assert!(res.is_err());
+    assert!(res.unwrap_err().to_string().contains("stale_token"));
+
+    // Task remains in needs_user, not cancelled
+    let current_task = core.task_unscoped(plan, task_id).unwrap();
+    assert_eq!(current_task.status, "needs_user");
+}
+
+#[test]
+fn test_blocked_task_prevents_premature_audit() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let plan = propose(&core, &conversation, "chain");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+
+    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+
+    // Verify no audit event was emitted
+    let events = core.store.events_since(&conversation, 0, 1000).unwrap();
+    assert!(
+        !events.iter().any(|e| e.kind == "plan_audit"),
+        "blocked task must not trigger plan audit"
+    );
+
+    // Verify messages do not contain plan audit / report
+    let messages = core.store.messages_after(&conversation, 0).unwrap();
+    assert!(
+        !messages
+            .iter()
+            .any(|m| m.text.contains("Plan Audit") || m.text.contains("All tasks approved")),
+        "no final audit message should be sent while tasks are blocked"
+    );
+}
+
+#[test]
+fn test_recover_task_integrate_with_consent_and_dag_cascade() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    // Create conflicting user edit in hello.txt
+    std::fs::write(project.join("hello.txt"), "user edit\n").unwrap();
+
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let plan = propose(&core, &conversation, "write_chain");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+
+    // w1 stopped because of user edit, w2 was skipped
+    assert_eq!(statuses(&core, &plan), ["needs_user", "skipped"]);
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user edit\n"
+    );
+
+    let tasks = core.store.plan(&plan).unwrap();
+    let w1_id = &tasks[0].id;
+    let token = core
+        .task_freshness_token(&conversation, &plan, w1_id)
+        .unwrap();
+
+    // User recovers with IntegrateWithConsent allowing hello.txt
+    let resp = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: w1_id.clone(),
+            action: RecoveryAction::IntegrateWithConsent,
+            consent_files: Some(vec!["hello.txt".into()]),
+            freshness_token: token,
+            message: None,
+        })
+        .unwrap();
+
+    assert_eq!(resp.status, "approved");
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "from worker\n"
+    );
+
+    // Wait for the cascade: w2 was unblocked to queued, runs, and completes
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["approved", "approved"]);
+}
+
+#[test]
+fn test_recover_task_keep_on_branch_unblocks_dag() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    std::fs::write(project.join("hello.txt"), "user edit\n").unwrap();
+
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let plan = propose(&core, &conversation, "write_chain");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+
+    assert_eq!(statuses(&core, &plan), ["needs_user", "skipped"]);
+    let tasks = core.store.plan(&plan).unwrap();
+    let w1_id = &tasks[0].id;
+    let branch = format!("antislop/{}", &w1_id[..8]);
+    let token = core
+        .task_freshness_token(&conversation, &plan, w1_id)
+        .unwrap();
+
+    // Recover with KeepOnBranch
+    let resp = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: w1_id.clone(),
+            action: RecoveryAction::KeepOnBranch,
+            consent_files: None,
+            freshness_token: token,
+            message: None,
+        })
+        .unwrap();
+
+    assert_eq!(resp.status, "approved");
+    // Project file must NOT be overwritten
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user edit\n"
+    );
+    // Branch still exists and contains worker change
+    assert_eq!(
+        git(&project, &["show", &format!("{branch}:hello.txt")]),
+        "from worker"
+    );
+
+    // DAG cascades and w2 completes
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["approved", "approved"]);
+}
+
+#[test]
+fn test_recover_task_verify_manual_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let plan = propose(&core, &conversation, "manual_fix");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+
+    // Set task to needs_user
+    let mut tasks = core.store.plan(&plan).unwrap();
+    tasks[0].status = "needs_user".into();
+    core.store.update_task(&tasks[0]).unwrap();
+
+    // User makes a manual fix in the project
+    std::fs::write(project.join("hello.txt"), "manual user fix\n").unwrap();
+    let head_before = git(&project, &["rev-parse", "HEAD"]);
+
+    let token = core
+        .task_freshness_token(&conversation, &plan, &tasks[0].id)
+        .unwrap();
+    let resp = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: tasks[0].id.clone(),
+            action: RecoveryAction::VerifyManualSnapshot,
+            consent_files: None,
+            freshness_token: token,
+            message: None,
+        })
+        .unwrap();
+
+    assert_eq!(resp.status, "approved");
+    let updated = core.task_unscoped(&plan, &tasks[0].id).unwrap();
+    assert_eq!(updated.status, "approved");
+
+    // Verify head was NOT moved
+    let head_after = git(&project, &["rev-parse", "HEAD"]);
+    assert_eq!(head_before, head_after);
+
+    // Verify task result points to the snapshot commit
+    assert!(updated.result.is_some());
+    let snap_commit = updated.result.unwrap();
+    assert_ne!(snap_commit, head_after);
+    assert_eq!(
+        git(&project, &["show", &format!("{snap_commit}:hello.txt")]),
+        "manual user fix"
+    );
+}
+
+#[test]
+fn test_recover_task_retry_with_guidance() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let plan = propose(&core, &conversation, "chain");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+
+    let tasks = core.store.plan(&plan).unwrap();
+    let t1_id = &tasks[0].id;
+    let token = core
+        .task_freshness_token(&conversation, &plan, t1_id)
+        .unwrap();
+
+    // Now enable login so worker succeeds on retry
+    std::fs::write(dir.path().join("logged-in"), "").unwrap();
+
+    let resp = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: t1_id.clone(),
+            action: RecoveryAction::RetryWithGuidance,
+            consent_files: None,
+            freshness_token: token,
+            message: Some("retrying after login".into()),
+        })
+        .unwrap();
+    assert_eq!(resp.status, "queued");
+
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
+}
+
+#[test]
+fn test_recover_task_force_approve_and_cancel_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    std::fs::write(dir.path().join("logged-in"), "").unwrap();
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let plan = propose(&core, &conversation, "chain");
+    // Remove logged-in temporarily so t1 fails into waiting
+    let _ = std::fs::remove_file(dir.path().join("logged-in"));
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+
+    let tasks = core.store.plan(&plan).unwrap();
+    let t1_id = &tasks[0].id;
+    let token = core
+        .task_freshness_token(&conversation, &plan, t1_id)
+        .unwrap();
+
+    // Force approve t1
+    let resp = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: t1_id.clone(),
+            action: RecoveryAction::ForceApprove,
+            consent_files: None,
+            freshness_token: token,
+            message: None,
+        })
+        .unwrap();
+    assert_eq!(resp.status, "approved");
+
+    wait_idle(&core, &conversation);
+    // t2 and t3 should unblock and run to completion
+    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
+
+    // Now test CancelTask on a fresh chain
+    let plan2 = propose(&core, &conversation, "chain");
+    core.accept_plan(&conversation, &plan2).unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan2), ["waiting", "skipped", "skipped"]);
+
+    let tasks2 = core.store.plan(&plan2).unwrap();
+    let token2 = core
+        .task_freshness_token(&conversation, &plan2, &tasks2[0].id)
+        .unwrap();
+
+    let resp2 = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan2.clone(),
+            task: tasks2[0].id.clone(),
+            action: RecoveryAction::CancelTask,
+            consent_files: None,
+            freshness_token: token2,
+            message: None,
+        })
+        .unwrap();
+    assert_eq!(resp2.status, "cancelled");
+
+    // Downstream tasks should also be cancelled
+    assert_eq!(
+        statuses(&core, &plan2),
+        ["cancelled", "cancelled", "cancelled"]
+    );
+}
+
+#[test]
+fn test_mechanical_audit_gate_prevents_false_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let spec1 = json!({"id": "t1", "title": "Done", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}});
+    let spec2 = json!({"id": "t2", "title": "Blocked", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}});
+    let tasks = core.store.add_plan(&conversation, &[spec1, spec2]).unwrap();
+    let plan = &tasks[0].plan_id;
+
+    // t1 approved, t2 needs_user
+    let mut t1 = tasks[0].clone();
+    t1.status = "approved".into();
+    core.store.update_task(&t1).unwrap();
+
+    let mut t2 = tasks[1].clone();
+    t2.status = "needs_user".into();
+    core.store.update_task(&t2).unwrap();
+
+    // Call plan_report directly (where fake agy returns approved: true)
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let report_output = core.plan_report(&conversation, plan, &cancel).unwrap();
+
+    // The mechanical gate in plan_report must have overridden verdict.approved to false
+    let events = core.store.events_since(&conversation, 0, 1000).unwrap();
+    let audit_event = events
+        .iter()
+        .rfind(|e| e.kind == "audit")
+        .expect("audit event");
+    assert_eq!(
+        audit_event.payload["approved"], false,
+        "mechanical gate must override to false"
+    );
+    let issue_str = audit_event.payload["findings"][0]["issue"]
+        .as_str()
+        .unwrap();
+    assert!(
+        issue_str.contains("Blocked") || issue_str.contains("not approved"),
+        "findings must note unapproved tasks"
+    );
+    assert!(
+        report_output.contains("not fully delivered"),
+        "plan report text must reflect audit rejection"
+    );
 }

@@ -12,7 +12,10 @@ fn fake_codex(dir: &Path) -> PathBuf {
         r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
-answer = "answer: " + prompt.splitlines()[-1] if prompt else "answer: ok"
+if "propose" in prompt:
+    answer = "Plan:\n```plan\n{\"tasks\": [{\"id\": \"t1\", \"title\": \"T1\", \"goal\": \"g\", \"kind\": \"analysis\", \"verifier\": {\"focus\": \"f\"}}]}\n```"
+else:
+    answer = "answer: " + prompt.splitlines()[-1] if prompt else "answer: ok"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
 print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}}))
@@ -672,4 +675,84 @@ fn test_stale_scope_forced_change_between_read_and_execution_has_no_side_effects
         review_stale_err.contains("stale_scope"),
         "error must be stale_scope, got: {review_stale_err}"
     );
+}
+
+#[test]
+fn test_task_scoped_query_includes_freshness_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().canonicalize().unwrap();
+    let project = dir_path.join("project");
+    std::fs::create_dir(&project).unwrap();
+    // Initialize git repo in project so git commands succeed
+    let _ = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&project)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["commit", "--allow-empty", "-m", "init"])
+        .current_dir(&project)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@test.com")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@test.com")
+        .output();
+
+    let codex = fake_codex(&dir_path);
+    let agy = fake_agy(&dir_path);
+    let config = write_config(&dir_path, &codex, &agy);
+    let state = dir_path.join("state");
+
+    let daemon = DaemonGuard::start(&project, &config, &state);
+    let started = daemon.call_raw(&json!({"op": "start"})).unwrap();
+    let conv_id = started["id"].as_str().unwrap();
+
+    daemon
+        .call_raw(&json!({
+            "op": "send",
+            "conversation": conv_id,
+            "text": "propose plan"
+        }))
+        .unwrap();
+
+    let mut plan_id = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let plans = daemon
+            .call_raw(&json!({
+                "op": "plans",
+                "conversation": conv_id
+            }))
+            .unwrap();
+        if let Some(id) = plans["active_plan_id"].as_str() {
+            plan_id = id.to_string();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!plan_id.is_empty(), "plan was not proposed");
+
+    // Query task with conversation
+    let task_resp = daemon
+        .call_raw(&json!({
+            "op": "task",
+            "conversation": conv_id,
+            "plan": plan_id,
+            "id": "t1"
+        }))
+        .unwrap();
+    assert!(task_resp["freshness_token"].is_string());
+    let token = task_resp["freshness_token"].as_str().unwrap();
+    assert!(!token.is_empty());
+
+    // Query task without explicit conversation (daemon resolves it via plan)
+    let task_resp2 = daemon
+        .call_raw(&json!({
+            "op": "task",
+            "plan": plan_id,
+            "id": "t1"
+        }))
+        .unwrap();
+    assert_eq!(task_resp2["freshness_token"].as_str().unwrap(), token);
 }

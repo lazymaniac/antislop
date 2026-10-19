@@ -12,7 +12,7 @@ pub mod tasks;
 pub mod tui;
 
 use crate::{
-    Result,
+    Error, Result,
     config::{Config, ResolvedProfile, RoleKind, WorkKind, WorkspaceMode},
     require,
 };
@@ -36,6 +36,43 @@ pub struct ConversationSummary {
     pub tasks_total: usize,
     pub tasks_done: usize,
     pub scope_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryAction {
+    IntegrateWithConsent,
+    KeepOnBranch,
+    VerifyManualSnapshot,
+    RetryWithGuidance,
+    ExtendRounds,
+    ForceApprove,
+    CancelTask,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRecoveryRequest {
+    pub conversation: String,
+    pub plan: String,
+    pub task: String,
+    pub action: RecoveryAction,
+    #[serde(default)]
+    pub consent_files: Option<Vec<String>>,
+    pub freshness_token: String,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TaskRecoveryResponse {
+    pub task: String,
+    pub status: String,
+    pub round: u32,
+    pub integrated_files: Vec<String>,
+    pub preserved_branch: Option<String>,
+    pub new_freshness_token: String,
+    pub notice: String,
 }
 
 /// Scope hash of a plan, capturing its task ids, specs, statuses and rounds.
@@ -436,7 +473,7 @@ impl Core {
     }
 
     pub fn diff_scope_hash(&self, conversation: &str, plan: &str, id: &str) -> Result<String> {
-        let task = self.task(plan, id)?;
+        let task = self.task_unscoped(plan, id)?;
         let (_, base, result) = self.change(conversation, &task)?;
         Ok(diff_scope_hash(
             conversation,
@@ -655,13 +692,67 @@ impl Core {
             || !self.reviews.lock().expect("reviews mutex").is_empty()
     }
 
-    /// One task of a plan, by the id the orchestrator gave it or its UUID.
-    pub fn task(&self, plan: &str, id: &str) -> Result<Task> {
+    pub fn task_freshness_token(
+        &self,
+        conversation: &str,
+        plan_id: &str,
+        task_id: &str,
+    ) -> Result<String> {
+        let conv = self.store.conversation(conversation)?;
+        let project = PathBuf::from(conv.project);
+        let task = self
+            .store
+            .plan(plan_id)?
+            .into_iter()
+            .find(|task| task.id == task_id || task.spec["id"] == task_id)
+            .ok_or_else(|| crate::Error::Invalid(format!("no task {task_id} in plan {plan_id}")))?;
+        let head = git::head(&project).unwrap_or_default();
+        let scope: Vec<String> =
+            serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
+        let fp = git::working_tree_fingerprint(&project, &scope);
+        let mut data = String::new();
+        data.push_str(conversation);
+        data.push('\0');
+        data.push_str(plan_id);
+        data.push('\0');
+        data.push_str(&task.id);
+        data.push('\0');
+        data.push_str(&task.round.to_string());
+        data.push('\0');
+        data.push_str(&task.status);
+        data.push('\0');
+        data.push_str(task.base.as_deref().unwrap_or(""));
+        data.push('\0');
+        data.push_str(task.result.as_deref().unwrap_or(""));
+        data.push('\0');
+        data.push_str(&head);
+        data.push('\0');
+        data.push_str(&fp);
+        Ok(crate::hash(data.as_bytes()))
+    }
+
+    pub fn task_unscoped(&self, plan: &str, id: &str) -> Result<Task> {
         self.store
             .plan(plan)?
             .into_iter()
             .find(|task| task.id == id || task.spec["id"] == id)
             .ok_or_else(|| crate::Error::Invalid(format!("no task {id} in plan {plan}")))
+    }
+
+    /// One task of a plan, by the id the orchestrator gave it or its UUID.
+    /// Populates freshness_token when the plan belongs to a conversation.
+    pub fn task(&self, plan: &str, id: &str) -> Result<Task> {
+        let mut task = self.task_unscoped(plan, id)?;
+        if let Ok(conv) = self.store.plan_conversation(plan) {
+            task.freshness_token = self.task_freshness_token(&conv, plan, &task.id).ok();
+        }
+        Ok(task)
+    }
+
+    pub fn task_scoped(&self, conversation: &str, plan: &str, id: &str) -> Result<Task> {
+        let mut task = self.task_unscoped(plan, id)?;
+        task.freshness_token = self.task_freshness_token(conversation, plan, &task.id).ok();
+        Ok(task)
     }
 
     /// Where a writer's change can be read: its worktree while it works (the
@@ -687,7 +778,7 @@ impl Core {
 
     /// A writer's change as files with per-file counts and numbered lines.
     pub fn diff(&self, conversation: &str, plan: &str, id: &str) -> Result<serde_json::Value> {
-        let task = self.task(plan, id)?;
+        let task = self.task_unscoped(plan, id)?;
         let (dir, base, result) = self.change(conversation, &task)?;
         let mut patch = git::patch(&dir, &base, result.as_deref())?;
         let truncated = patch.len() > DIFF_LIMIT;
@@ -727,7 +818,7 @@ impl Core {
     /// verifier profile in a session of its own. The findings go to the
     /// orchestrator; the review never changes the task's status.
     pub fn review_change(self: &Arc<Self>, conversation: &str, plan: &str, id: &str) -> Result<()> {
-        let task = self.task(plan, id)?;
+        let task = self.task_unscoped(plan, id)?;
         let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
         let (dir, base, result) = self.change(conversation, &task)?;
         let cancel = {
@@ -958,6 +1049,458 @@ impl Core {
         self.resume_plan(conversation, plan_id)
     }
 
+    pub fn recover_task(
+        self: &Arc<Self>,
+        req: TaskRecoveryRequest,
+    ) -> Result<TaskRecoveryResponse> {
+        let conv = self.store.conversation(&req.conversation)?;
+        let project = PathBuf::from(conv.project);
+        let mut task = self.task(&req.plan, &req.task)?;
+        let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
+
+        let _one_at_a_time = self.integrating.lock().expect("integration mutex");
+
+        let current_token = self.task_freshness_token(&req.conversation, &req.plan, &task.id)?;
+        require(req.freshness_token == current_token, "stale_token")?;
+        require(
+            task.status == status::NEEDS_USER
+                || task.status == status::WAITING
+                || task.status == status::FAILED
+                || task.status == status::SKIPPED
+                || task.status == status::CANCELLED,
+            "task is not waiting for recovery",
+        )?;
+
+        let mut integrated_files = Vec::new();
+        let mut preserved_branch = None;
+        let notice: String;
+
+        match req.action {
+            RecoveryAction::IntegrateWithConsent => {
+                let change = task.result.clone().ok_or_else(|| {
+                    Error::Invalid("task has no result commit to integrate".into())
+                })?;
+                let base = task
+                    .base
+                    .clone()
+                    .ok_or_else(|| Error::Invalid("task has no base commit".into()))?;
+                let all_changed = git::changed_files(&project, &base, &change)?;
+                if let Some(consent) = &req.consent_files {
+                    for file in consent {
+                        require(
+                            all_changed.contains(file),
+                            &format!("consent file '{file}' is not in changed files"),
+                        )?;
+                        require(
+                            spec.scope.is_empty()
+                                || spec.scope.iter().any(|s| {
+                                    s == "." || s.is_empty() || file.starts_with(s) || s == file
+                                }),
+                            &format!("consent file '{file}' is outside task scope"),
+                        )?;
+                    }
+                }
+                let outcome = git::integrate_scoped(
+                    &project,
+                    &base,
+                    &change,
+                    req.consent_files.as_deref(),
+                    self.config.policy.local_commits,
+                )?;
+                match outcome {
+                    git::Integration::Committed(commit) => {
+                        task.status = status::APPROVED.to_string();
+                        notice = format!("committed as {commit}");
+                        let worktree = self.state.join("worktrees").join(&task.id);
+                        let _ = git::remove_worktree(&project, &worktree, &branch(&task));
+                    }
+                    git::Integration::Applied => {
+                        task.status = status::APPROVED.to_string();
+                        notice = "applied to the working tree, not committed".to_string();
+                        let worktree = self.state.join("worktrees").join(&task.id);
+                        let _ = git::remove_worktree(&project, &worktree, &branch(&task));
+                    }
+                    git::Integration::Conflict(conflicts) => {
+                        return Err(Error::Invalid(format!(
+                            "conflicts remain in {}",
+                            conflicts.join(", ")
+                        )));
+                    }
+                    git::Integration::UserEdits(edits) => {
+                        return Err(Error::Invalid(format!(
+                            "uncommitted edits remain in {}",
+                            edits.join(", ")
+                        )));
+                    }
+                }
+                integrated_files = req.consent_files.unwrap_or(all_changed);
+                note(&mut task, notice.clone());
+                self.store.update_task(&task)?;
+                self.announce_task(&req.conversation, &task, None);
+                self.store.append_event(
+                    &req.conversation,
+                    None,
+                    Some(&req.plan),
+                    "task_recovery",
+                    &json!({
+                        "task": task.id,
+                        "action": "integrate_with_consent",
+                        "status": task.status,
+                        "files": integrated_files,
+                        "detail": notice
+                    }),
+                )?;
+                self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
+                self.maybe_continue_plan(&req.conversation, &req.plan)?;
+            }
+            RecoveryAction::KeepOnBranch => {
+                let b = branch(&task);
+                preserved_branch = Some(b.clone());
+                notice = format!("change preserved on branch {b}; working tree untouched");
+                task.status = status::APPROVED.to_string();
+                let worktree = self.state.join("worktrees").join(&task.id);
+                let _ = git::remove_worktree_keep_branch(&project, &worktree);
+                note(&mut task, notice.clone());
+                self.store.update_task(&task)?;
+                self.announce_task(&req.conversation, &task, None);
+                self.store.append_event(
+                    &req.conversation,
+                    None,
+                    Some(&req.plan),
+                    "task_recovery",
+                    &json!({
+                        "task": task.id,
+                        "action": "keep_on_branch",
+                        "status": task.status,
+                        "branch": b,
+                        "detail": notice
+                    }),
+                )?;
+                self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
+                self.maybe_continue_plan(&req.conversation, &req.plan)?;
+            }
+            RecoveryAction::VerifyManualSnapshot => {
+                let snapshot = git::snapshot(
+                    &project,
+                    &format!("manual fix verification: {}", spec.title),
+                )?;
+                let base = task
+                    .base
+                    .clone()
+                    .unwrap_or_else(|| git::head(&project).unwrap_or_default());
+                let stat = git::diff_stat(&project, &base, &snapshot)?;
+                let changes = tasks::changes_text(&base, &snapshot, &stat);
+
+                let verifier = format!("verifier:{}", task.id);
+                let setup = TurnSetup {
+                    conversation: &req.conversation,
+                    plan_id: Some(task.plan_id.clone()),
+                    role: verifier.clone(),
+                    profile: self.config.resolve(spec.kind, RoleKind::Verifier),
+                    cwd: project.clone(),
+                    add_dirs: vec![],
+                    access: agent::Access::ReadOnly,
+                    upto_message: 0,
+                };
+                let cancel = AtomicBool::new(false);
+                let answer = self.turn(setup, &cancel, |_| {
+                    tasks::verifier_prompt(
+                        &project.to_string_lossy(),
+                        &spec,
+                        task.report.as_deref().unwrap_or(""),
+                        Some(&changes),
+                    )
+                })?;
+                let answer = answer.unwrap_or_default();
+                let answer = self.post(
+                    &req.conversation,
+                    Some(&task.plan_id),
+                    &format!("{}/verifier", spec.id),
+                    &answer,
+                )?;
+                let mut verdict = tasks::parse_verdict(&answer);
+                let obligations = tasks::obligations(&spec);
+                tasks::settle(&mut verdict, &obligations);
+                task.round += 1;
+
+                let mut v_val = serde_json::to_value(&verdict)?;
+                if let Some(obj) = v_val.as_object_mut() {
+                    obj.insert("round".into(), json!(task.round));
+                    obj.insert("result".into(), json!(snapshot));
+                }
+                task.verdict = Some(v_val);
+
+                if verdict.approved {
+                    task.result = Some(snapshot.clone());
+                    task.status = status::APPROVED.to_string();
+                    notice = format!("manual fixes verified and approved on snapshot {snapshot}");
+                    note(&mut task, notice.clone());
+                    self.store.update_task(&task)?;
+                    self.announce_task(&req.conversation, &task, None);
+                    self.store.append_event(
+                        &req.conversation,
+                        None,
+                        Some(&req.plan),
+                        "task_recovery",
+                        &json!({
+                            "task": task.id,
+                            "action": "verify_manual_snapshot",
+                            "status": task.status,
+                            "result": snapshot,
+                            "detail": notice
+                        }),
+                    )?;
+                    self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
+                    self.maybe_continue_plan(&req.conversation, &req.plan)?;
+                } else {
+                    task.status = status::NEEDS_USER.to_string();
+                    let findings = tasks::findings_text(&verdict.findings);
+                    notice = format!("manual fix verification found open issues:\n{findings}");
+                    task.report = Some(format!(
+                        "{}\n\n[manual fix verification]\n{findings}",
+                        task.report.as_deref().unwrap_or("")
+                    ));
+                    self.store.update_task(&task)?;
+                    self.announce_task(&req.conversation, &task, Some(&findings));
+                    self.store.append_event(
+                        &req.conversation,
+                        None,
+                        Some(&req.plan),
+                        "task_recovery",
+                        &json!({
+                            "task": task.id,
+                            "action": "verify_manual_snapshot",
+                            "status": task.status,
+                            "findings": verdict.findings,
+                            "detail": notice
+                        }),
+                    )?;
+                }
+            }
+            RecoveryAction::RetryWithGuidance => {
+                if let Some(msg) = &req.message {
+                    let mail = Mail {
+                        id: 0,
+                        created_ms: 0,
+                        delivered_turn: None,
+                        delivered_ms: None,
+                        sender: RUNTIME.into(),
+                        recipient: format!("worker:{}", task.id),
+                        kind: "guidance".into(),
+                        text: msg.clone(),
+                        state: "queued".into(),
+                    };
+                    let _ = self.store.add_mail(
+                        &req.conversation,
+                        &format!("worker:{}", task.id),
+                        &mail,
+                    );
+                }
+                task.status = status::QUEUED.to_string();
+                task.verdict = None;
+                notice = "retrying task with guidance".to_string();
+                self.store.update_task(&task)?;
+                self.announce_task(&req.conversation, &task, None);
+                self.store.append_event(
+                    &req.conversation,
+                    None,
+                    Some(&req.plan),
+                    "task_recovery",
+                    &json!({
+                        "task": task.id,
+                        "action": "retry_with_guidance",
+                        "status": task.status,
+                        "message": req.message
+                    }),
+                )?;
+                self.maybe_continue_plan(&req.conversation, &req.plan)?;
+            }
+            RecoveryAction::ExtendRounds => {
+                task.status = status::QUEUED.to_string();
+                task.verdict = None;
+                notice = "extended rounds for task".to_string();
+                self.store.update_task(&task)?;
+                self.announce_task(&req.conversation, &task, None);
+                self.store.append_event(
+                    &req.conversation,
+                    None,
+                    Some(&req.plan),
+                    "task_recovery",
+                    &json!({
+                        "task": task.id,
+                        "action": "extend_rounds",
+                        "status": task.status
+                    }),
+                )?;
+                self.maybe_continue_plan(&req.conversation, &req.plan)?;
+            }
+            RecoveryAction::ForceApprove => {
+                task.status = status::APPROVED.to_string();
+                notice = req
+                    .message
+                    .as_deref()
+                    .map(|m| format!("force approved by user: {m}"))
+                    .unwrap_or_else(|| "force approved by user".to_string());
+                note(&mut task, notice.clone());
+                self.store.update_task(&task)?;
+                self.announce_task(&req.conversation, &task, None);
+                self.store.append_event(
+                    &req.conversation,
+                    None,
+                    Some(&req.plan),
+                    "task_recovery",
+                    &json!({
+                        "task": task.id,
+                        "action": "force_approve",
+                        "status": task.status,
+                        "detail": notice
+                    }),
+                )?;
+                self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
+                self.maybe_continue_plan(&req.conversation, &req.plan)?;
+            }
+            RecoveryAction::CancelTask => {
+                task.status = status::CANCELLED.to_string();
+                notice = "cancelled by user recovery".to_string();
+                self.store.update_task(&task)?;
+                self.announce_task(&req.conversation, &task, Some(&notice));
+                self.store.append_event(
+                    &req.conversation,
+                    None,
+                    Some(&req.plan),
+                    "task_recovery",
+                    &json!({
+                        "task": task.id,
+                        "action": "cancel_task",
+                        "status": task.status,
+                        "detail": notice
+                    }),
+                )?;
+                self.cancel_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
+                self.maybe_continue_plan(&req.conversation, &req.plan)?;
+            }
+        }
+
+        let new_freshness_token =
+            self.task_freshness_token(&req.conversation, &req.plan, &task.id)?;
+        Ok(TaskRecoveryResponse {
+            task: task.id,
+            status: task.status,
+            round: task.round,
+            integrated_files,
+            preserved_branch,
+            new_freshness_token,
+            notice,
+        })
+    }
+
+    fn cancel_dependent_tasks(
+        &self,
+        conversation: &str,
+        plan_id: &str,
+        cancelled_task_id: &str,
+    ) -> Result<()> {
+        let tasks = self.store.plan(plan_id)?;
+        let target_spec_id = tasks
+            .iter()
+            .find(|t| t.id == cancelled_task_id || t.spec["id"] == cancelled_task_id)
+            .map(|t| t.spec["id"].as_str().unwrap_or_default().to_owned())
+            .unwrap_or_default();
+
+        let mut cancelled_ids = std::collections::HashSet::new();
+        if !target_spec_id.is_empty() {
+            cancelled_ids.insert(target_spec_id);
+        }
+        cancelled_ids.insert(cancelled_task_id.to_string());
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let current_tasks = self.store.plan(plan_id)?;
+            for mut t in current_tasks {
+                if t.status == status::APPROVED || t.status == status::CANCELLED {
+                    continue;
+                }
+                let depends: Vec<String> =
+                    serde_json::from_value(t.spec["depends_on"].clone()).unwrap_or_default();
+                if depends.iter().any(|d| cancelled_ids.contains(d)) {
+                    t.status = status::CANCELLED.to_string();
+                    self.store.update_task(&t)?;
+                    self.announce_task(
+                        conversation,
+                        &t,
+                        Some("cancelled due to cancelled dependency"),
+                    );
+                    let spec_id = t.spec["id"].as_str().unwrap_or_default().to_owned();
+                    if !spec_id.is_empty() {
+                        cancelled_ids.insert(spec_id);
+                    }
+                    cancelled_ids.insert(t.id.clone());
+                    changed = true;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn unblock_dependent_tasks(
+        &self,
+        conversation: &str,
+        plan_id: &str,
+        approved_task_id: &str,
+    ) -> Result<()> {
+        let tasks = self.store.plan(plan_id)?;
+        let target = tasks
+            .iter()
+            .find(|t| t.id == approved_task_id || t.spec["id"] == approved_task_id);
+        let target_spec_id = target
+            .map(|t| t.spec["id"].as_str().unwrap_or_default().to_owned())
+            .unwrap_or_default();
+
+        let mut to_unblock = Vec::new();
+        for task in &tasks {
+            if task.status != status::SKIPPED {
+                continue;
+            }
+            let depends: Vec<String> =
+                serde_json::from_value(task.spec["depends_on"].clone()).unwrap_or_default();
+            if depends.contains(&target_spec_id) || depends.contains(&approved_task_id.to_string())
+            {
+                let all_deps_approved = depends.iter().all(|dep| {
+                    tasks.iter().any(|other| {
+                        (other.id == *dep || other.spec["id"] == *dep)
+                            && (other.status == status::APPROVED
+                                || other.id == approved_task_id
+                                || other.spec["id"] == approved_task_id)
+                    })
+                });
+                if all_deps_approved {
+                    to_unblock.push(task.clone());
+                }
+            }
+        }
+        for mut task in to_unblock {
+            task.status = status::QUEUED.to_string();
+            self.store.update_task(&task)?;
+            self.announce_task(conversation, &task, None);
+        }
+        Ok(())
+    }
+
+    fn maybe_continue_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<()> {
+        let tasks = self.store.plan(plan_id)?;
+        let has_queued = tasks.iter().any(|t| t.status == status::QUEUED);
+        let all_approved = !tasks.is_empty() && tasks.iter().all(|t| t.status == status::APPROVED);
+        if has_queued || all_approved {
+            let plans = self.plans.lock().expect("plans mutex");
+            if !plans.contains_key(conversation) {
+                drop(plans);
+                let _ = self.start_plan(conversation, plan_id, |_| Ok(()));
+            }
+        }
+        Ok(())
+    }
+
     fn start_plan(
         self: &Arc<Self>,
         conversation: &str,
@@ -984,6 +1527,17 @@ impl Core {
         std::thread::spawn(move || {
             core.warn_of_uncommitted(&conversation, tasks_write);
             core.run_plan(&conversation, &plan_id, &cancel);
+            // If any tasks are blocked waiting for user action or recovery,
+            // do not run the premature audit or report; await recovery action.
+            let tasks = core.store.plan(&plan_id).unwrap_or_default();
+            let has_blocked = tasks
+                .iter()
+                .any(|t| t.status == status::NEEDS_USER || t.status == status::WAITING);
+            if has_blocked {
+                let mut plans = core.plans.lock().expect("plans mutex");
+                plans.remove(&conversation);
+                return;
+            }
             // The audit still counts as the plan running: it can be cancelled
             // and keeps the daemon busy.
             let report = core.plan_report(&conversation, &plan_id, &cancel);
@@ -1584,7 +2138,9 @@ impl Core {
                 let mut settled = false;
                 for task in &mut tasks {
                     let spec_id = task.spec["id"].as_str().unwrap_or_default().to_owned();
-                    if task.status != status::QUEUED || in_flight_ids.contains(&spec_id) {
+                    if (task.status != status::QUEUED && task.status != status::SKIPPED)
+                        || in_flight_ids.contains(&spec_id)
+                    {
                         continue;
                     }
                     let depends: Vec<String> =
@@ -1596,16 +2152,23 @@ impl Core {
                             })
                         });
                     if blocked {
-                        let next = if cancel.load(Ordering::SeqCst) {
-                            status::CANCELLED
-                        } else {
-                            status::SKIPPED
-                        };
-                        let _ = self.set_status(conversation, task, next);
-                        settled = true;
+                        if task.status == status::QUEUED {
+                            let next = if cancel.load(Ordering::SeqCst) {
+                                status::CANCELLED
+                            } else {
+                                status::SKIPPED
+                            };
+                            let _ = self.set_status(conversation, task, next);
+                            settled = true;
+                        }
                     } else if depends.iter().all(|dependency| {
                         state.get(dependency).map(String::as_str) == Some(status::APPROVED)
                     }) {
+                        if task.status == status::SKIPPED {
+                            let _ = self.set_status(conversation, task, status::QUEUED);
+                            settled = true;
+                            continue;
+                        }
                         let writes = task.spec["writes"].as_bool().unwrap_or(false);
                         let task_scope: Vec<String> =
                             serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
@@ -1780,6 +2343,7 @@ impl Core {
         let mut previous: Option<String> = None;
         for round in first_round..=last_round {
             task.round = round;
+            task.verdict = None;
             self.set_status(conversation, task, status::WORKING)?;
             let worker_setup = || TurnSetup {
                 conversation,
@@ -1930,7 +2494,14 @@ impl Core {
             }
             let incomplete = !tasks::unaccounted(&verdict, &obligations).is_empty();
             tasks::settle(&mut verdict, &obligations);
-            task.verdict = Some(serde_json::to_value(&verdict)?);
+            let mut v_val = serde_json::to_value(&verdict)?;
+            if let Some(obj) = v_val.as_object_mut() {
+                obj.insert("round".into(), json!(task.round));
+                if let Some(res) = &task.result {
+                    obj.insert("result".into(), json!(res));
+                }
+            }
+            task.verdict = Some(v_val);
             if incomplete {
                 // The worker cannot fix a verifier that skips its checks.
                 return self.stop(
@@ -2306,7 +2877,7 @@ impl Core {
 
     /// The finished plan's results, and an independent audit of whether they
     /// deliver the user's request, for the orchestrator to answer the user.
-    fn plan_report(
+    pub fn plan_report(
         &self,
         conversation: &str,
         plan_id: &str,
@@ -2320,13 +2891,25 @@ impl Core {
                 Some((end, _)) => format!("{}\n[report truncated]", &report[..end]),
                 None => report.to_owned(),
             };
-            let findings = task
+            let findings = if task.status == status::APPROVED {
+                "none".into()
+            } else if let Some(verdict) = task
                 .verdict
                 .as_ref()
                 .and_then(|verdict| serde_json::from_value::<Verdict>(verdict.clone()).ok())
-                .map(|verdict| tasks::findings_text(&verdict.findings))
-                .filter(|text| !text.is_empty())
-                .unwrap_or_else(|| "none".into());
+            {
+                if verdict.approved {
+                    format!(
+                        "the verifier approved this task's worktree, but the task ended as {}",
+                        task.status
+                    )
+                } else {
+                    let text = tasks::findings_text(&verdict.findings);
+                    if text.is_empty() { "none".into() } else { text }
+                }
+            } else {
+                format!("task ended as {} without approval", task.status)
+            };
             results.push_str(&format!(
                 "\n## {} — {} ({}, {} round(s))\nGoal: {}\nWorker report:\n{report}\nOpen verifier findings:\n{findings}\n",
                 task.spec["id"].as_str().unwrap_or_default(),
@@ -2343,7 +2926,7 @@ impl Core {
         if !cancel.load(Ordering::SeqCst) {
             let project = PathBuf::from(self.store.conversation(conversation)?.project);
             let project_text = project.to_string_lossy().into_owned();
-            let audit = self.review(
+            let mut audit = self.review(
                 conversation,
                 AUDITOR,
                 Some(plan_id),
@@ -2357,6 +2940,29 @@ impl Core {
                     }
                 },
             )?;
+            let has_unapproved = tasks.iter().any(|t| t.status != status::APPROVED);
+            if has_unapproved
+                && let Ok(ref mut verdict) = audit
+                && verdict.approved
+            {
+                verdict.approved = false;
+                let unapproved_ids: Vec<_> = tasks
+                    .iter()
+                    .filter(|t| t.status != status::APPROVED)
+                    .map(|t| {
+                        let id = t.spec["id"].as_str().unwrap_or(&t.id);
+                        format!("{}: {}", id, t.status)
+                    })
+                    .collect();
+                verdict.findings.push(serde_json::json!({
+                    "severity": "high",
+                    "issue": format!(
+                        "Tasks in plan were not approved: {}",
+                        unapproved_ids.join(", ")
+                    ),
+                    "where": "plan"
+                }));
+            }
             let mut payload = review_json(&audit);
             payload["plan"] = json!(plan_id);
             self.store
@@ -2386,6 +2992,15 @@ fn review_json(review: &std::result::Result<Verdict, String>) -> serde_json::Val
         Ok(verdict) => json!({"approved": verdict.approved, "findings": verdict.findings}),
         Err(error) => json!({"approved": false, "error": error}),
     }
+}
+
+fn note(task: &mut Task, text: impl AsRef<str>) {
+    let report = task.report.take().unwrap_or_default();
+    task.report = Some(
+        format!("{report}\n\n[recovery] {}", text.as_ref())
+            .trim_start()
+            .to_owned(),
+    );
 }
 
 /// The branch a writer's worktree is on.

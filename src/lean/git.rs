@@ -168,6 +168,46 @@ pub fn remove_worktree(project: &Path, path: &Path, branch: &str) -> Result<()> 
     Ok(())
 }
 
+pub fn remove_worktree_keep_branch(project: &Path, path: &Path) -> Result<()> {
+    let target = path.to_string_lossy();
+    let _ = git(project, &["worktree", "remove", "--force", &target]);
+    Ok(())
+}
+
+/// Fingerprint of working tree files in `scope` for freshness validation.
+pub fn working_tree_fingerprint(project: &Path, scope: &[String]) -> String {
+    let mut sorted_scope = scope.to_vec();
+    sorted_scope.sort();
+    let mut fp = String::new();
+    for rel_path in &sorted_scope {
+        let full = project.join(rel_path);
+        if full.is_file() {
+            if let Ok(bytes) = std::fs::read(&full) {
+                fp.push_str(rel_path);
+                fp.push(':');
+                fp.push_str(&crate::hash(&bytes));
+                fp.push('\n');
+            }
+        } else if full.is_dir() {
+            if let Ok(status) = Command::new("git")
+                .arg("-C")
+                .arg(project)
+                .args(["status", "--porcelain=v1", "-z", "--", rel_path])
+                .output()
+            {
+                fp.push_str(rel_path);
+                fp.push(':');
+                fp.push_str(&crate::hash(&status.stdout));
+                fp.push('\n');
+            }
+        } else {
+            fp.push_str(rel_path);
+            fp.push_str(":missing\n");
+        }
+    }
+    crate::hash(fp.as_bytes())
+}
+
 /// Commits everything the worker changed. Returns the new HEAD (unchanged if
 /// the worker changed nothing).
 pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
@@ -307,35 +347,65 @@ pub enum Integration {
 }
 
 /// Applies the squashed commit `change` (made on `base`) to the project's
-/// current branch.
-pub fn integrate(project: &Path, base: &str, change: &str, commit: bool) -> Result<Integration> {
+/// current branch, optionally restricted to `allowed_files`.
+pub fn integrate_scoped(
+    project: &Path,
+    base: &str,
+    change: &str,
+    allowed_files: Option<&[String]>,
+    commit: bool,
+) -> Result<Integration> {
     let files = changed_files(project, base, change)?;
+    let target_files: Vec<String> = if let Some(allowed) = allowed_files {
+        files
+            .iter()
+            .filter(|f| allowed.contains(f))
+            .cloned()
+            .collect()
+    } else {
+        files.clone()
+    };
+    if target_files.is_empty() {
+        return Ok(Integration::Applied);
+    }
+
     // Landed already, by a run cut off before it recorded that: never twice.
-    if unchanged_since(project, change, &files)? {
+    if unchanged_since(project, change, &target_files)? {
         if !commit {
             return Ok(Integration::Applied);
         }
-        if blobs(project, "HEAD", &files)? == blobs(project, change, &files)? {
+        if blobs(project, "HEAD", &target_files)? == blobs(project, change, &target_files)? {
             return Ok(Integration::Committed(head(project)?));
         }
     }
+
     // Uncommitted files that are exactly as the worker started from (for
     // example an earlier task's applied result) are not the user's edits.
-    if !commit && unchanged_since(project, base, &files)? {
-        write_files(project, change, &files)?;
+    if !commit && unchanged_since(project, base, &target_files)? {
+        write_files(project, change, &target_files)?;
         return Ok(Integration::Applied);
     }
+
     // Not `ok()`: trimming would eat the leading space of " M path".
     let status = git(project, &["status", "--porcelain=v1", "-z"])?;
     let dirty: Vec<String> = String::from_utf8_lossy(&status.stdout)
         .split('\0')
         .filter(|entry| entry.len() > 3)
         .map(|entry| entry[3..].to_owned())
-        .filter(|path| files.contains(path))
+        .filter(|path| {
+            if let Some(allowed) = allowed_files {
+                // If allowed_files was given, the user explicitly consented to overwrite allowed_files.
+                // Any OTHER files touched by this task that are dirty in the worktree remain protected.
+                files.contains(path) && !allowed.contains(path)
+            } else {
+                target_files.contains(path)
+            }
+        })
         .collect();
     if !dirty.is_empty() {
         return Ok(Integration::UserEdits(dirty));
     }
+
     let merge_base = format!("--merge-base={base}");
     let check = git(
         project,
@@ -349,43 +419,64 @@ pub fn integrate(project: &Path, base: &str, change: &str, commit: bool) -> Resu
         ],
     )?;
     if check.status.code() == Some(1) {
-        let conflicts = String::from_utf8_lossy(&check.stdout)
+        let conflicts: Vec<String> = String::from_utf8_lossy(&check.stdout)
             .lines()
             .skip(1)
             .take_while(|line| !line.is_empty())
+            .filter(|path| target_files.contains(&path.to_string()))
             .map(str::to_owned)
             .collect();
-        return Ok(Integration::Conflict(conflicts));
+        if !conflicts.is_empty() {
+            return Ok(Integration::Conflict(conflicts));
+        }
     }
-    if !check.status.success() {
+    if !check.status.success() && check.status.code() != Some(1) {
         return Err(Error::Invalid(format!(
             "git merge-tree: {}",
             String::from_utf8_lossy(&check.stderr).trim()
         )));
     }
-    if commit {
-        ok(
-            project,
-            &[
-                "-c",
-                "user.name=antislop",
-                "-c",
-                "user.email=antislop@localhost",
-                "cherry-pick",
-                "--allow-empty",
-                change,
-            ],
-        )?;
-        Ok(Integration::Committed(head(project)?))
+
+    if allowed_files.is_none() && target_files.len() == files.len() {
+        if commit {
+            ok(
+                project,
+                &[
+                    "-c",
+                    "user.name=antislop",
+                    "-c",
+                    "user.email=antislop@localhost",
+                    "cherry-pick",
+                    "--allow-empty",
+                    change,
+                ],
+            )?;
+            Ok(Integration::Committed(head(project)?))
+        } else {
+            ok(project, &["cherry-pick", "--no-commit", change])?;
+            // Leave the result as ordinary working-tree changes; unstage only
+            // this change's paths, never what the user staged.
+            let mut args = vec!["--literal-pathspecs", "reset", "--quiet", "--"];
+            args.extend(files.iter().map(String::as_str));
+            let _ = git(project, &args);
+            Ok(Integration::Applied)
+        }
     } else {
-        ok(project, &["cherry-pick", "--no-commit", change])?;
-        // Leave the result as ordinary working-tree changes; unstage only
-        // this change's paths, never what the user staged.
-        let mut args = vec!["--literal-pathspecs", "reset", "--quiet", "--"];
-        args.extend(files.iter().map(String::as_str));
-        let _ = git(project, &args);
-        Ok(Integration::Applied)
+        write_files(project, change, &target_files)?;
+        if commit {
+            let msg = ok(project, &["log", "-1", "--format=%B", change])?;
+            let committed = commit_paths(project, &target_files, msg.trim())?;
+            Ok(Integration::Committed(committed))
+        } else {
+            Ok(Integration::Applied)
+        }
     }
+}
+
+/// Applies the squashed commit `change` (made on `base`) to the project's
+/// current branch.
+pub fn integrate(project: &Path, base: &str, change: &str, commit: bool) -> Result<Integration> {
+    integrate_scoped(project, base, change, None, commit)
 }
 
 /// Blob ids of `files` at `rev`; files absent there are absent here.

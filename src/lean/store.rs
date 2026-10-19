@@ -197,6 +197,8 @@ pub struct Task {
     /// A writer's starting commit and its latest squashed result.
     pub base: Option<String>,
     pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freshness_token: Option<String>,
 }
 
 pub fn now_ms() -> i64 {
@@ -847,6 +849,7 @@ impl Store {
                 verdict: None,
                 base: None,
                 result: None,
+                freshness_token: None,
             };
             tx.execute(
                 "INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms)
@@ -935,6 +938,7 @@ impl Store {
                 verdict: verdict.map(|v| serde_json::from_str(&v)).transpose()?,
                 base,
                 result,
+                freshness_token: None,
             })
         })
         .collect()
@@ -1519,6 +1523,7 @@ impl Store {
                     verdict: verdict.map(|v| serde_json::from_str(&v)).transpose()?,
                     base,
                     result,
+                    freshness_token: None,
                 })
             },
         )
