@@ -15,6 +15,7 @@ pub mod session;
 pub mod theme;
 pub mod unblock;
 pub mod view;
+pub mod workspace;
 
 pub use carousel::Carousel;
 pub use details::Details;
@@ -33,6 +34,7 @@ pub use view::{
 
 use super::cli::Options;
 use super::daemon::{Client, Request};
+use super::{projects, trust};
 use crate::Result;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -68,6 +70,18 @@ pub enum Update {
     },
     Conversation(String),
     Notice(String),
+    /// A project was opened: switch to it, to `conversation` if one was named.
+    ProjectReady {
+        conn: Box<workspace::ProjectConn>,
+        conversation: Option<String>,
+    },
+    /// The directory must be trusted before it is opened.
+    ProjectTrust(std::path::PathBuf),
+    /// The conversations of a connected project, as it last listed them.
+    ProjectStatus {
+        path: std::path::PathBuf,
+        conversations: Vec<Value>,
+    },
     /// A task's change, for the diff view of `task`.
     Diff {
         conversation: String,
@@ -217,6 +231,12 @@ pub struct App {
     pub trust_prompt: Option<String>,
     /// The way out for a stopped step, while the user picks one.
     pub unblock: Option<unblock::Unblock>,
+    /// The projects the screen is connected to; the active one's client is
+    /// `client`.
+    pub projects: Vec<workspace::ProjectConn>,
+    pub active_project: usize,
+    /// A directory the user is asked about before it is opened.
+    pub project_trust: Option<std::path::PathBuf>,
 }
 
 impl App {
@@ -292,6 +312,9 @@ impl App {
             graph_viewport: None,
             trust_prompt: None,
             unblock: None,
+            projects: Vec::new(),
+            active_project: 0,
+            project_trust: None,
         }
     }
 
@@ -1068,6 +1091,19 @@ impl App {
                 }
             }
             Update::Conversation(id) => self.open(id),
+            Update::ProjectReady { conn, conversation } => {
+                let index = self.register_project(*conn);
+                self.switch_project(index, conversation);
+            }
+            Update::ProjectTrust(path) => self.project_trust = Some(path),
+            Update::ProjectStatus {
+                path,
+                conversations,
+            } => {
+                if let Some(project) = self.projects.iter_mut().find(|p| p.path == path) {
+                    project.conversations = conversations;
+                }
+            }
             Update::Notice(text) => {
                 if text.contains("stale_scope") {
                     if let Some(mut card) = self.confirmation.take() {
@@ -1351,10 +1387,11 @@ impl App {
             _ if text.starts_with("/unblock ") => {
                 self.open_unblock(Some(text.trim_start_matches("/unblock ").trim().to_owned()));
             }
+            "/project" => self.open_projects_picker(),
             _ if text.starts_with("/project ") => {
                 let proj = text.trim_start_matches("/project ").trim().to_string();
                 if !proj.is_empty() {
-                    self.new_conversation_in(proj);
+                    self.open_project(&proj);
                 }
             }
             _ => {
@@ -1441,21 +1478,150 @@ impl App {
         });
     }
 
-    fn new_conversation_in(&mut self, project: String) {
-        let client = self.client.clone();
-        let updates = self.updates.clone();
-        self.project = std::path::Path::new(&project)
-            .file_name()
-            .map_or_else(|| project.clone(), |n| n.to_string_lossy().into_owned());
+    /// Adds a connected project to the screen, once; its conversations are
+    /// listed in the background from then on. Returns its place.
+    pub fn register_project(&mut self, conn: workspace::ProjectConn) -> usize {
+        if let Some(index) = self.projects.iter().position(|p| p.path == conn.path) {
+            return index;
+        }
+        let _ = projects::Projects::from_env().and_then(|list| list.remember(&conn.path));
+        let (client, path, updates) =
+            (conn.client.clone(), conn.path.clone(), self.updates.clone());
         std::thread::spawn(move || {
-            let update = match client.call(&Request::StartIn { project }) {
-                Ok(conversation) => {
-                    Update::Conversation(conversation["id"].as_str().unwrap_or_default().into())
+            loop {
+                if let Ok(list) = client.call(&Request::Conversations) {
+                    let mine = list
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|c| c["project"] == path.to_string_lossy().as_ref())
+                        .cloned()
+                        .collect();
+                    let update = Update::ProjectStatus {
+                        path: path.clone(),
+                        conversations: mine,
+                    };
+                    // The screen is gone: so is the reason to look.
+                    if updates.send(update).is_err() {
+                        return;
+                    }
                 }
+                std::thread::sleep(Duration::from_secs(3));
+            }
+        });
+        self.projects.push(conn);
+        self.projects.len() - 1
+    }
+
+    /// Makes a connected project the one on screen, showing `conversation`
+    /// or the project's latest.
+    pub fn switch_project(&mut self, index: usize, conversation: Option<String>) {
+        let Some(conn) = self.projects.get(index).cloned() else {
+            return;
+        };
+        let conversation = match conversation {
+            Some(id) => id,
+            None => match workspace::latest_or_new(&conn) {
+                Ok(id) => id,
+                Err(error) => {
+                    self.notice = Some(format!("✗ {}: {error}", conn.name));
+                    return;
+                }
+            },
+        };
+        self.active_project = index;
+        self.client = conn.client.clone();
+        self.project = conn.name.clone();
+        self.open(conversation);
+    }
+
+    /// Opens a project by directory, or switches to it if it is open. The
+    /// directory must be trusted; if it is not, the user is asked first.
+    pub fn open_project(&mut self, path: &str) {
+        let path = expand_home(path);
+        if let Ok(canonical) = path.canonicalize()
+            && let Some(index) = self.projects.iter().position(|p| p.path == canonical)
+        {
+            self.switch_project(index, None);
+            return;
+        }
+        let updates = self.updates.clone();
+        std::thread::spawn(move || {
+            let update = match trust::Registry::from_env() {
                 Err(error) => Update::Notice(format!("✗ {error}")),
+                Ok(registry) => match workspace::connect(&path, &registry) {
+                    Ok(conn) => match workspace::latest_or_new(&conn) {
+                        Ok(id) => Update::ProjectReady {
+                            conn: Box::new(conn),
+                            conversation: Some(id),
+                        },
+                        Err(error) => Update::Notice(format!("✗ {error}")),
+                    },
+                    Err(workspace::ConnectError::NotTrusted(path)) => Update::ProjectTrust(path),
+                    Err(workspace::ConnectError::Failed(error)) => {
+                        Update::Notice(format!("✗ {error}"))
+                    }
+                },
             };
             let _ = updates.send(update);
         });
+    }
+
+    /// The projects open here and those opened before, to pick from.
+    pub fn open_projects_picker(&mut self) {
+        let mut items = Vec::new();
+        for (index, project) in self.projects.iter().enumerate() {
+            let (working, attention) = project.badges();
+            let mut title = format!("{} · {}", project.name, project.path.display());
+            if index == self.active_project {
+                title.push_str(" (current)");
+            }
+            if working > 0 {
+                title.push_str(&format!("  ●{working}"));
+            }
+            if attention > 0 {
+                title.push_str(&format!("  !{attention}"));
+            }
+            items.push(palette::ProjectItem {
+                path: project.path.to_string_lossy().into_owned(),
+                title,
+            });
+        }
+        if let Ok(list) = projects::Projects::from_env() {
+            for path in list.list() {
+                if !self.projects.iter().any(|p| p.path == path) {
+                    items.push(palette::ProjectItem {
+                        title: format!(
+                            "{} · {} (not open)",
+                            workspace::name_of(&path),
+                            path.display()
+                        ),
+                        path: path.to_string_lossy().into_owned(),
+                    });
+                }
+            }
+        }
+        let mut picker = Picker::new(Kind::Projects);
+        picker.projects = items;
+        self.picker = Some(picker);
+    }
+
+    /// Keys while the user is asked whether to trust a directory to open.
+    fn project_trust_key(&mut self, key: event::KeyEvent) {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if let Some(path) = self.project_trust.take() {
+                    match trust::Registry::from_env().and_then(|r| r.trust(&path)) {
+                        Ok(()) => self.open_project(&path.to_string_lossy()),
+                        Err(error) => self.notice = Some(format!("✗ {error}")),
+                    }
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') => {
+                self.project_trust = None;
+            }
+            _ => {}
+        }
     }
 
     /// A command from a shortcut or the palette; the draft stays as it is.
@@ -1530,8 +1696,21 @@ impl App {
                     }
                     Some(Action::SwitchConversation(id)) => {
                         if id != self.conversation {
-                            self.open(id);
+                            // A conversation of another open project switches to it.
+                            let owner = self.projects.iter().position(|p| {
+                                p.conversations.iter().any(|c| c["id"] == id.as_str())
+                            });
+                            match owner {
+                                Some(index) if index != self.active_project => {
+                                    self.switch_project(index, Some(id));
+                                }
+                                _ => self.open(id),
+                            }
                         }
+                        true
+                    }
+                    Some(Action::OpenProject(path)) => {
+                        self.open_project(&path);
                         true
                     }
                     Some(Action::Address(recipient)) => {
@@ -1599,6 +1778,7 @@ impl App {
                 let help = self.help_here();
                 self.show_help(help);
             }
+            Command::Projects => self.open_projects_picker(),
             Command::Quit => return false,
         }
         true
@@ -1668,14 +1848,18 @@ impl App {
     }
 
     /// The header as drawn, which is also what a click on it is read from.
-    fn header_line(&self, width: u16) -> Line<'static> {
+    pub fn header_line(&self, width: u16) -> Line<'static> {
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
             Focus::Tasks => PanelFocus::Tasks,
             Focus::Graph => PanelFocus::Graph,
         };
+        let label = match workspace::others_summary(&self.projects, self.active_project) {
+            Some(others) => format!("{} ({others})", self.project),
+            None => self.project.clone(),
+        };
         view::render_header_with(
-            &self.project,
+            &label,
             &self.conversation,
             self.view.autonomous,
             &self.header_status(),
@@ -1793,6 +1977,10 @@ impl App {
             self.show_help(self.help_here());
             return true;
         }
+        if self.project_trust.is_some() {
+            self.project_trust_key(key);
+            return true;
+        }
         if let Some(modal) = &mut self.unblock {
             match modal.key(key) {
                 unblock::Outcome::None => {}
@@ -1873,6 +2061,10 @@ impl App {
             }
             KeyCode::Char('l') if control => {
                 self.command("/plan");
+                return true;
+            }
+            KeyCode::Char('g') if control => {
+                self.open_projects_picker();
                 return true;
             }
             KeyCode::BackTab => {
@@ -2297,6 +2489,23 @@ impl App {
             }
         }
 
+        for (index, project) in self.projects.iter().enumerate() {
+            if index == self.active_project {
+                continue;
+            }
+            for conversation in &project.conversations {
+                let id = conversation["id"].as_str().unwrap_or_default().to_string();
+                if id.is_empty() {
+                    continue;
+                }
+                let status = conversation["status"].as_str().unwrap_or("idle");
+                items.push(palette::ConversationItem {
+                    title: format!("{} · {id} · {status}", project.name),
+                    project: project.path.to_string_lossy().into_owned(),
+                    id,
+                });
+            }
+        }
         for id in self.conversation_states.keys() {
             if !items.iter().any(|item| &item.id == id) {
                 let active_mark = if id == &self.conversation {
@@ -2665,6 +2874,57 @@ impl App {
                     box_area,
                 );
             }
+        }
+        if let Some(path) = &self.project_trust {
+            let area = frame.area();
+            let width = area.width.saturating_sub(4).clamp(12, 76);
+            let height = 8u16.min(area.height);
+            let boxed = Rect::new(
+                area.x + area.width.saturating_sub(width) / 2,
+                area.y + area.height.saturating_sub(height) / 2,
+                width,
+                height,
+            );
+            frame.render_widget(Clear, boxed);
+            let inner = usize::from(width.saturating_sub(4).max(1));
+            let lines = vec![
+                Line::styled(
+                    truncate("Open this directory as a project?", inner),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::raw(""),
+                Line::styled(
+                    truncate(&path.display().to_string(), inner),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Line::raw(""),
+                Line::styled(
+                    truncate(
+                        "Its agents can read files, run commands and edit code there.",
+                        inner,
+                    ),
+                    dim(),
+                ),
+                Line::raw(""),
+                Line::styled(
+                    truncate("[Enter / y] Trust and open   [Esc / n] Cancel", inner),
+                    Style::default().fg(Color::Green),
+                ),
+            ];
+            frame.render_widget(
+                Paragraph::new(lines).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Yellow))
+                        .title(" trust ")
+                        .padding(ratatui::widgets::Padding::horizontal(1)),
+                ),
+                boxed,
+            );
         }
         if let Some(modal) = &mut self.unblock {
             modal.draw(frame);
@@ -3358,7 +3618,7 @@ impl App {
 
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
         self.settle_focus();
-        if self.trust_prompt.is_some() {
+        if self.trust_prompt.is_some() || self.project_trust.is_some() {
             return true;
         }
         if let Some(modal) = &mut self.unblock {
@@ -3609,6 +3869,16 @@ pub fn without_color(buffer: &mut ratatui::buffer::Buffer) {
     }
 }
 
+/// `~` and `~/…` mean the user's home; other paths are used as typed.
+fn expand_home(path: &str) -> std::path::PathBuf {
+    let path = path.trim();
+    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => std::path::PathBuf::from(home).join(rest),
+        (None, Some(home)) if path == "~" => std::path::PathBuf::from(home),
+        _ => std::path::PathBuf::from(path),
+    }
+}
+
 /// Asks the daemon to unblock a task, with a freshly read token so the
 /// request is about the state the user is looking at. Returns what the
 /// daemon says happened.
@@ -3707,6 +3977,9 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         details_query_memory: std::collections::HashMap::new(),
         graph_viewport: None,
         unblock: None,
+        projects: Vec::new(),
+        active_project: 0,
+        project_trust: None,
         trust_prompt: if options.trust {
             None
         } else {
@@ -3716,6 +3989,10 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
             }
         },
     };
+    app.register_project(workspace::ProjectConn::new(
+        options.project.clone(),
+        client.clone(),
+    ));
     app.open(conversation);
 
     // https://no-color.org: nothing depends on color alone (design §17).

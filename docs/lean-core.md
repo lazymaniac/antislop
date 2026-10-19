@@ -471,20 +471,36 @@ directory to run both. The socket is `<state>/core.sock`, or
 - Complete parity verification against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8`
   with test proofs and architectural notes is documented in [parity.md](parity.md).
 
+## Several projects in one screen
+
+`Ctrl+G` (or `/project`, or the palette) lists the projects open on the screen
+and those opened before (`~/.config/antislop/projects.json`); choosing one
+switches to it, and typing a directory path (`/…`, `~/…`, `./…`) opens it. A
+project is its own directory: its `architect.toml`, its `.antislop/` state and
+its own daemon, started as when antislop is run there alone, so nothing of one
+project's configuration, plans or sessions reaches another. A directory that is
+not trusted yet is asked about first and nothing is created in it before the
+answer. The header names the project and counts what the others do
+(`alpha (2 more ●1 !1`: one working, one waiting for the user), refreshed in the
+background; `Ctrl+O` also lists the other projects' conversations, and choosing
+one switches the project too. Drafts, open dialogs and scroll positions are
+kept per conversation, so switching back finds them as they were.
+
 ## Known limits
 
 - A writer that depends on exactly one writer starts from that writer's
-  result; one that depends on several starts from `HEAD`, so without
-  `local_commits` it does not see their uncommitted results.
-- A plan runs in waves: a task waits for every task of the previous wave.
+  result; one that depends on several starts from `HEAD` with all their
+  results laid on it (`git::combine`), and a result that does not apply is
+  an error naming it.
+- Tasks start as soon as their own dependencies are approved, at most
+  `policy.max_parallel` at a time.
 - `View::apply(plan_proposed)` replaces the active task cards of the view
   projection with the newly proposed plan's tasks; while past tasks, verdicts,
   turns, and messages remain fully persisted in `core.db`, simultaneously
   projecting historical plans and past workers/verifiers into the live team
   graph is a planned enhancement for the next plan.
-- Conversation switching (`Ctrl+O`) operates within the project directory
-  managed by the daemon; simultaneous multi-project switching across distinct
-  repositories within a single TUI instance is planned for the next plan.
+- One daemon still serves one project. The screen can hold several (below);
+  a project's conversations are never mixed into another's daemon.
 - Resume works per plan, not per task, and `waiting` tasks are not retried
   on a timer.
 - Read-only modes are prompts and CLI modes, not OS confinement; `scope`

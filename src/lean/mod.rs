@@ -8,6 +8,7 @@ pub mod diff;
 pub mod eval;
 pub mod feedback;
 pub mod git;
+pub mod projects;
 pub mod store;
 pub mod tasks;
 pub mod trust;

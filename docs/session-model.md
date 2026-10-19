@@ -26,7 +26,7 @@ Project (canonical filesystem path)
 
 ### Components of the Contract
 
-1. **Project**: The absolute, canonical path to the repository directory (e.g., `/Users/.../project`). A daemon serves exactly one project.
+1. **Project**: The absolute, canonical path to the repository directory (e.g., `/Users/.../project`). A daemon serves exactly one project; a screen may be connected to several daemons, one per project (see `docs/lean-core.md`).
 2. **Endpoint / Config / State**:
    - Unix domain socket: `<state>/core.sock` (or `/tmp/antislop-<uid>/<hash>.sock` when state path is long).
    - Configuration file: `architect.toml` with loaded timestamp for hot reload detection.

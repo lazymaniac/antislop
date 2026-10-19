@@ -34,6 +34,10 @@ per directory in `~/.config/antislop/trusted.json` (`$XDG_CONFIG_HOME` or
 created or started in the directory before you answer. Without a terminal, pass
 `--trust` to answer yes.
 
+Several projects can be open in one screen: `Ctrl+G` switches between them and
+opens another by path (`/project PATH`); each keeps its own configuration,
+`.antislop/` and daemon, and the header shows what the others are doing.
+
 `antislop eval` runs real CLIs on the cases in [evals/](evals) and compares
 the verifier antislop gives a task with one agent asked plainly to review;
 [docs/calibration.md](docs/calibration.md) reports what it measured.

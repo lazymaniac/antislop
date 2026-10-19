@@ -37,9 +37,10 @@ pub enum Command {
     Quit,
     AddressMessage,
     ConversationDetails,
+    Projects,
 }
 
-const COMMANDS: [(Command, &str); 22] = [
+const COMMANDS: [(Command, &str); 23] = [
     (Command::Accept, "Accept proposed plan · Ctrl+A"),
     (Command::Reject, "Reject proposed plan · /reject"),
     (Command::Plan, "Open plan document viewer · Ctrl+L / /plan"),
@@ -60,6 +61,10 @@ const COMMANDS: [(Command, &str); 22] = [
     ),
     (Command::NewConversation, "New conversation · Ctrl+N"),
     (Command::SwitchConversation, "Switch conversation · Ctrl+O"),
+    (
+        Command::Projects,
+        "Open or switch project · Ctrl+G / /project",
+    ),
     (Command::Tasks, "Tasks (carousel) · t"),
     (Command::Find, "Find agent · /"),
     (Command::Search, "Search conversation · Ctrl+F"),
@@ -75,6 +80,12 @@ const COMMANDS: [(Command, &str); 22] = [
     (Command::Help, "Help · ?"),
     (Command::Quit, "Detach (work continues) · q"),
 ];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectItem {
+    pub path: String,
+    pub title: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationItem {
@@ -94,6 +105,8 @@ pub enum Action {
     SwitchConversation(String),
     /// Address a message to a recipient.
     Address(String),
+    /// Open this project (a directory) or switch to it.
+    OpenProject(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +116,7 @@ pub enum Kind {
     History,
     Conversations,
     Recipients,
+    Projects,
 }
 
 #[derive(Debug)]
@@ -111,6 +125,7 @@ pub struct Picker {
     pub query: String,
     pub selected: usize,
     pub conversations: Vec<ConversationItem>,
+    pub projects: Vec<ProjectItem>,
 }
 
 impl Picker {
@@ -120,6 +135,7 @@ impl Picker {
             query: String::new(),
             selected: 0,
             conversations: Vec::new(),
+            projects: Vec::new(),
         }
     }
 
@@ -159,6 +175,11 @@ impl Picker {
                 .conversations
                 .iter()
                 .map(|c| (c.title.clone(), Action::SwitchConversation(c.id.clone())))
+                .collect(),
+            Kind::Projects => self
+                .projects
+                .iter()
+                .map(|p| (p.title.clone(), Action::OpenProject(p.path.clone())))
                 .collect(),
             Kind::Recipients => {
                 let mut list = vec![
@@ -207,12 +228,22 @@ impl Picker {
             .split_whitespace()
             .map(str::to_owned)
             .collect();
-        all.into_iter()
+        let mut matching: Vec<(String, Action)> = all
+            .into_iter()
             .filter(|(label, _)| {
                 let label = label.to_lowercase();
                 words.iter().all(|word| label.contains(word.as_str()))
             })
-            .collect()
+            .collect();
+        // A typed path can be opened even when it is in no list.
+        let typed = self.query.trim();
+        if self.kind == Kind::Projects && (typed.starts_with(['/', '~', '.'])) {
+            matching.push((
+                format!("Open {typed}"),
+                Action::OpenProject(typed.to_owned()),
+            ));
+        }
+        matching
     }
 
     pub fn draw(&mut self, frame: &mut Frame, view: &View) {
@@ -255,6 +286,7 @@ impl Picker {
                     Kind::History => "No entries in conversation history.",
                     Kind::Conversations => "No other conversations in this project.",
                     Kind::Recipients => "No recipients matching query.",
+                    Kind::Projects => "No other projects yet: type a directory path (/…, ~/…).",
                 }
             } else {
                 "Nothing matches the query."
@@ -285,6 +317,9 @@ impl Picker {
             Kind::Recipients if width >= 45 => " message recipient · Enter select · Esc close ",
             Kind::Recipients if width >= 20 => " recipients · Esc ",
             Kind::Recipients => " recipients ",
+            Kind::Projects if width >= 50 => " projects · Enter open · type a path · Esc close ",
+            Kind::Projects if width >= 20 => " projects · Esc ",
+            Kind::Projects => " projects ",
         };
         frame.render_widget(Clear, box_area);
         frame.render_widget(
@@ -336,7 +371,7 @@ impl Help {
                 "/pause, /continue  pause new steps / continue",
                 "/mode autonomous   autonomous mode for next plans",
                 "/mode supervised   supervised mode (Ctrl+T toggles)",
-                "Ctrl+N / Ctrl+O  new / switch conversation",
+                "Ctrl+N / O / G    new / switch conversation / project",
                 "Ctrl+F / Ctrl+L  search conversation / open plan",
                 "Ctrl+P           command palette",
                 "Esc              back/clear draft (daemon runs)",
