@@ -1,3 +1,4 @@
+mod common;
 use architect::lean::daemon::{Client, Request};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -68,6 +69,7 @@ struct DaemonGuard {
 
 impl DaemonGuard {
     fn start(project: &Path, config: &Path, state: &Path) -> Self {
+        common::trust(project);
         std::fs::create_dir_all(state).unwrap();
         std::fs::set_permissions(state, std::os::unix::fs::PermissionsExt::from_mode(0o700))
             .unwrap();
@@ -830,4 +832,46 @@ fn removed_commands_and_options_are_refused_with_a_reason() {
     // Neither is advertised any more.
     let help = String::from_utf8_lossy(&run(&["--help"]).stdout).into_owned();
     assert!(!help.contains("--project") && !help.contains("export"));
+}
+
+#[test]
+fn nothing_is_created_or_started_in_a_directory_that_is_not_trusted() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().canonicalize().unwrap();
+    let project = dir_path.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(&dir_path);
+    let agy = fake_agy(&dir_path);
+    let config = write_config(&dir_path, &codex, &agy);
+    std::fs::copy(&config, project.join("architect.toml")).unwrap();
+    let list = dir_path.join("config");
+
+    // The CLI without a terminal and without --trust refuses, leaving no state.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+        .current_dir(&project)
+        .env("ANTISLOP_CONFIG_DIR", &list)
+        .arg("hello")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not trusted"));
+    assert!(!project.join(".antislop").exists(), "no state directory");
+    assert!(!list.exists(), "nothing was remembered");
+
+    // A daemon will not start for it either.
+    let state = dir_path.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let daemon = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+        .env("ANTISLOP_CONFIG_DIR", &list)
+        .arg("__core")
+        .arg(&project)
+        .arg(&config)
+        .arg(&state)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!daemon.status.success());
+    assert!(String::from_utf8_lossy(&daemon.stderr).contains("not a trusted directory"));
 }

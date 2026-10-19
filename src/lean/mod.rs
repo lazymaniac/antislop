@@ -10,6 +10,7 @@ pub mod feedback;
 pub mod git;
 pub mod store;
 pub mod tasks;
+pub mod trust;
 pub mod tui;
 
 use crate::{

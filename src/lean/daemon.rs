@@ -911,6 +911,19 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     let loaded = modified(config_path);
     let core = Core::open(state, Config::load(config_path)?)?;
     let project = project.canonicalize()?;
+    // Work starts only in a directory the user trusted. A project trusted
+    // before the list was the user's own is carried over.
+    let registry = super::trust::Registry::from_env()?;
+    if !registry.is_trusted(&project) && core.store.is_trusted(&project.to_string_lossy())? {
+        registry.trust(&project)?;
+    }
+    require(
+        registry.is_trusted(&project),
+        &format!(
+            "{} is not a trusted directory: run antislop there in a terminal first, or pass --trust",
+            project.display()
+        ),
+    )?;
     let config_path = config_path.canonicalize()?;
     let socket = socket(state);
     if let Some(parent) = socket.parent() {
@@ -998,7 +1011,14 @@ fn handle(
             project: target_project,
         } => {
             let target_path = Path::new(&target_project).canonicalize()?;
-            let _ = core.store.trust_project(&target_path.to_string_lossy());
+            require(
+                super::trust::Registry::from_env()?.is_trusted(&target_path),
+                &format!(
+                    "{} is not a trusted directory: run antislop there in a terminal first",
+                    target_path.display()
+                ),
+            )?;
+            core.store.trust_project(&target_path.to_string_lossy())?;
             json!(core.start(&target_path)?)
         }
         Request::Send { conversation, text } => {
@@ -1279,21 +1299,20 @@ fn handle(
             json!(core.store.mail(&conversation)?)
         }
         Request::TrustStatus => {
-            let proj = project.to_string_lossy();
             json!({
-                "project": proj,
-                "trusted": core.store.is_trusted(&proj)?,
+                "project": project.to_string_lossy(),
+                "trusted": super::trust::Registry::from_env()?.is_trusted(project),
             })
         }
         Request::Trust { trusted } => {
-            let proj = project.to_string_lossy();
+            let registry = super::trust::Registry::from_env()?;
             if trusted {
-                core.store.trust_project(&proj)?;
+                registry.trust(project)?;
             } else {
-                core.store.untrust_project(&proj)?;
+                registry.untrust(project)?;
             }
             json!({
-                "project": proj,
+                "project": project.to_string_lossy(),
                 "trusted": trusted,
             })
         }
@@ -1303,6 +1322,9 @@ fn handle(
 fn validate_project_conversation(core: &Core, project: &Path, conversation: &str) -> Result<()> {
     let conv = core.store.conversation(conversation)?;
     require(
+        // The projects this daemon was asked to serve (`StartIn`) are in its
+        // own state; the user's list of trusted directories says nothing
+        // about which daemon may open whose conversations.
         conv.project == project.to_string_lossy() || core.store.is_trusted(&conv.project)?,
         &format!(
             "conversation {conversation} does not belong to project {}",

@@ -1,3 +1,4 @@
+mod common;
 use architect::{
     config::Config,
     lean::{
@@ -62,6 +63,7 @@ struct DaemonGuard {
 
 impl DaemonGuard {
     fn start(project: &Path, config: &Path, state: &Path) -> Self {
+        common::trust(project);
         std::fs::create_dir_all(state).unwrap();
         std::fs::set_permissions(state, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))

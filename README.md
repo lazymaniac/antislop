@@ -27,6 +27,13 @@ antislop --config FILE --state DIR   # the directory you start it in is the proj
 antislop eval evals --cli codex  # verifiers on seeded cases vs a plain review
 ```
 
+The first time you start antislop in a directory it asks whether you trust the
+files there (agents read them, run commands and edit code). The answer is kept
+per directory in `~/.config/antislop/trusted.json` (`$XDG_CONFIG_HOME` or
+`ANTISLOP_CONFIG_DIR` move it), so it survives deleting `.antislop/`. Nothing is
+created or started in the directory before you answer. Without a terminal, pass
+`--trust` to answer yes.
+
 `antislop eval` runs real CLIs on the cases in [evals/](evals) and compares
 the verifier antislop gives a task with one agent asked plainly to review;
 [docs/calibration.md](docs/calibration.md) reports what it measured.

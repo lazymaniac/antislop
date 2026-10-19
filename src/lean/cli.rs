@@ -57,17 +57,30 @@ impl Options {
             config.is_file(),
             &format!("no configuration at {}", config.display()),
         )?;
+        // Nothing is created yet: the directory may not be trusted.
         let state = state.unwrap_or_else(|| project.join(".antislop"));
-        super::daemon::private_directory(&state)?;
+        let state = if state.is_absolute() {
+            state
+        } else {
+            project.join(state)
+        };
         Ok(Self {
             project,
             config: config.canonicalize()?,
-            state: state.canonicalize()?,
+            state,
             conversation,
             new,
             trust,
             message: (!words.is_empty()).then(|| words.join(" ")),
         })
+    }
+
+    /// Creates the private state directory. Called once the working
+    /// directory is trusted, so that asking leaves nothing behind.
+    pub fn prepare(&mut self) -> Result<()> {
+        super::daemon::private_directory(&self.state)?;
+        self.state = self.state.canonicalize()?;
+        Ok(())
     }
 
     /// The conversation to show: the one asked for, else the latest for this
@@ -100,28 +113,28 @@ impl Options {
     }
 }
 
-pub fn ensure_cli_trusted<R: BufRead, W: Write>(
-    client: &Client,
+/// Makes sure the user let antislop work in `project`: it is remembered, or
+/// `--trust` says so, or the user answers now. Without a terminal and
+/// without `--trust` there is nobody to ask, so the answer is no.
+pub fn ensure_trusted<R: BufRead, W: Write>(
+    registry: &super::trust::Registry,
     project: &std::path::Path,
     trust_flag: bool,
     interactive: bool,
     mut reader: R,
     mut writer: W,
 ) -> Result<()> {
+    if registry.is_trusted(project) {
+        return Ok(());
+    }
     if trust_flag {
-        client.call(&Request::Trust { trusted: true })?;
-        return Ok(());
+        return registry.trust(project);
     }
-    let status = client.call(&Request::TrustStatus)?;
-    if status["trusted"] == true {
-        return Ok(());
-    }
-    if !interactive {
-        // Non-interactive piped invocations still record trust when launched explicitly,
-        // or if interactive terminal is present we prompt the user.
-        client.call(&Request::Trust { trusted: true })?;
-        return Ok(());
-    }
+    require(
+        interactive,
+        "this directory is not trusted yet: run antislop here in a terminal to answer, \
+         or pass --trust",
+    )?;
     writeln!(
         writer,
         "Do you trust the files in this directory?\n  {}\nAntislop agents can read files, run commands, and modify code in this directory.",
@@ -131,32 +144,30 @@ pub fn ensure_cli_trusted<R: BufRead, W: Write>(
     writer.flush()?;
     let mut answer = String::new();
     reader.read_line(&mut answer)?;
-    let trimmed = answer.trim().to_ascii_lowercase();
+    let answer = answer.trim().to_ascii_lowercase();
     require(
-        trimmed == "y" || trimmed == "yes",
+        answer == "y" || answer == "yes",
         "workspace directory is not trusted",
     )?;
-    client.call(&Request::Trust { trusted: true })?;
-    Ok(())
+    registry.trust(project)
 }
 
 pub fn chat(args: &[String]) -> Result<()> {
-    let options = Options::parse(args)?;
-    let client = Client::connect(&options.project, &options.config, &options.state)?;
-    if options.trust {
-        client.call(&Request::Trust { trusted: true })?;
-    }
-    if options.message.is_none() && std::io::stdin().is_terminal() {
-        return super::tui::run(&options, client);
-    }
-    ensure_cli_trusted(
-        &client,
+    let mut options = Options::parse(args)?;
+    // Before anything is created or started in this directory.
+    ensure_trusted(
+        &super::trust::Registry::from_env()?,
         &options.project,
         options.trust,
         std::io::stdin().is_terminal(),
         std::io::stdin().lock(),
         std::io::stderr(),
     )?;
+    options.prepare()?;
+    let client = Client::connect(&options.project, &options.config, &options.state)?;
+    if options.message.is_none() && std::io::stdin().is_terminal() {
+        return super::tui::run(&options, client);
+    }
     if let Some(notice) = &client.notice {
         eprintln!("{notice}");
     }
@@ -432,5 +443,73 @@ fn print(event: &Value) {
         // Agents' text may carry terminal escapes (design §13).
         let _ = writeln!(out, "{}", clean(&line));
         let _ = out.flush();
+    }
+}
+
+#[cfg(test)]
+mod trust_tests {
+    use super::*;
+    use crate::lean::trust::Registry;
+    use std::io::Cursor;
+
+    fn ask(
+        registry: &Registry,
+        dir: &std::path::Path,
+        flag: bool,
+        tty: bool,
+        input: &str,
+    ) -> (Result<()>, String) {
+        let mut shown = Vec::new();
+        let result = ensure_trusted(
+            registry,
+            dir,
+            flag,
+            tty,
+            Cursor::new(input.to_owned()),
+            &mut shown,
+        );
+        (result, String::from_utf8(shown).unwrap())
+    }
+
+    #[test]
+    fn the_directory_is_asked_about_once_and_never_without_a_terminal() {
+        let config = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let registry = Registry::at(config.path());
+
+        // No terminal and no flag: nobody to ask, so no.
+        let (result, shown) = ask(&registry, project.path(), false, false, "y\n");
+        assert!(result.unwrap_err().to_string().contains("--trust"));
+        assert!(shown.is_empty() && !registry.is_trusted(project.path()));
+
+        // Declining (or an empty answer) leaves it untrusted.
+        for answer in ["n\n", "\n", "maybe\n"] {
+            let (result, shown) = ask(&registry, project.path(), false, true, answer);
+            assert!(result.is_err());
+            assert!(shown.contains("Do you trust the files in this directory?"));
+            assert!(!registry.is_trusted(project.path()));
+        }
+
+        // Yes is remembered: the next start does not ask.
+        let (result, _) = ask(&registry, project.path(), false, true, "Yes\n");
+        result.unwrap();
+        let (result, shown) = ask(&registry, project.path(), false, false, "");
+        result.unwrap();
+        assert!(shown.is_empty());
+
+        // The flag answers for a directory not yet known.
+        let other = tempfile::tempdir().unwrap();
+        let (result, _) = ask(&registry, other.path(), true, false, "");
+        result.unwrap();
+        assert!(registry.is_trusted(other.path()));
+    }
+
+    #[test]
+    fn parsing_the_options_creates_nothing() {
+        let before = std::env::current_dir().unwrap();
+        let options =
+            Options::parse(&["--config".into(), "Cargo.toml".into(), "hi".into()]).unwrap();
+        assert!(!options.state.exists() || options.state.starts_with(&before));
+        assert_eq!(options.message.as_deref(), Some("hi"));
     }
 }

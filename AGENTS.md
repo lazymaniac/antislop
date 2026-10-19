@@ -75,6 +75,6 @@ When modifying or adding UI components in `src/lean/tui/`:
 ## 5. Working Tree & Process Safety
 
 - **Working Directory**: The process working directory is the repository root supplied by the user. Do not hardcode absolute system paths.
-- **Runtime State**: All runtime state, database files, and socket locks belong in `.antislop/` (ignored in `.gitignore`). Do not write artifacts or logs into the source tree.
+- **Runtime State**: All runtime state, database files, and socket locks belong in `.antislop/` (ignored in `.gitignore`). Do not write artifacts or logs into the source tree. The one exception is the user's list of trusted directories (`trusted.json` in `~/.config/antislop/`, see `src/lean/trust.rs`): it belongs to the user, not to a project, and nothing may be created in a directory before it is trusted.
 - **Git Worktree Isolation**: Task workers must only modify files inside their allocated task worktrees. Never mutate the user's primary working tree outside approved merges.
 - **External CLI Processes**: When spawning agent CLIs, always enforce timeout handling, stdout/stderr streaming, and explicit cancellation channels.

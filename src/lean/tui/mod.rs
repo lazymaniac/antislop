@@ -1742,8 +1742,8 @@ impl App {
                     self.accept_trust();
                     return true;
                 }
-                KeyCode::Esc => return true,
-                KeyCode::Char('n')
+                KeyCode::Esc
+                | KeyCode::Char('n')
                 | KeyCode::Char('N')
                 | KeyCode::Char('q')
                 | KeyCode::Char('Q') => {

@@ -1,3 +1,4 @@
+mod common;
 use architect::{
     config::Config,
     lean::{Core, store::TurnStatus},
@@ -451,6 +452,7 @@ fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
 }
 
 fn chat(dir: &std::path::Path, project: &std::path::Path, message: &str) -> String {
+    common::trust(project);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
         .current_dir(project)
         .arg("chat")
@@ -607,6 +609,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
             .unwrap()
     };
 
+    common::trust(&project);
     let mut first = run(
         if rebuilt { &old_build } else { current_build },
         "sleepy: pierwsza",
@@ -769,6 +772,7 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
         ),
     )
     .unwrap();
+    common::trust(&project);
     let frontend = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
         .current_dir(&project)
         .arg("chat")
