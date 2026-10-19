@@ -50,7 +50,7 @@ impl DiffView {
             };
             self.range = match (short("base"), short("head")) {
                 (Some(base), Some(head)) => format!("{base}..{head}"),
-                (Some(base), None) => format!("{base}..drzewo robocze"),
+                (Some(base), None) => format!("{base}..working tree"),
                 _ => String::new(),
             };
             self.truncated = value["truncated"] == true;
@@ -171,7 +171,7 @@ impl DiffView {
         let files = match &self.files {
             None => {
                 frame.render_widget(
-                    Paragraph::new(Span::styled("Pobieram diff zadania z demona…", dim())),
+                    Paragraph::new(Span::styled("Loading task diff from daemon…", dim())),
                     body,
                 );
                 return;
@@ -179,7 +179,7 @@ impl DiffView {
             Some(Err(error)) => {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
-                        format!("✗ Błąd pobierania zmian: {error}"),
+                        format!("✗ Error loading changes: {error}"),
                         Style::default().fg(Color::Red),
                     )),
                     body,
@@ -189,7 +189,7 @@ impl DiffView {
             Some(Ok(files)) if files.is_empty() => {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
-                        "Brak zmian w tym zadaniu. Zadanie nie zmodyfikowało żadnych plików.",
+                        "No changes in this task. The task did not modify any files.",
                         dim(),
                     )),
                     body,
@@ -238,7 +238,7 @@ impl DiffView {
                     comment.id,
                     clean(&comment.text),
                     if comment.status == "resolved" {
-                        " (rozwiązany)"
+                        " (resolved)"
                     } else {
                         ""
                     }
@@ -254,7 +254,7 @@ impl DiffView {
         let mut rows: Vec<Line> = vec![];
         let mut title = if compact && file_count > 1 {
             format!(
-                " [{}/{}] {} [Tab: pliki]",
+                " [{}/{}] {} [Tab: files]",
                 self.file + 1,
                 file_count,
                 file.path
@@ -276,7 +276,7 @@ impl DiffView {
                 .map(|comment| comment_line(comment)),
         );
         if file.binary {
-            rows.push(Line::styled("  plik binarny", dim()));
+            rows.push(Line::styled("  binary file", dim()));
         }
         let mut cursor_row = 0;
         for (index, line) in file.lines.iter().enumerate() {
@@ -347,12 +347,12 @@ pub fn diff_header_with_reviewer(
     reviewer: Option<&ReviewerProfile>,
     width: usize,
 ) -> Line<'static> {
-    let trunc_str = if truncated { " · obcięty" } else { "" };
+    let trunc_str = if truncated { " · truncated" } else { "" };
     let task_badge = format!(" {task} diff ");
     let reviewer_str = match reviewer {
         Some(r) => match &r.model {
-            Some(m) => format!(" · recenzent: {} ({m})", r.provider),
-            None => format!(" · recenzent: {}", r.provider),
+            Some(m) => format!(" · reviewer: {} ({m})", r.provider),
+            None => format!(" · reviewer: {}", r.provider),
         },
         None => String::new(),
     };
@@ -361,7 +361,7 @@ pub fn diff_header_with_reviewer(
             Span::styled(task_badge, Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
                 format!(
-                    "{range} · plików: {file_count} · +{added} −{removed}{trunc_str}{reviewer_str}"
+                    "{range} · files: {file_count} · +{added} −{removed}{trunc_str}{reviewer_str}"
                 ),
                 dim(),
             ),
@@ -378,7 +378,7 @@ pub fn diff_header_with_reviewer(
         Line::from(vec![
             Span::styled(task_badge, Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
-                format!("+{added} −{removed} · {file_count} plik(i){trunc_str}"),
+                format!("+{added} −{removed} · {file_count} file(s){trunc_str}"),
                 dim(),
             ),
         ])
@@ -406,11 +406,11 @@ pub fn diff_header(
 
 pub fn diff_footer_hint(width: usize) -> &'static str {
     if width >= 95 {
-        "↑/↓ wybór · ←/→ plik · Tab pliki/linie · c komentarz · R recenzja kodu · r odśwież · ? pomoc · Esc powrót"
+        "↑/↓ select · ←/→ file · Tab files/lines · c comment · R code review · r refresh · ? help · Esc back"
     } else if width >= 65 {
-        "↑/↓ wybór · ←/→ plik · Tab przełącz · c kom. · R recenzja · r odśwież · Esc powrót"
+        "↑/↓ select · ←/→ file · Tab switch · c com. · R review · r refresh · Esc back"
     } else if width >= 45 {
-        "↑/↓ · ←/→ · Tab przełącz · c kom · Esc powrót"
+        "↑/↓ · ←/→ · Tab switch · c com · Esc back"
     } else {
         "Tab · c · Esc"
     }
@@ -432,7 +432,7 @@ fn draw_files(
             } else {
                 dim()
             })
-            .title(" Zmienione pliki [Tab: przełącz na diff] ")
+            .title(" Changed files [Tab: switch to diff] ")
     } else {
         Block::default().borders(Borders::RIGHT)
     };
@@ -484,7 +484,7 @@ mod tests {
         // Wide: 100 columns
         let header = diff_header("t1", "base..head", 3, 10, 5, false, 100);
         let header_text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(header_text.contains("plików: 3"));
+        assert!(header_text.contains("files: 3"));
         assert!(header_text.contains("+10 −5"));
 
         // Narrow: 40 columns
@@ -497,8 +497,8 @@ mod tests {
         assert!(narrow_text.contains("+10 −5"));
 
         // Footer hints
-        assert!(diff_footer_hint(100).contains("recenzja kodu"));
-        assert!(!diff_footer_hint(40).contains("recenzja kodu"));
+        assert!(diff_footer_hint(100).contains("code review"));
+        assert!(!diff_footer_hint(40).contains("code review"));
         assert!(diff_footer_hint(40).contains("Esc"));
     }
 
@@ -536,7 +536,7 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let rendered: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(rendered.contains("Zmienione pliki"));
+        assert!(rendered.contains("Changed files"));
 
         // Tiny terminal (10x4)
         let backend = TestBackend::new(10, 4);

@@ -11,6 +11,9 @@ pub struct TaskSpec {
     pub id: String,
     pub title: String,
     pub goal: String,
+    /// Optional section heading in the plan document that this task implements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     /// Directories or files that matter: the project's own, or related ones
     /// such as a service it talks to. Agents read them themselves.
     #[serde(default)]
@@ -181,6 +184,305 @@ fn validate(tasks: &[TaskSpec]) -> Result<()> {
     Ok(())
 }
 
+fn normalize_scope_path(path: &str) -> &str {
+    path.trim().trim_start_matches("./").trim_end_matches('/')
+}
+
+pub fn work_kind_name(kind: WorkKind) -> &'static str {
+    match kind {
+        WorkKind::Orchestration => "orchestration",
+        WorkKind::Context => "context",
+        WorkKind::Requirements => "requirements",
+        WorkKind::Options => "options",
+        WorkKind::Planning => "planning",
+        WorkKind::Architecture => "architecture",
+        WorkKind::Dependencies => "dependencies",
+        WorkKind::Implementation => "implementation",
+        WorkKind::Refactoring => "refactoring",
+        WorkKind::StaticAnalysis => "static_analysis",
+        WorkKind::TestDesign => "test_design",
+        WorkKind::Testing => "testing",
+        WorkKind::Security => "security",
+        WorkKind::Performance => "performance",
+        WorkKind::Integration => "integration",
+        WorkKind::Research => "research",
+        WorkKind::Writing => "writing",
+        WorkKind::Analysis => "analysis",
+        WorkKind::Delivery => "delivery",
+    }
+}
+
+/// Whether two task scopes overlap on disk (empty scope means the whole project).
+pub fn scopes_overlap(a: &[String], b: &[String]) -> bool {
+    if a.is_empty() || b.is_empty() {
+        return true;
+    }
+    for left in a {
+        let left = normalize_scope_path(left);
+        if left.is_empty() || left == "." {
+            return true;
+        }
+        for right in b {
+            let right = normalize_scope_path(right);
+            if right.is_empty() || right == "." || left == right {
+                return true;
+            }
+            if left
+                .strip_prefix(right)
+                .is_some_and(|rest| rest.starts_with('/'))
+                || right
+                    .strip_prefix(left)
+                    .is_some_and(|rest| rest.starts_with('/'))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether task `from` depends directly or transitively on `target`.
+pub fn depends_transitively(tasks: &[TaskSpec], from: &str, target: &str) -> bool {
+    let mut stack: Vec<&str> = tasks
+        .iter()
+        .find(|t| t.id == from)
+        .map(|t| t.depends_on.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(curr) = stack.pop() {
+        if curr == target {
+            return true;
+        }
+        if visited.insert(curr)
+            && let Some(node) = tasks.iter().find(|t| t.id == curr)
+        {
+            for dep in &node.depends_on {
+                stack.push(dep.as_str());
+            }
+        }
+    }
+    false
+}
+
+/// For each task id, lists the peer task ids with which it can execute in parallel
+/// (neither depends on the other, and if both write, their scopes do not overlap).
+pub fn parallel_peers(tasks: &[TaskSpec]) -> std::collections::HashMap<String, Vec<String>> {
+    let mut map = std::collections::HashMap::new();
+    for task in tasks {
+        let mut peers = Vec::new();
+        for other in tasks {
+            if other.id == task.id {
+                continue;
+            }
+            let ordered = depends_transitively(tasks, &task.id, &other.id)
+                || depends_transitively(tasks, &other.id, &task.id);
+            let write_conflict =
+                task.writes && other.writes && scopes_overlap(&task.scope, &other.scope);
+            if !ordered && !write_conflict {
+                peers.push(other.id.clone());
+            }
+        }
+        map.insert(task.id.clone(), peers);
+    }
+    map
+}
+
+/// Builds a structured Markdown plan document with sections assigned to tasks.
+/// If the orchestrator's text already contains Markdown headings or paragraphs,
+/// preserves them and appends structured section blocks for any tasks not yet
+/// covered by a `#` heading so every task is mapped to a document section.
+pub fn render_plan_document(markdown: &str, tasks: &[TaskSpec]) -> String {
+    let peers = parallel_peers(tasks);
+    let trimmed = markdown.trim();
+    let mut doc = String::new();
+    if !trimmed.is_empty() {
+        doc.push_str(trimmed);
+        doc.push_str("\n\n");
+    } else {
+        doc.push_str("# Execution Plan\n\n");
+    }
+    let has_section_headers = trimmed.lines().any(|l| l.trim_start().starts_with('#'));
+    if !has_section_headers {
+        doc.push_str("## Plan Sections & Task Breakdown\n\n");
+    }
+    for (idx, task) in tasks.iter().enumerate() {
+        let section_title = task
+            .section
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&task.title);
+        let heading_marker = format!("### {}. {} [{}]", idx + 1, section_title, task.id);
+        if !trimmed.contains(&format!("[{}]", task.id)) {
+            doc.push_str(&heading_marker);
+            doc.push('\n');
+            doc.push_str(&format!("- **Task**: `{}` — {}\n", task.id, task.title));
+            doc.push_str(&format!("- **Kind**: `{}`", work_kind_name(task.kind)));
+            if task.writes {
+                doc.push_str(" (writes)");
+            } else {
+                doc.push_str(" (read-only)");
+            }
+            doc.push('\n');
+            doc.push_str(&format!("- **Goal**: {}\n", task.goal));
+            doc.push_str(&format!("- **Scope**: {}\n", scope_text(&task.scope)));
+            let deps = if task.depends_on.is_empty() {
+                "none (can start immediately)".to_owned()
+            } else {
+                task.depends_on.join(", ")
+            };
+            doc.push_str(&format!("- **Depends on**: {deps}\n"));
+            let par = peers
+                .get(&task.id)
+                .filter(|p| !p.is_empty())
+                .map(|p| p.join(", "))
+                .unwrap_or_else(|| "sequential".to_owned());
+            doc.push_str(&format!("- **Parallel with**: {par}\n\n"));
+        }
+    }
+    doc.trim_end().to_owned()
+}
+
+/// Predefined quality agent role in the standard agent pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PredefinedAgent {
+    pub id: &'static str,
+    pub kind: WorkKind,
+    pub title: &'static str,
+    pub focus: &'static str,
+    pub required_for_code_changes: bool,
+}
+
+/// Predefined pool of specialist and quality-gate agents ensuring that
+/// every code change leaves the codebase cleaner and meets all requirements.
+pub const PREDEFINED_AGENT_POOL: &[PredefinedAgent] = &[
+    PredefinedAgent {
+        id: "context-scout",
+        kind: WorkKind::Context,
+        title: "Context & Contracts Scout",
+        focus: "Every claim backed by files read, existing contracts and invariants identified",
+        required_for_code_changes: true,
+    },
+    PredefinedAgent {
+        id: "clean-implementer",
+        kind: WorkKind::Implementation,
+        title: "Implementation & Boy-Scout Refactoring",
+        focus: "All requirements met and touched code left cleaner and better structured than before",
+        required_for_code_changes: true,
+    },
+    PredefinedAgent {
+        id: "quality-refactoring",
+        kind: WorkKind::Refactoring,
+        title: "Code Quality & Structure Guardian",
+        focus: "Behavior preserved with evidence while simplifying touched modules and removing technical debt",
+        required_for_code_changes: false,
+    },
+    PredefinedAgent {
+        id: "static-analyzer",
+        kind: WorkKind::StaticAnalysis,
+        title: "Static Analysis & Linter Gate",
+        focus: "Zero compiler or linter warnings and strict adherence to project formatting and rules",
+        required_for_code_changes: true,
+    },
+    PredefinedAgent {
+        id: "verification-testing",
+        kind: WorkKind::Testing,
+        title: "Regression & Edge-Case Verification",
+        focus: "Real code paths and edge cases exercised by automated tests with green runs observed",
+        required_for_code_changes: true,
+    },
+    PredefinedAgent {
+        id: "integration-gate",
+        kind: WorkKind::Integration,
+        title: "End-to-End Integration & Requirements Gate",
+        focus: "Combined changes build cleanly, pass all checks, and satisfy every user requirement",
+        required_for_code_changes: true,
+    },
+];
+
+/// Kinds of required agents that check a finished change as a whole, and so
+/// can be appended after a plan's writing tasks without reshaping the plan.
+fn is_gate_kind(kind: WorkKind) -> bool {
+    matches!(
+        kind,
+        WorkKind::StaticAnalysis | WorkKind::Testing | WorkKind::Integration
+    )
+}
+
+/// Returns the required quality gates from `PREDEFINED_AGENT_POOL` that a plan
+/// modifying code (`writes == true`) lacks: no task of the gate's kind exists.
+pub fn missing_quality_agents(tasks: &[TaskSpec]) -> Vec<&'static PredefinedAgent> {
+    if !tasks.iter().any(|t| t.writes) {
+        return Vec::new();
+    }
+    PREDEFINED_AGENT_POOL
+        .iter()
+        .filter(|agent| agent.required_for_code_changes && is_gate_kind(agent.kind))
+        .filter(|agent| !tasks.iter().any(|t| t.kind == agent.kind))
+        .collect()
+}
+
+/// The plan with every missing required quality gate appended, so a plan that
+/// changes code is always statically checked, tested and checked against the
+/// user's requirements. Static analysis and testing run in parallel after all
+/// writing tasks; integration runs last, after them too.
+pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
+    let missing = missing_quality_agents(&tasks);
+    if missing.is_empty() {
+        return tasks;
+    }
+    let writers: Vec<String> = tasks
+        .iter()
+        .filter(|t| t.writes)
+        .map(|t| t.id.clone())
+        .collect();
+    let mut scope: Vec<String> = Vec::new();
+    for task in tasks.iter().filter(|t| t.writes) {
+        for path in &task.scope {
+            if !scope.contains(path) {
+                scope.push(path.clone());
+            }
+        }
+    }
+    let mut gates: Vec<String> = Vec::new();
+    // Integration is ordered last so it can depend on the other gates.
+    let mut ordered = missing;
+    ordered.sort_by_key(|agent| agent.kind == WorkKind::Integration);
+    for agent in ordered {
+        let mut id = agent.id.to_owned();
+        let mut n = 2;
+        while tasks.iter().any(|t| t.id == id) {
+            id = format!("{}-{n}", agent.id);
+            n += 1;
+        }
+        let mut depends_on = writers.clone();
+        if agent.kind == WorkKind::Integration {
+            depends_on.extend(gates.iter().cloned());
+        }
+        gates.push(id.clone());
+        tasks.push(TaskSpec {
+            id,
+            title: agent.title.to_owned(),
+            goal: format!(
+                "Required quality gate for the whole change: {}. Report every problem \
+                 found with evidence; fix only what is needed to pass the gate.",
+                agent.focus
+            ),
+            section: Some("Quality Gates".to_owned()),
+            scope: scope.clone(),
+            // Gates run builds and checks, which write; a gate that changes
+            // nothing leaves the project as it was.
+            writes: true,
+            depends_on,
+            kind: agent.kind,
+            verifier: VerifierSpec {
+                focus: agent.focus.to_owned(),
+                risks: Vec::new(),
+            },
+        });
+    }
+    tasks
+}
+
 /// A verifier's verdict. Without a readable verdict block the whole answer
 /// counts as one finding, so the worker sees what the verifier said.
 /// An approval that still lists high or medium findings contradicts itself
@@ -214,7 +516,8 @@ pub const COMMON_CHECKS: &str = "every requirement of the goal accounted for, \
      reproduced yourself, not taken from the worker's report; a \
      counterexample or a failing premise looked for, not only the expected \
      path; nothing beyond the agreed scope and no hidden change of it; \
-     earlier findings resolved on the current version, with evidence";
+     earlier findings resolved on the current version, with evidence; \
+     the touched code is left in a better, cleaner state than it was found";
 
 /// What a task's verifier must account for in its verdict, with ids: the
 /// risks its task names (`R1`…), the common checks (`V1`…) and its kind's
@@ -344,12 +647,23 @@ pub fn orchestrator_instructions() -> String {
         "analysis",
         "delivery",
     ];
+    let pool: Vec<String> = PREDEFINED_AGENT_POOL
+        .iter()
+        .map(|a| format!("`{}` ({}: {})", a.id, work_kind_name(a.kind), a.focus))
+        .collect();
     format!(
-        "Answer simple questions yourself. When the request needs work by other \
-         agents (thorough analysis of separate areas, changes, reviews), explain \
-         briefly and end your answer with a plan block:\n\
+        "Follow a two-step workflow when the user sends a task:\n\
+         1. **Interview**: When the user's request has any ambiguity, missing constraints, \
+         or architectural trade-offs, conduct a concise clarifying interview with the user \
+         first (do not emit a ```plan block during the interview). Answer simple questions \
+         directly. Once the requirements are clear (or when the request is already \
+         self-contained), proceed to Step 2.\n\
+         2. **Plan Document & Task List**: Write a structured Markdown plan document \
+         divided into clear `#` / `##` / `###` sections, and end your answer with a ```plan \
+         block mapping tasks to those sections:\n\
          ```plan\n\
-         {{\"tasks\":[{{\"id\":\"t1\",\"title\":\"short title\",\"goal\":\"what to achieve and report, and how to tell it is done\",\
+         {{\"tasks\":[{{\"id\":\"t1\",\"title\":\"short title\",\"section\":\"Section heading in the plan\",\
+         \"goal\":\"what to achieve and report, and how to tell it is done\",\
          \"scope\":[\"paths relative to the project, or absolute paths of related projects or services\"],\
          \"writes\":false,\"depends_on\":[],\"kind\":\"analysis\",\
          \"verifier\":{{\"focus\":\"what the verifier must check\",\"risks\":[\"risks specific to this task's domain\"]}}}}]}}\n\
@@ -361,20 +675,24 @@ pub fn orchestrator_instructions() -> String {
          that write (tests using temporary files, builds): a read-only agent's \
          CLI may forbid every write, and a `writes` task runs in its own copy of \
          the project; one that changes nothing leaves the project as it was. A task that needs \
-         another's result depends on it; tasks that change the same files or \
-         contract are ordered. An unknown that matters is established by an \
-         earlier task, never assumed.\n\n\
+         another's result depends on it; independent tasks with non-overlapping scopes \
+         run in parallel (`depends_on: []` or shared earlier dependencies); tasks that \
+         change the same files or contract must be ordered via `depends_on`. An unknown \
+         that matters is established by an earlier task, never assumed.\n\n\
+         Always include key quality agents from the predefined pool ({}) when modifying code \
+         so that every requirement is verified and touched code is always left in a cleaner, \
+         better state than it was found.\n\n\
          Shape the team to the request; small requests get few, short tasks:\n\
          - change to existing code: context, then implementation per module \
-         (with its tests), then integration that checks the whole change; add \
-         architecture, dependencies, security or performance tasks when the \
-         change carries those risks;\n\
+         (with its tests and boy-scout cleanup), then static_analysis/testing/integration \
+         that checks the whole change; add architecture, dependencies, security or \
+         performance tasks when the change carries those risks;\n\
          - refactoring: context and characterization tests first, then the \
          refactoring, then integration;\n\
          - security fix: threat and reproduction, fix, adversarial tests;\n\
          - new project: requirements, architecture, a vertical slice, then \
          increments;\n\
-         - research: independent areas researched separately, then a synthesis;\n\
+         - research: independent areas researched in parallel, then a synthesis;\n\
          - document: outline, research if needed, writing;\n\
          - analysis: method, the analysis, an independent recalculation.\n\n\
          An independent plan verifier checks your plan before the user sees it \
@@ -384,7 +702,8 @@ pub fn orchestrator_instructions() -> String {
          missing.\n\n\
          While a plan runs you may pass something on to a task's worker \
          (for example what the user just told you): {MESSAGE_FORMAT}",
-        kinds.join(", ")
+        kinds.join(", "),
+        pool.join(", ")
     )
 }
 
@@ -734,8 +1053,9 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      state is assumed that the system does not guarantee; no unknown that \
      matters is assumed instead of being established first; each goal is \
      checkable; scope names the places that matter, including related projects \
-     or services; tasks that change files are marked `writes`; each verifier's \
-     focus and risks fit its own task. ";
+     or services; tasks that change files are marked `writes`; key quality and \
+     verification agents from the predefined pool are included so touched code \
+     is left in a better state; each verifier's focus and risks fit its own task. ";
 
 fn plan_text(plan: &[TaskSpec]) -> String {
     serde_json::to_string_pretty(plan).unwrap_or_default()
@@ -781,7 +1101,8 @@ pub fn audit_followup(request: &str, results: &str) -> String {
 
 const AUDIT_CHECKS: &str = "List every obligation in the request, each \
      qualifier included, and decide for each whether the results and the files \
-     show it done. A missing, partial or unverified obligation is a high \
+     show it done and whether touched code was left in a cleaner, better state \
+     than before. A missing, partial or unverified obligation is a high \
      finding. ";
 
 pub const VERDICT_FORMAT: &str = "End your answer with a verdict block:\n\
@@ -858,6 +1179,57 @@ mod tests {
         assert_eq!(plan.len(), 2);
         assert_eq!(plan[1].depends_on, ["t1"]);
         assert!(!plan[0].writes);
+    }
+
+    #[test]
+    fn parallel_peers_detects_independent_non_conflicting_tasks() {
+        let answer = "```plan\n{\"tasks\":[\
+            {\"id\":\"t1\",\"title\":\"Context\",\"section\":\"1. Context\",\"goal\":\"g\",\"scope\":[\"src/\"],\"writes\":false,\"kind\":\"context\",\"verifier\":{\"focus\":\"f\"}},\
+            {\"id\":\"t2\",\"title\":\"Mod A\",\"section\":\"2. Module A\",\"goal\":\"g\",\"scope\":[\"src/a.rs\"],\"writes\":true,\"depends_on\":[\"t1\"],\"kind\":\"implementation\",\"verifier\":{\"focus\":\"f\"}},\
+            {\"id\":\"t3\",\"title\":\"Mod B\",\"section\":\"3. Module B\",\"goal\":\"g\",\"scope\":[\"src/b.rs\"],\"writes\":true,\"depends_on\":[\"t1\"],\"kind\":\"implementation\",\"verifier\":{\"focus\":\"f\"}},\
+            {\"id\":\"t4\",\"title\":\"Mod A2\",\"section\":\"2. Module A\",\"goal\":\"g\",\"scope\":[\"src/a.rs\"],\"writes\":true,\"depends_on\":[\"t1\"],\"kind\":\"refactoring\",\"verifier\":{\"focus\":\"f\"}}\
+        ]}\n```";
+        let (_, plan) = parse_plan(answer);
+        let tasks = plan.unwrap().unwrap();
+        let peers = parallel_peers(&tasks);
+        assert!(peers["t1"].is_empty());
+        assert_eq!(peers["t2"], vec!["t3"]);
+        assert_eq!(peers["t3"], vec!["t2", "t4"]);
+        assert_eq!(peers["t4"], vec!["t3"]);
+        let doc = render_plan_document("# Plan Overview", &tasks);
+        assert!(doc.contains("[t2]"));
+        assert!(doc.contains("Parallel with"));
+    }
+
+    #[test]
+    fn plans_that_write_get_the_required_quality_gates() {
+        let answer = "```plan\n{\"tasks\":[\
+            {\"id\":\"t1\",\"title\":\"A\",\"goal\":\"g\",\"scope\":[\"src/a.rs\"],\"writes\":true,\"kind\":\"implementation\",\"verifier\":{\"focus\":\"f\"}},\
+            {\"id\":\"t2\",\"title\":\"T\",\"goal\":\"g\",\"scope\":[\"tests/\"],\"writes\":true,\"depends_on\":[\"t1\"],\"kind\":\"testing\",\"verifier\":{\"focus\":\"f\"}}\
+        ]}\n```";
+        let tasks = parse_plan(answer).1.unwrap().unwrap();
+        let ids: Vec<_> = missing_quality_agents(&tasks)
+            .iter()
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(ids, vec!["static-analyzer", "integration-gate"]);
+        let full = with_required_agents(tasks);
+        assert_eq!(full.len(), 4);
+        validate(&full).unwrap();
+        let lint = &full[2];
+        assert_eq!(lint.kind, WorkKind::StaticAnalysis);
+        assert_eq!(lint.depends_on, vec!["t1", "t2"]);
+        assert_eq!(lint.scope, vec!["src/a.rs", "tests/"]);
+        let gate = &full[3];
+        assert_eq!(gate.kind, WorkKind::Integration);
+        assert_eq!(gate.depends_on, vec!["t1", "t2", "static-analyzer"]);
+        assert!(missing_quality_agents(&full).is_empty());
+
+        // A read-only plan needs no gates.
+        let read_only = "```plan\n{\"tasks\":[{\"id\":\"t1\",\"title\":\"a\",\"goal\":\"b\",\
+            \"kind\":\"analysis\",\"verifier\":{\"focus\":\"c\"}}]}\n```";
+        let tasks = parse_plan(read_only).1.unwrap().unwrap();
+        assert_eq!(with_required_agents(tasks).len(), 1);
     }
 
     #[test]

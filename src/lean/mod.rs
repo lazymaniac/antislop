@@ -6,7 +6,6 @@ pub mod cli;
 pub mod daemon;
 pub mod diff;
 pub mod eval;
-pub mod export;
 pub mod git;
 pub mod store;
 pub mod tasks;
@@ -22,7 +21,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use store::{Comment, Conversation, Mail, Message, Store, Task, TurnStatus};
+use store::{
+    Comment, Conversation, Mail, Message, PlanHistory, PlansPage, Store, Task, TurnStatus,
+};
 use tasks::{TaskSpec, Verdict, status};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -76,6 +77,8 @@ pub fn task_scope_hash(task: &Task) -> String {
 }
 
 const ORCHESTRATOR: &str = "orchestrator";
+/// Plan feedback has an independent native CLI session.
+pub const COMMENT_ORCHESTRATOR: &str = "comment-orchestrator";
 const RUNTIME: &str = "runtime";
 /// Author of a code review's findings, and how its message starts.
 const CODE_REVIEW: &str = "code-review";
@@ -115,6 +118,7 @@ pub struct Core {
 /// Who runs a turn, where, and with what access.
 struct TurnSetup<'a> {
     conversation: &'a str,
+    plan_id: Option<String>,
     role: String,
     profile: Result<ResolvedProfile>,
     cwd: PathBuf,
@@ -281,6 +285,7 @@ impl Core {
                 self.store.append_event(
                     conversation,
                     None,
+                    plan.first().map(|t| t.plan_id.as_str()),
                     "mail_rejected",
                     &json!({
                         "sender": "user",
@@ -392,6 +397,7 @@ impl Core {
         // Recipient not recognized
         self.store.append_event(
             conversation,
+            None,
             None,
             "mail_rejected",
             &json!({
@@ -512,17 +518,35 @@ impl Core {
         target: &str,
         text: &str,
     ) -> Result<Comment> {
+        self.comment_scoped(conversation, None, target, text)
+    }
+
+    /// Comments on an element, scoped optionally to a specific plan (active or historical).
+    pub fn comment_scoped(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: Option<&str>,
+        target: &str,
+        text: &str,
+    ) -> Result<Comment> {
         self.store.conversation(conversation)?;
         let text = text.trim();
         require(!text.is_empty(), "the comment is empty")?;
         require(!target.trim().is_empty(), "the comment has no element")?;
-        let plan = self.store.latest_plan(conversation)?;
+        let plan = match plan_id {
+            Some(pid) => self.store.plan(pid)?,
+            None => self.store.latest_plan(conversation)?,
+        };
         let label = comment_label(target, &plan);
+        let resolved_plan_id = match plan_id {
+            Some(pid) => Some(pid.to_string()),
+            None => plan.first().map(|task| task.plan_id.clone()),
+        };
         let comment = self.store.add_comment(
             conversation,
             &Comment {
                 id: 0,
-                plan_id: plan.first().map(|task| task.plan_id.clone()),
+                plan_id: resolved_plan_id,
                 target: target.into(),
                 label: label.clone(),
                 text: text.into(),
@@ -535,13 +559,32 @@ impl Core {
         Ok(comment)
     }
 
+    /// Paginated read of all stored plans for a conversation.
+    pub fn plans(&self, conversation: &str, offset: usize, limit: usize) -> Result<PlansPage> {
+        self.store.plans_page(conversation, offset, limit)
+    }
+
+    /// Read detailed history of a single plan.
+    pub fn plan_history(&self, conversation: &str, plan_id: &str) -> Result<PlanHistory> {
+        self.store.plan_history(conversation, plan_id)
+    }
+
     /// Resolves, reopens or deletes a comment; only the user does this.
-    pub fn set_comment(&self, conversation: &str, id: u64, status: &str) -> Result<Comment> {
+    pub fn set_comment(
+        self: &Arc<Self>,
+        conversation: &str,
+        id: u64,
+        status: &str,
+    ) -> Result<Comment> {
         require(
             matches!(status, "open" | "resolved" | "deleted"),
             "a comment is open, resolved or deleted",
         )?;
-        self.store.set_comment_status(conversation, id, status)
+        let comment = self.store.set_comment_status(conversation, id, status)?;
+        if status == "open" {
+            self.wake(conversation);
+        }
+        Ok(comment)
     }
 
     /// Stops the orchestrator's turn and any running plan; queued messages stay.
@@ -612,12 +655,12 @@ impl Core {
             || !self.reviews.lock().expect("reviews mutex").is_empty()
     }
 
-    /// One task of a plan, by the id the orchestrator gave it.
+    /// One task of a plan, by the id the orchestrator gave it or its UUID.
     pub fn task(&self, plan: &str, id: &str) -> Result<Task> {
         self.store
             .plan(plan)?
             .into_iter()
-            .find(|task| task.spec["id"] == id)
+            .find(|task| task.id == id || task.spec["id"] == id)
             .ok_or_else(|| crate::Error::Invalid(format!("no task {id} in plan {plan}")))
     }
 
@@ -709,15 +752,18 @@ impl Core {
         self.store.append_event(
             conversation,
             None,
+            Some(plan),
             "code_review",
             &json!({"id": id, "status": "running"}),
         )?;
         let core = self.clone();
         let conversation = conversation.to_owned();
+        let plan_id = plan.to_owned();
         std::thread::spawn(move || {
             let role = format!("code-review:{}", task.id);
             let setup = TurnSetup {
                 conversation: &conversation,
+                plan_id: Some(plan_id.clone()),
                 role: role.clone(),
                 profile: core.config.resolve(spec.kind, RoleKind::Verifier),
                 cwd: dir.clone(),
@@ -748,9 +794,13 @@ impl Core {
             let mut payload = review_json(&review);
             payload["id"] = json!(spec.id);
             payload["status"] = json!("done");
-            let _ = core
-                .store
-                .append_event(&conversation, None, "code_review", &payload);
+            let _ = core.store.append_event(
+                &conversation,
+                None,
+                Some(&plan_id),
+                "code_review",
+                &payload,
+            );
             if let Ok(verdict) = &review {
                 let text = format!(
                     "{CODE_REVIEW_PREFIX} of task {} \"{}\", requested by the user]\n{}",
@@ -787,12 +837,86 @@ impl Core {
         self.review_change(conversation, plan, id)
     }
 
+    /// Open comments targeting the plan document or whole plan `plan_id`.
+    pub fn open_plan_comments(&self, conversation: &str, plan_id: &str) -> Result<Vec<Comment>> {
+        let prefix = format!("plan:{plan_id}:");
+        let exact = format!("plan:{plan_id}");
+        Ok(self
+            .store
+            .comments(conversation, "open")?
+            .into_iter()
+            .filter(|c| {
+                c.plan_id.as_deref() == Some(plan_id)
+                    && (c.target == exact || c.target.starts_with(&prefix) || c.target == "plan")
+            })
+            .collect())
+    }
+
     /// Starts the proposed plan `plan_id`: exactly the one the user saw, even
-    /// if the orchestrator has proposed another since.
+    /// if the orchestrator has proposed another since. Requires all open plan
+    /// comments on `plan_id` to be resolved first.
     pub fn accept_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<Vec<Task>> {
+        let open = self.open_plan_comments(conversation, plan_id)?;
+        require(
+            open.is_empty(),
+            "resolve all open plan comments before accepting the plan",
+        )?;
         self.start_plan(conversation, plan_id, |store| {
             store.queue_plan(conversation, plan_id).map(|_| ())
         })
+    }
+
+    /// Rejects the proposed plan `plan_id` and asks the orchestrator to revise it.
+    pub fn reject_plan(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: &str,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        self.store.conversation(conversation)?;
+        let changed = self
+            .store
+            .set_plan_status(plan_id, status::PROPOSED, status::CANCELLED)?;
+        require(changed > 0, "this plan is not waiting for approval")?;
+        let tasks = self.store.plan(plan_id)?;
+        for task in &tasks {
+            self.announce_task(conversation, task, Some("plan rejected by user"));
+        }
+        let reason_text = reason
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .unwrap_or("Please revise the plan or clarify requirements.");
+        self.store.append_event(
+            conversation,
+            None,
+            Some(plan_id),
+            "plan_rejected",
+            &json!({
+                "plan": plan_id,
+                "reason": reason_text,
+            }),
+        )?;
+        self.store.add_message(
+            conversation,
+            "user",
+            &format!("[rejected plan {plan_id}] {reason_text}"),
+        )?;
+        self.wake(conversation);
+        Ok(())
+    }
+
+    pub fn reject_plan_scoped(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: &str,
+        reason: Option<&str>,
+        scope_hash: Option<&str>,
+    ) -> Result<()> {
+        if let Some(expected) = scope_hash {
+            let current = self.plan_scope_hash(conversation, plan_id)?;
+            require(expected == current, "stale_scope")?;
+        }
+        self.reject_plan(conversation, plan_id, reason)
     }
 
     /// Runs again every task of `plan_id` that ended without approval
@@ -905,6 +1029,7 @@ impl Core {
         let _ = self.store.append_event(
             conversation,
             None,
+            None,
             "notice",
             &json!({"text": format!(
                 "uncommitted changes in {}{}: writers start from the last commit and do not see them; \
@@ -955,24 +1080,30 @@ impl Core {
         }
     }
 
-    /// The newest message for the orchestrator after its last turn, if any.
+    /// The next message boundary for either orchestration session.
     fn unanswered(&self, conversation: &str) -> Result<Option<u64>> {
         // A failed turn counts as handled (the next message asks again); one
         // cut off by a restart does not.
-        let after = match self.store.last_turn(conversation, ORCHESTRATOR)? {
+        let after = match self.store.last_orchestration_turn(conversation)? {
             Some(turn) if turn.status == TurnStatus::Interrupted => {
-                self.store.last_answered(conversation, ORCHESTRATOR)?
+                self.store.last_orchestration_answered(conversation)?
             }
             Some(turn) => turn.upto_message,
             None => 0,
         };
-        Ok(self
+        let pending: Vec<_> = self
             .store
             .messages_after(conversation, after)?
             .into_iter()
             .filter(|message| message.author != ORCHESTRATOR)
-            .map(|message| message.seq)
-            .next_back())
+            .collect();
+        // Give each newly queued comment its own turn, including messages
+        // preceding it. Comments arriving during a turn stay queued.
+        Ok(pending
+            .iter()
+            .find(|message| message.text.starts_with(COMMENT_PREFIX))
+            .or_else(|| pending.last())
+            .map(|message| message.seq))
     }
 
     fn orchestrator_turn(
@@ -984,16 +1115,25 @@ impl Core {
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         // A failed turn may never have reached the agent: repeat everything
         // asked since the last answer.
-        let answered = self.store.last_answered(conversation, ORCHESTRATOR)?;
+        let answered = self.store.last_orchestration_answered(conversation)?;
         let asked: Vec<Message> = self
             .store
             .messages_after(conversation, answered)?
             .into_iter()
             .filter(|message| message.author != ORCHESTRATOR && message.seq <= upto)
             .collect();
+        let is_comment = asked
+            .iter()
+            .any(|message| message.text.starts_with(COMMENT_PREFIX));
         let setup = TurnSetup {
             conversation,
-            role: ORCHESTRATOR.into(),
+            plan_id: None,
+            role: if is_comment {
+                COMMENT_ORCHESTRATOR
+            } else {
+                ORCHESTRATOR
+            }
+            .into(),
             profile: self
                 .config
                 .resolve(WorkKind::Orchestration, RoleKind::Orchestrator),
@@ -1010,8 +1150,61 @@ impl Core {
             .into_iter()
             .filter(|comment| comment.message <= answered)
             .collect();
+        let mut comment_context = String::new();
+        if !is_comment && self.store.last_answered(conversation, ORCHESTRATOR)? < answered {
+            comment_context.push_str("\n\nThe comment agent handled feedback since your previous turn. Continue from its current plan and answer:\n");
+            if let Some(reply) = self
+                .store
+                .messages_by(conversation, ORCHESTRATOR, 0)?
+                .last()
+            {
+                comment_context.push_str(&reply.text);
+                comment_context.push('\n');
+            }
+            if let Some(task) = self.store.latest_plan(conversation)?.first()
+                && let Some(document) = self.store.plan_document(conversation, &task.plan_id)?
+            {
+                comment_context.push_str(&document);
+                comment_context.push('\n');
+            }
+        }
+        if is_comment {
+            comment_context.push_str(
+                "\n\nAddress each new user comment explicitly by its #id now. For plan feedback, \
+                 produce a revised complete plan in the required plan format when changes are \
+                 needed; otherwise explain your decision or ask a concrete question. Do not \
+                 merely acknowledge or wait for plan acceptance. Only comments included in \
+                 this turn can be addressed.\n",
+            );
+            let comments = self.store.comments(conversation, "open")?;
+            let mut plans: std::collections::BTreeSet<_> = comments
+                .iter()
+                .filter(|comment| comment.message <= upto)
+                .filter_map(|comment| comment.plan_id.as_deref())
+                .collect();
+            let latest = self.store.latest_plan(conversation)?;
+            if let Some(task) = latest.first() {
+                plans.insert(&task.plan_id);
+                comment_context.push_str(&format!("\nCurrent plan: {}. Preserve changes from this version when revising historical feedback.\n", task.plan_id));
+            }
+            if let Some(request) = self
+                .store
+                .messages_by(conversation, "user", 0)?
+                .iter()
+                .find(|message| !message.text.starts_with(COMMENT_PREFIX))
+            {
+                comment_context.push_str(&format!("\nOriginal user request:\n{}\n", request.text));
+            }
+            for plan in plans {
+                if let Some(document) = self.store.plan_document(conversation, plan)? {
+                    comment_context.push_str(&format!("\nReferenced plan {plan}:\n{document}\n"));
+                }
+            }
+        }
         let Some(answer) = self.turn(setup, cancel, |first| {
-            orchestrator_prompt(&project, first, &asked, &open)
+            let mut prompt = orchestrator_prompt(&project, first, &asked, &open);
+            prompt.push_str(&comment_context);
+            prompt
         })?
         else {
             return Ok(());
@@ -1026,10 +1219,18 @@ impl Core {
         let (text, plan) = tasks::parse_plan(&answer);
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
         match plan {
-            Some(Ok(specs)) => self.propose(conversation, &project, &specs, cancel)?,
+            Some(Ok(specs)) => {
+                let specs = if self.config.policy.required_gates {
+                    tasks::with_required_agents(specs)
+                } else {
+                    specs
+                };
+                self.propose(conversation, &project, &text, &specs, cancel)?
+            }
             Some(Err(error)) => {
                 self.store.append_event(
                     conversation,
+                    None,
                     None,
                     "plan_invalid",
                     &json!({"error": error.to_string()}),
@@ -1048,6 +1249,7 @@ impl Core {
         self: &Arc<Self>,
         conversation: &str,
         project: &Path,
+        text: &str,
         specs: &[TaskSpec],
         cancel: &AtomicBool,
     ) -> Result<()> {
@@ -1057,10 +1259,14 @@ impl Core {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let tasks = self.store.add_plan(conversation, &values)?;
         let plan_id = tasks[0].plan_id.clone();
+        // Capture the answered boundary before the verifier runs: comments
+        // added during either turn have not been incorporated in this plan.
+        let answered = self.store.last_orchestration_answered(conversation)?;
         let project_text = project.to_string_lossy().into_owned();
         let review = self.review(
             conversation,
             PLAN_VERIFIER,
+            Some(&plan_id),
             project,
             cancel,
             |first, request| {
@@ -1086,6 +1292,7 @@ impl Core {
             self.store.append_event(
                 conversation,
                 None,
+                Some(&plan_id),
                 "plan_review",
                 &json!({"plan": plan_id, "approved": false, "findings": verdict.findings}),
             )?;
@@ -1098,6 +1305,9 @@ impl Core {
             return Ok(());
         }
         let checked = review.as_ref().is_ok_and(|verdict| verdict.approved);
+        if checked {
+            self.store.resolve_plan_comments(conversation, answered)?;
+        }
         let autonomous = self.autonomous(conversation)?;
         let waiting = if !autonomous {
             None
@@ -1111,12 +1321,17 @@ impl Core {
             None
         };
         let scope_hash = plan_scope_hash(&tasks);
+        let document = tasks::render_plan_document(text, specs);
+        let parallel = tasks::parallel_peers(specs);
         self.store.append_event(
             conversation,
             None,
+            Some(&plan_id),
             "plan_proposed",
             &json!({
                 "plan": plan_id,
+                "document": document,
+                "parallel": parallel,
                 "tasks": tasks.iter().map(|task| task.spec.clone()).collect::<Vec<_>>(),
                 "review": review_json(&review),
                 "automatic": autonomous && waiting.is_none(),
@@ -1137,6 +1352,7 @@ impl Core {
         &self,
         conversation: &str,
         role: &str,
+        plan_id: Option<&str>,
         project: &Path,
         cancel: &AtomicBool,
         prompt: impl FnOnce(bool, &str) -> String,
@@ -1153,6 +1369,7 @@ impl Core {
         };
         let setup = TurnSetup {
             conversation,
+            plan_id: plan_id.map(str::to_string),
             role: role.into(),
             profile: self
                 .config
@@ -1185,6 +1402,7 @@ impl Core {
     ) -> Result<Option<String>> {
         let TurnSetup {
             conversation,
+            plan_id,
             role,
             profile,
             cwd,
@@ -1192,7 +1410,7 @@ impl Core {
             access,
             upto_message,
         } = setup;
-        if role != ORCHESTRATOR && role != PLAN_VERIFIER {
+        if role != ORCHESTRATOR && role != COMMENT_ORCHESTRATOR && role != PLAN_VERIFIER {
             // Cancelling a paused conversation ends what waits, too.
             while !cancel.load(Ordering::SeqCst) && self.store.paused(conversation)? {
                 std::thread::sleep(std::time::Duration::from_millis(200));
@@ -1203,13 +1421,32 @@ impl Core {
             .map_or("unconfigured", |profile| agent::name(profile.provider));
         let resume = self.store.last_session(conversation, &role, provider)?;
         let inbox = self.store.pending_mail(conversation, &role)?;
-        let turn = self
-            .store
-            .start_turn(conversation, &role, provider, upto_message)?;
+        let comments: Vec<u64> = if role == ORCHESTRATOR || role == COMMENT_ORCHESTRATOR {
+            let answered = self.store.last_orchestration_answered(conversation)?;
+            self.store
+                .comments(conversation, "open")?
+                .into_iter()
+                .filter(|comment| comment.message > answered && comment.message <= upto_message)
+                .map(|comment| comment.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let turn = self.store.start_turn(
+            conversation,
+            &role,
+            provider,
+            upto_message,
+            plan_id.as_deref(),
+        )?;
         let announce = |kind: &str, payload: serde_json::Value| {
-            let _ = self
-                .store
-                .append_event(conversation, Some(&turn.id), kind, &payload);
+            let _ = self.store.append_event(
+                conversation,
+                Some(&turn.id),
+                turn.plan_id.as_deref(),
+                kind,
+                &payload,
+            );
         };
         // What ran, for the history and its export (design §15).
         announce(
@@ -1219,12 +1456,14 @@ impl Core {
                 "provider": provider,
                 "model": profile.as_ref().ok().and_then(|profile| profile.model.clone()),
                 "effort": profile.as_ref().ok().and_then(|profile| profile.native_effort.clone()),
+                "comments": comments,
             }),
         );
         let outcome = profile.and_then(|profile| {
             let spec = agent::Spec {
                 provider: profile.provider,
                 binary: profile.binary,
+                args: profile.args,
                 model: profile.model,
                 effort: profile.native_effort,
                 cwd,
@@ -1248,7 +1487,6 @@ impl Core {
                     agent::Event::Text { .. } => return,
                     agent::Event::Process { pid } => {
                         let _ = self.store.set_turn_pid(&turn.id, *pid);
-                        return;
                     }
                     _ => {}
                 }
@@ -1259,6 +1497,10 @@ impl Core {
         });
         match outcome {
             Ok(outcome) => {
+                let preview: String = outcome.text.chars().take(240).collect();
+                if !preview.trim().is_empty() {
+                    announce("agent", json!({"type": "text", "delta": preview}));
+                }
                 self.store.finish_turn(&turn.id, TurnStatus::Done, None)?;
                 let delivered: Vec<u64> = inbox.iter().map(|mail| mail.id).collect();
                 self.store
@@ -1289,6 +1531,7 @@ impl Core {
         let _ = self.store.append_event(
             conversation,
             None,
+            Some(&task.plan_id),
             "task",
             &json!({"id": task.spec["id"], "task": task.id, "title": task.spec["title"],
                     "status": task.status, "round": task.round, "reason": reason,
@@ -1314,74 +1557,103 @@ impl Core {
         Ok(())
     }
 
-    /// Runs every task whose dependencies are approved, in waves, until none
-    /// can run. Tasks behind a task that was not approved are skipped.
+    /// Dynamically schedules and runs every task whose dependencies are approved
+    /// and whose write scope does not conflict with currently running writers.
+    /// Tasks start immediately as soon as their dependencies finish rather than
+    /// waiting for unrelated slow tasks in the same wave.
     fn run_plan(&self, conversation: &str, plan_id: &str, cancel: &AtomicBool) {
-        loop {
-            let Ok(mut tasks) = self.store.plan(plan_id) else {
-                return;
-            };
-            let state: HashMap<String, String> = tasks
-                .iter()
-                .map(|task| {
-                    (
-                        task.spec["id"].as_str().unwrap_or_default().to_owned(),
-                        task.status.clone(),
-                    )
-                })
-                .collect();
-            let mut ready = vec![];
-            let mut settled = false;
-            for task in &mut tasks {
-                if task.status != status::QUEUED {
-                    continue;
+        std::thread::scope(|scope| {
+            let (done_tx, done_rx) = std::sync::mpsc::channel::<String>();
+            let mut in_flight_ids: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut in_flight_writers: HashMap<String, Vec<String>> = HashMap::new();
+
+            loop {
+                let Ok(mut tasks) = self.store.plan(plan_id) else {
+                    break;
+                };
+                let state: HashMap<String, String> = tasks
+                    .iter()
+                    .map(|task| {
+                        (
+                            task.spec["id"].as_str().unwrap_or_default().to_owned(),
+                            task.status.clone(),
+                        )
+                    })
+                    .collect();
+                let mut settled = false;
+                for task in &mut tasks {
+                    let spec_id = task.spec["id"].as_str().unwrap_or_default().to_owned();
+                    if task.status != status::QUEUED || in_flight_ids.contains(&spec_id) {
+                        continue;
+                    }
+                    let depends: Vec<String> =
+                        serde_json::from_value(task.spec["depends_on"].clone()).unwrap_or_default();
+                    let blocked = cancel.load(Ordering::SeqCst)
+                        || depends.iter().any(|dependency| {
+                            state.get(dependency).is_some_and(|status| {
+                                status::finished(status) && status != status::APPROVED
+                            })
+                        });
+                    if blocked {
+                        let next = if cancel.load(Ordering::SeqCst) {
+                            status::CANCELLED
+                        } else {
+                            status::SKIPPED
+                        };
+                        let _ = self.set_status(conversation, task, next);
+                        settled = true;
+                    } else if depends.iter().all(|dependency| {
+                        state.get(dependency).map(String::as_str) == Some(status::APPROVED)
+                    }) {
+                        let writes = task.spec["writes"].as_bool().unwrap_or(false);
+                        let task_scope: Vec<String> =
+                            serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
+                        let write_conflict = writes
+                            && in_flight_writers.values().any(|active_scope| {
+                                tasks::scopes_overlap(&task_scope, active_scope)
+                            });
+                        if !write_conflict {
+                            in_flight_ids.insert(spec_id.clone());
+                            if writes {
+                                in_flight_writers.insert(spec_id.clone(), task_scope);
+                            }
+                            let mut task_clone = task.clone();
+                            let tx = done_tx.clone();
+                            scope.spawn(move || {
+                                if let Err(error) =
+                                    self.run_task(conversation, &mut task_clone, cancel)
+                                {
+                                    task_clone.report = Some(error.to_string());
+                                    let _ = self.stop(
+                                        conversation,
+                                        &mut task_clone,
+                                        status::FAILED,
+                                        Some(&error.to_string()),
+                                    );
+                                }
+                                let _ = tx.send(spec_id);
+                            });
+                        }
+                    }
                 }
-                let depends: Vec<String> =
-                    serde_json::from_value(task.spec["depends_on"].clone()).unwrap_or_default();
-                let blocked = cancel.load(Ordering::SeqCst)
-                    || depends.iter().any(|dependency| {
-                        state.get(dependency).is_some_and(|status| {
-                            status::finished(status) && status != status::APPROVED
-                        })
-                    });
-                if blocked {
-                    let next = if cancel.load(Ordering::SeqCst) {
-                        status::CANCELLED
-                    } else {
-                        status::SKIPPED
-                    };
-                    let _ = self.set_status(conversation, task, next);
-                    settled = true;
-                } else if depends.iter().all(|dependency| {
-                    state.get(dependency).map(String::as_str) == Some(status::APPROVED)
-                }) {
-                    ready.push(task.clone());
-                }
-            }
-            if ready.is_empty() {
-                // A skipped task can make its own dependants skippable.
                 if settled {
                     continue;
                 }
-                return;
-            }
-            std::thread::scope(|scope| {
-                for task in ready {
-                    scope.spawn(move || {
-                        let mut task = task;
-                        if let Err(error) = self.run_task(conversation, &mut task, cancel) {
-                            task.report = Some(error.to_string());
-                            let _ = self.stop(
-                                conversation,
-                                &mut task,
-                                status::FAILED,
-                                Some(&error.to_string()),
-                            );
-                        }
-                    });
+                if in_flight_ids.is_empty() {
+                    break;
                 }
-            });
-        }
+                let Ok(finished_id) = done_rx.recv() else {
+                    break;
+                };
+                in_flight_ids.remove(&finished_id);
+                in_flight_writers.remove(&finished_id);
+                while let Ok(more_id) = done_rx.try_recv() {
+                    in_flight_ids.remove(&more_id);
+                    in_flight_writers.remove(&more_id);
+                }
+            }
+        });
     }
 
     /// Worker and verifier take turns until the verifier approves or the
@@ -1511,6 +1783,7 @@ impl Core {
             self.set_status(conversation, task, status::WORKING)?;
             let worker_setup = || TurnSetup {
                 conversation,
+                plan_id: Some(task.plan_id.clone()),
                 role: worker.clone(),
                 profile: self.config.resolve(spec.kind, RoleKind::Executor),
                 cwd: workdir.clone(),
@@ -1575,12 +1848,13 @@ impl Core {
                     if !touched.is_empty() {
                         let text = format!(
                             "the worker changed files you were editing: {}. Your version is kept: \
-                             `git checkout {base} -- <file>` restores it",
+                              `git checkout {base} -- <file>` restores it",
                             touched.join(", ")
                         );
                         let _ = self.store.append_event(
                             conversation,
                             None,
+                            Some(&task.plan_id),
                             "integration",
                             &json!({"id": spec.id, "title": spec.title,
                                     "status": status::NEEDS_USER, "detail": text}),
@@ -1599,6 +1873,7 @@ impl Core {
             self.set_status(conversation, task, status::VERIFYING)?;
             let setup = TurnSetup {
                 conversation,
+                plan_id: Some(task.plan_id.clone()),
                 role: verifier.clone(),
                 profile: self.config.resolve(spec.kind, RoleKind::Verifier),
                 cwd: workdir.clone(),
@@ -1631,6 +1906,7 @@ impl Core {
                 let prompt = tasks::coverage_followup(&missing);
                 let setup = TurnSetup {
                     conversation,
+                    plan_id: Some(task.plan_id.clone()),
                     role: verifier.clone(),
                     profile: self.config.resolve(spec.kind, RoleKind::Verifier),
                     cwd: workdir.clone(),
@@ -1798,6 +2074,7 @@ impl Core {
             self.store.append_event(
                 conversation,
                 None,
+                plan_id,
                 "mail_rejected",
                 &json!({"sender": sender, "recipient": message.to, "text": message.text,
                         "reason": "no such recipient in the current plan"}),
@@ -1910,6 +2187,7 @@ impl Core {
         let _ = self.store.append_event(
             conversation,
             None,
+            Some(&task.plan_id),
             "integration",
             &json!({"id": spec.id, "title": spec.title, "status": status, "detail": text}),
         );
@@ -1982,6 +2260,7 @@ impl Core {
         let _ = self.store.append_event(
             conversation,
             None,
+            Some(&task.plan_id),
             "integration",
             &json!({"id": spec.id, "title": spec.title, "status": status::APPROVED, "detail": text}),
         );
@@ -2064,18 +2343,24 @@ impl Core {
         if !cancel.load(Ordering::SeqCst) {
             let project = PathBuf::from(self.store.conversation(conversation)?.project);
             let project_text = project.to_string_lossy().into_owned();
-            let audit =
-                self.review(conversation, AUDITOR, &project, cancel, |first, request| {
+            let audit = self.review(
+                conversation,
+                AUDITOR,
+                Some(plan_id),
+                &project,
+                cancel,
+                |first, request| {
                     if first {
                         tasks::audit_prompt(&project_text, request, &results)
                     } else {
                         tasks::audit_followup(request, &results)
                     }
-                })?;
+                },
+            )?;
             let mut payload = review_json(&audit);
             payload["plan"] = json!(plan_id);
             self.store
-                .append_event(conversation, None, "audit", &payload)?;
+                .append_event(conversation, None, Some(plan_id), "audit", &payload)?;
             text.push_str(&match &audit {
                 Ok(verdict) if verdict.approved => {
                     "\n## Independent audit\nThe request is fully delivered.\n".to_owned()
@@ -2112,16 +2397,20 @@ fn branch(task: &Task) -> String {
 pub fn comment_label(target: &str, plan: &[Task]) -> String {
     let task = |id: &str| {
         plan.iter()
-            .find(|task| task.spec["id"] == id)
+            .find(|task| task.id == id || task.spec["id"] == id)
             .map(|task| {
                 format!(
-                    "task {id} \"{}\"",
+                    "task {} \"{}\"",
+                    task.spec["id"].as_str().unwrap_or(id),
                     task.spec["title"].as_str().unwrap_or_default()
                 )
             })
             .unwrap_or_else(|| format!("task {id}"))
     };
     if let Some(rest) = target.strip_prefix("plan:") {
+        if let Some((plan_id, line)) = rest.split_once(":line:") {
+            return format!("line {line} of the plan {plan_id}");
+        }
         return format!("the plan {rest}");
     }
     if let Some(rest) = target.strip_prefix("task:") {

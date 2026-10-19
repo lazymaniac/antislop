@@ -5,8 +5,6 @@ antislop — a team of CLI agents working on your project
 
 usage:
   antislop [chat] [options] [message]
-  antislop export [options]   the conversation's history as JSON lines,
-                              secrets redacted, on stdout
   antislop eval SUITE --cli CLI [--model M] [--effort E] [--arm A] [--jobs N]
                               calibrate verifiers on seeded cases (evals/)
                               against a plain one-agent review
@@ -15,11 +13,11 @@ With no message in a terminal it opens the TUI; with a message, or when
 input is not a terminal, it prints the conversation line by line.
 
 options:
-  --project DIR        project to work on (default: current directory)
-  --config FILE        configuration (default: PROJECT/architect.toml)
-  --state DIR          private state directory (default: PROJECT/.antislop)
+  --config FILE        configuration (default: ./architect.toml)
+  --state DIR          private state directory (default: ./.antislop)
   --conversation ID    continue this conversation
   --new                start a new conversation
+  --trust              trust the current working directory without prompting
   --version            print the version
 ";
 
@@ -50,7 +48,6 @@ fn run() -> Result<()> {
             )
         }
         Some("chat") => architect::lean::cli::chat(&args[1..]),
-        Some("export") => architect::lean::export::export(&args[1..]),
         Some("eval") => architect::lean::eval::eval(&args[1..]),
         _ => architect::lean::cli::chat(&args),
     }

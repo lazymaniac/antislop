@@ -53,6 +53,300 @@ fn wait_idle(core: &Core, conversation: &str) {
     }
 }
 
+/// Each new native session gets its own id; resuming preserves that id.
+fn comment_codex(dir: &std::path::Path) -> std::path::PathBuf {
+    let script = dir.join("comment-codex");
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+session="session-$$"
+for arg; do
+  case "$arg" in session-*) session="$arg" ;; esac
+  last="$arg"
+done
+printf '%s\n---\n' "$*" >> '{dir}/comment-calls.log'
+printf '{{"type":"thread.started","thread_id":"%s"}}\n' "$session"
+case "$last" in
+  *retry-once*)
+    if [ ! -f '{dir}/failed-once' ]; then
+      touch '{dir}/failed-once'
+      echo 'thread-store conflict: thread already has an active writer' >&2
+      exit 1
+    fi ;;
+esac
+case "$last" in *slow-comment*) sleep 1 ;; esac
+echo '{{"type":"item.completed","item":{{"type":"agent_message","text":"Feedback addressed."}}}}'
+echo '{{"type":"turn.completed"}}'
+"#,
+            dir = dir.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    script
+}
+
+#[test]
+fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
+    use architect::lean::COMMENT_ORCHESTRATOR;
+    let dir = tempfile::tempdir().unwrap();
+    let core = Core::open(
+        &dir.path().join("state"),
+        config(&comment_codex(dir.path())),
+    )
+    .unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    core.send(&conversation.id, "Original request").unwrap();
+    wait_idle(&core, &conversation.id);
+    let main = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    let first = core
+        .comment(&conversation.id, "orchestrator", "slow-comment")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while core
+        .store
+        .last_turn(&conversation.id, COMMENT_ORCHESTRATOR)
+        .unwrap()
+        .is_none()
+    {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let second = core
+        .comment(&conversation.id, "orchestrator", "second comment")
+        .unwrap();
+    let third = core
+        .comment(&conversation.id, "orchestrator", "third comment")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+
+    let sessions = core.store.sessions(&conversation.id).unwrap();
+    let comments: Vec<_> = sessions
+        .iter()
+        .filter(|turn| turn.role == COMMENT_ORCHESTRATOR)
+        .collect();
+    assert_eq!(comments.len(), 3);
+    assert!(comments.iter().all(|turn| turn.status == "done"));
+    assert!(
+        comments
+            .iter()
+            .all(|turn| turn.session_id != main.session_id)
+    );
+    assert!(
+        comments
+            .iter()
+            .all(|turn| turn.session_id == comments[0].session_id)
+    );
+    let events = core.store.events_since(&conversation.id, 0, 500).unwrap();
+    let ids: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event.kind == "turn_started" && event.payload["role"] == COMMENT_ORCHESTRATOR
+        })
+        .map(|event| event.payload["comments"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            serde_json::json!([first.id]),
+            serde_json::json!([second.id]),
+            serde_json::json!([third.id])
+        ]
+    );
+    core.send(&conversation.id, "Continue the request").unwrap();
+    wait_idle(&core, &conversation.id);
+    let resumed_main = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed_main.session_id, main.session_id);
+    let calls = std::fs::read_to_string(dir.path().join("comment-calls.log")).unwrap();
+    assert!(calls.contains("The comment agent handled feedback"));
+}
+
+#[test]
+fn failed_comments_keep_the_raw_error_and_reopening_retries_them() {
+    use architect::lean::{COMMENT_ORCHESTRATOR, tui::view::View};
+    let dir = tempfile::tempdir().unwrap();
+    let core = Core::open(
+        &dir.path().join("state"),
+        config(&comment_codex(dir.path())),
+    )
+    .unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    let comment = core
+        .comment(&conversation.id, "plan", "retry-once")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let failed = core
+        .store
+        .last_turn(&conversation.id, COMMENT_ORCHESTRATOR)
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status, TurnStatus::Failed);
+    assert!(
+        failed
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("already has an active writer")
+    );
+    let mut view = View::default();
+    for event in core.store.events_since(&conversation.id, 0, 500).unwrap() {
+        view.apply(&serde_json::to_value(event).unwrap());
+    }
+    assert_eq!(view.comment_state(comment.id), "failed");
+    assert!(
+        view.comment_error(comment.id)
+            .unwrap()
+            .contains("thread-store conflict")
+    );
+    assert!(view.comment_activity().is_none());
+    let reopened = core
+        .set_comment(&conversation.id, comment.id, "open")
+        .unwrap();
+    assert!(reopened.message > comment.message);
+    wait_idle(&core, &conversation.id);
+    for event in core
+        .store
+        .events_since(&conversation.id, view.after, 500)
+        .unwrap()
+    {
+        view.apply(&serde_json::to_value(event).unwrap());
+    }
+    assert_eq!(view.comment_state(comment.id), "addressed");
+    assert!(view.comment_error(comment.id).is_none());
+    assert_eq!(
+        core.store.comments(&conversation.id, "open").unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn plan_revision_resolves_only_comments_in_its_answered_snapshot() {
+    use architect::lean::store::{Comment, Store};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    let add = |target: &str| {
+        store
+            .add_comment(
+                &conversation.id,
+                &Comment {
+                    id: 0,
+                    plan_id: Some("p1".into()),
+                    target: target.into(),
+                    label: target.into(),
+                    text: "feedback".into(),
+                    status: "open".into(),
+                    message: 0,
+                },
+                |id| format!("[user comment #{id}] feedback"),
+            )
+            .unwrap()
+    };
+    let first = add("plan:p1:line:2");
+    let second = add("plan:p1");
+    let other = add("worker:t1");
+    store
+        .resolve_plan_comments(&conversation.id, first.message)
+        .unwrap();
+    assert_eq!(
+        store.comments(&conversation.id, "resolved").unwrap()[0].id,
+        first.id
+    );
+    assert_eq!(
+        store
+            .comments(&conversation.id, "open")
+            .unwrap()
+            .iter()
+            .map(|comment| comment.id)
+            .collect::<Vec<_>>(),
+        [second.id, other.id]
+    );
+    // A retry of an older comment must also stay outside a stale snapshot.
+    store
+        .set_comment_status(&conversation.id, first.id, "open")
+        .unwrap();
+    store
+        .resolve_plan_comments(&conversation.id, second.message)
+        .unwrap();
+    assert!(
+        store
+            .comments(&conversation.id, "open")
+            .unwrap()
+            .iter()
+            .any(|comment| comment.id == first.id)
+    );
+}
+
+#[test]
+fn interrupted_comment_sessions_resume_after_daemon_restart() {
+    use architect::lean::{
+        COMMENT_ORCHESTRATOR,
+        store::{Comment, Store},
+        tui::view::View,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    architect::lean::daemon::private_directory(&state).unwrap();
+    let store = Store::open(&state.join("core.db")).unwrap();
+    let conversation = store
+        .create_conversation(dir.path().to_str().unwrap())
+        .unwrap();
+    let comment = store
+        .add_comment(
+            &conversation.id,
+            &Comment {
+                id: 0,
+                plan_id: None,
+                target: "plan".into(),
+                label: "the plan".into(),
+                text: "feedback".into(),
+                status: "open".into(),
+                message: 0,
+            },
+            |id| format!("[user comment #{id}] feedback"),
+        )
+        .unwrap();
+    let turn = store
+        .start_turn(
+            &conversation.id,
+            COMMENT_ORCHESTRATOR,
+            "codex",
+            comment.message,
+            None,
+        )
+        .unwrap();
+    store.append_event(&conversation.id, Some(&turn.id), None, "turn_started", &serde_json::json!({"role":COMMENT_ORCHESTRATOR, "provider":"codex", "comments":[comment.id]})).unwrap();
+    drop(store);
+    let core = Core::open(&state, config(&comment_codex(dir.path()))).unwrap();
+    wait_idle(&core, &conversation.id);
+    let turns = core.store.sessions(&conversation.id).unwrap();
+    assert!(
+        turns
+            .iter()
+            .any(|session| session.turn_id == turn.id && session.status == "interrupted")
+    );
+    assert!(
+        turns
+            .iter()
+            .any(|session| session.role == COMMENT_ORCHESTRATOR && session.status == "done")
+    );
+    let mut view = View::default();
+    for event in core.store.events_since(&conversation.id, 0, 500).unwrap() {
+        view.apply(&serde_json::to_value(event).unwrap());
+    }
+    assert_eq!(view.comment_state(comment.id), "addressed");
+    assert!(view.comment_activity().is_none());
+}
+
 #[test]
 fn messages_are_accepted_at_once_and_answered_in_order() {
     let dir = tempfile::tempdir().unwrap();
@@ -149,8 +443,8 @@ fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
 
 fn chat(dir: &std::path::Path, project: &std::path::Path, message: &str) -> String {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
-        .args(["chat", "--project"])
-        .arg(project)
+        .current_dir(project)
+        .arg("chat")
         .arg("--config")
         .arg(dir.join("architect.toml"))
         .arg("--state")
@@ -206,34 +500,6 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
         "{calls}"
     );
 
-    // The history exports as JSON lines with secrets redacted (design §15).
-    chat(&dir, &project, "password=hunter2");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
-        .args(["export", "--project"])
-        .arg(&project)
-        .arg("--config")
-        .arg(dir.join("architect.toml"))
-        .arg("--state")
-        .arg(dir.join("state"))
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let lines: Vec<serde_json::Value> = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(lines[0]["export"], "antislop");
-    let all = serde_json::Value::Array(lines).to_string();
-    assert!(
-        all.contains("answer: password=[redacted]") && !all.contains("hunter2"),
-        "{all}"
-    );
-    assert!(
-        all.contains(r#""model":"#) && all.contains("pierwsza"),
-        "{all}"
-    );
-
     architect::lean::daemon::Client::at(&dir.join("state"))
         .call(&architect::lean::daemon::Request::Shutdown)
         .unwrap();
@@ -254,7 +520,7 @@ fn a_question_cut_off_by_a_restart_is_answered_after_it() {
         .add_message(&conversation.id, "user", "co dalej?")
         .unwrap();
     core.store
-        .start_turn(&conversation.id, "orchestrator", "codex", message.seq)
+        .start_turn(&conversation.id, "orchestrator", "codex", message.seq, None)
         .unwrap();
     drop(core);
 
@@ -297,8 +563,8 @@ fn a_changed_configuration_waits_for_running_work_and_says_so() {
     };
     let run = |message: &str| {
         std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
-            .args(["chat", "--project"])
-            .arg(&project)
+            .current_dir(&project)
+            .arg("chat")
             .arg("--config")
             .arg(dir.join("architect.toml"))
             .arg("--state")
@@ -326,7 +592,7 @@ fn a_changed_configuration_waits_for_running_work_and_says_so() {
     let second = run("druga").wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(second.status.success(), "{stderr}");
-    assert!(stderr.contains("architect.toml zmienił się"), "{stderr}");
+    assert!(stderr.contains("architect.toml changed"), "{stderr}");
     assert_eq!(
         identity().unwrap()["pid"],
         daemon,
@@ -392,7 +658,7 @@ fn a_dead_daemons_agent_is_ended_before_its_turn_resumes() {
     // process group, so it outlived the daemon.
     let turn = core
         .store
-        .start_turn(&conversation.id, "worker:t1", "codex", 0)
+        .start_turn(&conversation.id, "worker:t1", "codex", 0, None)
         .unwrap();
     let orphan_script = dir.path().join("orphan").join("codex");
     std::fs::create_dir(orphan_script.parent().unwrap()).unwrap();
@@ -440,8 +706,8 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
     )
     .unwrap();
     let frontend = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
-        .args(["chat", "--project"])
-        .arg(&project)
+        .current_dir(&project)
+        .arg("chat")
         .arg("--config")
         .arg(dir.join("architect.toml"))
         .arg("--state")

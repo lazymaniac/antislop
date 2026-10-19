@@ -249,7 +249,7 @@ impl Theme {
     /// A stable color for a message sender or recipient.
     pub fn person(&self, name: &str) -> Style {
         let color = match name {
-            "user" | "Ty" => 74,
+            "user" | "You" | "Ty" => 74,
             "orchestrator" | "orkiestrator" => 176,
             "*" => 179,
             _ => 110,

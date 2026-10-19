@@ -9,6 +9,7 @@ pub mod diffview;
 pub mod editor;
 pub mod graph;
 pub mod palette;
+pub mod planview;
 pub mod sanitize;
 pub mod theme;
 pub mod view;
@@ -19,6 +20,7 @@ pub use diffview::DiffView;
 pub use editor::{InputBuffer, sanitize_paste, sanitize_single_line_paste, visual_text_lines};
 pub use graph::{Filter, GroupingMode};
 pub use palette::{Help, Kind, Picker};
+pub use planview::{PlanAction, PlanView};
 pub use sanitize::sanitize;
 pub use theme::{
     CardProps, Glyphs, Row, Theme, Tone, card, draw_rows, scrollbar, section, split_row, tone,
@@ -31,7 +33,8 @@ use super::cli::Options;
 use super::daemon::{Client, Request};
 use crate::Result;
 use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use details::{CHECKS, COMMENTS, RESULT, TABS};
 use graph::{Canvas, Graph};
@@ -132,6 +135,7 @@ pub struct ConversationState {
     pub offset: (u16, u16),
     pub details: Option<Details>,
     pub diff: Option<DiffView>,
+    pub plan_view: Option<PlanView>,
     pub scroll: usize,
     pub task_request_id: u64,
     pub diff_request_id: u64,
@@ -172,6 +176,7 @@ pub struct App {
     pub offset: (u16, u16),
     pub details: Option<Details>,
     pub diff: Option<DiffView>,
+    pub plan_view: Option<PlanView>,
     pub editor: Option<Editor>,
     pub picker: Option<Picker>,
     pub help: Option<Help>,
@@ -205,6 +210,7 @@ pub struct App {
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     pub graph_viewport: Option<(u16, u16)>,
+    pub trust_prompt: Option<String>,
 }
 
 impl App {
@@ -243,6 +249,7 @@ impl App {
             offset: (0, 0),
             details: None,
             diff: None,
+            plan_view: None,
             editor: None,
             picker: None,
             help: None,
@@ -276,6 +283,21 @@ impl App {
             details_scroll_memory: std::collections::HashMap::new(),
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,
+            trust_prompt: None,
+        }
+    }
+
+    pub fn require_trust(&mut self, project_path: impl Into<String>) {
+        self.trust_prompt = Some(project_path.into());
+    }
+
+    pub fn accept_trust(&mut self) {
+        if self.trust_prompt.take().is_some() {
+            self.request(
+                Request::Trust { trusted: true },
+                Some("workspace directory trusted"),
+            );
+            self.notice = Some("workspace directory trusted".into());
         }
     }
 
@@ -372,6 +394,7 @@ impl App {
                     offset: self.offset,
                     details: self.details.clone(),
                     diff: self.diff.clone(),
+                    plan_view: self.plan_view.clone(),
                     scroll: self.scroll,
                     task_request_id: self.task_request_id,
                     diff_request_id: self.diff_request_id,
@@ -409,6 +432,7 @@ impl App {
             self.offset = state.offset;
             self.details = state.details;
             self.diff = state.diff;
+            self.plan_view = state.plan_view;
             self.scroll = state.scroll;
             self.task_request_id = state.task_request_id;
             self.diff_request_id = state.diff_request_id;
@@ -430,6 +454,7 @@ impl App {
             self.input = InputBuffer::with_text(restored_draft);
             self.details = None;
             self.diff = None;
+            self.plan_view = None;
             self.editor = None;
             self.confirmation = None;
             self.selected = ORCHESTRATOR.into();
@@ -493,7 +518,7 @@ impl App {
                     }
                     Err(error) => {
                         std::thread::sleep(Duration::from_secs(1));
-                        Update::Notice(format!("demon nie odpowiada: {error}"))
+                        Update::Notice(format!("daemon is not responding: {error}"))
                     }
                 };
                 if stop.load(Ordering::SeqCst) || updates.send(update).is_err() {
@@ -654,7 +679,7 @@ impl App {
                         break;
                     }
                 }
-                self.notice = Some("✗ stale_scope: zakres uległ zmianie, akcja odrzucona".into());
+                self.notice = Some("✗ stale_scope: scope changed, action rejected".into());
                 return;
             }
             let conversation = self.conversation.clone();
@@ -677,7 +702,7 @@ impl App {
                                 plan,
                                 scope_hash,
                             },
-                            Some("plan uruchomiony"),
+                            Some("plan accepted"),
                         );
                     }
                 }
@@ -689,7 +714,7 @@ impl App {
                                 plan,
                                 scope_hash,
                             },
-                            Some("plan wznowiony"),
+                            Some("plan resumed"),
                         );
                     }
                 }
@@ -702,7 +727,7 @@ impl App {
                                 id,
                                 scope_hash,
                             },
-                            Some("zmiany zatwierdzone"),
+                            Some("changes approved"),
                         );
                     }
                 }
@@ -712,7 +737,7 @@ impl App {
                             conversation,
                             scope_hash,
                         },
-                        Some("anulowano"),
+                        Some("cancelled"),
                     );
                 }
             }
@@ -730,7 +755,7 @@ impl App {
                     break;
                 }
             }
-            self.notice = Some("Odrzucono działanie".into());
+            self.notice = Some("Action rejected".into());
         }
     }
 
@@ -792,7 +817,7 @@ impl App {
                         plan,
                         id: diff.task.clone(),
                     };
-                    self.request(request, Some("recenzja kodu uruchomiona"));
+                    self.request(request, Some("code review started"));
                 }
             }
             code => diff.key(code),
@@ -854,7 +879,7 @@ impl App {
 
     pub fn submit(&mut self) {
         if self.sending {
-            self.notice = Some("Wysyłanie w toku; szkic zachowany.".into());
+            self.notice = Some("Sending in progress; draft preserved.".into());
             return;
         }
         let trimmed = self.input.text.trim();
@@ -905,7 +930,7 @@ impl App {
 
     pub fn submit_comment(&mut self) {
         if self.sending_comment {
-            self.notice = Some("Wysyłanie komentarza w toku; szkic zachowany.".into());
+            self.notice = Some("Sending comment in progress; draft preserved.".into());
             return;
         }
         let Some(editor) = &mut self.editor else {
@@ -928,8 +953,9 @@ impl App {
         let generation = self.generation;
 
         std::thread::spawn(move || {
-            let reply = client.call(&Request::Comment {
+            let reply = client.call(&Request::CommentScoped {
                 conversation: conversation.clone(),
+                plan: plan.clone(),
                 target: editor.target.clone(),
                 text: editor.input.text.clone(),
             });
@@ -954,11 +980,21 @@ impl App {
                 autonomous,
             } => {
                 if conversation == self.conversation && generation == self.generation {
+                    let mut saw_manual_plan = false;
                     for event in &events {
+                        if event["kind"] == "plan_proposed" && event["payload"]["automatic"] != true
+                        {
+                            saw_manual_plan = true;
+                        }
                         self.view.apply(event);
                     }
                     self.view.idle = idle;
                     self.view.autonomous = Some(autonomous);
+                    if saw_manual_plan && !self.view.tasks.is_empty() && self.confirmation.is_none()
+                    {
+                        let pid = self.view.plan.clone().unwrap_or_else(|| "plan".into());
+                        self.plan_view = Some(PlanView::new(pid));
+                    }
                     let stale = self
                         .confirmation
                         .as_ref()
@@ -973,7 +1009,7 @@ impl App {
                                 break;
                             }
                         }
-                        self.notice = Some("✗ stale_scope: zakres uległ zmianie".into());
+                        self.notice = Some("✗ stale_scope: scope changed".into());
                     }
                 }
             }
@@ -1063,11 +1099,10 @@ impl App {
                         Err(error) => {
                             if self.input.is_empty() {
                                 self.input = InputBuffer::with_text(sent_text);
-                                self.notice = Some(format!("✗ {error} (szkic przywrócony)"));
+                                self.notice = Some(format!("✗ {error} (draft restored)"));
                             } else {
                                 self.failed_send = Some(sent_text);
-                                self.notice =
-                                    Some(format!("✗ {error} (niewysłana wiadomość zachowana)"));
+                                self.notice = Some(format!("✗ {error} (unsent message preserved)"));
                             }
                         }
                     }
@@ -1125,7 +1160,7 @@ impl App {
                             } else {
                                 self.editor = Some(editor);
                             }
-                            self.notice = Some(format!("✗ {error} (szkic komentarza zachowany)"));
+                            self.notice = Some(format!("✗ {error} (comment draft preserved)"));
                         }
                     }
                 } else if let Some(state) = self.conversation_states.get_mut(&conversation)
@@ -1171,12 +1206,45 @@ impl App {
         let conversation = self.conversation.clone();
         match text.as_str() {
             "" => {}
+            "/plan" => {
+                if self.view.plan.is_some()
+                    || !self.view.tasks.is_empty()
+                    || !self.view.plan_doc.is_empty()
+                {
+                    let pid = self.view.plan.clone().unwrap_or_else(|| "plan".into());
+                    self.plan_view = Some(PlanView::new(pid));
+                } else {
+                    self.notice = Some("✗ there is no plan to view".into());
+                }
+            }
             "/accept" => match self.view.plan.clone().filter(|_| self.view.plan_proposed()) {
-                Some(plan) => self.request(
-                    Request::Accept { conversation, plan },
-                    Some("plan uruchomiony"),
-                ),
-                None => self.notice = Some("✗ nie ma planu do uruchomienia".into()),
+                Some(plan) => {
+                    if !self.view.open_plan_comments().is_empty() {
+                        self.notice =
+                            Some("✗ resolve all plan comments before accepting the plan".into());
+                    } else {
+                        self.plan_view = None;
+                        self.request(
+                            Request::Accept { conversation, plan },
+                            Some("plan accepted"),
+                        );
+                    }
+                }
+                None => self.notice = Some("✗ there is no plan to accept".into()),
+            },
+            "/reject" => match self.view.plan.clone().filter(|_| self.view.plan_proposed()) {
+                Some(plan) => {
+                    self.plan_view = None;
+                    self.request(
+                        Request::Reject {
+                            conversation,
+                            plan,
+                            reason: None,
+                        },
+                        Some("plan rejected"),
+                    );
+                }
+                None => self.notice = Some("✗ there is no plan to reject".into()),
             },
             "/resume" => match self
                 .view
@@ -1184,13 +1252,12 @@ impl App {
                 .clone()
                 .filter(|_| self.view.plan_resumable())
             {
-                Some(plan) => self.request(
-                    Request::Resume { conversation, plan },
-                    Some("plan wznowiony"),
-                ),
-                None => self.notice = Some("✗ nie ma czego wznowić".into()),
+                Some(plan) => {
+                    self.request(Request::Resume { conversation, plan }, Some("plan resumed"))
+                }
+                None => self.notice = Some("✗ there is nothing to resume".into()),
             },
-            "/cancel" => self.request(Request::Cancel { conversation }, Some("anulowano")),
+            "/cancel" => self.request(Request::Cancel { conversation }, Some("cancelled")),
             "/pause" => self.request(
                 Request::Pause {
                     conversation,
@@ -1205,13 +1272,34 @@ impl App {
                 },
                 None,
             ),
-            "/mode autonomous" | "/mode supervised" => self.request(
-                Request::Mode {
-                    conversation,
-                    autonomous: text.ends_with("autonomous"),
-                },
-                None,
-            ),
+            "/mode" => {
+                let next_auto = self.view.autonomous != Some(true);
+                self.view.autonomous = Some(next_auto);
+                self.request(
+                    Request::Mode {
+                        conversation,
+                        autonomous: next_auto,
+                    },
+                    None,
+                );
+            }
+            "/mode autonomous" | "/mode supervised" => {
+                let next_auto = text.ends_with("autonomous");
+                self.view.autonomous = Some(next_auto);
+                self.request(
+                    Request::Mode {
+                        conversation,
+                        autonomous: next_auto,
+                    },
+                    None,
+                );
+            }
+            _ if text.starts_with("/project ") => {
+                let proj = text.trim_start_matches("/project ").trim().to_string();
+                if !proj.is_empty() {
+                    self.new_conversation_in(proj);
+                }
+            }
             _ => {
                 self.scroll = 0;
                 self.request(Request::Send { conversation, text }, None);
@@ -1224,6 +1312,23 @@ impl App {
         let updates = self.updates.clone();
         std::thread::spawn(move || {
             let update = match client.call(&Request::Start) {
+                Ok(conversation) => {
+                    Update::Conversation(conversation["id"].as_str().unwrap_or_default().into())
+                }
+                Err(error) => Update::Notice(format!("✗ {error}")),
+            };
+            let _ = updates.send(update);
+        });
+    }
+
+    fn new_conversation_in(&mut self, project: String) {
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        self.project = std::path::Path::new(&project)
+            .file_name()
+            .map_or_else(|| project.clone(), |n| n.to_string_lossy().into_owned());
+        std::thread::spawn(move || {
+            let update = match client.call(&Request::StartIn { project }) {
                 Ok(conversation) => {
                     Update::Conversation(conversation["id"].as_str().unwrap_or_default().into())
                 }
@@ -1288,6 +1393,7 @@ impl App {
                     Some(Action::Select(key)) => {
                         self.details = None;
                         self.diff = None;
+                        self.plan_view = None;
                         self.focus = Focus::Graph;
                         self.select_node(key);
                         true
@@ -1295,6 +1401,7 @@ impl App {
                     Some(Action::Show(entry)) => {
                         self.details = None;
                         self.diff = None;
+                        self.plan_view = None;
                         self.focus = Focus::Chat;
                         self.found = Some(entry);
                         // Brought to the top at the next draw.
@@ -1310,6 +1417,7 @@ impl App {
                     Some(Action::Address(recipient)) => {
                         self.details = None;
                         self.diff = None;
+                        self.plan_view = None;
                         self.focus = Focus::Chat;
                         let formatted = format!("@{recipient} ");
                         let text = self.input.text.trim_end();
@@ -1338,6 +1446,8 @@ impl App {
         let selected = self.selected.clone();
         match command {
             Command::Accept => self.command("/accept"),
+            Command::Reject => self.command("/reject"),
+            Command::Plan => self.command("/plan"),
             Command::Resume => self.command("/resume"),
             Command::Cancel => self.command("/cancel"),
             Command::Pause => self.command("/pause"),
@@ -1374,6 +1484,45 @@ impl App {
         true
     }
 
+    pub fn handle_plan_action(&mut self, action: PlanAction) {
+        match action {
+            PlanAction::Close => {
+                self.plan_view = None;
+            }
+            PlanAction::Accept => {
+                if !self.view.open_plan_comments().is_empty() {
+                    self.notice =
+                        Some("✗ resolve all plan comments before accepting the plan".into());
+                } else {
+                    self.plan_view = None;
+                    self.command("/accept");
+                }
+            }
+            PlanAction::Reject => {
+                self.plan_view = None;
+                self.command("/reject");
+            }
+            PlanAction::None => {}
+            PlanAction::CommentLine { line, .. } => {
+                if let Some(plan) = &self.view.plan {
+                    let target = format!("plan:{plan}:line:{line}");
+                    let input = self.get_comment_draft(&target);
+                    self.editor = Some(Editor { target, input });
+                }
+            }
+            PlanAction::CommentWholePlan => {
+                if let Some(plan) = &self.view.plan {
+                    let target = format!("plan:{plan}");
+                    let input = self.get_comment_draft(&target);
+                    self.editor = Some(Editor { target, input });
+                }
+            }
+            PlanAction::ToggleResolveComment { id, next_status } => {
+                self.set_comment(id, &next_status);
+            }
+        }
+    }
+
     /// Returns false when the user quits.
     pub fn key(&mut self, key: event::KeyEvent) -> bool {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1386,6 +1535,38 @@ impl App {
         // Global exit
         if key.code == KeyCode::Char('c') && control {
             return false;
+        }
+        let editing = self.editor.is_some()
+            || self.picker.is_some()
+            || self
+                .details
+                .as_ref()
+                .is_some_and(|details| details.searching)
+            || (self.focus == Focus::Chat
+                && self.help.is_none()
+                && self.plan_view.is_none()
+                && self.details.is_none()
+                && self.diff.is_none()
+                && !self.input.is_empty());
+        if key.code == KeyCode::Char('q') && !control && !alt && !editing {
+            return false;
+        }
+
+        if self.trust_prompt.is_some() {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.accept_trust();
+                    return true;
+                }
+                KeyCode::Esc => return true,
+                KeyCode::Char('n')
+                | KeyCode::Char('N')
+                | KeyCode::Char('q')
+                | KeyCode::Char('Q') => {
+                    return false;
+                }
+                _ => return true,
+            }
         }
 
         // Modal routing: active modal gets strict key ownership
@@ -1435,6 +1616,11 @@ impl App {
             self.editor_key(key);
             return true;
         }
+        if let Some(pv) = &mut self.plan_view {
+            let action = pv.key(key, &self.view);
+            self.handle_plan_action(action);
+            return true;
+        }
         if self.diff.is_some() {
             self.diff_key(key);
             return true;
@@ -1466,6 +1652,10 @@ impl App {
         match key.code {
             KeyCode::Char('p') if control => {
                 self.picker = Some(Picker::new(Kind::Commands));
+                return true;
+            }
+            KeyCode::Char('m') if control => {
+                self.command("/mode");
                 return true;
             }
             KeyCode::Char('f') if control => {
@@ -1534,8 +1724,6 @@ impl App {
                     self.history_draft_preferred_col = self.input.preferred_col;
                     self.input.clear();
                     self.input_shown = 0;
-                } else {
-                    return false;
                 }
             }
             KeyCode::Char('a') if control => {
@@ -1638,6 +1826,15 @@ impl App {
             self.graph_grouping,
             self.graph_viewport,
         );
+        if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+            let height = self.graph_viewport.map_or(10, |(_, height)| height);
+            self.scroll_graph_node(
+                &graph,
+                key.code == KeyCode::PageDown,
+                height.saturating_sub(2).max(1),
+            );
+            return true;
+        }
         let step = match key.code {
             KeyCode::Left => Some((-1, 0)),
             KeyCode::Right => Some((1, 0)),
@@ -1685,6 +1882,7 @@ impl App {
             KeyCode::Char('q') => return false,
             KeyCode::Char('?') => self.show_help(Help::Graph),
             KeyCode::Char('/') => self.picker = Some(Picker::new(Kind::Agents)),
+            KeyCode::Char('p') => self.command("/plan"),
             KeyCode::Char('t') => {
                 self.focus = Focus::Tasks;
             }
@@ -1709,6 +1907,22 @@ impl App {
         true
     }
 
+    fn scroll_graph_node(&mut self, graph: &Graph, down: bool, amount: u16) {
+        if let Some(node) = graph.node(&self.selected) {
+            let height = self.graph_viewport.map_or(10, |(_, height)| height);
+            let max = node
+                .y
+                .saturating_add(node.height)
+                .saturating_sub(height)
+                .max(node.y);
+            self.offset.1 = if down {
+                self.offset.1.saturating_add(amount).clamp(node.y, max)
+            } else {
+                self.offset.1.saturating_sub(amount).clamp(node.y, max)
+            };
+        }
+    }
+
     fn tasks_key(&mut self, key: event::KeyEvent) -> bool {
         match key.code {
             KeyCode::Left | KeyCode::Up | KeyCode::Char('h') | KeyCode::Char('k') => {
@@ -1723,6 +1937,7 @@ impl App {
                     self.selected = format!("worker:{}", task.id);
                 }
             }
+            KeyCode::Char('p') => self.command("/plan"),
             KeyCode::Char('w') | KeyCode::Char('W') => {
                 if let Some(task) = self.carousel.current_task(&self.view) {
                     self.select_node(format!("worker:{}", task.id));
@@ -1841,7 +2056,14 @@ impl App {
         if let Ok(Value::Array(list)) = self.client.call(&Request::Conversations) {
             for val in list {
                 let project = val["project"].as_str().unwrap_or_default();
-                if !project.is_empty() && project != self.project {
+                let project_basename = std::path::Path::new(project)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(project);
+                if !project.is_empty()
+                    && project != self.project
+                    && project_basename != self.project
+                {
                     continue;
                 }
                 let id = val["id"].as_str().unwrap_or_default().to_string();
@@ -1852,12 +2074,12 @@ impl App {
                 let total = val["tasks_total"].as_u64().unwrap_or(0);
                 let done = val["tasks_done"].as_u64().unwrap_or(0);
                 let active_mark = if id == self.conversation {
-                    " (bieżąca)"
+                    " (current)"
                 } else {
                     ""
                 };
                 let title = if total > 0 {
-                    format!("{id}{active_mark} · {status} · {done}/{total} zadań")
+                    format!("{id}{active_mark} · {status} · {done}/{total} tasks")
                 } else {
                     format!("{id}{active_mark} · {status}")
                 };
@@ -1872,14 +2094,14 @@ impl App {
         for id in self.conversation_states.keys() {
             if !items.iter().any(|item| &item.id == id) {
                 let active_mark = if id == &self.conversation {
-                    " (bieżąca)"
+                    " (current)"
                 } else {
                     ""
                 };
                 items.push(palette::ConversationItem {
                     id: id.clone(),
                     project: self.project.clone(),
-                    title: format!("{id}{active_mark} · zapisany stan"),
+                    title: format!("{id}{active_mark} · saved state"),
                 });
             }
         }
@@ -1889,7 +2111,7 @@ impl App {
                 palette::ConversationItem {
                     id: self.conversation.clone(),
                     project: self.project.clone(),
-                    title: format!("{} (bieżąca) · aktywna", self.conversation),
+                    title: format!("{} (current) · active", self.conversation),
                 },
             );
         }
@@ -2007,14 +2229,6 @@ impl App {
                 details.raw = !details.raw;
                 return;
             }
-            KeyCode::Char('n') => {
-                details.next_session_page();
-                return;
-            }
-            KeyCode::Char('p') => {
-                details.prev_session_page();
-                return;
-            }
             KeyCode::Char(c @ '1'..='5') => {
                 let tab = (c as usize) - ('1' as usize);
                 details.switch_tab(tab);
@@ -2064,11 +2278,11 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
-        if self.help.is_some() {
+        if self.help.is_some() || self.trust_prompt.is_some() {
             return;
         }
         if text.len() > editor::MAX_PASTE_BYTES {
-            self.notice = Some("Wklejony tekst przycięto do 64 KB".into());
+            self.notice = Some("Pasted text truncated to 64 KB".into());
         }
         if let Some(picker) = &mut self.picker {
             let clean_text = sanitize_single_line_paste(text);
@@ -2077,7 +2291,11 @@ impl App {
         } else if let Some(editor) = &mut self.editor {
             let clean_text = sanitize_paste(text);
             editor.input.insert_str(&clean_text);
-        } else if self.focus == Focus::Chat && self.diff.is_none() && self.details.is_none() {
+        } else if self.focus == Focus::Chat
+            && self.plan_view.is_none()
+            && self.diff.is_none()
+            && self.details.is_none()
+        {
             let clean_text = sanitize_paste(text);
             self.input.insert_str(&clean_text);
         }
@@ -2088,7 +2306,10 @@ impl App {
         if draw_min_term_guard(frame, frame.area()) {
             return;
         }
-        if let Some(diff) = &mut self.diff {
+        if let Some(pv) = &mut self.plan_view {
+            let theme = Theme::from_env();
+            pv.draw(frame, frame.area(), &self.view, &theme);
+        } else if let Some(diff) = &mut self.diff {
             diff.draw(frame, &self.view);
         } else if let Some(details) = &mut self.details {
             details.draw(frame, &self.view);
@@ -2129,7 +2350,7 @@ impl App {
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::Cyan))
                         .title(format!(
-                            " komentarz do {} · Enter wyślij · Alt+Enter nowa linia · Esc anuluj ",
+                            " comment on {} · Enter send · Alt+Enter newline · Esc cancel ",
                             target_name(&editor.target)
                         )),
                 ),
@@ -2137,6 +2358,7 @@ impl App {
             );
             if self.help.is_none()
                 && self.picker.is_none()
+                && self.trust_prompt.is_none()
                 && box_area.width >= 3
                 && box_area.height >= 3
             {
@@ -2151,7 +2373,11 @@ impl App {
             }
         }
         if let Some(picker) = &mut self.picker {
-            picker.draw_with_cursor(frame, &self.view, self.help.is_none());
+            picker.draw_with_cursor(
+                frame,
+                &self.view,
+                self.help.is_none() && self.trust_prompt.is_none(),
+            );
         }
         if let Some(help) = self.help {
             let max_scroll = help.max_scroll(frame.area());
@@ -2162,6 +2388,7 @@ impl App {
             && conf.status == ConfirmationStatus::Pending
             && self.picker.is_none()
             && self.help.is_none()
+            && self.trust_prompt.is_none()
         {
             let area = frame.area();
             let height = 5u16;
@@ -2176,7 +2403,7 @@ impl App {
                 let lines = vec![
                     Line::from(vec![
                         Span::styled(
-                            " Potwierdzenie: ",
+                            " Confirmation: ",
                             Style::default()
                                 .fg(Color::Yellow)
                                 .add_modifier(Modifier::BOLD),
@@ -2184,11 +2411,11 @@ impl App {
                         Span::raw(&conf.title),
                     ]),
                     Line::from(vec![Span::styled(
-                        format!(" Zakres: {}", conf.scope_hash),
+                        format!(" Scope: {}", conf.scope_hash),
                         Style::default().fg(Color::DarkGray),
                     )]),
                     Line::from(vec![Span::styled(
-                        " [Enter / y] Potwierdź   [Esc / n] Odrzuć",
+                        " [Enter / y] Confirm   [Esc / n] Reject",
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
@@ -2199,11 +2426,66 @@ impl App {
                         Block::default()
                             .borders(Borders::ALL)
                             .border_style(Style::default().fg(Color::Yellow))
-                            .title(" Wymagane potwierdzenie "),
+                            .title(" Confirmation required "),
                     ),
                     box_area,
                 );
             }
+        }
+        if let Some(dir) = &self.trust_prompt {
+            let area = frame.area();
+            let width = area.width.saturating_sub(4).clamp(12, 76);
+            let height = 9u16.min(area.height);
+            let box_area = Rect::new(
+                area.x + area.width.saturating_sub(width) / 2,
+                area.y + area.height.saturating_sub(height) / 2,
+                width,
+                height,
+            );
+            frame.render_widget(Clear, box_area);
+            let inner_w = usize::from(width.saturating_sub(4).max(1));
+            let lines = vec![
+                Line::from(vec![Span::styled(
+                    truncate("Do you trust the contents of this directory?", inner_w),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )]),
+                Line::raw(""),
+                Line::from(vec![Span::styled(
+                    format!("  {}", truncate(dir, inner_w.saturating_sub(2))),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )]),
+                Line::raw(""),
+                Line::from(vec![Span::styled(
+                    truncate(
+                        "Agents can read files, run commands, and edit code in this folder.",
+                        inner_w,
+                    ),
+                    dim(),
+                )]),
+                Line::raw(""),
+                Line::from(vec![Span::styled(
+                    truncate(
+                        "[Enter / y] Trust this directory   [Esc / n / q] Quit",
+                        inner_w,
+                    ),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )]),
+            ];
+            frame.render_widget(
+                Paragraph::new(lines).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Yellow))
+                        .title(" Workspace trust required "),
+                ),
+                box_area,
+            );
         }
     }
 
@@ -2216,11 +2498,11 @@ impl App {
         ])
         .areas(area);
 
-        let status = match (&self.view.activity, self.view.idle) {
-            (Some(activity), _) => activity.clone(),
-            (None, _) if self.view.paused => "wstrzymane".into(),
-            (None, true) => "gotowy".into(),
-            (None, false) => "zadania w toku…".into(),
+        let status = match (self.view.orchestrator_activity(), self.view.idle) {
+            (Some(activity), _) => activity,
+            (None, _) if self.view.paused => "paused".into(),
+            (None, true) => "ready".into(),
+            (None, false) => "tasks in progress…".into(),
         };
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
@@ -2240,7 +2522,44 @@ impl App {
         );
 
         let theme = Theme::from_env();
-        if body.width >= SIDE_BY_SIDE_BREAKPOINT {
+        if self.view.graph_hidden() && self.focus == Focus::Chat {
+            self.draw_chat(frame, body, &theme);
+            if self.view.activity.is_some() {
+                let progress = self.view.progress();
+                let width = progress
+                    .iter()
+                    .map(|line| line.width().saturating_add(4))
+                    .max()
+                    .unwrap_or(0)
+                    .clamp(16, 48) as u16;
+                let width = width.min(body.width);
+                let height = progress.len().min(6) as u16 + 2;
+                if body.width >= width + 2 && body.height >= height + 2 {
+                    let overlay = Rect::new(
+                        body.right().saturating_sub(width + 1),
+                        body.y + 1,
+                        width,
+                        height,
+                    );
+                    let lines: Vec<Line> = progress
+                        .iter()
+                        .take(6)
+                        .map(|line| Line::raw(truncate(line, usize::from(width.saturating_sub(4)))))
+                        .collect();
+                    frame.render_widget(Clear, overlay);
+                    frame.render_widget(
+                        Paragraph::new(lines).block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(Color::Yellow))
+                                .title(" now ")
+                                .padding(ratatui::widgets::Padding::horizontal(1)),
+                        ),
+                        overlay,
+                    );
+                }
+            }
+        } else if body.width >= SIDE_BY_SIDE_BREAKPOINT {
             let chat_width = (body.width / 3).max(34);
             let [chat, sep_col, team] = Layout::horizontal([
                 Constraint::Length(chat_width),
@@ -2312,6 +2631,7 @@ impl App {
             && self.editor.is_none()
             && self.picker.is_none()
             && self.help.is_none()
+            && self.trust_prompt.is_none()
             && self.diff.is_none()
             && self.details.is_none();
 
@@ -2340,7 +2660,7 @@ impl App {
         }
 
         if input.height > 0 && input.width > 2 {
-            let title = " wiadomość ";
+            let title = " message ";
             let title_style = fill.patch(if focused { theme.accent() } else { theme.dim() });
             buf.set_string(input.x + 1, input.y, title, title_style);
         }
@@ -2388,7 +2708,7 @@ impl App {
             let is_found = self.found == Some(index);
             match card_entry {
                 TranscriptCard::Message(msg) => {
-                    let is_user = msg.sender == "Ty" || msg.sender == "user";
+                    let is_user = msg.sender == "You" || msg.sender == "Ty" || msg.sender == "user";
                     let mut fill = if is_user {
                         theme.raised()
                     } else {
@@ -2441,7 +2761,7 @@ impl App {
                                 format!("Plan {}", theme.clean(plan)),
                                 theme.accent().patch(theme.title()),
                             )],
-                            right: format!("{tasks} zadań"),
+                            right: format!("{tasks} tasks"),
                             body: text,
                             max_body: usize::MAX,
                             width,
@@ -2493,17 +2813,26 @@ impl App {
                         top = Some(cards.len());
                         fill = fill.add_modifier(Modifier::REVERSED);
                     }
+                    let state = self
+                        .view
+                        .comments
+                        .get(id)
+                        .map_or(status.as_str(), |_| self.view.comment_state(*id));
+                    let body = match self.view.comment_error(*id) {
+                        Some(error) => format!("{text}\nError: {error}"),
+                        None => text.clone(),
+                    };
                     cards.extend(card(
                         theme,
                         CardProps {
                             fill,
                             accent: theme.person("user"),
                             head: vec![Span::styled(
-                                format!("Komentarz #{} do {}", id, theme.clean(target)),
+                                format!("Comment #{} on {}", id, theme.clean(target)),
                                 theme.accent().patch(theme.title()),
                             )],
-                            right: theme.clean(status),
-                            body: text,
+                            right: theme.clean(state),
+                            body: &body,
                             max_body: usize::MAX,
                             width,
                         },
@@ -2516,17 +2845,13 @@ impl App {
                         fill = fill.add_modifier(Modifier::REVERSED);
                     }
                     let (accent, status_str) = match conf.status {
-                        ConfirmationStatus::Pending => {
-                            (theme.warning(), "[oczekuje na potwierdzenie]")
-                        }
-                        ConfirmationStatus::Confirmed => {
-                            (theme.status("completed"), "[potwierdzone]")
-                        }
-                        ConfirmationStatus::Stale => (theme.error(), "[nieaktualne: stale_scope]"),
-                        ConfirmationStatus::Rejected => (theme.dim(), "[odrzucone]"),
+                        ConfirmationStatus::Pending => (theme.warning(), "[awaiting confirmation]"),
+                        ConfirmationStatus::Confirmed => (theme.status("completed"), "[confirmed]"),
+                        ConfirmationStatus::Stale => (theme.error(), "[stale: stale_scope]"),
+                        ConfirmationStatus::Rejected => (theme.dim(), "[rejected]"),
                     };
                     let title_span = vec![
-                        Span::styled("Potwierdzenie: ", theme.faint()),
+                        Span::styled("Confirmation: ", theme.faint()),
                         Span::styled(theme.clean(&conf.title), accent.patch(theme.title())),
                     ];
                     let mut body = conf.detail.clone();
@@ -2534,13 +2859,13 @@ impl App {
                         body.push_str(&format!("\nPlan: {plan}"));
                     }
                     if let Some(task) = &conf.task_id {
-                        body.push_str(&format!("\nZadanie: {task}"));
+                        body.push_str(&format!("\nTask: {task}"));
                     }
                     if let Some(candidate) = &conf.candidate {
-                        body.push_str(&format!("\nKandydat diffu: {candidate}"));
+                        body.push_str(&format!("\nDiff candidate: {candidate}"));
                     }
                     if !conf.scope_hash.is_empty() {
-                        body.push_str(&format!("\nZakres (hash): {}", conf.scope_hash));
+                        body.push_str(&format!("\nScope (hash): {}", conf.scope_hash));
                     }
                     cards.extend(card(
                         theme,
@@ -2582,11 +2907,11 @@ impl App {
                     fill: theme.card(),
                     accent: theme.accent(),
                     head: vec![Span::styled(
-                        "Brak wiadomości w tej rozmowie.",
+                        "No messages in this conversation.",
                         theme.title(),
                     )],
                     right: String::new(),
-                    body: "Wpisz wiadomość w kompozytorze poniżej lub naciśnij Ctrl+P, aby otworzyć paletę.",
+                    body: "Type a message in the composer below or press Ctrl+P to open the palette.",
                     max_body: usize::MAX,
                     width,
                 },
@@ -2628,7 +2953,7 @@ impl App {
                 dim()
             })
             .title(format!(
-                " zespół · filtr: {} (f) · grupy: {} (g) · [V] wer [D] zal [M] msg ",
+                " team · filter: {} (f) · groups: {} (g) · [V] ver [D] dep [M] msg ",
                 self.filter.name(),
                 self.graph_grouping.name()
             ));
@@ -2688,10 +3013,22 @@ impl App {
             } else if node.x + graph::WIDTH + 3 > *left + inner.width {
                 *left = (node.x + graph::WIDTH + 3).saturating_sub(inner.width);
             }
-            if node.y < *top {
+            if node.height > inner.height {
+                // A tall card can be read with PgUp/PgDn or the mouse wheel.
+                let last = node
+                    .y
+                    .saturating_add(node.height)
+                    .saturating_sub(inner.height);
+                if *top < node.y || *top > last {
+                    *top = node.y;
+                }
+            } else if node.y < *top {
                 *top = node.y;
-            } else if node.y + graph::HEIGHT > *top + inner.height {
-                *top = (node.y + graph::HEIGHT).saturating_sub(inner.height);
+            } else if node.y.saturating_add(node.height) > top.saturating_add(inner.height) {
+                *top = node
+                    .y
+                    .saturating_add(node.height)
+                    .saturating_sub(inner.height);
             }
         }
         let mut canvas =
@@ -2731,11 +3068,161 @@ impl App {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Yellow))
-                    .title(" teraz ")
+                    .title(" now ")
                     .padding(ratatui::widgets::Padding::horizontal(1)),
             ),
             overlay,
         );
+    }
+
+    pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        if self.trust_prompt.is_some() {
+            return true;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if self.help.is_some() {
+                    self.help_scroll = self.help_scroll.saturating_sub(3);
+                } else if let Some(pv) = &mut self.plan_view {
+                    pv.key(
+                        event::KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                        &self.view,
+                    );
+                } else if let Some(diff) = &mut self.diff {
+                    diff.key(KeyCode::Up);
+                } else if let Some(details) = &mut self.details {
+                    details.scroll = details.scroll.saturating_sub(3);
+                } else if self.focus == Focus::Tasks {
+                    self.carousel.prev(self.view.tasks.len());
+                } else if self.focus == Focus::Graph {
+                    let graph = Graph::new_with_viewport(
+                        &self.view,
+                        self.graph_filter.as_deref(),
+                        &self.graph_collapsed,
+                        self.graph_grouping,
+                        self.graph_viewport,
+                    );
+                    self.scroll_graph_node(&graph, false, 3);
+                } else {
+                    self.scroll += 3;
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if self.help.is_some() {
+                    self.help_scroll = (self.help_scroll + 3).min(self.help_max_scroll());
+                } else if let Some(pv) = &mut self.plan_view {
+                    pv.key(
+                        event::KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                        &self.view,
+                    );
+                } else if let Some(diff) = &mut self.diff {
+                    diff.key(KeyCode::Down);
+                } else if let Some(details) = &mut self.details {
+                    details.scroll += 3;
+                } else if self.focus == Focus::Tasks {
+                    self.carousel.next(self.view.tasks.len());
+                } else if self.focus == Focus::Graph {
+                    let graph = Graph::new_with_viewport(
+                        &self.view,
+                        self.graph_filter.as_deref(),
+                        &self.graph_collapsed,
+                        self.graph_grouping,
+                        self.graph_viewport,
+                    );
+                    self.scroll_graph_node(&graph, true, 3);
+                } else {
+                    self.scroll = self.scroll.saturating_sub(3);
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let col = mouse.column;
+                let row = mouse.row;
+                let area = self.terminal_area;
+                if self.plan_view.is_some() {
+                    let action = self
+                        .plan_view
+                        .as_mut()
+                        .map(|pv| pv.mouse_click(col, row, &self.view))
+                        .unwrap_or(PlanAction::None);
+                    self.handle_plan_action(action);
+                    return true;
+                }
+                if self.diff.is_some() || self.details.is_some() {
+                    return true;
+                }
+                if row == area.y && area.width > 0 {
+                    let status = match (self.view.orchestrator_activity(), self.view.idle) {
+                        (Some(activity), _) => activity,
+                        (None, _) if self.view.paused => "paused".into(),
+                        (None, true) => "ready".into(),
+                        (None, false) => "tasks in progress…".into(),
+                    };
+                    let panel_focus = match self.focus {
+                        Focus::Chat => PanelFocus::Chat,
+                        Focus::Tasks => PanelFocus::Tasks,
+                        Focus::Graph => PanelFocus::Graph,
+                    };
+                    let header_line = render_header(
+                        &self.project,
+                        &self.conversation,
+                        self.view.autonomous,
+                        &status,
+                        panel_focus,
+                        area.width,
+                    );
+                    let header_text: String = header_line
+                        .spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect();
+                    // Find bracketed token at column
+                    let mut cur_col = 0usize;
+                    let target_col = usize::from(col.saturating_sub(area.x));
+                    for (idx, ch) in header_text.char_indices() {
+                        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                        if target_col >= cur_col && target_col < cur_col + w {
+                            if let Some(open) = header_text[..=idx].rfind('[')
+                                && let Some(close_rel) = header_text[idx..].find(']')
+                            {
+                                let token = &header_text[open..=idx + close_rel];
+                                match token {
+                                    "[Mode: autonomous]" | "[auto]" => {
+                                        self.command("/mode supervised");
+                                    }
+                                    "[Mode: supervised]" | "[sup]" => {
+                                        self.command("/mode autonomous");
+                                    }
+                                    "[/pause]" => self.command("/pause"),
+                                    "[/continue]" => self.command("/continue"),
+                                    "[/resume]" => self.command("/resume"),
+                                    "[/cancel]" => self.command("/cancel"),
+                                    "[Plan]" => self.command("/plan"),
+                                    "[chat]" => self.focus = Focus::Chat,
+                                    "[tasks]" => self.focus = Focus::Tasks,
+                                    "[team]" => self.focus = Focus::Graph,
+                                    _ => {}
+                                }
+                            }
+                            break;
+                        }
+                        cur_col += w;
+                    }
+                } else if row > area.y
+                    && row + 1 < area.bottom()
+                    && !self.view.graph_hidden()
+                    && area.width >= SIDE_BY_SIDE_BREAKPOINT
+                {
+                    let chat_width = (area.width / 3).max(34);
+                    if col < area.x + chat_width {
+                        self.focus = Focus::Chat;
+                    } else if col > area.x + chat_width && self.focus == Focus::Chat {
+                        self.focus = Focus::Graph;
+                    }
+                }
+            }
+            _ => {}
+        }
+        true
     }
 }
 
@@ -2843,6 +3330,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         offset: (0, 0),
         details: None,
         diff: None,
+        plan_view: None,
         editor: None,
         picker: None,
         help: None,
@@ -2876,6 +3364,14 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         details_scroll_memory: std::collections::HashMap::new(),
         details_query_memory: std::collections::HashMap::new(),
         graph_viewport: None,
+        trust_prompt: if options.trust {
+            None
+        } else {
+            match client.call(&Request::TrustStatus) {
+                Ok(val) if val["trusted"] == true => None,
+                _ => Some(options.project.to_string_lossy().into_owned()),
+            }
+        },
     };
     app.open(conversation);
 
@@ -2883,7 +3379,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     let ascii = ascii_terminal();
     let mut terminal = ratatui::init();
-    let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
+    let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableMouseCapture);
     let result = (|| -> Result<()> {
         loop {
             while let Ok(update) = received.try_recv() {
@@ -2908,13 +3404,22 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                         return Ok(());
                     }
                 }
+                Event::Mouse(mouse) => {
+                    if !app.mouse(mouse) {
+                        return Ok(());
+                    }
+                }
                 Event::Paste(text) => app.paste(&text),
                 _ => {}
             }
         }
     })();
     app.stop_poller.store(true, Ordering::SeqCst);
-    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        DisableBracketedPaste,
+        DisableMouseCapture
+    );
     ratatui::restore();
     result
 }
@@ -3021,11 +3526,15 @@ pub mod tests {
     }
 
     #[test]
-    fn ac_modal_04_clean_detach_on_empty_chat() {
+    fn ac_modal_04_esc_stays_open_and_explicit_quit_detaches() {
         let mut app = test_app();
         assert!(app.input.is_empty());
-        let open = app.key(key_press(KeyCode::Esc));
-        assert!(!open);
+        assert!(app.key(key_press(KeyCode::Esc)));
+        assert!(!app.key(key_press(KeyCode::Char('q'))));
+        assert!(!app.key(event::KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL
+        )));
     }
 
     #[test]
@@ -3145,7 +3654,7 @@ pub mod tests {
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
         let norm = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(norm.contains("Terminal zbyt mały (wymagane min. 12x5)"));
+        assert!(norm.contains("Terminal too small (min. 12x5 required)"));
     }
 
     #[test]
@@ -3164,9 +3673,9 @@ pub mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("[Czat]"));
-        assert!(text.contains("Zespół"));
-        assert!(text.contains("(Tab: przełącz)"));
+        assert!(text.contains("[Chat]"));
+        assert!(text.contains("Team"));
+        assert!(text.contains("(Tab: switch)"));
 
         // Switch to Focus::Graph
         app.focus = Focus::Graph;
@@ -3177,9 +3686,9 @@ pub mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("Czat"));
-        assert!(text.contains("[Zespół]"));
-        assert!(text.contains("(Tab: przełącz)"));
+        assert!(text.contains("Chat"));
+        assert!(text.contains("[Team]"));
+        assert!(text.contains("(Tab: switch)"));
     }
 
     #[test]
@@ -3198,10 +3707,10 @@ pub mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(!text.contains("[Czat]"));
-        assert!(!text.contains("(Tab: przełącz)"));
+        assert!(!text.contains("[Chat]"));
+        assert!(!text.contains("(Tab: switch)"));
         assert!(text.contains("antislop"));
-        assert!(text.contains("gotowy"));
+        assert!(text.contains("ready"));
     }
 
     #[test]
@@ -3220,7 +3729,7 @@ pub mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("Brak wiadomości w tej rozmowie"));
+        assert!(text.contains("No messages in this conversation"));
     }
 
     #[test]
@@ -3363,12 +3872,12 @@ pub mod tests {
         let text1: String = buffer1.content.iter().map(|c| c.symbol()).collect();
 
         // Check shortcuts and their full descriptions
-        assert!(text1.contains("wyślij wiadomość orkiestratorowi"));
-        assert!(text1.contains("nowa linia w szkicu"));
-        assert!(text1.contains("wiersz w szkicu"));
-        assert!(text1.contains("przewijanie rozmowy"));
-        assert!(text1.contains("uruchom/wznów"));
-        assert!(text1.contains("usuń do początku / końca"));
+        assert!(text1.contains("send message to orchestrator"));
+        assert!(text1.contains("newline in draft"));
+        assert!(text1.contains("line in draft"));
+        assert!(text1.contains("scroll conversation"));
+        assert!(text1.contains("accept/resume"));
+        assert!(text1.contains("delete to start / end of line"));
 
         // 2. Navigate/scroll help down and verify modal isolation
         for _ in 0..8 {
@@ -3390,17 +3899,17 @@ pub mod tests {
         let buffer2 = terminal.backend().buffer();
         let text2: String = buffer2.content.iter().map(|c| c.symbol()).collect();
 
-        assert!(text2.contains("anuluj trwającą pracę"));
-        assert!(text2.contains("wstrzymaj nowe kroki / kontynuuj"));
+        assert!(text2.contains("cancel running work"));
+        assert!(text2.contains("pause new steps / continue"));
         assert!(text2.contains("/mode autonomous"));
         assert!(text2.contains("/mode supervised"));
-        assert!(text2.contains("szukaj w rozmowie"));
-        assert!(text2.contains("paleta poleceń"));
-        assert!(text2.contains("czyść szkic; wyjdź gdy pusty"));
+        assert!(text2.contains("search conversation"));
+        assert!(text2.contains("command palette"));
+        assert!(text2.contains("back/clear draft"));
 
         // 4. Verify End followed by Down, PageDown, Up (clamping and no overflow panic)
         let max_scroll = app.help_max_scroll();
-        assert_eq!(max_scroll, 8);
+        assert!(max_scroll >= 8);
 
         app.key(event::KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         assert_eq!(app.help_scroll, max_scroll);
@@ -3436,7 +3945,7 @@ pub mod tests {
                 app.draw(frame);
             })
             .unwrap();
-        assert_eq!(app.help_max_scroll(), 8);
+        assert_eq!(app.help_max_scroll(), max_scroll);
 
         // 6. Graph help at 60x12: verify long filter relation description is fully accessible without clipping
         app.show_help(Help::Graph);
@@ -3447,12 +3956,12 @@ pub mod tests {
             .unwrap();
         let buffer_graph = terminal.backend().buffer();
         let text_graph: String = buffer_graph.content.iter().map(|c| c.symbol()).collect();
-        assert!(text_graph.contains("filtr relacji:"));
-        assert!(text_graph.contains("wszystko"));
-        assert!(text_graph.contains("zależności"));
-        assert!(text_graph.contains("weryfikacja"));
-        assert!(text_graph.contains("wiadomości"));
-        assert!(text_graph.contains("nadzór"));
+        assert!(text_graph.contains("relation filter:"));
+        assert!(text_graph.contains("all"));
+        assert!(text_graph.contains("dependencies"));
+        assert!(text_graph.contains("verification"));
+        assert!(text_graph.contains("messages"));
+        assert!(text_graph.contains("supervision"));
 
         // 7. Modal dismissal and draft preservation
         app.key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -3470,7 +3979,7 @@ pub mod tests {
 
         // 1. Render App with active progress in wide mode (100x30)
         let mut app = test_app();
-        app.view.activity = Some("trwa kompilacja testów".into());
+        app.view.activity = Some("compiling tests".into());
         app.focus = Focus::Graph;
         app.selected = ORCHESTRATOR.into();
 
@@ -3484,15 +3993,15 @@ pub mod tests {
 
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        // Progress overlay renders with "teraz" title and doesn't obscure orchestrator
-        assert!(text.contains("teraz"));
-        assert!(text.contains("orkiestrator") || text.contains(ORCHESTRATOR));
+        // Progress overlay renders with "now" title and doesn't obscure orchestrator
+        assert!(text.contains("now"));
+        assert!(text.contains("orchestrator") || text.contains(ORCHESTRATOR));
 
         // Verify orchestrator node cells remain intact in the buffer
         let mut orchestrator_visible = false;
         for y in 0..30 {
             let row: String = (0..100).map(|x| buffer[(x, y)].symbol()).collect();
-            if row.contains("orkiestrator") || row.contains(ORCHESTRATOR) {
+            if row.contains("orchestrator") || row.contains(ORCHESTRATOR) {
                 orchestrator_visible = true;
                 break;
             }
@@ -3502,7 +4011,7 @@ pub mod tests {
         // 2. Compact render with tiny inner area where all overlay placements collide
         // When compute_progress_overlay returns None, App::draw hides the overlay
         let mut app_compact = test_app();
-        app_compact.view.activity = Some("bardzo długa linia aktywności".into());
+        app_compact.view.activity = Some("very long activity line".into());
         app_compact.focus = Focus::Graph;
 
         // Create a fake test terminal where inner area forces collision
@@ -3517,6 +4026,6 @@ pub mod tests {
         let tiny_buf = term_tiny.backend().buffer();
         let tiny_text: String = tiny_buf.content.iter().map(|c| c.symbol()).collect();
         // Even at 60x12 in graph focus, orchestrator node remains visible
-        assert!(tiny_text.contains("orkiestrator") || tiny_text.contains(ORCHESTRATOR));
+        assert!(tiny_text.contains("orchestrator") || tiny_text.contains(ORCHESTRATOR));
     }
 }

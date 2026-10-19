@@ -78,6 +78,9 @@ fn config(codex: &Path, agy: &Path) -> Config {
     config_with(codex, agy, |text| text)
 }
 
+/// These tests follow one writing task through its agents, so the required
+/// quality gates a real plan gets are switched off;
+/// `required_gates_join_plans_that_write` switches them back on.
 fn config_with(codex: &Path, agy: &Path, change: impl Fn(String) -> String) -> Config {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -91,7 +94,8 @@ fn config_with(codex: &Path, agy: &Path, change: impl Fn(String) -> String) -> C
     .replace(
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
-    );
+    )
+    .replace("required_gates = true", "required_gates = false");
     Config::from_toml(&change(text)).unwrap()
 }
 
@@ -137,6 +141,39 @@ fn wait_idle(core: &Core, conversation: &str) {
         assert!(Instant::now() < deadline, "conversation never went idle");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn required_gates_join_plans_that_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    let config = config_with(&codex, &agy, |text| {
+        text.replace("required_gates = false", "required_gates = true")
+    });
+    let core = Core::open(&project.join(".antislop"), config).unwrap();
+    let conversation = core.start(&project).unwrap();
+    core.send(&conversation.id, "dodaj powitanie").unwrap();
+    wait_idle(&core, &conversation.id);
+    let plan = core.store.latest_plan(&conversation.id).unwrap();
+    let kinds: Vec<String> = plan
+        .iter()
+        .map(|task| task.spec["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(plan.len(), 4, "{kinds:?}");
+    let writer = plan[0].spec["id"].clone();
+    for gate in &plan[1..] {
+        assert_eq!(gate.spec["writes"], true);
+        assert!(
+            gate.spec["depends_on"]
+                .as_array()
+                .unwrap()
+                .contains(&writer),
+            "{:?}",
+            gate.spec
+        );
+    }
+    assert_eq!(kinds[1..], ["static_analysis", "testing", "integration"]);
 }
 
 #[test]

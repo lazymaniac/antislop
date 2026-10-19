@@ -75,22 +75,22 @@ impl Carousel {
         if view.tasks.is_empty() {
             let empty_text = vec![
                 Line::styled(
-                    "Brak zadań w bieżącym planie.",
+                    "No tasks in the current plan.",
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Line::styled("", Style::default()),
                 Line::styled(
-                    "Orkiestrator zaproponuje zadania po analizie Twojego zapytania w czacie.",
+                    "The orchestrator will propose tasks after analyzing your request in chat.",
                     dim(),
                 ),
                 Line::styled(
-                    "Naciśnij Tab, aby wrócić do zespołu lub Esc, aby pisać w czacie.",
+                    "Press Tab to return to the team or Esc to type in chat.",
                     dim(),
                 ),
             ];
             let block = Block::default()
                 .borders(Borders::ALL)
-                .title(" Zadania (karuzela) ");
+                .title(" Tasks (carousel) ");
             let p = Paragraph::new(empty_text).block(block);
             frame.render_widget(p, area);
             return;
@@ -144,7 +144,7 @@ impl Carousel {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Karuzela zadań ");
+            .title(" Task carousel ");
         let p = Paragraph::new(Line::from(spans)).block(block);
         frame.render_widget(p, area);
     }
@@ -180,7 +180,7 @@ impl Carousel {
         // Header line
         lines.push(Line::from(vec![
             Span::styled(
-                format!("Zadanie {}: ", task.id),
+                format!("Task {}: ", task.id),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(
@@ -194,11 +194,11 @@ impl Carousel {
 
         // Real counters section
         lines.push(Line::from(vec![Span::styled(
-            "● Rzeczywiste liczniki i stan:",
+            "● Live counters and state:",
             theme.accent(),
         )]));
         lines.push(Line::from(vec![
-            Span::styled("  Stan: ", theme.dim()),
+            Span::styled("  Status: ", theme.dim()),
             Span::styled(
                 format!("{status_mark} {}", polish(&task.status)),
                 Style::default()
@@ -206,11 +206,11 @@ impl Carousel {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("  ·  Runda: r{}", task.round),
+                format!("  ·  Round: r{}", task.round),
                 Style::default().fg(Color::Yellow),
             ),
             Span::styled(
-                format!("  ·  Komentarze: ✎{open_comments} otwartych ({total_comments} łącznie)"),
+                format!("  ·  Comments: ✎{open_comments} open ({total_comments} total)"),
                 Style::default().fg(if open_comments > 0 {
                     Color::Cyan
                 } else {
@@ -220,34 +220,58 @@ impl Carousel {
         ]));
 
         let deps_str = if task.depends_on.is_empty() {
-            "brak (korzeń grafu)".into()
+            "none (graph root)".into()
         } else {
             task.depends_on.join(", ")
         };
+        let par_str = if task.parallel_with.is_empty() {
+            "sequential".into()
+        } else {
+            task.parallel_with.join(", ")
+        };
         lines.push(Line::from(vec![
-            Span::styled("  Zależności [D]: ", theme.dim()),
+            Span::styled("  Dependencies [D]: ", theme.dim()),
             Span::styled(
-                format!("{} (liczba: {})", deps_str, task.depends_on.len()),
+                format!("{} (count: {})", deps_str, task.depends_on.len()),
                 Style::default().fg(Color::Blue),
             ),
+            Span::styled("  ·  Parallel with: ", theme.dim()),
+            Span::styled(
+                par_str,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]));
+        if let Some(sec) = task.section.as_deref().filter(|s| !s.is_empty()) {
+            let mut sec_style = Style::default().fg(Color::Cyan);
+            if task.status == "approved" {
+                sec_style = sec_style
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+            }
+            lines.push(Line::from(vec![
+                Span::styled("  Plan section: ", theme.dim()),
+                Span::styled(sec.to_owned(), sec_style),
+            ]));
+        }
 
         let scope_str = if task.scope.is_empty() {
-            "cały projekt".into()
+            "entire project".into()
         } else {
             task.scope.join(", ")
         };
         lines.push(Line::from(vec![
-            Span::styled("  Zakres plików: ", theme.dim()),
+            Span::styled("  File scope: ", theme.dim()),
             Span::styled(
-                format!("{} ścieżek ({scope_str})", task.scope.len()),
+                format!("{} paths ({scope_str})", task.scope.len()),
                 Style::default(),
             ),
             Span::styled(
                 if task.writes {
-                    " · modyfikuje pliki"
+                    " · modifies files"
                 } else {
-                    " · tylko do odczytu"
+                    " · read-only"
                 },
                 Style::default().fg(if task.writes {
                     Color::Yellow
@@ -258,28 +282,28 @@ impl Carousel {
         ]));
 
         // Agents information
-        let worker_info = worker_agent.map_or("nieuruchomiony", |a| {
+        let worker_info = worker_agent.map_or("not started", |a| {
             if a.running {
-                "● pracuje"
+                "● working"
             } else if !a.activity.is_empty() {
                 a.activity.as_str()
             } else {
-                "bezczynny"
+                "idle"
             }
         });
-        let verifier_info = verifier_agent.map_or("nieuruchomiony", |a| {
+        let verifier_info = verifier_agent.map_or("not started", |a| {
             if a.running {
-                "● sprawdza"
+                "● checking"
             } else if !a.activity.is_empty() {
                 a.activity.as_str()
             } else {
-                "bezczynny"
+                "idle"
             }
         });
         lines.push(Line::from(vec![
             Span::styled("  Worker: ", theme.dim()),
             Span::styled(worker_info, Style::default().fg(Color::Cyan)),
-            Span::styled("  │  Weryfikator [V]: ", theme.dim()),
+            Span::styled("  │  Verifier [V]: ", theme.dim()),
             Span::styled(verifier_info, Style::default().fg(Color::Yellow)),
         ]));
 
@@ -288,13 +312,13 @@ impl Carousel {
         // Goal & Focus
         if !task.goal.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Cel: ", theme.dim()),
+                Span::styled("Goal: ", theme.dim()),
                 Span::styled(task.goal.clone(), Style::default()),
             ]));
         }
         if !task.focus.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Fokus weryfikacji: ", theme.dim()),
+                Span::styled("Verification focus: ", theme.dim()),
                 Span::styled(task.focus.clone(), Style::default().fg(Color::Yellow)),
             ]));
         }
@@ -329,42 +353,42 @@ impl Carousel {
 
         lines.push(Line::styled("", Style::default()));
         lines.push(Line::from(vec![
-            Span::styled(format!("Podsumowanie planu: {} zadań łącznie  │  ✓ {} zatwierdzone  │  ● {} w toku  │  ○ {} oczekuje  │  ✕ {} problemów",
+            Span::styled(format!("Plan summary: {} tasks total │ ✓ {} approved │ ● {} in progress │ ○ {} waiting │ ✕ {} issues",
                 view.tasks.len(), approved, working, queued, problems
             ), theme.dim()),
         ]));
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(format!(" Szczegóły zadania {} ", task.id));
+            .title(format!(" Task {} details ", task.id));
         let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
         frame.render_widget(p, area);
     }
 
     fn draw_actions(&self, frame: &mut Frame, area: Rect, _task: &TaskRow, theme: &Theme) {
         let spans = vec![
-            Span::styled("Skróty: ", theme.dim()),
+            Span::styled("Shortcuts: ", theme.dim()),
             Span::styled(
                 "[w] ",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Przejdź do workera na grafie  ", Style::default()),
+            Span::styled("Jump to worker on graph  ", Style::default()),
             Span::styled(
                 "[v] ",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Przejdź do weryfikatora  ", Style::default()),
+            Span::styled("Jump to verifier  ", Style::default()),
             Span::styled(
                 "[Enter] ",
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Szczegóły  ", Style::default()),
+            Span::styled("Details  ", Style::default()),
             Span::styled(
                 "[d] ",
                 Style::default()
@@ -378,14 +402,14 @@ impl Carousel {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Komentarz  ", Style::default()),
+            Span::styled("Comment  ", Style::default()),
             Span::styled(
                 "[←/→] ",
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("Nawigacja karuzeli", Style::default()),
+            Span::styled("Carousel navigation", Style::default()),
         ];
         let p = Paragraph::new(Line::from(spans)).wrap(Wrap { trim: true });
         frame.render_widget(p, area);

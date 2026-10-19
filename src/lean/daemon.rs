@@ -62,6 +62,9 @@ pub enum Request {
     Shutdown,
     Conversations,
     Start,
+    StartIn {
+        project: String,
+    },
     Send {
         conversation: String,
         text: String,
@@ -79,6 +82,18 @@ pub enum Request {
     AcceptScoped {
         conversation: String,
         plan: String,
+        scope_hash: Option<String>,
+    },
+    /// Rejects a proposed plan and asks the orchestrator to revise it.
+    Reject {
+        conversation: String,
+        plan: String,
+        reason: Option<String>,
+    },
+    RejectScoped {
+        conversation: String,
+        plan: String,
+        reason: Option<String>,
         scope_hash: Option<String>,
     },
     /// Runs again what the plan left unfinished, through the same sessions.
@@ -108,9 +123,33 @@ pub enum Request {
         conversation: String,
         autonomous: bool,
     },
+    /// Paginated read of all stored plans for a conversation.
+    Plans {
+        conversation: String,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    },
+    /// Detailed history of a single plan.
+    Plan {
+        conversation: String,
+        plan: String,
+    },
+    /// Comments of a conversation, optionally filtered by plan and/or status.
+    Comments {
+        conversation: String,
+        plan: Option<String>,
+        status: Option<String>,
+    },
     /// The user's comment on one element of the team panel or a diff.
     Comment {
         conversation: String,
+        target: String,
+        text: String,
+    },
+    /// The user's comment scoped to a specific plan.
+    CommentScoped {
+        conversation: String,
+        plan: Option<String>,
         target: String,
         text: String,
     },
@@ -143,6 +182,11 @@ pub enum Request {
         plan: String,
         id: String,
     },
+    TaskScoped {
+        conversation: Option<String>,
+        plan: String,
+        id: String,
+    },
     Events {
         conversation: String,
         after: u64,
@@ -165,6 +209,14 @@ pub enum Request {
     Mail {
         conversation: String,
     },
+    TrustStatus,
+    Trust {
+        trusted: bool,
+    },
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,7 +225,10 @@ enum WireRequest {
     Identity,
     Shutdown,
     Conversations,
-    Start,
+    Start {
+        #[serde(default)]
+        project: Option<String>,
+    },
     Send {
         conversation: String,
         text: String,
@@ -183,6 +238,14 @@ enum WireRequest {
     Accept {
         conversation: String,
         plan: String,
+        #[serde(default)]
+        scope_hash: Option<String>,
+    },
+    Reject {
+        conversation: String,
+        plan: String,
+        #[serde(default)]
+        reason: Option<String>,
         #[serde(default)]
         scope_hash: Option<String>,
     },
@@ -205,8 +268,28 @@ enum WireRequest {
         conversation: String,
         autonomous: bool,
     },
+    Plans {
+        conversation: String,
+        #[serde(default)]
+        offset: Option<usize>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    Plan {
+        conversation: String,
+        plan: String,
+    },
+    Comments {
+        conversation: String,
+        #[serde(default)]
+        plan: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+    },
     Comment {
         conversation: String,
+        #[serde(default)]
+        plan: Option<String>,
         target: String,
         text: String,
     },
@@ -228,6 +311,8 @@ enum WireRequest {
         scope_hash: Option<String>,
     },
     Task {
+        #[serde(default)]
+        conversation: Option<String>,
         plan: String,
         id: String,
     },
@@ -251,6 +336,11 @@ enum WireRequest {
     Mail {
         conversation: String,
     },
+    TrustStatus,
+    Trust {
+        #[serde(default = "default_true")]
+        trusted: bool,
+    },
 }
 
 impl From<Request> for WireRequest {
@@ -259,7 +349,10 @@ impl From<Request> for WireRequest {
             Request::Identity => WireRequest::Identity,
             Request::Shutdown => WireRequest::Shutdown,
             Request::Conversations => WireRequest::Conversations,
-            Request::Start => WireRequest::Start,
+            Request::Start => WireRequest::Start { project: None },
+            Request::StartIn { project } => WireRequest::Start {
+                project: Some(project),
+            },
             Request::Send { conversation, text } => WireRequest::Send {
                 conversation,
                 text,
@@ -286,6 +379,27 @@ impl From<Request> for WireRequest {
             } => WireRequest::Accept {
                 conversation,
                 plan,
+                scope_hash,
+            },
+            Request::Reject {
+                conversation,
+                plan,
+                reason,
+            } => WireRequest::Reject {
+                conversation,
+                plan,
+                reason,
+                scope_hash: None,
+            },
+            Request::RejectScoped {
+                conversation,
+                plan,
+                reason,
+                scope_hash,
+            } => WireRequest::Reject {
+                conversation,
+                plan,
+                reason,
                 scope_hash,
             },
             Request::Resume { conversation, plan } => WireRequest::Resume {
@@ -327,12 +441,43 @@ impl From<Request> for WireRequest {
                 conversation,
                 autonomous,
             },
+            Request::Plans {
+                conversation,
+                offset,
+                limit,
+            } => WireRequest::Plans {
+                conversation,
+                offset,
+                limit,
+            },
+            Request::Plan { conversation, plan } => WireRequest::Plan { conversation, plan },
+            Request::Comments {
+                conversation,
+                plan,
+                status,
+            } => WireRequest::Comments {
+                conversation,
+                plan,
+                status,
+            },
             Request::Comment {
                 conversation,
                 target,
                 text,
             } => WireRequest::Comment {
                 conversation,
+                plan: None,
+                target,
+                text,
+            },
+            Request::CommentScoped {
+                conversation,
+                plan,
+                target,
+                text,
+            } => WireRequest::Comment {
+                conversation,
+                plan,
                 target,
                 text,
             },
@@ -375,7 +520,20 @@ impl From<Request> for WireRequest {
                 id,
                 scope_hash,
             },
-            Request::Task { plan, id } => WireRequest::Task { plan, id },
+            Request::Task { plan, id } => WireRequest::Task {
+                conversation: None,
+                plan,
+                id,
+            },
+            Request::TaskScoped {
+                conversation,
+                plan,
+                id,
+            } => WireRequest::Task {
+                conversation,
+                plan,
+                id,
+            },
             Request::Events {
                 conversation,
                 after,
@@ -408,6 +566,8 @@ impl From<Request> for WireRequest {
                 limit,
             },
             Request::Mail { conversation } => WireRequest::Mail { conversation },
+            Request::TrustStatus => WireRequest::TrustStatus,
+            Request::Trust { trusted } => WireRequest::Trust { trusted },
         }
     }
 }
@@ -418,7 +578,10 @@ impl From<WireRequest> for Request {
             WireRequest::Identity => Request::Identity,
             WireRequest::Shutdown => Request::Shutdown,
             WireRequest::Conversations => Request::Conversations,
-            WireRequest::Start => Request::Start,
+            WireRequest::Start { project } => match project {
+                Some(project) => Request::StartIn { project },
+                None => Request::Start,
+            },
             WireRequest::Send {
                 conversation,
                 text,
@@ -447,6 +610,27 @@ impl From<WireRequest> for Request {
                     }
                 } else {
                     Request::Accept { conversation, plan }
+                }
+            }
+            WireRequest::Reject {
+                conversation,
+                plan,
+                reason,
+                scope_hash,
+            } => {
+                if scope_hash.is_some() {
+                    Request::RejectScoped {
+                        conversation,
+                        plan,
+                        reason,
+                        scope_hash,
+                    }
+                } else {
+                    Request::Reject {
+                        conversation,
+                        plan,
+                        reason,
+                    }
                 }
             }
             WireRequest::Resume {
@@ -491,15 +675,46 @@ impl From<WireRequest> for Request {
                 conversation,
                 autonomous,
             },
+            WireRequest::Plans {
+                conversation,
+                offset,
+                limit,
+            } => Request::Plans {
+                conversation,
+                offset,
+                limit,
+            },
+            WireRequest::Plan { conversation, plan } => Request::Plan { conversation, plan },
+            WireRequest::Comments {
+                conversation,
+                plan,
+                status,
+            } => Request::Comments {
+                conversation,
+                plan,
+                status,
+            },
             WireRequest::Comment {
                 conversation,
+                plan,
                 target,
                 text,
-            } => Request::Comment {
-                conversation,
-                target,
-                text,
-            },
+            } => {
+                if plan.is_some() {
+                    Request::CommentScoped {
+                        conversation,
+                        plan,
+                        target,
+                        text,
+                    }
+                } else {
+                    Request::Comment {
+                        conversation,
+                        target,
+                        text,
+                    }
+                }
+            }
             WireRequest::CommentStatus {
                 conversation,
                 id,
@@ -539,7 +754,21 @@ impl From<WireRequest> for Request {
                     }
                 }
             }
-            WireRequest::Task { plan, id } => Request::Task { plan, id },
+            WireRequest::Task {
+                conversation,
+                plan,
+                id,
+            } => {
+                if conversation.is_some() {
+                    Request::TaskScoped {
+                        conversation,
+                        plan,
+                        id,
+                    }
+                } else {
+                    Request::Task { plan, id }
+                }
+            }
             WireRequest::Events {
                 conversation,
                 after,
@@ -572,6 +801,8 @@ impl From<WireRequest> for Request {
                 limit,
             },
             WireRequest::Mail { conversation } => Request::Mail { conversation },
+            WireRequest::TrustStatus => Request::TrustStatus,
+            WireRequest::Trust { trusted } => Request::Trust { trusted },
         }
     }
 }
@@ -708,6 +939,13 @@ fn handle(
         }
         Request::Conversations => json!(core.conversations()?),
         Request::Start => json!(core.start(project)?),
+        Request::StartIn {
+            project: target_project,
+        } => {
+            let target_path = Path::new(&target_project).canonicalize()?;
+            let _ = core.store.trust_project(&target_path.to_string_lossy());
+            json!(core.start(&target_path)?)
+        }
         Request::Send { conversation, text } => {
             validate_project_conversation(core, project, &conversation)?;
             core.submit_addressed(&conversation, &text, None)?
@@ -722,6 +960,7 @@ fn handle(
         }
         Request::Accept { conversation, plan } => {
             validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
             json!(core.accept_plan(&conversation, &plan)?.len())
         }
         Request::AcceptScoped {
@@ -736,10 +975,39 @@ fn handle(
                     Err(_) => return Err(Error::Invalid("stale_scope".into())),
                 }
             }
+            validate_conversation_plan(core, &conversation, &plan)?;
             json!(core.accept_plan(&conversation, &plan)?.len())
+        }
+        Request::Reject {
+            conversation,
+            plan,
+            reason,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
+            core.reject_plan(&conversation, &plan, reason.as_deref())?;
+            Value::Null
+        }
+        Request::RejectScoped {
+            conversation,
+            plan,
+            reason,
+            scope_hash,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            if let Some(expected) = &scope_hash {
+                match core.plan_scope_hash(&conversation, &plan) {
+                    Ok(current) => require(expected == &current, "stale_scope")?,
+                    Err(_) => return Err(Error::Invalid("stale_scope".into())),
+                }
+            }
+            validate_conversation_plan(core, &conversation, &plan)?;
+            core.reject_plan(&conversation, &plan, reason.as_deref())?;
+            Value::Null
         }
         Request::Resume { conversation, plan } => {
             validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
             json!(core.resume_plan(&conversation, &plan)?.len())
         }
         Request::ResumeScoped {
@@ -754,6 +1022,7 @@ fn handle(
                     Err(_) => return Err(Error::Invalid("stale_scope".into())),
                 }
             }
+            validate_conversation_plan(core, &conversation, &plan)?;
             json!(core.resume_plan(&conversation, &plan)?.len())
         }
         Request::Cancel { conversation } => {
@@ -791,6 +1060,43 @@ fn handle(
             core.set_mode(&conversation, autonomous)?;
             Value::Null
         }
+        Request::Plans {
+            conversation,
+            offset,
+            limit,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            let offset = offset.unwrap_or(0);
+            let limit = limit.unwrap_or(50);
+            json!(core.plans(&conversation, offset, limit)?)
+        }
+        Request::Plan { conversation, plan } => {
+            validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
+            json!(core.plan_history(&conversation, &plan)?)
+        }
+        Request::Comments {
+            conversation,
+            plan,
+            status,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            if let Some(p) = &plan {
+                validate_conversation_plan(core, &conversation, p)?;
+            }
+            let filter_status = match status.as_deref() {
+                Some(s) if s.eq_ignore_ascii_case("all") => None,
+                Some(s) => Some(s),
+                None => Some("open"),
+            };
+            let comments = match &plan {
+                Some(p) => core
+                    .store
+                    .comments_by_plan(&conversation, p, filter_status)?,
+                None => core.store.comments_all(&conversation, filter_status)?,
+            };
+            json!(comments)
+        }
         Request::Comment {
             conversation,
             target,
@@ -798,6 +1104,18 @@ fn handle(
         } => {
             validate_project_conversation(core, project, &conversation)?;
             json!(core.comment(&conversation, &target, &text)?)
+        }
+        Request::CommentScoped {
+            conversation,
+            plan,
+            target,
+            text,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            if let Some(p) = &plan {
+                validate_conversation_plan(core, &conversation, p)?;
+            }
+            json!(core.comment_scoped(&conversation, plan.as_deref(), &target, &text)?)
         }
         Request::CommentStatus {
             conversation,
@@ -807,13 +1125,35 @@ fn handle(
             validate_project_conversation(core, project, &conversation)?;
             json!(core.set_comment(&conversation, id, &status)?)
         }
-        Request::Task { plan, id } => json!(core.task(&plan, &id)?),
+        Request::Task { plan, id } => {
+            let conv = core.store.plan_conversation(&plan)?;
+            validate_project_conversation(core, project, &conv)?;
+            validate_plan_task(core, &plan, &id)?;
+            json!(core.task(&plan, &id)?)
+        }
+        Request::TaskScoped {
+            conversation,
+            plan,
+            id,
+        } => {
+            if let Some(conv) = &conversation {
+                validate_project_conversation(core, project, conv)?;
+                validate_conversation_plan(core, conv, &plan)?;
+            } else {
+                let conv = core.store.plan_conversation(&plan)?;
+                validate_project_conversation(core, project, &conv)?;
+            }
+            validate_plan_task(core, &plan, &id)?;
+            json!(core.task(&plan, &id)?)
+        }
         Request::Diff {
             conversation,
             plan,
             id,
         } => {
             validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
+            validate_plan_task(core, &plan, &id)?;
             core.diff(&conversation, &plan, &id)?
         }
         Request::Review {
@@ -822,6 +1162,8 @@ fn handle(
             id,
         } => {
             validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
+            validate_plan_task(core, &plan, &id)?;
             core.review_change(&conversation, &plan, &id)?;
             Value::Null
         }
@@ -838,6 +1180,8 @@ fn handle(
                     Err(_) => return Err(Error::Invalid("stale_scope".into())),
                 }
             }
+            validate_conversation_plan(core, &conversation, &plan)?;
+            validate_plan_task(core, &plan, &id)?;
             core.review_change(&conversation, &plan, &id)?;
             Value::Null
         }
@@ -868,17 +1212,53 @@ fn handle(
             validate_project_conversation(core, project, &conversation)?;
             json!(core.store.mail(&conversation)?)
         }
+        Request::TrustStatus => {
+            let proj = project.to_string_lossy();
+            json!({
+                "project": proj,
+                "trusted": core.store.is_trusted(&proj)?,
+            })
+        }
+        Request::Trust { trusted } => {
+            let proj = project.to_string_lossy();
+            if trusted {
+                core.store.trust_project(&proj)?;
+            } else {
+                core.store.untrust_project(&proj)?;
+            }
+            json!({
+                "project": proj,
+                "trusted": trusted,
+            })
+        }
     })
 }
 
 fn validate_project_conversation(core: &Core, project: &Path, conversation: &str) -> Result<()> {
     let conv = core.store.conversation(conversation)?;
     require(
-        conv.project == project.to_string_lossy(),
+        conv.project == project.to_string_lossy() || core.store.is_trusted(&conv.project)?,
         &format!(
             "conversation {conversation} does not belong to project {}",
             project.display()
         ),
+    )?;
+    Ok(())
+}
+
+fn validate_conversation_plan(core: &Core, conversation: &str, plan: &str) -> Result<()> {
+    require(
+        core.store
+            .plan_belongs_to_conversation(conversation, plan)?,
+        &format!("plan {plan} does not belong to conversation {conversation}"),
+    )?;
+    Ok(())
+}
+
+fn validate_plan_task(core: &Core, plan: &str, task_id: &str) -> Result<()> {
+    require(
+        core.store.task_in_plan(plan, task_id)?,
+        &format!("task {task_id} does not belong to plan {plan}"),
     )?;
     Ok(())
 }
@@ -994,8 +1374,8 @@ impl Client {
             }
             if same && identity["busy"] == true {
                 client.notice = Some(
-                    "architect.toml zmienił się: trwająca praca zachowuje swoją konfigurację, \
-                     nowa zadziała po jej zakończeniu i ponownym otwarciu"
+                    "architect.toml changed: running work keeps its configuration, \
+                     the new one applies once it finishes and you reopen"
                         .into(),
                 );
                 return Ok(client);

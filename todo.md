@@ -1,0 +1,21 @@
+TODO list:
+
+- [x] Pierwszy krok pracy z antislop po wyslaniu zadania jest wywiad z uzytkownikiem. Nastepnym krokiem jest napisanie planu. Widok grafu agentow na tym etapie powinien byc ukryty.
+- [x] Plan stwozony dla danego zadania wyslanego przez uzytkownika powinien zostac pokazany na calym ekranie jak dokument w ktorym uzytkownik porusza kursorem miedzy liniami tekstu i jest w stanie skomentowac dowolna linie planu. Pod tekstem na stalej belce dolnej dostepne przyciski. Accept / Reject / Comment whole plan.
+- [x] Komentarze dodane do planu powinny zostac rozwiazane lub odpowiednio zaadresowane.
+- [x] Plan po rozwiazaniu wszystktkich komentarzy uzytkownika powinien zostac zamieniony na liste zadan do wykonania, zadania powinny miec okreslone zaleznosci i informacje o mozliwosci wykonania rownolegle z innymi zadaniami.
+- [x] Uzytkownik w kazdej chwili powinien miec mozliwosc wgladu w plan.
+- [x] Mozna sie zastanowic nad mozliwoscia przypisywania zadan do konkretnych sekcji planu i nastepnie fragment planu ktory zostal wykonany moze zostac podkreslony w odpowiedni sposob.
+- [x] Agenci powinni miec mozliwosc pracy rownleglem tam gdzie ma to sens.
+- [x] Argument aplikacji --project nie jest potrzebny. Zadne ze znanych narzedzi nie obsluguje takich paramterow. Katalogiem roboczym jest katalog w ktorym zostal uruchomiony antislop czyli najczesciej katalog glowny projektu. Nie trzeba sprawdzac czy jest to katalog glowny projektu. Katalog w ktorym zostal uruchomiony antislop jest katalogiem dostarczonym przez uzytkownika.
+- [x] Trzeba dodac mechanizm akceptacji i zaufania danego katalogu roboczego przy pierwszym uruchomieniu w danym katalogu tak jak to dziala w innych narzedziach jak np codex.
+- [x] UI powinien wyswietlac toggle dla trybu autonomous albo supervised
+- [x] Komendy /pause /resume /continue /cancel takze powinny zostac obsluzone jak przyciski UI.
+- [x] Podglad sesji w szczegolach agenta powien emulowac terminal procesu w ktorym jest uruchominy dany agent, tak zeby uzytkownik mial wglad we wszystkie operacje i komunikaty jakie przetwarza dany agent.
+- [x] dodac obsluge uruchamiania aplikacji agentow za pomoca komend udostepnionych przez inne platformy. Przyklad: chcialbym moc skonfigurowac apliakcje tak ze orkiestrator jest dziala jako domyslny codex, a workerzy i werfikatorzy sa startowani przy pomocy komendy np omlx launch codex, albo ollama launch codex.
+- [x] Kazdy tekst wyswietlony w UI powinien zostac przetlumaczony na Angielski.
+- [x] Trzymanie effort map w konfiguracji nie ma sensu. Apliakcje maja jedna drabine skalowania dla myslenian i trzeba je zahardkodac.
+- [x] Czesc agentow z dostepnej puli predefiniowanych agentow powinna byc wymagana, tak aby zawsze zapewnic najlepsza jakosc i pozostawic kod w lepszym stanie niz byl, oraz zapewnic ze wszystkie wymagania zostaly spelnione.
+- [x] funkcjonalnosc eksportu powinna zostac usunieta.
+- [x] UI musi wspierac myszke / touchpad.
+- [x] Dodac mozliwosc pracy nad kilkoma projektami na raz.

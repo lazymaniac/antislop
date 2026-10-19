@@ -107,6 +107,67 @@ fn wait_idle(core: &Core, conversation: &str) {
     }
 }
 
+#[test]
+fn a_plan_comment_gets_an_independent_revision_and_verification() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    core.send(&conversation.id, "Assess storage and TUI")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let initial = core.store.latest_plan(&conversation.id).unwrap()[0]
+        .plan_id
+        .clone();
+    let comment = core
+        .comment_scoped(
+            &conversation.id,
+            Some(&initial),
+            &format!("plan:{initial}:line:2"),
+            "Explain storage verification in more detail",
+        )
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let revised = core.store.latest_plan(&conversation.id).unwrap()[0]
+        .plan_id
+        .clone();
+    assert_ne!(initial, revised);
+    assert!(
+        core.store
+            .comments(&conversation.id, "resolved")
+            .unwrap()
+            .iter()
+            .any(|entry| entry.id == comment.id)
+    );
+    let turn = core
+        .store
+        .last_turn(&conversation.id, architect::lean::COMMENT_ORCHESTRATOR)
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.status, architect::lean::store::TurnStatus::Done);
+    let calls = calls(dir.path());
+    let revision = calls
+        .iter()
+        .find(|(binary, prompt)| {
+            binary == "codex" && prompt.contains("Address each new user comment")
+        })
+        .unwrap();
+    assert!(revision.1.contains(&format!("Referenced plan {initial}")));
+    assert!(revision.1.contains("Assess storage and TUI"));
+    assert!(
+        revision
+            .1
+            .contains("Explain storage verification in more detail")
+    );
+    let review = core.store.plan_history(&conversation.id, &revised).unwrap();
+    assert!(
+        review
+            .turns
+            .iter()
+            .any(|turn| turn.role == "plan-verifier" && turn.status == "done")
+    );
+}
+
 fn calls(dir: &Path) -> Vec<(String, String)> {
     std::fs::read_to_string(dir.join(CALLS))
         .unwrap()

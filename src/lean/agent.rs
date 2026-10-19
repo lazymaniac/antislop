@@ -25,6 +25,7 @@ pub enum Access {
 pub struct Spec {
     pub provider: ProviderKind,
     pub binary: PathBuf,
+    pub args: Vec<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     pub cwd: PathBuf,
@@ -177,6 +178,7 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
     const NO_CODEX_SUBAGENTS: &str = "features.multi_agent=false";
     const NO_CLAUDE_SUBAGENTS: &str = "Task,Agent";
     let mut command = Command::new(&spec.binary);
+    command.args(&spec.args);
     command.current_dir(&spec.cwd);
     let read_only = spec.access == Access::ReadOnly;
     match spec.provider {
@@ -798,6 +800,7 @@ mod tests {
             let spec = Spec {
                 provider,
                 binary: "cli".into(),
+                args: vec![],
                 model: None,
                 effort: None,
                 cwd: "/".into(),
@@ -833,6 +836,29 @@ mod tests {
     }
 
     #[test]
+    fn launcher_prefix_args_precede_provider_flags() {
+        let spec = Spec {
+            provider: ProviderKind::Codex,
+            binary: "omlx".into(),
+            args: vec!["launch".into(), "codex".into()],
+            model: None,
+            effort: Some("high".into()),
+            cwd: "/".into(),
+            add_dirs: vec![],
+            access: Access::Write,
+            resume: None,
+        };
+        let cmd = command(&spec, "prompt").unwrap();
+        assert_eq!(cmd.get_program(), "omlx");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(&args[..3], ["launch", "codex", "exec"]);
+        assert_eq!(args.last().unwrap(), "prompt");
+    }
+
+    #[test]
     fn a_missing_result_reports_exit_status_and_stderr() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("agent");
@@ -842,6 +868,7 @@ mod tests {
         let spec = Spec {
             provider: ProviderKind::Codex,
             binary: script,
+            args: vec![],
             model: None,
             effort: None,
             cwd: dir.path().into(),
@@ -863,6 +890,7 @@ mod tests {
         let spec = Spec {
             provider: ProviderKind::Agy,
             binary: script,
+            args: vec![],
             model: None,
             effort: None,
             cwd: dir.path().into(),
@@ -889,6 +917,7 @@ mod tests {
         Spec {
             provider: ProviderKind::Codex,
             binary: script,
+            args: vec![],
             model: None,
             effort: None,
             cwd: dir.into(),

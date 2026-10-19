@@ -22,24 +22,17 @@ revision = 1
 local_write = true
 local_checks = true
 local_commits = false
+# Plans that change code always get the static analysis, testing and
+# integration gates they lack from the predefined agent pool.
+required_gates = true
 
 [providers.codex]
 binary = "codex"
 isolation = "read_only"
-native_effort = true
-[providers.codex.effort_map]
-light = "low"
-standard = "medium"
-deep = "high"
 
 [providers.agy]
 binary = "agy"
 isolation = "tool_free"
-native_effort = true
-[providers.agy.effort_map]
-light = "low"
-standard = "medium"
-deep = "high"
 
 [role_providers]
 orchestrator = ["codex"]

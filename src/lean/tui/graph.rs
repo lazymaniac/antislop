@@ -2,12 +2,16 @@
 //! what relates them. The layout depends only on the plan's shape, so nodes
 //! stay put while events arrive.
 
-use super::view::{AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, View, agent_name, polish, truncate};
+use super::view::{
+    AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, View, agent_name, clean, polish, truncate, wrap,
+};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use std::collections::HashMap;
 use std::time::Duration;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 pub const WIDTH: u16 = 26;
 pub const HEIGHT: u16 = 4;
@@ -40,19 +44,17 @@ impl Filter {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::All => "wszystko",
-            Self::Depends => "zależności",
-            Self::Verifies => "weryfikacja",
-            Self::Mail => "komunikacja",
-            Self::Supervises => "nadzór",
+            Self::All => "all",
+            Self::Depends => "dependencies",
+            Self::Verifies => "verification",
+            Self::Mail => "messages",
+            Self::Supervises => "supervision",
         }
     }
 
-    /// Supervision edges reach every worker, so only their own filter shows
-    /// them.
     fn shows(self, kind: Kind) -> bool {
         match self {
-            Self::All => kind != Kind::Supervises,
+            Self::All => true,
             Self::Depends => kind == Kind::Depends,
             Self::Verifies => kind == Kind::Verifies,
             Self::Mail => matches!(kind, Kind::Mail { .. }),
@@ -100,8 +102,8 @@ impl GroupingMode {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Dependency => "zależności",
-            Self::Status => "stan",
+            Self::Dependency => "dependencies",
+            Self::Status => "state",
         }
     }
 }
@@ -111,6 +113,7 @@ pub struct Node {
     pub key: String,
     pub x: u16,
     pub y: u16,
+    pub height: u16,
     pub visible: bool,
     pub group: Option<String>,
     pub collapsed: bool,
@@ -122,6 +125,7 @@ impl Default for Node {
             key: String::new(),
             x: 0,
             y: 0,
+            height: HEIGHT,
             visible: true,
             group: None,
             collapsed: false,
@@ -135,6 +139,7 @@ impl Node {
             key,
             x,
             y,
+            height: HEIGHT,
             visible: true,
             group: None,
             collapsed: false,
@@ -142,7 +147,7 @@ impl Node {
     }
 
     fn mid_y(&self) -> u16 {
-        self.y + HEIGHT / 2
+        self.y.saturating_add(self.height / 2)
     }
 
     fn right(&self) -> u16 {
@@ -369,6 +374,7 @@ impl Graph {
                     key: key.to_string(),
                     x: if vis { column_x(col) } else { 0 },
                     y: if vis { row_y(row) } else { 0 },
+                    height: HEIGHT,
                     visible: vis,
                     group: None,
                     collapsed: false,
@@ -485,6 +491,7 @@ impl Graph {
                     key: key.to_string(),
                     x: if vis { column_x(col) } else { 0 },
                     y: if vis { row_y(row) } else { 0 },
+                    height: HEIGHT,
                     visible: vis,
                     group: None,
                     collapsed: false,
@@ -543,6 +550,7 @@ impl Graph {
                     key: format!("worker:{id}"),
                     x: 0,
                     y: 0,
+                    height: HEIGHT,
                     visible: false,
                     group: Some(format!("task:{id}")),
                     collapsed: is_task_collapsed,
@@ -551,11 +559,40 @@ impl Graph {
                     key: format!("verifier:{id}"),
                     x: 0,
                     y: 0,
+                    height: HEIGHT,
                     visible: false,
                     group: Some(format!("task:{id}")),
                     collapsed: false,
                 });
             }
+        }
+
+        let mut row_heights = std::collections::BTreeMap::<u16, u16>::new();
+        for node in graph.nodes.iter_mut().filter(|node| node.visible) {
+            if let Some(text) = task_text(view, &node.key) {
+                node.height = u16::try_from(wrap(&text, usize::from(WIDTH - 4)).len())
+                    .unwrap_or(u16::MAX - 3)
+                    .saturating_add(3)
+                    .max(HEIGHT);
+            }
+            row_heights
+                .entry(node.y)
+                .and_modify(|height| *height = (*height).max(node.height))
+                .or_insert(node.height);
+        }
+        let mut next_y = 0u16;
+        let row_positions: HashMap<_, _> = row_heights
+            .into_iter()
+            .map(|(row, height)| {
+                let y = next_y;
+                next_y = next_y.saturating_add(height).saturating_add(GAP_Y);
+                (row, (y, height))
+            })
+            .collect();
+        for node in graph.nodes.iter_mut().filter(|node| node.visible) {
+            let (y, height) = row_positions[&node.y];
+            node.y = y;
+            node.height = height;
         }
 
         let mut edge = |from: String, to: String, kind: Kind, label: Option<String>| {
@@ -622,7 +659,7 @@ impl Graph {
             .nodes
             .iter()
             .filter(|n| n.visible)
-            .map(|node| node.y + HEIGHT)
+            .map(|node| node.y.saturating_add(node.height))
             .max()
             .unwrap_or(0);
         graph
@@ -639,7 +676,7 @@ impl Graph {
         let center = |node: &Node| {
             (
                 i32::from(node.x) + i32::from(WIDTH) / 2,
-                i32::from(node.y) + i32::from(HEIGHT) / 2,
+                i32::from(node.y) + i32::from(node.height) / 2,
             )
         };
         let (fx, fy) = center(from);
@@ -670,14 +707,21 @@ impl Graph {
         let half = GAP_X / 2;
         // Same column
         if from.x == to.x {
-            let is_adjacent = (from.y as i32 - to.y as i32).abs() <= (HEIGHT + GAP_Y) as i32;
+            let is_adjacent = if from.y < to.y {
+                from.y.saturating_add(from.height).saturating_add(GAP_Y) == to.y
+            } else {
+                to.y.saturating_add(to.height).saturating_add(GAP_Y) == from.y
+            };
             if is_adjacent {
                 let x = to.x + WIDTH / 2;
                 if from.y > to.y {
-                    return vec![(x, from.y - 1), (x, to.y + HEIGHT)];
+                    return vec![(x, from.y - 1), (x, to.y.saturating_add(to.height))];
                 }
                 if from.y < to.y {
-                    return vec![(x, from.y + HEIGHT), (x, to.y.saturating_sub(1))];
+                    return vec![
+                        (x, from.y.saturating_add(from.height)),
+                        (x, to.y.saturating_sub(1)),
+                    ];
                 }
             } else {
                 let lane = from.right() + half;
@@ -703,11 +747,11 @@ impl Graph {
         let mut path = vec![(from.right(), from.mid_y()), (out, from.mid_y())];
         if out != into {
             let lane = if to.y == 0 {
-                HEIGHT
+                to.height
             } else if to.y > from.y {
                 to.y.saturating_sub(1)
             } else {
-                to.y + HEIGHT
+                to.y.saturating_add(to.height)
             };
             path.push((out, lane));
             path.push((into, lane));
@@ -748,7 +792,11 @@ impl Graph {
             let y_max = p1.1.max(p2.1);
             for x in x_min..=x_max {
                 for y in y_min..=y_max {
-                    if x >= node.x && x < node.x + WIDTH && y >= node.y && y < node.y + HEIGHT {
+                    if x >= node.x
+                        && x < node.x + WIDTH
+                        && y >= node.y
+                        && y < node.y.saturating_add(node.height)
+                    {
                         return true;
                     }
                 }
@@ -837,7 +885,7 @@ fn describe(view: &View, key: &str) -> (Color, String, String) {
         return if who == "worker" {
             let active = task.status == "working";
             let state = if task.status == "verifying" {
-                format!("○ czeka na werdykt{round}")
+                format!("○ waiting for verdict{round}")
             } else {
                 format!("{mark} {}{round}", polish(&task.status))
             };
@@ -853,10 +901,10 @@ fn describe(view: &View, key: &str) -> (Color, String, String) {
         } else {
             let active = task.status == "verifying";
             let state = match task.status.as_str() {
-                "verifying" => "● sprawdza".to_owned(),
-                "approved" => "✓ zatwierdził".to_owned(),
-                "needs_user" | "failed" => "✗ odrzucił".to_owned(),
-                "proposed" | "queued" | "working" => "○ czeka na workera".to_owned(),
+                "verifying" => "● checking".to_owned(),
+                "approved" => "✓ approved".to_owned(),
+                "needs_user" | "failed" => "✗ rejected".to_owned(),
+                "proposed" | "queued" | "working" => "○ waiting for worker".to_owned(),
                 other => format!("– {}", polish(other)),
             };
             (
@@ -872,9 +920,9 @@ fn describe(view: &View, key: &str) -> (Color, String, String) {
     }
     let running = agent.is_some_and(|agent| agent.running);
     let state = if running {
-        "● pracuje".to_owned()
+        "● working".to_owned()
     } else if activity.is_empty() {
-        "○ bezczynny".to_owned()
+        "○ idle".to_owned()
     } else {
         activity.to_owned()
     };
@@ -889,6 +937,28 @@ fn describe(view: &View, key: &str) -> (Color, String, String) {
     )
 }
 
+fn task_text(view: &View, key: &str) -> Option<String> {
+    let (role, id) = key.split_once(':')?;
+    let task = view.tasks.iter().find(|task| task.id == id)?;
+    let mut text = task.title.clone();
+    if role == "worker" {
+        if !task.goal.is_empty() {
+            text.push_str(&format!("\n{}", task.goal));
+        }
+        if !task.scope.is_empty() {
+            text.push_str(&format!("\nScope: {}", task.scope.join(", ")));
+        }
+    } else {
+        if !task.focus.is_empty() {
+            text.push_str(&format!("\n{}", task.focus));
+        }
+        for risk in &task.risks {
+            text.push_str(&format!("\nRisk: {risk}"));
+        }
+    }
+    Some(clean(&text))
+}
+
 pub fn mark(status: &str) -> (&'static str, Color) {
     match status {
         "approved" => ("✓", Color::Green),
@@ -901,6 +971,13 @@ pub fn mark(status: &str) -> (&'static str, Color) {
 }
 
 fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
+    if node.x >= canvas.origin_x.saturating_add(canvas.width)
+        || node.x.saturating_add(WIDTH) <= canvas.origin_x
+        || node.y >= canvas.origin_y.saturating_add(canvas.height)
+        || node.y.saturating_add(node.height) <= canvas.origin_y
+    {
+        return;
+    }
     let (color, state, detail) = describe(view, &node.key);
     let mut border = Style::default().fg(color);
     if selected {
@@ -913,12 +990,12 @@ fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
     };
     let (x, y) = (node.x, node.y);
     let right = x + WIDTH - 1;
-    let bottom = y + HEIGHT - 1;
+    let bottom = y.saturating_add(node.height).saturating_sub(1);
     for cx in x..=right {
         canvas.put(cx, y, h, border);
         canvas.put(cx, bottom, h, border);
     }
-    for cy in y..=bottom {
+    for cy in y.max(canvas.origin_y)..=bottom.min(canvas.origin_y.saturating_add(canvas.height)) {
         canvas.put(x, cy, v, border);
         canvas.put(right, cy, v, border);
     }
@@ -962,7 +1039,9 @@ fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
             Style::default().fg(Color::DarkGray),
         );
     }
-    for cy in y + 1..bottom {
+    for cy in
+        (y + 1).max(canvas.origin_y)..bottom.min(canvas.origin_y.saturating_add(canvas.height))
+    {
         for cx in x + 1..right {
             canvas.put(cx, cy, ' ', Style::default());
         }
@@ -981,12 +1060,23 @@ fn draw_node(view: &View, canvas: &mut Canvas, node: &Node, selected: bool) {
         );
     }
     canvas.text(x + 2, y + 1, &truncate(&state, inner), Style::default());
-    canvas.text(
-        x + 2,
-        y + 2,
-        &truncate(&detail, inner),
-        Style::default().fg(Color::DarkGray),
-    );
+    if let Some(text) = task_text(view, &node.key) {
+        for (row, line) in wrap(&text, inner).iter().enumerate() {
+            let row = u16::try_from(row).unwrap_or(u16::MAX);
+            let cy = y.saturating_add(2).saturating_add(row);
+            if cy >= bottom {
+                break;
+            }
+            canvas.text(x + 2, cy, line, Style::default());
+        }
+    } else {
+        canvas.text(
+            x + 2,
+            y + 2,
+            &truncate(&detail, inner),
+            Style::default().fg(Color::DarkGray),
+        );
+    }
 }
 
 const UP: u8 = 1;
@@ -997,7 +1087,7 @@ const RIGHT: u8 = 8;
 #[derive(Debug, Clone)]
 struct Cell {
     lines: u8,
-    ch: Option<char>,
+    ch: Option<String>,
     style: Style,
 }
 
@@ -1065,16 +1155,29 @@ impl Canvas {
 
     fn put(&mut self, x: u16, y: u16, ch: char, style: Style) {
         if let Some(cell) = self.cell(x, y) {
-            cell.ch = Some(ch);
+            cell.ch = Some(ch.to_string());
             cell.style = style;
         }
     }
 
     fn text(&mut self, x: u16, y: u16, text: &str, style: Style) {
         let mut cx = x;
-        for ch in text.chars() {
-            self.put(cx, y, ch, style);
-            cx += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+        for grapheme in text.graphemes(true) {
+            let width = UnicodeWidthStr::width(grapheme) as u16;
+            // A clipped glyph must never leave half an emoji or combining
+            // sequence at either viewport edge.
+            if cx >= self.origin_x
+                && cx.saturating_add(width) <= self.origin_x.saturating_add(self.width)
+            {
+                if let Some(cell) = self.cell(cx, y) {
+                    cell.ch = Some(grapheme.to_owned());
+                    cell.style = style;
+                }
+                for offset in 1..width {
+                    self.put(cx.saturating_add(offset), y, ' ', style);
+                }
+            }
+            cx = cx.saturating_add(width);
         }
     }
 
@@ -1103,25 +1206,25 @@ impl Canvas {
         }
     }
 
-    fn glyph(cell: &Cell) -> char {
-        if let Some(ch) = cell.ch {
+    fn glyph(cell: &Cell) -> &str {
+        if let Some(ch) = &cell.ch {
             return ch;
         }
         match cell.lines {
-            0 => ' ',
-            UP | DOWN => '│',
-            LEFT | RIGHT => '─',
-            lines if lines == UP | DOWN => '│',
-            lines if lines == LEFT | RIGHT => '─',
-            lines if lines == DOWN | RIGHT => '┌',
-            lines if lines == DOWN | LEFT => '┐',
-            lines if lines == UP | RIGHT => '└',
-            lines if lines == UP | LEFT => '┘',
-            lines if lines == UP | DOWN | RIGHT => '├',
-            lines if lines == UP | DOWN | LEFT => '┤',
-            lines if lines == LEFT | RIGHT | DOWN => '┬',
-            lines if lines == LEFT | RIGHT | UP => '┴',
-            _ => '┼',
+            0 => " ",
+            UP | DOWN => "│",
+            LEFT | RIGHT => "─",
+            lines if lines == UP | DOWN => "│",
+            lines if lines == LEFT | RIGHT => "─",
+            lines if lines == DOWN | RIGHT => "┌",
+            lines if lines == DOWN | LEFT => "┐",
+            lines if lines == UP | RIGHT => "└",
+            lines if lines == UP | LEFT => "┘",
+            lines if lines == UP | DOWN | RIGHT => "├",
+            lines if lines == UP | DOWN | LEFT => "┤",
+            lines if lines == LEFT | RIGHT | DOWN => "┬",
+            lines if lines == LEFT | RIGHT | UP => "┴",
+            _ => "┼",
         }
     }
 
@@ -1133,7 +1236,7 @@ impl Canvas {
                 if let Some(cell) = self.get_cell(x, y)
                     && let Some(target) = buffer.cell_mut((area.x + column, area.y + row))
                 {
-                    target.set_char(Self::glyph(cell)).set_style(cell.style);
+                    target.set_symbol(Self::glyph(cell)).set_style(cell.style);
                 }
             }
         }
@@ -1155,7 +1258,7 @@ impl Canvas {
     }
 }
 
-/// Computes the overlay rectangle for the 'teraz' progress box so that
+/// Computes the overlay rectangle for the 'now' progress box so that
 /// it does not collide with the currently selected node in the viewport.
 pub fn compute_progress_overlay(
     inner: Rect,
@@ -1174,7 +1277,7 @@ pub fn compute_progress_overlay(
     )
 }
 
-/// Computes the overlay rectangle for the 'teraz' progress box checking against
+/// Computes the overlay rectangle for the 'now' progress box checking against
 /// both selected node and all visible nodes in the viewport.
 ///
 /// Default position is bottom-right. If collisions exist, it tests top-right,
@@ -1208,7 +1311,7 @@ pub fn compute_progress_overlay_with_nodes(
                 screen_x.max(0) as u16,
                 screen_y.max(0) as u16,
                 WIDTH,
-                HEIGHT,
+                node.height,
             );
             node_rect.intersects(overlay)
         });
@@ -1221,14 +1324,14 @@ pub fn compute_progress_overlay_with_nodes(
             let screen_y = inner.y as i32 + node.y as i32 - offset.1 as i32;
             if screen_x + WIDTH as i32 > inner.x as i32
                 && screen_x < inner.right() as i32
-                && screen_y + HEIGHT as i32 > inner.y as i32
+                && screen_y + node.height as i32 > inner.y as i32
                 && screen_y < inner.bottom() as i32
             {
                 let node_rect = Rect::new(
                     screen_x.max(0) as u16,
                     screen_y.max(0) as u16,
                     WIDTH,
-                    HEIGHT,
+                    node.height,
                 );
                 node_rect.intersects(overlay)
             } else {
@@ -1322,7 +1425,25 @@ mod tests {
         assert!(lines[usize::from(worker.y)].contains("t1 worker"));
         // A message between them is counted beside the source.
         assert!(lines[usize::from(worker.mid_y() - 1)].contains("✉2"));
-        assert!(lines[usize::from(worker.y + 1)].contains("proponowane"));
+        assert!(lines[usize::from(worker.y + 1)].contains("proposed"));
+    }
+
+    #[test]
+    fn all_includes_every_supervision_edge() {
+        let view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
+        let graph = Graph::new(&view);
+        let all = graph.edge_routes(Filter::All);
+        let supervision = graph.edge_routes(Filter::Supervises);
+        assert_eq!(supervision.len(), 2);
+        for edge in &supervision {
+            assert!(all.contains(edge), "All must include {edge:?}");
+        }
+        assert!(
+            graph
+                .edge_routes(Filter::Depends)
+                .iter()
+                .all(|edge| !supervision.contains(edge))
+        );
     }
 
     #[test]

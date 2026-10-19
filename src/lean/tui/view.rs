@@ -113,10 +113,14 @@ pub struct TaskRow {
     /// The task's database id, once it is queued.
     pub uuid: Option<String>,
     pub title: String,
+    /// Optional section heading in the plan document this task is assigned to.
+    pub section: Option<String>,
     pub kind: String,
     pub goal: String,
     pub scope: Vec<String>,
     pub depends_on: Vec<String>,
+    /// Peer task ids that can execute in parallel with this task.
+    pub parallel_with: Vec<String>,
     pub writes: bool,
     pub focus: String,
     pub risks: Vec<String>,
@@ -139,9 +143,13 @@ pub struct Agent {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub running: bool,
+    /// Process ID of the running or latest turn, if reported.
+    pub pid: Option<u32>,
     /// The current tool call while running, else the last outcome.
     pub activity: String,
     pub session: Vec<String>,
+    /// Emulated process terminal stream showing all commands, tool calls, messages, and output.
+    pub terminal: Vec<String>,
     /// Finished turns, and how many of them the CLI reported tokens for.
     pub turns: u32,
     pub reported: u32,
@@ -161,19 +169,19 @@ impl Agent {
     /// unknown, never zero.
     pub fn tokens(&self) -> String {
         if self.reported == 0 {
-            return "niedostępne (CLI ich nie zgłosił)".into();
+            return "unavailable (CLI did not report them)".into();
         }
         let whole = if self.reported >= self.turns {
             String::new()
         } else {
             format!(
-                " · zgłoszone w {} z {} tur, reszta nieznana",
+                " · reported in {} of {} turns, rest unknown",
                 self.reported, self.turns
             )
         };
-        let side = |sum: Option<u64>| sum.map_or("nieznane".to_owned(), |sum| sum.to_string());
+        let side = |sum: Option<u64>| sum.map_or("unknown".to_owned(), |sum| sum.to_string());
         format!(
-            "we {} / wy {}{whole}",
+            "in {} / out {}{whole}",
             side(self.tokens_in),
             side(self.tokens_out)
         )
@@ -197,12 +205,20 @@ pub struct Comment {
     pub status: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct CommentProgress {
+    pub state: String,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct View {
     pub transcript: Vec<Entry>,
     pub tasks: Vec<TaskRow>,
     /// The plan the task rows show.
     pub plan: Option<String>,
+    /// Full Markdown document of the latest proposed plan.
+    pub plan_doc: String,
     /// The orchestrator's current activity, while it works.
     pub activity: Option<String>,
     pub idle: bool,
@@ -214,6 +230,7 @@ pub struct View {
     pub mailbox: HashMap<String, Vec<String>>,
     /// The user's comments by id, deleted ones included.
     pub comments: BTreeMap<u64, Comment>,
+    pub comment_progress: BTreeMap<u64, CommentProgress>,
     /// The latest review of the plan verifier and the auditor, as lines.
     pub reviews: HashMap<String, Vec<String>>,
     /// The user paused new plan work.
@@ -228,6 +245,7 @@ pub struct View {
     pub conversation_scope_hash: Option<String>,
     /// Agent key of each running turn.
     roles: HashMap<String, String>,
+    comment_turns: HashMap<String, Vec<u64>>,
     /// Recipient of each shown message to an agent, by mail id.
     mail: HashMap<u64, String>,
     /// Task row index by the task's database id.
@@ -239,6 +257,44 @@ pub fn dim() -> Style {
 }
 
 impl View {
+    pub fn comment_state(&self, id: u64) -> &str {
+        match self.comments.get(&id) {
+            Some(comment) if comment.status != "open" => &comment.status,
+            _ => self
+                .comment_progress
+                .get(&id)
+                .map_or("queued", |progress| progress.state.as_str()),
+        }
+    }
+
+    pub fn comment_error(&self, id: u64) -> Option<&str> {
+        self.comment_progress.get(&id)?.error.as_deref()
+    }
+
+    /// Keep the comment identity visible even when tool activity changes.
+    pub fn comment_activity(&self) -> Option<String> {
+        let active: Vec<_> = self
+            .comment_progress
+            .iter()
+            .filter(|(_, progress)| progress.state == "addressing")
+            .filter_map(|(id, _)| self.comments.get(id))
+            .collect();
+        let first = active.first()?;
+        let ids = active
+            .iter()
+            .map(|comment| format!("#{}", comment.id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "Addressing comment {ids} (comment agent): {}",
+            clean(&first.text)
+        ))
+    }
+
+    pub fn orchestrator_activity(&self) -> Option<String> {
+        self.comment_activity().or_else(|| self.activity.clone())
+    }
+
     fn push(&mut self, style: Style, text: impl Into<String>) {
         self.transcript.push(Entry {
             style,
@@ -248,6 +304,37 @@ impl View {
 
     pub fn plan_proposed(&self) -> bool {
         !self.tasks.is_empty() && self.tasks.iter().all(|task| task.status == "proposed")
+    }
+
+    /// The agent graph view is hidden during the initial interview and while a plan
+    /// is still in the proposed/review document stage before execution starts.
+    /// A fresh conversation, before the user sent a task, still shows the layout.
+    pub fn graph_hidden(&self) -> bool {
+        let started = self.activity.is_some()
+            || !self.transcript.is_empty()
+            || !self.messages.is_empty()
+            || !self.cards.is_empty();
+        (self.tasks.is_empty() && started) || self.plan_proposed()
+    }
+
+    /// Unresolved comments targeting the current plan document or whole plan.
+    pub fn open_plan_comments(&self) -> Vec<&Comment> {
+        let Some(plan_id) = self.plan.as_deref() else {
+            return Vec::new();
+        };
+        let prefix = format!("plan:{plan_id}:");
+        let exact = format!("plan:{plan_id}");
+        self.comments
+            .values()
+            .filter(|c| c.status == "open")
+            .filter(|c| {
+                (c.plan_id.is_none() || c.plan_id.as_deref() == Some(plan_id))
+                    && (c.target == "plan"
+                        || c.target == exact
+                        || c.target.starts_with(&prefix)
+                        || c.target.starts_with("plan:line:"))
+            })
+            .collect()
     }
 
     /// Whether the plan ended with tasks that can run again.
@@ -263,6 +350,9 @@ impl View {
 
     /// The agent key of a session role (`worker:<uuid>` → `worker:t1`).
     fn agent_key(&self, role: &str) -> String {
+        if role == super::super::COMMENT_ORCHESTRATOR {
+            return ORCHESTRATOR.into();
+        }
         match role.split_once(':') {
             Some((who, uuid)) => match self.task_rows.get(uuid) {
                 Some(&row) => format!("{who}:{}", self.tasks[row].id),
@@ -291,6 +381,14 @@ impl View {
         }
     }
 
+    fn terminal(&mut self, key: &str, line: String) {
+        let term = &mut self.agents.entry(key.to_owned()).or_default().terminal;
+        term.push(clean(&line));
+        if term.len() > SESSION_LINES {
+            term.drain(..term.len() - SESSION_LINES);
+        }
+    }
+
     fn row_of(&mut self, key: &str) -> Option<&mut TaskRow> {
         let id = key.split_once(':')?.1;
         self.tasks.iter_mut().find(|task| task.id == id)
@@ -310,19 +408,20 @@ impl View {
                 "user" => {
                     let msg = MessageEntry {
                         id: format!("m{}", self.after),
-                        sender: "Ty".to_owned(),
-                        target: "orkiestrator".to_owned(),
+                        sender: "You".to_owned(),
+                        target: "orchestrator".to_owned(),
                         text: text("text"),
-                        state: "wysłano".to_owned(),
+                        state: "sent".to_owned(),
                         kind: "user".to_owned(),
                     };
                     self.messages.push(msg.clone());
                     self.cards.push(TranscriptCard::Message(msg));
+                    self.terminal(ORCHESTRATOR, format!("<< [user] {}", text("text")));
                     self.push(
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
-                        "Ty",
+                        "You",
                     );
                     self.push(Style::default(), text("text"));
                     self.push(Style::default(), "");
@@ -331,24 +430,24 @@ impl View {
                     self.cards.push(TranscriptCard::System {
                         title: "Runtime".into(),
                         meta: String::new(),
-                        text: "· wyniki zadań przekazane orkiestratorowi".into(),
+                        text: "· task results handed to orchestrator".into(),
                         tone: super::theme::Tone::Queued,
                     });
-                    self.push(dim(), "· wyniki zadań przekazane orkiestratorowi");
+                    self.push(dim(), "· task results handed to orchestrator");
                     self.push(Style::default(), "");
                 }
                 author => {
                     let display_author = match author {
-                        ORCHESTRATOR => "orkiestrator".to_owned(),
-                        PLAN_VERIFIER => "weryfikator planu".to_owned(),
+                        ORCHESTRATOR => "orchestrator".to_owned(),
+                        PLAN_VERIFIER => "plan verifier".to_owned(),
                         author => author.to_owned(),
                     };
                     let msg = MessageEntry {
                         id: format!("m{}", self.after),
                         sender: display_author.clone(),
-                        target: "Ty".to_owned(),
+                        target: "You".to_owned(),
                         text: text("text"),
-                        state: "doręczono".to_owned(),
+                        state: "delivered".to_owned(),
                         kind: "agent".to_owned(),
                     };
                     self.messages.push(msg.clone());
@@ -367,25 +466,75 @@ impl View {
                 let key = self.agent_key(&text("role"));
                 let provider = text("provider");
                 if key == ORCHESTRATOR {
-                    self.activity = Some(format!("orkiestrator ({provider}) pracuje…"));
+                    let comments: Vec<_> = payload["comments"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_u64)
+                        .collect();
+                    for id in &comments {
+                        self.comment_progress.insert(
+                            *id,
+                            CommentProgress {
+                                state: "addressing".into(),
+                                error: None,
+                            },
+                        );
+                    }
+                    self.comment_turns.insert(turn.to_owned(), comments);
+                    self.activity = Some(format!("orchestrator ({provider}) is working…"));
                 } else if let Some(row) = self.row_of(&key) {
                     let who = key.split(':').next().unwrap_or_default();
                     row.activity = format!("{who} ({provider})");
                 }
+                let model = payload["model"].as_str().map(str::to_owned);
+                let effort = payload["effort"].as_str().map(str::to_owned);
                 let agent = self.agents.entry(key.clone()).or_default();
-                agent.provider = provider;
-                agent.model = payload["model"].as_str().map(str::to_owned);
-                agent.effort = payload["effort"].as_str().map(str::to_owned);
+                agent.provider = provider.clone();
+                agent.model = model.clone();
+                agent.effort = effort.clone();
                 agent.running = true;
                 agent.started_ms = event["created_ms"].as_i64().filter(|ms| *ms > 0);
-                agent.activity = "zaczyna turę".into();
-                self.session(&key, "── tura".into());
+                agent.activity = "starting turn".into();
+                self.session(&key, "── turn".into());
+                self.terminal(
+                    &key,
+                    format!(
+                        "$ {provider} [role={}, model={}, effort={}] — turn started",
+                        text("role"),
+                        model.as_deref().unwrap_or("default"),
+                        effort.as_deref().unwrap_or("default")
+                    ),
+                );
                 self.roles.insert(turn.to_owned(), key);
+            }
+            "agent" if payload["type"] == "process" => {
+                if !key.is_empty()
+                    && let Some(pid) = payload["pid"].as_u64()
+                {
+                    self.agents.entry(key.clone()).or_default().pid = Some(pid as u32);
+                    self.terminal(&key, format!("[pid {pid}] process started"));
+                }
+            }
+            "agent" if payload["type"] == "session" => {
+                if !key.is_empty() {
+                    let sid = text("id");
+                    self.terminal(&key, format!("[session {sid}] attached"));
+                }
+            }
+            "agent" if payload["type"] == "text" => {
+                if !key.is_empty() {
+                    for line in text("delta").lines().take(6) {
+                        if !line.trim().is_empty() {
+                            self.terminal(&key, format!("> {}", line.trim()));
+                        }
+                    }
+                }
             }
             "agent" if payload["type"] == "tool" => {
                 let detail = format!("{} {}", text("name"), text("detail"));
                 if key == ORCHESTRATOR {
-                    self.activity = Some(format!("orkiestrator: {detail}"));
+                    self.activity = Some(format!("orchestrator: {detail}"));
                     self.push(dim(), format!("  ↳ {detail}"));
                 } else if let Some(row) = self.row_of(&key) {
                     let who = key.split(':').next().unwrap_or_default().to_owned();
@@ -394,6 +543,7 @@ impl View {
                 if !key.is_empty() {
                     self.agents.entry(key.clone()).or_default().activity = detail.clone();
                     self.session(&key, format!("↳ {detail}"));
+                    self.terminal(&key, format!("$ {detail}"));
                 }
             }
             "agent" if payload["type"] == "usage" => {
@@ -408,16 +558,48 @@ impl View {
                     };
                     add(&mut agent.tokens_in, input);
                     add(&mut agent.tokens_out, output);
+                    self.terminal(
+                        &key,
+                        format!(
+                            "[tokens] in={} out={}",
+                            input.unwrap_or(0),
+                            output.unwrap_or(0)
+                        ),
+                    );
                 }
             }
             "turn_finished" => {
                 let failed = payload["status"] != "done";
                 if key == ORCHESTRATOR {
                     self.activity = None;
+                    if let Some(comments) = self.comment_turns.remove(turn) {
+                        for id in comments {
+                            // Reopening while this turn ran queued a newer
+                            // request; the old completion must not consume it.
+                            if self
+                                .comment_progress
+                                .get(&id)
+                                .is_some_and(|progress| progress.state == "queued")
+                            {
+                                continue;
+                            }
+                            self.comment_progress.insert(
+                                id,
+                                CommentProgress {
+                                    state: if failed {
+                                        text("status")
+                                    } else {
+                                        "addressed".into()
+                                    },
+                                    error: payload["error"].as_str().map(str::to_owned),
+                                },
+                            );
+                        }
+                    }
                     if failed {
                         self.push(
                             Style::default().fg(Color::Red),
-                            format!("✗ orkiestrator: {} — {}", text("status"), text("error")),
+                            format!("✗ orchestrator: {} — {}", text("status"), text("error")),
                         );
                     }
                 } else if let Some(row) = self.row_of(&key) {
@@ -431,7 +613,7 @@ impl View {
                     let outcome = if failed {
                         format!("✗ {}: {}", text("status"), text("error"))
                     } else {
-                        "✓ tura zakończona".into()
+                        "✓ turn finished".into()
                     };
                     let agent = self.agents.entry(key.clone()).or_default();
                     agent.running = false;
@@ -443,11 +625,16 @@ impl View {
                         agent.last_ms = Some(took);
                     }
                     agent.activity = outcome.clone();
-                    self.session(&key, outcome);
+                    self.session(&key, outcome.clone());
+                    self.terminal(&key, format!("── {outcome}"));
                 }
             }
             "plan_proposed" => {
                 self.plan = payload["plan"].as_str().map(str::to_owned);
+                self.plan_doc = payload["document"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_default();
                 let strings = |value: &Value| -> Vec<String> {
                     value
                         .as_array()
@@ -460,38 +647,72 @@ impl View {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .map(|task| TaskRow {
-                        id: task["id"].as_str().unwrap_or_default().to_owned(),
-                        uuid: None,
-                        title: task["title"].as_str().unwrap_or_default().to_owned(),
-                        kind: task["kind"].as_str().unwrap_or_default().to_owned(),
-                        goal: task["goal"].as_str().unwrap_or_default().to_owned(),
-                        scope: strings(&task["scope"]),
-                        depends_on: strings(&task["depends_on"]),
-                        writes: task["writes"] == true,
-                        focus: task["verifier"]["focus"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_owned(),
-                        risks: strings(&task["verifier"]["risks"]),
-                        status: "proposed".into(),
-                        round: 0,
-                        activity: if task["writes"] == true {
-                            "zmienia pliki".into()
-                        } else {
-                            String::new()
-                        },
-                        reason: None,
-                        scope_hash: task["scope_hash"].as_str().map(str::to_owned),
+                    .map(|task| {
+                        let id = task["id"].as_str().unwrap_or_default().to_owned();
+                        let parallel_with = strings(&payload["parallel"][&id]);
+                        TaskRow {
+                            id,
+                            uuid: None,
+                            title: task["title"].as_str().unwrap_or_default().to_owned(),
+                            section: task["section"].as_str().map(str::to_owned),
+                            kind: task["kind"].as_str().unwrap_or_default().to_owned(),
+                            goal: task["goal"].as_str().unwrap_or_default().to_owned(),
+                            scope: strings(&task["scope"]),
+                            depends_on: strings(&task["depends_on"]),
+                            parallel_with,
+                            writes: task["writes"] == true,
+                            focus: task["verifier"]["focus"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_owned(),
+                            risks: strings(&task["verifier"]["risks"]),
+                            status: "proposed".into(),
+                            round: 0,
+                            activity: if task["writes"] == true {
+                                "modifies files".into()
+                            } else {
+                                String::new()
+                            },
+                            reason: None,
+                            scope_hash: task["scope_hash"].as_str().map(str::to_owned),
+                        }
                     })
                     .collect();
+                // Compute parallel_with fallback when event did not include payload["parallel"]
+                if payload["parallel"].is_null() && self.tasks.len() > 1 {
+                    let ids_and_deps: Vec<(String, Vec<String>, bool, Vec<String>)> = self
+                        .tasks
+                        .iter()
+                        .map(|t| {
+                            (
+                                t.id.clone(),
+                                t.depends_on.clone(),
+                                t.writes,
+                                t.scope.clone(),
+                            )
+                        })
+                        .collect();
+                    for row in &mut self.tasks {
+                        row.parallel_with = ids_and_deps
+                            .iter()
+                            .filter(|(oid, odeps, owrites, oscope)| {
+                                *oid != row.id
+                                    && !row.depends_on.contains(oid)
+                                    && !odeps.contains(&row.id)
+                                    && !(row.writes
+                                        && *owrites
+                                        && super::super::tasks::scopes_overlap(&row.scope, oscope))
+                            })
+                            .map(|(oid, _, _, _)| oid.clone())
+                            .collect();
+                    }
+                }
                 self.task_rows.clear();
                 self.agents
                     .retain(|key, _| !key.starts_with("worker:") && !key.starts_with("verifier:"));
                 self.links.clear();
                 self.mailbox.clear();
-                for line in super::super::cli::review_lines("weryfikator planu", &payload["review"])
-                {
+                for line in super::super::cli::review_lines("plan verifier", &payload["review"]) {
                     self.push(Style::default().fg(Color::Yellow), line);
                 }
                 let review = &payload["review"];
@@ -503,15 +724,15 @@ impl View {
                     self.conversation_scope_hash = Some(sh.clone());
                 }
                 let next = if payload["automatic"] == true {
-                    "uruchamiam (tryb autonomiczny).".to_owned()
+                    "running (autonomous mode).".to_owned()
                 } else {
                     let waiting = payload["waiting"]
                         .as_str()
-                        .map(|reason| format!("Czeka na Ciebie: {reason}. "))
+                        .map(|reason| format!("Waiting for you: {reason}. "))
                         .unwrap_or_default();
-                    format!("{waiting}Ctrl+A uruchamia, albo napisz, co zmienić.")
+                    format!("{waiting}Ctrl+A runs it, or type what to change.")
                 };
-                let plan_text = format!("Plan: {} zadań. {next}", self.tasks.len());
+                let plan_text = format!("Plan: {} tasks. {next}", self.tasks.len());
                 self.cards.push(TranscriptCard::Plan {
                     plan: self.plan.clone().unwrap_or_default(),
                     tasks: self.tasks.len(),
@@ -520,18 +741,36 @@ impl View {
                 self.push(Style::default().fg(Color::Yellow), plan_text);
                 self.push(Style::default(), "");
             }
+            "plan_rejected" => {
+                for task in &mut self.tasks {
+                    if task.status == "proposed" {
+                        task.status = "cancelled".into();
+                    }
+                }
+                let reason = text("reason");
+                self.cards.push(TranscriptCard::System {
+                    title: "Plan rejected".into(),
+                    meta: String::new(),
+                    text: format!("✗ {reason}"),
+                    tone: super::theme::Tone::Failed,
+                });
+                self.push(
+                    Style::default().fg(Color::Red),
+                    format!("✗ plan rejected: {reason}"),
+                );
+            }
             "plan_review" => self.review(PLAN_VERIFIER, payload),
             "plan_invalid" => {
                 let err = text("error");
                 self.cards.push(TranscriptCard::System {
-                    title: "Plan odrzucony".into(),
+                    title: "Plan rejected".into(),
                     meta: String::new(),
                     text: format!("✗ {err}"),
                     tone: super::theme::Tone::Failed,
                 });
                 self.push(
                     Style::default().fg(Color::Red),
-                    format!("✗ plan odrzucony: {err}"),
+                    format!("✗ plan rejected: {err}"),
                 );
             }
             "task" => {
@@ -561,12 +800,12 @@ impl View {
             "paused" => {
                 self.paused = payload["paused"] == true;
                 let txt = if self.paused {
-                    "⏸ wstrzymano: nowe kroki czekają (/continue wznawia)"
+                    "⏸ paused: new steps wait (/continue resumes)"
                 } else {
-                    "▶ wznowiono"
+                    "▶ resumed"
                 };
                 self.cards.push(TranscriptCard::System {
-                    title: "Wstrzymanie".into(),
+                    title: "Pause".into(),
                     meta: String::new(),
                     text: txt.into(),
                     tone: super::theme::Tone::Waiting,
@@ -576,7 +815,7 @@ impl View {
             "notice" => {
                 let txt = text("text");
                 self.cards.push(TranscriptCard::System {
-                    title: "Uwaga".into(),
+                    title: "Notice".into(),
                     meta: String::new(),
                     text: txt.clone(),
                     tone: super::theme::Tone::Waiting,
@@ -588,9 +827,9 @@ impl View {
                 self.push(
                     Style::default().fg(Color::Yellow),
                     if payload["autonomous"] == true {
-                        "⚙ tryb autonomiczny: kolejne plany i rundy ruszają same"
+                        "⚙ autonomous mode: next plans and rounds start automatically"
                     } else {
-                        "⚙ tryb nadzorowany: kolejne plany czekają na zgodę (Ctrl+A)"
+                        "⚙ supervised mode: next plans wait for approval (Ctrl+A)"
                     },
                 );
             }
@@ -599,9 +838,9 @@ impl View {
                 self.cards.push(TranscriptCard::System {
                     title: format!("[{}] {}", text("id"), text("title")),
                     meta: if approved {
-                        "zatwierdzono".into()
+                        "approved".into()
                     } else {
-                        "weryfikacja".into()
+                        "verification".into()
                     },
                     text: text("detail"),
                     tone: if approved {
@@ -624,8 +863,8 @@ impl View {
                 let mail_id = payload["id"].as_u64().unwrap_or_default();
                 self.mail.insert(mail_id, recipient.clone());
                 let sender = match text("sender").as_str() {
-                    "user" => "Ty".to_owned(),
-                    ORCHESTRATOR => "orkiestrator".to_owned(),
+                    "user" => "You".to_owned(),
+                    ORCHESTRATOR => "orchestrator".to_owned(),
                     sender => sender.to_owned(),
                 };
                 let id_str = if mail_id > 0 {
@@ -638,7 +877,7 @@ impl View {
                     sender: sender.clone(),
                     target: recipient.clone(),
                     text: text("text"),
-                    state: "czeka na turę".to_owned(),
+                    state: "waiting for turn".to_owned(),
                     kind: text("kind"),
                 };
                 self.messages.push(msg.clone());
@@ -650,7 +889,7 @@ impl View {
                 );
                 self.push(
                     Style::default().fg(Color::Magenta),
-                    format!("✉ {line} · czeka na następną turę odbiorcy"),
+                    format!("✉ {line} · waiting for recipient's next turn"),
                 );
                 let from = Self::mail_key(&text("sender"));
                 let to = Self::mail_key(&recipient);
@@ -659,6 +898,7 @@ impl View {
                         .entry(key.clone())
                         .or_default()
                         .push(clean(&line));
+                    self.terminal(key, format!("✉ {line}"));
                 }
                 let link = self.links.entry((from, to)).or_insert(Link {
                     count: 0,
@@ -673,18 +913,18 @@ impl View {
                         let id_str = format!("{mail_id}");
                         for msg in &mut self.messages {
                             if msg.id == id_str {
-                                msg.state = "dostarczono".to_owned();
+                                msg.state = "delivered".to_owned();
                             }
                         }
                         for card in &mut self.cards {
                             if let TranscriptCard::Message(msg) = card
                                 && msg.id == id_str
                             {
-                                msg.state = "dostarczono".to_owned();
+                                msg.state = "delivered".to_owned();
                             }
                         }
                         if let Some(recipient) = self.mail.remove(&mail_id) {
-                            self.push(dim(), format!("✓ {recipient} otrzymał wiadomość"));
+                            self.push(dim(), format!("✓ {recipient} received message"));
                         }
                     }
                 }
@@ -693,15 +933,15 @@ impl View {
                 let sender = text("sender");
                 let recipient = text("recipient");
                 let norm_sender = match sender.as_str() {
-                    "user" => "Ty",
-                    ORCHESTRATOR => "orkiestrator",
+                    "user" => "You",
+                    ORCHESTRATOR => "orchestrator",
                     s => s,
                 };
                 for msg in self.messages.iter_mut().rev() {
                     if (msg.sender == sender || msg.sender == norm_sender)
                         && msg.target == recipient
                     {
-                        msg.state = "odrzucono".to_owned();
+                        msg.state = "rejected".to_owned();
                         break;
                     }
                 }
@@ -710,14 +950,14 @@ impl View {
                         && (msg.sender == sender || msg.sender == norm_sender)
                         && msg.target == recipient
                     {
-                        msg.state = "odrzucono".to_owned();
+                        msg.state = "rejected".to_owned();
                         break;
                     }
                 }
                 self.push(
                     Style::default().fg(Color::Red),
                     format!(
-                        "✗ wiadomość od {} do {} niedostarczalna: {}",
+                        "✗ message from {} to {} undeliverable: {}",
                         text("sender"),
                         text("recipient"),
                         text("reason")
@@ -725,7 +965,7 @@ impl View {
                 );
             }
             "audit" => {
-                for line in super::super::cli::review_lines("audyt", payload) {
+                for line in super::super::cli::review_lines("audit", payload) {
                     self.push(Style::default().fg(Color::Yellow), line);
                 }
                 self.review(AUDITOR, payload);
@@ -733,9 +973,9 @@ impl View {
             "code_review" => {
                 let task = text("id");
                 if payload["status"] == "running" {
-                    self.push(dim(), format!("· recenzja kodu {task} w toku"));
+                    self.push(dim(), format!("· code review {task} in progress"));
                 } else {
-                    let who = format!("recenzja kodu {task}");
+                    let who = format!("code review {task}");
                     let lines = super::super::cli::review_lines(&who, payload);
                     for line in &lines {
                         self.push(Style::default().fg(Color::Yellow), line.clone());
@@ -748,17 +988,23 @@ impl View {
                     return;
                 };
                 let name = target_name(&comment.target);
+                if comment.status == "open" {
+                    self.comment_progress.insert(
+                        comment.id,
+                        CommentProgress {
+                            state: "queued".into(),
+                            error: None,
+                        },
+                    );
+                }
                 let (line, card_status) = match comment.status.as_str() {
                     "open" if !self.comments.contains_key(&comment.id) => (
-                        format!("✎ #{} do {name}: {}", comment.id, comment.text),
-                        "otwarty".into(),
+                        format!("✎ #{} to {name}: {}", comment.id, comment.text),
+                        "open".into(),
                     ),
-                    "open" => (
-                        format!("✎ #{} otwarty ponownie", comment.id),
-                        "ponownie otwarty".into(),
-                    ),
-                    "resolved" => (format!("✎ #{} rozwiązany", comment.id), "rozwiązany".into()),
-                    _ => (format!("✎ #{} usunięty", comment.id), "usunięty".into()),
+                    "open" => (format!("✎ #{} reopened", comment.id), "reopened".into()),
+                    "resolved" => (format!("✎ #{} resolved", comment.id), "resolved".into()),
+                    _ => (format!("✎ #{} deleted", comment.id), "deleted".into()),
                 };
                 self.cards.push(TranscriptCard::Comment {
                     id: comment.id,
@@ -810,10 +1056,10 @@ impl View {
     pub fn progress(&self) -> Vec<String> {
         let mut lines = vec![];
         if self.paused {
-            lines.push("⏸ wstrzymane: nowe kroki czekają".into());
+            lines.push("⏸ paused: new steps wait".into());
         }
-        if let Some(activity) = &self.activity {
-            lines.push(clean(activity));
+        if let Some(activity) = self.orchestrator_activity() {
+            lines.push(clean(&activity));
         }
         for task in &self.tasks {
             match task.status.as_str() {
@@ -825,7 +1071,7 @@ impl View {
                     };
                     lines.push(format!("{} {}: {}", task.id, polish(&task.status), act));
                 }
-                "waiting" => lines.push(format!("{} czeka na logowanie/limit", task.id)),
+                "waiting" => lines.push(format!("{} waiting for login/limit", task.id)),
                 _ => {}
             }
         }
@@ -836,11 +1082,11 @@ impl View {
         }
         if lines.is_empty() {
             lines.push(if self.plan_proposed() {
-                "czeka na Ciebie: plan do akceptacji".into()
+                "waiting for you: plan to accept".into()
             } else if self.plan_resumable() {
-                "czeka na Ciebie: plan do wznowienia".into()
+                "waiting for you: plan to resume".into()
             } else {
-                "bezczynny".into()
+                "idle".into()
             });
         }
         lines
@@ -849,11 +1095,11 @@ impl View {
 
 fn review_word(review: &Value) -> String {
     if review["error"].is_string() {
-        "✗ nie zadziałał".into()
+        "✗ failed".into()
     } else if review["approved"] == true {
-        "✓ zatwierdził".into()
+        "✓ approved".into()
     } else {
-        "⚠ zastrzeżenia".into()
+        "⚠ issues".into()
     }
 }
 
@@ -868,26 +1114,34 @@ pub fn target_name(target: &str) -> String {
     }
     if let Some((kind, rest)) = target.split_once(':') {
         match kind {
-            "plan" => return format!("Plan {rest}"),
-            "task" => return format!("Zadanie {rest}"),
+            "plan" => {
+                if let Some((plan_id, line)) = rest.split_once(":line:") {
+                    return format!("Plan {plan_id} line {line}");
+                }
+                if let Some(line) = rest.strip_prefix("line:") {
+                    return format!("Plan line {line}");
+                }
+                return format!("Plan {rest}");
+            }
+            "task" => return format!("Task {rest}"),
             "check" => {
                 if let Some((task_id, check_id)) = rest.split_once(':') {
-                    return format!("Zadanie {task_id} kontrola {check_id}");
+                    return format!("Task {task_id} check {check_id}");
                 }
-                return format!("Kontrola {rest}");
+                return format!("Check {rest}");
             }
             "finding" => {
                 if let Some((task_id, finding_id)) = rest.split_once(':') {
-                    return format!("Zadanie {task_id} ustalenie #{finding_id}");
+                    return format!("Task {task_id} finding #{finding_id}");
                 }
-                return format!("Ustalenie {rest}");
+                return format!("Finding {rest}");
             }
-            "report" => return format!("Zadanie {rest} raport"),
+            "report" => return format!("Task {rest} report"),
             "artifact" => {
                 if let Some((task_id, path)) = rest.split_once(':') {
-                    return format!("Zadanie {task_id} artefakt {path}");
+                    return format!("Task {task_id} artifact {path}");
                 }
-                return format!("Artefakt {rest}");
+                return format!("Artifact {rest}");
             }
             _ => {}
         }
@@ -899,12 +1153,12 @@ pub fn target_name(target: &str) -> String {
 pub fn agent_name(key: &str) -> String {
     match key.split_once(':') {
         Some(("worker", id)) => format!("{id} worker"),
-        Some(("verifier", id)) => format!("{id} weryfikator"),
+        Some(("verifier", id)) => format!("{id} verifier"),
         _ => match key {
-            ORCHESTRATOR => "orkiestrator".into(),
-            PLAN_VERIFIER => "weryfikator planu".into(),
-            AUDITOR => "audytor".into(),
-            "conversation" | "rozmowa" => "rozmowa".into(),
+            ORCHESTRATOR => "orchestrator".into(),
+            PLAN_VERIFIER => "plan verifier".into(),
+            AUDITOR => "auditor".into(),
+            "conversation" | "rozmowa" => "conversation".into(),
             other => other.into(),
         },
     }
@@ -912,17 +1166,17 @@ pub fn agent_name(key: &str) -> String {
 
 pub fn polish(status: &str) -> &str {
     match status {
-        "proposed" => "proponowane",
-        "queued" => "w kolejce",
-        "working" => "worker pracuje",
-        "verifying" => "weryfikacja",
-        "approved" => "zatwierdzone",
-        "needs_user" => "wymaga decyzji",
-        "failed" => "nieudane",
-        "skipped" => "pominięte",
-        "cancelled" => "anulowane",
-        "waiting" => "czeka na logowanie/limit",
-        "revised" => "odesłane",
+        "proposed" => "proposed",
+        "queued" => "queued",
+        "working" => "working",
+        "verifying" => "verifying",
+        "approved" => "approved",
+        "needs_user" => "needs decision",
+        "failed" => "failed",
+        "skipped" => "skipped",
+        "cancelled" => "cancelled",
+        "waiting" => "waiting for login/limit",
+        "revised" => "sent back",
         other => other,
     }
 }
@@ -957,7 +1211,7 @@ pub fn truncate(text: &str, width: usize) -> String {
 /// Returns true if the guard was triggered and drawn.
 pub fn draw_min_term_guard(frame: &mut ratatui::Frame, area: Rect) -> bool {
     if area.width < MIN_TERM_WIDTH || area.height < MIN_TERM_HEIGHT {
-        let msg = format!("Terminal zbyt mały (wymagane min. {MIN_TERM_WIDTH}x{MIN_TERM_HEIGHT})");
+        let msg = format!("Terminal too small (min. {MIN_TERM_WIDTH}x{MIN_TERM_HEIGHT} required)");
         frame.render_widget(Clear, area);
         frame.render_widget(
             Paragraph::new(msg)
@@ -993,8 +1247,8 @@ pub fn render_header(
 
     let short = conversation.get(..8).unwrap_or(conversation);
     let mode_str = match mode {
-        Some(true) => "autonomiczny · ",
-        Some(false) => "nadzorowany · ",
+        Some(true) => "[Mode: autonomous] · ",
+        Some(false) => "[Mode: supervised] · ",
         None => "",
     };
 
@@ -1028,22 +1282,22 @@ pub fn render_header(
             ),
         };
         let (chat_label, tasks_label, graph_label) = match focus {
-            PanelFocus::Chat => ("[Czat]", "Zadania", "Zespół"),
-            PanelFocus::Tasks => ("Czat", "[Zadania]", "Zespół"),
-            PanelFocus::Graph => ("Czat", "Zadania", "[Zespół]"),
+            PanelFocus::Chat => ("[Chat]", "Tasks", "Team"),
+            PanelFocus::Tasks => ("Chat", "[Tasks]", "Team"),
+            PanelFocus::Graph => ("Chat", "Tasks", "[Team]"),
         };
         spans.push(Span::styled(format!(" {chat_label} "), chat_style));
         spans.push(Span::styled(format!("{tasks_label} "), tasks_style));
         spans.push(Span::styled(format!("{graph_label} "), graph_style));
         let switch_hint = match focus {
-            PanelFocus::Chat => "(Tab: przełącz) · (t: zadania) · ",
-            PanelFocus::Tasks => "(Tab: przełącz) · (Esc: czat) · ",
-            PanelFocus::Graph => "(Tab: przełącz) · (t: zadania) · ",
+            PanelFocus::Chat => "(Tab: switch) · (t: tasks) · ",
+            PanelFocus::Tasks => "(Tab: switch) · (Esc: chat) · ",
+            PanelFocus::Graph => "(Tab: switch) · (t: tasks) · ",
         };
         if width >= 75 {
             spans.push(Span::styled(switch_hint, dim()));
         } else if width >= 65 {
-            spans.push(Span::styled("(Tab: przełącz) · ", dim()));
+            spans.push(Span::styled("(Tab: switch) · ", dim()));
         } else if width >= 40 {
             spans.push(Span::styled("· ", dim()));
         }
@@ -1064,6 +1318,12 @@ pub fn render_header(
             Style::default().fg(Color::Yellow),
         ));
     }
+    if width >= 95 {
+        spans.push(Span::styled(
+            " · [/pause] [/continue] [/resume] [/cancel] [Plan]",
+            Style::default().fg(Color::Cyan),
+        ));
+    }
     Line::from(spans)
 }
 
@@ -1079,9 +1339,9 @@ pub fn main_footer_hint(
         return truncate(notice, width);
     }
     let plan = if plan_proposed {
-        "Ctrl+A uruchom plan · "
+        "Ctrl+A accept plan · "
     } else if plan_resumable {
-        "Ctrl+R wznów plan · "
+        "Ctrl+R resume plan · "
     } else {
         ""
     };
@@ -1089,14 +1349,12 @@ pub fn main_footer_hint(
         PanelFocus::Chat => {
             if width >= 115 {
                 format!(
-                    "Enter wyślij (@t2 … do agenta) · Alt+Enter nowa linia · {plan}Ctrl+P polecenia · F1 pomoc · Tab zespół · Esc wyjdź"
+                    "Enter send (@t2 … to agent) · Alt+Enter newline · {plan}Ctrl+P commands · F1 help · Tab team · Ctrl+C/q quit"
                 )
             } else if width >= 75 {
-                format!(
-                    "Enter wyślij · Alt+Enter nowa linia · {plan}Ctrl+P · F1 pomoc · Tab zespół · Esc"
-                )
+                format!("Enter send · Alt+Enter newline · {plan}Ctrl+P · F1 help · Tab team · Esc")
             } else if width >= 50 {
-                format!("Enter wyślij · {plan}Tab zespół · Esc")
+                format!("Enter send · {plan}Tab team · Esc")
             } else {
                 "Enter · Esc".into()
             }
@@ -1104,40 +1362,40 @@ pub fn main_footer_hint(
         PanelFocus::Tasks => {
             if width >= 115 {
                 format!(
-                    "←/→ zadanie · w worker · v weryfikator · Enter szczegóły · d diff · c skomentuj · {plan}Tab zespół · Esc czat"
+                    "←/→ task · w worker · v verifier · Enter details · d diff · c comment · {plan}Tab team · Esc chat"
                 )
             } else if width >= 75 {
-                "←/→ zadanie · w worker · v wer. · Enter szczegóły · d diff · Tab zespół · Esc"
-                    .into()
+                "←/→ task · w worker · v ver. · Enter details · d diff · Tab team · Esc".into()
             } else if width >= 50 {
-                "←/→ zadanie · w worker · v wer. · Tab zespół".into()
+                "←/→ task · w worker · v ver. · Tab team".into()
             } else {
-                "←/→ zadanie · w · v".into()
+                "←/→ task · w · v".into()
             }
         }
         PanelFocus::Graph => {
             if width >= 115 {
                 format!(
-                    "strzałki wybór · Enter szczegóły · / znajdź · d diff · c skomentuj · f filtr · {plan}Ctrl+P polecenia · ? pomoc · q wyjdź"
+                    "arrows select · PgUp/PgDn scroll text · Enter details · / find · d diff · c comment · {plan}? help · q quit"
                 )
             } else if width >= 75 {
-                "strzałki wybór · Enter szczegóły · / szukaj · d diff · c kom. · f filtr · ? pomoc · q".into()
+                "arrows select · PgUp/PgDn text · Enter details · / find · d diff · ? help · q"
+                    .into()
             } else if width >= 50 {
-                "strzałki · Enter szczegóły · Tab czat · q".into()
+                "arrows · Enter details · Tab chat · q".into()
             } else {
-                "strzałki · q".into()
+                "arrows · q".into()
             }
         }
     }
 }
 
-/// Polish empty state displayed when transcript contains no messages.
+/// Empty state displayed when transcript contains no messages.
 pub fn transcript_empty_state(width: usize) -> Vec<Line<'static>> {
     vec![
-        Line::styled("Brak wiadomości w tej rozmowie.", dim()),
+        Line::styled("No messages in this conversation.", dim()),
         Line::styled(
             truncate(
-                "Wpisz wiadomość orkiestratorowi poniżej lub naciśnij Ctrl+P, aby otworzyć paletę.",
+                "Type a message to the orchestrator below or press Ctrl+P to open the command palette.",
                 width,
             ),
             dim(),
@@ -1204,7 +1462,7 @@ mod tests {
             view.apply(&event);
         }
         assert_eq!(view.after, 7);
-        assert_eq!(view.activity.as_deref(), Some("orkiestrator: exec ls"));
+        assert_eq!(view.activity.as_deref(), Some("orchestrator: exec ls"));
         assert_eq!(view.tasks[0].status, "working");
         assert_eq!(view.tasks[0].activity, "worker: view_file src/x.rs");
         assert!(!view.plan_proposed());
@@ -1241,12 +1499,12 @@ mod tests {
             .iter()
             .map(|entry| entry.text.as_str())
             .collect();
-        assert!(text.contains(&"⚠ weryfikator planu nie zadziałał: login required"));
+        assert!(text.contains(&"⚠ plan verifier failed: login required"));
         assert!(
             text.iter()
-                .any(|line| line.contains("Czeka na Ciebie") && line.contains("Ctrl+A"))
+                .any(|line| line.contains("Waiting for you") && line.contains("Ctrl+A"))
         );
-        assert!(text.contains(&"⚠ audyt: zastrzeżenia"));
+        assert!(text.contains(&"⚠ audit: issues found"));
         assert!(text.contains(&"  - [high] README missing"));
         assert!(view.plan_proposed());
     }
@@ -1280,8 +1538,8 @@ mod tests {
         assert_eq!(
             text,
             [
-                "✉ Ty → t2 (user_instruction): użyj UTF-8 · czeka na następną turę odbiorcy",
-                "✓ t2 otrzymał wiadomość"
+                "✉ You → t2 (user_instruction): użyj UTF-8 · waiting for recipient's next turn",
+                "✓ t2 received message"
             ]
         );
     }
@@ -1305,9 +1563,9 @@ mod tests {
             json!({"author": "user", "text": "start"}),
         ));
         assert_eq!(view.messages.len(), 1);
-        assert_eq!(view.messages[0].sender, "Ty");
-        assert_eq!(view.messages[0].target, "orkiestrator");
-        assert_eq!(view.messages[0].state, "wysłano");
+        assert_eq!(view.messages[0].sender, "You");
+        assert_eq!(view.messages[0].target, "orchestrator");
+        assert_eq!(view.messages[0].state, "sent");
 
         view.apply(&event(
             2,
@@ -1317,7 +1575,7 @@ mod tests {
         ));
         assert_eq!(view.messages.len(), 2);
         assert_eq!(view.messages[1].id, "101");
-        assert_eq!(view.messages[1].state, "czeka na turę");
+        assert_eq!(view.messages[1].state, "waiting for turn");
 
         view.apply(&event(
             3,
@@ -1325,9 +1583,9 @@ mod tests {
             "mail_delivered",
             json!({"ids": [101]}),
         ));
-        assert_eq!(view.messages[1].state, "dostarczono");
+        assert_eq!(view.messages[1].state, "delivered");
         if let TranscriptCard::Message(msg) = &view.cards[1] {
-            assert_eq!(msg.state, "dostarczono");
+            assert_eq!(msg.state, "delivered");
         } else {
             panic!("Expected message card");
         }
@@ -1380,12 +1638,12 @@ mod tests {
         let verifier = &view.agents["verifier:t1"];
         assert!(verifier.running);
         assert_eq!(verifier.provider, "agy");
-        assert_eq!(verifier.session, ["── tura", "↳ read a.rs"]);
+        assert_eq!(verifier.session, ["── turn", "↳ read a.rs"]);
         let link = &view.links[&("verifier:t1".to_owned(), "worker:t2".to_owned())];
         assert_eq!(link.count, 1);
         assert_eq!(view.mailbox["worker:t2"], ["t1/verifier → t2 (finding): x"]);
-        assert_eq!(view.reviews[AUDITOR], ["✓ audytor: bez zastrzeżeń"]);
-        assert_eq!(view.progress(), ["t1 weryfikacja: verifier: read a.rs"]);
+        assert_eq!(view.reviews[AUDITOR], ["✓ auditor: no issues"]);
+        assert_eq!(view.progress(), ["t1 verifying: verifier: read a.rs"]);
     }
 
     #[test]
@@ -1434,10 +1692,10 @@ mod tests {
         assert_eq!(
             text,
             [
-                "✎ #1 do t1 worker: x",
-                "✎ #2 do t1 diff src/a.rs:3: x",
-                "✎ #3 do t1 weryfikator: x",
-                "✎ #3 usunięty"
+                "✎ #1 to t1 worker: x",
+                "✎ #2 to t1 diff src/a.rs:3: x",
+                "✎ #3 to t1 verifier: x",
+                "✎ #3 deleted"
             ],
             "the comment's message is not shown twice"
         );
@@ -1502,13 +1760,13 @@ mod tests {
             view.apply(&event);
         }
         let agent = |view: &View| view.agents.values().next().unwrap().tokens();
-        assert_eq!(agent(&view), "niedostępne (CLI ich nie zgłosił)");
+        assert_eq!(agent(&view), "unavailable (CLI did not report them)");
         for event in turn(4, "b", json!(120)) {
             view.apply(&event);
         }
         assert_eq!(
             agent(&view),
-            "we 120 / wy nieznane · zgłoszone w 1 z 2 tur, reszta nieznana"
+            "in 120 / out unknown · reported in 1 of 2 turns, rest unknown"
         );
     }
 
@@ -1519,7 +1777,7 @@ mod tests {
             "proj",
             "conv-12345",
             Some(true),
-            "gotowy",
+            "ready",
             PanelFocus::Chat,
             84,
         );
@@ -1528,15 +1786,15 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(chat_text.contains("[Czat]"));
-        assert!(chat_text.contains("Zespół"));
-        assert!(chat_text.contains("(Tab: przełącz)"));
+        assert!(chat_text.contains("[Chat]"));
+        assert!(chat_text.contains("Team"));
+        assert!(chat_text.contains("(Tab: switch)"));
 
         let header_graph = render_header(
             "proj",
             "conv-12345",
             Some(true),
-            "gotowy",
+            "ready",
             PanelFocus::Graph,
             84,
         );
@@ -1545,9 +1803,9 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(graph_text.contains("Czat"));
-        assert!(graph_text.contains("[Zespół]"));
-        assert!(graph_text.contains("(Tab: przełącz)"));
+        assert!(graph_text.contains("Chat"));
+        assert!(graph_text.contains("[Team]"));
+        assert!(graph_text.contains("(Tab: switch)"));
     }
 
     #[test]
@@ -1557,7 +1815,7 @@ mod tests {
             "proj",
             "conv-12345",
             Some(true),
-            "gotowy",
+            "ready",
             PanelFocus::Chat,
             85,
         );
@@ -1566,12 +1824,12 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(!wide_text.contains("[Czat]"));
-        assert!(!wide_text.contains("(Tab: przełącz)"));
+        assert!(!wide_text.contains("[Chat]"));
+        assert!(!wide_text.contains("(Tab: switch)"));
         assert!(wide_text.contains("proj"));
         assert!(wide_text.contains("conv-123"));
-        assert!(wide_text.contains("autonomiczny"));
-        assert!(wide_text.contains("gotowy"));
+        assert!(wide_text.contains("autonomous"));
+        assert!(wide_text.contains("ready"));
     }
 
     #[test]
@@ -1592,7 +1850,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
         let norm = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(norm.contains("Terminal zbyt mały (wymagane min. 12x5)"));
+        assert!(norm.contains("Terminal too small (min. 12x5 required)"));
 
         // Terminal size 12x5 meets minimum guard
         let backend = TestBackend::new(12, 5);
@@ -1612,20 +1870,20 @@ mod tests {
             "test-proj",
             "conv-12345",
             Some(false),
-            "gotowy",
+            "ready",
             PanelFocus::Chat,
             120,
         );
         let text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("antislop"));
-        assert!(text.contains("nadzorowany"));
-        assert!(text.contains("gotowy"));
+        assert!(text.contains("supervised"));
+        assert!(text.contains("ready"));
 
         let header_auto = render_header(
             "test-proj",
             "conv-12345",
             Some(true),
-            "zadania w toku…",
+            "tasks in progress…",
             PanelFocus::Chat,
             120,
         );
@@ -1634,16 +1892,16 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert!(text_auto.contains("autonomiczny"));
-        assert!(text_auto.contains("zadania w toku…"));
+        assert!(text_auto.contains("autonomous"));
+        assert!(text_auto.contains("tasks in progress…"));
     }
 
     #[test]
     fn main_footer_hints_prioritized_by_width() {
         // Chat hints
         let wide = main_footer_hint(PanelFocus::Chat, false, false, None, 120);
-        assert!(wide.contains("Alt+Enter nowa linia"));
-        assert!(wide.contains("F1 pomoc"));
+        assert!(wide.contains("Alt+Enter newline"));
+        assert!(wide.contains("F1 help"));
 
         let medium = main_footer_hint(PanelFocus::Chat, false, false, None, 80);
         assert!(medium.contains("Ctrl+P"));
@@ -1654,17 +1912,17 @@ mod tests {
 
         // Graph hints
         let graph_wide = main_footer_hint(PanelFocus::Graph, false, false, None, 120);
-        assert!(graph_wide.contains("strzałki wybór"));
+        assert!(graph_wide.contains("arrows select"));
         assert!(graph_wide.contains("d diff"));
 
         let graph_narrow = main_footer_hint(PanelFocus::Graph, false, false, None, 55);
-        assert!(graph_narrow.contains("Tab czat"));
+        assert!(graph_narrow.contains("Tab chat"));
     }
 
     #[test]
     fn transcript_empty_state_polish() {
         let lines = transcript_empty_state(80);
         let text = lines[0].spans[0].content.as_ref();
-        assert_eq!(text, "Brak wiadomości w tej rozmowie.");
+        assert_eq!(text, "No messages in this conversation.");
     }
 }

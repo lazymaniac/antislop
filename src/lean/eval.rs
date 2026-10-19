@@ -338,6 +338,7 @@ fn judge(
     let mut spec = Spec {
         provider: options.provider,
         binary: options.binary.clone(),
+        args: vec![],
         model: options.model.clone(),
         effort: options.effort.clone(),
         cwd: repo.to_path_buf(),

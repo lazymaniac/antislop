@@ -35,6 +35,8 @@ pub struct Turn {
     pub error: Option<String>,
     /// The last user message this turn answers.
     pub upto_message: u64,
+    #[serde(default)]
+    pub plan_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +53,8 @@ pub enum TurnStatus {
 pub struct Event {
     pub seq: u64,
     pub turn_id: Option<String>,
+    #[serde(default)]
+    pub plan_id: Option<String>,
     pub kind: String,
     pub payload: Value,
     /// When it was recorded; 0 for events from before schema 2.
@@ -84,6 +88,8 @@ fn default_mail_state() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub turn_id: String,
+    #[serde(default)]
+    pub plan_id: Option<String>,
     pub role: String,
     pub provider: String,
     pub session_id: Option<String>,
@@ -93,6 +99,60 @@ pub struct SessionInfo {
     pub started_ms: i64,
     pub finished_ms: Option<i64>,
     pub pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanAgentInfo {
+    pub role: String,
+    pub provider: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub task_label: Option<String>,
+    pub turns_count: usize,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskReportInfo {
+    pub task_id: String,
+    pub task_label: String,
+    pub round: u32,
+    pub report: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskVerdictInfo {
+    pub task_id: String,
+    pub task_label: String,
+    pub round: u32,
+    pub verdict: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanHistory {
+    pub id: String,
+    pub conversation_id: String,
+    pub created_ms: i64,
+    pub status: String,
+    pub is_active: bool,
+    pub tasks: Vec<Task>,
+    pub agents: Vec<PlanAgentInfo>,
+    pub turns: Vec<SessionInfo>,
+    pub reports: Vec<TaskReportInfo>,
+    pub verdicts: Vec<TaskVerdictInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlansPage {
+    pub plans: Vec<PlanHistory>,
+    pub offset: usize,
+    pub limit: usize,
+    pub total: usize,
+    pub has_more: bool,
+    pub active_plan_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -171,7 +231,7 @@ impl TurnStatus {
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Tables only ever get added; a change to an existing one raises it and
 /// migrates from the version found.
-const SCHEMA: u32 = 3;
+const SCHEMA: u32 = 4;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -196,13 +256,14 @@ impl Store {
              CREATE TABLE IF NOT EXISTS turns(
                id TEXT PRIMARY KEY,
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
+               plan_id TEXT,
                role TEXT NOT NULL, provider TEXT NOT NULL, session_id TEXT,
                status TEXT NOT NULL, error TEXT, upto_message INTEGER NOT NULL,
                started_ms INTEGER NOT NULL, finished_ms INTEGER, pid INTEGER);
              CREATE TABLE IF NOT EXISTS events(
                seq INTEGER PRIMARY KEY AUTOINCREMENT,
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               turn_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL,
+               turn_id TEXT, plan_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL,
                created_ms INTEGER NOT NULL DEFAULT 0);
              CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, seq);
              CREATE INDEX IF NOT EXISTS turns_by_conversation ON turns(conversation_id, role, started_ms);
@@ -233,7 +294,10 @@ impl Store {
                conversation_id TEXT PRIMARY KEY REFERENCES conversations(id));
              CREATE TABLE IF NOT EXISTS modes(
                conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
-               autonomous INTEGER NOT NULL);",
+               autonomous INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS trusted_projects(
+               project TEXT PRIMARY KEY,
+               trusted_ms INTEGER NOT NULL);",
         )?;
         // 1 → 2: events got their time; earlier ones keep 0, unknown.
         let timed: bool = connection.query_row(
@@ -255,6 +319,56 @@ impl Store {
         if !tracked {
             connection.execute_batch("ALTER TABLE turns ADD COLUMN pid INTEGER")?;
         }
+        // 3 → 4: events, turns and comments associate with plan; plans table backfilled.
+        let event_plan: bool = connection.query_row(
+            "SELECT count(*) FROM pragma_table_info('events') WHERE name='plan_id'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !event_plan {
+            connection.execute_batch("ALTER TABLE events ADD COLUMN plan_id TEXT")?;
+        }
+        let turn_plan: bool = connection.query_row(
+            "SELECT count(*) FROM pragma_table_info('turns') WHERE name='plan_id'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !turn_plan {
+            connection.execute_batch("ALTER TABLE turns ADD COLUMN plan_id TEXT")?;
+        }
+        let comment_plan: bool = connection.query_row(
+            "SELECT count(*) FROM pragma_table_info('comments') WHERE name='plan_id'",
+            [],
+            |row| row.get(0),
+        )?;
+        if !comment_plan {
+            connection.execute_batch("ALTER TABLE comments ADD COLUMN plan_id TEXT")?;
+        }
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS plans(
+               id TEXT PRIMARY KEY,
+               conversation_id TEXT NOT NULL REFERENCES conversations(id),
+               created_ms INTEGER NOT NULL);
+             CREATE INDEX IF NOT EXISTS plans_by_conversation ON plans(conversation_id, created_ms);
+             CREATE INDEX IF NOT EXISTS events_by_plan ON events(conversation_id, plan_id, seq);
+             CREATE INDEX IF NOT EXISTS turns_by_plan ON turns(conversation_id, plan_id, started_ms);
+             INSERT OR IGNORE INTO plans(id, conversation_id, created_ms)
+               SELECT plan_id, conversation_id, MIN(created_ms) FROM tasks GROUP BY plan_id, conversation_id;
+             UPDATE turns SET plan_id = (
+               SELECT plan_id FROM tasks WHERE tasks.id = substr(turns.role, 8)
+             ) WHERE turns.plan_id IS NULL AND turns.role LIKE 'worker:%';
+             UPDATE turns SET plan_id = (
+               SELECT plan_id FROM tasks WHERE tasks.id = substr(turns.role, 10)
+             ) WHERE turns.plan_id IS NULL AND turns.role LIKE 'verifier:%';
+             UPDATE events SET plan_id = (
+               SELECT plan_id FROM turns WHERE turns.id = events.turn_id AND turns.plan_id IS NOT NULL
+             ) WHERE events.plan_id IS NULL AND events.turn_id IS NOT NULL;
+             UPDATE events SET plan_id = (
+               SELECT plan_id FROM tasks WHERE tasks.id = json_extract(events.payload, '$.task')
+             ) WHERE events.plan_id IS NULL AND events.kind = 'task' AND json_extract(events.payload, '$.task') IS NOT NULL;
+             UPDATE events SET plan_id = json_extract(events.payload, '$.plan')
+             WHERE events.plan_id IS NULL AND json_extract(events.payload, '$.plan') IS NOT NULL;",
+        )?;
         connection.pragma_update(None, "user_version", SCHEMA)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -280,6 +394,41 @@ impl Store {
             ],
         )?;
         Ok(conversation)
+    }
+
+    pub fn is_trusted(&self, project: &str) -> Result<bool> {
+        let count: i64 = self.db().query_row(
+            "SELECT count(*) FROM trusted_projects WHERE project=?1",
+            [project],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn trust_project(&self, project: &str) -> Result<()> {
+        self.db().execute(
+            "INSERT OR REPLACE INTO trusted_projects(project, trusted_ms) VALUES(?1, ?2)",
+            params![project, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn untrust_project(&self, project: &str) -> Result<()> {
+        self.db()
+            .execute("DELETE FROM trusted_projects WHERE project=?1", [project])?;
+        Ok(())
+    }
+
+    pub fn trusted_projects(&self) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut statement =
+            db.prepare("SELECT project FROM trusted_projects ORDER BY trusted_ms DESC")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        let mut projects = Vec::new();
+        for row in rows {
+            projects.push(row?);
+        }
+        Ok(projects)
     }
 
     pub fn conversation(&self, id: &str) -> Result<Conversation> {
@@ -324,7 +473,7 @@ impl Store {
         )?;
         let seq = tx.last_insert_rowid() as u64;
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,NULL,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![
                 conversation,
                 serde_json::json!({"seq":seq,"author":author,"text":text}).to_string()
@@ -393,7 +542,28 @@ impl Store {
         role: &str,
         provider: &str,
         upto_message: u64,
+        plan_id: Option<&str>,
     ) -> Result<Turn> {
+        let db = self.db();
+        let resolved_plan: Option<String> = match plan_id {
+            Some(pid) => Some(pid.to_string()),
+            None => {
+                if let Some(task_uuid) = role
+                    .strip_prefix("worker:")
+                    .or_else(|| role.strip_prefix("verifier:"))
+                {
+                    db.query_row(
+                        "SELECT plan_id FROM tasks WHERE id=?1",
+                        [task_uuid],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()?
+                    .flatten()
+                } else {
+                    None
+                }
+            }
+        };
         let turn = Turn {
             id: crate::id(),
             role: role.into(),
@@ -401,13 +571,15 @@ impl Store {
             session_id: None,
             error: None,
             upto_message,
+            plan_id: resolved_plan.clone(),
         };
-        self.db().execute(
-            "INSERT INTO turns(id,conversation_id,role,provider,status,upto_message,started_ms)
-             VALUES(?1,?2,?3,?4,'running',?5,?6)",
+        db.execute(
+            "INSERT INTO turns(id,conversation_id,plan_id,role,provider,status,upto_message,started_ms)
+             VALUES(?1,?2,?3,?4,?5,'running',?6,?7)",
             params![
                 turn.id,
                 conversation,
+                resolved_plan,
                 role,
                 provider,
                 upto_message as i64,
@@ -456,11 +628,28 @@ impl Store {
     /// The latest turn of `role`, which carries the session to resume and the
     /// last message it answered.
     pub fn last_turn(&self, conversation: &str, role: &str) -> Result<Option<Turn>> {
+        self.last_turn_for_roles(conversation, role, role)
+    }
+
+    pub fn last_orchestration_turn(&self, conversation: &str) -> Result<Option<Turn>> {
+        self.last_turn_for_roles(
+            conversation,
+            super::ORCHESTRATOR,
+            super::COMMENT_ORCHESTRATOR,
+        )
+    }
+
+    fn last_turn_for_roles(
+        &self,
+        conversation: &str,
+        role: &str,
+        other: &str,
+    ) -> Result<Option<Turn>> {
         self.db()
             .query_row(
-                "SELECT id,role,status,session_id,error,upto_message FROM turns
-                 WHERE conversation_id=?1 AND role=?2 ORDER BY started_ms DESC, rowid DESC LIMIT 1",
-                params![conversation, role],
+                "SELECT id,role,status,session_id,error,upto_message,plan_id FROM turns
+                 WHERE conversation_id=?1 AND role IN (?2,?3) ORDER BY started_ms DESC, rowid DESC LIMIT 1",
+                params![conversation, role, other],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -469,11 +658,12 @@ impl Store {
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, Option<String>>(4)?,
                         row.get::<_, i64>(5)?,
+                        row.get::<_, Option<String>>(6)?,
                     ))
                 },
             )
             .optional()?
-            .map(|(id, role, status, session_id, error, upto)| {
+            .map(|(id, role, status, session_id, error, upto, plan_id)| {
                 Ok(Turn {
                     id,
                     role,
@@ -481,6 +671,7 @@ impl Store {
                     session_id,
                     error,
                     upto_message: upto as u64,
+                    plan_id,
                 })
             })
             .transpose()
@@ -494,6 +685,12 @@ impl Store {
             params![conversation, role],
             |row| row.get::<_, i64>(0),
         )? as u64)
+    }
+
+    pub fn last_orchestration_answered(&self, conversation: &str) -> Result<u64> {
+        Ok(self
+            .last_answered(conversation, super::ORCHESTRATOR)?
+            .max(self.last_answered(conversation, super::COMMENT_ORCHESTRATOR)?))
     }
 
     /// The session of the latest turn of `role` with `provider` that got one,
@@ -526,12 +723,33 @@ impl Store {
         let conversations = {
             let mut statement = tx.prepare(
                 "SELECT DISTINCT conversation_id FROM turns
-                 WHERE status='running' AND role='orchestrator'",
+                 WHERE status='running' AND role IN ('orchestrator','comment-orchestrator')",
             )?;
             statement
                 .query_map([], |row| row.get(0))?
                 .collect::<std::result::Result<Vec<String>, _>>()?
         };
+        let interrupted = {
+            let mut statement = tx.prepare(
+                "SELECT id,conversation_id,plan_id,role FROM turns WHERE status='running'",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for (turn, conversation, plan, role) in interrupted {
+            tx.execute(
+                "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,?3,'turn_finished',?4,?5)",
+                params![conversation, turn, plan, serde_json::json!({"role": role, "status": "interrupted", "error": "the daemon stopped while this turn ran"}).to_string(), now_ms()],
+            )?;
+        }
         tx.execute(
             "UPDATE turns SET status='interrupted',finished_ms=?1 WHERE status='running'",
             [now_ms()],
@@ -612,6 +830,11 @@ impl Store {
         let plan_id = crate::id();
         let mut db = self.db();
         let tx = db.transaction()?;
+        let now = now_ms();
+        tx.execute(
+            "INSERT INTO plans(id,conversation_id,created_ms) VALUES(?1,?2,?3)",
+            params![plan_id, conversation, now],
+        )?;
         let mut tasks = vec![];
         for (position, spec) in specs.iter().enumerate() {
             let task = Task {
@@ -634,7 +857,7 @@ impl Store {
                     plan_id,
                     position as i64,
                     spec.to_string(),
-                    now_ms()
+                    now
                 ],
             )?;
             tasks.push(task);
@@ -770,7 +993,7 @@ impl Store {
             ..mail.clone()
         };
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'mail',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,NULL,'mail',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![conversation, serde_json::to_value(&mail)?.to_string()],
         )?;
         tx.commit()?;
@@ -809,11 +1032,12 @@ impl Store {
         )?;
         let message = tx.last_insert_rowid() as u64;
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms)
-             VALUES(?1,NULL,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms)
+             VALUES(?1,NULL,?3,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![
                 conversation,
-                serde_json::json!({"seq": message, "author": "user", "text": text}).to_string()
+                serde_json::json!({"seq": message, "author": "user", "text": text}).to_string(),
+                comment.plan_id
             ],
         )?;
         tx.execute(
@@ -827,8 +1051,8 @@ impl Store {
             ..comment.clone()
         };
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, serde_json::to_value(&comment)?.to_string()],
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,?3,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            params![conversation, serde_json::to_value(&comment)?.to_string(), comment.plan_id],
         )?;
         tx.commit()?;
         Ok(comment)
@@ -844,15 +1068,81 @@ impl Store {
         if changed == 0 {
             return Err(Error::Invalid(format!("no comment {id}")));
         }
-        let comment = Self::comment_rows(&tx, "id=?1", params![id as i64])?
+        let mut comment = Self::comment_rows(&tx, "id=?1", params![id as i64])?
             .pop()
             .ok_or_else(|| Error::Invalid(format!("no comment {id}")))?;
+        if status == "open" {
+            let text = format!(
+                "{}{} on {}] {}",
+                super::COMMENT_PREFIX,
+                id,
+                comment.label,
+                comment.text
+            );
+            tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)", params![conversation, text, now_ms()])?;
+            comment.message = tx.last_insert_rowid() as u64;
+            tx.execute(
+                "UPDATE comments SET message=?1 WHERE id=?2",
+                params![comment.message as i64, id as i64],
+            )?;
+            tx.execute(
+                "INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'message',?3,?4)",
+                params![conversation, comment.plan_id, serde_json::json!({"seq": comment.message, "author": "user", "text": text}).to_string(), now_ms()],
+            )?;
+        }
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, serde_json::to_value(&comment)?.to_string()],
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,?3,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            params![conversation, serde_json::to_value(&comment)?.to_string(), comment.plan_id],
         )?;
         tx.commit()?;
         Ok(comment)
+    }
+
+    /// Resolve only plan feedback included in the successful revision.
+    pub fn resolve_plan_comments(&self, conversation: &str, upto: u64) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let comments = Self::comment_rows(
+            &tx,
+            "conversation_id=?1 AND status='open' AND message<=?2 AND (target='plan' OR target LIKE 'plan:%')",
+            params![conversation, upto as i64],
+        )?;
+        for mut comment in comments {
+            tx.execute(
+                "UPDATE comments SET status='resolved',updated_ms=?1 WHERE id=?2",
+                params![now_ms(), comment.id as i64],
+            )?;
+            comment.status = "resolved".into();
+            tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'comment',?3,?4)",
+                params![conversation, comment.plan_id, serde_json::to_string(&comment)?, now_ms()])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The rendered plan document is runtime context, never repository contents.
+    pub fn plan_document(&self, conversation: &str, plan: &str) -> Result<Option<String>> {
+        let document = self.db().query_row(
+            "SELECT json_extract(payload,'$.document') FROM events WHERE conversation_id=?1 AND plan_id=?2 AND kind='plan_proposed' ORDER BY seq DESC LIMIT 1",
+            params![conversation, plan], |row| row.get::<_, Option<String>>(0),
+        ).optional()?.flatten();
+        if document.is_some() {
+            return Ok(document);
+        }
+        // A rejected candidate has task rows but no published document yet.
+        // Both orchestration sessions need its specs when revising it.
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT spec FROM tasks WHERE conversation_id=?1 AND plan_id=?2 ORDER BY position",
+        )?;
+        let specs = statement
+            .query_map(params![conversation, plan], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if specs.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(format!("[{}]", specs.join(","))))
+        }
     }
 
     /// Pauses or continues the conversation's plan work, with its event.
@@ -872,7 +1162,7 @@ impl Store {
         };
         if changed > 0 {
             tx.execute(
-                "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'paused',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+                "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,NULL,'paused',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
                 params![conversation, serde_json::json!({"paused": paused}).to_string()],
             )?;
         }
@@ -899,7 +1189,7 @@ impl Store {
                 params![conversation, autonomous],
             )?;
             tx.execute(
-                "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,NULL,'mode',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+                "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,NULL,'mode',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
                 params![
                     conversation,
                     serde_json::json!({"autonomous": autonomous}).to_string()
@@ -1033,7 +1323,7 @@ impl Store {
             )?;
         }
         tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,?2,'mail_delivered',?3,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,(SELECT plan_id FROM turns WHERE id=?2),'mail_delivered',?3,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![conversation, turn, serde_json::json!({"ids": ids, "delivered_ms": now, "state": "delivered"}).to_string()],
         )?;
         tx.commit()?;
@@ -1044,21 +1334,22 @@ impl Store {
         self.conversation(conversation)?;
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid
+            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid
              FROM turns WHERE conversation_id=?1 ORDER BY started_ms ASC, rowid ASC",
         )?;
         let rows = statement.query_map([conversation], |row| {
             Ok(SessionInfo {
                 turn_id: row.get(0)?,
-                role: row.get(1)?,
-                provider: row.get(2)?,
-                session_id: row.get(3)?,
-                status: row.get(4)?,
-                error: row.get(5)?,
-                upto_message: row.get::<_, i64>(6)? as u64,
-                started_ms: row.get(7)?,
-                finished_ms: row.get(8)?,
-                pid: row.get(9)?,
+                plan_id: row.get(1)?,
+                role: row.get(2)?,
+                provider: row.get(3)?,
+                session_id: row.get(4)?,
+                status: row.get(5)?,
+                error: row.get(6)?,
+                upto_message: row.get::<_, i64>(7)? as u64,
+                started_ms: row.get(8)?,
+                finished_ms: row.get(9)?,
+                pid: row.get(10)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -1124,13 +1415,41 @@ impl Store {
         &self,
         conversation: &str,
         turn: Option<&str>,
+        plan_id: Option<&str>,
         kind: &str,
         payload: &Value,
     ) -> Result<u64> {
         let db = self.db();
+        let resolved_plan: Option<String> = match plan_id {
+            Some(pid) => Some(pid.to_string()),
+            None => {
+                if let Some(tid) = turn {
+                    db.query_row("SELECT plan_id FROM turns WHERE id=?1", [tid], |row| {
+                        row.get::<_, Option<String>>(0)
+                    })
+                    .optional()?
+                    .flatten()
+                } else if let Some(pid) = payload.get("plan").and_then(|v| v.as_str()) {
+                    Some(pid.to_string())
+                } else if let Some(task_uuid) = payload.get("task").and_then(|v| v.as_str()) {
+                    db.query_row(
+                        "SELECT plan_id FROM tasks WHERE id=?1",
+                        [task_uuid],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()?
+                    .flatten()
+                } else {
+                    payload
+                        .get("plan_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                }
+            }
+        };
         db.execute(
-            "INSERT INTO events(conversation_id,turn_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, turn, kind, payload.to_string()],
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4,?5,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            params![conversation, turn, resolved_plan, kind, payload.to_string()],
         )?;
         Ok(db.last_insert_rowid() as u64)
     }
@@ -1138,7 +1457,7 @@ impl Store {
     pub fn events_since(&self, conversation: &str, after: u64, limit: usize) -> Result<Vec<Event>> {
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT seq,turn_id,kind,payload,created_ms FROM events
+            "SELECT seq,turn_id,plan_id,kind,payload,created_ms FROM events
              WHERE conversation_id=?1 AND seq>?2 ORDER BY seq LIMIT ?3",
         )?;
         let rows =
@@ -1146,22 +1465,369 @@ impl Store {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             })?;
         rows.map(|row| {
-            let (seq, turn_id, kind, payload, created_ms) = row?;
+            let (seq, turn_id, plan_id, kind, payload, created_ms) = row?;
             Ok(Event {
                 seq: seq as u64,
                 turn_id,
+                plan_id,
                 kind,
                 payload: serde_json::from_str(&payload)?,
                 created_ms,
             })
         })
         .collect()
+    }
+
+    /// Finds a task by its globally unique UUID across all plans.
+    pub fn task_by_id(&self, task_id: &str) -> Result<Option<Task>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT id,plan_id,spec,status,round,report,verdict,base,result FROM tasks
+             WHERE id=?1 LIMIT 1",
+        )?;
+        let task = statement
+            .query_row([task_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            })
+            .optional()?;
+        task.map(
+            |(id, plan_id, spec, status, round, report, verdict, base, result)| {
+                Ok(Task {
+                    id,
+                    plan_id,
+                    spec: serde_json::from_str(&spec)?,
+                    status,
+                    round: round as u32,
+                    report,
+                    verdict: verdict.map(|v| serde_json::from_str(&v)).transpose()?,
+                    base,
+                    result,
+                })
+            },
+        )
+        .transpose()
+    }
+
+    /// Checks if a plan belongs to the conversation.
+    pub fn plan_belongs_to_conversation(&self, conversation: &str, plan_id: &str) -> Result<bool> {
+        let db = self.db();
+        let in_tasks: bool = db
+            .query_row(
+                "SELECT 1 FROM tasks WHERE plan_id=?1 AND conversation_id=?2 LIMIT 1",
+                params![plan_id, conversation],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if in_tasks {
+            return Ok(true);
+        }
+        let in_plans: bool = db
+            .query_row(
+                "SELECT 1 FROM plans WHERE id=?1 AND conversation_id=?2 LIMIT 1",
+                params![plan_id, conversation],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(in_plans)
+    }
+
+    /// Finds the conversation_id for a plan.
+    pub fn plan_conversation(&self, plan_id: &str) -> Result<String> {
+        let db = self.db();
+        let conv: Option<String> = db
+            .query_row(
+                "SELECT conversation_id FROM tasks WHERE plan_id=?1 LIMIT 1",
+                [plan_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(c) = conv {
+            return Ok(c);
+        }
+        let conv2: Option<String> = db
+            .query_row(
+                "SELECT conversation_id FROM plans WHERE id=?1 LIMIT 1",
+                [plan_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        conv2.ok_or_else(|| Error::Invalid(format!("no plan {plan_id} found")))
+    }
+
+    /// Checks if a task belongs to a plan (by UUID or spec id).
+    pub fn task_in_plan(&self, plan_id: &str, task_id: &str) -> Result<bool> {
+        let db = self.db();
+        let found: bool = db
+            .query_row(
+                "SELECT 1 FROM tasks WHERE plan_id=?1 AND (id=?2 OR json_extract(spec, '$.id')=?2) LIMIT 1",
+                params![plan_id, task_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(found)
+    }
+
+    /// All comments in the conversation, optionally filtered by status.
+    pub fn comments_all(&self, conversation: &str, status: Option<&str>) -> Result<Vec<Comment>> {
+        if let Some(st) = status {
+            Self::comment_rows(
+                &self.db(),
+                "conversation_id=?1 AND status=?2",
+                params![conversation, st],
+            )
+        } else {
+            Self::comment_rows(&self.db(), "conversation_id=?1", params![conversation])
+        }
+    }
+
+    /// Comments for a specific plan in the conversation, optionally filtered by status.
+    pub fn comments_by_plan(
+        &self,
+        conversation: &str,
+        plan_id: &str,
+        status: Option<&str>,
+    ) -> Result<Vec<Comment>> {
+        if let Some(st) = status {
+            Self::comment_rows(
+                &self.db(),
+                "conversation_id=?1 AND plan_id=?2 AND status=?3",
+                params![conversation, plan_id, st],
+            )
+        } else {
+            Self::comment_rows(
+                &self.db(),
+                "conversation_id=?1 AND plan_id=?2",
+                params![conversation, plan_id],
+            )
+        }
+    }
+
+    /// Paginated list of all stored plans for a conversation.
+    pub fn plans_page(&self, conversation: &str, offset: usize, limit: usize) -> Result<PlansPage> {
+        self.conversation(conversation)?;
+        let (total, plan_ids, active_plan_id) = {
+            let db = self.db();
+            let total: i64 = db.query_row(
+                "SELECT COUNT(*) FROM plans WHERE conversation_id=?1",
+                [conversation],
+                |row| row.get(0),
+            )?;
+            let total = total as usize;
+            let mut stmt = db.prepare(
+                "SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC, rowid DESC LIMIT ?2 OFFSET ?3",
+            )?;
+            let plan_ids = stmt
+                .query_map(params![conversation, limit as i64, offset as i64], |row| {
+                    row.get(0)
+                })?
+                .collect::<std::result::Result<Vec<String>, _>>()?;
+
+            let active_plan_id: Option<String> = db
+                .query_row(
+                    "SELECT plan_id FROM tasks WHERE conversation_id=?1 ORDER BY created_ms DESC, rowid DESC LIMIT 1",
+                    [conversation],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            (total, plan_ids, active_plan_id)
+        };
+
+        let mut plans = Vec::with_capacity(plan_ids.len());
+        for pid in plan_ids {
+            plans.push(self.plan_history(conversation, &pid)?);
+        }
+
+        let has_more = offset + plans.len() < total;
+        Ok(PlansPage {
+            plans,
+            offset,
+            limit,
+            total,
+            has_more,
+            active_plan_id,
+        })
+    }
+
+    /// Detailed history of one plan: its tasks, agents, turns, reports and verdicts.
+    pub fn plan_history(&self, conversation: &str, plan_id: &str) -> Result<PlanHistory> {
+        self.conversation(conversation)?;
+        let tasks = self.plan(plan_id)?;
+        crate::require(
+            !tasks.is_empty(),
+            &format!("no plan {plan_id} in conversation {conversation}"),
+        )?;
+
+        let db = self.db();
+        let created_ms: i64 = db.query_row(
+            "SELECT COALESCE(
+                (SELECT created_ms FROM plans WHERE id=?1 AND conversation_id=?2),
+                (SELECT MIN(created_ms) FROM tasks WHERE plan_id=?1 AND conversation_id=?2),
+                0
+            )",
+            params![plan_id, conversation],
+            |row| row.get(0),
+        )?;
+
+        let active_plan_id: Option<String> = db
+            .query_row(
+                "SELECT plan_id FROM tasks WHERE conversation_id=?1 ORDER BY created_ms DESC, rowid DESC LIMIT 1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let is_active = active_plan_id.as_deref() == Some(plan_id);
+
+        let status = if tasks.iter().all(|t| t.status == "approved") {
+            "approved".to_string()
+        } else if tasks
+            .iter()
+            .any(|t| t.status == "working" || t.status == "verifying" || t.status == "queued")
+        {
+            "active".to_string()
+        } else if tasks.iter().all(|t| t.status == "proposed") {
+            "proposed".to_string()
+        } else if tasks.iter().any(|t| t.status == "failed") {
+            "failed".to_string()
+        } else if tasks.iter().any(|t| t.status == "cancelled") {
+            "cancelled".to_string()
+        } else if tasks.iter().any(|t| t.status == "needs_user") {
+            "needs_user".to_string()
+        } else if tasks.iter().any(|t| t.status == "revised") {
+            "revised".to_string()
+        } else {
+            "done".to_string()
+        };
+
+        let task_ids: std::collections::HashSet<String> =
+            tasks.iter().map(|t| t.id.clone()).collect();
+        let mut turn_stmt = db.prepare(
+            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid
+             FROM turns WHERE conversation_id=?1 ORDER BY started_ms ASC, rowid ASC",
+        )?;
+        let all_turns = turn_stmt
+            .query_map([conversation], |row| {
+                Ok(SessionInfo {
+                    turn_id: row.get(0)?,
+                    plan_id: row.get(1)?,
+                    role: row.get(2)?,
+                    provider: row.get(3)?,
+                    session_id: row.get(4)?,
+                    status: row.get(5)?,
+                    error: row.get(6)?,
+                    upto_message: row.get::<_, i64>(7)? as u64,
+                    started_ms: row.get(8)?,
+                    finished_ms: row.get(9)?,
+                    pid: row.get(10)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let turns: Vec<SessionInfo> = all_turns
+            .into_iter()
+            .filter(|turn| {
+                if turn.plan_id.as_deref() == Some(plan_id) {
+                    return true;
+                }
+                if let Some(tid) = turn
+                    .role
+                    .strip_prefix("worker:")
+                    .or_else(|| turn.role.strip_prefix("verifier:"))
+                    && task_ids.contains(tid)
+                {
+                    return true;
+                }
+                false
+            })
+            .collect();
+
+        let mut agents_map: std::collections::BTreeMap<String, PlanAgentInfo> =
+            std::collections::BTreeMap::new();
+        for turn in &turns {
+            let (task_id, task_label) = if let Some(tid) = turn
+                .role
+                .strip_prefix("worker:")
+                .or_else(|| turn.role.strip_prefix("verifier:"))
+            {
+                let label = tasks
+                    .iter()
+                    .find(|t| t.id == tid)
+                    .and_then(|t| t.spec["id"].as_str())
+                    .map(|s| s.to_string());
+                (Some(tid.to_string()), label)
+            } else {
+                (None, None)
+            };
+            let entry = agents_map
+                .entry(turn.role.clone())
+                .or_insert_with(|| PlanAgentInfo {
+                    role: turn.role.clone(),
+                    provider: turn.provider.clone(),
+                    model: None,
+                    task_id,
+                    task_label,
+                    turns_count: 0,
+                    status: turn.status.clone(),
+                });
+            entry.turns_count += 1;
+            entry.status = turn.status.clone();
+            entry.provider = turn.provider.clone();
+        }
+        let agents: Vec<PlanAgentInfo> = agents_map.into_values().collect();
+
+        let mut reports = Vec::new();
+        let mut verdicts = Vec::new();
+        for task in &tasks {
+            let label = task.spec["id"].as_str().unwrap_or(&task.id).to_string();
+            if let Some(report) = &task.report {
+                reports.push(TaskReportInfo {
+                    task_id: task.id.clone(),
+                    task_label: label.clone(),
+                    round: task.round,
+                    report: report.clone(),
+                });
+            }
+            if let Some(verdict) = &task.verdict {
+                verdicts.push(TaskVerdictInfo {
+                    task_id: task.id.clone(),
+                    task_label: label,
+                    round: task.round,
+                    verdict: verdict.clone(),
+                });
+            }
+        }
+
+        Ok(PlanHistory {
+            id: plan_id.to_string(),
+            conversation_id: conversation.to_string(),
+            created_ms,
+            status,
+            is_active,
+            tasks,
+            agents,
+            turns,
+            reports,
+            verdicts,
+        })
     }
 }
 
@@ -1189,6 +1855,7 @@ mod tests {
                 .append_event(
                     &conversation.id,
                     None,
+                    None,
                     "task",
                     &serde_json::json!({"task": task.id, "status": "approved"}),
                 )
@@ -1203,6 +1870,7 @@ mod tests {
         store
             .append_event(
                 &other.id,
+                None,
                 None,
                 "task",
                 &serde_json::json!({"task": task.id, "status": "approved"}),
@@ -1260,7 +1928,7 @@ mod tests {
         drop(old);
         let store = Store::open(&path).unwrap();
         store
-            .append_event("c", None, "new", &serde_json::json!({}))
+            .append_event("c", None, None, "new", &serde_json::json!({}))
             .unwrap();
         let events = store.events_since("c", 0, 10).unwrap();
         assert_eq!(events[0].created_ms, 0, "unknown, not invented");
@@ -1276,7 +1944,7 @@ mod tests {
             .add_message(&conversation.id, "user", "cześć")
             .unwrap();
         let turn = store
-            .start_turn(&conversation.id, "orchestrator", "codex", first.seq)
+            .start_turn(&conversation.id, "orchestrator", "codex", first.seq, None)
             .unwrap();
         store.set_session(&turn.id, "s1").unwrap();
         store
@@ -1319,7 +1987,7 @@ mod tests {
         let store = Store::open(&dir.path().join("core.db")).unwrap();
         let conversation = store.create_conversation("/p").unwrap();
         store
-            .start_turn(&conversation.id, "orchestrator", "agy", 0)
+            .start_turn(&conversation.id, "orchestrator", "agy", 0, None)
             .unwrap();
         drop(store);
         let store = Store::open(&dir.path().join("core.db")).unwrap();
@@ -1332,5 +2000,20 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(turn.status, TurnStatus::Interrupted);
+    }
+
+    #[test]
+    fn workspace_trust_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("core.db")).unwrap();
+        assert!(!store.is_trusted("/workspace/proj1").unwrap());
+        store.trust_project("/workspace/proj1").unwrap();
+        assert!(store.is_trusted("/workspace/proj1").unwrap());
+        assert_eq!(
+            store.trusted_projects().unwrap(),
+            vec!["/workspace/proj1".to_string()]
+        );
+        store.untrust_project("/workspace/proj1").unwrap();
+        assert!(!store.is_trusted("/workspace/proj1").unwrap());
     }
 }

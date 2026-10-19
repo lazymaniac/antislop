@@ -38,6 +38,193 @@ use std::thread;
 use std::time::Duration;
 
 #[test]
+fn plan_comments_show_queue_current_id_and_raw_failure_inside_the_plan() {
+    use architect::lean::tui::{PlanView, view::View};
+    let mut app = App::test_app();
+    app.view = View::default();
+    let mut seq = 0;
+    let mut event = |kind: &str, turn: Option<&str>, payload: Value| {
+        seq += 1;
+        json!({"seq": seq, "kind": kind, "turn_id": turn, "payload": payload})
+    };
+    app.view.apply(&event("plan_proposed", None, json!({"plan":"p1", "document":"# Plan\nImplement change", "tasks":[{"id":"t1", "title":"Change", "status":"proposed"}]})));
+    for (id, text) in [(1, "First feedback"), (2, "Second feedback")] {
+        app.view.apply(&event(
+            "comment",
+            None,
+            json!({"id":id, "plan_id":"p1", "target":"plan:p1", "text":text, "status":"open"}),
+        ));
+    }
+    assert_eq!(app.view.comment_state(1), "queued");
+    assert_eq!(app.view.comment_state(2), "queued");
+    app.view.apply(&event(
+        "turn_started",
+        Some("c1"),
+        json!({"role":"comment-orchestrator", "provider":"codex", "comments":[1]}),
+    ));
+    app.view.apply(&event(
+        "agent",
+        Some("c1"),
+        json!({"type":"tool", "name":"exec", "detail":"read plan"}),
+    ));
+    assert!(
+        app.view
+            .orchestrator_activity()
+            .unwrap()
+            .contains("comment #1")
+    );
+    assert_eq!(app.view.comment_state(2), "queued");
+    app.plan_view = Some(PlanView::new("p1".into()));
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Addressing comment #1"));
+
+    app.view.apply(&event("turn_finished", Some("c1"), json!({"role":"comment-orchestrator", "status":"failed", "error":"thread-store conflict: already has an active writer"})));
+    assert!(app.view.comment_activity().is_none());
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("#1 [failed]"));
+    assert!(text.contains("already has an active writer"));
+    assert!(text.contains("o retry/reopen"));
+    assert_eq!(
+        app.plan_view.as_mut().unwrap().key(
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+            &app.view
+        ),
+        architect::lean::tui::PlanAction::ToggleResolveComment {
+            id: 1,
+            next_status: "open".into()
+        }
+    );
+    app.view.apply(&event(
+        "turn_started",
+        Some("c2"),
+        json!({"role":"comment-orchestrator", "provider":"codex", "comments":[2]}),
+    ));
+    assert!(
+        app.view
+            .orchestrator_activity()
+            .unwrap()
+            .contains("comment #2")
+    );
+    assert_eq!(app.view.comment_state(1), "failed");
+}
+
+#[test]
+fn graph_cards_keep_full_specs_graphemes_and_allow_reading_tall_nodes() {
+    use architect::lean::tui::{
+        graph::{Canvas, Graph, WIDTH},
+        view::{Agent, TaskRow, View},
+    };
+    let mut view = View::default();
+    view.tasks.push(TaskRow {
+        id: "t1".into(),
+        title: "Full task title".into(),
+        status: "working".into(),
+        goal: format!(
+            "{} 👩‍💻 e\u{301} TASK_END",
+            "Long task description ".repeat(35)
+        ),
+        scope: vec!["src/file.rs".into()],
+        focus: format!("{} VERIFY_END", "Verify all required behavior ".repeat(12)),
+        risks: vec!["RISK_END".into()],
+        ..Default::default()
+    });
+    view.agents.insert(
+        "worker:t1".into(),
+        Agent {
+            running: true,
+            activity: "exec cargo check".into(),
+            ..Default::default()
+        },
+    );
+    let graph = Graph::new(&view);
+    let worker = graph.node("worker:t1").unwrap();
+    let verifier = graph.node("verifier:t1").unwrap();
+    assert!(verifier.y >= worker.y + worker.height);
+    for (key, end) in [("worker:t1", "TASK_END"), ("verifier:t1", "RISK_END")] {
+        let node = graph.node(key).unwrap();
+        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+        graph.render(&view, &mut canvas, Filter::All, key);
+        let text = canvas.lines().join("\n");
+        assert!(text.contains(end), "full specification must render: {text}");
+        if key == "worker:t1" {
+            assert!(text.contains("👩‍💻"));
+            assert!(text.contains("e\u{301}"));
+            assert!(text.contains("src/file.rs"));
+        } else {
+            assert!(text.contains("VERIFY_END"));
+        }
+    }
+    for (_, _, path) in graph.edge_routes(Filter::All) {
+        for node in graph.nodes.iter().filter(|node| node.visible) {
+            assert!(!Graph::route_intersects_card(&path, node));
+        }
+    }
+    let mut app = App::test_app();
+    app.view = view;
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let start = app.offset.1;
+    assert!(app.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)));
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.offset.1 > start);
+    for _ in 0..20 {
+        app.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+    }
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("TASK_END"));
+    assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    assert_eq!(app.focus, Focus::Chat);
+}
+
+#[test]
+fn escape_never_quits_and_q_quits_views_while_editors_keep_text() {
+    for focus in [Focus::Chat, Focus::Graph, Focus::Tasks] {
+        let mut app = App::test_app();
+        app.focus = focus;
+        assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(!app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
+    }
+    let mut app = App::test_app();
+    app.plan_view = Some(architect::lean::tui::PlanView::new("p1".into()));
+    assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    assert!(app.plan_view.is_none());
+    app.open_details("orchestrator".into());
+    assert!(!app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
+    app.details = None;
+    app.editor = Some(Editor {
+        target: "plan:p1".into(),
+        input: InputBuffer::new(),
+    });
+    assert!(app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "q");
+    assert!(!app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+}
+
+#[test]
 fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
     let mut app = App::test_app();
     app.paste(&"\n".repeat(MAX_PASTE_BYTES));
@@ -132,7 +319,7 @@ fn long_activity_labels_fit_the_progress_overlay() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(rendered.contains(" teraz "));
+    assert!(rendered.contains(" now "));
     assert!(rendered.contains(&"a".repeat(30)));
 }
 
@@ -250,7 +437,7 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
     let buf = term_small.backend().buffer();
     let rendered: String = buf.content.iter().map(|c| c.symbol()).collect();
     let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(normalized.contains("Terminal zbyt mały (wymagane min. 12x5)"));
+    assert!(normalized.contains("Terminal too small (min. 12x5 required)"));
 
     // At 12x5 minimum guard passes
     let backend_ok = TestBackend::new(12, 5);
@@ -268,7 +455,7 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
         "projekt",
         "conv-test",
         Some(true),
-        "gotowy",
+        "ready",
         PanelFocus::Chat,
         84,
     );
@@ -277,16 +464,16 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
         .iter()
         .map(|s| s.content.as_ref())
         .collect();
-    assert!(text_compact.contains("[Czat]"));
-    assert!(text_compact.contains("Zespół"));
-    assert!(text_compact.contains("(Tab: przełącz)"));
+    assert!(text_compact.contains("[Chat]"));
+    assert!(text_compact.contains("Team"));
+    assert!(text_compact.contains("(Tab: switch)"));
 
     // Breakpoint at 85 (>=85) -> side by side mode
     let header_wide = render_header(
         "projekt",
         "conv-test",
         Some(true),
-        "gotowy",
+        "ready",
         PanelFocus::Chat,
         85,
     );
@@ -295,26 +482,26 @@ fn tui_responsive_breakpoints_and_terminal_guard() {
         .iter()
         .map(|s| s.content.as_ref())
         .collect();
-    assert!(!text_wide.contains("[Czat]"));
-    assert!(!text_wide.contains("(Tab: przełącz)"));
+    assert!(!text_wide.contains("[Chat]"));
+    assert!(!text_wide.contains("(Tab: switch)"));
     assert!(text_wide.contains("projekt"));
-    assert!(text_wide.contains("autonomiczny"));
+    assert!(text_wide.contains("autonomous"));
 
-    // Polish empty state
+    // Empty state
     let empty_lines = transcript_empty_state(80);
     assert_eq!(
         empty_lines[0].spans[0].content.as_ref(),
-        "Brak wiadomości w tej rozmowie."
+        "No messages in this conversation."
     );
 
     // Prioritized footer hints
     let hint_120 = main_footer_hint(PanelFocus::Chat, false, false, None, 120);
-    assert!(hint_120.contains("Alt+Enter nowa linia"));
+    assert!(hint_120.contains("Alt+Enter newline"));
     let hint_75 = main_footer_hint(PanelFocus::Chat, false, false, None, 75);
     assert!(hint_75.contains("Ctrl+P"));
     let hint_50 = main_footer_hint(PanelFocus::Chat, false, false, None, 50);
     assert!(!hint_50.contains("Ctrl+P"));
-    assert!(hint_50.contains("Tab zespół"));
+    assert!(hint_50.contains("Tab team"));
 }
 
 #[test]
@@ -371,7 +558,7 @@ fn app_interaction_sequences_editing_and_paste() {
     app.paste(&big);
     assert_eq!(
         app.notice.as_deref(),
-        Some("Wklejony tekst przycięto do 64 KB")
+        Some("Pasted text truncated to 64 KB")
     );
 
     // 7. Verify visual rendering with TestBackend
@@ -387,7 +574,7 @@ fn app_interaction_sequences_editing_and_paste() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text.contains("Wklejony tekst"));
+    assert!(text.contains("Pasted text"));
 }
 
 #[test]
@@ -426,7 +613,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
         }
         if help == Help::Picker {
             let mut picker = Picker::new(Kind::Commands);
-            picker.query = "tryb".into();
+            picker.query = "mode".into();
             picker.selected = 1;
             app.picker = Some(picker);
         }
@@ -456,7 +643,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
             assert_eq!(editor.input.text, "szkic komentarza?");
         }
         if let Some(picker) = &app.picker {
-            assert_eq!(picker.query, "tryb");
+            assert_eq!(picker.query, "mode");
             assert_eq!(picker.selected, 1);
         }
     }
@@ -895,7 +1082,7 @@ fn app_incoming_updates_and_rendering() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text1.contains("Brak wiadomości w tej rozmowie."));
+    assert!(text1.contains("No messages in this conversation."));
 
     // 2. Incoming updates: message, task, notice
     app.view.apply(&json!({
@@ -944,8 +1131,8 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_wide.contains("autonomiczny"));
-    assert!(!text_wide.contains("[Czat]"));
+    assert!(text_wide.contains("autonomous"));
+    assert!(!text_wide.contains("[Chat]"));
 
     // 80x24 (compact stacked)
     let mut term_compact = Terminal::new(TestBackend::new(80, 24)).unwrap();
@@ -961,7 +1148,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_compact.contains("[Czat]"));
+    assert!(text_compact.contains("[Chat]"));
 
     // 11x4 (below minimum 12x5)
     let mut term_tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
@@ -978,7 +1165,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .map(|c| c.symbol())
         .collect();
     let text_tiny_norm = text_tiny.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(text_tiny_norm.contains("Terminal zbyt mały (wymagane min. 12x5)"));
+    assert!(text_tiny_norm.contains("Terminal too small (min. 12x5 required)"));
 
     // 2. Cursor bounds at 60x12
     let mut term_min = Terminal::new(TestBackend::new(60, 12)).unwrap();
@@ -1064,7 +1251,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_overlay.contains("teraz"));
+    assert!(text_overlay.contains("now"));
     assert!(text_overlay.contains("trwa kompilacja testów"));
 
     // 5. ASCII conversion
@@ -1355,8 +1542,10 @@ fn test_esc_behavior_and_cleared_draft_counterexample() {
         "Draft cleared by Esc is not restored by Up/Down"
     );
 
-    // 4. Esc on empty draft detaches (returns false)
-    assert!(!app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    // Esc on an empty draft stays in the app. Explicit quit keys detach.
+    assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    assert!(!app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
+    assert!(!app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
 }
 
 #[test]
@@ -1403,7 +1592,7 @@ fn tui_send_reliability_draft_retention_on_error_and_in_flight_typing() {
     );
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ połączenie zerwane (niewysłana wiadomość zachowana)")
+        Some("✗ połączenie zerwane (unsent message preserved)")
     );
 
     // 4. When input was empty upon error, draft is restored directly to input
@@ -1422,10 +1611,7 @@ fn tui_send_reliability_draft_retention_on_error_and_in_flight_typing() {
     });
     assert!(!app.sending);
     assert_eq!(app.input.text, "inna wiadomość");
-    assert_eq!(
-        app.notice.as_deref(),
-        Some("✗ błąd sieci (szkic przywrócony)")
-    );
+    assert_eq!(app.notice.as_deref(), Some("✗ błąd sieci (draft restored)"));
 }
 
 #[test]
@@ -1469,7 +1655,7 @@ fn tui_comment_send_retention_and_protection_on_error() {
     assert_eq!(restored.input.text, "szkic ważnego komentarza");
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ baza zablokowana (szkic komentarza zachowany)")
+        Some("✗ baza zablokowana (comment draft preserved)")
     );
 
     // User submits comment, but then opens a new editor while send is in flight
@@ -1519,7 +1705,7 @@ fn tui_duplicate_send_blocking_for_chat_and_comments() {
     app.submit(); // Should be blocked!
     assert_eq!(
         app.notice.as_deref(),
-        Some("Wysyłanie w toku; szkic zachowany.")
+        Some("Sending in progress; draft preserved.")
     );
     assert_eq!(app.input.text, "druga próba");
 
@@ -1527,7 +1713,7 @@ fn tui_duplicate_send_blocking_for_chat_and_comments() {
     app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
     assert_eq!(
         app.notice.as_deref(),
-        Some("Wysyłanie w toku; szkic zachowany.")
+        Some("Sending in progress; draft preserved.")
     );
 
     // 2. Comment duplicate send
@@ -1547,7 +1733,7 @@ fn tui_duplicate_send_blocking_for_chat_and_comments() {
     app.submit_comment();
     assert_eq!(
         app.notice.as_deref(),
-        Some("Wysyłanie komentarza w toku; szkic zachowany.")
+        Some("Sending comment in progress; draft preserved.")
     );
     assert!(
         app.editor.is_some(),
@@ -1958,7 +2144,7 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
     assert_eq!(app.failed_send.as_deref(), Some("wysyłana treść A"));
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ błąd sieci po A->B->A (niewysłana wiadomość zachowana)")
+        Some("✗ błąd sieci po A->B->A (unsent message preserved)")
     );
 
     // 4b. CommentResult arrives for request 102 with error
@@ -2056,7 +2242,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
     assert_eq!(app.input.text, "pierwotna treść wiadomości");
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ awaria sieci (szkic przywrócony)")
+        Some("✗ awaria sieci (draft restored)")
     );
 
     // 4. Send comment: editor is cleared and comment is in flight
@@ -2100,7 +2286,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
     assert_eq!(ed.input.text, "ważna uwaga do zadania");
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ odrzucono komentarz (szkic komentarza zachowany)")
+        Some("✗ odrzucono komentarz (comment draft preserved)")
     );
 
     // 7. Verify response arriving while user is in B (A -> B), then returns to A (B -> A)
@@ -2328,8 +2514,8 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
         }
     }));
     assert_eq!(app.view.messages.len(), 1);
-    assert_eq!(app.view.messages[0].sender, "Ty");
-    assert_eq!(app.view.messages[0].state, "czeka na turę");
+    assert_eq!(app.view.messages[0].sender, "You");
+    assert_eq!(app.view.messages[0].state, "waiting for turn");
     assert_eq!(app.view.cards.len(), 1);
 
     // 2. Delivery confirmation alters actual state
@@ -2339,9 +2525,9 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
             "ids": [101],
         }
     }));
-    assert_eq!(app.view.messages[0].state, "dostarczono");
+    assert_eq!(app.view.messages[0].state, "delivered");
     if let TranscriptCard::Message(msg) = &app.view.cards[0] {
-        assert_eq!(msg.state, "dostarczono");
+        assert_eq!(msg.state, "delivered");
     } else {
         panic!("expected TranscriptCard::Message");
     }
@@ -2357,7 +2543,7 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
             "id": 102,
         }
     }));
-    assert_eq!(app.view.messages[1].state, "czeka na turę");
+    assert_eq!(app.view.messages[1].state, "waiting for turn");
     app.view.apply(&serde_json::json!({
         "kind": "mail_rejected",
         "payload": {
@@ -2366,7 +2552,7 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
             "reason": "agent niedostępny",
         }
     }));
-    assert_eq!(app.view.messages[1].state, "odrzucono");
+    assert_eq!(app.view.messages[1].state, "rejected");
 
     // 4. Render on a terminal and verify buffer symbols
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
@@ -2378,10 +2564,10 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text.contains("Ty"));
-    assert!(text.contains("orkiestrator"));
-    assert!(text.contains("dostarczono"));
-    assert!(text.contains("odrzucono"));
+    assert!(text.contains("You"));
+    assert!(text.contains("orchestrator"));
+    assert!(text.contains("delivered"));
+    assert!(text.contains("rejected"));
     assert!(text.contains("Pierwsza prośba użytkownika"));
 }
 
@@ -2401,7 +2587,7 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
         .map(|c| c.symbol())
         .collect();
     let norm_11x4 = text_11x4.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(norm_11x4.contains("Terminal zbyt mały (wymagane min. 12x5)"));
+    assert!(norm_11x4.contains("Terminal too small (min. 12x5 required)"));
 
     // 12x5: Minimal working terminal renders without crashing
     let mut term_12x5 = Terminal::new(TestBackend::new(12, 5)).unwrap();
@@ -2440,8 +2626,8 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_84.contains("[Czat]"));
-    assert!(text_84.contains("Zespół"));
+    assert!(text_84.contains("[Chat]"));
+    assert!(text_84.contains("Team"));
 
     // 85 cols (>= 85): Split side-by-side with vertical separator
     let mut term_85 = Terminal::new(TestBackend::new(85, 20)).unwrap();
@@ -2908,12 +3094,12 @@ fn test_tasks_carousel_third_focus_and_transitions() {
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
     assert_eq!(app.focus, Focus::Tasks);
 
-    // Header rendering shows [Zadania]
+    // Header rendering shows [Tasks]
     let header = render_header("arch", "conv-1", Some(true), "idle", PanelFocus::Tasks, 80);
     let mut header_buf = Buffer::empty(Rect::new(0, 0, 100, 1));
     header_buf.set_line(0, 0, &header, 100);
     let header_str: String = header_buf.content.iter().map(|c| c.symbol()).collect();
-    assert!(header_str.contains("[Zadania]"));
+    assert!(header_str.contains("[Tasks]"));
 
     // 2. Carousel rendering with real counters
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
@@ -2926,11 +3112,11 @@ fn test_tasks_carousel_third_focus_and_transitions() {
         .map(|c| c.symbol())
         .collect();
 
-    assert!(text.contains("Karuzela zadań"));
-    assert!(text.contains("Zadanie t1"));
-    assert!(text.contains("Runda: r1"));
-    assert!(text.contains("brak (korzeń grafu)"));
-    assert!(text.contains("Podsumowanie planu: 2 zadań łącznie"));
+    assert!(text.contains("Task carousel"));
+    assert!(text.contains("Task t1"));
+    assert!(text.contains("Round: r1"));
+    assert!(text.contains("none (graph root)"));
+    assert!(text.contains("Plan summary: 2 tasks total"));
 
     // 3. Carousel navigation
     assert_eq!(app.carousel.selected, 0);
@@ -2946,13 +3132,14 @@ fn test_tasks_carousel_third_focus_and_transitions() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text2.contains("Zadanie t2"));
-    assert!(text2.contains("Runda: r2"));
-    assert!(text2.contains("Zależności [D]: t1 (liczba: 1)"));
-    assert!(text2.contains("Zakres plików: 2 ścieżek"));
-    assert!(text2.contains("modyfikuje pliki"));
-    assert!(text2.contains("Komentarze: ✎1"));
-    assert!(text2.contains("Worker: ● pracuje"));
+    let norm2 = text2.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(norm2.contains("Task t2"));
+    assert!(norm2.contains("Round: r2"));
+    assert!(norm2.contains("Dependencies [D]: t1 (count: 1)"));
+    assert!(norm2.contains("File scope: 2 paths"));
+    assert!(norm2.contains("modifies"));
+    assert!(norm2.contains("Comments: ✎1"));
+    assert!(norm2.contains("Worker: ● working"));
 
     // Wrap around to 0
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
@@ -3055,17 +3242,17 @@ fn test_tasks_carousel_third_focus_and_transitions() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(metric_text.contains("6 zadań łącznie"));
-    assert!(metric_text.contains("1 zatwierdzone"));
-    assert!(metric_text.contains("1 w toku"));
-    assert!(metric_text.contains("1 oczekuje"));
-    assert!(metric_text.contains("3 problemów"));
+    assert!(metric_text.contains("6 tasks total"));
+    assert!(metric_text.contains("1 approved"));
+    assert!(metric_text.contains("1 in progress"));
+    assert!(metric_text.contains("1 waiting"));
+    assert!(metric_text.contains("3 issues"));
 
     // 7. Compact header hints for each focus
     for (f, expected) in [
-        (PanelFocus::Chat, "(Tab: przełącz) · (t: zadania)"),
-        (PanelFocus::Tasks, "(Tab: przełącz) · (Esc: czat)"),
-        (PanelFocus::Graph, "(Tab: przełącz) · (t: zadania)"),
+        (PanelFocus::Chat, "(Tab: switch) · (t: tasks)"),
+        (PanelFocus::Tasks, "(Tab: switch) · (Esc: chat)"),
+        (PanelFocus::Graph, "(Tab: switch) · (t: tasks)"),
     ] {
         let h = render_header("arch", "conv-1", Some(true), "idle", f, 80);
         let mut b = Buffer::empty(Rect::new(0, 0, 80, 1));
@@ -3088,7 +3275,7 @@ fn test_tasks_carousel_third_focus_and_transitions() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(empty_text.contains("Brak zadań w bieżącym planie"));
+    assert!(empty_text.contains("No tasks in the current plan"));
 }
 
 #[test]
@@ -3226,6 +3413,7 @@ fn test_refresh_updates_and_overlay_collision_avoidance() {
         key: "worker:t1".into(),
         x: 0,
         y: 0,
+        height: architect::lean::tui::graph::HEIGHT,
         visible: true,
         group: None,
         collapsed: false,
@@ -3244,6 +3432,7 @@ fn test_refresh_updates_and_overlay_collision_avoidance() {
         key: "worker:t2".into(),
         x: 55,
         y: 20,
+        height: architect::lean::tui::graph::HEIGHT,
         visible: true,
         group: None,
         collapsed: false,
@@ -3262,6 +3451,7 @@ fn test_refresh_updates_and_overlay_collision_avoidance() {
         key: "verifier:t2".into(),
         x: 55,
         y: 20,
+        height: architect::lean::tui::graph::HEIGHT,
         visible: false,
         group: None,
         collapsed: false,
@@ -3420,7 +3610,7 @@ fn test_inspector_whole_record_search_and_raw_view() {
     assert!(
         filtered_lines
             .iter()
-            .any(|(_, text)| text.contains("Raport")),
+            .any(|(_, text)| text.contains("Report")),
         "record header must be included"
     );
     assert!(
@@ -3465,7 +3655,7 @@ fn test_inspector_explicit_missing_data_notices() {
         ..Default::default()
     });
 
-    // Tab 3: WYNIK -> explicit notices for missing report, artifacts, evidence
+    // Tab 3: OUTCOME -> explicit notices for missing report, artifacts, evidence
     details.tab = 3;
     let lines = details.lines(&view);
     let all_text = lines
@@ -3474,19 +3664,19 @@ fn test_inspector_explicit_missing_data_notices() {
         .collect::<Vec<_>>()
         .join(" ");
     assert!(
-        all_text.contains("[brak danych historycznych raportu]"),
+        all_text.contains("[no historical report data]"),
         "must contain explicit missing report notice: {all_text}"
     );
     assert!(
-        all_text.contains("[dane historyczne niedostępne]"),
+        all_text.contains("[historical data unavailable]"),
         "must contain explicit missing artifacts notice: {all_text}"
     );
     assert!(
-        all_text.contains("[brak załączonych dowodów"),
+        all_text.contains("[no attached evidence"),
         "must contain explicit missing evidence notice: {all_text}"
     );
 
-    // Tab 4: KONTROLE -> explicit notices for missing controls data
+    // Tab 4: CHECKS -> explicit notices for missing controls data
     details.tab = 4;
     let lines_checks = details.lines(&view);
     let all_checks = lines_checks
@@ -3495,11 +3685,11 @@ fn test_inspector_explicit_missing_data_notices() {
         .collect::<Vec<_>>()
         .join(" ");
     assert!(
-        all_checks.contains("brak danych historycznych"),
+        all_checks.contains("no historical data"),
         "must contain controls text: {all_checks}"
     );
 
-    // Tab 5: KOMENTARZE -> explicit notice for missing comments
+    // Tab 5: COMMENTS -> explicit notice for missing comments
     details.tab = 5;
     let lines_comments = details.lines(&view);
     let all_comments = lines_comments
@@ -3508,11 +3698,11 @@ fn test_inspector_explicit_missing_data_notices() {
         .collect::<Vec<_>>()
         .join(" ");
     assert!(
-        all_comments.contains("[brak komentarzy"),
+        all_comments.contains("[no comments"),
         "must contain explicit missing comments notice: {all_comments}"
     );
 
-    // Tab 1: SESJA -> explicit notice when no sessions are retained
+    // Tab 1: SESSION -> explicit notice when no sessions are retained
     details.tab = 1;
     let lines_sessions = details.lines(&view);
     let all_sessions = lines_sessions
@@ -3521,61 +3711,72 @@ fn test_inspector_explicit_missing_data_notices() {
         .collect::<Vec<_>>()
         .join(" ");
     assert!(
-        all_sessions.contains("historyczne"),
+        all_sessions.contains("historical"),
         "must contain explicit missing historical sessions notice: {all_sessions}"
     );
 }
 
 #[test]
-fn test_inspector_paginated_history_of_retained_sessions() {
+fn session_inspector_shows_only_the_terminal_transcript() {
+    use architect::lean::tui::view::{Agent, View};
     let mut details = Details::new("worker:t1".into());
     details.tab = 1;
-    // Add 12 dummy sessions
-    for i in 0..12 {
-        details.sessions.push(architect::lean::store::SessionInfo {
-            turn_id: format!("turn-{i}"),
-            role: "worker".into(),
-            provider: "anthropic".into(),
-            session_id: Some(format!("sess-{i}")),
-            status: "done".into(),
-            error: None,
-            upto_message: 1,
-            started_ms: 1000 + (i as i64) * 100,
-            finished_ms: Some(1050 + (i as i64) * 100),
-            pid: None,
-        });
-    }
-    let view = architect::lean::tui::view::View::default();
-
-    // Page 1
-    let lines_p1 = details.lines(&view);
-    let text_p1 = lines_p1
-        .iter()
-        .map(|(_, t)| t.as_str())
+    details.history_unavailable = true;
+    details.sessions.push(architect::lean::store::SessionInfo {
+        turn_id: "database-turn".into(),
+        plan_id: None,
+        role: "worker:t1".into(),
+        provider: "codex".into(),
+        session_id: Some("database-session".into()),
+        status: "done".into(),
+        error: None,
+        upto_message: 1,
+        started_ms: 1000,
+        finished_ms: Some(1050),
+        pid: None,
+    });
+    let mut view = View::default();
+    view.agents.insert(
+        "worker:t1".into(),
+        Agent {
+            terminal: vec![
+                "$ codex — turn started".into(),
+                "$ exec cargo check".into(),
+                "answer".into(),
+            ],
+            session: vec![
+                "── turn".into(),
+                "exec cargo check".into(),
+                "session mirror".into(),
+            ],
+            ..Default::default()
+        },
+    );
+    let text = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, line)| line)
         .collect::<Vec<_>>()
-        .join(" ");
-    assert!(text_p1.contains("strona 1/"), "must show page 1");
-    assert!(text_p1.contains("sess-0"), "must show first session");
+        .join("\n");
+    assert!(text.contains("Process Terminal"));
+    assert_eq!(text.matches("exec cargo check").count(), 1);
+    assert!(!text.contains("session mirror"));
+    assert!(!text.contains("database-turn"));
+    assert!(!text.contains("database-session"));
+    assert!(!text.contains("Retained sessions"));
+    assert!(!text.contains("archive"));
 
-    // Next page
-    details.next_session_page();
-    let lines_p2 = details.lines(&view);
-    let text_p2 = lines_p2
-        .iter()
-        .map(|(_, t)| t.as_str())
+    // Older event logs without terminal data still have one transcript.
+    view.agents.get_mut("worker:t1").unwrap().terminal.clear();
+    let text = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, line)| line)
         .collect::<Vec<_>>()
-        .join(" ");
-    assert!(text_p2.contains("strona 2/"), "must show page 2");
-
-    // Prev page
-    details.prev_session_page();
-    let lines_prev = details.lines(&view);
-    let text_prev = lines_prev
-        .iter()
-        .map(|(_, t)| t.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(text_prev.contains("strona 1/"), "must return to page 1");
+        .join("\n");
+    assert!(text.contains("Process Terminal"));
+    assert_eq!(text.matches("exec cargo check").count(), 1);
+    assert!(text.contains("session mirror"));
 }
 
 #[test]
@@ -3600,12 +3801,12 @@ fn test_conversation_details_inspector() {
         .collect::<Vec<_>>()
         .join(" ");
     assert!(
-        text.contains("Szczegóły rozmowy"),
+        text.contains("Conversation details"),
         "must show conversation title"
     );
-    assert!(text.contains("Aktywny plan: P42"), "must show plan");
+    assert!(text.contains("Active plan: P42"), "must show plan");
     assert!(
-        text.contains("Zadania: ogółem 1, wykonano 1"),
+        text.contains("Tasks: total 1, completed 1"),
         "must show task summary"
     );
 }
@@ -3626,7 +3827,7 @@ fn test_recipient_selection_and_broadcast() {
     // Verify broadcast and specific targets
     assert!(items.iter().any(|(label, act)| label.contains("all")
         && matches!(act, architect::lean::tui::palette::Action::Address(a) if a == "all")));
-    assert!(items.iter().any(|(label, act)| label.contains("orkiestrator") && matches!(act, architect::lean::tui::palette::Action::Address(a) if a == "orchestrator")));
+    assert!(items.iter().any(|(label, act)| label.contains("orchestrator") && matches!(act, architect::lean::tui::palette::Action::Address(a) if a == "orchestrator")));
     assert!(items.iter().any(|(label, act)| label.contains("worker:t1")
         && matches!(act, architect::lean::tui::palette::Action::Address(a) if a == "worker:t1")));
     assert!(items.iter().any(|(label, act)| label.contains("verifier:t1") && matches!(act, architect::lean::tui::palette::Action::Address(a) if a == "verifier:t1")));
@@ -3650,13 +3851,13 @@ fn test_recipient_selection_and_broadcast() {
 #[test]
 fn test_precise_comment_targets_and_labels() {
     assert_eq!(target_name("plan:P1"), "Plan P1");
-    assert_eq!(target_name("task:T1"), "Zadanie T1");
-    assert_eq!(target_name("check:C1"), "Kontrola C1");
-    assert_eq!(target_name("finding:F1"), "Ustalenie F1");
-    assert_eq!(target_name("report:R1"), "Zadanie R1 raport");
-    assert_eq!(target_name("artifact:A1"), "Artefakt A1");
+    assert_eq!(target_name("task:T1"), "Task T1");
+    assert_eq!(target_name("check:C1"), "Check C1");
+    assert_eq!(target_name("finding:F1"), "Finding F1");
+    assert_eq!(target_name("report:R1"), "Task R1 report");
+    assert_eq!(target_name("artifact:A1"), "Artifact A1");
     assert_eq!(target_name("diff:D1"), "D1 diff");
-    assert_eq!(target_name("conversation"), "rozmowa");
+    assert_eq!(target_name("conversation"), "conversation");
 
     assert_eq!(comment_label("plan:P1", &[]), "the plan P1");
     assert_eq!(comment_label("task:T1", &[]), "specification of task T1");
@@ -3692,7 +3893,7 @@ fn test_diff_reviewer_profile_rendered() {
         .collect::<Vec<_>>()
         .join("");
     assert!(
-        text.contains("recenzent:"),
+        text.contains("reviewer:"),
         "diff header must include reviewer: {text}"
     );
 }
@@ -3842,7 +4043,7 @@ fn test_stale_confirmation_handling_and_rendering() {
         .expect("conf-async must exist");
     assert_eq!(async_card.status, ConfirmationStatus::Stale);
 
-    // 4. Rendering test: verify stale cards render "[nieaktualne: stale_scope]"
+    // 4. Rendering test: verify stale cards render "[stale: stale_scope]"
     let mut terminal = Terminal::new(TestBackend::new(180, 40)).unwrap();
     terminal.draw(|f| app.draw(f)).unwrap();
     let rendered: String = terminal
@@ -3853,7 +4054,7 @@ fn test_stale_confirmation_handling_and_rendering() {
         .map(|c| c.symbol())
         .collect();
     assert!(
-        rendered.contains("[nieaktualne: stale_scope]"),
+        rendered.contains("[stale: stale_scope]"),
         "rendered transcript must include stale notice: {rendered}"
     );
 }
@@ -4821,4 +5022,45 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
             "Selection/activity must not displace nodes in {term_name}"
         );
     }
+}
+
+#[test]
+fn test_workspace_trust_modal_lifecycle() {
+    let mut app = App::test_app();
+    app.input = InputBuffer::with_text("initial draft");
+    app.require_trust("/Users/test/untrusted-repo");
+
+    let mut term = Terminal::new(TestBackend::new(90, 24)).unwrap();
+    term.draw(|f| app.draw(f)).unwrap();
+    assert!(!term.backend().cursor_visible());
+    let rendered: String = term
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(rendered.contains("Workspace trust required"));
+    assert!(rendered.contains("Do you trust the contents of this directory?"));
+    assert!(rendered.contains("/Users/test/untrusted-repo"));
+
+    // Typing ordinary keys or pasting is blocked while trust prompt is active
+    assert!(app.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)));
+    app.paste("injected text");
+    assert_eq!(app.input.text, "initial draft");
+    assert!(app.trust_prompt.is_some());
+
+    // Pressing 'n' or Esc rejects and exits (returns false)
+    let mut reject_app = App::test_app();
+    reject_app.require_trust("/Users/test/untrusted-repo");
+    assert!(!reject_app.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)));
+
+    // Pressing 'y' or Enter trusts the workspace and dismisses the modal
+    assert!(app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)));
+    assert!(app.trust_prompt.is_none());
+    assert_eq!(app.notice.as_deref(), Some("workspace directory trusted"));
+
+    // Normal typing works after trusting
+    assert!(app.key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE)));
+    assert_eq!(app.input.text, "initial draft!");
 }

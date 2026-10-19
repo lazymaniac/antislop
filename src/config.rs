@@ -100,26 +100,71 @@ impl Default for WorkspaceConfig {
     }
 }
 
+impl ProviderKind {
+    /// Built-in reasoning effort scale for each supported CLI.
+    pub fn native_effort(self, effort: Effort) -> Option<&'static str> {
+        match self {
+            Self::Codex | Self::Agy | Self::Claude => Some(match effort {
+                Effort::Light => "low",
+                Effort::Standard => "medium",
+                Effort::Deep => "high",
+            }),
+            Self::Gemini => None,
+        }
+    }
+}
+
+/// Command line tokens for launching an agent CLI, specified either as a
+/// whitespace-separated string (`"omlx launch codex"`) or an explicit array
+/// (`["omlx", "launch", "codex"]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct CommandLine(pub Vec<String>);
+
+impl<'de> Deserialize<'de> for CommandLine {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Text(String),
+            Args(Vec<String>),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Text(text) => Ok(Self(text.split_whitespace().map(str::to_owned).collect())),
+            Raw::Args(args) => Ok(Self(args)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
+    #[serde(default)]
     pub binary: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<CommandLine>,
     /// Path to a CLI-owned isolated home; credentials are never config values.
     #[serde(default)]
     pub managed_home: Option<PathBuf>,
     #[serde(default)]
     pub isolation: IsolationProfile,
-    /// Declared capability, checked against the actual CLI probe by the adapter.
-    /// False is an explicit unsupported mapping, not an ignored native request.
-    pub native_effort: bool,
-    #[serde(default)]
-    pub effort_map: BTreeMap<Effort, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub provider: ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<CommandLine>,
     pub model: Option<String>,
     pub effort: Effort,
     pub work_kinds: BTreeSet<WorkKind>,
@@ -160,6 +205,14 @@ pub struct Policy {
     pub local_write: bool,
     pub local_checks: bool,
     pub local_commits: bool,
+    /// Every plan that changes code gets the required quality gates from the
+    /// predefined agent pool (static analysis, testing, integration) it lacks.
+    #[serde(default = "default_required_gates")]
+    pub required_gates: bool,
+}
+
+fn default_required_gates() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +238,8 @@ pub struct ResolvedProfile {
     pub profile: String,
     pub provider: ProviderKind,
     pub binary: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
     pub managed_home: Option<PathBuf>,
     pub isolation: IsolationProfile,
     pub model: Option<String>,
@@ -206,6 +261,36 @@ fn nonempty_text(value: &str) -> bool {
     !value.trim().is_empty() && !value.chars().any(char::is_control)
 }
 
+fn resolve_command(provider: &ProviderConfig, profile: &Profile) -> Result<(PathBuf, Vec<String>)> {
+    if let Some(cmd) = &profile.command {
+        let Some((first, rest)) = cmd.0.split_first() else {
+            return Err(Error::Invalid(
+                "profile command must contain at least an executable".into(),
+            ));
+        };
+        let mut args = rest.to_vec();
+        args.extend(profile.args.iter().cloned());
+        return Ok((PathBuf::from(first), args));
+    }
+    if let Some(bin) = &profile.binary {
+        return Ok((bin.clone(), profile.args.clone()));
+    }
+    if let Some(cmd) = &provider.command {
+        let Some((first, rest)) = cmd.0.split_first() else {
+            return Err(Error::Invalid(
+                "provider command must contain at least an executable".into(),
+            ));
+        };
+        let mut args = rest.to_vec();
+        args.extend(provider.args.iter().cloned());
+        args.extend(profile.args.iter().cloned());
+        return Ok((PathBuf::from(first), args));
+    }
+    let mut args = provider.args.clone();
+    args.extend(profile.args.iter().cloned());
+    Ok((provider.binary.clone(), args))
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         Self::from_toml(&std::fs::read_to_string(path)?)
@@ -214,8 +299,13 @@ impl Config {
     pub fn from_toml(source: &str) -> Result<Self> {
         // TOML errors can render the input and expose accidental credentials.
         let config: Self = toml::from_str(source).map_err(|error: toml::de::Error| {
-            let location = error.span().map(|span| format!(" at bytes {}..{}", span.start, span.end)).unwrap_or_default();
-            Error::Invalid(format!("invalid TOML configuration{location}: check schema, syntax and duplicate/unknown fields"))
+            let location = error
+                .span()
+                .map(|span| format!(" at bytes {}..{}", span.start, span.end))
+                .unwrap_or_default();
+            Error::Invalid(format!(
+                "invalid TOML configuration{location}: check schema, syntax and duplicate/unknown fields"
+            ))
         })?;
         config.validate()?;
         Ok(config)
@@ -236,26 +326,26 @@ impl Config {
             "at least one explicit profile is required",
         )?;
         for provider in self.providers.values() {
+            if let Some(cmd) = &provider.command {
+                require(
+                    !cmd.0.is_empty() && cmd.0.iter().all(|arg| nonempty_text(arg)),
+                    "provider command tokens must be nonempty without control characters",
+                )?;
+            } else {
+                require(
+                    provider.binary.to_str().is_some_and(nonempty_text),
+                    "provider binary must be a nonempty Unicode path without control characters",
+                )?;
+            }
             require(
-                provider.binary.to_str().is_some_and(nonempty_text),
-                "provider binary must be a nonempty Unicode path without control characters",
+                provider.args.iter().all(|arg| nonempty_text(arg)),
+                "provider args must be nonempty and contain no control characters",
             )?;
             require(
                 provider.managed_home.as_ref().is_none_or(|path| {
                     path.is_absolute() && path.to_str().is_some_and(nonempty_text)
                 }),
                 "managed provider home must be an absolute Unicode path without control characters",
-            )?;
-            require(
-                provider.native_effort || provider.effort_map.is_empty(),
-                "native effort mappings require declared CLI support",
-            )?;
-            require(
-                provider
-                    .effort_map
-                    .values()
-                    .all(|value| nonempty_text(value)),
-                "native effort mapping must be nonempty and contain no control characters",
             )?;
         }
         for providers in self.role_providers.values() {
@@ -280,6 +370,22 @@ impl Config {
                     .is_none_or(|model| nonempty_text(model)),
                 "model must be nonempty and contain no control characters",
             )?;
+            if let Some(bin) = &profile.binary {
+                require(
+                    bin.to_str().is_some_and(nonempty_text),
+                    "profile binary must be a nonempty Unicode path without control characters",
+                )?;
+            }
+            if let Some(cmd) = &profile.command {
+                require(
+                    !cmd.0.is_empty() && cmd.0.iter().all(|arg| nonempty_text(arg)),
+                    "profile command tokens must be nonempty without control characters",
+                )?;
+            }
+            require(
+                profile.args.iter().all(|arg| nonempty_text(arg)),
+                "profile args must be nonempty and contain no control characters",
+            )?;
             require(
                 profile.roles.iter().all(|role| {
                     self.role_providers
@@ -291,9 +397,10 @@ impl Config {
             let provider = self.providers.get(&profile.provider).ok_or_else(|| {
                 Error::Invalid("profile refers to an unconfigured provider".into())
             })?;
+            let (binary, _) = resolve_command(provider, profile)?;
             require(
-                !provider.native_effort || provider.effort_map.contains_key(&profile.effort),
-                "profile effort has no native CLI mapping",
+                binary.to_str().is_some_and(nonempty_text),
+                "resolved profile binary must be a nonempty Unicode path without control characters",
             )?;
             if profile.roles.contains(&RoleKind::Orchestrator) {
                 require(
@@ -371,15 +478,20 @@ impl Config {
             .providers
             .get(&profile.provider)
             .ok_or_else(|| Error::Invalid("unconfigured provider".into()))?;
+        let (binary, args) = resolve_command(provider, profile)?;
         Ok(ResolvedProfile {
             profile: name.clone(),
             provider: profile.provider,
-            binary: provider.binary.clone(),
+            binary,
+            args,
             managed_home: provider.managed_home.clone(),
             isolation: provider.isolation,
             model: profile.model.clone(),
             effort: profile.effort,
-            native_effort: provider.effort_map.get(&profile.effort).cloned(),
+            native_effort: profile
+                .provider
+                .native_effort(profile.effort)
+                .map(str::to_owned),
             work_kind,
             role,
             requires_independent_session: role == RoleKind::Verifier,
@@ -419,6 +531,49 @@ mod tests {
             .unwrap();
         assert_eq!(orchestrator.provider, ProviderKind::Codex);
         assert_eq!(orchestrator.native_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn profile_command_supports_platform_launchers_for_workers_and_verifiers() {
+        let text = include_str!("../examples/architect.toml")
+            .replace(
+                "executor = [\"agy\"]",
+                "executor = [\"codex\", \"agy\"]",
+            )
+            .replace(
+                "verifier = [\"agy\"]",
+                "verifier = [\"codex\", \"agy\"]",
+            )
+            .replace(
+                "[profiles.execution]\nprovider = \"agy\"",
+                "[profiles.execution]\nprovider = \"codex\"\ncommand = \"omlx launch codex\"",
+            )
+            .replace(
+                "[profiles.review]\nprovider = \"agy\"",
+                "[profiles.review]\nprovider = \"codex\"\ncommand = [\"ollama\", \"launch\", \"codex\"]",
+            );
+        let config = Config::from_toml(&text).unwrap();
+        let orchestrator = config
+            .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
+            .unwrap();
+        assert_eq!(orchestrator.binary, PathBuf::from("codex"));
+        assert!(orchestrator.args.is_empty());
+
+        let worker = config
+            .resolve(WorkKind::Implementation, RoleKind::Executor)
+            .unwrap();
+        assert_eq!(worker.provider, ProviderKind::Codex);
+        assert_eq!(worker.binary, PathBuf::from("omlx"));
+        assert_eq!(worker.args, vec!["launch", "codex"]);
+        assert_eq!(worker.native_effort.as_deref(), Some("high"));
+
+        let verifier = config
+            .resolve(WorkKind::Implementation, RoleKind::Verifier)
+            .unwrap();
+        assert_eq!(verifier.provider, ProviderKind::Codex);
+        assert_eq!(verifier.binary, PathBuf::from("ollama"));
+        assert_eq!(verifier.args, vec!["launch", "codex"]);
+        assert_eq!(verifier.native_effort.as_deref(), Some("medium"));
     }
 
     #[test]

@@ -14,20 +14,10 @@ local_commits = true
 [providers.codex]
 binary = "/opt/homebrew/bin/codex"
 isolation = "read_only"
-native_effort = true
-[providers.codex.effort_map]
-light = "low"
-standard = "medium"
-deep = "high"
 
 [providers.agy]
 binary = "/Users/sebastian/.local/bin/agy"
 isolation = "tool_free"
-native_effort = true
-[providers.agy.effort_map]
-light = "low"
-standard = "medium"
-deep = "high"
 
 [role_providers]
 orchestrator = ["codex"]

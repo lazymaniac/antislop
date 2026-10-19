@@ -15,12 +15,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 pub const TABS: [&str; 6] = [
-    "Przegląd",
-    "Sesja",
-    "Wiadomości",
-    "Wynik",
-    "Kontrole",
-    "Komentarze",
+    "Overview", "Session", "Messages", "Result", "Checks", "Comments",
 ];
 pub const RESULT: usize = 3;
 pub const CHECKS: usize = 4;
@@ -41,7 +36,7 @@ pub struct Details {
     pub scroll: usize,
     /// The task as the daemon stores it, once fetched.
     pub task: Option<Value>,
-    /// The selected comment on the Komentarze tab.
+    /// The selected comment on the Comments tab.
     pub comment: usize,
     /// Scroll memory per (agent_key, tab_index)
     pub scroll_memory: HashMap<(String, usize), usize>,
@@ -51,12 +46,10 @@ pub struct Details {
     pub query: String,
     /// Whether user is typing a query in search mode
     pub searching: bool,
-    /// Widok czytelny (false) vs raw JSON (true)
+    /// Readable view (false) vs raw JSON (true)
     pub raw: bool,
-    /// Retained sessions history for Sesja tab
+    /// Retained turn metadata returned by the daemon
     pub sessions: Vec<SessionInfo>,
-    /// Current page of sessions (for pagination)
-    pub session_page: usize,
     /// Explicit flag indicating missing/pruned historical data
     pub history_unavailable: bool,
 }
@@ -75,7 +68,6 @@ impl Details {
             searching: false,
             raw: false,
             sessions: Vec::new(),
-            session_page: 0,
             history_unavailable: false,
         }
     }
@@ -136,17 +128,7 @@ impl Details {
             .unwrap_or_default();
     }
 
-    pub fn next_session_page(&mut self) {
-        self.session_page = self.session_page.saturating_add(1);
-        self.scroll = 0;
-    }
-
-    pub fn prev_session_page(&mut self) {
-        self.session_page = self.session_page.saturating_sub(1);
-        self.scroll = 0;
-    }
-
-    /// The id of the selected comment, on the Komentarze tab.
+    /// The id of the selected comment, on the Comments tab.
     pub fn selected_comment(&self, view: &View) -> Option<u64> {
         (self.tab == COMMENTS)
             .then(|| view.comments_on(&self.key).get(self.comment).map(|c| c.id))
@@ -168,7 +150,7 @@ impl Details {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
                 format!(
-                    "🔍 Filtr rekordów: \"{}\"  (v: przełącz widok raw/czytelny · Esc: wyczyść)",
+                    "🔍 Record filter: \"{}\"  (v: toggle raw/readable view · Esc: clear)",
                     self.query
                 ),
             ));
@@ -200,7 +182,7 @@ impl Details {
         if !query_lower.is_empty() && matched_records == 0 {
             out.push((
                 dim(),
-                format!("Brak rekordów pasujących do zapytania \"{}\".", self.query),
+                format!("No records matching query \"{}\".", self.query),
             ));
         }
         out
@@ -226,31 +208,31 @@ impl Details {
             0 => {
                 if is_conv {
                     let mut conv_lines = vec![];
-                    conv_lines.push(label("Szczegóły rozmowy"));
+                    conv_lines.push(label("Conversation details"));
                     conv_lines.push(plain(format!(
-                        "Projekt: {}",
-                        view.plan.as_deref().unwrap_or("bieżący")
+                        "Project: {}",
+                        view.plan.as_deref().unwrap_or("current")
                     )));
                     conv_lines.push(plain(format!(
-                        "Tryb: {}",
+                        "Mode: {}",
                         match view.autonomous {
-                            Some(true) => "autonomiczny",
-                            Some(false) => "nadzorowany",
-                            None => "nieokreślony",
+                            Some(true) => "autonomous",
+                            Some(false) => "supervised",
+                            None => "unspecified",
                         }
                     )));
                     conv_lines.push(plain(format!(
-                        "Stan: {}",
+                        "Status: {}",
                         if view.paused {
-                            "wstrzymano"
+                            "paused"
                         } else if view.idle {
-                            "bezczynny"
+                            "idle"
                         } else {
-                            "aktywny"
+                            "active"
                         }
                     )));
                     if let Some(p) = &view.plan {
-                        conv_lines.push(plain(format!("Aktywny plan: {p}")));
+                        conv_lines.push(plain(format!("Active plan: {p}")));
                     }
                     let total_tasks = view.tasks.len();
                     let done_tasks = view
@@ -259,7 +241,7 @@ impl Details {
                         .filter(|t| status::finished(&t.status))
                         .count();
                     conv_lines.push(plain(format!(
-                        "Zadania: ogółem {total_tasks}, wykonano {done_tasks}"
+                        "Tasks: total {total_tasks}, completed {done_tasks}"
                     )));
                     let _missing_reports = view
                         .tasks
@@ -267,7 +249,7 @@ impl Details {
                         .filter(|t| status::finished(&t.status) && t.reason.is_none())
                         .count();
                     conv_lines.push(plain(format!(
-                        "Raporty zadań: {done_tasks}/{total_tasks} gotowych (jawne braki: {} w toku)",
+                        "Task reports: {done_tasks}/{total_tasks} ready (explicitly missing: {} in progress)",
                         total_tasks.saturating_sub(done_tasks)
                     )));
                     let text = conv_lines
@@ -298,11 +280,11 @@ impl Details {
                         }
                         let mut cli_lines = vec![plain(cli)];
                         if agent.turns > 0 {
-                            cli_lines.push(plain(format!("Tokeny: {}", agent.tokens())));
+                            cli_lines.push(plain(format!("Tokens: {}", agent.tokens())));
                         }
                         if let Some(last) = agent.last_ms {
                             cli_lines.push(plain(format!(
-                                "Czas w turach: {} (ostatnia {})",
+                                "Time in turns: {} (last {})",
                                 duration(agent.busy_ms),
                                 duration(last)
                             )));
@@ -329,47 +311,47 @@ impl Details {
                     if let Some(task) = task {
                         let mut task_lines = vec![];
                         task_lines.push(plain(format!(
-                            "Status zadania: {}{}",
+                            "Task status: {}{}",
                             polish(&task.status),
                             if task.round > 0 {
-                                format!(" (runda {})", task.round)
+                                format!(" (round {})", task.round)
                             } else {
                                 String::new()
                             }
                         )));
                         if let Some(reason) = &task.reason {
-                            task_lines.push(plain(format!("Dlaczego: {reason}")));
+                            task_lines.push(plain(format!("Reason: {reason}")));
                         }
-                        task_lines.push(plain(format!("Zadanie {}: {}", task.id, task.title)));
+                        task_lines.push(plain(format!("Task {}: {}", task.id, task.title)));
                         task_lines.push(plain(format!(
-                            "Rodzaj: {}{}",
+                            "Kind: {}{}",
                             task.kind,
                             if task.writes {
-                                " · zmienia pliki"
+                                " · modifies files"
                             } else {
-                                " · tylko odczyt"
+                                " · read-only"
                             }
                         )));
                         if !task.depends_on.is_empty() {
                             task_lines.push(plain(format!(
-                                "Zależy od: {}",
+                                "Depends on: {}",
                                 task.depends_on.join(", ")
                             )));
                         }
                         if !task.scope.is_empty() {
-                            task_lines.push(plain(format!("Zakres: {}", task.scope.join(", "))));
+                            task_lines.push(plain(format!("Scope: {}", task.scope.join(", "))));
                         }
                         task_lines.push(plain(String::new()));
-                        task_lines.push(label("Cel"));
+                        task_lines.push(label("Goal"));
                         task_lines.push(plain(task.goal.clone()));
                         if verifier || !task.focus.is_empty() {
                             task_lines.push(plain(String::new()));
-                            task_lines.push(label("Weryfikacja"));
+                            task_lines.push(label("Verification"));
                             task_lines.push(plain(task.focus.clone()));
                         }
                         if verifier && !task.risks.is_empty() {
                             task_lines.push(plain(String::new()));
-                            task_lines.push(label("Ryzyka"));
+                            task_lines.push(label("Risks"));
                             for risk in &task.risks {
                                 task_lines.push(plain(format!("- {risk}")));
                             }
@@ -386,7 +368,7 @@ impl Details {
                         });
                     }
                     if let Some(review) = view.reviews.get(&self.key) {
-                        let mut rev_lines = vec![plain(String::new()), label("Ostatni wynik")];
+                        let mut rev_lines = vec![plain(String::new()), label("Latest result")];
                         rev_lines.extend(review.iter().cloned().map(plain));
                         let text = rev_lines
                             .iter()
@@ -400,11 +382,11 @@ impl Details {
                         });
                     }
                     if let Some(agent) = agent {
-                        let mut act_lines = vec![plain(String::new()), label("Teraz")];
+                        let mut act_lines = vec![plain(String::new()), label("Now")];
                         act_lines.push(plain(if agent.running {
-                            format!("pracuje: {}", agent.activity)
+                            format!("working: {}", agent.activity)
                         } else {
-                            format!("bezczynny · {}", agent.activity)
+                            format!("idle · {}", agent.activity)
                         }));
                         let text = act_lines
                             .iter()
@@ -421,113 +403,78 @@ impl Details {
                         });
                     } else if task.is_none() {
                         records.push(DetailRecord {
-                            lines: vec![plain("Ten agent jeszcze nie pracował.".into())],
-                            search_text: "Ten agent jeszcze nie pracował.".into(),
+                            lines: vec![plain("This agent has not worked yet.".into())],
+                            search_text: "This agent has not worked yet.".into(),
                             raw_value: None,
                         });
                     }
                 }
             }
             1 => {
-                if self.history_unavailable {
+                if let Some(agent) = agent
+                    && (!agent.terminal.is_empty()
+                        || !agent.session.is_empty()
+                        || agent.pid.is_some())
+                {
+                    let pid_label = agent
+                        .pid
+                        .map(|p| format!("PID {p}"))
+                        .unwrap_or_else(|| "no active PID".into());
+                    let state = if agent.running { "running" } else { "idle" };
+                    let term_header = format!(
+                        "┌─ Process Terminal: {} (status: {}, {}) ─┐",
+                        agent_name(&self.key),
+                        state,
+                        pid_label
+                    );
                     records.push(DetailRecord {
                         lines: vec![(
-                            Style::default().fg(Color::Yellow),
-                            "⚠ [Część danych historycznych sesji jest niedostępna w archiwum bazy]"
-                                .into(),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                            term_header.clone(),
                         )],
-                        search_text: "dane historyczne niedostępne".into(),
-                        raw_value: None,
+                        search_text: format!("process terminal {term_header}"),
+                        raw_value: Some(serde_json::json!({
+                            "agent": self.key,
+                            "status": state,
+                            "pid": agent.pid,
+                        })),
                     });
-                }
-                if !self.sessions.is_empty() {
-                    let page_size = 5;
-                    let total_pages = self.sessions.len().div_ceil(page_size);
-                    self.session_page = self.session_page.min(total_pages.saturating_sub(1));
-                    let start = self.session_page * page_size;
-                    let end = (start + page_size).min(self.sessions.len());
-                    records.push(DetailRecord {
-                        lines: vec![(
-                            Style::default().fg(Color::Cyan),
-                            format!(
-                                "── Zachowane sesje w bazie (strona {}/{}, pozycje {}-{} z {}) ──",
-                                self.session_page + 1,
-                                total_pages,
-                                start + 1,
-                                end,
-                                self.sessions.len()
-                            ),
-                        )],
-                        search_text: "sesje zachowane strona".into(),
-                        raw_value: None,
-                    });
-                    for sess in &self.sessions[start..end] {
-                        let mut sess_lines = vec![];
-                        sess_lines.push((
-                            Style::default().add_modifier(Modifier::BOLD),
-                            format!(
-                                "• Tura {} · Rola: {} ({}) · Stan: {}",
-                                sess.turn_id, sess.role, sess.provider, sess.status
-                            ),
-                        ));
-                        if let Some(sid) = &sess.session_id {
-                            sess_lines.push(plain(format!("  Sesja CLI: {sid}")));
+                    // The terminal is the single session transcript. Legacy
+                    // session events are a fallback when no terminal was retained.
+                    let transcript = if agent.terminal.is_empty() {
+                        &agent.session
+                    } else {
+                        &agent.terminal
+                    };
+                    for line in transcript {
+                        let style = if line.starts_with("$ ") {
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                        } else if line.starts_with("✉ ") {
+                            Style::default().fg(Color::Cyan)
+                        } else if line.starts_with("──") {
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        } else if line.starts_with("[process") {
+                            dim()
                         } else {
-                            sess_lines.push((
-                                dim(),
-                                "  Sesja CLI: [brak zapisanego session_id w historii]".into(),
-                            ));
-                        }
-                        let dur_str = if let Some(fin) = sess.finished_ms {
-                            duration(fin.saturating_sub(sess.started_ms).max(0) as u64)
-                        } else {
-                            "w toku".into()
+                            Style::default()
                         };
-                        sess_lines.push(plain(format!(
-                            "  Czas trwania: {dur_str} (start: {} ms)",
-                            sess.started_ms
-                        )));
-                        if let Some(pid) = sess.pid {
-                            sess_lines.push(plain(format!("  Proces PID: {pid}")));
-                        }
-                        sess_lines.push(plain(format!("  Do wiadomości: #{}", sess.upto_message)));
-                        if let Some(err) = &sess.error {
-                            sess_lines
-                                .push((Style::default().fg(Color::Red), format!("  Błąd: {err}")));
-                        }
-                        let text = sess_lines
-                            .iter()
-                            .map(|(_, t)| t.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ");
                         records.push(DetailRecord {
-                            lines: sess_lines,
-                            search_text: text,
-                            raw_value: Some(serde_json::to_value(sess).unwrap_or_default()),
+                            lines: vec![(style, format!("│ {line}"))],
+                            search_text: line.clone(),
+                            raw_value: Some(serde_json::json!({ "terminal": line })),
                         });
                     }
                 } else {
-                    match agent {
-                        Some(agent) if !agent.session.is_empty() => {
-                            for line in &agent.session {
-                                records.push(DetailRecord {
-                                    lines: vec![plain(line.clone())],
-                                    search_text: line.clone(),
-                                    raw_value: Some(serde_json::json!({ "event": line })),
-                                });
-                            }
-                        }
-                        _ => {
-                            records.push(DetailRecord {
-                                lines: vec![(
-                                    dim(),
-                                    "Brak zdarzeń sesji dla tego agenta. [dane historyczne niedostępne lub agent jeszcze nie pracował]. Zdarzenia narzędzi pojawią się w trakcie pracy.".into(),
-                                )],
-                                search_text: "brak zdarzeń sesji dane historyczne niedostępne".into(),
-                                raw_value: None,
-                            });
-                        }
-                    }
+                    records.push(DetailRecord {
+                        lines: vec![(
+                            dim(),
+                            "No session events for this agent. [historical data unavailable or agent has not worked yet]. Tool events will appear during work.".into(),
+                        )],
+                        search_text: "no session events historical data unavailable".into(),
+                        raw_value: None,
+                    });
                 }
             }
             2 => {
@@ -547,9 +494,9 @@ impl Details {
                         records.push(DetailRecord {
                             lines: vec![(
                                 dim(),
-                                format!("Brak wiadomości. [brak zarejestrowanych wiadomości w historii dla tego agenta]. Użyj '@{id} wiadomość' w czacie, aby napisać do tego agenta."),
+                                format!("No messages. [no recorded messages in history for this agent]. Use '@{id} message' in chat to write to this agent."),
                             )],
-                            search_text: "brak wiadomości".into(),
+                            search_text: "no messages".into(),
                             raw_value: None,
                         });
                     }
@@ -561,9 +508,9 @@ impl Details {
                     records.push(DetailRecord {
                         lines: vec![(
                             dim(),
-                            "Brak komentarzy. [brak komentarzy w historii dla tego elementu]. Naciśnij 'c', aby dodać komentarz do tego elementu.".into(),
+                            "No comments. [no comments in history for this element]. Press 'c' to add a comment to this element.".into(),
                         )],
-                        search_text: "brak komentarzy".into(),
+                        search_text: "no comments".into(),
                         raw_value: None,
                     });
                 } else {
@@ -577,13 +524,9 @@ impl Details {
                         if index == self.comment {
                             style = style.add_modifier(Modifier::REVERSED);
                         }
-                        let state = match comment.status.as_str() {
-                            "open" => "otwarty",
-                            "resolved" => "rozwiązany",
-                            other => other,
-                        };
+                        let state = view.comment_state(comment.id);
                         let stale = if view.stale(comment) {
-                            " · dotyczy poprzedniego planu"
+                            " · from previous plan"
                         } else {
                             ""
                         };
@@ -606,15 +549,15 @@ impl Details {
                 (_, None) => records.push(DetailRecord {
                     lines: vec![(
                         dim(),
-                        "Kontrole mają zadania: ryzyka zadania i lista kontrolna jego rodzaju, rozliczane przez weryfikatora. [brak danych kontroli w historii]".into(),
+                        "Tasks have checks: task risks and its kind's checklist, accounted for by the verifier. [no check data in history]".into(),
                     )],
-                    search_text: "kontrole mają zadania".into(),
+                    search_text: "tasks have checks".into(),
                     raw_value: None,
                 }),
                 (None, Some(_)) => records.push(DetailRecord {
-                    lines: vec![(dim(), "Pobieram…".into())],
-                    search_text: "pobieram".into(),
-                    raw_value: None,
+                    lines: vec![(dim(), "Loading…".into())],
+                    search_text: "loading".into(),
+                raw_value: None,
                 }),
                 (Some(stored), Some(_)) => {
                     let check_lines = checks(stored);
@@ -631,39 +574,39 @@ impl Details {
                 (_, None) => records.push(DetailRecord {
                     lines: vec![(
                         dim(),
-                        "Wynik mają workery i weryfikatorzy zadań; wyniki weryfikatora planu i audytora są w Przeglądzie. [brak danych historycznych wyniku]".into(),
+                        "Task workers and verifiers have results; plan verifier and auditor results are in Overview. [no historical result data]".into(),
                     )],
-                    search_text: "wynik mają workery".into(),
+                    search_text: "workers and verifiers have results".into(),
                     raw_value: None,
                 }),
                 (None, Some(_)) => records.push(DetailRecord {
-                    lines: vec![(dim(), "Pobieram…".into())],
-                    search_text: "pobieram".into(),
+                    lines: vec![(dim(), "Loading…".into())],
+                    search_text: "loading".into(),
                     raw_value: None,
                 }),
                 (Some(stored), Some(_)) if verifier => match &stored["verdict"] {
                     Value::Null => records.push(DetailRecord {
                         lines: vec![(
                             dim(),
-                            "Weryfikator jeszcze nie ocenił zadania (werdykt pojawi się po weryfikacji). [brak danych historycznych werdyktu]".into(),
+                            "Verifier has not evaluated the task yet (verdict will appear after verification). [no historical verdict data]".into(),
                         )],
-                        search_text: "weryfikator jeszcze nie ocenił".into(),
+                        search_text: "verifier has not evaluated".into(),
                         raw_value: None,
                     }),
                     verdict => {
                         let mut lines = vec![];
                         lines.extend(
-                            super::super::cli::review_lines("werdykt", verdict)
+                            super::super::cli::review_lines("verdict", verdict)
                                 .into_iter()
                                 .map(plain),
                         );
                         if let Some(findings) = verdict["findings"].as_array() {
                             if findings.is_empty() {
-                                lines.push(plain("Ustalenia: brak zastrzeżeń (weryfikator zatwierdził zadanie bez uwag).".into()));
+                                lines.push(plain("Findings: no issues (verifier approved the task without notes).".into()));
                             } else {
-                                lines.push(label("Ustalenia weryfikatora"));
+                                lines.push(label("Verifier findings"));
                                 for f in findings {
-                                    let sev = f["severity"].as_str().unwrap_or("uwaga");
+                                    let sev = f["severity"].as_str().unwrap_or("note");
                                     let issue = f["issue"].as_str().unwrap_or_default();
                                     let where_str = f["where"]
                                         .as_str()
@@ -675,7 +618,7 @@ impl Details {
                         } else {
                             lines.push((
                                 dim(),
-                                "Ustalenia: [brak danych historycznych ustaleń]".into(),
+                                "Findings: [no historical findings data]".into(),
                             ));
                         }
                         let text = lines
@@ -692,19 +635,19 @@ impl Details {
                 },
                 (Some(stored), Some(_)) => {
                     let mut art_lines = vec![];
-                    art_lines.push(label("Artefakty i zmiany"));
+                    art_lines.push(label("Artifacts and changes"));
                     if let (Some(base), Some(result)) =
                         (stored["base"].as_str(), stored["result"].as_str())
                     {
                         art_lines.push(plain(format!(
-                            "Zmiany git: {}..{}",
+                            "Git changes: {}..{}",
                             &base[..base.len().min(10)],
                             &result[..result.len().min(10)]
                         )));
                     } else {
                         art_lines.push((
                             dim(),
-                            "Artefakty: brak zarejestrowanych zmian git [dane historyczne niedostępne]".into(),
+                            "Artifacts: no recorded git changes [historical data unavailable]".into(),
                         ));
                     }
                     let art_text = art_lines
@@ -722,7 +665,7 @@ impl Details {
                     });
 
                     let mut rep_lines = vec![];
-                    rep_lines.push(label("Raport"));
+                    rep_lines.push(label("Report"));
                     match stored["report"].as_str() {
                         Some(report) => {
                             rep_lines.push(plain(report.to_owned()));
@@ -730,7 +673,7 @@ impl Details {
                         None => {
                             rep_lines.push((
                                 dim(),
-                                "Worker jeszcze nie oddał raportu (trwa praca lub oczekiwanie na start) [brak danych historycznych raportu].".into(),
+                                "Worker has not submitted a report yet (work in progress or waiting to start) [no historical report data].".into(),
                             ));
                         }
                     }
@@ -747,21 +690,21 @@ impl Details {
                         })),
                     });
 
-                    let mut ev_lines = vec![label("Dowody i ustalenia")];
+                    let mut ev_lines = vec![label("Evidence and findings")];
                     if let Some(verdict) = stored.get("verdict").filter(|v| !v.is_null()) {
                         if let Some(findings) = verdict["findings"].as_array() {
                             if findings.is_empty() {
-                                ev_lines.push(plain("Ustalenia: brak zastrzeżeń.".into()));
+                                ev_lines.push(plain("Findings: no issues.".into()));
                             } else {
                                 for f in findings {
-                                    let sev = f["severity"].as_str().unwrap_or("uwaga");
+                                    let sev = f["severity"].as_str().unwrap_or("note");
                                     let issue = f["issue"].as_str().unwrap_or_default();
                                     ev_lines.push(plain(format!("• [{sev}] {issue}")));
                                 }
                             }
                         }
                     } else {
-                        ev_lines.push((dim(), "Dowody: [brak załączonych dowodów w historii / oczekuje na weryfikację]".into()));
+                        ev_lines.push((dim(), "Evidence: [no attached evidence in history / awaiting verification]".into()));
                     }
                     let ev_text = ev_lines
                         .iter()
@@ -831,7 +774,7 @@ impl Details {
 
         let hint = if self.searching {
             format!(
-                "Szukaj w rekordach: {}_ (Enter: zatwierdź · Esc: anuluj)",
+                "Search records: {}_ (Enter: confirm · Esc: cancel)",
                 self.query
             )
         } else {
@@ -844,23 +787,23 @@ impl Details {
 pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
     if tab == COMMENTS {
         if width >= 95 {
-            "←/→ zakładka · ↑/↓ wybór · / szukaj · v raw · c skomentuj · r rozwiąż · o otwórz · x usuń · d diff · ? pomoc · Esc powrót"
+            "←/→ tab · ↑/↓ select · / search · v raw · c comment · r resolve · o reopen · x delete · d diff · ? help · Esc back"
         } else if width >= 65 {
-            "←/→ zakładki · ↑/↓ wybór · / szukaj · v raw · c dodaj · r/o/x status · d diff · Esc powrót"
+            "←/→ tabs · ↑/↓ select · / search · v raw · c add · r/o/x status · d diff · Esc back"
         } else if width >= 45 {
-            "←/→ tab · ↑/↓ wybór · c dodaj · r/o/x · Esc"
+            "←/→ tab · ↑/↓ select · c add · r/o/x · Esc"
         } else {
-            "c kom · Esc powrót"
+            "c com · Esc back"
         }
     } else {
         if width >= 90 {
-            "←/→ zakładka · ↑/↓ PgUp/PgDn przewiń · / szukaj · v raw · c skomentuj · d diff · ? pomoc · Esc powrót do grafu"
+            "←/→ tab · ↑/↓ PgUp/PgDn scroll · / search · v raw · c comment · d diff · ? help · Esc back to graph"
         } else if width >= 65 {
-            "←/→ zakładki · ↑/↓ przewiń · / szukaj · v raw · c skomentuj · d diff · Esc powrót"
+            "←/→ tabs · ↑/↓ scroll · / search · v raw · c comment · d diff · Esc back"
         } else if width >= 45 {
-            "←/→ tab · ↑/↓ przewiń · c kom · d diff · Esc"
+            "←/→ tab · ↑/↓ scroll · c com · d diff · Esc"
         } else {
-            "↑/↓ · Esc powrót"
+            "↑/↓ · Esc back"
         }
     }
 }
@@ -954,14 +897,14 @@ pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> 
 /// and how the latest verdict accounted for each.
 fn checks(stored: &Value) -> Vec<(Style, String)> {
     let Ok(spec) = serde_json::from_value::<TaskSpec>(stored["spec"].clone()) else {
-        return vec![(dim(), "Nie umiem odczytać zadania.".into())];
+        return vec![(dim(), "Cannot read task.".into())];
     };
     let coverage = &stored["verdict"]["coverage"];
     let mut lines = vec![];
     if stored["verdict"].is_null() {
         lines.push((
             dim(),
-            "Weryfikator jeszcze nie ocenił. Ryzyka i lista kontrolna zostaną rozliczone po zakończeniu zadania [brak danych historycznych].".into(),
+            "Verifier has not evaluated yet. Risks and checklist will be accounted for after the task finishes [no historical data].".into(),
         ));
         lines.push((Style::default(), String::new()));
     }
@@ -980,17 +923,17 @@ fn checks(stored: &Value) -> Vec<(Style, String)> {
             _ => ("?", Style::default().fg(Color::Yellow)),
         };
         let kind = if id.starts_with('R') {
-            "ryzyko"
+            "risk"
         } else if id.starts_with('V') {
-            "wspólna"
+            "common"
         } else {
-            "kontrola"
+            "check"
         };
         lines.push((style, format!("{mark} {id} {kind}: {text}")));
         if let Some(note) = entry["note"].as_str() {
             lines.push((Style::default(), format!("    {note}")));
         } else if !stored["verdict"].is_null() {
-            lines.push((dim(), "    nierozliczone [brak dowodu w historii]".into()));
+            lines.push((dim(), "    unaccounted for [no evidence in history]".into()));
         }
     }
     lines
@@ -1015,8 +958,8 @@ mod tests {
         let line = format_tabs("worker:t1", 3, 50);
         let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            rendered.contains("[Wynik]"),
-            "active tab Wynik missing in {rendered}"
+            rendered.contains("[Result]"),
+            "active tab Result missing in {rendered}"
         );
     }
 
@@ -1038,32 +981,24 @@ mod tests {
         let view = View::default();
         let mut details = Details::new("worker:t1".into());
 
-        // Tab 1: Sesja empty state
+        // Tab 1: Session empty state
         details.tab = 1;
         let lines = details.lines(&view);
         assert!(
             lines
                 .iter()
-                .any(|(_, text)| text.contains("Brak zdarzeń sesji"))
+                .any(|(_, text)| text.contains("No session events"))
         );
 
-        // Tab 2: Wiadomości empty state
+        // Tab 2: Messages empty state
         details.tab = 2;
         let lines = details.lines(&view);
-        assert!(
-            lines
-                .iter()
-                .any(|(_, text)| text.contains("Brak wiadomości"))
-        );
+        assert!(lines.iter().any(|(_, text)| text.contains("No messages")));
 
-        // Tab 5: Komentarze empty state
+        // Tab 5: Comments empty state
         details.tab = COMMENTS;
         let lines = details.lines(&view);
-        assert!(
-            lines
-                .iter()
-                .any(|(_, text)| text.contains("Brak komentarzy"))
-        );
+        assert!(lines.iter().any(|(_, text)| text.contains("No comments")));
     }
 
     #[test]

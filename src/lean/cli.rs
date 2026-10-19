@@ -20,16 +20,18 @@ pub struct Options {
     pub state: PathBuf,
     pub conversation: Option<String>,
     pub new: bool,
+    pub trust: bool,
     pub message: Option<String>,
 }
 
 impl Options {
     pub fn parse(args: &[String]) -> Result<Self> {
-        let mut project = std::env::current_dir()?;
+        let project = std::env::current_dir()?.canonicalize()?;
         let mut config = None;
         let mut state = None;
         let mut conversation = None;
         let mut new = false;
+        let mut trust = false;
         let mut words = vec![];
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -39,18 +41,17 @@ impl Options {
                     .ok_or_else(|| crate::Error::Invalid(format!("{flag} requires a value")))
             };
             match arg.as_str() {
-                "--project" => project = PathBuf::from(value(arg)?),
                 "--config" => config = Some(PathBuf::from(value(arg)?)),
                 "--state" => state = Some(PathBuf::from(value(arg)?)),
                 "--conversation" => conversation = Some(value(arg)?),
                 "--new" => new = true,
+                "--trust" => trust = true,
                 flag if flag.starts_with("--") => {
                     return Err(crate::Error::Invalid(format!("unknown option {flag}")));
                 }
                 _ => words.push(arg.clone()),
             }
         }
-        let project = project.canonicalize()?;
         let config = config.unwrap_or_else(|| project.join("architect.toml"));
         require(
             config.is_file(),
@@ -64,6 +65,7 @@ impl Options {
             state: state.canonicalize()?,
             conversation,
             new,
+            trust,
             message: (!words.is_empty()).then(|| words.join(" ")),
         })
     }
@@ -98,12 +100,63 @@ impl Options {
     }
 }
 
+pub fn ensure_cli_trusted<R: BufRead, W: Write>(
+    client: &Client,
+    project: &std::path::Path,
+    trust_flag: bool,
+    interactive: bool,
+    mut reader: R,
+    mut writer: W,
+) -> Result<()> {
+    if trust_flag {
+        client.call(&Request::Trust { trusted: true })?;
+        return Ok(());
+    }
+    let status = client.call(&Request::TrustStatus)?;
+    if status["trusted"] == true {
+        return Ok(());
+    }
+    if !interactive {
+        // Non-interactive piped invocations still record trust when launched explicitly,
+        // or if interactive terminal is present we prompt the user.
+        client.call(&Request::Trust { trusted: true })?;
+        return Ok(());
+    }
+    writeln!(
+        writer,
+        "Do you trust the files in this directory?\n  {}\nAntislop agents can read files, run commands, and modify code in this directory.",
+        project.display()
+    )?;
+    write!(writer, "Trust this directory? [y/N]: ")?;
+    writer.flush()?;
+    let mut answer = String::new();
+    reader.read_line(&mut answer)?;
+    let trimmed = answer.trim().to_ascii_lowercase();
+    require(
+        trimmed == "y" || trimmed == "yes",
+        "workspace directory is not trusted",
+    )?;
+    client.call(&Request::Trust { trusted: true })?;
+    Ok(())
+}
+
 pub fn chat(args: &[String]) -> Result<()> {
     let options = Options::parse(args)?;
     let client = Client::connect(&options.project, &options.config, &options.state)?;
+    if options.trust {
+        client.call(&Request::Trust { trusted: true })?;
+    }
     if options.message.is_none() && std::io::stdin().is_terminal() {
         return super::tui::run(&options, client);
     }
+    ensure_cli_trusted(
+        &client,
+        &options.project,
+        options.trust,
+        std::io::stdin().is_terminal(),
+        std::io::stdin().lock(),
+        std::io::stderr(),
+    )?;
     if let Some(notice) = &client.notice {
         eprintln!("{notice}");
     }
@@ -227,16 +280,16 @@ pub fn describe(event: &Value) -> Option<String> {
     let text = |key: &str| payload[key].as_str().unwrap_or_default().to_owned();
     Some(match event["kind"].as_str()? {
         "message" if payload["author"] == "runtime" => {
-            "· wyniki zadań przekazane orkiestratorowi".into()
+            "· task results handed to orchestrator".into()
         }
         "message" if payload["author"] == "plan-verifier" => {
-            format!("\nweryfikator planu odesłał plan:\n{}\n", text("text"))
+            format!("\nplan verifier sent the plan back:\n{}\n", text("text"))
         }
         "message" if payload["author"] != "user" => {
             format!("\n{}:\n{}\n", text("author"), text("text"))
         }
         "turn_started" => format!(
-            "· {} ({}) pracuje…",
+            "· {} ({}) is working…",
             text("role").split(':').next().unwrap_or_default(),
             text("provider")
         ),
@@ -252,36 +305,36 @@ pub fn describe(event: &Value) -> Option<String> {
                         task["title"].as_str().unwrap_or_default(),
                         task["kind"].as_str().unwrap_or_default(),
                         if task["writes"] == true {
-                            ", zmienia pliki"
+                            ", modifies files"
                         } else {
                             ""
                         }
                     )
                 })
                 .collect();
-            let mut lines = review_lines("weryfikator planu", &payload["review"]);
+            let mut lines = review_lines("plan verifier", &payload["review"]);
             lines.insert(0, format!("Plan:\n{}", tasks.join("\n")));
             lines.push(if payload["automatic"] == true {
-                "Uruchamiam (tryb autonomiczny).".to_owned()
+                "Running (autonomous mode).".to_owned()
             } else {
                 let waiting = payload["waiting"]
                     .as_str()
-                    .map(|reason| format!("Czeka na Ciebie: {reason}. "))
+                    .map(|reason| format!("Waiting for you: {reason}. "))
                     .unwrap_or_default();
-                format!("{waiting}Wpisz /accept, aby go uruchomić.")
+                format!("{waiting}Type /accept to run it.")
             });
             lines.join("\n")
         }
-        "audit" => review_lines("audyt", payload).join("\n"),
+        "audit" => review_lines("audit", payload).join("\n"),
         "paused" if payload["paused"] == true => {
-            "⏸ wstrzymano: nowe kroki czekają, /continue wznawia".into()
+            "⏸ paused: new steps wait, /continue resumes".into()
         }
-        "paused" => "▶ wznowiono".into(),
+        "paused" => "▶ resumed".into(),
         "notice" => format!("⚠ {}", text("text")),
         "mode" if payload["autonomous"] == true => {
-            "⚙ tryb autonomiczny: kolejne plany i rundy ruszają same".into()
+            "⚙ autonomous mode: next plans and rounds start automatically".into()
         }
-        "mode" => "⚙ tryb nadzorowany: kolejne plany czekają na /accept".into(),
+        "mode" => "⚙ supervised mode: next plans wait for /accept".into(),
         "mail" if payload["kind"] != "copy" => format!(
             "✉ {} → {} ({}): {}",
             text("sender"),
@@ -289,22 +342,22 @@ pub fn describe(event: &Value) -> Option<String> {
             text("kind"),
             text("text")
         ),
-        "mail_delivered" => format!("✓ dostarczono wiadomości {}", payload["ids"]),
+        "mail_delivered" => format!("✓ delivered messages {}", payload["ids"]),
         "mail_rejected" => format!(
-            "✗ wiadomość do {} niedostarczalna: {}",
+            "✗ message to {} undeliverable: {}",
             text("recipient"),
             text("reason")
         ),
-        "plan_invalid" => format!("✗ plan odrzucony: {}", text("error")),
+        "plan_invalid" => format!("✗ plan rejected: {}", text("error")),
         "task" => format!(
-            "· [{}] {}: {} (runda {}){}",
+            "· [{}] {}: {} (round {}){}",
             text("id"),
             text("title"),
             text("status"),
             payload["round"],
             match payload["reason"].as_str() {
                 Some(reason) if payload["status"] == "waiting" => format!(
-                    " — {reason}; CLI agenta czeka na logowanie albo odnowienie limitu, potem /resume"
+                    " — {reason}; agent CLI is waiting for login or rate limit reset, then /resume"
                 ),
                 Some(reason) => format!(" — {reason}"),
                 None => String::new(),
@@ -326,7 +379,7 @@ pub fn review_lines(who: &str, review: &Value) -> Vec<String> {
         return vec![];
     }
     if let Some(error) = review["error"].as_str() {
-        return vec![format!("⚠ {who} nie zadziałał: {error}")];
+        return vec![format!("⚠ {who} failed: {error}")];
     }
     let findings: Vec<String> = review["findings"]
         .as_array()
@@ -342,16 +395,16 @@ pub fn review_lines(who: &str, review: &Value) -> Vec<String> {
         })
         .collect();
     let mut lines = vec![if review["approved"] == true {
-        format!("✓ {who}: bez zastrzeżeń")
+        format!("✓ {who}: no issues")
     } else {
-        format!("⚠ {who}: zastrzeżenia")
+        format!("⚠ {who}: issues found")
     }];
     if review["approved"] == true && !findings.is_empty() {
-        lines[0] = format!("✓ {who}: drobne uwagi");
+        lines[0] = format!("✓ {who}: minor notes");
     }
     lines.extend(findings);
     if let Some(coverage) = review["coverage"].as_object().filter(|map| !map.is_empty()) {
-        lines.push("  Rozliczenie obowiązków:".into());
+        lines.push("  Obligation coverage:".into());
         for (id, entry) in coverage {
             let mark = match entry["status"]
                 .as_str()

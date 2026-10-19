@@ -16,6 +16,8 @@ use unicode_width::UnicodeWidthStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Accept,
+    Reject,
+    Plan,
     Resume,
     Cancel,
     Pause,
@@ -37,39 +39,41 @@ pub enum Command {
     ConversationDetails,
 }
 
-const COMMANDS: [(Command, &str); 20] = [
-    (Command::Accept, "Uruchom zaproponowany plan · Ctrl+A"),
-    (Command::Resume, "Wznów plan · Ctrl+R"),
-    (Command::Cancel, "Anuluj trwającą pracę · Ctrl+X"),
+const COMMANDS: [(Command, &str); 22] = [
+    (Command::Accept, "Accept proposed plan · Ctrl+A"),
+    (Command::Reject, "Reject proposed plan · /reject"),
+    (Command::Plan, "Open plan document viewer · p / /plan"),
+    (Command::Resume, "Resume plan · Ctrl+R"),
+    (Command::Cancel, "Cancel running work · Ctrl+X"),
     (
         Command::Pause,
-        "Wstrzymaj nowe kroki (bieżące się dokończą) · /pause",
+        "Pause new steps (current ones finish) · /pause",
     ),
-    (Command::Continue, "Kontynuuj wstrzymaną pracę · /continue"),
+    (Command::Continue, "Continue paused work · /continue"),
     (
         Command::Autonomous,
-        "Tryb autonomiczny: plany i rundy ruszają same · /mode autonomous",
+        "Autonomous mode: plans and rounds start automatically · /mode autonomous",
     ),
     (
         Command::Supervised,
-        "Tryb nadzorowany: plany czekają na zgodę · /mode supervised",
+        "Supervised mode: plans wait for approval · /mode supervised",
     ),
-    (Command::NewConversation, "Nowa rozmowa · Ctrl+N"),
-    (Command::SwitchConversation, "Przełącz rozmowę · Ctrl+O"),
-    (Command::Tasks, "Zadania (karuzela) · t"),
-    (Command::Find, "Znajdź agenta · /"),
-    (Command::Search, "Szukaj w rozmowie · Ctrl+F"),
-    (Command::Details, "Szczegóły wybranego agenta · Enter"),
+    (Command::NewConversation, "New conversation · Ctrl+N"),
+    (Command::SwitchConversation, "Switch conversation · Ctrl+O"),
+    (Command::Tasks, "Tasks (carousel) · t"),
+    (Command::Find, "Find agent · /"),
+    (Command::Search, "Search conversation · Ctrl+F"),
+    (Command::Details, "Selected agent details · Enter"),
     (
         Command::ConversationDetails,
-        "Szczegóły rozmowy (inspektor) · Ctrl+I",
+        "Conversation details (inspector) · Ctrl+I",
     ),
-    (Command::AddressMessage, "Adresuj wiadomość · @"),
-    (Command::Diff, "Diff zadania wybranego agenta · d"),
-    (Command::Comment, "Skomentuj wybrany element · c"),
-    (Command::Filter, "Następny filtr relacji grafu · f"),
-    (Command::Help, "Pomoc · ?"),
-    (Command::Quit, "Odłącz (praca trwa dalej) · q"),
+    (Command::AddressMessage, "Address message · @"),
+    (Command::Diff, "Selected agent task diff · d"),
+    (Command::Comment, "Comment on selected element · c"),
+    (Command::Filter, "Next graph relation filter · f"),
+    (Command::Help, "Help · ?"),
+    (Command::Quit, "Detach (work continues) · q"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,19 +163,19 @@ impl Picker {
             Kind::Recipients => {
                 let mut list = vec![
                     (
-                        "orkiestrator · domyślny adresat".to_owned(),
+                        "orchestrator · default recipient".to_owned(),
                         Action::Address("orchestrator".into()),
                     ),
                     (
-                        "all · broadcast do wszystkich aktywnych zadań".to_owned(),
+                        "all · broadcast to all active tasks".to_owned(),
                         Action::Address("all".into()),
                     ),
                     (
-                        "plan-verifier · weryfikator planu".to_owned(),
+                        "plan-verifier · plan verifier".to_owned(),
                         Action::Address("plan-verifier".into()),
                     ),
                     (
-                        "auditor · audytor końcowy".to_owned(),
+                        "auditor · final auditor".to_owned(),
                         Action::Address("auditor".into()),
                     ),
                 ];
@@ -182,15 +186,15 @@ impl Picker {
                             task.id,
                             task.title,
                             if task.writes {
-                                "zmienia pliki"
+                                "modifies files"
                             } else {
-                                "tylko odczyt"
+                                "read-only"
                             }
                         ),
                         Action::Address(format!("worker:{}", task.id)),
                     ));
                     list.push((
-                        format!("verifier:{} · weryfikator zadania {}", task.id, task.title),
+                        format!("verifier:{} · task verifier {}", task.id, task.title),
                         Action::Address(format!("verifier:{}", task.id)),
                     ));
                 }
@@ -246,14 +250,14 @@ impl Picker {
         if items.is_empty() {
             let empty_msg = if self.query.is_empty() {
                 match self.kind {
-                    Kind::Commands => "Brak dostępnych poleceń.",
-                    Kind::Agents => "Brak agentów w grafie.",
-                    Kind::History => "Brak wpisów w historii rozmowy.",
-                    Kind::Conversations => "Brak innych rozmów w tym projekcie.",
-                    Kind::Recipients => "Brak odbiorców pasujących do zapytania.",
+                    Kind::Commands => "No commands available.",
+                    Kind::Agents => "No agents in graph.",
+                    Kind::History => "No entries in conversation history.",
+                    Kind::Conversations => "No other conversations in this project.",
+                    Kind::Recipients => "No recipients matching query.",
                 }
             } else {
-                "Nic nie pasuje do zapytania."
+                "Nothing matches the query."
             };
             lines.push(Line::styled(truncate(empty_msg, inner), dim()));
         }
@@ -266,21 +270,21 @@ impl Picker {
             lines.push(Line::styled(truncate(label, inner), style));
         }
         let title = match self.kind {
-            Kind::Commands if width >= 42 => " polecenia · Enter wykonaj · Esc zamknij ",
-            Kind::Commands if width >= 20 => " polecenia · Esc ",
-            Kind::Commands => " polecenia ",
-            Kind::Agents if width >= 45 => " znajdź agenta · Enter wybierz · Esc zamknij ",
-            Kind::Agents if width >= 20 => " agenci · Esc ",
-            Kind::Agents => " agenci ",
-            Kind::History if width >= 45 => " szukaj w rozmowie · Enter pokaż · Esc zamknij ",
-            Kind::History if width >= 20 => " szukaj · Esc ",
-            Kind::History => " szukaj ",
-            Kind::Conversations if width >= 45 => " przełącz rozmowę · Enter otwórz · Esc zamknij ",
-            Kind::Conversations if width >= 20 => " rozmowy · Esc ",
-            Kind::Conversations => " rozmowy ",
-            Kind::Recipients if width >= 45 => " adresat wiadomości · Enter wybierz · Esc zamknij ",
-            Kind::Recipients if width >= 20 => " adresaci · Esc ",
-            Kind::Recipients => " adresaci ",
+            Kind::Commands if width >= 42 => " commands · Enter run · Esc close ",
+            Kind::Commands if width >= 20 => " commands · Esc ",
+            Kind::Commands => " commands ",
+            Kind::Agents if width >= 45 => " find agent · Enter select · Esc close ",
+            Kind::Agents if width >= 20 => " agents · Esc ",
+            Kind::Agents => " agents ",
+            Kind::History if width >= 45 => " search conversation · Enter show · Esc close ",
+            Kind::History if width >= 20 => " search · Esc ",
+            Kind::History => " search ",
+            Kind::Conversations if width >= 45 => " switch conversation · Enter open · Esc close ",
+            Kind::Conversations if width >= 20 => " conversations · Esc ",
+            Kind::Conversations => " conversations ",
+            Kind::Recipients if width >= 45 => " message recipient · Enter select · Esc close ",
+            Kind::Recipients if width >= 20 => " recipients · Esc ",
+            Kind::Recipients => " recipients ",
         };
         frame.render_widget(Clear, box_area);
         frame.render_widget(
@@ -318,87 +322,89 @@ impl Help {
     fn lines(self) -> &'static [&'static str] {
         match self {
             Help::Chat => &[
-                "Enter, Ctrl+S    wyślij wiadomość orkiestratorowi",
-                "@t2 tekst        wiadomość do workera t2 (kopia w czacie)",
-                "Alt+Enter, Ctrl+J  nowa linia w szkicu",
-                "↑/↓              wiersz w szkicu; historia wysłanych na skrajach",
-                "PgUp/PgDn        przewijanie rozmowy",
-                "Tab              panel zespołu",
-                "Ctrl+A / Ctrl+R  uruchom/wznów (na pustym); Home/szukaj",
-                "Ctrl+U / Ctrl+K  usuń do początku / końca linii",
-                "Ctrl+W           usuń słowo w lewo",
-                "Ctrl+E           przejdź na koniec linii",
-                "Ctrl+X           anuluj trwającą pracę",
-                "/pause, /continue  wstrzymaj nowe kroki / kontynuuj",
-                "/mode autonomous   tryb autonomiczny dla kolejnych planów",
-                "/mode supervised   tryb nadzorowany dla kolejnych planów",
-                "Ctrl+N / Ctrl+O  nowa / przełącz rozmowę",
-                "Ctrl+F           szukaj w rozmowie",
-                "Ctrl+P           paleta poleceń",
-                "Esc              czyść szkic; wyjdź gdy pusty (demon trwa)",
+                "Enter, Ctrl+S    send message to orchestrator",
+                "@t2 text         message worker t2 (copied in chat)",
+                "Alt+Enter, Ctrl+J  newline in draft",
+                "↑/↓              line in draft; sent history at edges",
+                "PgUp/PgDn        scroll conversation",
+                "Tab              team panel",
+                "Ctrl+A / Ctrl+R  accept/resume (if empty); Home/search",
+                "Ctrl+U / Ctrl+K  delete to start / end of line",
+                "Ctrl+W           delete word left",
+                "Ctrl+E           move to end of line",
+                "Ctrl+X           cancel running work",
+                "/pause, /continue  pause new steps / continue",
+                "/mode autonomous   autonomous mode for next plans",
+                "/mode supervised   supervised mode for next plans",
+                "Ctrl+N / Ctrl+O  new / switch conversation",
+                "Ctrl+F           search conversation",
+                "Ctrl+P           command palette",
+                "Esc              back/clear draft (daemon runs)",
+                "Ctrl+C / q       quit (q when not editing text)",
             ],
             Help::Graph => &[
-                "strzałki         najbliższy węzeł w tym kierunku",
-                "Enter            szczegóły agenta",
-                "/                znajdź agenta",
-                "t                karuzela zadań",
-                "d                diff zadania",
-                "c                komentarz do wybranego elementu",
-                "z, Spacja        zwiń / rozwiń zadanie",
-                "g                przełącz grupowanie (zależności / stan)",
-                "f                filtr relacji: wszystko, zależności, weryfikacja, wiadomości, nadzór",
-                "Ctrl+P           paleta poleceń",
-                "Tab, Esc         czat",
-                "q                wyjdź (praca trwa dalej w demonie)",
+                "arrows           nearest node in that direction",
+                "Enter            agent details",
+                "/                find agent",
+                "t                task carousel",
+                "d                task diff",
+                "c                comment on selected element",
+                "z, Space         collapse / expand task",
+                "g                toggle grouping (dependencies / state)",
+                "f                relation filter: all, dependencies, verification, messages, supervision",
+                "PgUp/PgDn, wheel scroll full task / verification text",
+                "Ctrl+P           command palette",
+                "Tab, Esc         chat",
+                "q                quit (work continues in daemon)",
             ],
             Help::Tasks => &[
-                "←/→, ↑/↓        poprzednie / następne zadanie w karuzeli",
-                "w                przejdź do workera na grafie",
-                "v                przejdź do weryfikatora na grafie",
-                "Enter            szczegóły wybranego zadania",
-                "d                diff zadania",
-                "c                komentarz do zadania",
-                "Ctrl+P           paleta poleceń",
-                "Tab              przełącz na zespół",
-                "Esc              przełącz na czat",
-                "q                wyjdź (praca trwa dalej w demonie)",
+                "←/→, ↑/↓        previous / next task in carousel",
+                "w                jump to worker on graph",
+                "v                jump to verifier on graph",
+                "Enter            selected task details",
+                "d                task diff",
+                "c                comment on task",
+                "Ctrl+P           command palette",
+                "Tab              switch to team",
+                "Esc              switch to chat",
+                "q                quit (work continues in daemon)",
             ],
             Help::Details => &[
-                "←/→, Tab         zakładki",
-                "↑/↓ PgUp/PgDn    przewijanie; na Komentarzach wybór",
-                "c                komentarz do agenta",
-                "r / o / x        rozwiąż / otwórz / usuń komentarz",
-                "d                diff zadania",
-                "Esc, q           powrót do grafu",
+                "←/→, Tab         tabs",
+                "↑/↓ PgUp/PgDn    scroll; on Comments select",
+                "c                comment on agent",
+                "r / o / x        resolve / reopen / delete comment",
+                "d                task diff",
+                "Esc              back to graph",
             ],
             Help::Diff => &[
-                "↑/↓ PgUp/PgDn    wybór linii (lub pliku)",
-                "←/→              poprzedni / następny plik",
-                "Tab              lista plików / linie",
-                "c                komentarz do linii lub pliku",
-                "R                recenzja kodu tej zmiany",
-                "r                odśwież",
-                "Esc, q           powrót",
+                "↑/↓ PgUp/PgDn    select line (or file)",
+                "←/→              previous / next file",
+                "Tab              file list / lines",
+                "c                comment on line or file",
+                "R                code review of this change",
+                "r                refresh",
+                "Esc              back",
             ],
             Help::Comment => &[
-                "Enter, Ctrl+S    wyślij komentarz",
-                "Alt+Enter, Ctrl+J  nowa linia w komentarzu",
-                "↑/↓              wiersz w komentarzu",
-                "←/→              znak w lewo / prawo",
-                "Alt/Ctrl+←/→     słowo w lewo / prawo",
-                "Home/End         początek / koniec linii",
-                "Alt/Ctrl+Home/End  początek / koniec komentarza",
-                "Ctrl+A / Ctrl+E  początek / koniec linii",
-                "Ctrl+U / Ctrl+K  usuń do początku / końca linii",
-                "Ctrl+W, Alt+Backspace  usuń słowo w lewo",
-                "Esc              anuluj komentarz (szkic czatu zostaje)",
+                "Enter, Ctrl+S    send comment",
+                "Alt+Enter, Ctrl+J  newline in comment",
+                "↑/↓              line in comment",
+                "←/→              character left / right",
+                "Alt/Ctrl+←/→     word left / right",
+                "Home/End         start / end of line",
+                "Alt/Ctrl+Home/End  start / end of comment",
+                "Ctrl+A / Ctrl+E  start / end of line",
+                "Ctrl+U / Ctrl+K  delete to start / end of line",
+                "Ctrl+W, Alt+Backspace  delete word left",
+                "Esc              cancel comment (chat draft stays)",
             ],
             Help::Picker => &[
-                "tekst            filtruj listę według wpisanych słów",
-                "Backspace        usuń ostatni znak zapytania",
-                "↑/↓              wybierz pozycję z listy",
-                "Enter            zatwierdź wybraną pozycję",
-                "Esc              zamknij listę (szkic czatu zostaje)",
+                "text             filter list by typed words",
+                "Backspace        delete last query character",
+                "↑/↓              select item from list",
+                "Enter            confirm selected item",
+                "Esc              close list (chat draft stays)",
             ],
         }
     }
@@ -492,18 +498,18 @@ impl Help {
         let scroll = scroll.min(max_scroll);
         let title = if max_scroll > 0 {
             if width >= 44 {
-                " pomoc · ↑/↓ przewijaj · Esc zamyka "
+                " help · ↑/↓ scroll · Esc closes "
             } else if width >= 26 {
-                " pomoc · ↑/↓ · Esc "
+                " help · ↑/↓ · Esc "
             } else {
-                " pomoc "
+                " help "
             }
         } else if width >= 36 {
-            " pomoc · Esc zamyka "
+            " help · Esc closes "
         } else if width >= 14 {
-            " pomoc · Esc "
+            " help · Esc "
         } else {
-            " pomoc "
+            " help "
         };
         let shown_lines: Vec<Line> = lines
             .iter()
@@ -545,7 +551,7 @@ mod tests {
         let view = View::default();
         let mut picker = Picker::new(Kind::Commands);
         assert_eq!(picker.items(&view).len(), COMMANDS.len());
-        picker.query = "plan wzn".into();
+        picker.query = "plan res".into();
         let items = picker.items(&view);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].1, Action::Run(Command::Resume));
@@ -581,12 +587,12 @@ mod tests {
             "tasks": [{"id": "t1", "title": "Parser"}, {"id": "t2", "title": "Docs"}]}}),
         );
         let mut picker = Picker::new(Kind::Agents);
-        picker.query = "pars wery".into();
+        picker.query = "pars veri".into();
         let items = picker.items(&view);
         assert_eq!(
             items,
             [(
-                "t1 weryfikator · Parser".to_owned(),
+                "t1 verifier · Parser".to_owned(),
                 Action::Select("verifier:t1".into())
             )]
         );
@@ -700,9 +706,10 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
         let rendered: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        // Polish empty state for history
+        // Empty state for history
         assert!(
-            rendered.contains("Brak wpisów w historii rozmowy") || rendered.contains("Brak wpisów")
+            rendered.contains("No entries in conversation history")
+                || rendered.contains("No entries")
         );
     }
 
@@ -771,12 +778,12 @@ mod tests {
         let rendered: String = buffer.content.iter().map(|c| c.symbol()).collect();
 
         // Check shortcuts and their complete descriptions
-        assert!(rendered.contains("wyślij wiadomość orkiestratorowi"));
-        assert!(rendered.contains("nowa linia w szkicu"));
-        assert!(rendered.contains("wiersz w szkicu"));
-        assert!(rendered.contains("przewijanie rozmowy"));
-        assert!(rendered.contains("uruchom/wznów"));
-        assert!(rendered.contains("usuń do początku / końca"));
+        assert!(rendered.contains("send message to orchestrator"));
+        assert!(rendered.contains("newline in draft"));
+        assert!(rendered.contains("line in draft"));
+        assert!(rendered.contains("scroll conversation"));
+        assert!(rendered.contains("accept/resume"));
+        assert!(rendered.contains("delete to start / end"));
 
         // 2. Scrolled page: verify subsequent shortcuts and descriptions
         terminal
@@ -788,28 +795,28 @@ mod tests {
         let buffer2 = terminal.backend().buffer();
         let rendered2: String = buffer2.content.iter().map(|c| c.symbol()).collect();
 
-        assert!(rendered2.contains("anuluj trwającą pracę"));
-        assert!(rendered2.contains("wstrzymaj nowe kroki / kontynuuj"));
+        assert!(rendered2.contains("cancel running work"));
+        assert!(rendered2.contains("pause new steps / continue"));
         assert!(rendered2.contains("/mode autonomous"));
         assert!(rendered2.contains("/mode supervised"));
-        assert!(rendered2.contains("szukaj w rozmowie"));
-        assert!(rendered2.contains("paleta poleceń"));
-        assert!(rendered2.contains("czyść szkic; wyjdź gdy pusty"));
+        assert!(rendered2.contains("search conversation"));
+        assert!(rendered2.contains("command palette"));
+        assert!(rendered2.contains("back/clear draft"));
 
         // 3. Graph help at 60x12: verify long filter relation description is fully accessible without clipping
         terminal
             .draw(|frame| {
-                Help::Graph.draw(frame);
+                Help::Graph.draw_scroll(frame, 2);
             })
             .unwrap();
 
         let buffer_graph = terminal.backend().buffer();
         let rendered_graph: String = buffer_graph.content.iter().map(|c| c.symbol()).collect();
-        assert!(rendered_graph.contains("filtr relacji"));
-        assert!(rendered_graph.contains("wszystko"));
-        assert!(rendered_graph.contains("zależności"));
-        assert!(rendered_graph.contains("weryfikacja"));
-        assert!(rendered_graph.contains("wiadomości"));
-        assert!(rendered_graph.contains("nadzór"));
+        assert!(rendered_graph.contains("relation filter"));
+        assert!(rendered_graph.contains("all"));
+        assert!(rendered_graph.contains("dependencies"));
+        assert!(rendered_graph.contains("verification"));
+        assert!(rendered_graph.contains("messages"));
+        assert!(rendered_graph.contains("supervision"));
     }
 }
