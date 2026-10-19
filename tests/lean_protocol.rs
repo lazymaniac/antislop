@@ -756,3 +756,56 @@ fn test_task_scoped_query_includes_freshness_token() {
         .unwrap();
     assert_eq!(task_resp2["freshness_token"].as_str().unwrap(), token);
 }
+
+#[test]
+fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().canonicalize().unwrap();
+    let project = dir_path.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(&dir_path);
+    let agy = fake_agy(&dir_path);
+    let config = write_config(&dir_path, &codex, &agy);
+    let daemon = DaemonGuard::start(&project, &config, &dir_path.join("state"));
+
+    let conv = daemon.call_raw(&json!({"op": "start"})).unwrap();
+    let conv = conv["id"].as_str().unwrap();
+    daemon
+        .call_raw(&json!({"op": "send", "conversation": conv, "text": "please propose"}))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let plan = loop {
+        let list = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
+        if let Some(plan) = list[0]["active_plan"].as_str() {
+            break plan.to_owned();
+        }
+        assert!(Instant::now() < deadline, "no plan was proposed");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let task = daemon
+        .call_raw(&json!({"op": "task", "plan": plan, "id": "t1"}))
+        .unwrap();
+    let token = task["freshness_token"]
+        .as_str()
+        .expect("a token")
+        .to_owned();
+
+    // A proposed task is not stopped, so there is nothing to recover.
+    let error = daemon
+        .call_raw(&json!({
+            "op": "recover", "conversation": conv, "plan": plan, "task": "t1",
+            "action": "extend_rounds", "freshness_token": token
+        }))
+        .unwrap_err();
+    assert!(error.contains("not waiting for recovery"), "{error}");
+
+    // Unknown actions and fields are refused by the protocol.
+    assert!(
+        daemon
+            .call_raw(&json!({
+                "op": "recover", "conversation": conv, "plan": plan, "task": "t1",
+                "action": "explode", "freshness_token": token
+            }))
+            .is_err()
+    );
+}

@@ -39,6 +39,8 @@ pub const AUDITOR: &str = "auditor";
 const SESSION_LINES: usize = 1500;
 /// Turns of one agent kept in its session view.
 const FEED_TURNS: usize = 12;
+/// Lines kept in a progress card before the oldest go.
+const PROGRESS_LINES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
@@ -468,6 +470,75 @@ impl View {
         }
     }
 
+    /// A short line for what just happened to a task, kept in one card.
+    fn report_progress(
+        &mut self,
+        id: &str,
+        title: &str,
+        was: (&str, u64),
+        now: (&str, u64),
+        reason: Option<String>,
+    ) {
+        use super::theme::Tone;
+        let why = reason
+            .map(|reason| format!(" — {}", clean(&reason).replace('\n', " ")))
+            .unwrap_or_default();
+        let name = if title.is_empty() {
+            id.to_owned()
+        } else {
+            format!("{id} {title}")
+        };
+        let done = self.tasks.iter().filter(|t| t.status == "approved").count();
+        let (line, tone) = match now.0 {
+            _ if was.0 == now.0 && was.1 == now.1 => return,
+            "approved" => (
+                format!("✓ {name} approved ({done}/{})", self.tasks.len()),
+                Tone::Done,
+            ),
+            "failed" => (format!("✗ {name} failed{why}"), Tone::Failed),
+            "needs_user" => (format!("! {name} needs your decision{why}"), Tone::Waiting),
+            "waiting" => (
+                format!("‖ {name} waits for login or limit{why}"),
+                Tone::Waiting,
+            ),
+            "skipped" => (format!("– {name} skipped{why}"), Tone::Queued),
+            "working" if now.1 > was.1 && was.1 > 0 => (
+                format!(
+                    "↺ {name}: round {} after the verifier asked for changes",
+                    now.1
+                ),
+                Tone::Active,
+            ),
+            _ => return,
+        };
+        let merged = match self.cards.last_mut() {
+            Some(TranscriptCard::System {
+                title,
+                text,
+                tone: card_tone,
+                ..
+            }) if title == "Progress" => {
+                text.push('\n');
+                text.push_str(&line);
+                let skip = text.lines().count().saturating_sub(PROGRESS_LINES);
+                *text = text.lines().skip(skip).collect::<Vec<_>>().join("\n");
+                if tone != Tone::Done {
+                    *card_tone = tone;
+                }
+                true
+            }
+            _ => false,
+        };
+        if !merged {
+            self.cards.push(TranscriptCard::System {
+                title: "Progress".into(),
+                meta: String::new(),
+                text: line,
+                tone,
+            });
+        }
+    }
+
     fn row_of(&mut self, key: &str) -> Option<&mut TaskRow> {
         let id = key.split_once(':')?.1;
         self.tasks.iter_mut().find(|task| task.id == id)
@@ -892,10 +963,18 @@ impl View {
                 if let Some(index) = index {
                     self.task_rows.insert(text("task"), index);
                     let row = &mut self.tasks[index];
+                    let (was, was_round) = (row.status.clone(), row.round);
                     row.uuid = Some(text("task"));
                     row.status = text("status");
                     row.round = payload["round"].as_u64().unwrap_or_default();
                     row.reason = payload["reason"].as_str().map(str::to_owned);
+                    let (title, status, round, reason) = (
+                        row.title.clone(),
+                        row.status.clone(),
+                        row.round,
+                        row.reason.clone(),
+                    );
+                    let progress = (title, was, was_round, status, round);
                     if let Some(sh) = payload["scope_hash"].as_str() {
                         row.scope_hash = Some(sh.to_owned());
                         self.conversation_scope_hash = Some(sh.to_owned());
@@ -908,6 +987,8 @@ impl View {
                             format!("! {} {}: {} — {reason}", id, row.title, polish(&row.status));
                         self.push(Style::default().fg(Color::Yellow), line);
                     }
+                    let (title, was, was_round, status, round) = progress;
+                    self.report_progress(&id, &title, (&was, was_round), (&status, round), reason);
                 }
             }
             "paused" => {
@@ -1573,6 +1654,78 @@ mod tests {
             agent.feed.last(),
             Some(&Block::Text(format!("answer {}", FEED_TURNS + 2)))
         );
+    }
+
+    #[test]
+    fn task_changes_become_short_lines_in_one_progress_card() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "plan_proposed",
+            json!({"tasks": [{"id": "t1", "title": "Storage"}, {"id": "t2", "title": "API"}]}),
+        ));
+        let task = |seq, id: &str, status: &str, round, reason: Option<&str>| {
+            event(
+                seq,
+                None,
+                "task",
+                json!({"id": id, "task": format!("u-{id}"), "status": status,
+                       "round": round, "reason": reason}),
+            )
+        };
+        for e in [
+            task(2, "t1", "queued", 0, None),
+            task(3, "t1", "working", 1, None),
+            task(4, "t1", "verifying", 1, None),
+            task(5, "t1", "working", 2, None),
+            // The same state again says nothing new.
+            task(6, "t1", "working", 2, None),
+            task(7, "t1", "approved", 2, None),
+            task(
+                8,
+                "t2",
+                "needs_user",
+                3,
+                Some("the verifier repeated itself"),
+            ),
+        ] {
+            view.apply(&e);
+        }
+        let progress: Vec<&TranscriptCard> = view
+            .cards
+            .iter()
+            .filter(|c| matches!(c, TranscriptCard::System { title, .. } if title == "Progress"))
+            .collect();
+        assert_eq!(progress.len(), 1);
+        let TranscriptCard::System { text, tone, .. } = progress[0] else {
+            unreachable!()
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "↺ t1 Storage: round 2 after the verifier asked for changes",
+                "✓ t1 Storage approved (1/2)",
+                "! t2 API needs your decision — the verifier repeated itself",
+            ]
+        );
+        assert_eq!(*tone, crate::lean::tui::Tone::Waiting);
+
+        // Another card in between starts a new progress card.
+        view.cards.push(TranscriptCard::System {
+            title: "Notice".into(),
+            meta: String::new(),
+            text: "x".into(),
+            tone: crate::lean::tui::Tone::Queued,
+        });
+        view.apply(&task(9, "t2", "failed", 3, None));
+        let count = view
+            .cards
+            .iter()
+            .filter(|c| matches!(c, TranscriptCard::System { title, .. } if title == "Progress"))
+            .count();
+        assert_eq!(count, 2);
     }
 
     #[test]

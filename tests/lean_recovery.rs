@@ -363,6 +363,17 @@ fn test_blocked_task_prevents_premature_audit() {
             .any(|m| m.text.contains("Plan Audit") || m.text.contains("All tasks approved")),
         "no final audit message should be sent while tasks are blocked"
     );
+
+    // The orchestrator is told, once, which step is blocked and how to go on.
+    let reports: Vec<_> = messages
+        .iter()
+        .filter(|m| m.author == "runtime" && m.text.contains("cannot go on"))
+        .collect();
+    assert_eq!(reports.len(), 1, "{messages:?}");
+    let text = &reports[0].text;
+    assert!(text.contains("is waiting after"), "{text}");
+    assert!(text.contains("Skipped because they depend on a blocked step"));
+    assert!(text.contains("/unblock"));
 }
 
 #[test]

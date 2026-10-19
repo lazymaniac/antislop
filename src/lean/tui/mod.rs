@@ -2339,10 +2339,19 @@ impl App {
                 details.switch_tab(details.neighbour_tab(-1));
             }
             KeyCode::Down => details.scroll += 1,
-            KeyCode::Up => details.scroll = details.scroll.saturating_sub(1),
+            KeyCode::Up => {
+                details.follow = false;
+                details.scroll = details.scroll.saturating_sub(1);
+            }
             KeyCode::PageDown => details.scroll += 20,
-            KeyCode::PageUp => details.scroll = details.scroll.saturating_sub(20),
-            KeyCode::Home => details.scroll = 0,
+            KeyCode::PageUp => {
+                details.follow = false;
+                details.scroll = details.scroll.saturating_sub(20);
+            }
+            KeyCode::Home => {
+                details.follow = false;
+                details.scroll = 0;
+            }
             KeyCode::End => details.scroll = usize::MAX,
             _ => {}
         }
@@ -4227,5 +4236,60 @@ pub mod tests {
         assert!(shown.contains("p19"));
         app.key(key_press(KeyCode::Enter));
         assert!(!app.details.as_ref().unwrap().expand_prompts);
+    }
+
+    #[test]
+    fn the_session_follows_new_entries_until_the_user_scrolls_up() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = test_app();
+        let feed = |count: usize| {
+            (0..count)
+                .map(|n| session::Block::Text(format!("entry {n}")))
+                .collect::<Vec<_>>()
+        };
+        let agent = |count| view::Agent {
+            provider: "codex".into(),
+            feed: feed(count),
+            ..view::Agent::default()
+        };
+        app.view.agents.insert("worker:t1".into(), agent(40));
+        let mut details = details::Details::new("worker:t1".into());
+        details.switch_tab(1);
+        app.details = Some(details);
+        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        let screen = |term: &Terminal<TestBackend>| -> String {
+            term.backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+
+        term.draw(|f| app.draw(f)).unwrap();
+        assert!(screen(&term).contains("entry 39"), "starts at the newest");
+
+        // New entries scroll into view by themselves.
+        app.view.agents.insert("worker:t1".into(), agent(55));
+        term.draw(|f| app.draw(f)).unwrap();
+        assert!(screen(&term).contains("entry 54"));
+
+        // Scrolling up stops following; the screen stays where the user is.
+        app.key(key_press(KeyCode::PageUp));
+        term.draw(|f| app.draw(f)).unwrap();
+        assert!(!app.details.as_ref().unwrap().follow);
+        app.view.agents.insert("worker:t1".into(), agent(70));
+        term.draw(|f| app.draw(f)).unwrap();
+        assert!(!screen(&term).contains("entry 69"));
+
+        // End goes back to the newest entry and follows again.
+        app.key(key_press(KeyCode::End));
+        term.draw(|f| app.draw(f)).unwrap();
+        assert!(app.details.as_ref().unwrap().follow);
+        assert!(screen(&term).contains("entry 69"));
+        app.view.agents.insert("worker:t1".into(), agent(80));
+        term.draw(|f| app.draw(f)).unwrap();
+        assert!(screen(&term).contains("entry 79"));
     }
 }

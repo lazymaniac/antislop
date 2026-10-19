@@ -50,7 +50,7 @@ pub enum RecoveryAction {
     CancelTask,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRecoveryRequest {
     pub conversation: String,
@@ -177,6 +177,9 @@ pub struct Core {
     plans: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Conversations with a code review the user asked for, and its flag.
     reviews: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The blocked report last handed to each conversation's orchestrator,
+    /// so that an unchanged block is told once.
+    blocked_seen: Mutex<HashMap<String, String>>,
 }
 
 /// Who runs a turn, where, and with what access.
@@ -239,6 +242,7 @@ impl Core {
             running: Mutex::new(HashMap::new()),
             plans: Mutex::new(HashMap::new()),
             reviews: Mutex::new(HashMap::new()),
+            blocked_seen: Mutex::new(HashMap::new()),
         });
         // Pick up where the previous process stopped: the orchestrator answers
         // what it was answering, and an autonomous conversation resumes its
@@ -1540,6 +1544,10 @@ impl Core {
             "a plan is already running",
         )?;
         queue(&self.store)?;
+        self.blocked_seen
+            .lock()
+            .expect("blocked mutex")
+            .remove(conversation);
         let tasks = self.store.plan(plan_id)?;
         for task in &tasks {
             self.announce_task(conversation, task, None);
@@ -1561,7 +1569,23 @@ impl Core {
                 .iter()
                 .any(|t| t.status == status::NEEDS_USER || t.status == status::WAITING);
             if has_blocked {
+                // Held like the normal ending, so the conversation never looks
+                // idle between the report and the orchestrator starting on it.
                 let mut plans = core.plans.lock().expect("plans mutex");
+                let report = blocked_report(&tasks);
+                let told = core
+                    .blocked_seen
+                    .lock()
+                    .expect("blocked mutex")
+                    .insert(conversation.clone(), report.clone());
+                if told.as_deref() != Some(report.as_str())
+                    && core
+                        .store
+                        .add_message(&conversation, RUNTIME, &report)
+                        .is_ok()
+                {
+                    core.wake(&conversation);
+                }
                 plans.remove(&conversation);
                 return;
             }
@@ -3154,6 +3178,53 @@ pub fn comment_label(target: &str, plan: &[Task]) -> String {
             other => other.into(),
         },
     }
+}
+
+/// What the orchestrator is told when tasks wait for the user: which, why,
+/// and what the user can do, so that it can explain the block in a few words.
+fn blocked_report(tasks: &[Task]) -> String {
+    let mut text = String::from(
+        "The plan cannot go on: these steps are blocked and wait for the user. Explain to \
+         the user in two or three sentences what is wrong and which way out fits; do not \
+         propose a new plan unless the user asks for one.\n",
+    );
+    let mut blocked_ids = Vec::new();
+    for task in tasks.iter().filter(|task| {
+        task.status == status::NEEDS_USER
+            || task.status == status::WAITING
+            || task.status == status::FAILED
+    }) {
+        let id = task.spec["id"].as_str().unwrap_or(&task.id);
+        blocked_ids.push(id.to_owned());
+        let why = task
+            .report
+            .as_deref()
+            .and_then(|report| report.rsplit("\n\n").next())
+            .unwrap_or("no reason recorded");
+        let why: String = why.trim().chars().take(400).collect();
+        text.push_str(&format!(
+            "\n- {id} \"{}\" is {} after {} round(s): {why}",
+            task.spec["title"].as_str().unwrap_or_default(),
+            task.status,
+            task.round
+        ));
+    }
+    let skipped: Vec<&str> = tasks
+        .iter()
+        .filter(|task| task.status == status::SKIPPED)
+        .filter_map(|task| task.spec["id"].as_str())
+        .collect();
+    if !skipped.is_empty() {
+        text.push_str(&format!(
+            "\nSkipped because they depend on a blocked step: {}.",
+            skipped.join(", ")
+        ));
+    }
+    text.push_str(
+        "\nThe user can unblock a step with /unblock <task>: retry it with guidance, give \
+         it more rounds, approve it as it is, keep its change on a branch, or cancel it.",
+    );
+    text
 }
 
 fn orchestrator_prompt(

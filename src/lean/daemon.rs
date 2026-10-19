@@ -123,6 +123,8 @@ pub enum Request {
         conversation: String,
         autonomous: bool,
     },
+    /// Unblocks a task that stopped: see [`super::RecoveryAction`].
+    Recover(super::TaskRecoveryRequest),
     /// Paginated read of all stored plans for a conversation.
     Plans {
         conversation: String,
@@ -254,6 +256,17 @@ enum WireRequest {
         plan: String,
         #[serde(default)]
         scope_hash: Option<String>,
+    },
+    Recover {
+        conversation: String,
+        plan: String,
+        task: String,
+        action: super::RecoveryAction,
+        #[serde(default)]
+        consent_files: Option<Vec<String>>,
+        freshness_token: String,
+        #[serde(default)]
+        message: Option<String>,
     },
     Cancel {
         conversation: String,
@@ -415,6 +428,15 @@ impl From<Request> for WireRequest {
                 conversation,
                 plan,
                 scope_hash,
+            },
+            Request::Recover(req) => WireRequest::Recover {
+                conversation: req.conversation,
+                plan: req.plan,
+                task: req.task,
+                action: req.action,
+                consent_files: req.consent_files,
+                freshness_token: req.freshness_token,
+                message: req.message,
             },
             Request::Cancel { conversation } => WireRequest::Cancel {
                 conversation,
@@ -648,6 +670,23 @@ impl From<WireRequest> for Request {
                     Request::Resume { conversation, plan }
                 }
             }
+            WireRequest::Recover {
+                conversation,
+                plan,
+                task,
+                action,
+                consent_files,
+                freshness_token,
+                message,
+            } => Request::Recover(super::TaskRecoveryRequest {
+                conversation,
+                plan,
+                task,
+                action,
+                consent_files,
+                freshness_token,
+                message,
+            }),
             WireRequest::Cancel {
                 conversation,
                 scope_hash,
@@ -1004,6 +1043,12 @@ fn handle(
             validate_conversation_plan(core, &conversation, &plan)?;
             core.reject_plan(&conversation, &plan, reason.as_deref())?;
             Value::Null
+        }
+        Request::Recover(req) => {
+            validate_project_conversation(core, project, &req.conversation)?;
+            validate_conversation_plan(core, &req.conversation, &req.plan)?;
+            validate_plan_task(core, &req.plan, &req.task)?;
+            json!(core.recover_task(req)?)
         }
         Request::Resume { conversation, plan } => {
             validate_project_conversation(core, project, &conversation)?;

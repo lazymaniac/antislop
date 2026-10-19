@@ -68,6 +68,9 @@ pub struct Details {
     pub history_unavailable: bool,
     /// Prompts of the Session tab are shown whole instead of folded.
     pub expand_prompts: bool,
+    /// The Session tab shows the newest entry and follows new ones until the
+    /// user scrolls up.
+    pub follow: bool,
 }
 
 impl Details {
@@ -86,6 +89,7 @@ impl Details {
             sessions: Vec::new(),
             history_unavailable: false,
             expand_prompts: false,
+            follow: true,
         }
     }
 
@@ -109,6 +113,7 @@ impl Details {
         self.query_memory
             .insert((self.key.clone(), self.tab), self.query.clone());
         self.tab = next_tab;
+        self.follow = true;
         self.scroll = *self
             .scroll_memory
             .get(&(self.key.clone(), self.tab))
@@ -808,7 +813,14 @@ impl Details {
             })
             .collect();
         let height = usize::from(inner.height);
-        self.scroll = self.scroll.min(lines.len().saturating_sub(height));
+        let bottom = lines.len().saturating_sub(height);
+        if self.tab == 1 && self.follow {
+            self.scroll = bottom;
+        } else {
+            self.scroll = self.scroll.min(bottom);
+            // Scrolling back down to the end picks the tail up again.
+            self.follow = self.scroll >= bottom;
+        }
         let end = (self.scroll + height).min(lines.len());
         frame.render_widget(Paragraph::new(lines[self.scroll..end].to_vec()), inner);
 
