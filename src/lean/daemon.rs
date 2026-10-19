@@ -125,6 +125,12 @@ pub enum Request {
     },
     /// Unblocks a task that stopped: see [`super::RecoveryAction`].
     Recover(super::TaskRecoveryRequest),
+    /// The user finished commenting on the plan: the orchestrator answers
+    /// the draft comments together.
+    ReviewComments {
+        conversation: String,
+        plan: String,
+    },
     /// Paginated read of all stored plans for a conversation.
     Plans {
         conversation: String,
@@ -256,6 +262,10 @@ enum WireRequest {
         plan: String,
         #[serde(default)]
         scope_hash: Option<String>,
+    },
+    ReviewComments {
+        conversation: String,
+        plan: String,
     },
     Recover {
         conversation: String,
@@ -429,6 +439,9 @@ impl From<Request> for WireRequest {
                 plan,
                 scope_hash,
             },
+            Request::ReviewComments { conversation, plan } => {
+                WireRequest::ReviewComments { conversation, plan }
+            }
             Request::Recover(req) => WireRequest::Recover {
                 conversation: req.conversation,
                 plan: req.plan,
@@ -669,6 +682,9 @@ impl From<WireRequest> for Request {
                 } else {
                     Request::Resume { conversation, plan }
                 }
+            }
+            WireRequest::ReviewComments { conversation, plan } => {
+                Request::ReviewComments { conversation, plan }
             }
             WireRequest::Recover {
                 conversation,
@@ -1043,6 +1059,11 @@ fn handle(
             validate_conversation_plan(core, &conversation, &plan)?;
             core.reject_plan(&conversation, &plan, reason.as_deref())?;
             Value::Null
+        }
+        Request::ReviewComments { conversation, plan } => {
+            validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
+            json!(core.review_comments(&conversation, &plan)?)
         }
         Request::Recover(req) => {
             validate_project_conversation(core, project, &req.conversation)?;

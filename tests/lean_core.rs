@@ -183,7 +183,16 @@ fn failed_comments_keep_the_raw_error_and_reopening_retries_them() {
     let comment = core
         .comment(&conversation.id, "plan", "retry-once")
         .unwrap();
+    // A comment on the plan is a draft until the user sends the review.
+    assert_eq!(comment.status, "draft");
+    assert!(core.is_idle(&conversation.id));
+    core.review_comments(&conversation.id, "plan").unwrap();
     wait_idle(&core, &conversation.id);
+    let comment = core
+        .store
+        .comments(&conversation.id, "open")
+        .unwrap()
+        .remove(0);
     let failed = core
         .store
         .last_turn(&conversation.id, COMMENT_ORCHESTRATOR)

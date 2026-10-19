@@ -1062,6 +1062,98 @@ impl Store {
         Ok(comment)
     }
 
+    /// Stores a comment on the plan as a draft: the user is still writing,
+    /// and the orchestrator hears of it only when the user sends the review.
+    pub fn add_draft_comment(&self, conversation: &str, comment: &Comment) -> Result<Comment> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let now = now_ms();
+        tx.execute(
+            "INSERT INTO comments(conversation_id,plan_id,target,label,text,status,message,
+                                  created_ms,updated_ms)
+             VALUES(?1,?2,?3,?4,?5,'draft',0,?6,?6)",
+            params![
+                conversation,
+                comment.plan_id,
+                comment.target,
+                comment.label,
+                comment.text,
+                now
+            ],
+        )?;
+        let comment = Comment {
+            id: tx.last_insert_rowid() as u64,
+            status: "draft".into(),
+            message: 0,
+            ..comment.clone()
+        };
+        tx.execute(
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,?3,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            params![conversation, serde_json::to_value(&comment)?.to_string(), comment.plan_id],
+        )?;
+        tx.commit()?;
+        Ok(comment)
+    }
+
+    /// Hands every draft comment on `plan_id` to the orchestrator as one
+    /// message, so that they are answered together in one turn.
+    pub fn send_draft_comments(&self, conversation: &str, plan_id: &str) -> Result<Vec<Comment>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let drafts = Self::comment_rows(
+            &tx,
+            "conversation_id=?1 AND status='draft' AND (plan_id=?2 OR plan_id IS NULL)",
+            params![conversation, plan_id],
+        )?;
+        if drafts.is_empty() {
+            return Err(Error::Invalid("there are no draft comments to send".into()));
+        }
+        let now = now_ms();
+        let text = drafts
+            .iter()
+            .map(|c| {
+                format!(
+                    "{}{} on {}] {}",
+                    super::COMMENT_PREFIX,
+                    c.id,
+                    c.label,
+                    c.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        tx.execute(
+            "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)",
+            params![conversation, text, now],
+        )?;
+        let message = tx.last_insert_rowid() as u64;
+        tx.execute(
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms)
+             VALUES(?1,NULL,?3,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            params![
+                conversation,
+                serde_json::json!({"seq": message, "author": "user", "text": text}).to_string(),
+                plan_id
+            ],
+        )?;
+        let mut sent = Vec::new();
+        for mut comment in drafts {
+            tx.execute(
+                "UPDATE comments SET status='open', message=?1, updated_ms=?2 WHERE id=?3",
+                params![message as i64, now, comment.id as i64],
+            )?;
+            comment.status = "open".into();
+            comment.message = message;
+            tx.execute(
+                "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,?3,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+                params![conversation, serde_json::to_value(&comment)?.to_string(), comment.plan_id],
+            )?;
+            sent.push(comment);
+        }
+        tx.commit()?;
+        Ok(sent)
+    }
+
     pub fn set_comment_status(&self, conversation: &str, id: u64, status: &str) -> Result<Comment> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -1075,6 +1167,13 @@ impl Store {
         let mut comment = Self::comment_rows(&tx, "id=?1", params![id as i64])?
             .pop()
             .ok_or_else(|| Error::Invalid(format!("no comment {id}")))?;
+        if comment.message == 0 && status != "deleted" {
+            // A draft has not been sent: it can be deleted, and only the
+            // review sends it.
+            return Err(Error::Invalid(
+                "this comment is a draft: delete it, or send it with Review".into(),
+            ));
+        }
         if status == "open" {
             let text = format!(
                 "{}{} on {}] {}",

@@ -579,7 +579,8 @@ impl Core {
     }
 
     /// The user's comment on one element: it reaches the orchestrator as a
-    /// message now and stays in its prompts until the user resolves it.
+    /// message now (a comment on the plan waits for the review) and stays in
+    /// its prompts until the user resolves it.
     pub fn comment(
         self: &Arc<Self>,
         conversation: &str,
@@ -610,21 +611,34 @@ impl Core {
             Some(pid) => Some(pid.to_string()),
             None => plan.first().map(|task| task.plan_id.clone()),
         };
-        let comment = self.store.add_comment(
-            conversation,
-            &Comment {
-                id: 0,
-                plan_id: resolved_plan_id,
-                target: target.into(),
-                label: label.clone(),
-                text: text.into(),
-                status: "open".into(),
-                message: 0,
-            },
-            |id| format!("{COMMENT_PREFIX}{id} on {label}] {text}"),
-        )?;
+        let new = Comment {
+            id: 0,
+            plan_id: resolved_plan_id,
+            target: target.into(),
+            label: label.clone(),
+            text: text.into(),
+            status: "open".into(),
+            message: 0,
+        };
+        // Feedback on the plan is collected while the user reads it; the
+        // orchestrator starts on it when the user sends the review.
+        if is_plan_target(target) {
+            return self.store.add_draft_comment(conversation, &new);
+        }
+        let comment = self.store.add_comment(conversation, &new, |id| {
+            format!("{COMMENT_PREFIX}{id} on {label}] {text}")
+        })?;
         self.wake(conversation);
         Ok(comment)
+    }
+
+    /// The user finished commenting on the plan: the orchestrator now
+    /// addresses all the draft comments together.
+    pub fn review_comments(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<usize> {
+        self.store.conversation(conversation)?;
+        let sent = self.store.send_draft_comments(conversation, plan_id)?;
+        self.wake(conversation);
+        Ok(sent.len())
     }
 
     /// Paginated read of all stored plans for a conversation.
@@ -963,9 +977,10 @@ impl Core {
     pub fn open_plan_comments(&self, conversation: &str, plan_id: &str) -> Result<Vec<Comment>> {
         let prefix = format!("plan:{plan_id}:");
         let exact = format!("plan:{plan_id}");
-        Ok(self
-            .store
-            .comments(conversation, "open")?
+        // Drafts count: they have not been answered either.
+        let mut comments = self.store.comments(conversation, "open")?;
+        comments.extend(self.store.comments(conversation, "draft")?);
+        Ok(comments
             .into_iter()
             .filter(|c| {
                 c.plan_id.as_deref() == Some(plan_id)
@@ -981,7 +996,7 @@ impl Core {
         let open = self.open_plan_comments(conversation, plan_id)?;
         require(
             open.is_empty(),
-            "resolve all open plan comments before accepting the plan",
+            "send the draft plan comments with Review and resolve all open ones before accepting the plan",
         )?;
         self.start_plan(conversation, plan_id, |store| {
             store.queue_plan(conversation, plan_id).map(|_| ())
@@ -3178,6 +3193,11 @@ pub fn comment_label(target: &str, plan: &[Task]) -> String {
             other => other.into(),
         },
     }
+}
+
+/// Whether a comment target is the plan document, the whole plan or a line.
+fn is_plan_target(target: &str) -> bool {
+    target == "plan" || target.starts_with("plan:")
 }
 
 /// What the orchestrator is told when tasks wait for the user: which, why,

@@ -18,9 +18,17 @@ pub enum PlanAction {
     Close,
     Accept,
     Reject,
-    CommentLine { line: usize, text_preview: String },
+    CommentLine {
+        line: usize,
+        text_preview: String,
+    },
     CommentWholePlan,
-    ToggleResolveComment { id: u64, next_status: String },
+    /// The user finished commenting: the agent may work on the drafts.
+    SubmitReview,
+    ToggleResolveComment {
+        id: u64,
+        next_status: String,
+    },
 }
 
 /// Which button in the fixed bottom bar is currently highlighted.
@@ -29,6 +37,7 @@ pub enum BottomButton {
     Accept,
     Reject,
     CommentWholePlan,
+    Review,
 }
 
 impl BottomButton {
@@ -36,15 +45,17 @@ impl BottomButton {
         match self {
             Self::Accept => Self::Reject,
             Self::Reject => Self::CommentWholePlan,
-            Self::CommentWholePlan => Self::Accept,
+            Self::CommentWholePlan => Self::Review,
+            Self::Review => Self::Accept,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Accept => Self::CommentWholePlan,
+            Self::Accept => Self::Review,
             Self::Reject => Self::Accept,
             Self::CommentWholePlan => Self::Reject,
+            Self::Review => Self::CommentWholePlan,
         }
     }
 }
@@ -83,7 +94,7 @@ pub struct PlanView {
     pub scroll: usize,
     pub button: BottomButton,
     /// Hit-boxes for the three bottom bar buttons `(Accept, Reject, CommentWholePlan)`.
-    pub button_rects: [Rect; 3],
+    pub button_rects: [Rect; 4],
     /// Inner document area for mouse line selection.
     pub doc_area: Rect,
     /// The document line each screen row belongs to, from the last draw.
@@ -110,7 +121,7 @@ impl PlanView {
             cursor: 0,
             scroll: 0,
             button: BottomButton::CommentWholePlan,
-            button_rects: [Rect::default(); 3],
+            button_rects: [Rect::default(); 4],
             doc_area: Rect::default(),
             row_docs: Vec::new(),
             confirm_accept: false,
@@ -204,6 +215,7 @@ impl PlanView {
         // Only a proposed plan can be accepted or rejected; otherwise the
         // view is a document to read and comment on.
         let decidable = view.plan_proposed();
+        let drafts = view.draft_plan_comments().len();
         let confirming = std::mem::take(&mut self.confirm_accept);
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
@@ -252,6 +264,9 @@ impl PlanView {
             KeyCode::Char('a') | KeyCode::Char('1') if decidable => PlanAction::Accept,
             KeyCode::Char('x') | KeyCode::Char('2') if decidable => PlanAction::Reject,
             KeyCode::Char('C') | KeyCode::Char('3') => PlanAction::CommentWholePlan,
+            KeyCode::Char('R') | KeyCode::Char('4') => {
+                self.activate(BottomButton::Review, decidable, false, drafts)
+            }
             KeyCode::Char('c') => {
                 let line_no = self.cursor + 1;
                 let preview = lines
@@ -261,6 +276,25 @@ impl PlanView {
                 PlanAction::CommentLine {
                     line: line_no,
                     text_preview: preview,
+                }
+            }
+            // Takes back a comment of this line, a draft usually.
+            KeyCode::Delete | KeyCode::Char('D') => {
+                match self
+                    .line_comments(view, self.cursor + 1)
+                    .into_iter()
+                    .rev()
+                    .find(|c| c.status == "draft")
+                    .or_else(|| {
+                        self.line_comments(view, self.cursor + 1)
+                            .into_iter()
+                            .next_back()
+                    }) {
+                    Some(comment) => PlanAction::ToggleResolveComment {
+                        id: comment.id,
+                        next_status: "deleted".into(),
+                    },
+                    None => PlanAction::None,
                 }
             }
             KeyCode::Char(ch @ ('r' | 'o')) => {
@@ -297,14 +331,22 @@ impl PlanView {
                     PlanAction::None
                 }
             }
-            KeyCode::Enter => self.activate(self.button, decidable, confirming),
+            KeyCode::Enter => self.activate(self.button, decidable, confirming, drafts),
             _ => PlanAction::None,
         }
     }
 
     /// A button was pressed: Accept asks for a second press first.
-    fn activate(&mut self, button: BottomButton, decidable: bool, confirming: bool) -> PlanAction {
+    fn activate(
+        &mut self,
+        button: BottomButton,
+        decidable: bool,
+        confirming: bool,
+        drafts: usize,
+    ) -> PlanAction {
         match button {
+            BottomButton::Review if drafts > 0 => PlanAction::SubmitReview,
+            BottomButton::Review => PlanAction::None,
             BottomButton::Accept if !decidable => PlanAction::None,
             BottomButton::Accept if confirming => PlanAction::Accept,
             BottomButton::Accept => {
@@ -321,15 +363,17 @@ impl PlanView {
     pub fn mouse_click(&mut self, col: u16, row: u16, view: &View) -> PlanAction {
         let pos = ratatui::layout::Position::new(col, row);
         let decidable = view.plan_proposed();
+        let drafts = view.draft_plan_comments().len();
         let confirming = std::mem::take(&mut self.confirm_accept);
         for (rect, button) in self.button_rects.into_iter().zip([
             BottomButton::Accept,
             BottomButton::Reject,
             BottomButton::CommentWholePlan,
+            BottomButton::Review,
         ]) {
             if rect.contains(pos) {
                 self.button = button;
-                return self.activate(button, decidable, confirming);
+                return self.activate(button, decidable, confirming, drafts);
             }
         }
         if self.doc_area.contains(pos) {
@@ -514,28 +558,35 @@ impl PlanView {
                     )
                 })
             });
+            let drafts = view.draft_plan_comments().len();
+            let sent = open_comments.len() - drafts;
+            let mut notes = Vec::new();
+            if drafts > 0 {
+                notes.push(Span::styled(
+                    format!(" ✎ {drafts} draft comment(s) "),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                notes.push(Span::styled("— R sends them for review · ", theme.dim()));
+            }
+            if sent > 0 {
+                notes.push(Span::styled(
+                    format!(" ⚠ {sent} unresolved comment(s) on this plan "),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                notes.push(Span::styled("— r resolve · o retry/reopen", theme.dim()));
+            }
             let banner = vec![
                 Line::styled(
                     format!(" {}", clean(&status)),
                     theme.accent().add_modifier(Modifier::BOLD),
                 ),
-                Line::from(vec![
-                    Span::styled(
-                        format!(
-                            " ⚠ {} unresolved comment(s) on this plan ",
-                            open_comments.len()
-                        ),
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        "— r resolve · o retry/reopen · wait for revision before accepting",
-                        theme.dim(),
-                    ),
-                ]),
+                Line::from(notes),
                 Line::styled(
-                    " Navigate: ↑/↓/j/k · Comment line: c · Resolve: r · Retry: o · Close preview: Esc",
+                    " ↑/↓ move · c comment line · R send drafts for review · D delete draft · Esc close",
                     theme.dim(),
                 ),
             ];
@@ -587,17 +638,14 @@ impl PlanView {
             .collect();
         frame.render_widget(Paragraph::new(rendered), doc_rect);
 
-        // Fixed bottom bar with 3 buttons: Accept / Reject / Comment whole plan
+        // Fixed bottom bar: Accept / Reject / Comment whole plan / Review
         let bar_area = chunks[2];
         let btn_cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
-            ])
+            .constraints([Constraint::Percentage(25); 4])
             .split(bar_area);
-        self.button_rects = [btn_cols[0], btn_cols[1], btn_cols[2]];
+        self.button_rects = [btn_cols[0], btn_cols[1], btn_cols[2], btn_cols[3]];
+        let drafts = view.draft_plan_comments().len();
 
         let decidable = view.plan_proposed();
         let can_accept = open_comments.is_empty() && decidable;
@@ -605,13 +653,15 @@ impl PlanView {
             (
                 BottomButton::Accept,
                 if !decidable {
-                    " [ Accept (plan already decided) ] "
+                    " [ Accept: decided ] "
+                } else if drafts > 0 {
+                    " [ Accept: review first ] "
                 } else if !open_comments.is_empty() {
-                    " [ Accept (resolve comments first) ] "
+                    " [ Accept: resolve first ] "
                 } else if self.confirm_accept {
-                    " [ Press again to accept ] "
+                    " [ Press again: accept ] "
                 } else {
-                    " [ Accept (Enter twice / a) ] "
+                    " [ Accept (a) ] "
                 },
                 if can_accept {
                     Tone::Done
@@ -625,9 +675,9 @@ impl PlanView {
             (
                 BottomButton::Reject,
                 if decidable {
-                    " [ Reject (Ctrl+X / x) ] "
+                    " [ Reject (x) ] "
                 } else {
-                    " [ Reject (plan already decided) ] "
+                    " [ Reject: decided ] "
                 },
                 if decidable {
                     Tone::Failed
@@ -638,9 +688,19 @@ impl PlanView {
             ),
             (
                 BottomButton::CommentWholePlan,
-                " [ Comment whole plan (C) ] ",
+                " [ Comment plan (C) ] ",
                 Tone::Active,
                 btn_cols[2],
+            ),
+            (
+                BottomButton::Review,
+                if drafts > 0 {
+                    " [ Review: send (R) ] "
+                } else {
+                    " [ Review: no drafts ] "
+                },
+                if drafts > 0 { Tone::Done } else { Tone::Queued },
+                btn_cols[3],
             ),
         ];
 
@@ -960,5 +1020,68 @@ mod wrap_tests {
         let got = states(&view);
         assert_eq!(got[0].1, SectionState::Open);
         assert_eq!(got[1].1, SectionState::Done);
+    }
+
+    fn comment(id: u64, status: &str, line: usize) -> Comment {
+        Comment {
+            id,
+            plan_id: Some("p".into()),
+            target: format!("plan:p:line:{line}"),
+            text: format!("remark {id}"),
+            status: status.into(),
+        }
+    }
+
+    #[test]
+    fn review_sends_the_drafts_only_when_there_are_some() {
+        let mut view = proposed("# Plan\nbody\nmore");
+        view.plan = Some("p".into());
+        let mut plan = PlanView::new("p".into());
+        assert_eq!(
+            press(&mut plan, &view, KeyCode::Char('R')),
+            PlanAction::None
+        );
+        plan.button = BottomButton::Review;
+        assert_eq!(press(&mut plan, &view, KeyCode::Enter), PlanAction::None);
+
+        view.comments.insert(1, comment(1, "draft", 2));
+        view.comments.insert(2, comment(2, "open", 3));
+        assert_eq!(view.draft_plan_comments().len(), 1);
+        assert_eq!(
+            press(&mut plan, &view, KeyCode::Char('R')),
+            PlanAction::SubmitReview
+        );
+        assert_eq!(
+            press(&mut plan, &view, KeyCode::Enter),
+            PlanAction::SubmitReview
+        );
+
+        // The bar offers it, the banner explains it, and a click sends it.
+        let theme = Theme::new(true, false);
+        let mut term = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        term.draw(|f| plan.draw(f, f.area(), &view, &theme))
+            .unwrap();
+        let text = screen(&term).join("\n");
+        assert!(text.contains("Review: send (R)"), "{text}");
+        assert!(text.contains("1 draft comment(s)"), "{text}");
+        assert!(text.contains("1 unresolved comment(s)"), "{text}");
+        assert!(
+            text.contains("[draft]"),
+            "the comment row says it is a draft"
+        );
+        let rect = plan.button_rects[3];
+        assert_eq!(
+            plan.mouse_click(rect.x + 2, rect.y + 1, &view),
+            PlanAction::SubmitReview
+        );
+        // D takes back the draft on the cursor's line.
+        plan.cursor = 1;
+        assert_eq!(
+            press(&mut plan, &view, KeyCode::Char('D')),
+            PlanAction::ToggleResolveComment {
+                id: 1,
+                next_status: "deleted".into()
+            }
+        );
     }
 }

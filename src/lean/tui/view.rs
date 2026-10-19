@@ -385,6 +385,14 @@ impl View {
         )
     }
 
+    /// Comments on the plan the user has written but not yet sent.
+    pub fn draft_plan_comments(&self) -> Vec<&Comment> {
+        self.open_plan_comments()
+            .into_iter()
+            .filter(|c| c.status == "draft")
+            .collect()
+    }
+
     /// Unresolved comments targeting the current plan document or whole plan.
     pub fn open_plan_comments(&self) -> Vec<&Comment> {
         let Some(plan_id) = self.plan.as_deref() else {
@@ -394,7 +402,7 @@ impl View {
         let exact = format!("plan:{plan_id}");
         self.comments
             .values()
-            .filter(|c| c.status == "open")
+            .filter(|c| c.status == "open" || c.status == "draft")
             .filter(|c| {
                 (c.plan_id.is_none() || c.plan_id.as_deref() == Some(plan_id))
                     && (c.target == "plan"
@@ -1232,7 +1240,18 @@ impl View {
                         },
                     );
                 }
+                let was_draft = self
+                    .comments
+                    .get(&comment.id)
+                    .is_some_and(|old| old.status == "draft");
                 let (line, card_status) = match comment.status.as_str() {
+                    "draft" => (
+                        format!("✎ #{} draft to {name}: {}", comment.id, comment.text),
+                        "draft".into(),
+                    ),
+                    "open" if was_draft => {
+                        (format!("✎ #{} sent for review", comment.id), "sent".into())
+                    }
                     "open" if !self.comments.contains_key(&comment.id) => (
                         format!("✎ #{} to {name}: {}", comment.id, comment.text),
                         "open".into(),
@@ -1803,6 +1822,37 @@ mod tests {
         ));
         assert_eq!(states(&view), ["answered"]);
         assert_eq!(view.messages[0].state, "answered");
+    }
+
+    #[test]
+    fn plan_comments_stay_drafts_until_they_are_sent_for_review() {
+        let mut view = View {
+            plan: Some("p1".into()),
+            ..View::default()
+        };
+        let comment = |status: &str, message: u64| {
+            json!({"id": 1, "plan_id": "p1", "target": "plan:p1:line:2", "label": "line 2",
+                   "text": "remark", "status": status, "message": message})
+        };
+        view.apply(&event(1, None, "comment", comment("draft", 0)));
+        assert_eq!(view.comment_state(1), "draft");
+        assert_eq!(view.draft_plan_comments().len(), 1);
+        // A draft is not queued for any agent, but it blocks accepting.
+        assert!(view.comment_progress.is_empty());
+        assert_eq!(view.open_plan_comments().len(), 1);
+
+        view.apply(&event(2, None, "comment", comment("open", 9)));
+        assert_eq!(view.comment_state(1), "queued");
+        assert!(view.draft_plan_comments().is_empty());
+        let states: Vec<&str> = view
+            .cards
+            .iter()
+            .filter_map(|c| match c {
+                TranscriptCard::Comment { status, .. } => Some(status.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states, ["draft", "sent"]);
     }
 
     #[test]

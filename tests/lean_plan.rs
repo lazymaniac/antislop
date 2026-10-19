@@ -171,7 +171,37 @@ fn a_plan_comment_gets_an_independent_revision_and_verification() {
             "Explain storage verification in more detail",
         )
         .unwrap();
+    // The comment waits as a draft: the agent starts when the user sends the
+    // review, and the plan cannot be accepted meanwhile.
+    assert_eq!(comment.status, "draft");
     wait_idle(&core, &conversation.id);
+    assert_eq!(
+        core.store.latest_plan(&conversation.id).unwrap()[0].plan_id,
+        initial
+    );
+    assert!(
+        core.store
+            .last_turn(&conversation.id, architect::lean::COMMENT_ORCHESTRATOR)
+            .unwrap()
+            .is_none()
+    );
+    let refused = core.accept_plan(&conversation.id, &initial).unwrap_err();
+    assert!(refused.to_string().contains("Review"), "{refused}");
+    assert!(
+        core.set_comment(&conversation.id, comment.id, "open")
+            .unwrap_err()
+            .to_string()
+            .contains("draft")
+    );
+    assert_eq!(core.review_comments(&conversation.id, &initial).unwrap(), 1);
+    wait_idle(&core, &conversation.id);
+    let comment = core
+        .store
+        .comments(&conversation.id, "resolved")
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.id == comment.id)
+        .expect("resolved after the revision");
     let revised = core.store.latest_plan(&conversation.id).unwrap()[0]
         .plan_id
         .clone();
@@ -305,4 +335,59 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
     assert_eq!(reviews, [false, true], "one plan review, then one audit");
     let tui_verifier = &verifiers.last().unwrap().1;
     assert!(tui_verifier.contains("r-tui") && !tui_verifier.contains("r-storage"));
+}
+
+#[test]
+fn one_review_sends_all_draft_comments_to_a_single_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    core.send(&conversation.id, "Assess storage and TUI")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
+        .plan_id
+        .clone();
+    let mut ids = vec![];
+    for (line, text) in [
+        (2, "first remark"),
+        (3, "second remark"),
+        (4, "dropped remark"),
+    ] {
+        ids.push(
+            core.comment_scoped(
+                &conversation.id,
+                Some(&plan),
+                &format!("plan:{plan}:line:{line}"),
+                text,
+            )
+            .unwrap()
+            .id,
+        );
+    }
+    // A draft the user deletes is never sent.
+    let deleted = core
+        .set_comment(&conversation.id, ids[2], "deleted")
+        .unwrap();
+    assert_eq!(deleted.status, "deleted");
+    assert_eq!(core.review_comments(&conversation.id, &plan).unwrap(), 2);
+    wait_idle(&core, &conversation.id);
+    let turns = core
+        .store
+        .sessions(&conversation.id)
+        .unwrap()
+        .into_iter()
+        .filter(|turn| turn.role == architect::lean::COMMENT_ORCHESTRATOR)
+        .count();
+    assert_eq!(turns, 1, "both comments are answered in one turn");
+    let prompt = calls(dir.path())
+        .into_iter()
+        .find(|(_, prompt)| prompt.contains("Address each new user comment"))
+        .unwrap()
+        .1;
+    assert!(prompt.contains("first remark") && prompt.contains("second remark"));
+    assert!(!prompt.contains("dropped remark"));
+    // Nothing is left to send.
+    assert!(core.review_comments(&conversation.id, &plan).is_err());
 }

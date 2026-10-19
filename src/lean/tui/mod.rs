@@ -1275,7 +1275,7 @@ impl App {
                 Some(plan) => {
                     if !self.view.open_plan_comments().is_empty() {
                         self.notice =
-                            Some("✗ resolve all plan comments before accepting the plan".into());
+                            Some("✗ send the draft comments (Review) and resolve the rest before accepting".into());
                     } else {
                         self.plan_view = None;
                         self.request(
@@ -1642,6 +1642,15 @@ impl App {
                     let target = format!("plan:{plan}");
                     let input = self.get_comment_draft(&target);
                     self.editor = Some(Editor { target, input });
+                }
+            }
+            PlanAction::SubmitReview => {
+                if let Some(plan) = self.view.plan.clone() {
+                    let conversation = self.conversation.clone();
+                    self.request(
+                        Request::ReviewComments { conversation, plan },
+                        Some("comments sent to the agent for review"),
+                    );
                 }
             }
             PlanAction::ToggleResolveComment { id, next_status } => {
