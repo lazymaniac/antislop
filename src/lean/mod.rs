@@ -1926,6 +1926,17 @@ impl Core {
         // added during either turn have not been incorporated in this plan.
         let answered = self.store.last_orchestration_answered(conversation)?;
         let project_text = project.to_string_lossy().into_owned();
+        let planning_gaps = planning_gaps(specs);
+        if !self.config.policy.required_gates && !tasks::missing_quality_agents(specs).is_empty() {
+            let _ = self.store.append_event(
+                conversation,
+                None,
+                Some(&plan_id),
+                "notice",
+                &json!({"text": "policy.required_gates is off: this plan changes code but gets no \
+                                 static analysis, testing or integration check"}),
+            );
+        }
         let review = self.review(
             conversation,
             PLAN_VERIFIER,
@@ -1933,10 +1944,14 @@ impl Core {
             project,
             cancel,
             |first, request| {
-                if first {
+                let prompt = if first {
                     tasks::plan_review_prompt(&project_text, request, specs)
                 } else {
                     tasks::plan_review_followup(request, specs)
+                };
+                match &planning_gaps {
+                    Some(gaps) => format!("{prompt}\n\n{gaps}"),
+                    None => prompt,
                 }
             },
         )?;
@@ -3263,6 +3278,30 @@ pub fn comment_label(target: &str, plan: &[Task]) -> String {
             other => other.into(),
         },
     }
+}
+
+/// What a plan that changes code lacks of the agents the pool makes required
+/// before the change (the gates after it are added by the runtime): told to
+/// the plan verifier, who rejects the plan for it.
+fn planning_gaps(specs: &[TaskSpec]) -> Option<String> {
+    if !specs.iter().any(|spec| spec.writes) {
+        return None;
+    }
+    let mut gaps = Vec::new();
+    if !specs.iter().any(|spec| spec.kind == WorkKind::Context) {
+        gaps.push(
+            "no context scout: a read-only task of kind `context` that reads the files, \
+             contracts and invariants the change touches, which the writing tasks depend on",
+        );
+    }
+    if gaps.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "The runtime requires these for a plan that changes code, and this one lacks them; \
+         do not approve it until it has them:\n- {}",
+        gaps.join("\n- ")
+    ))
 }
 
 /// Whether a comment target is the plan document, the whole plan or a line.

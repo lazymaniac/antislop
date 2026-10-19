@@ -445,6 +445,23 @@ impl Config {
             }
             self.profile(&route.verifier, *kind, RoleKind::Verifier)?;
         }
+        // The gates added to plans that change code need their routes now,
+        // not when a plan reaches them.
+        if self.policy.required_gates {
+            for kind in [
+                WorkKind::StaticAnalysis,
+                WorkKind::Testing,
+                WorkKind::Integration,
+            ] {
+                require(
+                    self.routing.contains_key(&kind),
+                    &format!(
+                        "policy.required_gates adds {kind:?} tasks to plans that change code, \
+                         but there is no route for that work: add one or set required_gates = false"
+                    ),
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -663,5 +680,26 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(other.contains("invalid TOML configuration"), "{other}");
+    }
+
+    #[test]
+    fn required_gates_need_routes_for_the_work_they_add() {
+        let text = include_str!("../examples/architect.toml");
+        assert!(Config::from_toml(text).is_ok());
+        // Find the first route table of a gate kind and take it away.
+        let header = text
+            .lines()
+            .find(|line| line.starts_with("[routing.") && line.contains("static_analysis"))
+            .expect("the example routes static analysis");
+        let start = text.find(header).unwrap();
+        let end = text[start + header.len()..]
+            .find("\n[")
+            .map_or(text.len(), |at| start + header.len() + at);
+        let without = format!("{}{}", &text[..start], &text[end..]);
+        let error = Config::from_toml(&without).unwrap_err().to_string();
+        assert!(error.contains("required_gates"), "{error}");
+        // With the gates off, the route is not needed.
+        let off = without.replace("required_gates = true", "required_gates = false");
+        assert!(Config::from_toml(&off).is_ok());
     }
 }

@@ -12,6 +12,24 @@ fn open(dir: &Path, orchestrator: &str, agent: &str) -> Arc<Core> {
 
 /// Like [`open`], with at most `max_parallel` tasks of a plan at a time.
 fn open_limited(dir: &Path, orchestrator: &str, agent: &str, max_parallel: usize) -> Arc<Core> {
+    open_edited(
+        dir,
+        orchestrator,
+        agent,
+        &[(
+            "max_parallel = 4",
+            &format!("max_parallel = {max_parallel}"),
+        )],
+    )
+}
+
+/// Like [`open`], with the example configuration edited by `replacements`.
+fn open_edited(
+    dir: &Path,
+    orchestrator: &str,
+    agent: &str,
+    replacements: &[(&str, &str)],
+) -> Arc<Core> {
     let log = dir.join("prompts.jsonl");
     let header = format!(
         r#"#!/usr/bin/env python3
@@ -71,11 +89,10 @@ def message(to, kind, text):
     .replace(
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
-    )
-    .replace(
-        "max_parallel = 4",
-        &format!("max_parallel = {max_parallel}"),
     );
+    let text = replacements
+        .iter()
+        .fold(text, |text, (from, to)| text.replace(from, to));
     std::fs::create_dir_all(dir.join("project")).unwrap();
     Core::open(&dir.join("state"), Config::from_toml(&text).unwrap()).unwrap()
 }
@@ -486,4 +503,69 @@ fn independent_tasks_overlap_in_time_unless_the_limit_says_otherwise() {
     let mut spans = timed_plan(dir.path(), 1);
     spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     assert!(spans[1].0 >= spans[0].1, "one at a time: {spans:?}");
+}
+
+const WRITING_PLAN: &str = r#"
+def writer(id, extra=None):
+    t = task(id, "Change", [])
+    t.update({"writes": True, "kind": "implementation", "scope": ["a.rs"]})
+    return t
+answer = plan(writer("t1")) if "[runtime]" not in prompt else "done"
+"#;
+
+#[test]
+fn the_plan_verifier_is_told_when_a_plan_that_changes_code_has_no_context_scout() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        WRITING_PLAN,
+        "    answer = verdict(True) if \"You review a plan\" in prompt else 'unused'",
+    );
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    core.send(&conversation, "change a.rs").unwrap();
+    wait_until("plan proposed", || core.is_idle(&conversation));
+    let review = prompts(dir.path())
+        .into_iter()
+        .find(|(_, prompt)| prompt.contains("You review a plan"))
+        .expect("the plan was reviewed")
+        .1;
+    assert!(review.contains("no context scout"), "{review}");
+    assert!(review.contains("do not approve it until"));
+}
+
+#[test]
+fn turning_the_required_gates_off_is_said_when_a_plan_changes_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open_edited(
+        dir.path(),
+        WRITING_PLAN,
+        "    answer = verdict(True) if \"You review a plan\" in prompt else 'unused'",
+        &[("required_gates = true", "required_gates = false")],
+    );
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    core.send(&conversation, "change a.rs").unwrap();
+    wait_until("plan proposed", || core.is_idle(&conversation));
+    let notices = events(&core, &conversation, "notice");
+    assert!(
+        notices.iter().any(|n| n["text"]
+            .as_str()
+            .unwrap()
+            .contains("required_gates is off")),
+        "{notices:?}"
+    );
+    // With the gates on, there is no such notice.
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        WRITING_PLAN,
+        "    answer = verdict(True) if \"You review a plan\" in prompt else 'unused'",
+    );
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    core.send(&conversation, "change a.rs").unwrap();
+    wait_until("plan proposed", || core.is_idle(&conversation));
+    assert!(
+        events(&core, &conversation, "notice")
+            .iter()
+            .all(|n| !n["text"].as_str().unwrap().contains("required_gates"))
+    );
 }

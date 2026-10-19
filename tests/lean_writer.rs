@@ -267,6 +267,14 @@ fn a_writer_never_touches_files_the_user_is_editing() {
         .unwrap()
         .into_iter()
         .filter(|event| event.kind == "notice")
+        .filter(|event| {
+            // This configuration also has the required gates off, which is
+            // told separately.
+            !event.payload["text"]
+                .as_str()
+                .unwrap()
+                .contains("required_gates is off")
+        })
         .collect();
     assert_eq!(notices.len(), 1);
     assert!(

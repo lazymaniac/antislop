@@ -117,6 +117,11 @@ Read-only modes are not a confinement: agy's plan mode was observed running
    checks the results and files against them. Its verdict goes into the
    results the orchestrator receives; gaps ask it to propose a plan for what
    is missing.
+   A plan that changes code always gets the static analysis, testing and
+   integration gates it lacks (`policy.required_gates`, which needs routes for
+   them, and `policy.max_parallel` bounds how many tasks run at once). The
+   context scout is required before the writers: the plan verifier is told
+   when it is missing and does not approve the plan.
 8. **Summary.** The orchestrator receives task outcomes and the audit and
    answers the user (or proposes the next plan).
 
@@ -144,7 +149,14 @@ A comment targets one element by key: an agent (`worker:t2`, `verifier:t2`,
 `orchestrator`, `plan-verifier`, `auditor`) or a diff (`diff:t2:FILE[:LINE]`).
 It is stored with the plan it was made on and reaches the orchestrator at once
 as a user message `[user comment #N on <what it is>] text` (one transaction
-with the comment, so a crash cannot keep one without the other). Until the user
+with the comment, so a crash cannot keep one without the other). Comments on
+the plan itself (a line, the whole plan) are the exception: they are kept as
+`draft`s while the user reads and reach the comment agent together, in one
+message and one turn, when the user sends the review (`R` in the plan view,
+the `review_comments` request). The agent ends its answer with a
+```` ```comments ```` block listing the comments its revised plan took care of;
+once the plan verifier approves the plan only those are resolved, and a
+comment it only answered in words stays open (`comment_replied`). Until the user
 resolves or deletes it, every later orchestrator prompt lists it under
 "Comments the user has not resolved yet"; delivery never resolves it, and a
 comment grants nothing: work it asks for goes through a plan as usual. Every
