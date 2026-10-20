@@ -1488,8 +1488,12 @@ impl View {
             }
         }
         for key in [PLAN_VERIFIER, AUDITOR] {
-            if let Some(agent) = self.agents.get(key).filter(|agent| agent.running) {
-                lines.push(format!("{}: {}", agent_name(key), clean(&agent.activity)));
+            if self.agents.get(key).is_some_and(|agent| agent.running) {
+                // The shared live-activity rule (taskinfo): the "starting
+                // turn" placeholder is not work, so a step that has not
+                // said anything yet gets the same "…" an empty task row does.
+                let doing = super::taskinfo::doing(self, key).unwrap_or_else(|| "…".to_owned());
+                lines.push(format!("{}: {doing}", agent_name(key)));
             }
         }
         if lines.is_empty() {
@@ -2500,6 +2504,40 @@ mod tests {
         assert_eq!(view.mailbox["worker:t2"], ["t1/verifier → t2 (finding): x"]);
         assert_eq!(view.reviews[AUDITOR], ["✓ auditor: no issues"]);
         assert_eq!(view.progress(), ["t1 verifying: verifier: read a.rs"]);
+    }
+
+    #[test]
+    fn admin_progress_names_a_starting_turn_as_no_activity_yet() {
+        let mut view = View::default();
+        view.agents.insert(
+            PLAN_VERIFIER.into(),
+            Agent {
+                running: true,
+                activity: "starting turn".into(),
+                ..Agent::default()
+            },
+        );
+        // The shared rule (taskinfo::doing) says the placeholder is not
+        // work: the step is named, and its doing stays an honest "…".
+        assert_eq!(view.progress(), ["plan verifier: …"]);
+        view.agents.insert(
+            AUDITOR.into(),
+            Agent {
+                running: true,
+                activity: "auditing  two  plans".into(),
+                ..Agent::default()
+            },
+        );
+        assert_eq!(
+            view.progress(),
+            ["plan verifier: …", "auditor: auditing two plans"],
+            "live activity is one normalized line, like every other view"
+        );
+        // A stopped turn never shows as live activity either.
+        if let Some(auditor) = view.agents.get_mut(AUDITOR) {
+            auditor.running = false;
+        }
+        assert_eq!(view.progress(), ["plan verifier: …"]);
     }
 
     #[test]

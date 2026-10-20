@@ -5556,6 +5556,104 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
 }
 
 #[test]
+fn carousel_keeps_roles_apart_and_shares_the_open_dependency_reading() {
+    use antislop::lean::tui::view::TaskRow;
+    let mut app = App::test_app();
+    app.view.plan = Some("p7".into());
+    app.view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "Store".into(),
+            status: "approved".into(),
+            round: 1,
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t3".into(),
+            title: "Index".into(),
+            status: "queued".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "API".into(),
+            status: "working".into(),
+            round: 1,
+            depends_on: vec!["t1".into(), "t3".into()],
+            ..TaskRow::default()
+        },
+    ];
+    app.focus = Focus::Tasks;
+    app.carousel.selected = 2;
+    let mut terminal = Terminal::new(TestBackend::new(110, 40)).unwrap();
+    let rows = |terminal: &mut Terminal<TestBackend>, app: &mut App| -> Vec<String> {
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let w = usize::from(buf.area.width);
+        (0..usize::from(buf.area.height))
+            .map(|y| {
+                (0..w)
+                    .map(|x| buf.content[y * w + x].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    };
+    let shown = rows(&mut terminal, &mut app);
+    let norm = |row: &str| row.split_whitespace().collect::<Vec<_>>().join(" ");
+    let worker = shown
+        .iter()
+        .map(|r| norm(r))
+        .find(|r| r.contains("Worker: "))
+        .expect("a worker line");
+    let verifier = shown
+        .iter()
+        .map(|r| norm(r))
+        .find(|r| r.contains("Verifier [V]: "))
+        .expect("a verifier line");
+    // Each role stands on its own line, like its own card on the graph.
+    assert!(worker.contains("Worker: working r1"), "{worker}");
+    assert!(
+        !worker.contains("Verifier"),
+        "roles share no line: {worker}"
+    );
+    assert!(
+        verifier.contains("Verifier [V]: waits for worker r1"),
+        "{verifier}"
+    );
+    assert!(
+        !verifier.contains("Worker: "),
+        "roles share no line: {verifier}"
+    );
+    // Dependencies show the declared list and the shared open reading:
+    // the approved parent is never presented as still pending.
+    let deps = shown
+        .iter()
+        .map(|r| norm(r))
+        .find(|r| r.contains("Dependencies [D]:"))
+        .expect("a dependencies line");
+    assert!(
+        deps.contains("Dependencies [D]: t1, t3 (count: 2) · Still open: t3"),
+        "{deps}"
+    );
+    // A round that reported nothing gets the one shared wording.
+    let effect = shown
+        .iter()
+        .map(|r| norm(r))
+        .find(|r| r.contains("Effect:"))
+        .expect("an effect line");
+    assert!(effect.contains("no effect reported yet"), "{effect}");
+    // Once the last parent is approved, the shared reading says so.
+    app.view.tasks[1].status = "approved".into();
+    let shown = rows(&mut terminal, &mut app);
+    let deps = shown
+        .iter()
+        .map(|r| norm(r))
+        .find(|r| r.contains("Dependencies [D]:"))
+        .expect("a dependencies line");
+    assert!(deps.contains("Still open: all approved"), "{deps}");
+}
+
+#[test]
 fn carousel_shows_rounds_effect_obligations_integration_and_state_counters() {
     use antislop::lean::tui::{Focus, view::TaskRow};
     let mut app = App::test_app();

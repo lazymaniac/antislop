@@ -123,7 +123,9 @@ pub fn with_provider(state: &str, provider: Option<&str>) -> String {
 
 /// What one agent is really doing right now, cleaned to a single line:
 /// only while its turn runs, and never the bare "starting turn" placeholder.
-fn doing(view: &View, key: &str) -> Option<String> {
+/// Every view that shows live activity asks here, so no view can show the
+/// placeholder as work or carry activity its turn has already stopped.
+pub fn doing(view: &View, key: &str) -> Option<String> {
     let agent = view.agents.get(key)?;
     if !agent.running {
         return None;
@@ -169,11 +171,19 @@ pub fn verifier_activity(view: &View, row: &TaskRow) -> Option<String> {
     }
 }
 
-/// The effect line a worker card may add under its summary: `None` while
-/// the round has produced nothing to report at all; the plain words the
-/// contract asks for when a round ends without an effect, and a fragment
-/// marker when the bounded text was cut short.
-pub fn effect_line(row: &TaskRow) -> Option<String> {
+/// The one wording a full-width list shows while the round has reported
+/// no effect at all. Views with a fixed slot (card, details) leave it
+/// empty instead; both take these words from here, never from view code.
+pub const NO_EFFECT_YET: &str = "no effect reported yet";
+/// The one wording for a finished round that stated no effect.
+const NO_EFFECT_STATED: &str = "effect: not reported by worker";
+
+/// The effect of a round as its two shared parts: the text collapsed to
+/// one normalized line, and whether a bound cut left it a fragment.
+/// `None` while the round has produced nothing to report at all. Every
+/// effect shape a view shows composes itself from these parts, so what
+/// counts as a fragment is decided exactly once.
+fn effect_pieces(row: &TaskRow) -> Option<(String, bool)> {
     let reported = row.effect.is_some()
         || row.obligations.is_some()
         || row.integration.is_some()
@@ -181,14 +191,47 @@ pub fn effect_line(row: &TaskRow) -> Option<String> {
     if !reported {
         return None;
     }
-    let text = row.effect.as_deref().map(one_line).unwrap_or_default();
-    Some(if text.is_empty() {
-        "effect: not reported by worker".to_owned()
-    } else if text.ends_with('…') {
-        format!("effect: {text} [fragment]")
-    } else {
-        format!("effect: {text}")
+    let text = one_line(row.effect.as_deref().unwrap_or_default())
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let fragment = text.ends_with('…');
+    Some((text, fragment))
+}
+
+/// From the shared parts to one "effect:" line. `front` says whether the
+/// fragment marker leads the text — where a slot narrow enough to cut the
+/// text again still shows it was broken off — or trails it whole.
+fn effect_shape(row: &TaskRow, front: bool) -> Option<String> {
+    let (text, fragment) = effect_pieces(row)?;
+    if text.is_empty() {
+        return Some(NO_EFFECT_STATED.to_owned());
+    }
+    Some(match (fragment, front) {
+        (true, true) => format!("effect: [fragment] {text}"),
+        (true, false) => format!("effect: {text} [fragment]"),
+        _ => format!("effect: {text}"),
     })
+}
+
+/// The effect line a list or the details screen adds: `None` while the
+/// round has produced nothing to report at all; the plain words the
+/// contract asks for when a round ends without an effect, and the
+/// fragment marker trailing the whole text.
+pub fn effect_line(row: &TaskRow) -> Option<String> {
+    effect_shape(row, false)
+}
+
+/// The same effect in the shape a card's fixed slot takes, with the
+/// fragment marker in front of the text.
+pub fn effect_front(row: &TaskRow) -> Option<String> {
+    effect_shape(row, true)
+}
+
+/// The effect line a view that always shows one (the carousel) gets:
+/// the shared reading, naming the wait when the round reported nothing.
+pub fn effect_shown(row: &TaskRow) -> String {
+    effect_line(row).unwrap_or_else(|| NO_EFFECT_YET.to_owned())
 }
 
 /// Obligations the verdict settled over the task's real obligations.
@@ -520,6 +563,50 @@ mod tests {
     }
 
     #[test]
+    fn live_activity_never_shows_the_placeholder_or_a_stopped_turn() {
+        let mut view = View::default();
+        view.agents.insert(
+            "plan verifier".into(),
+            crate::lean::tui::view::Agent {
+                running: true,
+                activity: "exec  two  words".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            doing(&view, "plan verifier").as_deref(),
+            Some("exec two words")
+        );
+        view.agents.insert(
+            "auditor".into(),
+            crate::lean::tui::view::Agent {
+                running: true,
+                activity: "starting turn".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            doing(&view, "auditor"),
+            None,
+            "a placeholder is not activity"
+        );
+        view.agents.insert(
+            "worker:t9".into(),
+            crate::lean::tui::view::Agent {
+                running: false,
+                activity: "✗ failed: boom".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            doing(&view, "worker:t9"),
+            None,
+            "a stopped turn is not live activity"
+        );
+        assert_eq!(doing(&view, "nobody"), None);
+    }
+
+    #[test]
     fn stops_name_the_cause_and_never_invent_one() {
         let mut failed = row("failed", 2);
         failed.reason = Some("conflicts with the current branch in src/a.rs".into());
@@ -556,15 +643,39 @@ mod tests {
     #[test]
     fn effects_mark_fragments_and_say_when_none_came() {
         assert_eq!(effect_line(&row("working", 1)), None);
+        assert_eq!(effect_front(&row("working", 1)), None);
+        assert_eq!(effect_shown(&row("working", 1)), NO_EFFECT_YET);
         let mut running = row("working", 1);
         running.integration = Some(json!({"outcome": "applied"}));
         assert_eq!(
             effect_line(&running).as_deref(),
             Some("effect: not reported by worker")
         );
+        assert_eq!(
+            effect_front(&running).as_deref(),
+            Some("effect: not reported by worker")
+        );
         let mut cut = row("approved", 1);
         cut.effect = Some("3 files changed — src/a.rs, src/b…".into());
         assert!(effect_line(&cut).unwrap().ends_with("[fragment]"));
+        // Both shapes come from the one reading: the same text and the one
+        // fragment verdict, only the marker's seat differs.
+        let trailing = effect_line(&cut).unwrap();
+        let leading = effect_front(&cut).unwrap();
+        let body = "3 files changed — src/a.rs, src/b…";
+        assert_eq!(trailing, format!("effect: {body} [fragment]"));
+        assert_eq!(leading, format!("effect: [fragment] {body}"));
+        // The text is one normalized line for every view alike.
+        let mut spaced = row("approved", 1);
+        spaced.effect = Some("two  spaces\n\tand a\ttab".into());
+        assert_eq!(
+            effect_line(&spaced).as_deref(),
+            Some("effect: two spaces and a tab")
+        );
+        assert_eq!(
+            effect_front(&spaced).as_deref(),
+            Some("effect: two spaces and a tab")
+        );
     }
 
     #[test]

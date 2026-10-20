@@ -14,18 +14,19 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub const WIDTH: u16 = 26;
-/// Every card is exactly this tall, whatever it has to say: title, state,
-/// one activity line, up to `MAX_SUMMARY_LINES` summary lines, up to
-/// `MAX_EFFECT_LINES` effect lines and the meta line have fixed slots, so
-/// heights and positions depend only on the plan's shape, filters and
-/// grouping — never on activity, an effect, a verdict or a retry arriving.
-pub const HEIGHT: u16 = 10;
 const MAX_SUMMARY_LINES: usize = 4;
 const MAX_EFFECT_LINES: usize = 2;
-/// Fixed slots inside a card, counted from its top.
+/// Fixed slots inside a card, counted from its top, each starting right
+/// where the previous block can end: title row, state row, one activity
+/// line, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
+/// effect lines and the meta line at the bottom. The height is that same
+/// arithmetic's end, so frame and slots are one rule that cannot drift
+/// apart: heights and positions depend only on the plan's shape, filters
+/// and grouping — never on activity, an effect, a verdict or a retry.
 const ACTIVITY_ROW: u16 = 2;
-const BODY_ROW: u16 = 3;
-const EFFECT_ROW: u16 = 7;
+const BODY_ROW: u16 = ACTIVITY_ROW + 1;
+const EFFECT_ROW: u16 = BODY_ROW + MAX_SUMMARY_LINES as u16;
+pub const HEIGHT: u16 = EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1;
 const GAP_X: u16 = 6;
 const GAP_Y: u16 = 2;
 /// Room left of the first column for edges entering it.
@@ -540,29 +541,21 @@ impl Graph {
             }
         }
 
-        let mut row_heights = std::collections::BTreeMap::<u16, u16>::new();
-        for node in graph.nodes.iter_mut().filter(|node| node.visible) {
-            // Cards are uniformly tall, so a row's height — and with it the
-            // position of every row — is fixed before any event arrives.
-            node.height = HEIGHT;
-            row_heights
-                .entry(node.y)
-                .and_modify(|height| *height = (*height).max(node.height))
-                .or_insert(node.height);
+        // Cards are uniformly tall — every constructor gives them `HEIGHT`
+        // — so stacking has one rule, `row_y`: the r-th non-empty row sits
+        // where `row_y` puts row r, and a row whose cards are all filtered
+        // away closes up without moving any other card.
+        let mut rows = std::collections::BTreeSet::<u16>::new();
+        for node in graph.nodes.iter().filter(|node| node.visible) {
+            rows.insert(node.y);
         }
-        let mut next_y = 0u16;
-        let row_positions: HashMap<_, _> = row_heights
+        let stack: HashMap<_, _> = rows
             .into_iter()
-            .map(|(row, height)| {
-                let y = next_y;
-                next_y = next_y.saturating_add(height).saturating_add(GAP_Y);
-                (row, (y, height))
-            })
+            .enumerate()
+            .map(|(row, y)| (y, row_y(row as u16)))
             .collect();
         for node in graph.nodes.iter_mut().filter(|node| node.visible) {
-            let (y, height) = row_positions[&node.y];
-            node.y = y;
-            node.height = height;
+            node.y = stack[&node.y];
         }
 
         let mut edge = |from: String, to: String, kind: Kind, label: Option<String>| {
@@ -899,10 +892,9 @@ fn describe(view: &View, key: &str) -> String {
         return taskinfo::with_provider(&status, provider);
     }
     let working = health(view, key) == Health::Working;
-    let doing = agent
-        .filter(|agent| agent.running)
-        .map(|agent| clean(&agent.activity))
-        .filter(|activity| working && !activity.is_empty() && activity != "starting turn");
+    // The live-activity rule (only while running, never the placeholder)
+    // is taskinfo's, the one every view reads the same way.
+    let doing = taskinfo::doing(view, key);
     let text = if working {
         "working".to_owned()
     } else {
@@ -1008,10 +1000,10 @@ fn fit_lines(text: &str, width: usize, max: usize) -> Vec<String> {
 }
 
 /// The worker's effect in its own fixed slot under the summary: never a
-/// substitute for a summary line, never a growth of the card. An effect
-/// the worker stated, or the bounded fallback the runtime derived, with
-/// the fragment marker a cut text carries (taskinfo); `None` keeps the
-/// slot empty until the round has something to report at all.
+/// substitute for a summary line, never a growth of the card. The card's
+/// shape of the shared reading (taskinfo) — text and fragment marker in
+/// front — wrapped to the slot; `None` keeps the slot empty until the
+/// round has something to report at all.
 fn effect_lines(view: &View, key: &str) -> Vec<String> {
     let Some(row) = key.split_once(':').and_then(|(role, id)| {
         (role == "worker")
@@ -1020,21 +1012,10 @@ fn effect_lines(view: &View, key: &str) -> Vec<String> {
     }) else {
         return Vec::new();
     };
-    let Some(effect) = taskinfo::effect_line(row) else {
+    let Some(effect) = taskinfo::effect_front(row) else {
         return Vec::new();
     };
-    // The fragment marker a cut effect carries moves to the front of the
-    // slot, where a card narrow enough to cut the text again can still
-    // show that this effect was already broken off.
-    let fragment = effect.ends_with(" [fragment]");
-    let body = effect.strip_suffix(" [fragment]").unwrap_or(&effect);
-    let text = if fragment {
-        body.replacen("effect: ", "effect: [fragment] ", 1)
-    } else {
-        body.to_owned()
-    };
-    let text = clean(&text.split_whitespace().collect::<Vec<_>>().join(" "));
-    fit_lines(&text, usize::from(WIDTH - 4), MAX_EFFECT_LINES)
+    fit_lines(&effect, usize::from(WIDTH - 4), MAX_EFFECT_LINES)
 }
 
 pub fn mark(status: &str) -> (&'static str, Color) {
@@ -1732,6 +1713,79 @@ mod tests {
             assert_eq!(node.height, HEIGHT, "{}", node.key);
             assert!(node.y.saturating_add(HEIGHT) >= HEIGHT);
         }
+    }
+
+    #[test]
+    fn every_card_block_stays_in_its_own_slot() {
+        use super::super::view::Agent;
+        use serde_json::json;
+        // Slots follow one arithmetic: the height ends where the last
+        // block ends, so no block can overrun the meta row.
+        assert_eq!(BODY_ROW, ACTIVITY_ROW + 1);
+        assert_eq!(EFFECT_ROW, BODY_ROW + MAX_SUMMARY_LINES as u16);
+        assert_eq!(HEIGHT, EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1);
+        let mut row = task("t1", &["t0"]);
+        row.summary = Some(
+            "Repair the storage engine so a restart never loses a queued write, at all.".into(),
+        );
+        let mut view = view(vec![task("t0", &[]), row]);
+        let render = |view: &View| -> Vec<String> {
+            let graph = Graph::new(view);
+            let node = graph.node("worker:t1").unwrap();
+            let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+            graph.render(view, &mut canvas, Filter::All, "worker:t1");
+            canvas.lines()
+        };
+        // Working: the doing text sits on the activity row, alone, and no
+        // effect words appear anywhere while the round reported nothing.
+        view.tasks[1].status = "working".into();
+        view.tasks[1].round = 1;
+        view.agents.insert(
+            "worker:t1".into(),
+            Agent {
+                running: true,
+                activity: "cargo  check".into(),
+                ..Default::default()
+            },
+        );
+        let rows = render(&view);
+        assert_eq!(rows.len(), usize::from(HEIGHT));
+        assert!(rows[1].contains("working r1"), "{rows:?}");
+        assert!(!rows[1].contains("cargo"), "state alone: {}", rows[1]);
+        assert!(
+            rows[usize::from(ACTIVITY_ROW)].contains("doing: cargo check"),
+            "{rows:?}"
+        );
+        for (row, text) in rows.iter().enumerate() {
+            if row != usize::from(ACTIVITY_ROW) {
+                assert!(!text.contains("doing"), "{rows:?}");
+            }
+            assert!(!text.contains("effect"), "{rows:?}");
+        }
+        // A verdict: the card's shape of the shared effect reading takes
+        // its own slot — marker in front, text normalized once — and
+        // displaces no summary row and no meta row.
+        view.tasks[1].status = "approved".into();
+        view.tasks[1].round = 2;
+        view.tasks[1].effect = Some("two  files cut…".into());
+        view.tasks[1].integration = Some(json!({"outcome": "committed", "detail": "as abc12"}));
+        let rows = render(&view);
+        assert_eq!(
+            effect_lines(&view, "worker:t1").join(""),
+            "effect: [fragment] two files cut…",
+            "one normalized line, marker in front"
+        );
+        assert!(
+            rows[usize::from(EFFECT_ROW)].contains("effect: [fragment]"),
+            "{rows:?}"
+        );
+        for text in &rows[BODY_ROW as usize..usize::from(EFFECT_ROW)] {
+            assert!(!text.contains("effect"), "summary keeps its slot: {rows:?}");
+        }
+        assert!(rows[BODY_ROW as usize].contains("Repair"), "{rows:?}");
+        let bottom = &rows[usize::from(HEIGHT) - 1];
+        assert!(bottom.contains("committed"), "meta at the bottom: {rows:?}");
+        assert!(!bottom.contains("effect"), "{rows:?}");
     }
 
     #[test]

@@ -226,6 +226,20 @@ impl Carousel {
         } else {
             task.depends_on.join(", ")
         };
+        // Which of those dependencies still hold the task is read the one
+        // shared way (taskinfo), the same split the graph meta and the
+        // activity lines use — an approved parent is never shown as pending.
+        let open_deps = if task.depends_on.is_empty() {
+            String::new()
+        } else {
+            let waiting = taskinfo::waiting_on(view, task);
+            let open = if waiting.is_empty() {
+                "all approved".to_owned()
+            } else {
+                waiting.join(", ")
+            };
+            format!("  ·  Still open: {open}")
+        };
         let par_str = if task.parallel_with.is_empty() {
             "sequential".into()
         } else {
@@ -234,7 +248,7 @@ impl Carousel {
         lines.push(Line::from(vec![
             Span::styled("  Dependencies [D]: ", theme.dim()),
             Span::styled(
-                format!("{} (count: {})", deps_str, task.depends_on.len()),
+                format!("{} (count: {}){open_deps}", deps_str, task.depends_on.len()),
                 Style::default().fg(Color::Blue),
             ),
             Span::styled("  ·  Parallel with: ", theme.dim()),
@@ -283,9 +297,10 @@ impl Carousel {
             ),
         ]));
 
-        // Agents information: worker and verifier keep separate lines, each
-        // carrying the shared reading of the task state (taskinfo), with its
-        // round and provider — the same words the graph card gives.
+        // Agents information: worker and verifier each get a line of
+        // their own, carrying the shared reading of the task state
+        // (taskinfo), with its round and provider — the same words the
+        // graph card gives, never a second interpretation.
         let role_line = |key: &str, state: String| -> String {
             let agent = view.agents.get(key);
             let running = agent.is_some_and(|agent| agent.running);
@@ -298,18 +313,18 @@ impl Carousel {
         lines.push(Line::from(vec![
             Span::styled("  Worker: ", theme.dim()),
             Span::styled(worker_info, Style::default().fg(Color::Cyan)),
-            Span::styled("  │  Verifier [V]: ", theme.dim()),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Verifier [V]: ", theme.dim()),
             Span::styled(verifier_info, Style::default().fg(Color::Yellow)),
         ]));
 
         // What the round produced, what the verdict covered, and how it
-        // landed — the same reading the graph card gives.
+        // landed — the same reading the graph card gives, down to the one
+        // wording for a round that reported nothing yet.
         lines.push(Line::from(vec![
             Span::styled("  Effect: ", theme.dim()),
-            Span::styled(
-                taskinfo::effect_line(task).unwrap_or_else(|| "no effect reported yet".to_owned()),
-                Style::default(),
-            ),
+            Span::styled(taskinfo::effect_shown(task), Style::default()),
         ]));
         lines.push(Line::from(vec![
             Span::styled("  Obligations: ", theme.dim()),

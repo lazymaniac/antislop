@@ -2839,9 +2839,7 @@ impl Core {
                     task.result = Some(result.clone());
                     let stat = git::diff_stat(path, base, &result)?;
                     let files = git::changed_files(path, base, &result)?;
-                    if effect_text.is_none() {
-                        effect_text = Some(tasks::effect(&stat, &files));
-                    }
+                    effect_text.get_or_insert_with(|| tasks::effect(&stat, &files));
                     Some(tasks::changes_text(base, &result, &stat))
                 }
                 (None, Some(base)) if in_place => {
@@ -2850,9 +2848,7 @@ impl Core {
                     task.result = Some(result.clone());
                     let stat = git::diff_stat(&project, base, &result)?;
                     let files = git::changed_files(&project, base, &result)?;
-                    if effect_text.is_none() {
-                        effect_text = Some(tasks::effect(&stat, &files));
-                    }
+                    effect_text.get_or_insert_with(|| tasks::effect(&stat, &files));
                     let touched: Vec<String> = files
                         .into_iter()
                         .filter(|file| user_edits.contains(file))
