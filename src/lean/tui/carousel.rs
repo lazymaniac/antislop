@@ -173,8 +173,6 @@ impl Carousel {
 
         let worker_key = format!("worker:{}", task.id);
         let verifier_key = format!("verifier:{}", task.id);
-        let worker_agent = view.agents.get(&worker_key);
-        let verifier_agent = view.agents.get(&verifier_key);
 
         let mut lines = Vec::new();
 
@@ -286,30 +284,17 @@ impl Carousel {
         ]));
 
         // Agents information: worker and verifier keep separate lines, each
-        // with the round its work belongs to.
-        let round = taskinfo::round_shown(task.round);
-        let with_round = |text: &str| match &round {
-            Some(round) => format!("{text} {round}"),
-            None => text.to_owned(),
+        // carrying the shared reading of the task state (taskinfo), with its
+        // round and provider — the same words the graph card gives.
+        let role_line = |key: &str, state: String| -> String {
+            let agent = view.agents.get(key);
+            let running = agent.is_some_and(|agent| agent.running);
+            let provider = agent.map(|agent| agent.provider.as_str());
+            let line = taskinfo::with_provider(&state, provider);
+            if running { format!("● {line}") } else { line }
         };
-        let worker_info = worker_agent.map_or("not started".to_owned(), |a| {
-            if a.running {
-                with_round("● working")
-            } else if !a.activity.is_empty() {
-                a.activity.clone()
-            } else {
-                "idle".to_owned()
-            }
-        });
-        let verifier_info = verifier_agent.map_or("not started".to_owned(), |a| {
-            if a.running {
-                with_round("● checking")
-            } else if !a.activity.is_empty() {
-                a.activity.clone()
-            } else {
-                "idle".to_owned()
-            }
-        });
+        let worker_info = role_line(&worker_key, taskinfo::worker_state(view, task));
+        let verifier_info = role_line(&verifier_key, taskinfo::verifier_state(task));
         lines.push(Line::from(vec![
             Span::styled("  Worker: ", theme.dim()),
             Span::styled(worker_info, Style::default().fg(Color::Cyan)),

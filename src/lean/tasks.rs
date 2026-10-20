@@ -99,6 +99,58 @@ fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
     Some((remaining, rest[..end].trim()))
 }
 
+/// A worker's optional own one-line effect: a ```effect block in the same
+/// answer it reports in, so no extra model call is spent asking for it.
+/// The last such block wins (same rule as [`fenced`]); its closing fence
+/// must stand on its own line, so a stray inline backtick cannot cut the
+/// block short. An empty or damaged block is left in the report whole —
+/// it yields `None` and the caller keeps the diffstat or report-line
+/// fallback, so nothing the worker wrote is lost. A kept effect is bounded
+/// to [`EFFECT_LIMIT`] with `bound`, the same cut a card marks `[fragment]`.
+pub fn parse_effect(answer: &str) -> (String, Option<String>) {
+    let open = "```effect";
+    let Some(start) = answer.rfind(open) else {
+        return (answer.to_owned(), None);
+    };
+    let rest = &answer[start + open.len()..];
+    if !rest.starts_with(['\n', '\r', ' ']) {
+        return (answer.to_owned(), None);
+    }
+    // The closing fence is a full line of exactly ```; anything else that
+    // looks like a fence is text and stays inside the body.
+    let mut offset = 0usize;
+    let mut close = None;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end_matches(['\n', '\r', ' ', '\t']) == "```" {
+            close = Some(offset);
+            break;
+        }
+        offset += line.len();
+    }
+    let Some(close) = close else {
+        return (answer.to_owned(), None);
+    };
+    let body = rest[..close].trim();
+    if body.is_empty() {
+        return (answer.to_owned(), None);
+    }
+    let one_line = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut remaining = answer[..start].trim_end().to_owned();
+    let after = rest[close + 3..].trim();
+    if !after.is_empty() {
+        if !remaining.is_empty() {
+            remaining.push_str("\n\n");
+        }
+        remaining.push_str(after);
+    }
+    (remaining, Some(bound(&one_line, EFFECT_LIMIT)))
+}
+
 /// A message an agent addresses to another agent in a ```message block.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Outgoing {
@@ -164,6 +216,18 @@ pub fn inbox_text(mail: &[crate::lean::store::Mail]) -> String {
 pub const INBOX_FOLLOWUP: &str = "Messages arrived while you worked (above). \
      Take them into account where they matter and give your complete, \
      updated report.";
+
+/// How a worker may offer the one line its task card shows, from the same
+/// answer it reports in. The runtime keeps the worker's own line when it is
+/// there, falls back to the diffstat (writers) or the report's first text
+/// line (read-only) when it is not, and bounds what it keeps to
+/// `EFFECT_LIMIT` characters, marking a cut so a card can flag it.
+pub const EFFECT_FORMAT: &str = "Optionally, end your report with the one line \
+     your task card shows, in a block like this:\n```effect\nwhat you changed or \
+     found, on one line, no backticks\n```\nWrite the effect as a single line \
+     (no backticks inside), keep it short, and let the closing ``` stand on its \
+     own line. Without the block the card falls back to the diff's summary or \
+     your first report line; a longer line is cut with a mark, never kept whole.";
 
 /// Splits an orchestrator answer into its text and an optional plan.
 pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskSpec>>>) {
@@ -1299,7 +1363,7 @@ pub fn worker_prompt(
          Task: {}\nTask id: {}\nGoal: {}\nScope: {}\n\n{}{PROJECT_RULES}\n\n\
          Stop and say so in your report when the goal cannot be reached without \
          something outside your task: a decision, access, or another task's \
-         result.\n\n{team}\
+         result.\n\n{team}{EFFECT_FORMAT}\n\n\
          End with a complete report of your result; an independent verifier \
          will check it against the files.",
         task.title,
@@ -1368,8 +1432,10 @@ pub fn needs_user_action(error: &str) -> bool {
 
 pub fn worker_followup(findings: &[Value]) -> String {
     format!(
-        "Your verifier found problems:\n{}\n\nAddress them and give your complete updated report.",
-        findings_text(findings)
+        "Your verifier found problems:\n{}\n\nAddress them and give your complete \
+         updated report. {}",
+        findings_text(findings),
+        EFFECT_FORMAT,
     )
 }
 
@@ -2257,5 +2323,56 @@ mod tests {
         assert_eq!(report_effect("  \n\n"), "");
         let long = "x".repeat(EFFECT_LIMIT + 50);
         assert_eq!(report_effect(&long).chars().count(), EFFECT_LIMIT);
+    }
+
+    #[test]
+    fn a_worker_stated_effect_is_kept_bounded_and_removed_from_the_report() {
+        let answer = "I fixed the store.\n\n```effect\n2 files changed — src/a.rs, src/b.rs\n```\n\
+                      The verifier should check the diff.";
+        let (report, effect) = parse_effect(answer);
+        assert_eq!(
+            effect.as_deref(),
+            Some("2 files changed — src/a.rs, src/b.rs")
+        );
+        assert!(!report.contains("```effect"), "{report}");
+        assert!(report.contains("I fixed the store.") && report.contains("check the diff"));
+    }
+
+    #[test]
+    fn the_last_effect_block_wins_and_unicode_survives_the_cut() {
+        let answer = "```effect\nfirst\n```\ntext\n```effect\n👩‍💻e\u{301} naprawione — żółć\n```";
+        let (_, effect) = parse_effect(answer);
+        assert_eq!(effect.as_deref(), Some("👩‍💻e\u{301} naprawione — żółć"));
+        let long = "długi-效果".repeat(EFFECT_LIMIT);
+        let answer = format!("report\n```effect\n{long}\n```");
+        let (report, effect) = parse_effect(&answer);
+        let effect = effect.expect("stated effect");
+        assert!(
+            effect.chars().count() <= EFFECT_LIMIT,
+            "{}",
+            effect.chars().count()
+        );
+        assert!(effect.ends_with('…'), "a cut effect says so");
+        assert!(report.starts_with("report"), "{report}");
+    }
+
+    #[test]
+    fn an_empty_or_damaged_effect_block_stays_in_the_report() {
+        // Empty body: the block is not a stated effect, and it is not lost.
+        let answer = "report text\n```effect\n\n```";
+        let (report, effect) = parse_effect(answer);
+        assert_eq!(effect, None);
+        assert_eq!(report, answer);
+        // A closing fence that does not stand on its own line is text:
+        // an inline backtick cannot cut the block short, and an unterminated
+        // block keeps the whole answer for the fallback to read.
+        let answer = "report\n```effect\ninline `code` here ```effect tail";
+        let (report, effect) = parse_effect(answer);
+        assert_eq!(effect, None);
+        assert_eq!(report, answer);
+        // No block at all: untouched, `None` — the older answers' path.
+        let (report, effect) = parse_effect("plain report, no block");
+        assert_eq!(effect, None);
+        assert_eq!(report, "plain report, no block");
     }
 }

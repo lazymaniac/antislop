@@ -126,7 +126,7 @@ fn plan_comments_show_queue_current_id_and_raw_failure_inside_the_plan() {
 #[test]
 fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
     use antislop::lean::tui::{
-        graph::{Canvas, Graph, WIDTH},
+        graph::{Canvas, Graph, HEIGHT, WIDTH},
         view::{Agent, TaskRow, View},
     };
     let mut view = View::default();
@@ -163,7 +163,10 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
         assert!(verifier.y >= worker.y + worker.height);
         for key in ["worker:t1", "verifier:t1"] {
             let node = graph.node(key).unwrap();
-            assert!((4..=7).contains(&node.height));
+            assert_eq!(
+                node.height, HEIGHT,
+                "every card is exactly as tall as the budget"
+            );
             let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
             graph.render(&view, &mut canvas, Filter::All, key);
             let text = canvas.lines().join("\n");
@@ -173,7 +176,15 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
                     && !text.contains("RISK_END")
             );
             assert!(!text.contains("src/file.rs"));
+            // The long activity phrase is cut at the card edge; the state
+            // line alone holds state, and the running role's doing text
+            // has a line of its own.
             assert!(!text.contains("exec cargo check"));
+            if key == format!("{active_role}:t1") {
+                assert!(text.contains("doing: exec cargo"), "{text}");
+            } else {
+                assert!(!text.contains("doing"), "{text}");
+            }
             if key == "worker:t1" {
                 assert!(text.contains("Popraw zapis"), "{text}");
                 assert!(text.contains("👩‍💻") && text.contains("e\u{301}"), "{text}");
@@ -207,7 +218,10 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
 
 #[test]
 fn graph_scrolls_through_many_short_cards() {
-    use antislop::lean::tui::{graph::Graph, view::TaskRow};
+    use antislop::lean::tui::{
+        graph::{Graph, HEIGHT},
+        view::TaskRow,
+    };
     let mut app = App::test_app();
     app.view.tasks = (0..12)
         .map(|i| TaskRow {
@@ -244,7 +258,7 @@ fn graph_scrolls_through_many_short_cards() {
         "the final short card must be reachable: {text}"
     );
     let graph = Graph::new(&app.view);
-    assert!(graph.nodes.iter().all(|node| node.height <= 7));
+    assert!(graph.nodes.iter().all(|node| node.height == HEIGHT));
     assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
     assert_eq!(app.focus, Focus::Chat);
 }
@@ -4681,7 +4695,11 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
 
     let v1 = filtered_graph.node("verifier:t1").unwrap();
     assert!(v1.visible);
-    assert_eq!(v1.y, 6, "Verifier at row 1 immediately below worker:t1");
+    assert_eq!(
+        v1.y,
+        antislop::lean::tui::graph::HEIGHT + 2,
+        "Verifier at row 1 immediately below worker:t1"
+    );
 
     // 2. Column selection according to visible tasks:
     // Only "task 3" visible (raw topological depth was 2).
@@ -4766,7 +4784,8 @@ fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
     let mut view = View::default();
     view.tasks = tasks;
 
-    // Terminals: 80x24 (h=20), 120x30 (h=26), 160x50 (h=46)
+    // Terminals: 80x24 (h=20), 120x30 (h=26), 160x62 (h=58 — one screen
+    // tall enough for the fixed-size cards, five rows at their full height)
     let g_short = Graph::new_with_viewport(
         &view,
         None,
@@ -4786,12 +4805,12 @@ fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
         None,
         &Default::default(),
         GroupingMode::Dependency,
-        Some((104, 46)),
+        Some((104, 58)),
     );
 
     let whole_short = count_whole_cards(&g_short, 78, 20);
     let whole_mid = count_whole_cards(&g_mid, 77, 26);
-    let whole_tall = count_whole_cards(&g_tall, 104, 46);
+    let whole_tall = count_whole_cards(&g_tall, 104, 58);
 
     // Height utilization: larger panel height fits strictly more whole readable cards
     assert!(
@@ -4800,14 +4819,14 @@ fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
     );
     assert!(
         whole_tall > whole_mid,
-        "Height 46 ({whole_tall}) must fit more whole cards than height 26 ({whole_mid})"
+        "Height 58 ({whole_tall}) must fit more whole cards than height 26 ({whole_mid})"
     );
 
     // Taller height allows all tasks to be visible without vertical scrolling
     assert_eq!(
         whole_tall,
         g_tall.nodes.iter().filter(|n| n.visible).count(),
-        "On 160x50 all nodes fit completely without scroll"
+        "On 160x62 all nodes fit completely without scroll"
     );
 }
 
@@ -5175,7 +5194,7 @@ fn task_events_attach_feedback_only_for_their_round_and_recovery_clears_it() {
 fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     use antislop::lean::tui::{
         Details,
-        graph::{Canvas, Filter, Graph, WIDTH},
+        graph::{Canvas, Filter, Graph, HEIGHT, WIDTH},
         view::{Agent, View},
     };
     let mut view = View::default();
@@ -5274,11 +5293,11 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     let (worker, worker_h) = card(&view, "worker:t1");
     assert!(worker.contains("effect: 2 files"), "{worker}");
     assert!(worker.contains("committed"), "{worker}");
-    assert!(worker_h <= 7, "card stays within the height budget");
+    assert_eq!(worker_h, HEIGHT, "the card keeps its fixed height budget");
     let (verifier, verifier_h) = card(&view, "verifier:t1");
     assert!(verifier.contains("2/3"), "coverage counters: {verifier}");
     assert!(verifier.contains("committed"), "{verifier}");
-    assert!(verifier_h <= 7);
+    assert_eq!(verifier_h, HEIGHT);
     for (_, _, path) in Graph::new(&view).edge_routes(Filter::All) {
         for node in Graph::new(&view).nodes.iter().filter(|n| n.visible) {
             assert!(!antislop::lean::tui::graph::Graph::route_intersects_card(
@@ -5331,7 +5350,10 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         "details name the concrete dependency: {queued_full}"
     );
     let (failed, _) = card(&view, "worker:t1");
-    assert!(failed.contains("failed r1 · the ver"), "{failed}");
+    assert!(
+        failed.contains("failed r1") && failed.contains("the verifier repeated"),
+        "state alone, cause on its own line: {failed}"
+    );
     let mut failed_details = Details::new("worker:t1".into());
     let cause: String = failed_details
         .lines(&view)
@@ -5350,7 +5372,10 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         json!({"id": "t2", "task": "u2", "status": "failed", "round": 1, "feedback": null}),
     ));
     let (quiet, _) = card(&view, "worker:t2");
-    assert!(quiet.contains("failed r1 · cause n"), "{quiet}");
+    assert!(
+        quiet.contains("failed r1") && quiet.contains("cause not reported"),
+        "an unexplained stop says so on its own line: {quiet}"
+    );
     let mut quiet_details = Details::new("worker:t2".into());
     let quiet_full: String = quiet_details
         .lines(&view)
@@ -5362,6 +5387,172 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         quiet_full.contains("Reason: cause not reported"),
         "an unexplained stop says so: {quiet_full}"
     );
+}
+
+#[test]
+fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_events() {
+    use antislop::lean::tui::{
+        graph::{Canvas, Filter, Graph, GroupingMode, HEIGHT, WIDTH},
+        view::{Agent, View},
+    };
+    let ev = |seq: u64, kind: &str, payload: Value| json!({"seq": seq, "kind": kind, "payload": payload});
+    let mut view = View::default();
+    view.apply(&ev(
+        1,
+        "plan_proposed",
+        json!({"plan": "p1", "tasks": [
+            {"id": "t1", "title": "Store", "summary": "Fix storage.",
+             "verifier": {"summary": "Check storage."}},
+            {"id": "t2", "title": "API", "depends_on": ["t1"],
+             "summary": "Expose the corrected storage behind a small HTTP surface a verifier can read in one pass, with careful unicode 👩‍💻 everywhere.",
+             "verifier": {"summary": "Verify the 👩‍💻 surface wrapped past every card edge twice over żółwie e\u{301} until only an ellipsis ends the last visible line."}},
+        ]}),
+    ));
+    let geometry = |view: &View, grouping: GroupingMode| -> Vec<(String, u16, u16, u16, bool)> {
+        Graph::new_with_options(view, None, &Default::default(), grouping)
+            .nodes
+            .iter()
+            .map(|node| (node.key.clone(), node.x, node.y, node.height, node.visible))
+            .collect()
+    };
+    let before = geometry(&view, GroupingMode::Dependency);
+    // Every node — admin, worker and verifier alike — starts at the fixed
+    // height, and stays there through every event below.
+    assert!(before.iter().all(|(_, _, _, h, _)| *h == HEIGHT));
+
+    // Activity: the round starts and the agent runs.
+    view.apply(&ev(
+        2,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "working", "round": 1, "feedback": null}),
+    ));
+    view.agents.insert(
+        "worker:t1".into(),
+        Agent {
+            running: true,
+            provider: "codex".into(),
+            activity: "cargo check --workspace --all-targets".into(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        geometry(&view, GroupingMode::Dependency),
+        before,
+        "activity moves no card"
+    );
+    // Working on round 2 under Status grouping keeps its column too, and
+    // no card ever changes height there either.
+    let status_before = geometry(&view, GroupingMode::Status);
+    view.apply(&ev(
+        3,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "verifying", "round": 2, "feedback": null}),
+    ));
+    let status_now = geometry(&view, GroupingMode::Status);
+    assert_eq!(
+        status_now
+            .iter()
+            .map(|(key, _, _, height, _)| (key, height))
+            .collect::<Vec<_>>(),
+        status_before
+            .iter()
+            .map(|(key, _, _, height, _)| (key, height))
+            .collect::<Vec<_>>(),
+        "heights never move"
+    );
+    assert!(status_now.iter().all(|(_, _, _, h, _)| *h == HEIGHT));
+
+    // Effect + verdict: a cut (fragment) effect of the bounded kind.
+    let long_effect = format!("{}…", "naprawione 👩‍💻 — src/store.rs ".repeat(12));
+    view.apply(&ev(
+        4,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "approved", "round": 2,
+               "feedback": {"round": 2, "effect": long_effect.clone(),
+                            "coverage": {"total": 4, "ok": 4, "missing": 0},
+                            "integration": {"outcome": "committed", "detail": "as 1234abc"}}}),
+    ));
+    assert_eq!(
+        geometry(&view, GroupingMode::Dependency),
+        before,
+        "an effect and a verdict move no card"
+    );
+    let graph = Graph::new(&view);
+    let node = graph.node("worker:t1").unwrap();
+    let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+    graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+    let text = canvas.lines().join(" ");
+    assert!(
+        text.contains("effect: [fragment]"),
+        "a cut effect says it is a fragment, front-first: {text}"
+    );
+    assert!(text.contains("naprawione"));
+
+    // Retry: the recovery clears the round's card data; geometry holds.
+    view.apply(&ev(
+        5,
+        "task_recovery",
+        json!({"task": "u1", "action": "unblock", "status": "queued",
+               "detail": "unblocked and queued again"}),
+    ));
+    assert!(view.tasks[0].effect.is_none() && view.tasks[0].integration.is_none());
+    assert_eq!(
+        geometry(&view, GroupingMode::Dependency),
+        before,
+        "a retry moves no card"
+    );
+
+    // Late events: feedback stamped for the finished round must not revive
+    // on the new round, and again no card moves.
+    view.apply(&ev(
+        6,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "working", "round": 3,
+               "feedback": {"round": 2, "effect": "stale effect"}}),
+    ));
+    assert_eq!(view.tasks[0].effect, None, "stale feedback is not revived");
+    assert_eq!(
+        geometry(&view, GroupingMode::Dependency),
+        before,
+        "a late event moves no card"
+    );
+
+    // Short and long descriptions share the one fixed frame: the short
+    // card keeps empty slots, the long card cuts with the ellipsis, and
+    // both stand at the same height in the same places.
+    let (short_text, short_h) = {
+        let graph = Graph::new(&view);
+        let node = graph.node("verifier:t1").unwrap();
+        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+        graph.render(&view, &mut canvas, Filter::All, "verifier:t1");
+        (canvas.lines().join("\n"), node.height)
+    };
+    let (long_text, long_h) = {
+        let graph = Graph::new(&view);
+        let node = graph.node("verifier:t2").unwrap();
+        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+        graph.render(&view, &mut canvas, Filter::All, "verifier:t2");
+        (canvas.lines().join("\n"), node.height)
+    };
+    assert_eq!(short_h, HEIGHT);
+    assert_eq!(long_h, HEIGHT, "a long summary grows no card");
+    assert!(short_text.contains("Check storage."), "{short_text}");
+    assert!(
+        long_text.contains('…'),
+        "the long summary cuts: {long_text}"
+    );
+    assert!(
+        long_text.contains('👩'),
+        "emoji survive the cut: {long_text}"
+    );
+    for (_, _, path) in Graph::new(&view).edge_routes(Filter::All) {
+        for node in Graph::new(&view).nodes.iter().filter(|n| n.visible) {
+            assert!(
+                !Graph::route_intersects_card(&path, node),
+                "fixed cards keep their gaps clear"
+            );
+        }
+    }
 }
 
 #[test]
@@ -5438,6 +5629,11 @@ fn carousel_shows_rounds_effect_obligations_integration_and_state_counters() {
     );
     assert!(norm2.contains("Dependencies [D]: t1"), "{norm2}");
     assert!(norm2.contains("Next:"), "{norm2}");
+    // The worker and verifier lines carry the shared taskinfo reading —
+    // the same words the graph cards put on their state lines — not a
+    // second, drifting interpretation of the same state.
+    assert!(norm2.contains("Worker: approved r2"), "{norm2}");
+    assert!(norm2.contains("Verifier [V]: approved r2"), "{norm2}");
     // Plan state counters name every state that is occupied.
     assert!(norm2.contains("Plan states:"), "{norm2}");
     for part in ["queued 1", "approved 1", "failed 1"] {

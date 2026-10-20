@@ -53,44 +53,119 @@ pub fn cause(row: &TaskRow) -> Option<String> {
     })
 }
 
-/// The worker's state line: its round right after the state word once one
-/// has started, the concrete dependencies it waits on, and the raw cause
-/// when it stopped.
-pub fn worker_state(view: &View, row: &TaskRow) -> String {
+/// The worker's state word with its round, alone: what a card's state line
+/// holds. The waiting reason and the stop cause get their own line
+/// ([`worker_activity`]), so a long wait or a provider never crowds the
+/// state out, and the state never has to repeat them.
+pub fn worker_status(row: &TaskRow) -> String {
     let round = round_shown(row.round).map_or_default(|round| format!(" {round}"));
     match row.status.as_str() {
+        status::VERIFYING => format!("awaiting verdict{round}"),
+        other => format!("{}{round}", status_label(other)),
+    }
+}
+
+/// The worker's state line: its round right after the state word once one
+/// has started, the concrete dependencies it waits on, and the raw cause
+/// when it stopped. It is the same reading the card splits over two lines,
+/// word for word.
+pub fn worker_state(view: &View, row: &TaskRow) -> String {
+    let status = worker_status(row);
+    let reason = match row.status.as_str() {
         status::QUEUED => {
             let waiting = waiting_on(view, row);
-            if waiting.is_empty() {
-                format!("queued{round}")
-            } else {
-                format!("queued{round} · waits for {}", waiting.join(", "))
-            }
+            (!waiting.is_empty()).then(|| format!("waits for {}", waiting.join(", ")))
         }
-        status::WORKING => format!("working{round}"),
-        status::VERIFYING => format!("awaiting verdict{round}"),
-        status::FAILED | status::NEEDS_USER | status::WAITING | status::SKIPPED => match cause(row)
-        {
-            Some(why) => format!("{}{round} · {why}", status_label(&row.status)),
-            None => format!("{}{round}", status_label(&row.status)),
-        },
+        status::FAILED | status::NEEDS_USER | status::WAITING | status::SKIPPED => cause(row),
+        _ => None,
+    };
+    match reason {
+        Some(reason) => format!("{status} · {reason}"),
+        None => status,
+    }
+}
+
+/// The verifier's state word with its round, alone, for a card's state line.
+pub fn verifier_status(row: &TaskRow) -> String {
+    let round = round_shown(row.round).map_or_default(|round| format!(" {round}"));
+    match row.status.as_str() {
+        status::VERIFYING => format!("checking{round}"),
+        status::FAILED | status::NEEDS_USER => format!("rejected{round}"),
+        status::PROPOSED | status::QUEUED | status::WORKING => format!("waits for worker{round}"),
         other => format!("{}{round}", status_label(other)),
     }
 }
 
 /// The verifier's state line, with the same round the worker shows.
 pub fn verifier_state(row: &TaskRow) -> String {
-    let round = round_shown(row.round).map_or_default(|round| format!(" {round}"));
+    let status = verifier_status(row);
     match row.status.as_str() {
-        status::VERIFYING => format!("checking{round}"),
         status::FAILED | status::NEEDS_USER => match cause(row) {
-            Some(why) => format!("rejected{round} · {why}"),
-            None => format!("rejected{round}"),
+            Some(why) => format!("{status} · {why}"),
+            None => status,
         },
-        status::PROPOSED | status::QUEUED | status::WORKING => {
-            format!("waits for worker{round}")
+        _ => status,
+    }
+}
+
+/// The provider beside a state, in the one shape every view shows it:
+/// cards, the carousel and details read the same state and add the same
+/// provider, so no two views can drift apart.
+pub fn with_provider(state: &str, provider: Option<&str>) -> String {
+    match provider
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+    {
+        Some(provider) => format!("{state} · {provider}"),
+        None => state.to_owned(),
+    }
+}
+
+/// What one agent is really doing right now, cleaned to a single line:
+/// only while its turn runs, and never the bare "starting turn" placeholder.
+fn doing(view: &View, key: &str) -> Option<String> {
+    let agent = view.agents.get(key)?;
+    if !agent.running {
+        return None;
+    }
+    let text = clean(&agent.activity)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!text.is_empty() && text != "starting turn").then_some(text)
+}
+
+/// The worker's own line under the state: what it is doing while it runs,
+/// the concrete dependencies it waits for while queued, or the cause it
+/// stopped with. Independent of the state word and the provider, and
+/// `None` when there is nothing of the sort to say.
+pub fn worker_activity(view: &View, row: &TaskRow) -> Option<String> {
+    if row.status == status::WORKING
+        && let Some(doing) = doing(view, &format!("worker:{}", row.id))
+    {
+        return Some(format!("doing: {doing}"));
+    }
+    match row.status.as_str() {
+        status::QUEUED => {
+            let waiting = waiting_on(view, row);
+            (!waiting.is_empty()).then(|| format!("waits for {}", waiting.join(", ")))
         }
-        other => format!("{}{round}", status_label(other)),
+        status::FAILED | status::NEEDS_USER | status::WAITING | status::SKIPPED => cause(row),
+        _ => None,
+    }
+}
+
+/// The verifier's own line under its state, read the same way: what its
+/// check is doing while it runs, or the cause a rejection stopped with.
+pub fn verifier_activity(view: &View, row: &TaskRow) -> Option<String> {
+    if row.status == status::VERIFYING
+        && let Some(doing) = doing(view, &format!("verifier:{}", row.id))
+    {
+        return Some(format!("doing: {doing}"));
+    }
+    match row.status.as_str() {
+        status::FAILED | status::NEEDS_USER => cause(row),
+        _ => None,
     }
 }
 
@@ -345,6 +420,103 @@ mod tests {
         );
         assert_eq!(verifier_state(&row("working", 1)), "waits for worker r1");
         assert_eq!(verifier_state(&row("proposed", 0)), "waits for worker");
+    }
+
+    #[test]
+    fn the_activity_line_is_its_own_and_the_state_line_its_own() {
+        // A queued task waiting on a dependency: the state stays short and
+        // the concrete wait gets its own line, provider-independent.
+        let mut view = View::default();
+        let mut parent = TaskRow {
+            id: "t0".into(),
+            status: "working".into(),
+            ..TaskRow::default()
+        };
+        parent.summary = Some("Parent work.".into());
+        let mut waiting = row("queued", 2);
+        waiting.depends_on = vec!["t0".into()];
+        view.tasks = vec![parent, waiting.clone()];
+        assert_eq!(worker_status(&waiting), "queued r2");
+        assert_eq!(
+            worker_activity(&view, &waiting).as_deref(),
+            Some("waits for t0")
+        );
+        assert_eq!(worker_state(&view, &waiting), "queued r2 · waits for t0");
+        assert_eq!(
+            with_provider(&worker_status(&waiting), Some("codex")),
+            "queued r2 · codex"
+        );
+        assert_eq!(with_provider("queued r2", Some("")), "queued r2");
+        // A running worker shows its activity as its own line; the verifier
+        // never borrows it, and the state line never carries it.
+        view.agents.insert(
+            "worker:t1".into(),
+            crate::lean::tui::view::Agent {
+                running: true,
+                provider: "codex".into(),
+                activity: "reading  src/a.rs".into(),
+                ..Default::default()
+            },
+        );
+        let working = row("working", 1);
+        assert_eq!(worker_status(&working), "working r1");
+        assert_eq!(
+            worker_activity(&view, &working).as_deref(),
+            Some("doing: reading src/a.rs")
+        );
+        assert!(!worker_status(&working).contains("reading"));
+        // Placeholder activity is no activity.
+        view.agents.insert(
+            "worker:t1".into(),
+            crate::lean::tui::view::Agent {
+                running: true,
+                activity: "starting turn".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(worker_activity(&view, &working), None);
+        // The verifier's own line belongs to its own status and agent.
+        let checking = row("verifying", 1);
+        assert_eq!(verifier_status(&checking), "checking r1");
+        assert_eq!(verifier_activity(&view, &checking), None);
+        view.agents.insert(
+            "verifier:t1".into(),
+            crate::lean::tui::view::Agent {
+                running: true,
+                activity: "checking  the diff".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            verifier_activity(&view, &checking).as_deref(),
+            Some("doing: checking the diff")
+        );
+        // A stop puts the cause on the activity line, and the combined
+        // reading stays word-for-word what the split says.
+        let mut failed = row("failed", 2);
+        failed.reason = Some("  it conflicted\n".into());
+        assert_eq!(worker_status(&failed), "failed r2");
+        assert_eq!(
+            worker_activity(&view, &failed).as_deref(),
+            Some("it conflicted")
+        );
+        assert_eq!(worker_state(&view, &failed), "failed r2 · it conflicted");
+        assert_eq!(
+            verifier_activity(&view, &failed).as_deref(),
+            Some("it conflicted")
+        );
+        let quiet = row("needs_user", 1);
+        assert_eq!(worker_status(&quiet), "needs decision r1");
+        assert_eq!(
+            worker_activity(&view, &quiet).as_deref(),
+            Some("cause not reported")
+        );
+        // An idle approved task has nothing to put on the line, and says so
+        // by staying empty rather than inventing filler.
+        let done = row("approved", 1);
+        assert_eq!(worker_activity(&view, &done), None);
+        assert_eq!(verifier_activity(&view, &done), None);
+        assert_eq!(worker_state(&view, &done), "approved r1");
     }
 
     #[test]

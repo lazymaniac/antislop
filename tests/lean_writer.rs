@@ -78,6 +78,80 @@ fn config(codex: &Path, agy: &Path) -> Config {
     config_with(codex, agy, |text| text)
 }
 
+/// The same two fake CLIs, but the worker answers with the Python
+/// expression `worker_answer` — used to probe the optional ```effect
+/// block the worker may add to the very report it gives.
+fn fake_clis_answered(dir: &Path, worker_answer: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let log = dir.join("calls.jsonl");
+    let common = format!(
+        r#"#!/usr/bin/env python3
+import json, os, sys
+prompt = sys.argv[-1]
+with open({log:?}, "a") as f:
+    f.write(json.dumps({{"bin": sys.argv[0].rsplit("/", 1)[-1], "cwd": os.getcwd(), "args": sys.argv[1:]}}) + "\n")
+"#,
+        log = log.to_string_lossy()
+    );
+    let codex = dir.join("codex");
+    std::fs::write(
+        &codex,
+        common.clone()
+            + r#"
+plan = {"tasks": [{"id": "t1", "title": "Add greeting", "goal": "Create hello.txt",
+  "writes": True, "scope": [".", "../shared"], "kind": "implementation", "verifier": {"focus": "file content"}}]}
+answer = "done" if "[runtime]" in prompt else "Plan.\n```plan\n" + json.dumps(plan) + "\n```"
+print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
+print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
+print(json.dumps({"type": "turn.completed", "usage": {}}))
+"#,
+    )
+    .unwrap();
+    let agy = dir.join("agy");
+    std::fs::write(
+        &agy,
+        common
+            + format!(
+                r#"
+def cover(answer):
+    import re
+    ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
+    if not ids or "```verdict" not in answer:
+        return answer
+    head, body = answer.rsplit("```verdict", 1)
+    data = json.loads(body.split("```")[0])
+    data["coverage"] = {{i: {{"status": "ok", "note": "checked"}} for i in ids}}
+    return head + "```verdict\n" + json.dumps(data) + "\n```"
+REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:")
+if any(marker in prompt for marker in REVIEW):
+    session = "reviewer"
+    answer = "```verdict\n{{\"approved\": true, \"findings\": []}}\n```"
+elif "You review a code change" in prompt:
+    session = "code-review"
+    answer = "```verdict\n" + json.dumps({{"approved": False, "findings": [
+        {{"severity": "medium", "issue": "greeting lacks a name", "where": "hello.txt:1"}}]}}) + "\n```"
+elif "You verify" in prompt:
+    session = "verifier"
+    answer = "```verdict\n" + json.dumps({{"approved": "git diff" in prompt, "findings": []}}) + "\n```"
+else:
+    session = "worker"
+    with open("hello.txt", "w") as f:
+        f.write("from worker\n")
+    answer = {worker_answer}
+answer = cover(answer)
+print(json.dumps({{"event": "init", "conversation_id": session}}))
+print(json.dumps({{"event": "result", "result": {{"conversation_id": session, "status": "SUCCESS", "response": answer, "usage": {{}}}}}}))
+"#
+            )
+            .as_str(),
+    )
+    .unwrap();
+    for script in [&codex, &agy] {
+        std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+    }
+    (codex, agy)
+}
+
 /// These tests follow one writing task through its agents, so the required
 /// quality gates a real plan gets are switched off;
 /// `required_gates_join_plans_that_write` switches them back on.
@@ -790,6 +864,68 @@ fn an_applied_change_gives_its_card_the_effect_and_the_full_coverage() {
     );
     assert_eq!(feedback["coverage"]["missing"], 0);
     assert_eq!(feedback["coverage"]["unknown"], serde_json::json!([]));
+}
+
+#[test]
+fn a_worker_stated_effect_takes_the_card_and_no_extra_model_call_is_spent() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis_answered(
+        dir.path(),
+        "\"wrote hello.txt\\n\\n```effect\\nAdded a greeting — hello.txt\\n```\"",
+    );
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let (feedback, from_event) = card(&core, &conversation, "t1");
+    // The worker's own bounded line is the card's effect, not the diffstat.
+    assert_eq!(feedback["effect"], "Added a greeting — hello.txt");
+    // The block is dropped from the stored report, never copied into the
+    // task event whole: the announced feedback is the same bounded string.
+    let task = core
+        .store
+        .latest_plan(&conversation)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "t1")
+        .unwrap();
+    let report = task.report.as_deref().unwrap();
+    assert!(report.contains("wrote hello.txt"), "{report}");
+    assert!(!report.contains("```effect"), "block removed: {report}");
+    assert_eq!(from_event["effect"], feedback["effect"]);
+    // Same run, one worker turn: the round ran on a single worker call.
+    let calls = std::fs::read_to_string(dir.path().join("calls.jsonl")).unwrap();
+    let worker_turns = calls
+        .lines()
+        .filter(|line| line.contains("\"bin\": \"agy\"") && line.contains("You are a worker"))
+        .count();
+    assert_eq!(worker_turns, 1, "no extra model call: {calls}");
+}
+
+#[test]
+fn an_empty_effect_block_stays_in_the_report_and_the_diffstat_fills_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) =
+        fake_clis_answered(dir.path(), "\"wrote hello.txt\\n\\n```effect\\n\\n```\"");
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let (feedback, _) = card(&core, &conversation, "t1");
+    assert_eq!(
+        feedback["effect"], "1 file changed, 1 insertion(+) — hello.txt",
+        "the runtime derives the effect when the block says nothing"
+    );
+    let task = core
+        .store
+        .latest_plan(&conversation)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "t1")
+        .unwrap();
+    let report = task.report.as_deref().unwrap();
+    assert!(
+        report.contains("```effect"),
+        "the damaged block is kept, not swallowed: {report}"
+    );
 }
 
 #[test]

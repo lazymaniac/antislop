@@ -14,8 +14,18 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub const WIDTH: u16 = 26;
-pub const HEIGHT: u16 = 4;
+/// Every card is exactly this tall, whatever it has to say: title, state,
+/// one activity line, up to `MAX_SUMMARY_LINES` summary lines, up to
+/// `MAX_EFFECT_LINES` effect lines and the meta line have fixed slots, so
+/// heights and positions depend only on the plan's shape, filters and
+/// grouping — never on activity, an effect, a verdict or a retry arriving.
+pub const HEIGHT: u16 = 10;
 const MAX_SUMMARY_LINES: usize = 4;
+const MAX_EFFECT_LINES: usize = 2;
+/// Fixed slots inside a card, counted from its top.
+const ACTIVITY_ROW: u16 = 2;
+const BODY_ROW: u16 = 3;
+const EFFECT_ROW: u16 = 7;
 const GAP_X: u16 = 6;
 const GAP_Y: u16 = 2;
 /// Room left of the first column for edges entering it.
@@ -532,7 +542,9 @@ impl Graph {
 
         let mut row_heights = std::collections::BTreeMap::<u16, u16>::new();
         for node in graph.nodes.iter_mut().filter(|node| node.visible) {
-            node.height = (body_lines(view, &node.key).len() as u16 + 3).max(HEIGHT);
+            // Cards are uniformly tall, so a row's height — and with it the
+            // position of every row — is fixed before any event arrives.
+            node.height = HEIGHT;
             row_heights
                 .entry(node.y)
                 .and_modify(|height| *height = (*height).max(node.height))
@@ -868,34 +880,30 @@ pub fn health(view: &View, key: &str) -> Health {
     }
 }
 
-/// The node's status text (without an icon), including its provider and,
-/// while it works, what it is doing.
+/// The node's status text (without an icon), including its provider. For
+/// task cards this is the state word, its round and the provider, read
+/// through the shared interpretation (taskinfo); what the agent is doing
+/// and why it waits have their own line and never crowd the state out.
 fn describe(view: &View, key: &str) -> String {
     let agent = view.agents.get(key);
-    let provider = agent
-        .map(|agent| agent.provider.as_str())
-        .filter(|provider| !provider.is_empty());
-    let with_provider = |text: String| match provider {
-        Some(provider) => format!("{text} · {provider}"),
-        None => text,
-    };
+    let provider = agent.map(|agent| agent.provider.as_str());
+    if let Some((who, id)) = key.split_once(':') {
+        let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
+            return "?".into();
+        };
+        let status = if who == "worker" {
+            taskinfo::worker_status(task)
+        } else {
+            taskinfo::verifier_status(task)
+        };
+        return taskinfo::with_provider(&status, provider);
+    }
     let working = health(view, key) == Health::Working;
     let doing = agent
         .filter(|agent| agent.running)
         .map(|agent| clean(&agent.activity))
         .filter(|activity| working && !activity.is_empty() && activity != "starting turn");
-    let text = if let Some((who, id)) = key.split_once(':') {
-        let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
-            return "?".into();
-        };
-        // Cards and lists read the round, the dependencies and the stop
-        // cause through one shared interpretation (taskinfo).
-        if who == "worker" {
-            taskinfo::worker_state(view, task)
-        } else {
-            taskinfo::verifier_state(task)
-        }
-    } else if working {
+    let text = if working {
         "working".to_owned()
     } else {
         let activity = agent.map_or("", |agent| agent.activity.as_str());
@@ -906,9 +914,28 @@ fn describe(view: &View, key: &str) -> String {
             activity.to_owned()
         }
     };
+    let text = taskinfo::with_provider(&text, provider);
     match doing {
-        Some(doing) => format!("{} · {doing}", with_provider(text)),
-        None => with_provider(text),
+        Some(doing) => format!("{text} · {doing}"),
+        None => text,
+    }
+}
+
+/// The card's activity line: what this role is doing, the dependencies it
+/// waits for, or the cause it stopped with — one line of its own, shared
+/// with the carousel and details through taskinfo, and independent of the
+/// state word and the provider.
+fn activity_line(view: &View, key: &str) -> Option<String> {
+    let (role, task) = key.split_once(':').and_then(|(role, id)| {
+        view.tasks
+            .iter()
+            .find(|task| task.id == id)
+            .map(|t| (role, t))
+    })?;
+    if role == "worker" {
+        taskinfo::worker_activity(view, task)
+    } else {
+        taskinfo::verifier_activity(view, task)
     }
 }
 
@@ -953,10 +980,18 @@ fn card_lines(view: &View, key: &str) -> Vec<String> {
         }
     };
     let width = usize::from(WIDTH - 4);
-    let mut lines = wrap(&text, width);
-    if lines.len() > MAX_SUMMARY_LINES {
-        lines.truncate(MAX_SUMMARY_LINES);
-        let last = lines.last_mut().expect("summary has at least one line");
+    fit_lines(&text, width, MAX_SUMMARY_LINES)
+}
+
+/// The same bounded, grapheme-safe wrapping the summary uses: at most
+/// `max` lines of `width` columns, the cut line forced to end in `…`.
+fn fit_lines(text: &str, width: usize, max: usize) -> Vec<String> {
+    let mut lines = wrap(text, width);
+    if lines.len() > max {
+        lines.truncate(max);
+        let last = lines
+            .last_mut()
+            .expect("a wrapped text has at least one line");
         // Force an ellipsis even when the final visible line has spare columns.
         let mut used = 0;
         let prefix: String = last
@@ -972,28 +1007,34 @@ fn card_lines(view: &View, key: &str) -> Vec<String> {
     lines
 }
 
-/// The card's body: the summary, plus the worker's reported effect when the
-/// round has one. The budget never grows past the summary's own ceiling, so
-/// a card stays at most `NAME + STATE + MAX_SUMMARY_LINES + META` = 7 rows
-/// tall however many events arrive. Layout and rendering share this one.
-fn body_lines(view: &View, key: &str) -> Vec<String> {
-    let mut lines = card_lines(view, key);
-    let worker_row = key.split_once(':').and_then(|(role, id)| {
+/// The worker's effect in its own fixed slot under the summary: never a
+/// substitute for a summary line, never a growth of the card. An effect
+/// the worker stated, or the bounded fallback the runtime derived, with
+/// the fragment marker a cut text carries (taskinfo); `None` keeps the
+/// slot empty until the round has something to report at all.
+fn effect_lines(view: &View, key: &str) -> Vec<String> {
+    let Some(row) = key.split_once(':').and_then(|(role, id)| {
         (role == "worker")
             .then(|| view.tasks.iter().find(|task| task.id == id))
             .flatten()
-    });
-    if let Some(row) = worker_row
-        && let Some(effect) = taskinfo::effect_line(row)
-    {
-        if lines.len() >= MAX_SUMMARY_LINES {
-            lines.truncate(MAX_SUMMARY_LINES - 1);
-        }
-        let effect = effect.split_whitespace().collect::<Vec<_>>().join(" ");
-        let effect = clean(&effect);
-        lines.push(truncate(&effect, usize::from(WIDTH - 4)));
-    }
-    lines
+    }) else {
+        return Vec::new();
+    };
+    let Some(effect) = taskinfo::effect_line(row) else {
+        return Vec::new();
+    };
+    // The fragment marker a cut effect carries moves to the front of the
+    // slot, where a card narrow enough to cut the text again can still
+    // show that this effect was already broken off.
+    let fragment = effect.ends_with(" [fragment]");
+    let body = effect.strip_suffix(" [fragment]").unwrap_or(&effect);
+    let text = if fragment {
+        body.replacen("effect: ", "effect: [fragment] ", 1)
+    } else {
+        body.to_owned()
+    };
+    let text = clean(&text.split_whitespace().collect::<Vec<_>>().join(" "));
+    fit_lines(&text, usize::from(WIDTH - 4), MAX_EFFECT_LINES)
 }
 
 pub fn mark(status: &str) -> (&'static str, Color) {
@@ -1097,8 +1138,38 @@ fn draw_node(
             tone
         }),
     );
-    for (row, line) in body_lines(view, &node.key).iter().enumerate() {
-        canvas.text(x + 2, y + 2 + row as u16, line, fill.patch(theme.text()));
+    // The activity line: what this role is doing, waits for, or stopped
+    // with, on its own row — status and provider cannot crowd it out.
+    if let Some(line) = activity_line(view, &node.key) {
+        let style = match health {
+            Health::Problem => theme.error(),
+            Health::Waiting => theme.warning(),
+            _ => theme.dim(),
+        };
+        canvas.text(
+            x + 2,
+            y + ACTIVITY_ROW,
+            &truncate(&line, inner),
+            fill.patch(style),
+        );
+    }
+    for (row, line) in card_lines(view, &node.key).iter().enumerate() {
+        canvas.text(
+            x + 2,
+            y + BODY_ROW + row as u16,
+            line,
+            fill.patch(theme.text()),
+        );
+    }
+    // The worker's effect keeps its own slot under the summary, so it
+    // replaces no summary line and the card never changes height for it.
+    for (row, line) in effect_lines(view, &node.key).iter().enumerate() {
+        canvas.text(
+            x + 2,
+            y + EFFECT_ROW + row as u16,
+            line,
+            fill.patch(theme.text()),
+        );
     }
     // The meta line: what the verifier accounts for, how the result landed,
     // the concrete dependencies still open, and any messages in between.
@@ -1421,7 +1492,7 @@ mod tests {
             );
         }
         let graph = Graph::new(&view);
-        assert_eq!(graph.node("worker:t1").unwrap().height, 7);
+        assert_eq!(graph.node("worker:t1").unwrap().height, HEIGHT);
         let worker = graph.node("worker:t1").unwrap();
         let verifier = graph.node("verifier:t1").unwrap();
         assert!(verifier.y >= worker.y + worker.height + GAP_Y);
@@ -1573,6 +1644,94 @@ mod tests {
         assert_eq!(at("worker:t3"), (column_x(0), row_y(3)));
         assert_eq!(at("worker:t2"), (column_x(1), row_y(1)));
         assert_eq!(at(ORCHESTRATOR), (column_x(1), 0));
+    }
+
+    #[test]
+    fn cards_are_fixed_and_no_event_moves_a_single_node() {
+        use super::super::view::Agent;
+        use serde_json::json;
+        let mut worker = task("t1", &[]);
+        worker.title = "Store".into();
+        worker.summary = Some("Fix the storage path so writes survive a restart.".into());
+        let mut view = view(vec![worker, task("t2", &["t1"])]);
+        let geometry = |view: &View| -> Vec<(String, u16, u16, u16, bool)> {
+            Graph::new(view)
+                .nodes
+                .iter()
+                .map(|node| (node.key.clone(), node.x, node.y, node.height, node.visible))
+                .collect()
+        };
+        let before = geometry(&view);
+        assert!(before.iter().all(|(_, _, _, height, _)| *height == HEIGHT));
+
+        // Activity: the round starts and its agent runs — no geometry moves,
+        // and the worker's doing text lands on its own line, not behind
+        // the state.
+        view.tasks[0].status = "working".into();
+        view.tasks[0].round = 1;
+        view.agents.insert(
+            "worker:t1".into(),
+            Agent {
+                running: true,
+                provider: "codex".into(),
+                activity: "cargo check --workspace".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(geometry(&view), before, "activity moves no card");
+        let graph = Graph::new(&view);
+        let node = graph.node("worker:t1").unwrap();
+        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+        graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+        let rows = canvas.lines();
+        assert!(rows[1].contains("working r1"), "{}", rows[1]);
+        assert!(!rows[1].contains("cargo check"), "state alone: {}", rows[1]);
+        assert!(
+            !rows[2].contains("codex"),
+            "the activity line is independent of the provider: {}",
+            rows[2]
+        );
+        assert!(rows[2].contains("doing: cargo check"), "{}", rows[2]);
+
+        // Effect and verdict: the round's card data changes no geometry and
+        // takes its own slot without pushing the summary away.
+        view.tasks[0].status = "approved".into();
+        view.tasks[0].round = 1;
+        view.tasks[0].effect = Some("3 files changed — src/a.rs, src/b.rs, src/c.rs".into());
+        view.tasks[0].obligations = Some(json!({"total": 2, "ok": 2, "missing": 0}));
+        view.tasks[0].integration = Some(json!({"outcome": "committed", "detail": "as abc123"}));
+        assert_eq!(geometry(&view), before, "a verdict moves no card");
+        let graph = Graph::new(&view);
+        let node = graph.node("worker:t1").unwrap();
+        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+        graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+        let rows = canvas.lines();
+        assert!(
+            rows[..BODY_ROW as usize + MAX_SUMMARY_LINES]
+                .iter()
+                .any(|row| row.contains("Fix the storage")),
+            "the summary keeps its slot: {rows:?}"
+        );
+        let effect_slot: String = rows[EFFECT_ROW as usize..rows.len() - 1].join(" ");
+        assert!(effect_slot.contains("effect: 3 files"), "{rows:?}");
+        assert!(
+            rows.last().unwrap().contains("committed"),
+            "meta at the bottom"
+        );
+        assert_eq!(rows.len(), usize::from(HEIGHT));
+
+        // A retry clears the round's card data and still moves no card.
+        view.tasks[0].status = "queued".into();
+        view.tasks[0].effect = None;
+        view.tasks[0].obligations = None;
+        view.tasks[0].integration = None;
+        assert_eq!(geometry(&view), before, "a retry moves no card");
+        // Neither role ever shows a summary line displaced by the other's
+        // data: every visible card keeps its fixed slot count.
+        for node in Graph::new(&view).nodes.iter().filter(|node| node.visible) {
+            assert_eq!(node.height, HEIGHT, "{}", node.key);
+            assert!(node.y.saturating_add(HEIGHT) >= HEIGHT);
+        }
     }
 
     #[test]

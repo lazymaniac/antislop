@@ -2825,15 +2825,23 @@ impl Core {
                 };
                 report = self.post(conversation, Some(&task.plan_id), &spec.id, &next)?;
             }
+            // The worker may have stated its own effect for the card in the
+            // same answer. Keep that line for feedback and drop the block
+            // from the stored report; an empty or damaged block stays in
+            // the report whole and the round falls back to the diffstat
+            // (writers) or the report's first text line (read-only).
+            let (report, stated) = tasks::parse_effect(&report);
             task.report = Some(report.clone());
-            let mut effect_text: Option<String> = None;
+            let mut effect_text = stated;
             let changes = match (&worktree, &task.base) {
                 (Some(path), Some(base)) => {
                     let result = git::commit_all(path, &format!("{} (round {round})", spec.title))?;
                     task.result = Some(result.clone());
                     let stat = git::diff_stat(path, base, &result)?;
                     let files = git::changed_files(path, base, &result)?;
-                    effect_text = Some(tasks::effect(&stat, &files));
+                    if effect_text.is_none() {
+                        effect_text = Some(tasks::effect(&stat, &files));
+                    }
                     Some(tasks::changes_text(base, &result, &stat))
                 }
                 (None, Some(base)) if in_place => {
@@ -2842,7 +2850,9 @@ impl Core {
                     task.result = Some(result.clone());
                     let stat = git::diff_stat(&project, base, &result)?;
                     let files = git::changed_files(&project, base, &result)?;
-                    effect_text = Some(tasks::effect(&stat, &files));
+                    if effect_text.is_none() {
+                        effect_text = Some(tasks::effect(&stat, &files));
+                    }
                     let touched: Vec<String> = files
                         .into_iter()
                         .filter(|file| user_edits.contains(file))
