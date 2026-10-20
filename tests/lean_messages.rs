@@ -187,6 +187,97 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Protocol"), task(
 }
 
 #[test]
+fn an_approved_task_answers_a_question_that_arrives_after_its_approval() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2", "Gate", ["t1"]))
+"#,
+        r#"    if "from t1 (answer)" in prompt:
+        answer = "gate closed on UTF-16"
+    elif "from t2 (question)" in prompt:
+        answer = "no findings" + message("t2", "answer", "UTF-16")
+    elif "Task id: t2" in prompt:
+        answer = "gate waits" + message("t1", "question", "which encoding?")
+    else:
+        answer = "audit report""#,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("plan finished", || core.is_idle(&conversation));
+
+    let tasks = core.store.latest_plan(&conversation).unwrap();
+    assert_eq!(tasks[0].status, "approved");
+    assert_eq!(tasks[1].report.as_deref(), Some("gate closed on UTF-16"));
+    assert!(events(&core, &conversation, "mail_rejected").is_empty());
+    let mail = core.store.mail(&conversation).unwrap();
+    assert!(
+        mail.iter()
+            .filter(|mail| mail.sender == "t2" || mail.sender == "t1")
+            .all(|mail| mail.delivered_turn.is_some()),
+        "{mail:?}"
+    );
+}
+
+#[test]
+fn the_user_writes_to_an_approved_task_and_its_worker_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"))
+"#,
+        r#"    answer = "noted" if "Messages for you" in prompt else "audit report""#,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("plan finished", || core.is_idle(&conversation));
+
+    core.submit(&conversation, "@t1 dodaj przypadek UTF-8")
+        .unwrap();
+    wait_until("answered", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .mail(&conversation)
+                .unwrap()
+                .iter()
+                .any(|mail| mail.sender == "user" && mail.delivered_turn.is_some())
+    });
+    assert!(prompts(dir.path()).iter().any(|(bin, prompt)| bin == "agy"
+        && prompt.starts_with("Messages for you:\n- from user (user_instruction): dodaj")));
+    // The answering turn changes neither the task nor its report.
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "approved");
+    assert_eq!(task.report.as_deref(), Some("audit report"));
+}
+
+#[test]
+fn a_message_to_a_task_that_failed_tells_the_sender() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2", "Gate"))
+"#,
+        r#"    if "Task id: t1" in prompt:
+        sys.exit(1)
+    elif "not delivered" in prompt:
+        answer = "gate saw the notice"
+    else:
+        time.sleep(1)
+        answer = "gate waits" + message("t1", "question", "which encoding?")"#,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("plan finished", || core.is_idle(&conversation));
+
+    let tasks = core.store.latest_plan(&conversation).unwrap();
+    assert_ne!(tasks[0].status, "approved");
+    assert_eq!(tasks[1].report.as_deref(), Some("gate saw the notice"));
+    let rejected = events(&core, &conversation, "mail_rejected");
+    assert_eq!(rejected[0]["recipient"], "t1");
+}
+
+#[test]
 fn the_user_writes_to_a_working_agent_and_the_orchestrator_learns_of_it() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(

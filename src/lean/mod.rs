@@ -174,6 +174,8 @@ pub struct Core {
     integrating: Mutex<()>,
     /// In-place writers work in the user's directory one at a time.
     in_place: Mutex<()>,
+    /// Serializes the turns that answer messages for approved tasks.
+    answering: Mutex<()>,
     /// Conversations with an orchestrator loop running, and its cancel flag.
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Conversations with a plan running, and its cancel flag.
@@ -244,6 +246,7 @@ impl Core {
             state: state.canonicalize()?,
             integrating: Mutex::new(()),
             in_place: Mutex::new(()),
+            answering: Mutex::new(()),
             running: Mutex::new(HashMap::new()),
             plans: Mutex::new(HashMap::new()),
             reviews: Mutex::new(HashMap::new()),
@@ -460,6 +463,9 @@ impl Core {
                     state: "queued".into(),
                 },
             )?;
+            if !is_verifier && task.status == status::APPROVED {
+                self.answer_in_background(conversation, &task.plan_id);
+            }
             return Ok(json!({
                 "mail": mail.id,
                 "state": "queued",
@@ -1479,6 +1485,9 @@ impl Core {
                     }),
                 )?;
                 self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
+                // Mail that reached the task before it was approved by hand
+                // has no round left to be read in.
+                self.answer_in_background(&req.conversation, &req.plan);
                 self.maybe_continue_plan(&req.conversation, &req.plan)?;
             }
             RecoveryAction::CancelTask => {
@@ -2628,6 +2637,8 @@ impl Core {
                                         Some(&error.to_string()),
                                     );
                                 }
+                                let _ =
+                                    self.answer_waiting(conversation, &task_clone.plan_id, cancel);
                                 let _ = tx.send(spec_id);
                             });
                         }
@@ -2808,6 +2819,8 @@ impl Core {
                 return self.stop_task(conversation, task, &worker, cancel);
             };
             let mut report = self.post(conversation, Some(&task.plan_id), &spec.id, &report)?;
+            // Approved tasks addressed by it answer now, so its next turn reads them.
+            self.answer_waiting(conversation, &task.plan_id, cancel)?;
             // Messages that arrived while it worked get a turn of their own.
             for _ in 0..MAIL_TURNS {
                 if self.store.pending_mail(conversation, &worker)?.is_empty() {
@@ -3136,9 +3149,15 @@ impl Core {
                     (to, false)
                 };
                 let known = plan.iter().any(|task| task.spec["id"] == target_id);
+                // An approved task takes no more turns of its own, but its
+                // worker still answers messages (`answer_waiting`).
                 let live: Vec<_> = plan
                     .iter()
-                    .filter(|task| task.spec["id"] == target_id && !status::finished(&task.status))
+                    .filter(|task| {
+                        task.spec["id"] == target_id
+                            && (!status::finished(&task.status)
+                                || (!is_verifier && task.status == status::APPROVED))
+                    })
                     .collect();
                 if known && live.is_empty() {
                     self.store.append_event(
@@ -3167,6 +3186,29 @@ impl Core {
                             state: "queued".into(),
                         },
                     )?;
+                    // The sender learns that nobody will read it.
+                    if let Some(sender_task) = plan.iter().find(|task| task.spec["id"] == own_task)
+                    {
+                        let role = format!("worker:{}", sender_task.id);
+                        self.store.add_mail(
+                            conversation,
+                            &role,
+                            &Mail {
+                                id: 0,
+                                sender: RUNTIME.into(),
+                                recipient: role.clone(),
+                                kind: "status".into(),
+                                text: format!(
+                                    "Your message to {} was not delivered: its task has finished and takes no more turns.",
+                                    message.to
+                                ),
+                                created_ms: 0,
+                                delivered_turn: None,
+                                delivered_ms: None,
+                                state: "queued".into(),
+                            },
+                        )?;
+                    }
                 }
                 live.into_iter()
                     .map(|task| {
@@ -3206,6 +3248,100 @@ impl Core {
                     state: "queued".into(),
                 },
             )?;
+        }
+        Ok(())
+    }
+
+    /// Answers waiting messages of approved tasks in the background, for mail
+    /// that arrives when no task of the plan is about to read it: the user's,
+    /// or any left over when a task was approved by hand. It joins a running
+    /// plan's cancellation, or holds the conversation busy and cancellable
+    /// while it works.
+    fn answer_in_background(self: &Arc<Self>, conversation: &str, plan_id: &str) {
+        let waiting = self.store.plan(plan_id).is_ok_and(|tasks| {
+            tasks.iter().any(|task| {
+                task.status == status::APPROVED
+                    && self
+                        .store
+                        .pending_mail(conversation, &format!("worker:{}", task.id))
+                        .is_ok_and(|mail| !mail.is_empty())
+            })
+        });
+        if !waiting {
+            return;
+        }
+        let (cancel, own) = {
+            let mut plans = self.plans.lock().expect("plans mutex");
+            match plans.get(conversation) {
+                Some(cancel) => (cancel.clone(), false),
+                None => {
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    plans.insert(conversation.to_owned(), cancel.clone());
+                    (cancel, true)
+                }
+            }
+        };
+        let core = self.clone();
+        let conversation = conversation.to_owned();
+        let plan_id = plan_id.to_owned();
+        std::thread::spawn(move || {
+            if let Err(error) = core.answer_waiting(&conversation, &plan_id, &cancel) {
+                let _ = core.store.append_event(
+                    &conversation,
+                    None,
+                    Some(&plan_id),
+                    "mail_rejected",
+                    &json!({"sender": RUNTIME, "recipient": "?", "text": "",
+                            "reason": format!("answering waiting messages failed: {error}")}),
+                );
+            }
+            if own {
+                core.plans
+                    .lock()
+                    .expect("plans mutex")
+                    .remove(&conversation);
+            }
+        });
+    }
+
+    /// Gives each approved task of the plan whose worker has waiting
+    /// messages a read-only turn to answer them. An approved task runs no
+    /// round of its own, so without this its mail would never be read.
+    fn answer_waiting(&self, conversation: &str, plan_id: &str, cancel: &AtomicBool) -> Result<()> {
+        let _answering = self.answering.lock().unwrap_or_else(|e| e.into_inner());
+        let project = PathBuf::from(self.store.conversation(conversation)?.project);
+        for task in self.store.plan(plan_id)? {
+            if task.status != status::APPROVED {
+                continue;
+            }
+            let worker = format!("worker:{}", task.id);
+            let Ok(spec) = serde_json::from_value::<TaskSpec>(task.spec.clone()) else {
+                continue;
+            };
+            for _ in 0..MAIL_TURNS {
+                if cancel.load(Ordering::SeqCst)
+                    || self.store.pending_mail(conversation, &worker)?.is_empty()
+                {
+                    break;
+                }
+                let setup = TurnSetup {
+                    conversation,
+                    plan_id: Some(task.plan_id.clone()),
+                    role: worker.clone(),
+                    profile: self.config.resolve(spec.kind, RoleKind::Executor),
+                    cwd: project.clone(),
+                    add_dirs: vec![],
+                    access: agent::Access::ReadOnly,
+                    upto_message: 0,
+                };
+                let title = spec.title.clone();
+                let Some(answer) =
+                    self.turn(setup, cancel, |first| tasks::answer_prompt(&title, first))?
+                else {
+                    break;
+                };
+                self.post(conversation, Some(&task.plan_id), &spec.id, &answer)?;
+            }
         }
         Ok(())
     }

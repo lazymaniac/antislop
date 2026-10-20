@@ -213,6 +213,21 @@ pub fn inbox_text(mail: &[crate::lean::store::Mail]) -> String {
     format!("Messages for you:\n{}\n\n", lines.join("\n"))
 }
 
+/// The prompt of a turn that answers messages for a task that is done.
+pub fn answer_prompt(title: &str, first: bool) -> String {
+    let head = if first {
+        format!("Your task \"{title}\" is finished and approved. ")
+    } else {
+        String::new()
+    };
+    format!(
+        "{head}Messages arrived for you (above). Answer them read-only: change no \
+         files. Reply to each sender with a message block addressed to them \
+         (`{{\"to\": \"<sender>\", \"kind\": \"answer\", \"text\": \"...\"}}`); \
+         say plainly when you have nothing to add."
+    )
+}
+
 pub const INBOX_FOLLOWUP: &str = "Messages arrived while you worked (above). \
      Take them into account where they matter and give your complete, \
      updated report.";
