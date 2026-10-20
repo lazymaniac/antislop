@@ -56,6 +56,12 @@ pub struct Details {
     pub fetched_round: Option<u64>,
     /// The selected comment on the Comments tab.
     pub comment: usize,
+    /// The selected check on the Checks tab.
+    pub check: usize,
+    /// The selection moved: the next draw scrolls it into view.
+    pub reveal_check: bool,
+    /// How many check events the last task fetch had seen.
+    pub fetched_checks: u64,
     /// Scroll memory per (agent_key, tab_index)
     pub scroll_memory: HashMap<(String, usize), usize>,
     /// Query memory per (agent_key, tab_index)
@@ -86,6 +92,9 @@ impl Details {
             task: None,
             fetched_round: None,
             comment: 0,
+            check: 0,
+            reveal_check: false,
+            fetched_checks: 0,
             scroll_memory: HashMap::new(),
             query_memory: HashMap::new(),
             query: String::new(),
@@ -176,6 +185,21 @@ impl Details {
         (self.tab == COMMENTS)
             .then(|| view.comments_on(&self.key).get(self.comment).map(|c| c.id))
             .flatten()
+    }
+
+    /// The id of the selected check, on the Checks tab.
+    pub fn selected_check(&self) -> Option<String> {
+        if self.tab != CHECKS {
+            return None;
+        }
+        let rows = check_rows(self.task.as_ref()?);
+        rows.get(self.check.min(rows.len().saturating_sub(1)))
+            .map(|row| row.id.clone())
+    }
+
+    /// How many checks the open task has, for moving the selection.
+    pub fn check_count(&self) -> usize {
+        self.task.as_ref().map_or(0, |task| check_rows(task).len())
     }
 
     /// The task id of a worker or verifier.
@@ -627,12 +651,101 @@ impl Details {
                 raw_value: None,
                 }),
                 (Some(stored), Some(_)) => {
-                    let check_lines = checks(stored);
-                    for line in check_lines {
+                    let rows = check_rows(stored);
+                    self.check = self.check.min(rows.len().saturating_sub(1));
+                    let task_id = self.task_id().unwrap_or_default().to_owned();
+                    let now: Vec<&str> = rows
+                        .iter()
+                        .filter(|row| row.state == "checking")
+                        .map(|row| row.id.as_str())
+                        .collect();
+                    let settled = rows.iter().filter(|row| row.state == "settled").count();
+                    let issues = rows
+                        .iter()
+                        .filter(|row| matches!(row.status.as_deref(), Some("issue" | "blocked")))
+                        .count();
+                    let mut summary = format!("{settled}/{} checks settled", rows.len());
+                    if issues > 0 {
+                        summary.push_str(&format!(" · {issues} with issues"));
+                    }
+                    let working = if now.is_empty() {
+                        String::new()
+                    } else {
+                        format!("Checking now: {}", now.join(", "))
+                    };
+                    let mut head = vec![label(&summary)];
+                    if !working.is_empty() {
+                        head.push((Style::default().fg(Color::Cyan), working));
+                    }
+                    if stored["verdict"].is_null() && stored["checks"].as_array().is_none_or(Vec::is_empty) {
+                        head.push((
+                            dim(),
+                            "Verifier has not started yet; checks appear here as it settles them [no historical data]".into(),
+                        ));
+                    }
+                    head.push((dim(), "↑/↓ select a check · c comment on it".into()));
+                    head.push(plain(String::new()));
+                    records.push(DetailRecord {
+                        search_text: head
+                            .iter()
+                            .map(|(_, text)| text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        lines: head,
+                        raw_value: None,
+                    });
+                    for (index, row) in rows.iter().enumerate() {
+                        let selected = index == self.check;
+                        let mut header_style = row.style;
+                        if selected {
+                            header_style = header_style.add_modifier(Modifier::REVERSED);
+                        }
+                        let comments = view.check_comments(&task_id, &row.id);
+                        let count = if comments.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [{} comment{}]", comments.len(), if comments.len() == 1 { "" } else { "s" })
+                        };
+                        let cursor = if selected { "▸" } else { " " };
+                        let mut lines = vec![(
+                            header_style,
+                            format!("{cursor}{} {} {}: {}{count}", row.mark, row.id, row.kind, row.text),
+                        )];
+                        match (&row.note, row.state) {
+                            (Some(note), _) => {
+                                lines.push((Style::default(), format!("    evidence: {note}")))
+                            }
+                            (None, "checking") => {
+                                lines.push((dim(), "    checking… no evidence yet".into()))
+                            }
+                            (None, "settled") => lines.push((
+                                dim(),
+                                "    settled without evidence [none given in history]".into(),
+                            )),
+                            (None, "unaccounted") => lines.push((
+                                dim(),
+                                "    unaccounted for [no evidence in history]".into(),
+                            )),
+                            _ => lines.push((dim(), "    not checked yet".into())),
+                        }
+                        for comment in comments {
+                            let state = view.comment_state(comment.id);
+                            lines.push((
+                                Style::default().fg(Color::Magenta),
+                                format!("    💬 #{} {state}: {}", comment.id, comment.text),
+                            ));
+                        }
                         records.push(DetailRecord {
-                            search_text: line.1.clone(),
-                            lines: vec![line],
-                            raw_value: Some(stored["verdict"]["coverage"].clone()),
+                            search_text: lines
+                                .iter()
+                                .map(|(_, text)| text.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                            lines,
+                            raw_value: Some(serde_json::json!({
+                                "id": row.id, "state": row.state,
+                                "status": row.status, "evidence": row.note,
+                            })),
                         });
                     }
                 }
@@ -836,6 +949,18 @@ impl Details {
             .collect();
         let height = usize::from(inner.height);
         let bottom = lines.len().saturating_sub(height);
+        if self.tab == CHECKS
+            && std::mem::take(&mut self.reveal_check)
+            && let Some(at) = lines
+                .iter()
+                .position(|line| line.style.add_modifier.contains(Modifier::REVERSED))
+        {
+            if at < self.scroll {
+                self.scroll = at;
+            } else if at >= self.scroll + height {
+                self.scroll = at + 1 - height;
+            }
+        }
         if self.tab == 1 && self.follow {
             self.scroll = bottom;
         } else {
@@ -859,7 +984,15 @@ impl Details {
 }
 
 pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
-    if tab == COMMENTS {
+    if tab == CHECKS {
+        if width >= 80 {
+            "←/→ tab · ↑/↓ select check · c comment on check · / search · v raw · d diff · ? help · Esc back"
+        } else if width >= 45 {
+            "←/→ tab · ↑/↓ select · c comment · Esc"
+        } else {
+            "c com · Esc back"
+        }
+    } else if tab == COMMENTS {
         if width >= 95 {
             "←/→ tab · ↑/↓ select · / search · v raw · c comment · r resolve · o reopen · x delete · d diff · ? help · Esc back"
         } else if width >= 65 {
@@ -971,55 +1104,125 @@ pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> 
     Line::from(spans)
 }
 
-/// The verifier's obligations (the task's risks, then its kind's checklist)
-/// and how the latest verdict accounted for each.
-fn checks(stored: &Value) -> Vec<(Style, String)> {
+/// One check of a verifier as the Checks tab shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckRow {
+    pub id: String,
+    pub kind: &'static str,
+    pub text: String,
+    pub mark: &'static str,
+    pub style: Style,
+    /// `pending`, `checking`, `settled` or `unaccounted`.
+    pub state: &'static str,
+    pub status: Option<String>,
+    pub note: Option<String>,
+}
+
+/// The verifier's obligations (the task's risks, the common checks, then its
+/// kind's checklist) and how far each is: what the verifier reported while it
+/// works, else how the latest verdict accounted for it.
+pub fn check_rows(stored: &Value) -> Vec<CheckRow> {
     let Ok(spec) = serde_json::from_value::<TaskSpec>(stored["spec"].clone()) else {
-        return vec![(dim(), "Cannot read task.".into())];
+        return Vec::new();
     };
-    let coverage = &stored["verdict"]["coverage"];
-    let mut lines = vec![];
-    if stored["verdict"].is_null() {
-        lines.push((
-            dim(),
-            "Verifier has not evaluated yet. Risks and checklist will be accounted for after the task finishes [no historical data].".into(),
-        ));
-        lines.push((Style::default(), String::new()));
-    }
-    for (id, text) in obligations(&spec) {
-        let entry = &coverage[id.as_str()];
-        let (mark, style) = match entry["status"]
-            .as_str()
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("ok") => ("✓", Style::default().fg(Color::Green)),
-            Some("issue") => ("✗", Style::default().fg(Color::Red)),
-            Some("blocked") => ("!", Style::default().fg(Color::Yellow)),
-            Some("n/a") => ("–", dim()),
-            _ if stored["verdict"].is_null() => ("○", dim()),
-            _ => ("?", Style::default().fg(Color::Yellow)),
-        };
-        let kind = if id.starts_with('R') {
-            "risk"
-        } else if id.starts_with('V') {
-            "common"
-        } else {
-            "check"
-        };
-        lines.push((style, format!("{mark} {id} {kind}: {text}")));
-        if let Some(note) = entry["note"].as_str() {
-            lines.push((Style::default(), format!("    {note}")));
-        } else if !stored["verdict"].is_null() {
-            lines.push((dim(), "    unaccounted for [no evidence in history]".into()));
-        }
-    }
-    lines
+    let live = stored["checks"].as_array().filter(|rows| !rows.is_empty());
+    let verdict = !stored["verdict"].is_null();
+    obligations(&spec)
+        .into_iter()
+        .map(|(id, text)| {
+            let (state, status, note) = match live {
+                Some(rows) => match rows.iter().find(|row| row["id"] == id.as_str()) {
+                    Some(row) if row["state"] == "settled" => (
+                        "settled",
+                        row["status"].as_str().map(str::to_ascii_lowercase),
+                        row["note"].as_str().filter(|n| !n.is_empty()),
+                    ),
+                    Some(row) => (
+                        "checking",
+                        None,
+                        row["note"].as_str().filter(|n| !n.is_empty()),
+                    ),
+                    None => ("pending", None, None),
+                },
+                None => {
+                    let entry = &stored["verdict"]["coverage"][id.as_str()];
+                    match entry["status"].as_str() {
+                        Some(status) => (
+                            "settled",
+                            Some(status.to_ascii_lowercase()),
+                            entry["note"].as_str(),
+                        ),
+                        None if verdict => ("unaccounted", None, None),
+                        None => ("pending", None, None),
+                    }
+                }
+            };
+            let (mark, style) = match (state, status.as_deref()) {
+                ("checking", _) => ("◐", Style::default().fg(Color::Cyan)),
+                (_, Some("ok")) => ("✓", Style::default().fg(Color::Green)),
+                (_, Some("issue")) => ("✗", Style::default().fg(Color::Red)),
+                (_, Some("blocked")) => ("!", Style::default().fg(Color::Yellow)),
+                (_, Some("n/a")) => ("–", dim()),
+                ("unaccounted", _) => ("?", Style::default().fg(Color::Yellow)),
+                _ => ("○", dim()),
+            };
+            let kind = match id.chars().next() {
+                Some('R') => "risk",
+                Some('V') => "common",
+                _ => "check",
+            };
+            CheckRow {
+                id,
+                kind,
+                text,
+                mark,
+                style,
+                state,
+                status,
+                note: note.map(str::to_owned),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn verifier_task(extra: Value) -> Value {
+        let mut task = serde_json::json!({
+            "spec": {"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
+                     "verifier": {"focus": "f", "risks": ["a risk"]}},
+        });
+        task.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        task
+    }
+
+    #[test]
+    fn checks_show_live_progress_before_any_verdict() {
+        let task = verifier_task(serde_json::json!({"checks": [
+            {"id": "R1", "state": "settled", "status": "ok", "note": "a.rs:3"},
+            {"id": "V1", "state": "checking", "status": null, "note": ""},
+        ]}));
+        let rows = check_rows(&task);
+        assert_eq!(rows[0].state, "settled");
+        assert_eq!(rows[0].note.as_deref(), Some("a.rs:3"));
+        assert_eq!(rows[1].state, "checking");
+        assert_eq!(rows[2].state, "pending");
+    }
+
+    #[test]
+    fn checks_fall_back_to_the_verdict_and_flag_what_it_skipped() {
+        let task = verifier_task(serde_json::json!({"verdict": {"coverage": {
+            "R1": {"status": "issue", "note": "broken"}}}}));
+        let rows = check_rows(&task);
+        assert_eq!(rows[0].status.as_deref(), Some("issue"));
+        assert_eq!(rows[0].note.as_deref(), Some("broken"));
+        assert_eq!(rows[1].state, "unaccounted");
+    }
+
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 

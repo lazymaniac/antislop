@@ -92,6 +92,29 @@ impl DiffView {
         })
     }
 
+    /// Vim-style Ctrl+D / Ctrl+U: half of a page down or up.
+    pub fn half_page(&mut self, down: bool) {
+        let count = if self.on_files {
+            self.files().len()
+        } else {
+            self.lines_in_file()
+        };
+        let last = count.saturating_sub(1);
+        let position = if self.on_files {
+            &mut self.file
+        } else {
+            &mut self.line
+        };
+        *position = if down {
+            (*position + 10).min(last)
+        } else {
+            position.saturating_sub(10)
+        };
+        if self.on_files {
+            self.line = 0;
+        }
+    }
+
     pub fn key(&mut self, code: crossterm::event::KeyCode) {
         use crossterm::event::KeyCode;
         let files = self.files().len();

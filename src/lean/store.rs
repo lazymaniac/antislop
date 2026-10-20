@@ -205,6 +205,11 @@ pub struct Task {
     pub feedback: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub freshness_token: Option<String>,
+    /// What the verifier has settled so far in the current round, one entry
+    /// per check (`id`, `state`, `status`, `note`). Filled when a task is
+    /// read for a frontend, never stored on the task row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Value>,
 }
 
 pub fn now_ms() -> i64 {
@@ -298,6 +303,11 @@ impl Store {
                plan_id TEXT, target TEXT NOT NULL, label TEXT NOT NULL, text TEXT NOT NULL,
                status TEXT NOT NULL, message INTEGER NOT NULL,
                created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS checks(
+               task_id TEXT NOT NULL, round INTEGER NOT NULL, check_id TEXT NOT NULL,
+               state TEXT NOT NULL, status TEXT, note TEXT NOT NULL DEFAULT '',
+               updated_ms INTEGER NOT NULL,
+               PRIMARY KEY(task_id, round, check_id));
              CREATE TABLE IF NOT EXISTS pauses(
                conversation_id TEXT PRIMARY KEY REFERENCES conversations(id));
              CREATE TABLE IF NOT EXISTS modes(
@@ -867,6 +877,7 @@ impl Store {
                 result: None,
                 feedback: None,
                 freshness_token: None,
+                checks: None,
             };
             tx.execute(
                 "INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms)
@@ -958,9 +969,73 @@ impl Store {
                 result,
                 feedback: feedback.map(|v| serde_json::from_str(&v)).transpose()?,
                 freshness_token: None,
+                checks: None,
             })
         })
         .collect()
+    }
+
+    /// Records how far a verifier is with one check of a round: `checking`
+    /// while it works on it, `settled` with its status and evidence. A check
+    /// already settled does not go back to `checking`; a note stays unless a
+    /// new one replaces it. Returns whether the row changed.
+    pub fn set_check(
+        &self,
+        task: &str,
+        round: u32,
+        check: &str,
+        state: &str,
+        status: Option<&str>,
+        note: &str,
+    ) -> Result<bool> {
+        let db = self.db();
+        let before: Option<(String, Option<String>, String)> = db
+            .query_row(
+                "SELECT state,status,note FROM checks WHERE task_id=?1 AND round=?2 AND check_id=?3",
+                params![task, round, check],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let (state, status, note) = match before {
+            Some((old_state, ..)) if old_state == "settled" && state == "checking" => {
+                return Ok(false);
+            }
+            Some((_, old_status, old_note)) => (
+                state,
+                status.map(str::to_owned).or(old_status),
+                if note.is_empty() {
+                    old_note
+                } else {
+                    note.to_owned()
+                },
+            ),
+            None => (state, status.map(str::to_owned), note.to_owned()),
+        };
+        let changed = db.execute(
+            "INSERT INTO checks(task_id,round,check_id,state,status,note,updated_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)
+             ON CONFLICT(task_id,round,check_id) DO UPDATE SET
+               state=?4,status=?5,note=?6,updated_ms=?7
+             WHERE state IS NOT ?4 OR status IS NOT ?5 OR note IS NOT ?6",
+            params![task, round, check, state, status, note, now_ms()],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// The checks of one round of a task, as JSON entries.
+    pub fn checks(&self, task: &str, round: u32) -> Result<Vec<Value>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT check_id,state,status,note FROM checks
+             WHERE task_id=?1 AND round=?2 ORDER BY updated_ms, check_id",
+        )?;
+        let rows = statement.query_map(params![task, round], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?, "state": row.get::<_, String>(1)?,
+                "status": row.get::<_, Option<String>>(2)?, "note": row.get::<_, String>(3)?,
+            }))
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     pub fn update_task(&self, task: &Task) -> Result<()> {
@@ -1659,6 +1734,7 @@ impl Store {
                     result,
                     feedback: feedback.map(|v| serde_json::from_str(&v)).transpose()?,
                     freshness_token: None,
+                    checks: None,
                 })
             },
         )
@@ -2073,6 +2149,41 @@ mod tests {
         let events = store.events_since("c", 0, 10).unwrap();
         assert_eq!(events[0].created_ms, 0, "unknown, not invented");
         assert!(events[1].created_ms > 1_700_000_000_000);
+    }
+
+    #[test]
+    fn checks_keep_their_evidence_and_never_go_back_to_checking() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("core.db")).unwrap();
+        assert!(
+            store
+                .set_check("u1", 1, "R1", "checking", None, "")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .set_check("u1", 1, "R1", "checking", None, "")
+                .unwrap()
+        );
+        assert!(
+            store
+                .set_check("u1", 1, "R1", "settled", Some("ok"), "a.rs:3")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .set_check("u1", 1, "R1", "checking", None, "")
+                .unwrap()
+        );
+        // The verdict repeats the check without a note: the evidence stays.
+        store
+            .set_check("u1", 1, "R1", "settled", Some("ok"), "")
+            .unwrap();
+        let rows = store.checks("u1", 1).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["note"], "a.rs:3");
+        assert_eq!(rows[0]["status"], "ok");
+        assert!(store.checks("u1", 2).unwrap().is_empty());
     }
 
     #[test]

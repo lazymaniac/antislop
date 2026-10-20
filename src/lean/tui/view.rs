@@ -232,6 +232,8 @@ pub struct CommentProgress {
 
 #[derive(Debug, Default)]
 pub struct View {
+    /// How many check events arrived: an open Checks tab refetches on change.
+    pub check_events: u64,
     pub transcript: Vec<Entry>,
     pub tasks: Vec<TaskRow>,
     /// The plan the task rows show.
@@ -1133,6 +1135,7 @@ impl View {
                 self.push(Style::default().fg(Color::Yellow), text);
                 self.system_card("Mode", text.into(), super::theme::Tone::Queued);
             }
+            "check" => self.check_events += 1,
             "integration" => {
                 let approved = payload["status"] == "approved";
                 self.cards.push(TranscriptCard::System {
@@ -1410,16 +1413,31 @@ impl View {
 
     /// Comments on an element (a diff's comments count for its worker),
     /// newest first, deleted ones left out.
+    /// The comments on one check of a task.
+    pub fn check_comments(&self, task: &str, check: &str) -> Vec<&Comment> {
+        let target = format!("check:{task}:{check}");
+        self.comments
+            .values()
+            .filter(|comment| comment.status != "deleted" && comment.target == target)
+            .collect()
+    }
+
     pub fn comments_on(&self, key: &str) -> Vec<&Comment> {
         let diff = key
             .strip_prefix("worker:")
             .map(|task| format!("diff:{task}"));
+        let checks = key
+            .strip_prefix("verifier:")
+            .map(|task| format!("check:{task}:"));
         self.comments
             .values()
             .rev()
             .filter(|comment| comment.status != "deleted")
             .filter(|comment| {
                 comment.target == key
+                    || checks
+                        .as_ref()
+                        .is_some_and(|checks| comment.target.starts_with(checks))
                     || diff.as_ref().is_some_and(|diff| {
                         comment.target == *diff || comment.target.starts_with(&format!("{diff}:"))
                     })

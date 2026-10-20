@@ -85,7 +85,11 @@ fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
     if !rest.starts_with(['\n', '\r', ' ']) {
         return None;
     }
-    let end = rest.find("```")?;
+    // The closing fence stands on its own line; a ``` inside the body (in a
+    // JSON string, say) does not end it. A one-line block closes at the first.
+    let end = rest
+        .find("\n```")
+        .map_or_else(|| rest.find("```"), |at| Some(at + 1))?;
     let mut remaining = text[..start].trim_end().to_owned();
     let after = rest[end + 3..].trim();
     if !after.is_empty() {
@@ -112,13 +116,23 @@ fn default_kind() -> String {
 /// Every ```message block of an answer, and the answer without them.
 /// Unreadable blocks stay in the text, so nothing the agent said is lost.
 pub fn parse_messages(answer: &str) -> (String, Vec<Outgoing>) {
+    let (text, messages, _) = parse_messages_checked(answer);
+    (text, messages)
+}
+
+/// Like `parse_messages`, and also the bodies of the blocks it could not read.
+pub fn parse_messages_checked(answer: &str) -> (String, Vec<Outgoing>, Vec<String>) {
+    let mut unreadable = vec![];
     let mut text = answer.to_owned();
     let mut messages = vec![];
     let mut kept = vec![];
     while let Some((rest, body)) = fenced(&text, "message") {
         match serde_json::from_str::<Outgoing>(body) {
             Ok(message) if !message.text.trim().is_empty() => messages.push(message),
-            _ => kept.push(format!("```message\n{body}\n```")),
+            _ => {
+                unreadable.push(body.to_owned());
+                kept.push(format!("```message\n{body}\n```"));
+            }
         }
         text = rest;
     }
@@ -127,7 +141,7 @@ pub fn parse_messages(answer: &str) -> (String, Vec<Outgoing>) {
         text.push_str("\n\n");
         text.push_str(&block);
     }
-    (text.trim().to_owned(), messages)
+    (text.trim().to_owned(), messages, unreadable)
 }
 
 pub const MESSAGE_FORMAT: &str = "To tell another agent something it needs \
@@ -135,7 +149,8 @@ pub const MESSAGE_FORMAT: &str = "To tell another agent something it needs \
      ```message\n{\"to\": \"t2\", \"kind\": \"finding|handoff|question|answer|decision|status\", \
      \"text\": \"...\"}\n``` addressed to a task id of the plan, \"orchestrator\" or \"all\". \
      It reaches that agent in its next turn. Keep messages short and only \
-     when they matter to the recipient.";
+     when they matter to the recipient. Never write three backticks inside \
+     the message text, and keep the JSON valid (escape newlines as \\n).";
 
 /// Messages delivered into a turn, before its own prompt.
 pub fn inbox_text(mail: &[crate::lean::store::Mail]) -> String {
@@ -167,6 +182,31 @@ pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskSpec>>>) {
             Ok(plan.tasks)
         });
     (text, Some(plan))
+}
+
+/// One step of a ```recover block: how the orchestrator unblocks a task.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Unblocking {
+    pub task: String,
+    pub action: String,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Splits the ```recover block off an orchestrator answer. Returns the answer
+/// without it and the steps, when the block was there and valid.
+pub fn parse_recoveries(answer: &str) -> (String, Vec<Unblocking>) {
+    #[derive(Deserialize)]
+    struct Block {
+        actions: Vec<Unblocking>,
+    }
+    let Some((text, body)) = fenced(answer, "recover") else {
+        return (answer.trim().to_owned(), Vec::new());
+    };
+    let steps = serde_json::from_str::<Block>(body)
+        .map(|block| block.actions)
+        .unwrap_or_default();
+    (text, steps)
 }
 
 fn validate(tasks: &[TaskSpec]) -> Result<()> {
@@ -705,6 +745,96 @@ pub fn coverage_followup(missing: &[&(String, String)]) -> String {
          Give your complete verdict again, with every obligation in \
          \"coverage\". {VERDICT_FORMAT} {COVERAGE_FORMAT}",
         obligations_text(&missing)
+    )
+}
+
+/// One progress line of a verifier: it started on an obligation (`status`
+/// is `None`) or settled it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckUpdate {
+    pub id: String,
+    pub status: Option<String>,
+    pub note: String,
+}
+
+/// Reads `CHECKING <id>` and `CHECK <id> <status>: <evidence>`, however the
+/// agent decorated the line (list marks, bold, backticks).
+pub fn parse_progress(line: &str) -> Option<CheckUpdate> {
+    let line = line.trim_matches(|c: char| c.is_whitespace() || "-*•`>_".contains(c));
+    let (word, rest) = line.split_once(char::is_whitespace)?;
+    let word = word.trim_matches(|c: char| !c.is_alphanumeric());
+    let rest = rest.trim_start();
+    let (id, rest) = match rest.split_once(char::is_whitespace) {
+        Some((id, rest)) => (id, rest.trim()),
+        None => (rest, ""),
+    };
+    let id = id.trim_matches(|c: char| !c.is_alphanumeric());
+    let mut chars = id.chars();
+    let valid = matches!(chars.next(), Some('R' | 'V' | 'C')) && chars.all(|c| c.is_ascii_digit());
+    if !valid || id.len() < 2 {
+        return None;
+    }
+    match word {
+        "CHECKING" => Some(CheckUpdate {
+            id: id.to_owned(),
+            status: None,
+            note: String::new(),
+        }),
+        "CHECK" => {
+            let (status, note) = rest.split_once(':').unwrap_or((rest, ""));
+            let status = status.trim().trim_matches('*').to_ascii_lowercase();
+            matches!(status.as_str(), "ok" | "issue" | "blocked" | "n/a").then(|| CheckUpdate {
+                id: id.to_owned(),
+                status: Some(status),
+                note: bound(note.trim().trim_matches('*').trim(), DETAIL_LIMIT),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Splits streamed text into lines and reads the progress lines among them.
+#[derive(Debug, Default)]
+pub struct Progress {
+    partial: String,
+}
+
+impl Progress {
+    pub fn push(&mut self, delta: &str) -> Vec<CheckUpdate> {
+        self.partial.push_str(delta);
+        let mut updates = Vec::new();
+        while let Some(end) = self.partial.find('\n') {
+            let line: String = self.partial.drain(..=end).collect();
+            updates.extend(parse_progress(&line));
+        }
+        // A line that never ends must not grow without bound.
+        if self.partial.len() > 4 * DETAIL_LIMIT {
+            self.partial.clear();
+        }
+        updates
+    }
+
+    /// The last line, which may have no newline after it.
+    pub fn finish(&mut self) -> Vec<CheckUpdate> {
+        parse_progress(&std::mem::take(&mut self.partial))
+            .into_iter()
+            .collect()
+    }
+}
+
+/// The user's comments on checks, for the verifier: `(check id, text)`.
+pub fn check_comments_text(comments: &[(String, String)]) -> String {
+    if comments.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = comments
+        .iter()
+        .map(|(id, text)| format!("- on {id}: {text}"))
+        .collect();
+    format!(
+        "The user commented on your checks. Take each into account and answer it in \
+         that check's evidence:\n{}\n\n",
+        list.join("\n")
     )
 }
 
@@ -1269,7 +1399,7 @@ pub fn verifier_prompt(
          Task: {}\nGoal: {}\nScope: {}\nYour focus: {}\n\n\
          Your obligations (the task's risks, the checks of every verification, \
          then those for this kind of work):\n{}{risks}\n\n\
-         The worker's report:\n<<<\n{report}\n>>>\n\n{}{VERDICT_FORMAT} {COVERAGE_FORMAT}",
+         The worker's report:\n<<<\n{report}\n>>>\n\n{}{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
         task.title,
         task.goal,
         scope_text(&task.scope),
@@ -1284,7 +1414,7 @@ pub fn verifier_prompt(
 pub fn verifier_followup(task: &TaskSpec, report: &str, changes: Option<&str>) -> String {
     format!(
         "The worker's updated report:\n<<<\n{report}\n>>>\n\n{}Check it again against \
-         the files and account again for your obligations:\n{}\n\n{VERDICT_FORMAT} {COVERAGE_FORMAT}",
+         the files and account again for your obligations:\n{}\n\n{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
         changes
             .map(|text| format!("{text}\n\n"))
             .unwrap_or_default(),
@@ -1459,6 +1589,14 @@ const OUTSIDE: &str = "Read only the project and the places the request or \
      the plan names; other files on this machine (other projects, logs, this \
      tool's own state and source) are not part of the work.";
 
+/// How a verifier reports while it works, so the user can follow each check
+/// and its evidence as it is settled, not only in the final verdict.
+const PROGRESS_FORMAT: &str = "While you work, report on lines of their own, one per \
+     obligation id: `CHECKING <id>` when you start on it, and `CHECK <id> \
+     <ok|issue|blocked|n/a>: <evidence>` as soon as you settle it. The evidence \
+     is what you saw: file:line, or the command you ran and its result; not a \
+     general assurance. The verdict block that ends your answer repeats them.";
+
 const COVERAGE_FORMAT: &str = "Your verdict must also account for every \
      obligation by its id: \"coverage\": {\"R1\": {\"status\": \"ok|issue|blocked|n/a\", \
      \"note\": \"what you checked, or why it does not apply\"}, \"V1\": {...}, \"C1\": {...}}. \
@@ -1524,6 +1662,52 @@ pub fn findings_text(findings: &[Value]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn progress_lines_are_read_however_they_are_decorated() {
+        let update = |id: &str, status: Option<&str>, note: &str| {
+            Some(CheckUpdate {
+                id: id.into(),
+                status: status.map(Into::into),
+                note: note.into(),
+            })
+        };
+        assert_eq!(parse_progress("CHECKING R1"), update("R1", None, ""));
+        assert_eq!(
+            parse_progress("- **CHECK V2 ok**: src/a.rs:10 handles it"),
+            update("V2", Some("ok"), "src/a.rs:10 handles it")
+        );
+        assert_eq!(
+            parse_progress("`CHECK C3 N/A: nothing to migrate`"),
+            update("C3", Some("n/a"), "nothing to migrate")
+        );
+        assert_eq!(parse_progress("CHECK R1 maybe: x"), None);
+        assert_eq!(parse_progress("CHECK X1 ok: x"), None);
+        assert_eq!(parse_progress("Checking the code now"), None);
+    }
+
+    #[test]
+    fn progress_survives_lines_split_across_deltas() {
+        let mut progress = Progress::default();
+        assert!(progress.push("CHECKING R").is_empty());
+        let first = progress.push("1\nCHECK R1 issue: br");
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].status, None);
+        assert!(progress.push("oken").is_empty());
+        let last = progress.finish();
+        assert_eq!(last[0].note, "broken");
+        assert_eq!(last[0].status.as_deref(), Some("issue"));
+    }
+    #[test]
+    fn a_recover_block_is_split_off_with_its_steps() {
+        let answer = "Retrying.\n```recover\n{\"actions\":[{\"task\":\"t1\",\"action\":\"extend_rounds\"}]}\n```";
+        let (text, steps) = parse_recoveries(answer);
+        assert_eq!(text, "Retrying.");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].task, "t1");
+        assert_eq!(parse_recoveries("a\n```recover\nnope\n```").1, vec![]);
+        assert_eq!(parse_recoveries("plain"), ("plain".to_owned(), vec![]));
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -1710,6 +1894,20 @@ mod tests {
             [("t2", "finding", "UTF-16"), ("all", "status", "heads up")]
         );
         assert_eq!(text, "Report.\n\nMore.\n\n```message\nnot json\n```");
+    }
+
+    #[test]
+    fn backticks_inside_a_message_do_not_cut_it() {
+        let answer =
+            "Report.\n```message\n{\"to\": \"t14\", \"text\": \"last ```effect fence wins\"}\n```";
+        let (text, messages, unreadable) = parse_messages_checked(answer);
+        assert!(unreadable.is_empty());
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "last ```effect fence wins");
+        assert_eq!(text, "Report.");
+        let (_, none, bad) = parse_messages_checked("```message\nnot json\n```");
+        assert!(none.is_empty());
+        assert_eq!(bad, ["not json"]);
     }
 
     #[test]

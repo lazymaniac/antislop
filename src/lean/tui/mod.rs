@@ -597,7 +597,10 @@ impl App {
             .and_then(|details| {
                 let fetched = details.fetched_round?;
                 let now = self.task_row_round(&details.key)?;
-                Some(fetched != now)
+                // Checks the verifier settles meanwhile change the Checks tab.
+                let checks =
+                    details.tab == CHECKS && details.fetched_checks != self.view.check_events;
+                Some(fetched != now || checks)
             })
             .unwrap_or(false);
         if stale {
@@ -631,6 +634,7 @@ impl App {
             .filter(|details| details.task_id() == Some(id.as_str()))
         {
             details.fetched_round = Some(round);
+            details.fetched_checks = self.view.check_events;
         }
         let request = Request::Task {
             plan: plan.clone(),
@@ -898,6 +902,9 @@ impl App {
                     };
                     self.request(request, Some("code review started"));
                 }
+            }
+            KeyCode::Char(ch @ ('u' | 'd')) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                diff.half_page(ch == 'd');
             }
             code => diff.key(code),
         }
@@ -2019,6 +2026,14 @@ impl App {
                     self.help_scroll = (self.help_scroll + 5).min(max_scroll);
                     return true;
                 }
+                KeyCode::Char('u') if control => {
+                    self.help_scroll = self.help_scroll.saturating_sub(3);
+                    return true;
+                }
+                KeyCode::Char('d') if control => {
+                    self.help_scroll = (self.help_scroll + 3).min(max_scroll);
+                    return true;
+                }
                 KeyCode::Home => {
                     self.help_scroll = 0;
                     return true;
@@ -2196,6 +2211,12 @@ impl App {
                 }
             }
             KeyCode::Char('x') if control => self.command("/cancel"),
+            // Vim half-page scrolling while there is no draft to edit; with
+            // text in the box Ctrl+U keeps deleting to the start of the line.
+            KeyCode::Char('u') if control && self.input.is_empty() => self.scroll += 5,
+            KeyCode::Char('d') if control && self.input.is_empty() => {
+                self.scroll = self.scroll.saturating_sub(5);
+            }
             KeyCode::Char('u') if control => self.input.delete_to_start(),
             KeyCode::Char('k') if control => self.input.delete_to_end(),
             KeyCode::Char('w') if control => self.input.delete_word_back(),
@@ -2288,6 +2309,13 @@ impl App {
                 key.code == KeyCode::PageDown,
                 height.saturating_sub(2).max(1),
             );
+            return true;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('u' | 'd'))
+        {
+            let height = self.graph_viewport.map_or(10, |(_, height)| height);
+            self.scroll_graph_node(&graph, key.code == KeyCode::Char('d'), (height / 2).max(1));
             return true;
         }
         let step = match key.code {
@@ -2684,8 +2712,10 @@ impl App {
             return;
         }
 
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let comment = details.selected_comment(&self.view);
         let on_comments = details.tab == COMMENTS;
+        let on_checks = details.tab == CHECKS;
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 details.save_current_tab();
@@ -2717,9 +2747,21 @@ impl App {
             }
             KeyCode::Char('?') => self.show_help(Help::Details),
             KeyCode::Char('c') => {
-                let target = details.key.clone();
+                // On the Checks tab a comment belongs to the selected check.
+                let target = match (details.selected_check(), details.task_id()) {
+                    (Some(check), Some(task)) => format!("check:{task}:{check}"),
+                    _ => details.key.clone(),
+                };
                 let input = self.get_comment_draft(&target);
                 self.editor = Some(Editor { target, input });
+            }
+            KeyCode::Down if on_checks => {
+                details.check = (details.check + 1).min(details.check_count().saturating_sub(1));
+                details.reveal_check = true;
+            }
+            KeyCode::Up if on_checks => {
+                details.check = details.check.saturating_sub(1);
+                details.reveal_check = true;
             }
             KeyCode::Down if on_comments => details.comment += 1,
             KeyCode::Up if on_comments => details.comment = details.comment.saturating_sub(1),
@@ -2730,6 +2772,11 @@ impl App {
                     _ => "deleted",
                 };
                 self.set_comment(comment.expect("selected"), status);
+            }
+            KeyCode::Char('d') if control => details.scroll += 10,
+            KeyCode::Char('u') if control => {
+                details.follow = false;
+                details.scroll = details.scroll.saturating_sub(10);
             }
             KeyCode::Char('d') => {
                 let key = details.key.clone();

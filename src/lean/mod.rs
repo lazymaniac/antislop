@@ -183,6 +183,8 @@ pub struct Core {
     /// The blocked report last handed to each conversation's orchestrator,
     /// so that an unchanged block is told once.
     blocked_seen: Mutex<HashMap<String, String>>,
+    /// How often the orchestrator unblocked each task by itself.
+    unblocked: Mutex<HashMap<(String, String), u32>>,
 }
 
 /// Who runs a turn, where, and with what access.
@@ -246,6 +248,7 @@ impl Core {
             plans: Mutex::new(HashMap::new()),
             reviews: Mutex::new(HashMap::new()),
             blocked_seen: Mutex::new(HashMap::new()),
+            unblocked: Mutex::new(HashMap::new()),
         });
         // Pick up where the previous process stopped: the orchestrator answers
         // what it was answering, and an autonomous conversation resumes its
@@ -794,12 +797,22 @@ impl Core {
         if let Ok(conv) = self.store.plan_conversation(plan) {
             task.freshness_token = self.task_freshness_token(&conv, plan, &task.id).ok();
         }
+        task.checks = self
+            .store
+            .checks(&task.id, task.round)
+            .ok()
+            .map(serde_json::Value::from);
         Ok(task)
     }
 
     pub fn task_scoped(&self, conversation: &str, plan: &str, id: &str) -> Result<Task> {
         let mut task = self.task_unscoped(plan, id)?;
         task.freshness_token = self.task_freshness_token(conversation, plan, &task.id).ok();
+        task.checks = self
+            .store
+            .checks(&task.id, task.round)
+            .ok()
+            .map(serde_json::Value::from);
         Ok(task)
     }
 
@@ -1613,6 +1626,100 @@ impl Core {
         Ok(())
     }
 
+    /// Carries out the unblocking steps the orchestrator wrote, one task at a
+    /// time. A step that cannot be taken is reported with its raw reason and
+    /// leaves the others alone. In an autonomous conversation a task is
+    /// unblocked this way only a few times, then it waits for the user.
+    fn unblock_by_orchestrator(self: &Arc<Self>, conversation: &str, steps: &[tasks::Unblocking]) {
+        const AUTOMATIC_LIMIT: u32 = 3;
+        const ALLOWED: [RecoveryAction; 5] = [
+            RecoveryAction::RetryWithGuidance,
+            RecoveryAction::ExtendRounds,
+            RecoveryAction::ForceApprove,
+            RecoveryAction::KeepOnBranch,
+            RecoveryAction::CancelTask,
+        ];
+        let autonomous = self.autonomous(conversation).unwrap_or(false);
+        let Some(plan) = self
+            .store
+            .latest_plan(conversation)
+            .ok()
+            .and_then(|tasks| tasks.first().map(|task| task.plan_id.clone()))
+        else {
+            return;
+        };
+        for step in steps {
+            let result = (|| -> Result<String> {
+                let action: RecoveryAction =
+                    serde_json::from_value(json!(step.action)).map_err(|_| {
+                        Error::Invalid(format!("unknown unblocking action {}", step.action))
+                    })?;
+                require(
+                    ALLOWED.contains(&action),
+                    &format!("{} is left to the user", step.action),
+                )?;
+                let task = self.task_unscoped(&plan, &step.task)?;
+                if autonomous {
+                    let mut seen = self.unblocked.lock().expect("unblocked mutex");
+                    let count = seen
+                        .entry((conversation.to_owned(), task.id.clone()))
+                        .or_default();
+                    require(
+                        *count < AUTOMATIC_LIMIT,
+                        "unblocked automatically too often; it waits for the user",
+                    )?;
+                    *count += 1;
+                }
+                let response = self.recover_task(TaskRecoveryRequest {
+                    conversation: conversation.to_owned(),
+                    plan: plan.clone(),
+                    task: task.id.clone(),
+                    action,
+                    consent_files: None,
+                    freshness_token: self.task_freshness_token(conversation, &plan, &task.id)?,
+                    message: step.message.clone(),
+                })?;
+                Ok(response.status)
+            })();
+            self.notice(
+                conversation,
+                &match result {
+                    Ok(status) => format!(
+                        "orchestrator unblocked {} ({}): now {status}",
+                        step.task, step.action
+                    ),
+                    Err(error) => format!(
+                        "orchestrator could not unblock {} ({}): {error}",
+                        step.task, step.action
+                    ),
+                },
+            );
+        }
+    }
+
+    /// The user's open comments on the checks of a task, for its verifier.
+    fn check_comments(&self, conversation: &str, plan: &str, spec_id: &str) -> String {
+        let prefix = format!("check:{spec_id}:");
+        let comments: Vec<(String, String)> = self
+            .store
+            .comments(conversation, "open")
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|comment| comment.plan_id.as_deref().is_none_or(|id| id == plan))
+            .filter_map(|comment| {
+                let id = comment.target.strip_prefix(&prefix)?.to_owned();
+                Some((id, comment.text))
+            })
+            .collect();
+        tasks::check_comments_text(&comments)
+    }
+
+    fn notice(&self, conversation: &str, text: &str) {
+        let _ = self
+            .store
+            .append_event(conversation, None, None, "notice", &json!({"text": text}));
+    }
+
     fn maybe_continue_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<()> {
         let tasks = self.store.plan(plan_id)?;
         let has_queued = tasks.iter().any(|t| t.status == status::QUEUED);
@@ -1660,14 +1767,17 @@ impl Core {
             // If any tasks are blocked waiting for user action or recovery,
             // do not run the premature audit or report; await recovery action.
             let tasks = core.store.plan(&plan_id).unwrap_or_default();
-            let has_blocked = tasks
-                .iter()
-                .any(|t| t.status == status::NEEDS_USER || t.status == status::WAITING);
+            let has_blocked = tasks.iter().any(|t| {
+                t.status == status::NEEDS_USER
+                    || t.status == status::WAITING
+                    || t.status == status::FAILED
+            });
             if has_blocked {
+                let autonomous = core.autonomous(&conversation).unwrap_or(false);
                 // Held like the normal ending, so the conversation never looks
                 // idle between the report and the orchestrator starting on it.
                 let mut plans = core.plans.lock().expect("plans mutex");
-                let report = blocked_report(&tasks);
+                let report = blocked_report(&tasks, autonomous);
                 let told = core
                     .blocked_seen
                     .lock()
@@ -1927,8 +2037,22 @@ impl Core {
         } else {
             (answer, None)
         };
+        let (answer, unblocking) = tasks::parse_recoveries(&answer);
         let (text, plan) = tasks::parse_plan(&answer);
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
+        if !unblocking.is_empty() {
+            // Supervised: only an answer of the user lets the orchestrator
+            // unblock; the runtime's own report does not.
+            let decided = asked.last().is_some_and(|message| message.author == "user");
+            if decided || self.autonomous(conversation)? {
+                self.unblock_by_orchestrator(conversation, &unblocking);
+            } else {
+                self.notice(
+                    conversation,
+                    "the orchestrator proposed to unblock steps before you decided; nothing was done",
+                );
+            }
+        }
         match plan {
             Some(Ok(specs)) => {
                 let specs = if self.config.policy.required_gates {
@@ -2204,6 +2328,19 @@ impl Core {
             );
         };
         let log = std::cell::RefCell::new(TurnLog::default());
+        // A verifier reports its checks while it works; they are recorded as
+        // they come, so the user follows them before the verdict exists.
+        let live = role
+            .strip_prefix("verifier:")
+            .and_then(|task| self.store.task_by_id(task).ok().flatten());
+        let progress = std::cell::RefCell::new(tasks::Progress::default());
+        let record = |updates: Vec<tasks::CheckUpdate>| {
+            if let Some(task) = &live {
+                for update in updates {
+                    self.record_check(conversation, task, &update);
+                }
+            }
+        };
         let flush_text = |log: &std::cell::RefCell<TurnLog>| {
             let mut log = log.borrow_mut();
             let text = std::mem::take(&mut log.text);
@@ -2265,6 +2402,7 @@ impl Core {
                     // when something else happens, not as a row each.
                     agent::Event::Text { delta } => {
                         log.borrow_mut().text.push_str(delta);
+                        record(progress.borrow_mut().push(delta));
                         return;
                     }
                     _ => {}
@@ -2293,8 +2431,17 @@ impl Core {
             })
         });
         flush_text(&log);
+        record(progress.borrow_mut().finish());
         match outcome {
             Ok(outcome) => {
+                // Some CLIs report the answer only at the end.
+                record(
+                    outcome
+                        .text
+                        .lines()
+                        .filter_map(tasks::parse_progress)
+                        .collect(),
+                );
                 // Some CLIs report the answer only at the end.
                 if !log.borrow().stored_text {
                     let preview = agent::clip(&outcome.text, TURN_TEXT);
@@ -2323,6 +2470,34 @@ impl Core {
                 );
                 Ok(None)
             }
+        }
+    }
+
+    /// Stores one check the verifier reported and tells frontends, when it
+    /// changed what they show.
+    fn record_check(&self, conversation: &str, task: &Task, update: &tasks::CheckUpdate) {
+        let state = if update.status.is_some() {
+            "settled"
+        } else {
+            "checking"
+        };
+        let changed = self.store.set_check(
+            &task.id,
+            task.round,
+            &update.id,
+            state,
+            update.status.as_deref(),
+            &update.note,
+        );
+        if changed.unwrap_or(false) {
+            let _ = self.store.append_event(
+                conversation,
+                None,
+                Some(&task.plan_id),
+                "check",
+                &json!({"id": task.spec["id"], "task": task.id, "round": task.round,
+                        "check": update.id, "state": state, "status": update.status}),
+            );
         }
     }
 
@@ -2714,12 +2889,14 @@ impl Core {
                 access: agent::Access::ReadOnly,
                 upto_message: 0,
             };
+            let user_checks = self.check_comments(conversation, &task.plan_id, &spec.id);
             let answer = self.turn(setup, cancel, |first| {
-                if first {
+                let prompt = if first {
                     tasks::verifier_prompt(&project_text, &spec, &report, changes.as_deref())
                 } else {
                     tasks::verifier_followup(&spec, &report, changes.as_deref())
-                }
+                };
+                format!("{user_checks}{prompt}")
             })?;
             let Some(answer) = answer else {
                 return self.stop_task(conversation, task, &verifier, cancel);
@@ -2763,6 +2940,27 @@ impl Core {
             }
             let incomplete = !tasks::unaccounted(&verdict, &obligations).is_empty();
             tasks::settle(&mut verdict, &obligations, !spec.writes);
+            // The verdict has the last word on every check, with its evidence.
+            for (id, _) in &obligations {
+                if let Some(entry) = verdict.coverage.get(id.as_str()) {
+                    let status = entry["status"].as_str().map(str::to_ascii_lowercase);
+                    let note = tasks::bound(
+                        entry["note"].as_str().unwrap_or_default(),
+                        tasks::DETAIL_LIMIT,
+                    );
+                    self.record_check(
+                        conversation,
+                        task,
+                        &tasks::CheckUpdate {
+                            id: id.clone(),
+                            status: status.filter(|status| {
+                                matches!(status.as_str(), "ok" | "issue" | "blocked" | "n/a")
+                            }),
+                            note,
+                        },
+                    );
+                }
+            }
             let mut v_val = serde_json::to_value(&verdict)?;
             if let Some(obj) = v_val.as_object_mut() {
                 obj.insert("round".into(), json!(task.round));
@@ -2877,7 +3075,17 @@ impl Core {
         sender: &str,
         answer: &str,
     ) -> Result<String> {
-        let (text, outgoing) = tasks::parse_messages(answer);
+        let (text, outgoing, unreadable) = tasks::parse_messages_checked(answer);
+        for body in unreadable {
+            self.store.append_event(
+                conversation,
+                None,
+                plan_id,
+                "mail_rejected",
+                &json!({"sender": sender, "recipient": "?", "text": body,
+                        "reason": "unreadable message block: invalid JSON or an unescaped ``` inside it"}),
+            )?;
+        }
         for message in outgoing {
             self.deliver(conversation, plan_id, sender, message)?;
         }
@@ -2921,8 +3129,40 @@ impl Core {
                 } else {
                     (to, false)
                 };
-                plan.iter()
-                    .filter(|task| task.spec["id"] == target_id)
+                let known = plan.iter().any(|task| task.spec["id"] == target_id);
+                let live: Vec<_> = plan
+                    .iter()
+                    .filter(|task| task.spec["id"] == target_id && !status::finished(&task.status))
+                    .collect();
+                if known && live.is_empty() {
+                    self.store.append_event(
+                        conversation,
+                        None,
+                        plan_id,
+                        "mail_rejected",
+                        &json!({"sender": sender, "recipient": message.to, "text": message.text,
+                                "reason": "the recipient's task has already finished"}),
+                    )?;
+                    self.store.add_mail(
+                        conversation,
+                        ORCHESTRATOR,
+                        &Mail {
+                            id: 0,
+                            sender: sender.into(),
+                            recipient: ORCHESTRATOR.into(),
+                            kind: message.kind.clone(),
+                            text: format!(
+                                "(for {}, whose task has finished) {}",
+                                message.to, message.text
+                            ),
+                            created_ms: 0,
+                            delivered_turn: None,
+                            delivered_ms: None,
+                            state: "queued".into(),
+                        },
+                    )?;
+                }
+                live.into_iter()
                     .map(|task| {
                         let role = if is_verifier {
                             format!("verifier:{}", task.id)
@@ -3541,12 +3781,18 @@ fn is_plan_target(target: &str) -> bool {
 
 /// What the orchestrator is told when tasks wait for the user: which, why,
 /// and what the user can do, so that it can explain the block in a few words.
-fn blocked_report(tasks: &[Task]) -> String {
-    let mut text = String::from(
+fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
+    let mut text = String::from(if autonomous {
+        "The plan cannot go on: these steps are blocked. The user is not watching: decide \
+         yourself which way out fits each step and take it with a ```recover block (format \
+         below); say in two or three sentences what you decided and why. Do not propose a \
+         new plan.\n"
+    } else {
         "The plan cannot go on: these steps are blocked and wait for the user. Explain to \
-         the user in two or three sentences what is wrong and which way out fits; do not \
-         propose a new plan unless the user asks for one.\n",
-    );
+         the user in two or three sentences what is wrong, and ask which way out they want \
+         for each step. Do not unblock anything yet and do not propose a new plan: when the \
+         user has answered, carry out their decision with a ```recover block (format below).\n"
+    });
     let mut blocked_ids = Vec::new();
     for task in tasks.iter().filter(|task| {
         task.status == status::NEEDS_USER
@@ -3580,8 +3826,12 @@ fn blocked_report(tasks: &[Task]) -> String {
         ));
     }
     text.push_str(
-        "\nThe user can unblock a step with /unblock <task>: retry it with guidance, give \
-         it more rounds, approve it as it is, keep its change on a branch, or cancel it.",
+        "\nWays out: `retry_with_guidance` (the message is the hint for the worker; it \
+         resumes its own session), `extend_rounds`, `force_approve` (accept the result as it \
+         is), `keep_on_branch` (keep a writer's change on a branch and go on), `cancel_task`. \
+         The user can also use /unblock <task>. To unblock steps, end your answer with:\n\
+         ```recover\n{\"actions\":[{\"task\":\"t2\",\"action\":\"retry_with_guidance\",\
+         \"message\":\"what to do differently\"}]}\n```",
     );
     text
 }

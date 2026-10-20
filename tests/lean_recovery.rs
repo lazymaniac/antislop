@@ -28,6 +28,13 @@ plans = {
 }
 name = next((name for name in sorted(plans, key=len, reverse=True) if name in prompt.splitlines()[-1]), None)
 answer = "Plan.\n```plan\n" + json.dumps({"tasks": plans[name]}) + "\n```" if name else "ok"
+# The user has decided (supervised) or nobody watches (autonomous): unblock t1,
+# which only works once the agent is logged in.
+if "The user is not watching" in prompt or prompt.splitlines()[-1] == "retry t1":
+    import os
+    open(os.path.join(os.path.dirname(sys.argv[0]), "logged-in"), "w").close()
+    answer = "Retrying.\n```recover\n" + json.dumps({"actions": [
+        {"task": "t1", "action": "retry_with_guidance", "message": "logged in now"}]}) + "\n```"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
 print(json.dumps({"type": "turn.completed", "usage": {}}))
@@ -679,4 +686,41 @@ fn test_mechanical_audit_gate_prevents_false_success() {
         report_output.contains("not fully delivered"),
         "plan report text must reflect audit rejection"
     );
+}
+
+#[test]
+fn supervised_orchestrator_unblocks_only_after_the_user_decides() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let plan = propose(&core, &conversation, "chain");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+
+    core.send(&conversation, "retry t1").unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
+    let events = core.store.events_since(&conversation, 0, 1000).unwrap();
+    assert!(events.iter().any(|e| {
+        e.kind == "notice"
+            && e.payload["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("orchestrator unblocked t1"))
+    }));
+}
+
+#[test]
+fn autonomous_orchestrator_unblocks_a_blocked_task_by_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open_in_mode(dir.path(), "autonomous");
+    let conversation = core.start(&project).unwrap().id;
+    core.send(&conversation, "chain").unwrap();
+    wait_idle(&core, &conversation);
+    let plan = core.store.latest_plan(&conversation).unwrap()[0]
+        .plan_id
+        .clone();
+    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
 }

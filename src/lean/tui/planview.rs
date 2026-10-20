@@ -219,6 +219,14 @@ impl PlanView {
         let confirming = std::mem::take(&mut self.confirm_accept);
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
+                KeyCode::Char('d') => {
+                    self.cursor = (self.cursor + 5).min(max_cursor);
+                    return PlanAction::None;
+                }
+                KeyCode::Char('u') => {
+                    self.cursor = self.cursor.saturating_sub(5);
+                    return PlanAction::None;
+                }
                 KeyCode::Char('a') if decidable => return PlanAction::Accept,
                 KeyCode::Char('x') | KeyCode::Char('r') if decidable => {
                     return PlanAction::Reject;
