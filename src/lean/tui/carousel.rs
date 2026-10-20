@@ -2,6 +2,7 @@
 //! and transitions to worker and verifier.
 
 use super::graph::mark;
+use super::taskinfo;
 use super::theme::Theme;
 use super::view::{TaskRow, View, dim, status_label};
 use ratatui::{
@@ -206,7 +207,10 @@ impl Carousel {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("  ·  Round: r{}", task.round),
+                match taskinfo::round_shown(task.round) {
+                    Some(round) => format!("  ·  Round: {round}"),
+                    None => "  ·  Round: not started".to_owned(),
+                },
                 Style::default().fg(Color::Yellow),
             ),
             Span::styled(
@@ -281,23 +285,29 @@ impl Carousel {
             ),
         ]));
 
-        // Agents information
-        let worker_info = worker_agent.map_or("not started", |a| {
+        // Agents information: worker and verifier keep separate lines, each
+        // with the round its work belongs to.
+        let round = taskinfo::round_shown(task.round);
+        let with_round = |text: &str| match &round {
+            Some(round) => format!("{text} {round}"),
+            None => text.to_owned(),
+        };
+        let worker_info = worker_agent.map_or("not started".to_owned(), |a| {
             if a.running {
-                "● working"
+                with_round("● working")
             } else if !a.activity.is_empty() {
-                a.activity.as_str()
+                a.activity.clone()
             } else {
-                "idle"
+                "idle".to_owned()
             }
         });
-        let verifier_info = verifier_agent.map_or("not started", |a| {
+        let verifier_info = verifier_agent.map_or("not started".to_owned(), |a| {
             if a.running {
-                "● checking"
+                with_round("● checking")
             } else if !a.activity.is_empty() {
-                a.activity.as_str()
+                a.activity.clone()
             } else {
-                "idle"
+                "idle".to_owned()
             }
         });
         lines.push(Line::from(vec![
@@ -306,6 +316,47 @@ impl Carousel {
             Span::styled("  │  Verifier [V]: ", theme.dim()),
             Span::styled(verifier_info, Style::default().fg(Color::Yellow)),
         ]));
+
+        // What the round produced, what the verdict covered, and how it
+        // landed — the same reading the graph card gives.
+        lines.push(Line::from(vec![
+            Span::styled("  Effect: ", theme.dim()),
+            Span::styled(
+                taskinfo::effect_line(task).unwrap_or_else(|| "no effect reported yet".to_owned()),
+                Style::default(),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Obligations: ", theme.dim()),
+            Span::styled(
+                taskinfo::coverage_full(task),
+                Style::default().fg(Color::Green),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Integration: ", theme.dim()),
+            Span::styled(
+                format!(
+                    "{} · {}",
+                    taskinfo::integration_label(task),
+                    taskinfo::integration_detail(task)
+                ),
+                Style::default().fg(Color::Magenta),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Next: ", theme.dim()),
+            Span::styled(
+                taskinfo::next_step(view, task),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]));
+        if let Some(why) = taskinfo::cause(task) {
+            lines.push(Line::from(vec![
+                Span::styled("  Cause: ", theme.dim()),
+                Span::styled(why, Style::default().fg(Color::Red)),
+            ]));
+        }
 
         lines.push(Line::styled("", Style::default()));
 
@@ -352,11 +403,23 @@ impl Carousel {
         let problems = problems + unclassified;
 
         lines.push(Line::styled("", Style::default()));
+        // Plan state counters: the coarse reading first, then every state's
+        // own count, so no task ever disappears into an unnamed bucket.
+        let per_state = taskinfo::state_counts(view)
+            .into_iter()
+            .filter(|(_, count)| *count > 0)
+            .map(|(state, count)| format!("{state} {count}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
         lines.push(Line::from(vec![
             Span::styled(format!("Plan summary: {} tasks total │ ✓ {} approved │ ● {} in progress │ ○ {} waiting │ ✕ {} issues",
                 view.tasks.len(), approved, working, queued, problems
             ), theme.dim()),
         ]));
+        lines.push(Line::from(vec![Span::styled(
+            format!("Plan states: {per_state}"),
+            theme.dim(),
+        )]));
 
         let block = Block::default()
             .borders(Borders::ALL)

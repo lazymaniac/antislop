@@ -12,6 +12,7 @@ pub mod palette;
 pub mod planview;
 pub mod sanitize;
 pub mod session;
+pub mod taskinfo;
 pub mod theme;
 pub mod unblock;
 pub mod view;
@@ -91,13 +92,16 @@ pub enum Update {
         task: String,
         reply: std::result::Result<Value, String>,
     },
-    /// A task as the daemon stores it, for the details of `key`.
+    /// A task as the daemon stores it, for the details of `key`. `round`
+    /// is the task's round when the fetch was issued; a reply for a round
+    /// that already moved on is dropped instead of shown stale.
     Task {
         conversation: String,
         plan: Option<String>,
         generation: u64,
         request_id: u64,
         key: String,
+        round: u64,
         task: Value,
     },
     SendResult {
@@ -574,22 +578,65 @@ impl App {
         });
     }
 
-    /// Fetches the stored task behind the open details.
+    /// The round of the task row behind a details key, if the row is shown.
+    fn task_row_round(&self, key: &str) -> Option<u64> {
+        let id = key.split_once(':')?.1;
+        self.view
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .map(|task| task.round)
+    }
+
+    /// Refetches an open details panel once its task has moved on to a new
+    /// round, so the stored report it shows never belongs to a past round.
+    fn refetch_stale_details(&mut self) {
+        let stale = self
+            .details
+            .as_ref()
+            .and_then(|details| {
+                let fetched = details.fetched_round?;
+                let now = self.task_row_round(&details.key)?;
+                Some(fetched != now)
+            })
+            .unwrap_or(false);
+        if stale {
+            self.fetch_task();
+        }
+    }
+
+    /// Fetches the stored task behind the open details. The request carries
+    /// the task id, the plan and the task's round, and replies are matched
+    /// against all of them plus this conversation's generation and the
+    /// request id, so a late answer can never paste one round's data into
+    /// another round's or another plan's details.
     fn fetch_task(&mut self) {
-        let (Some(details), Some(plan)) = (&self.details, &self.view.plan) else {
+        let (Some(plan), Some(id)) = (
+            self.view.plan.clone(),
+            self.details
+                .as_ref()
+                .and_then(|details| details.task_id().map(str::to_owned)),
+        ) else {
             return;
         };
-        let Some(id) = details.task_id() else {
+        let Some(key) = self.details.as_ref().map(|details| details.key.clone()) else {
             return;
         };
+        let round = self.task_row_round(&key).unwrap_or(0);
         self.task_request_id += 1;
         let request_id = self.task_request_id;
+        if let Some(details) = self
+            .details
+            .as_mut()
+            .filter(|details| details.task_id() == Some(id.as_str()))
+        {
+            details.fetched_round = Some(round);
+        }
         let request = Request::Task {
             plan: plan.clone(),
-            id: id.to_owned(),
+            id,
         };
-        let key = details.key.clone();
-        let plan_id = plan.clone();
+        let plan_id = plan;
         let conversation = self.conversation.clone();
         let generation = self.generation;
         let client = self.client.clone();
@@ -602,6 +649,7 @@ impl App {
                     generation,
                     request_id,
                     key,
+                    round,
                     task,
                 },
                 Err(error) => Update::Notice(format!("✗ {error}")),
@@ -1067,6 +1115,11 @@ impl App {
                     }
                     self.view.idle = idle;
                     self.view.autonomous = Some(autonomous);
+                    // Events run in batches, never per frame: if one started
+                    // a new round for the task the details show, the stored
+                    // record on screen belongs to the old round. Refetch it
+                    // now, once, instead of letting it age on every redraw.
+                    self.refetch_stale_details();
                     if saw_manual_plan && !self.view.tasks.is_empty() && self.confirmation.is_none()
                     {
                         let pid = self.view.plan.clone().unwrap_or_else(|| "plan".into());
@@ -1134,17 +1187,26 @@ impl App {
                 generation: _,
                 request_id,
                 key,
+                round,
                 task,
             } => {
+                // A task that moved on while its record was in flight must
+                // not show the earlier round's report or verdict.
+                let round_current = match self.task_row_round(&key) {
+                    Some(current) => current == round,
+                    None => true,
+                };
                 if conversation == self.conversation
                     && request_id == self.task_request_id
                     && self.view.plan.as_ref() == plan.as_ref()
+                    && round_current
                     && let Some(details) =
                         self.details.as_mut().filter(|details| details.key == key)
                 {
                     details.task = Some(task);
                 } else if let Some(state) = self.conversation_states.get_mut(&conversation)
                     && state.task_request_id == request_id
+                    && round_current
                     && let Some(details) =
                         state.details.as_mut().filter(|details| details.key == key)
                 {

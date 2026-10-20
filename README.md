@@ -65,6 +65,22 @@ opens another by path (`/project PATH`); each keeps its own configuration,
    delivered; the orchestrator receives the results and the audit and
    answers you, or proposes a plan for what is missing.
 
+## Task cards and plan state
+
+Every worker and verifier card carries the same honest reading of the task,
+built from what the runtime actually reported: the round (`r1`, `r2`, …) once
+one has started and never before; a separate activity line per role; the
+concrete dependencies a queued task waits for (`waits for t1`, `D:t1`) instead
+of a guessed reason; the raw cause when a task stops, or `cause not reported`;
+the worker's effect once its round ends; the verifier's obligation counters
+(`2/3`, never `0` when nothing was reported); and one landing label for the
+integration (`committed`, `applied in place`, `conflict`, `on branch`, …). The
+carousel adds the full effect, obligation and integration lines, the next step
+naming only keys that really work, and plan-state counters over every task.
+Details keep the whole cause and diff. Cards stay 26 columns wide and at most
+7 rows, degrade to the same words in fewer columns, and stay readable with
+`NO_COLOR=1` and `ANTISLOP_ASCII=1`.
+
 ## Build and test
 
 Rust 1.98.1 is pinned. `scripts/cargo.sh` prefers rustup when an asdf shim

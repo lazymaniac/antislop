@@ -138,6 +138,16 @@ pub struct TaskRow {
     /// Why it stopped, when it stopped short of approval.
     pub reason: Option<String>,
     pub scope_hash: Option<String>,
+    /// The current round's bounded effect, as the daemon reported it in the
+    /// task event's feedback. `None`: that round has reported no effect.
+    pub effect: Option<String>,
+    /// The current round's obligation coverage
+    /// (`{total, ok, issue, blocked, na, missing, unknown}`). `None`: no
+    /// verdict has reported coverage; cards show `?`, never a quiet `0`.
+    pub obligations: Option<Value>,
+    /// How the current round's result landed
+    /// (`{outcome, source, detail, ...}`). `None`: not reported yet.
+    pub integration: Option<Value>,
 }
 
 /// One agent on the team graph: the orchestrator, the plan verifier, the
@@ -897,6 +907,9 @@ impl View {
                             },
                             reason: None,
                             scope_hash: task["scope_hash"].as_str().map(str::to_owned),
+                            effect: None,
+                            obligations: None,
+                            integration: None,
                         }
                     })
                     .collect();
@@ -1027,6 +1040,26 @@ impl View {
                     row.status = text("status");
                     row.round = payload["round"].as_u64().unwrap_or_default();
                     row.reason = payload["reason"].as_str().map(str::to_owned);
+                    // The round's card data arrives with the announcement and
+                    // belongs to one round only: anything stamped for another
+                    // round is stale and reads as not reported.
+                    let feedback = &payload["feedback"];
+                    let fresh = feedback["round"].as_u64() == Some(row.round);
+                    row.effect = if fresh {
+                        feedback["effect"].as_str().map(str::to_owned)
+                    } else {
+                        None
+                    };
+                    row.obligations = if fresh && feedback["coverage"].is_object() {
+                        Some(feedback["coverage"].clone())
+                    } else {
+                        None
+                    };
+                    row.integration = if fresh && feedback["integration"].is_object() {
+                        Some(feedback["integration"].clone())
+                    } else {
+                        None
+                    };
                     let (title, status, round, reason) = (
                         row.title.clone(),
                         row.status.clone(),
@@ -1124,6 +1157,81 @@ impl View {
                     },
                     format!("· [{}] {}: {}", text("id"), text("title"), text("detail")),
                 );
+                // The same landing reaches the row: a stopped integration
+                // keeps its raw reason, and the detail rides along with any
+                // outcome the task event reported.
+                let detail = text("detail");
+                if let Some(row) = self.tasks.iter_mut().find(|row| row.id == text("id")) {
+                    if payload["status"] == "needs_user" {
+                        row.reason = Some(detail.clone());
+                    }
+                    match row.integration.as_mut().filter(|v| v.is_object()) {
+                        Some(existing) => {
+                            existing["detail"] = serde_json::json!(detail);
+                            existing["source"] = serde_json::json!("integration");
+                        }
+                        None => {
+                            row.integration = Some(serde_json::json!({
+                                "detail": detail,
+                                "source": "integration",
+                                "status": text("status"),
+                            }));
+                        }
+                    }
+                }
+            }
+            "task_recovery" => {
+                // A recovery is announced as a `task` event with its feedback
+                // plus this event with the action's own raw detail. The row
+                // takes the detail whole; a retry also clears what the earlier
+                // round showed, so nothing stale survives the new round.
+                let action = text("action");
+                let detail = text("detail");
+                let line = format!("· recovery · {action} · {}", clean(&detail));
+                self.push(dim(), line);
+                if let Some(&index) = self.task_rows.get(text("task").as_str())
+                    && let Some(row) = self.tasks.get_mut(index)
+                {
+                    let status = text("status");
+                    if !status.is_empty() {
+                        row.status = status;
+                    }
+                    if status::finished(&row.status) {
+                        row.activity.clear();
+                    }
+                    if !detail.is_empty() {
+                        row.reason = Some(detail.clone());
+                    }
+                    if matches!(
+                        action.as_str(),
+                        "retry_with_guidance" | "extend_rounds" | "unblock"
+                    ) {
+                        row.effect = None;
+                        row.obligations = None;
+                        row.integration = None;
+                    }
+                    // Outcomes this event can name by itself, without
+                    // reading them out of prose.
+                    let outcome = match action.as_str() {
+                        "keep_on_branch" => Some("left_on_branch"),
+                        "force_approve" => Some("force_approved"),
+                        "cancel_task" => Some("cancelled"),
+                        _ => None,
+                    };
+                    if let Some(outcome) = outcome {
+                        let mut integration = row
+                            .integration
+                            .take()
+                            .filter(|v| v.is_object())
+                            .unwrap_or_else(|| serde_json::json!({}));
+                        integration["outcome"] = serde_json::json!(outcome);
+                        integration["source"] = serde_json::json!("recovery");
+                        if let Some(branch) = payload["branch"].as_str() {
+                            integration["branch"] = serde_json::json!(branch);
+                        }
+                        row.integration = Some(integration);
+                    }
+                }
             }
             "mail" if payload["kind"] != "copy" => {
                 let recipient = text("recipient");

@@ -2,10 +2,9 @@
 //! what relates them. The layout depends only on the plan's shape, so nodes
 //! stay put while events arrive.
 
+use super::taskinfo;
 use super::theme::Theme;
-use super::view::{
-    AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, View, agent_name, clean, status_label, truncate, wrap,
-};
+use super::view::{AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, View, agent_name, clean, truncate, wrap};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -328,6 +327,9 @@ impl Graph {
                             || t.verifier_summary
                                 .as_ref()
                                 .is_some_and(|s| s.to_lowercase().contains(&q_lower))
+                            || t.effect
+                                .as_ref()
+                                .is_some_and(|s| s.to_lowercase().contains(&q_lower))
                     })
         };
 
@@ -530,7 +532,7 @@ impl Graph {
 
         let mut row_heights = std::collections::BTreeMap::<u16, u16>::new();
         for node in graph.nodes.iter_mut().filter(|node| node.visible) {
-            node.height = (card_lines(view, &node.key).len() as u16 + 3).max(HEIGHT);
+            node.height = (body_lines(view, &node.key).len() as u16 + 3).max(HEIGHT);
             row_heights
                 .entry(node.y)
                 .and_modify(|height| *height = (*height).max(node.height))
@@ -886,25 +888,12 @@ fn describe(view: &View, key: &str) -> String {
         let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
             return "?".into();
         };
-        let round = if task.round > 1 {
-            format!(" r{}", task.round)
-        } else {
-            String::new()
-        };
+        // Cards and lists read the round, the dependencies and the stop
+        // cause through one shared interpretation (taskinfo).
         if who == "worker" {
-            if task.status == "verifying" {
-                format!("waiting for verdict{round}")
-            } else {
-                format!("{}{round}", status_label(&task.status))
-            }
+            taskinfo::worker_state(view, task)
         } else {
-            match task.status.as_str() {
-                "verifying" => "checking".to_owned(),
-                "approved" => "approved".to_owned(),
-                "needs_user" | "failed" => "rejected".to_owned(),
-                "proposed" | "queued" | "working" => "waiting for worker".to_owned(),
-                other => status_label(other).to_owned(),
-            }
+            taskinfo::verifier_state(task)
         }
     } else if working {
         "working".to_owned()
@@ -979,6 +968,30 @@ fn card_lines(view: &View, key: &str) -> Vec<String> {
             })
             .collect();
         *last = format!("{prefix}…");
+    }
+    lines
+}
+
+/// The card's body: the summary, plus the worker's reported effect when the
+/// round has one. The budget never grows past the summary's own ceiling, so
+/// a card stays at most `NAME + STATE + MAX_SUMMARY_LINES + META` = 7 rows
+/// tall however many events arrive. Layout and rendering share this one.
+fn body_lines(view: &View, key: &str) -> Vec<String> {
+    let mut lines = card_lines(view, key);
+    let worker_row = key.split_once(':').and_then(|(role, id)| {
+        (role == "worker")
+            .then(|| view.tasks.iter().find(|task| task.id == id))
+            .flatten()
+    });
+    if let Some(row) = worker_row
+        && let Some(effect) = taskinfo::effect_line(row)
+    {
+        if lines.len() >= MAX_SUMMARY_LINES {
+            lines.truncate(MAX_SUMMARY_LINES - 1);
+        }
+        let effect = effect.split_whitespace().collect::<Vec<_>>().join(" ");
+        let effect = clean(&effect);
+        lines.push(truncate(&effect, usize::from(WIDTH - 4)));
     }
     lines
 }
@@ -1084,30 +1097,23 @@ fn draw_node(
             tone
         }),
     );
-    for (row, line) in card_lines(view, &node.key).iter().enumerate() {
+    for (row, line) in body_lines(view, &node.key).iter().enumerate() {
         canvas.text(x + 2, y + 2 + row as u16, line, fill.patch(theme.text()));
     }
-    // Relations: depends on (D), verified (V), messages (M).
+    // The meta line: what the verifier accounts for, how the result landed,
+    // the concrete dependencies still open, and any messages in between.
+    // Parts that do not fit drop from the right; nothing runs over an edge.
     if let Some(t) = task {
-        let mut badges = String::new();
-        if !t.depends_on.is_empty() {
-            badges.push_str("D ");
+        let role = node.key.split_once(':').map_or("", |(role, _)| role);
+        let meta = taskinfo::card_meta(role, view, t, inner);
+        if !meta.is_empty() {
+            canvas.text(
+                x + 2,
+                bottom,
+                &truncate(&meta, inner),
+                fill.patch(theme.faint()),
+            );
         }
-        badges.push_str("V ");
-        if view
-            .links
-            .keys()
-            .any(|(from, to)| from == &node.key || to == &node.key)
-        {
-            badges.push('M');
-        }
-        let badges = badges.trim();
-        canvas.text(
-            right.saturating_sub(badges.len() as u16 + 1),
-            bottom,
-            badges,
-            fill.patch(theme.faint()),
-        );
     }
 }
 

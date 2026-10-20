@@ -1960,6 +1960,7 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
         generation: 1,
         request_id: conv_a_task_id,
         key: "worker:t1".into(),
+        round: 0,
         task: json!({"id": "t1", "title": "stare zadanie"}),
     });
     // Active Conv-B details remains pristine (for worker:t9):
@@ -2231,6 +2232,7 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
         generation: 1,
         request_id: app.task_request_id,
         key: "worker:t1".into(),
+        round: 0,
         task: json!({"id": "t1", "title": "zadanie po A->B->A"}),
     });
     assert_eq!(
@@ -5073,4 +5075,470 @@ fn test_workspace_trust_modal_lifecycle() {
     // Normal typing works after trusting
     assert!(app.key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE)));
     assert_eq!(app.input.text, "initial draft!");
+}
+
+#[test]
+fn task_events_attach_feedback_only_for_their_round_and_recovery_clears_it() {
+    use antislop::lean::tui::view::View;
+    let mut view = View::default();
+    let ev = |seq: u64, kind: &str, payload: Value| json!({"seq": seq, "kind": kind, "payload": payload});
+    view.apply(&ev(
+        1,
+        "plan_proposed",
+        json!({"plan": "p1", "tasks": [{"id": "t1", "title": "Store"}]}),
+    ));
+    // A round announced without feedback shows no effect and no counters.
+    view.apply(&ev(
+        2,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "working", "round": 1}),
+    ));
+    assert!(view.tasks[0].effect.is_none());
+    assert!(view.tasks[0].obligations.is_none());
+    assert!(view.tasks[0].integration.is_none());
+    // Feedback stamped for another round is stale and must not attach.
+    view.apply(&ev(
+        3,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "verifying", "round": 1,
+               "feedback": {"round": 0, "effect": "x", "coverage": {"total": 1},
+                            "integration": {"outcome": "committed"}}}),
+    ));
+    assert!(view.tasks[0].effect.is_none());
+    assert!(view.tasks[0].integration.is_none());
+    // Feedback for the announced round attaches.
+    view.apply(&ev(
+        4,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "approved", "round": 1,
+               "feedback": {"round": 1, "effect": "2 files changed",
+                            "coverage": {"total": 3, "ok": 3, "missing": 0},
+                            "integration": {"outcome": "applied",
+                                            "detail": "applied to the working tree"}}}),
+    ));
+    assert_eq!(view.tasks[0].effect.as_deref(), Some("2 files changed"));
+    assert_eq!(view.tasks[0].obligations.as_ref().unwrap()["total"], 3);
+    assert_eq!(
+        view.tasks[0].integration.as_ref().unwrap()["outcome"],
+        "applied"
+    );
+    // A new round without feedback clears what the old one showed.
+    view.apply(&ev(
+        5,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "working", "round": 2, "feedback": null}),
+    ));
+    assert!(view.tasks[0].effect.is_none());
+    assert!(view.tasks[0].obligations.is_none());
+    assert!(view.tasks[0].integration.is_none());
+    // The integration event writes the raw reason and detail onto the row.
+    view.apply(&ev(
+        6,
+        "integration",
+        json!({"id": "t1", "title": "Store", "status": "needs_user",
+               "detail": "conflicts with the current branch in src/a.rs"}),
+    ));
+    assert_eq!(
+        view.tasks[0].reason.as_deref(),
+        Some("conflicts with the current branch in src/a.rs")
+    );
+    assert_eq!(
+        view.tasks[0].integration.as_ref().unwrap()["source"],
+        "integration"
+    );
+    // task_recovery is keyed by the task's database id.
+    view.apply(&ev(
+        7,
+        "task_recovery",
+        json!({"task": "u1", "action": "retry_with_guidance", "status": "queued",
+               "detail": "retrying task with guidance"}),
+    ));
+    assert_eq!(view.tasks[0].status, "queued");
+    assert!(view.tasks[0].integration.is_none());
+    view.apply(&ev(
+        8,
+        "task_recovery",
+        json!({"task": "u1", "action": "keep_on_branch", "status": "approved",
+               "branch": "antislop/u1", "detail": "change preserved on branch antislop/u1"}),
+    ));
+    assert_eq!(
+        view.tasks[0].integration.as_ref().unwrap()["outcome"],
+        "left_on_branch"
+    );
+    assert_eq!(
+        view.tasks[0].integration.as_ref().unwrap()["branch"],
+        "antislop/u1"
+    );
+}
+
+#[test]
+fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
+    use antislop::lean::tui::{
+        Details,
+        graph::{Canvas, Filter, Graph, WIDTH},
+        view::{Agent, View},
+    };
+    let mut view = View::default();
+    let ev = |seq: u64, kind: &str, payload: Value| json!({"seq": seq, "kind": kind, "payload": payload});
+    view.apply(&ev(
+        1,
+        "plan_proposed",
+        json!({"plan": "p1", "tasks": [
+            {"id": "t1", "title": "Store", "summary": "Fix the storage path.",
+             "verifier": {"summary": "Check the storage path."}},
+            {"id": "t2", "title": "API", "depends_on": ["t1"]}
+        ]}),
+    ));
+    let card = |view: &View, key: &str| -> (String, u16) {
+        let graph = Graph::new(view);
+        let node = graph.node(key).expect("node");
+        let height = node.height;
+        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, height);
+        graph.render(view, &mut canvas, Filter::All, key);
+        (canvas.lines().join("\n"), height)
+    };
+    // Before any round starts, no card claims one.
+    let (text, _) = card(&view, "worker:t1");
+    assert!(text.contains("proposed"), "{text}");
+    assert!(
+        !text.contains(" r1"),
+        "no quiet r1 before the first round: {text}"
+    );
+    assert!(
+        !text.contains("effect"),
+        "no effect line before a round: {text}"
+    );
+    // Worker working round 1: both roles show the round.
+    view.apply(&ev(
+        2,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "working", "round": 1, "feedback": null}),
+    ));
+    view.agents.insert(
+        "worker:t1".into(),
+        Agent {
+            running: true,
+            provider: "codex".into(),
+            activity: "cargo check".into(),
+            ..Agent::default()
+        },
+    );
+    let (text, _) = card(&view, "worker:t1");
+    assert!(text.contains("working r1"), "{text}");
+    let (text, _) = card(&view, "verifier:t1");
+    assert!(text.contains("waits for worker r1"), "{text}");
+    // Verifier checking: separate activity lines per role.
+    view.apply(&ev(
+        3,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "verifying", "round": 1, "feedback": null}),
+    ));
+    view.agents.insert(
+        "verifier:t1".into(),
+        Agent {
+            running: true,
+            provider: "agy".into(),
+            activity: "cargo test".into(),
+            ..Agent::default()
+        },
+    );
+    let (worker_now, _) = card(&view, "worker:t1");
+    assert!(worker_now.contains("awaiting verdict r1"), "{worker_now}");
+    assert!(
+        !worker_now.contains("cargo test"),
+        "worker keeps its own line"
+    );
+    let (verifier_now, _) = card(&view, "verifier:t1");
+    assert!(verifier_now.contains("checking r1"), "{verifier_now}");
+    assert!(
+        verifier_now.contains("· agy"),
+        "verifier shows its own agent: {verifier_now}"
+    );
+    assert!(
+        !verifier_now.contains("codex"),
+        "no worker agent on the verifier card"
+    );
+    // Approved with feedback: effect on the worker card, coverage and the
+    // one landing label on the bottom line; details keep the same words.
+    view.apply(&ev(
+        4,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "approved", "round": 1,
+               "feedback": {"round": 1,
+                            "effect": "2 files changed — src/a.rs",
+                            "coverage": {"total": 3, "ok": 2, "issue": 0, "blocked": 0,
+                                         "na": 0, "missing": 1, "unknown": []},
+                            "integration": {"outcome": "committed",
+                                            "detail": "committed as 1234abc"}}}),
+    ));
+    let (worker, worker_h) = card(&view, "worker:t1");
+    assert!(worker.contains("effect: 2 files"), "{worker}");
+    assert!(worker.contains("committed"), "{worker}");
+    assert!(worker_h <= 7, "card stays within the height budget");
+    let (verifier, verifier_h) = card(&view, "verifier:t1");
+    assert!(verifier.contains("2/3"), "coverage counters: {verifier}");
+    assert!(verifier.contains("committed"), "{verifier}");
+    assert!(verifier_h <= 7);
+    for (_, _, path) in Graph::new(&view).edge_routes(Filter::All) {
+        for node in Graph::new(&view).nodes.iter().filter(|n| n.visible) {
+            assert!(!antislop::lean::tui::graph::Graph::route_intersects_card(
+                &path, node
+            ));
+        }
+    }
+    let mut details = Details::new("worker:t1".into());
+    let full: String = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(full.contains("round r1"), "{full}");
+    assert!(
+        full.contains("Integration: committed · committed as 1234abc"),
+        "details repeat the card's reading: {full}"
+    );
+    assert!(full.contains("Obligations: 2 of 3 accounted"), "{full}");
+    assert!(
+        full.contains("done: committed"),
+        "details state the next step honestly: {full}"
+    );
+    // A queued task whose dependency failed says which one it waits for,
+    // and never guesses a limit or a write conflict.
+    view.apply(&ev(
+        5,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "failed", "round": 1, "feedback": null,
+               "reason": "the verifier repeated itself"}),
+    ));
+    view.apply(&ev(
+        6,
+        "task",
+        json!({"id": "t2", "task": "u2", "status": "queued", "round": 0, "feedback": null}),
+    ));
+    let (api, _) = card(&view, "worker:t2");
+    assert!(api.contains("D:t1"), "dependency id on the card: {api}");
+    assert!(!api.contains("limit") && !api.contains("conflict"), "{api}");
+    let mut queued_details = Details::new("worker:t2".into());
+    let queued_full: String = queued_details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        queued_full.contains("next: waits for t1"),
+        "details name the concrete dependency: {queued_full}"
+    );
+    let (failed, _) = card(&view, "worker:t1");
+    assert!(failed.contains("failed r1 · the ver"), "{failed}");
+    let mut failed_details = Details::new("worker:t1".into());
+    let cause: String = failed_details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        cause.contains("the verifier repeated itself"),
+        "details keep the whole cause: {cause}"
+    );
+    // A failed task with no reported cause says so instead of inventing one.
+    view.apply(&ev(
+        7,
+        "task",
+        json!({"id": "t2", "task": "u2", "status": "failed", "round": 1, "feedback": null}),
+    ));
+    let (quiet, _) = card(&view, "worker:t2");
+    assert!(quiet.contains("failed r1 · cause n"), "{quiet}");
+    let mut quiet_details = Details::new("worker:t2".into());
+    let quiet_full: String = quiet_details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        quiet_full.contains("Reason: cause not reported"),
+        "an unexplained stop says so: {quiet_full}"
+    );
+}
+
+#[test]
+fn carousel_shows_rounds_effect_obligations_integration_and_state_counters() {
+    use antislop::lean::tui::{Focus, view::TaskRow};
+    let mut app = App::test_app();
+    app.view.plan = Some("p9".into());
+    app.view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            title: "Store".into(),
+            status: "queued".into(),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            title: "API".into(),
+            status: "approved".into(),
+            round: 2,
+            depends_on: vec!["t1".into()],
+            effect: Some("3 files changed — src/x.rs".into()),
+            obligations: Some(json!({"total": 4, "ok": 3, "issue": 0, "blocked": 0,
+                                     "na": 1, "missing": 0, "unknown": []})),
+            integration: Some(json!({"outcome": "in_place_committed",
+                                     "detail": "committed in place as deadbee"})),
+            ..TaskRow::default()
+        },
+        TaskRow {
+            id: "t3".into(),
+            title: "Docs".into(),
+            status: "failed".into(),
+            round: 1,
+            reason: Some("the login expired".into()),
+            ..TaskRow::default()
+        },
+    ];
+    app.focus = Focus::Tasks;
+    let mut terminal = Terminal::new(TestBackend::new(110, 34)).unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    let norm = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // The first task never ran: no invented r0.
+    assert!(norm.contains("Round: not started"), "{norm}");
+    assert!(!norm.contains("Round: r0"), "{norm}");
+    // Move to the approved task: round, effect, obligations, integration.
+    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let text2: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    let norm2 = text2.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(norm2.contains("Round: r2"), "{norm2}");
+    assert!(
+        norm2.contains("effect: 3 files changed — src/x.rs"),
+        "{norm2}"
+    );
+    assert!(
+        norm2.contains("Obligations: 4 of 4 accounted"),
+        "n/a counts as settled: {norm2}"
+    );
+    assert!(
+        norm2.contains("Integration: committed in place · committed in place as deadbee"),
+        "{norm2}"
+    );
+    assert!(norm2.contains("Dependencies [D]: t1"), "{norm2}");
+    assert!(norm2.contains("Next:"), "{norm2}");
+    // Plan state counters name every state that is occupied.
+    assert!(norm2.contains("Plan states:"), "{norm2}");
+    for part in ["queued 1", "approved 1", "failed 1"] {
+        assert!(norm2.contains(part), "{part} missing from: {norm2}");
+    }
+}
+
+#[test]
+fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round() {
+    use antislop::lean::tui::Update;
+    let mut app = App::test_app();
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![json!({"seq": 1, "kind": "plan_proposed", "payload": {
+            "plan": "p1", "tasks": [{"id": "t1", "title": "Store"}]}})],
+        idle: true,
+        autonomous: false,
+    });
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![json!({"seq": 3, "kind": "task", "payload": {
+            "id": "t1", "task": "u1", "status": "working", "round": 1}})],
+        idle: false,
+        autonomous: false,
+    });
+    app.open_details("worker:t1".into());
+    let issued = app.task_request_id;
+    assert_eq!(app.details.as_ref().unwrap().fetched_round, Some(1));
+    // A late reply for the previous round is dropped, not shown.
+    app.apply_update(Update::Task {
+        conversation: "test-conv".into(),
+        plan: Some("p1".into()),
+        generation: 1,
+        request_id: issued,
+        key: "worker:t1".into(),
+        round: 0,
+        task: json!({"id": "t1", "report": "old round"}),
+    });
+    assert!(app.details.as_ref().unwrap().task.is_none());
+    // The reply for the round the fetch was issued for is taken.
+    app.apply_update(Update::Task {
+        conversation: "test-conv".into(),
+        plan: Some("p1".into()),
+        generation: 1,
+        request_id: issued,
+        key: "worker:t1".into(),
+        round: 1,
+        task: json!({"id": "t1", "report": "round one"}),
+    });
+    assert_eq!(
+        app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
+        "round one"
+    );
+    // When the round moves, the open details refetch once — on the event,
+    // never per frame.
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![json!({"seq": 3, "kind": "task", "payload": {
+            "id": "t1", "task": "u1", "status": "working", "round": 2}})],
+        idle: false,
+        autonomous: false,
+    });
+    assert_eq!(app.task_request_id, issued + 1);
+    assert_eq!(app.details.as_ref().unwrap().fetched_round, Some(2));
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+    assert_eq!(
+        app.task_request_id,
+        issued + 1,
+        "redraws issue no further fetches"
+    );
+    // The new round's record is accepted and the old one can no longer land.
+    app.apply_update(Update::Task {
+        conversation: "test-conv".into(),
+        plan: Some("p1".into()),
+        generation: 1,
+        request_id: issued + 1,
+        key: "worker:t1".into(),
+        round: 1,
+        task: json!({"id": "t1", "report": "stale again"}),
+    });
+    assert_eq!(
+        app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
+        "round one",
+        "a round-1 reply cannot overwrite round-2 details"
+    );
+    app.apply_update(Update::Task {
+        conversation: "test-conv".into(),
+        plan: Some("p1".into()),
+        generation: 1,
+        request_id: issued + 1,
+        key: "worker:t1".into(),
+        round: 2,
+        task: json!({"id": "t1", "report": "round two"}),
+    });
+    assert_eq!(
+        app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
+        "round two"
+    );
 }

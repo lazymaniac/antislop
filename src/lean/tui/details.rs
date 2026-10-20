@@ -2,6 +2,7 @@
 //! its session history, messages, deliverables, obligations, and comments.
 
 use super::super::tasks::{TaskSpec, obligations, status};
+use super::taskinfo;
 use super::view::{View, agent_name, dim, duration, status_label, wrap};
 use crate::lean::store::SessionInfo;
 use ratatui::{
@@ -50,6 +51,9 @@ pub struct Details {
     pub scroll: usize,
     /// The task as the daemon stores it, once fetched.
     pub task: Option<Value>,
+    /// The task round the last task fetch was issued for, so a reply for a
+    /// round that already moved on can be dropped and refetched, not shown.
+    pub fetched_round: Option<u64>,
     /// The selected comment on the Comments tab.
     pub comment: usize,
     /// Scroll memory per (agent_key, tab_index)
@@ -80,6 +84,7 @@ impl Details {
             tab: 0,
             scroll: 0,
             task: None,
+            fetched_round: None,
             comment: 0,
             scroll_memory: HashMap::new(),
             query_memory: HashMap::new(),
@@ -132,6 +137,9 @@ impl Details {
         self.query_memory
             .insert((self.key.clone(), self.tab), self.query.clone());
         self.key = new_key;
+        // A different element is a different task: its old record is gone.
+        self.task = None;
+        self.fetched_round = None;
         self.scroll = *self
             .scroll_memory
             .get(&(self.key.clone(), self.tab))
@@ -348,15 +356,30 @@ impl Details {
                         task_lines.push(plain(format!(
                             "Task status: {}{}",
                             status_label(&task.status),
-                            if task.round > 0 {
-                                format!(" (round {})", task.round)
-                            } else {
-                                String::new()
+                            match taskinfo::round_shown(task.round) {
+                                Some(round) => format!(" (round {round})"),
+                                None => " (not started yet)".to_owned(),
                             }
                         )));
                         if let Some(reason) = &task.reason {
+                            // The raw reason stays whole here, never cut.
                             task_lines.push(plain(format!("Reason: {reason}")));
+                        } else if let Some(why) = taskinfo::cause(task) {
+                            task_lines.push(plain(format!("Reason: {why}")));
                         }
+                        if let Some(effect) = taskinfo::effect_line(task) {
+                            task_lines.push(plain(effect));
+                        }
+                        task_lines.push(plain(format!(
+                            "Obligations: {}",
+                            taskinfo::coverage_full(task)
+                        )));
+                        task_lines.push(plain(format!(
+                            "Integration: {} · {}",
+                            taskinfo::integration_label(task),
+                            taskinfo::integration_detail(task)
+                        )));
+                        task_lines.push(plain(taskinfo::next_step(view, task)));
                         task_lines.push(plain(format!("Task {}: {}", task.id, task.title)));
                         task_lines.push(plain(format!(
                             "Kind: {}{}",
