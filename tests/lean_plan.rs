@@ -61,7 +61,7 @@ if any(marker in prompt for marker in REVIEW):
     answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```"
 elif "You verify" in prompt:
     session = "verifier"
-    approved = "Storage" not in prompt
+    approved = "Task: Storage" not in prompt
     answer = verdict(approved, [] if approved else [{"severity": "high", "issue": "wrong claim", "where": "src/a.rs:1"}])
 elif "Your verifier found problems" in prompt:
     session, answer = "worker", "fixed report"

@@ -2766,6 +2766,7 @@ impl Core {
             .into_iter()
             .filter_map(|task| serde_json::from_value(task.spec).ok())
             .collect();
+        let upstream = self.upstream(&task.plan_id, &spec)?;
         let worker = format!("worker:{}", task.id);
         let verifier = format!("verifier:{}", task.id);
         // A resumed task keeps its rounds and its verifier's last word.
@@ -2818,6 +2819,7 @@ impl Core {
             let report = self.turn(worker_setup(), cancel, |first| {
                 if first {
                     tasks::worker_prompt(&project_text, &spec, &team, autonomous)
+                        + &upstream
                         + &tasks::user_edits_note(&user_edits)
                 } else if resumed && round == first_round {
                     tasks::worker_resume(&findings)
@@ -2925,6 +2927,7 @@ impl Core {
             let answer = self.turn(setup, cancel, |first| {
                 let prompt = if first {
                     tasks::verifier_prompt(&project_text, &spec, &report, changes.as_deref())
+                        + &upstream
                 } else {
                     tasks::verifier_followup(&spec, &report, changes.as_deref())
                 };
@@ -3361,8 +3364,25 @@ impl Core {
         Ok(())
     }
 
-    /// A writer starts from its writing dependency's result, so it sees that
-    /// work; otherwise from the project's current commit.
+    /// The approved reports of the tasks `spec` depends on, as prompt text.
+    fn upstream(&self, plan_id: &str, spec: &TaskSpec) -> Result<String> {
+        let plan = self.store.plan(plan_id)?;
+        let done: Vec<(&str, &str, &str)> = plan
+            .iter()
+            .filter(|task| task.status == status::APPROVED)
+            .filter_map(|task| {
+                let id = task.spec["id"].as_str()?;
+                spec.depends_on.iter().any(|d| d == id).then_some(())?;
+                Some((
+                    id,
+                    task.spec["title"].as_str().unwrap_or_default(),
+                    task.report.as_deref()?,
+                ))
+            })
+            .collect();
+        Ok(tasks::upstream_note(&done))
+    }
+
     /// Where a writer starts: from the result of the one task it depends on,
     /// from the user's HEAD when none of them wrote, and from HEAD with all
     /// their results laid on it when several did.

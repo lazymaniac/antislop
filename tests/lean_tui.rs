@@ -5907,3 +5907,38 @@ fn an_unblock_announcement_invalidates_the_card_like_a_retry() {
     assert!(view.tasks[0].obligations.is_none());
     assert!(view.tasks[0].integration.is_none());
 }
+
+#[test]
+fn the_carousel_ribbon_shows_a_window_around_the_selection_not_every_task() {
+    use antislop::lean::tui::view::{TaskRow, View};
+
+    let mut app = App::test_app();
+    let mut view = View::default();
+    view.tasks = (0..2000)
+        .map(|i| TaskRow {
+            id: format!("t{i}"),
+            title: format!("Task {i}"),
+            status: "queued".into(),
+            ..TaskRow::default()
+        })
+        .collect();
+    app.view = view;
+    app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+    app.carousel.selected = 1000;
+
+    let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..20)
+        .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+    let title = rows
+        .iter()
+        .position(|row| row.contains("Task carousel"))
+        .expect("carousel drawn");
+    let ribbon = &rows[title + 1];
+
+    assert!(ribbon.contains("[1001/2000]"), "{ribbon}");
+    assert!(ribbon.contains('…'), "{ribbon}");
+    assert!(!ribbon.contains("[1/2000]") && !ribbon.contains("[2000/2000]"));
+}

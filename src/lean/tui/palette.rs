@@ -830,7 +830,7 @@ mod tests {
         // 2. Scrolled page: verify subsequent shortcuts and descriptions
         terminal
             .draw(|frame| {
-                Help::Chat.draw_scroll(frame, 8);
+                Help::Chat.draw_scroll(frame, usize::MAX);
             })
             .unwrap();
 

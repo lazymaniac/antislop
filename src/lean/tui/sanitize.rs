@@ -84,6 +84,19 @@ pub fn sanitize(input: &str) -> String {
     output
 }
 
+/// [`sanitize`] collapsed to one printable line for fields a view renders
+/// inside a single row (titles, ids, paths, sections): every whitespace
+/// run, newlines included, becomes one space so no control reaches the
+/// line and no break shifts the row. Whitespace is folded on space
+/// characters between clusters, so readable text and grapheme clusters
+/// (emoji families, flags, combining marks) stay whole.
+pub fn sanitize_line(input: &str) -> String {
+    sanitize(input)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +158,23 @@ mod tests {
         assert_eq!(sanitize("Safe\x1b[31"), "Safe");
         assert_eq!(sanitize("Safe\x1b]52;c;something"), "Safe");
         assert_eq!(sanitize("Safe\x1bPdevice_command"), "Safe");
+    }
+
+    #[test]
+    fn single_line_folds_breaks_without_splitting_clusters() {
+        assert_eq!(sanitize_line("Fix\nthe  store\tpath"), "Fix the store path");
+        // Escapes, controls and bidi never reach the line; text stays.
+        assert_eq!(
+            sanitize_line("\x1b[31mFix\u{7}\u{9b}31m the\u{202e}store\x1b]0;evil\u{7}"),
+            "Fix thestore"
+        );
+        // Grapheme clusters stay whole: an emoji family and combining marks
+        // survive the fold untouched.
+        assert_eq!(sanitize_line("a\u{0301} 👩‍👩‍👧‍👦  b\n"), "a\u{0301} 👩‍👩‍👧‍👦 b");
+        // Ids and paths come back byte-identical when they were clean.
+        assert_eq!(sanitize_line("worker:t1"), "worker:t1");
+        assert_eq!(sanitize_line("src/lean/tasks.rs"), "src/lean/tasks.rs");
+        // An escape whose payload would have filled the row is gone with it.
+        assert_eq!(sanitize_line("\x1b]52;c;AAAA\u{7}done"), "done");
     }
 }

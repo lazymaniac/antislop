@@ -391,25 +391,70 @@ pub fn depends_transitively(tasks: &[TaskSpec], from: &str, target: &str) -> boo
     false
 }
 
+/// What the parallelism rule reads of a task, so the core's specs and a
+/// frontend's rows share one implementation of it.
+pub struct PeerNode<'a> {
+    pub id: &'a str,
+    pub depends_on: &'a [String],
+    pub writes: bool,
+    pub scope: &'a [String],
+}
+
 /// For each task id, lists the peer task ids with which it can execute in parallel
 /// (neither depends on the other, and if both write, their scopes do not overlap).
 pub fn parallel_peers(tasks: &[TaskSpec]) -> std::collections::HashMap<String, Vec<String>> {
+    let nodes: Vec<PeerNode> = tasks
+        .iter()
+        .map(|task| PeerNode {
+            id: &task.id,
+            depends_on: &task.depends_on,
+            writes: task.writes,
+            scope: &task.scope,
+        })
+        .collect();
+    peers_of(&nodes)
+}
+
+/// [`parallel_peers`] over plain nodes. Each task's dependency chain is walked
+/// once, so the cost is the plan's own size (tasks x edges), not a walk per pair.
+pub fn peers_of(nodes: &[PeerNode]) -> std::collections::HashMap<String, Vec<String>> {
+    let index: std::collections::HashMap<&str, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(at, node)| (node.id, at))
+        .collect();
+    // reaches[i][j]: task i depends, through any chain, on task j.
+    let reaches: Vec<Vec<bool>> = (0..nodes.len())
+        .map(|from| {
+            let mut seen = vec![false; nodes.len()];
+            let mut stack: Vec<usize> = vec![from];
+            while let Some(at) = stack.pop() {
+                for dep in nodes[at].depends_on {
+                    if let Some(&to) = index.get(dep.as_str())
+                        && !std::mem::replace(&mut seen[to], true)
+                    {
+                        stack.push(to);
+                    }
+                }
+            }
+            seen
+        })
+        .collect();
     let mut map = std::collections::HashMap::new();
-    for task in tasks {
-        let mut peers = Vec::new();
-        for other in tasks {
-            if other.id == task.id {
-                continue;
-            }
-            let ordered = depends_transitively(tasks, &task.id, &other.id)
-                || depends_transitively(tasks, &other.id, &task.id);
-            let write_conflict =
-                task.writes && other.writes && scopes_overlap(&task.scope, &other.scope);
-            if !ordered && !write_conflict {
-                peers.push(other.id.clone());
-            }
-        }
-        map.insert(task.id.clone(), peers);
+    for (i, task) in nodes.iter().enumerate() {
+        let peers = nodes
+            .iter()
+            .enumerate()
+            .filter(|&(j, other)| {
+                j != i
+                    && other.id != task.id
+                    && !reaches[i][j]
+                    && !reaches[j][i]
+                    && !(task.writes && other.writes && scopes_overlap(task.scope, other.scope))
+            })
+            .map(|(_, other)| other.id.to_owned())
+            .collect();
+        map.insert(task.id.to_owned(), peers);
     }
     map
 }
@@ -1424,6 +1469,31 @@ pub fn user_edits_note(files: &[String]) -> String {
     )
 }
 
+/// Longest report of one approved dependency put into a prompt.
+const UPSTREAM_LIMIT: usize = 6_000;
+
+/// What the tasks this one depends on concluded. Their reports live only in
+/// the runtime's store, out of reach of an agent reading files, so an
+/// approved dependency's report (cut to a bound) is handed over; a task with
+/// no approved dependency gets nothing.
+pub fn upstream_note(done: &[(&str, &str, &str)]) -> String {
+    if done.is_empty() {
+        return String::new();
+    }
+    let mut note = String::from(
+        "\n\nTasks this one depends on are approved. Their reports follow; they are \
+         the record of that work, so do not ask those tasks for it again:\n",
+    );
+    for (id, title, report) in done {
+        let report = match report.char_indices().nth(UPSTREAM_LIMIT) {
+            Some((end, _)) => format!("{}\n[report truncated]", &report[..end]),
+            None => (*report).to_owned(),
+        };
+        note.push_str(&format!("\n### {id}: {title}\n{report}\n"));
+    }
+    note
+}
+
 pub fn worker_prompt(
     project: &str,
     task: &TaskSpec,
@@ -1816,6 +1886,16 @@ pub fn findings_text(findings: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn upstream_note_carries_bounded_reports() {
+        assert_eq!(upstream_note(&[]), "");
+        let long = "é".repeat(UPSTREAM_LIMIT + 5);
+        let note = upstream_note(&[("t1", "Audit", "found F1"), ("t2", "Perf", &long)]);
+        assert!(note.contains("### t1: Audit\nfound F1\n"));
+        assert!(note.ends_with("[report truncated]\n"));
+        assert!(note.chars().count() < 2 * UPSTREAM_LIMIT);
+    }
+
+    #[test]
     fn progress_lines_are_read_however_they_are_decorated() {
         let update = |id: &str, status: Option<&str>, note: &str| {
             Some(CheckUpdate {
@@ -1959,6 +2039,36 @@ mod tests {
         let doc = render_plan_document("# Plan Overview", &tasks);
         assert!(doc.contains("[t2]"));
         assert!(doc.contains("Parallel with"));
+    }
+
+    #[test]
+    fn parallel_peers_follow_long_dependency_chains() {
+        let task = |at: usize, deps: Vec<String>| TaskSpec {
+            id: format!("t{at}"),
+            depends_on: deps,
+            ..serde_json::from_value(serde_json::json!({
+                "id": "x", "title": "T", "goal": "g",
+                "kind": "analysis", "verifier": {"focus": "f"}
+            }))
+            .unwrap()
+        };
+        // A chain of 400 plus one independent task: only the loner has peers,
+        // and every chained task is ordered against every other.
+        let mut tasks: Vec<TaskSpec> = (0..400)
+            .map(|at| {
+                let deps = if at == 0 {
+                    vec![]
+                } else {
+                    vec![format!("t{}", at - 1)]
+                };
+                task(at, deps)
+            })
+            .collect();
+        tasks.push(task(400, vec![]));
+        let peers = parallel_peers(&tasks);
+        assert_eq!(peers["t400"].len(), 400);
+        assert_eq!(peers["t399"], ["t400"]);
+        assert_eq!(peers["t0"], ["t400"]);
     }
 
     #[test]

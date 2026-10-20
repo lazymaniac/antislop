@@ -25,7 +25,7 @@ pub use editor::{InputBuffer, sanitize_paste, sanitize_single_line_paste, visual
 pub use graph::{Filter, GroupingMode};
 pub use palette::{Help, Kind, Picker};
 pub use planview::{PlanAction, PlanView};
-pub use sanitize::sanitize;
+pub use sanitize::{sanitize, sanitize_line};
 pub use theme::{
     CardProps, Glyphs, Row, Theme, Tone, card, draw_rows, scrollbar, section, split_row, tone,
 };
@@ -4626,10 +4626,14 @@ pub mod tests {
         assert!(text1.contains("delete to start / end of line"));
 
         // 2. Navigate/scroll help down and verify modal isolation
-        for _ in 0..8 {
+        let bottom = app.help_max_scroll();
+        for _ in 0..bottom {
             app.key(event::KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         }
-        assert_eq!(app.help_scroll, 8, "Help should scroll down to max_scroll");
+        assert_eq!(
+            app.help_scroll, bottom,
+            "Help should scroll down to max_scroll"
+        );
         assert_eq!(
             app.input.text, "draft message to preserve",
             "Help navigation must not modify underlying input draft"
@@ -4695,6 +4699,9 @@ pub mod tests {
 
         // 6. Graph help at 60x12: verify long filter relation description is fully accessible without clipping
         app.show_help(Help::Graph);
+        for _ in 0..2 {
+            app.key(event::KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
         terminal
             .draw(|frame| {
                 app.draw(frame);

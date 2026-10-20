@@ -660,3 +660,36 @@ fn turning_the_required_gates_off_is_said_when_a_plan_changes_code() {
             .all(|n| !n["text"].as_str().unwrap().contains("required_gates"))
     );
 }
+
+#[test]
+fn a_task_reads_the_approved_reports_of_its_dependencies() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2", "Gate", ["t1"]), task("t3", "Docs"))
+"#,
+        r#"    answer = "audit found F1 and F2" if "Task id: t1" in prompt else "report""#,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("plan finished", || core.is_idle(&conversation));
+
+    let worker_prompts: Vec<String> = prompts(dir.path())
+        .into_iter()
+        .filter(|(bin, prompt)| bin == "agy" && prompt.contains("Task id:"))
+        .map(|(_, prompt)| prompt)
+        .collect();
+    let gate = worker_prompts
+        .iter()
+        .find(|prompt| prompt.contains("Task id: t2"))
+        .unwrap();
+    assert!(
+        gate.contains("### t1: Audit\naudit found F1 and F2"),
+        "{gate}"
+    );
+    let docs = worker_prompts
+        .iter()
+        .find(|prompt| prompt.contains("Task id: t3"))
+        .unwrap();
+    assert!(!docs.contains("audit found"), "only dependents get it");
+}

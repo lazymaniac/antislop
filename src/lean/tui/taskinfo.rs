@@ -3,7 +3,7 @@
 //! effect, obligation coverage and integration are read here and only here,
 //! so the three views can never tell different stories about the same task.
 
-use super::super::tasks::{Outcome, status};
+use super::super::tasks::{Outcome, UNKNOWN_ID_BYTES, UNKNOWN_ID_LIMIT, bound, status};
 use super::view::{TaskRow, View, clean, status_label};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
@@ -183,6 +183,14 @@ const NO_EFFECT_STATED: &str = "effect: not reported by worker";
 /// `None` while the round has produced nothing to report at all. Every
 /// effect shape a view shows composes itself from these parts, so what
 /// counts as a fragment is decided exactly once.
+///
+/// The fragment verdict reads the daemon's explicit `effect_cut` stamp —
+/// recorded at the moment of the cut, and the only honest answer: honest
+/// text may end in `…` and a kept whole oversized cluster carries no
+/// mark. Only feedback that predates the stamp (`effect_cut: None`) falls
+/// back to the trailing mark, the one signal such historical rows still
+/// carry. Sanitizing the text always happens before that mark is read, so
+/// a smuggled escape can neither pose as nor hide the cut.
 fn effect_pieces(row: &TaskRow) -> Option<(String, bool)> {
     let reported = row.effect.is_some()
         || row.obligations.is_some()
@@ -195,7 +203,10 @@ fn effect_pieces(row: &TaskRow) -> Option<(String, bool)> {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    let fragment = text.ends_with('…');
+    let fragment = match row.effect_cut {
+        Some(cut) => cut,
+        None => text.ends_with('…'),
+    };
     Some((text, fragment))
 }
 
@@ -282,8 +293,35 @@ pub fn coverage_full(row: &TaskRow) -> String {
                 .and_then(Value::as_array)
                 .map(|ids| ids.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
-            if !unknown.is_empty() {
-                line.push_str(&format!(" · ids not in the plan: {}", unknown.join(", ")));
+            let more = coverage
+                .get("unknown_more")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            // The preview lists at most [`UNKNOWN_ID_LIMIT`] ids, each a
+            // sanitized line within [`UNKNOWN_ID_BYTES`] — the preview's
+            // own bound. A feedback written before ids were bounded can
+            // carry a longer or fatter list; the renderer trims it to the
+            // same shape, and every id left out, by the runtime or here,
+            // is counted, never silently dropped. The full ids stay in
+            // the verdict, outside this compact account.
+            let shown: Vec<String> = unknown
+                .iter()
+                .take(UNKNOWN_ID_LIMIT)
+                .map(|id| bound(&one_line(id), UNKNOWN_ID_BYTES))
+                .collect();
+            let dropped = more + (unknown.len() - shown.len()) as u64;
+            if !shown.is_empty() {
+                let rest = if dropped > 0 {
+                    format!(" (+{dropped} more)")
+                } else {
+                    String::new()
+                };
+                line.push_str(&format!(
+                    " · ids not in the plan: {}{rest}",
+                    shown.join(", ")
+                ));
+            } else if dropped > 0 {
+                line.push_str(&format!(" · ids not in the plan: +{dropped} more"));
             }
             line
         }
@@ -676,6 +714,83 @@ mod tests {
             effect_front(&spaced).as_deref(),
             Some("effect: two spaces and a tab")
         );
+    }
+
+    #[test]
+    fn the_fragment_verdict_reads_the_stamp_the_mark_is_only_the_fallback() {
+        // An honest sentence ending in an ellipsis is no fragment once the
+        // daemon's stamp says the stored text was never cut.
+        let mut honest = row("approved", 1);
+        honest.effect = Some("fixed the ellipsis bug in src/a.rs…".into());
+        honest.effect_cut = Some(false);
+        assert_eq!(
+            effect_line(&honest).as_deref(),
+            Some("effect: fixed the ellipsis bug in src/a.rs…"),
+            "a natural ellipsis never marks a fragment on stamped feedback"
+        );
+        // A cut the stamp reports shows even when the kept whole carries
+        // no trailing mark (an oversized first cluster kept whole).
+        let mut stamped = row("approved", 1);
+        stamped.effect = Some("👩‍👩‍👧‍👦".into());
+        stamped.effect_cut = Some(true);
+        assert_eq!(
+            effect_front(&stamped).as_deref(),
+            Some("effect: [fragment] 👩‍👩‍👧‍👦"),
+            "the stamp decides, and the card puts it in front of the text"
+        );
+        // Historical feedback without the stamp falls back to the mark,
+        // stated as the best the row allows.
+        let mut legacy = row("approved", 1);
+        legacy.effect = Some("3 files changed — src/a…".into());
+        assert!(effect_line(&legacy).unwrap().ends_with("[fragment]"));
+        let mut legacy_plain = row("approved", 1);
+        legacy_plain.effect = Some("3 files changed — src/a.rs".into());
+        assert!(!effect_line(&legacy_plain).unwrap().contains("[fragment]"));
+    }
+
+    #[test]
+    fn coverage_render_caps_fat_ids_and_counts_every_one_left_out() {
+        // The runtime's preview shape: few short ids plus an honest count
+        // of the rest.
+        let mut preview = row("verifying", 1);
+        preview.obligations = Some(json!({
+            "total": 3, "ok": 1, "missing": 2,
+            "unknown": ["XX1", "XX2"], "unknown_more": 6,
+        }));
+        let full = coverage_full(&preview);
+        assert!(
+            full.contains("ids not in the plan: XX1, XX2 (+6 more)"),
+            "{full}"
+        );
+        // An old replay from before ids were bounded: an oversized list of
+        // oversized ids. The renderer lists at most the preview's share,
+        // bounds each id, and counts the rest — the true total stands.
+        let fat: Vec<String> = (0..12)
+            .map(|i| format!("x{i}{}", "y".repeat(200)))
+            .collect();
+        let mut replay = row("verifying", 1);
+        replay.obligations = Some(json!({
+            "total": 2, "ok": 0, "missing": 2, "unknown": fat,
+        }));
+        let full = coverage_full(&replay);
+        let listed = full
+            .split("ids not in the plan: ")
+            .nth(1)
+            .expect("ids named")
+            .split(" (")
+            .next()
+            .expect("listing");
+        let ids: Vec<&str> = listed.split(", ").collect();
+        assert_eq!(ids.len(), UNKNOWN_ID_LIMIT, "{full}");
+        assert!(
+            ids.iter().all(|id| id.len() <= UNKNOWN_ID_BYTES),
+            "every listed id is within the preview bound: {ids:?}"
+        );
+        assert!(
+            full.contains(&format!("(+{} more)", 12 - UNKNOWN_ID_LIMIT)),
+            "the ids left out are counted, not lost: {full}"
+        );
+        assert!(full.starts_with("0 of 2 accounted"), "{full}");
     }
 
     #[test]

@@ -12,6 +12,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Carousel {
@@ -120,13 +121,10 @@ impl Carousel {
 
     fn draw_ribbon(&self, frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
         let total = view.tasks.len();
-        let mut spans = Vec::new();
-        spans.push(Span::styled("◄ ", theme.accent()));
-
-        for (i, t) in view.tasks.iter().enumerate() {
-            let is_cur = i == self.selected;
+        let label = |i: usize| {
+            let t = &view.tasks[i];
             let (m, col) = mark(&t.status);
-            let style = if is_cur {
+            let style = if i == self.selected {
                 Style::default()
                     .fg(Color::White)
                     .bg(Color::Blue)
@@ -134,14 +132,58 @@ impl Carousel {
             } else {
                 Style::default().fg(col)
             };
-            let sep_style = theme.dim();
-            let label = format!(" [{}/{}] {} {} ", i + 1, total, m, t.id);
-            spans.push(Span::styled(label, style));
-            if i + 1 < total {
-                spans.push(Span::styled("│", sep_style));
+            let text = format!(" [{}/{}] {} {} ", i + 1, total, m, t.id);
+            (text, style)
+        };
+        // Only the labels that fit around the selected task are built, so a
+        // frame costs the width of the ribbon, not the size of the plan.
+        let mut budget = usize::from(area.width).saturating_sub(2 + 2 + 2);
+        let (selected, style) = label(self.selected);
+        budget = budget.saturating_sub(selected.width());
+        let (mut first, mut last) = (self.selected, self.selected);
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        loop {
+            let mut grew = false;
+            if first > 0 {
+                let (text, style) = label(first - 1);
+                if text.width() < budget {
+                    budget -= text.width() + 1;
+                    before.push((text, style));
+                    first -= 1;
+                    grew = true;
+                }
+            }
+            if last + 1 < total {
+                let (text, style) = label(last + 1);
+                if text.width() < budget {
+                    budget -= text.width() + 1;
+                    after.push((text, style));
+                    last += 1;
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
             }
         }
-        spans.push(Span::styled(" ►", theme.accent()));
+        let sep = || Span::styled("│", theme.dim());
+        let mut spans = vec![Span::styled(
+            if first > 0 { "◄ … " } else { "◄ " },
+            theme.accent(),
+        )];
+        for (text, style) in before.into_iter().rev() {
+            spans.push(Span::styled(text, style));
+            spans.push(sep());
+        }
+        spans.push(Span::styled(selected, style));
+        for (text, style) in after {
+            spans.push(sep());
+            spans.push(Span::styled(text, style));
+        }
+        spans.push(Span::styled(
+            if last + 1 < total { " … ►" } else { " ►" },
+            theme.accent(),
+        ));
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -159,20 +201,16 @@ impl Carousel {
         theme: &Theme,
     ) {
         let (status_mark, status_color) = mark(&task.status);
-        let open_comments = view
-            .comments_on(&format!("worker:{}", task.id))
-            .iter()
-            .chain(view.comments_on(&format!("verifier:{}", task.id)).iter())
-            .filter(|c| c.status == "open")
-            .count();
-        let total_comments = view
-            .comments_on(&format!("worker:{}", task.id))
-            .iter()
-            .chain(view.comments_on(&format!("verifier:{}", task.id)).iter())
-            .count();
-
         let worker_key = format!("worker:{}", task.id);
         let verifier_key = format!("verifier:{}", task.id);
+        // One scan of the comments per side for the whole card.
+        let comments: Vec<_> = view
+            .comments_on(&worker_key)
+            .into_iter()
+            .chain(view.comments_on(&verifier_key))
+            .collect();
+        let open_comments = comments.iter().filter(|c| c.status == "open").count();
+        let total_comments = comments.len();
 
         let mut lines = Vec::new();
 

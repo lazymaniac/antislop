@@ -1,7 +1,10 @@
 //! What the screen shows, built only from the conversation's events, so a
 //! frontend that attaches later rebuilds the same state.
 
-use super::super::tasks::{feedback_is_current, recovery_outcome, resets_card, status};
+use super::super::tasks::{
+    DETAIL_LIMIT, EFFECT_LIMIT, UNKNOWN_ID_BYTES, bound, feedback_is_current, recovery_outcome,
+    resets_card, status,
+};
 use super::session::Block;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -141,6 +144,12 @@ pub struct TaskRow {
     /// The current round's bounded effect, as the daemon reported it in the
     /// task event's feedback. `None`: that round has reported no effect.
     pub effect: Option<String>,
+    /// Whether the daemon cut that effect at the moment it stored it
+    /// (the feedback's explicit `effect_cut` stamp). `None`: the feedback
+    /// predates the stamp, and a reader falls back to the trailing mark —
+    /// a guess that feedback written after the stamp never needs, because
+    /// honest text may end in `…` and a kept whole cluster carries none.
+    pub effect_cut: Option<bool>,
     /// The current round's obligation coverage
     /// (`{total, ok, issue, blocked, na, missing, unknown}`). `None`: no
     /// verdict has reported coverage; cards show `?`, never a quiet `0`.
@@ -865,12 +874,19 @@ impl View {
                     .as_str()
                     .map(str::to_owned)
                     .unwrap_or_default();
+                // Plan text is orchestrator prose: every field a view may
+                // draw arrives sanitized once here, so the carousel, the
+                // graph and the details screen all read printable rows
+                // from the same row, and ids stay stable mirrors of what
+                // later events will carry back through the same fold.
+                let line = |value: &Value| clean_line(value.as_str().unwrap_or_default());
+                let opt_line = |value: &Value| value.as_str().map(clean_line);
                 let strings = |value: &Value| -> Vec<String> {
                     value
                         .as_array()
                         .into_iter()
                         .flatten()
-                        .filter_map(|item| item.as_str().map(str::to_owned))
+                        .filter_map(|item| item.as_str().map(clean_line))
                         .collect()
                 };
                 self.tasks = payload["tasks"]
@@ -878,27 +894,23 @@ impl View {
                     .into_iter()
                     .flatten()
                     .map(|task| {
-                        let id = task["id"].as_str().unwrap_or_default().to_owned();
-                        let parallel_with = strings(&payload["parallel"][&id]);
+                        let raw_id = task["id"].as_str().unwrap_or_default();
+                        let id = clean_line(raw_id);
+                        let parallel_with = strings(&payload["parallel"][raw_id]);
                         TaskRow {
                             id,
                             uuid: None,
-                            title: task["title"].as_str().unwrap_or_default().to_owned(),
-                            summary: task["summary"].as_str().map(str::to_owned),
-                            verifier_summary: task["verifier"]["summary"]
-                                .as_str()
-                                .map(str::to_owned),
-                            section: task["section"].as_str().map(str::to_owned),
-                            kind: task["kind"].as_str().unwrap_or_default().to_owned(),
-                            goal: task["goal"].as_str().unwrap_or_default().to_owned(),
+                            title: line(&task["title"]),
+                            summary: opt_line(&task["summary"]),
+                            verifier_summary: opt_line(&task["verifier"]["summary"]),
+                            section: opt_line(&task["section"]),
+                            kind: line(&task["kind"]),
+                            goal: line(&task["goal"]),
                             scope: strings(&task["scope"]),
                             depends_on: strings(&task["depends_on"]),
                             parallel_with,
                             writes: task["writes"] == true,
-                            focus: task["verifier"]["focus"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_owned(),
+                            focus: line(&task["verifier"]["focus"]),
                             risks: strings(&task["verifier"]["risks"]),
                             status: "proposed".into(),
                             round: 0,
@@ -908,8 +920,9 @@ impl View {
                                 String::new()
                             },
                             reason: None,
-                            scope_hash: task["scope_hash"].as_str().map(str::to_owned),
+                            scope_hash: opt_line(&task["scope_hash"]),
                             effect: None,
+                            effect_cut: None,
                             obligations: None,
                             integration: None,
                         }
@@ -917,52 +930,22 @@ impl View {
                     .collect();
                 // Compute parallel_with fallback when event did not include payload["parallel"]
                 if payload["parallel"].is_null() && self.tasks.len() > 1 {
-                    let ids_and_deps: Vec<(String, Vec<String>, bool, Vec<String>)> = self
-                        .tasks
-                        .iter()
-                        .map(|t| {
-                            (
-                                t.id.clone(),
-                                t.depends_on.clone(),
-                                t.writes,
-                                t.scope.clone(),
-                            )
-                        })
-                        .collect();
-                    // Ordered through any chain of dependencies, as the core
-                    // computes it (`tasks::parallel_peers`).
-                    let direct: HashMap<&str, &[String]> = ids_and_deps
-                        .iter()
-                        .map(|(id, deps, _, _)| (id.as_str(), deps.as_slice()))
-                        .collect();
-                    let reaches = |from: &str, to: &str| {
-                        let mut stack = vec![from];
-                        let mut seen = std::collections::HashSet::new();
-                        while let Some(id) = stack.pop() {
-                            for dep in direct.get(id).copied().unwrap_or_default() {
-                                if dep == to {
-                                    return true;
-                                }
-                                if seen.insert(dep.as_str()) {
-                                    stack.push(dep);
-                                }
-                            }
-                        }
-                        false
-                    };
-                    for row in &mut self.tasks {
-                        row.parallel_with = ids_and_deps
+                    // The core's own rule (`tasks::parallel_peers`), so the
+                    // rows and the plan document never tell different stories.
+                    let peers = super::super::tasks::peers_of(
+                        &self
+                            .tasks
                             .iter()
-                            .filter(|(oid, _, owrites, oscope)| {
-                                *oid != row.id
-                                    && !reaches(&row.id, oid)
-                                    && !reaches(oid, &row.id)
-                                    && !(row.writes
-                                        && *owrites
-                                        && super::super::tasks::scopes_overlap(&row.scope, oscope))
+                            .map(|row| super::super::tasks::PeerNode {
+                                id: &row.id,
+                                depends_on: &row.depends_on,
+                                writes: row.writes,
+                                scope: &row.scope,
                             })
-                            .map(|(oid, _, _, _)| oid.clone())
-                            .collect();
+                            .collect::<Vec<_>>(),
+                    );
+                    for row in &mut self.tasks {
+                        row.parallel_with = peers.get(&row.id).cloned().unwrap_or_default();
                     }
                 }
                 self.task_rows.clear();
@@ -1032,33 +1015,54 @@ impl View {
                 );
             }
             "task" => {
-                let id = text("id");
+                let id = clean_line(&text("id"));
                 let index = self.tasks.iter().position(|row| row.id == id);
                 if let Some(index) = index {
                     self.task_rows.insert(text("task"), index);
                     let row = &mut self.tasks[index];
                     let (was, was_round) = (row.status.clone(), row.round);
                     row.uuid = Some(text("task"));
-                    row.status = text("status");
+                    row.status = clean_line(&text("status"));
                     row.round = payload["round"].as_u64().unwrap_or_default();
-                    row.reason = payload["reason"].as_str().map(str::to_owned);
+                    // The card's reason is a bounded line of at most
+                    // `DETAIL_LIMIT`; the whole cause stays in the task's
+                    // report and the conversation, so a cut hides nothing
+                    // the user cannot still read. Events written before the
+                    // daemon bounded reasons fold through the same cut.
+                    row.reason = payload["reason"]
+                        .as_str()
+                        .map(|reason| bound(&clean(reason), DETAIL_LIMIT));
                     // The round's card data arrives with the announcement and
                     // belongs to one round only: anything stamped for another
                     // round is stale and reads as not reported.
                     let feedback = &payload["feedback"];
                     let fresh = feedback_is_current(feedback, row.round);
+                    // An effect older than the daemon's own bound folds to
+                    // the bounded projection here, marked when it had to be
+                    // cut; the effect's raw source stays in the report.
                     row.effect = if fresh {
-                        feedback["effect"].as_str().map(str::to_owned)
+                        feedback["effect"]
+                            .as_str()
+                            .map(|effect| bound(&clean_line(effect), EFFECT_LIMIT))
+                    } else {
+                        None
+                    };
+                    // The cut stamp travels with its effect and its round:
+                    // an effect that never attached carries no verdict,
+                    // and feedback without the stamp stays unknown (`None`)
+                    // so the reader falls back honestly to the mark.
+                    row.effect_cut = if row.effect.is_some() {
+                        feedback["effect_cut"].as_bool()
                     } else {
                         None
                     };
                     row.obligations = if fresh && feedback["coverage"].is_object() {
-                        Some(feedback["coverage"].clone())
+                        Some(bounded_coverage(&feedback["coverage"]))
                     } else {
                         None
                     };
                     row.integration = if fresh && feedback["integration"].is_object() {
-                        Some(feedback["integration"].clone())
+                        Some(bounded_landing(&feedback["integration"]))
                     } else {
                         None
                     };
@@ -1138,14 +1142,20 @@ impl View {
             "check" => self.check_events += 1,
             "integration" => {
                 let approved = payload["status"] == "approved";
+                let title = clean_line(&format!("[{}] {}", text("id"), text("title")));
+                // The landing line the row keeps is the bounded projection;
+                // the full text lives in the task's report and in the mail,
+                // so a cut here never loses evidence. Events written before
+                // the daemon bounded details fold through the same cut.
+                let detail = bound(&clean_line(&text("detail")), DETAIL_LIMIT);
                 self.cards.push(TranscriptCard::System {
-                    title: format!("[{}] {}", text("id"), text("title")),
+                    title: title.clone(),
                     meta: if approved {
                         "approved".into()
                     } else {
                         "verification".into()
                     },
-                    text: text("detail"),
+                    text: detail.clone(),
                     tone: if approved {
                         super::theme::Tone::Done
                     } else {
@@ -1158,13 +1168,13 @@ impl View {
                     } else {
                         Style::default().fg(Color::Yellow)
                     },
-                    format!("· [{}] {}: {}", text("id"), text("title"), text("detail")),
+                    format!("· {title}: {detail}"),
                 );
                 // The same landing reaches the row: a stopped integration
                 // keeps its raw reason, and the detail rides along with any
                 // outcome the task event reported.
-                let detail = text("detail");
-                if let Some(row) = self.tasks.iter_mut().find(|row| row.id == text("id")) {
+                let id = clean_line(&text("id"));
+                if let Some(row) = self.tasks.iter_mut().find(|row| row.id == id) {
                     if payload["status"] == "needs_user" {
                         row.reason = Some(detail.clone());
                     }
@@ -1186,16 +1196,18 @@ impl View {
             "task_recovery" => {
                 // A recovery is announced as a `task` event with its feedback
                 // plus this event with the action's own raw detail. The row
-                // takes the detail whole; a retry also clears what the earlier
+                // takes the bounded line; a retry also clears what the earlier
                 // round showed, so nothing stale survives the new round.
-                let action = text("action");
-                let detail = text("detail");
-                let line = format!("· recovery · {action} · {}", clean(&detail));
+                // Events written before the daemon bounded recovery details
+                // fold through the same cut; the whole text stays in mail.
+                let action = clean_line(&text("action"));
+                let detail = bound(&clean_line(&text("detail")), DETAIL_LIMIT);
+                let line = format!("· recovery · {action} · {detail}");
                 self.push(dim(), line);
                 if let Some(&index) = self.task_rows.get(text("task").as_str())
                     && let Some(row) = self.tasks.get_mut(index)
                 {
-                    let status = text("status");
+                    let status = clean_line(&text("status"));
                     if !status.is_empty() {
                         row.status = status;
                     }
@@ -1203,10 +1215,11 @@ impl View {
                         row.activity.clear();
                     }
                     if !detail.is_empty() {
-                        row.reason = Some(detail.clone());
+                        row.reason = Some(detail);
                     }
                     if resets_card(&action) {
                         row.effect = None;
+                        row.effect_cut = None;
                         row.obligations = None;
                         row.integration = None;
                     }
@@ -1221,7 +1234,8 @@ impl View {
                         integration["outcome"] = serde_json::json!(outcome);
                         integration["source"] = serde_json::json!("recovery");
                         if let Some(branch) = payload["branch"].as_str() {
-                            integration["branch"] = serde_json::json!(branch);
+                            integration["branch"] =
+                                serde_json::json!(bound(&clean_line(branch), DETAIL_LIMIT));
                         }
                         row.integration = Some(integration);
                     }
@@ -1610,6 +1624,46 @@ pub fn duration(ms: u64) -> String {
 /// Agents' text may carry terminal escapes; keep it printable.
 pub fn clean(text: &str) -> String {
     super::sanitize::sanitize(text)
+}
+
+/// Agents' single-line fields (titles, ids, paths, sections) as one
+/// printable line, folded before they ever reach a row; a break or a
+/// smuggled escape can never shift or corrupt the line it is drawn on.
+pub fn clean_line(text: &str) -> String {
+    super::sanitize::sanitize_line(text)
+}
+
+/// A coverage preview folded into its bounded shape: every listed unknown
+/// id becomes a printable line within [`UNKNOWN_ID_BYTES`], while the
+/// array keeps its full length so the renderer can still name the real
+/// count. Feedback written after the daemon's own preview bound already
+/// satisfies every one of these and comes back unchanged, `unknown_more`
+/// included.
+fn bounded_coverage(coverage: &Value) -> Value {
+    let mut coverage = coverage.clone();
+    if let Some(ids) = coverage.get_mut("unknown").and_then(Value::as_array_mut) {
+        for id in ids.iter_mut() {
+            if let Some(text) = id.as_str() {
+                *id = Value::String(bound(&clean_line(text), UNKNOWN_ID_BYTES));
+            }
+        }
+    }
+    coverage
+}
+
+/// A landing folded into its bounded shape: the printable detail line cut
+/// at [`DETAIL_LIMIT`] (marked when it had to be cut, like every bounded
+/// projection), everything else riding along whole. The full landing text
+/// stays in the task's report and mail, outside this compact row.
+fn bounded_landing(integration: &Value) -> Value {
+    let mut integration = integration.clone();
+    if let Some(object) = integration.as_object_mut()
+        && let Some(detail) = object.get("detail").and_then(Value::as_str)
+    {
+        let detail = bound(&clean_line(detail), DETAIL_LIMIT);
+        object.insert("detail".into(), Value::String(detail));
+    }
+    integration
 }
 
 /// Word-wraps `text` to `width` columns, breaking long words safely by grapheme clusters.
@@ -2255,8 +2309,11 @@ mod tests {
                     "verifier": {"summary": summary, "focus": "Full focus", "risks": ["Data loss"]}
                 }]}),
             ));
-            assert_eq!(view.tasks[0].summary.as_deref(), summary.as_str());
-            assert_eq!(view.tasks[0].verifier_summary.as_deref(), summary.as_str());
+            // Summaries arrive sanitized: blank and escape-only legacy values
+            // fold to an empty line, which the views read as not written.
+            let expected = summary.as_str().map(clean_line);
+            assert_eq!(view.tasks[0].summary, expected);
+            assert_eq!(view.tasks[0].verifier_summary, expected);
             assert_eq!(view.tasks[0].goal, "Full goal");
             assert_eq!(view.tasks[0].focus, "Full focus");
             assert_eq!(view.tasks[0].risks, ["Data loss"]);
