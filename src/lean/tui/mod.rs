@@ -1127,7 +1127,12 @@ impl App {
                     // record on screen belongs to the old round. Refetch it
                     // now, once, instead of letting it age on every redraw.
                     self.refetch_stale_details();
-                    if saw_manual_plan && !self.view.tasks.is_empty() && self.confirmation.is_none()
+                    // Replayed history also carries old proposals; only a plan
+                    // still awaiting a decision is worth opening.
+                    if saw_manual_plan
+                        && self.view.plan_proposed()
+                        && !self.view.tasks.is_empty()
+                        && self.confirmation.is_none()
                     {
                         let pid = self.view.plan.clone().unwrap_or_else(|| "plan".into());
                         self.plan_view = Some(PlanView::new(pid));
