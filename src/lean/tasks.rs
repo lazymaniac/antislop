@@ -4,6 +4,7 @@
 use crate::{Error, Result, config::WorkKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -106,8 +107,9 @@ fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
 /// block short. An empty or damaged block is left in the report whole —
 /// it yields `None` and the caller keeps the diffstat or report-line
 /// fallback, so nothing the worker wrote is lost. A kept effect is bounded
-/// to [`EFFECT_LIMIT`] with `bound`, the same cut a card marks `[fragment]`.
-pub fn parse_effect(answer: &str) -> (String, Option<String>) {
+/// to [`EFFECT_LIMIT`] with [`bound_cut`], which also says whether it cut;
+/// the caller stores that as the card's `effect_cut` metadata.
+pub fn parse_effect(answer: &str) -> (String, Option<(String, bool)>) {
     let open = "```effect";
     let Some(start) = answer.rfind(open) else {
         return (answer.to_owned(), None);
@@ -148,7 +150,7 @@ pub fn parse_effect(answer: &str) -> (String, Option<String>) {
         }
         remaining.push_str(after);
     }
-    (remaining, Some(bound(&one_line, EFFECT_LIMIT)))
+    (remaining, Some(bound_cut(&one_line, EFFECT_LIMIT)))
 }
 
 /// A message an agent addresses to another agent in a ```message block.
@@ -236,7 +238,7 @@ pub const INBOX_FOLLOWUP: &str = "Messages arrived while you worked (above). \
 /// answer it reports in. The runtime keeps the worker's own line when it is
 /// there, falls back to the diffstat (writers) or the report's first text
 /// line (read-only) when it is not, and bounds what it keeps to
-/// `EFFECT_LIMIT` characters, marking a cut so a card can flag it.
+/// `EFFECT_LIMIT` bytes, recording a cut in the card's `effect_cut` flag.
 pub const EFFECT_FORMAT: &str = "Optionally, end your report with the one line \
      your task card shows, in a block like this:\n```effect\nwhat you changed or \
      found, on one line, no backticks\n```\nWrite the effect as a single line \
@@ -917,21 +919,65 @@ pub fn check_comments_text(comments: &[(String, String)]) -> String {
     )
 }
 
-/// The longest effect summary a card gets, in characters.
+/// The longest effect summary a card gets, in bytes of stored text.
 pub const EFFECT_LIMIT: usize = 240;
-/// The longest integration detail a card gets, in characters.
+/// The longest integration detail a card gets, in bytes of stored text.
 pub const DETAIL_LIMIT: usize = 600;
 /// How many file names a card lists; the rest are only counted.
 pub const FILE_LIMIT: usize = 20;
+/// How many unknown ids a coverage preview lists; the rest are only counted.
+pub const UNKNOWN_ID_LIMIT: usize = 8;
+/// The longest unknown id a coverage preview lists, in bytes of stored text.
+pub const UNKNOWN_ID_BYTES: usize = 32;
+/// The mark of a cut: the last grapheme of text [`bound_cut`] trimmed for
+/// having no room for the whole.
+pub const CUT_MARK: char = '…';
 
-/// Cuts text at a character boundary, marking the cut with `…` so a card
-/// never splits a character and never grows past `limit`.
-pub fn bound(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.to_owned();
+/// Cuts text to `limit` bytes — the budget a stored payload pays in UTF-8,
+/// never graphemes, since one cluster can cost tens of bytes — taking the
+/// longest run of whole grapheme clusters that still leaves room for
+/// [`CUT_MARK`], so a stored card string never splits a combined character
+/// (ZWJ families, flags, combining marks) and never grows past `limit`.
+/// The mark is the cut's last grapheme. When even the first cluster finds
+/// no room beside the mark: a cluster that fits `limit` whole is kept as
+/// the whole answer (no mark can join it), one that fits neither becomes
+/// the mark alone if the mark fits, else nothing; `limit` 0 is always
+/// empty, and at `limit` 1 the answer is the first cluster whole when it
+/// is a single byte, else empty — never the mark standing in for content.
+/// The flag says whether the text was trimmed: that is the effect's
+/// `effect_cut` metadata, recorded when the cut happens — a consumer must
+/// not recognise a cut by a trailing mark, which honest text can end with
+/// and a kept whole cluster lacks.
+pub fn bound_cut(text: &str, limit: usize) -> (String, bool) {
+    if text.len() <= limit {
+        return (text.to_owned(), false);
     }
-    let cut: String = text.chars().take(limit.saturating_sub(1)).collect();
-    format!("{}…", cut.trim_end())
+    let budget = limit.saturating_sub(CUT_MARK.len_utf8());
+    let mut end = 0usize;
+    for (index, grapheme) in text.grapheme_indices(true) {
+        let next = index + grapheme.len();
+        if next > budget {
+            break;
+        }
+        end = next;
+    }
+    let head = text[..end].trim_end();
+    if !head.is_empty() {
+        return (format!("{head}{CUT_MARK}"), true);
+    }
+    let first = text.graphemes(true).next().unwrap_or_default();
+    if first.len() <= limit {
+        return (first.to_owned(), true);
+    }
+    if limit >= CUT_MARK.len_utf8() {
+        return (CUT_MARK.to_string(), true);
+    }
+    (String::new(), true)
+}
+
+/// [`bound_cut`] with only the text.
+pub fn bound(text: &str, limit: usize) -> String {
+    bound_cut(text, limit).0
 }
 
 /// How a task's result landed on the user's project: exactly one outcome
@@ -1071,6 +1117,10 @@ fn counted_status(entry: &Value) -> &'static str {
 /// The coverage a card shows: counts over the task's real obligations only.
 /// Ids the verdict adds that are not obligations are listed as `unknown`
 /// and counted nowhere; obligations without a usable answer are `missing`.
+/// The preview bounds the unknown ids: at most [`UNKNOWN_ID_LIMIT`] of them,
+/// each within [`UNKNOWN_ID_BYTES`] bytes, with the number left out in
+/// `unknown_more`; the verdict keeps every id whole, so nothing is lost to
+/// the preview's cut.
 pub fn coverage(verdict: &Verdict, obligations: &[(String, String)]) -> Value {
     let mut counts: std::collections::BTreeMap<&str, u32> = std::collections::BTreeMap::new();
     for (id, _) in obligations {
@@ -1088,6 +1138,11 @@ pub fn coverage(verdict: &Verdict, obligations: &[(String, String)]) -> Value {
         .keys()
         .filter(|id| !real.contains(id.as_str()))
         .collect();
+    let shown: Vec<String> = unknown
+        .iter()
+        .take(UNKNOWN_ID_LIMIT)
+        .map(|id| bound(id, UNKNOWN_ID_BYTES))
+        .collect();
     serde_json::json!({
         "total": obligations.len(),
         "ok": counts.get("ok").copied().unwrap_or_default(),
@@ -1095,17 +1150,19 @@ pub fn coverage(verdict: &Verdict, obligations: &[(String, String)]) -> Value {
         "blocked": counts.get("blocked").copied().unwrap_or_default(),
         "na": counts.get("na").copied().unwrap_or_default(),
         "missing": counts.get("missing").copied().unwrap_or_default(),
-        "unknown": unknown,
+        "unknown": shown,
+        "unknown_more": unknown.len() - shown.len(),
     })
 }
 
 /// The bounded effect a card shows for a writer's change: what the diff
 /// summed to and which files it touched, never the diff or the report.
 /// Names are dropped from the end, never the counts, so a cut never hides
-/// that there are more files.
-pub fn effect(stat: &str, files: &[String]) -> String {
+/// that there are more files. The flag says whether the stored text was
+/// cut by [`bound_cut`].
+pub fn effect(stat: &str, files: &[String]) -> (String, bool) {
     if files.is_empty() {
-        return "no file changes".into();
+        return ("no file changes".into(), false);
     }
     let summary = stat
         .lines()
@@ -1127,16 +1184,17 @@ pub fn effect(stat: &str, files: &[String]) -> String {
             };
             format!("{summary} — {}{more}", names.join(", "))
         };
-        if shown == 0 || candidate.chars().count() <= EFFECT_LIMIT {
-            return bound(&candidate, EFFECT_LIMIT);
+        if shown == 0 || candidate.len() <= EFFECT_LIMIT {
+            return bound_cut(&candidate, EFFECT_LIMIT);
         }
         shown -= 1;
     }
 }
 
 /// The bounded effect a card shows for a read-only task: the first text
-/// line of its report outside code fences, not the report.
-pub fn report_effect(report: &str) -> String {
+/// line of its report outside code fences, not the report. The flag says
+/// whether the stored text was cut by [`bound_cut`].
+pub fn report_effect(report: &str) -> (String, bool) {
     let mut in_fence = false;
     for line in report.lines() {
         let line = line.trim();
@@ -1147,9 +1205,23 @@ pub fn report_effect(report: &str) -> String {
         if in_fence || line.is_empty() {
             continue;
         }
-        return bound(line, EFFECT_LIMIT);
+        return bound_cut(line, EFFECT_LIMIT);
     }
-    String::new()
+    (String::new(), false)
+}
+
+/// The two card-feedback keys of a bounded effect: its text (`null` when
+/// the round has not stated one) and the explicit `effect_cut` flag, set
+/// when [`bound_cut`] trimmed the text at the moment of the trim. A
+/// consumer must read the flag, not the text's last grapheme: honest text
+/// can end in `…` and a kept whole oversized cluster carries no mark.
+/// Feedback written before this flag existed has neither key and reads
+/// as "no cut" to a frontend falling back on the old mark.
+pub fn effect_keys(effect: &Option<(String, bool)>) -> (Value, Value) {
+    match effect {
+        Some((text, cut)) => (Value::String(text.clone()), serde_json::json!(*cut)),
+        None => (Value::Null, serde_json::json!(false)),
+    }
 }
 
 pub fn orchestrator_instructions() -> String {
@@ -2149,15 +2221,58 @@ mod tests {
     }
 
     #[test]
-    fn bound_cuts_at_character_boundaries() {
+    fn bound_cuts_on_graphemes_within_a_byte_budget() {
         assert_eq!(bound("short", 10), "short");
         assert_eq!(bound("abcd", 4), "abcd");
-        assert_eq!(bound("abcd", 3), "ab…");
+        // The budget is bytes, counted before the mark is appended: at 3
+        // there is no room for a whole cluster beside the mark, so the
+        // first whole cluster stands for the cut instead of splitting one.
+        assert_eq!(bound("abcd", 3), "a");
         // A cut never splits a multi-byte character.
         let text = "zażółć gęślą jaźń";
         let cut = bound(text, 5);
-        assert!(cut.chars().count() <= 5 && cut.is_char_boundary(cut.len()));
-        assert_eq!(cut, "zażó…");
+        assert_eq!(cut, "za…");
+        assert!(cut.len() <= 5 && cut.is_char_boundary(cut.len()));
+    }
+
+    #[test]
+    fn bound_answers_zero_one_and_oversized_clusters_whole() {
+        // limit 0 is empty: never a mark paid over the budget.
+        assert_eq!(bound("abcd", 0), "");
+        // limit 1 keeps the first whole cluster instead of all content lost.
+        assert_eq!(bound("abcd", 1), "a");
+        assert_eq!(bound("abcd", 2), "a");
+        // A combining sequence is one cluster: kept whole, never split.
+        let composed = "e\u{301}xtra";
+        assert_eq!(bound(composed, 3), "e\u{301}");
+        assert_eq!(bound(composed, 2), "");
+        assert_eq!(bound(composed, 6), "e\u{301}…");
+        // A ZWJ family is one oversized cluster: where it fits no more than
+        // the limit holds, the mark alone says the cut happened.
+        let family = "👨‍👩‍👧‍👦🚀rest";
+        assert!(
+            family.graphemes(true).next().unwrap().len() > 24,
+            "the family is one oversized cluster"
+        );
+        assert_eq!(bound(family, 3), CUT_MARK.to_string());
+        assert_eq!(bound(family, 2), "");
+    }
+
+    #[test]
+    fn bound_never_splits_a_cluster_and_always_fits_the_budget() {
+        let text = "aé–—👨‍👩‍👧‍👦🚀ż\u{301}end";
+        let clusters: Vec<&str> = text.graphemes(true).collect();
+        for limit in 0..=text.len() + 2 {
+            let (cut, was_cut) = bound_cut(text, limit);
+            assert_eq!(was_cut, text.len() > limit, "limit {limit}: {cut:?}");
+            assert!(cut.len() <= limit, "limit {limit}: {cut:?}");
+            let body = cut.strip_suffix(CUT_MARK).unwrap_or(&cut);
+            let shown: Vec<&str> = body.graphemes(true).collect();
+            assert!(
+                clusters.starts_with(&shown),
+                "limit {limit}: {cut:?} is not whole leading clusters of the text"
+            );
+        }
     }
 
     fn verdict_with(coverage: serde_json::Map<String, Value>) -> Verdict {
@@ -2186,7 +2301,7 @@ mod tests {
         assert_eq!(
             counted,
             json!({"total": 4, "ok": 1, "issue": 1, "blocked": 0,
-                   "na": 1, "missing": 1, "unknown": []})
+                   "na": 1, "missing": 1, "unknown": [], "unknown_more": 0})
         );
     }
 
@@ -2204,13 +2319,59 @@ mod tests {
         assert_eq!(
             counted,
             json!({"total": 1, "ok": 1, "issue": 0, "blocked": 0,
-                   "na": 0, "missing": 0, "unknown": ["R0", "X9"]})
+                   "na": 0, "missing": 0, "unknown": ["R0", "X9"], "unknown_more": 0})
         );
         // No verdict yet: the obligations are missing, not silently ok.
         let none = coverage(&verdict_with(serde_json::Map::new()), &obligations);
         assert_eq!(none["total"], 1);
         assert_eq!(none["missing"], 1);
         assert_eq!(none["ok"], 0);
+    }
+
+    #[test]
+    fn coverage_previews_unknown_ids_bounded_and_counts_the_omitted() {
+        let obligations = vec![("R1".to_owned(), "risk".to_owned())];
+        let mut entries = serde_json::Map::new();
+        entries.insert("R1".into(), json!({"status": "ok", "note": "fine"}));
+        // Eleven unknown ids, one of them absurdly long: a hostile or
+        // confused verdict must not make the card's preview unbounded.
+        for i in 0..11 {
+            entries.insert(format!("W{i}"), json!({"status": "ok", "note": "n"}));
+        }
+        let enormous = "x".repeat(500);
+        entries.insert(enormous.clone(), json!({"status": "ok", "note": "n"}));
+        let counted = coverage(&verdict_with(entries.clone()), &obligations);
+        let shown = counted["unknown"].as_array().expect("unknown list");
+        assert_eq!(shown.len(), UNKNOWN_ID_LIMIT);
+        assert!(
+            shown
+                .iter()
+                .all(|id| id.as_str().unwrap().len() <= UNKNOWN_ID_BYTES),
+            "{shown:?}"
+        );
+        assert_eq!(
+            counted["unknown_more"].as_u64().unwrap(),
+            12 - UNKNOWN_ID_LIMIT as u64
+        );
+        // The counts never touched the preview's cut: the real obligations
+        // settle exactly as before and the verdict keeps every id whole.
+        assert_eq!(counted["total"], 1);
+        assert_eq!(counted["ok"], 1);
+        assert!(
+            entries.contains_key(&enormous),
+            "the full verdict still holds the whole id"
+        );
+        // An id longer than the preview keeps the mark of the cut.
+        let mut long_only = serde_json::Map::new();
+        long_only.insert(enormous.clone(), json!({"status": "ok", "note": "n"}));
+        let only = coverage(&verdict_with(long_only), &obligations)["unknown"][0]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            only.ends_with(CUT_MARK) && only.len() <= UNKNOWN_ID_BYTES,
+            "{only}"
+        );
     }
 
     #[test]
@@ -2313,8 +2474,8 @@ mod tests {
     fn the_effect_summary_is_bounded_and_names_the_files() {
         let files: Vec<String> = (0..25).map(|i| format!("src/m{i}.rs")).collect();
         let stat = " src/m0.rs | 2 ++\n 25 files changed, 50 insertions(+)";
-        let summary = effect(stat, &files);
-        assert!(summary.chars().count() <= EFFECT_LIMIT, "{summary}");
+        let (summary, _cut) = effect(stat, &files);
+        assert!(summary.len() <= EFFECT_LIMIT, "{summary}");
         // The counts survive the cut; only trailing names are dropped, and
         // the summary always says how many more there are.
         assert!(summary.starts_with("25 files changed, 50 insertions(+)"));
@@ -2326,18 +2487,25 @@ mod tests {
             .count();
         assert!(named >= 1 && named < files.len(), "named {named}");
         // A diff stat without a summary line still reports the file count.
-        let odd = effect("binary files differ", &["a.png".to_owned()]);
+        let (odd, odd_cut) = effect("binary files differ", &["a.png".to_owned()]);
         assert_eq!(odd, "1 file(s) changed — a.png");
-        assert_eq!(effect("", &[]), "no file changes");
+        assert!(!odd_cut);
+        assert_eq!(effect("", &[]), ("no file changes".to_owned(), false));
     }
 
     #[test]
     fn a_read_only_effect_is_the_reports_opening_line() {
         let report = "```json\n{}\n```\nFound 3 leaks in store.rs.\nDetails follow.";
-        assert_eq!(report_effect(report), "Found 3 leaks in store.rs.");
-        assert_eq!(report_effect("  \n\n"), "");
+        let (found, cut) = report_effect(report);
+        assert_eq!(found, "Found 3 leaks in store.rs.");
+        assert!(!cut);
+        assert_eq!(report_effect("  \n\n"), (String::new(), false));
         let long = "x".repeat(EFFECT_LIMIT + 50);
-        assert_eq!(report_effect(&long).chars().count(), EFFECT_LIMIT);
+        let (bounded, cut) = report_effect(&long);
+        // Bytes are the budget: whole ASCII clusters up to the limit, and
+        // the last grapheme is the mark of the cut.
+        assert_eq!(bounded.len(), EFFECT_LIMIT);
+        assert!(cut && bounded.ends_with(CUT_MARK), "{bounded}");
     }
 
     #[test]
@@ -2345,10 +2513,9 @@ mod tests {
         let answer = "I fixed the store.\n\n```effect\n2 files changed — src/a.rs, src/b.rs\n```\n\
                       The verifier should check the diff.";
         let (report, effect) = parse_effect(answer);
-        assert_eq!(
-            effect.as_deref(),
-            Some("2 files changed — src/a.rs, src/b.rs")
-        );
+        let (stated, cut) = effect.expect("stated effect");
+        assert_eq!(stated, "2 files changed — src/a.rs, src/b.rs");
+        assert!(!cut);
         assert!(!report.contains("```effect"), "{report}");
         assert!(report.contains("I fixed the store.") && report.contains("check the diff"));
     }
@@ -2357,17 +2524,21 @@ mod tests {
     fn the_last_effect_block_wins_and_unicode_survives_the_cut() {
         let answer = "```effect\nfirst\n```\ntext\n```effect\n👩‍💻e\u{301} naprawione — żółć\n```";
         let (_, effect) = parse_effect(answer);
-        assert_eq!(effect.as_deref(), Some("👩‍💻e\u{301} naprawione — żółć"));
+        let (stated, cut) = effect.expect("stated effect");
+        assert_eq!(stated, "👩‍💻e\u{301} naprawione — żółć");
+        assert!(!cut, "a short cluster-rich line is not cut");
         let long = "długi-效果".repeat(EFFECT_LIMIT);
         let answer = format!("report\n```effect\n{long}\n```");
         let (report, effect) = parse_effect(&answer);
-        let effect = effect.expect("stated effect");
-        assert!(
-            effect.chars().count() <= EFFECT_LIMIT,
-            "{}",
-            effect.chars().count()
-        );
-        assert!(effect.ends_with('…'), "a cut effect says so");
+        let (effect, cut) = effect.expect("stated effect");
+        assert!(effect.len() <= EFFECT_LIMIT, "{}", effect.len());
+        assert!(cut && effect.ends_with(CUT_MARK), "a cut effect says so");
+        // The cut sits on a cluster edge: combining marks and CJK stay whole.
+        let units: Vec<&str> = effect.graphemes(true).collect();
+        let whole: Vec<&str> = long.graphemes(true).collect();
+        let body = effect.strip_suffix(CUT_MARK).unwrap_or(&effect);
+        let shown: Vec<&str> = body.graphemes(true).collect();
+        assert!(whole.starts_with(&shown), "{units:?}");
         assert!(report.starts_with("report"), "{report}");
     }
 

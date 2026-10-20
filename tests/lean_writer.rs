@@ -1227,6 +1227,8 @@ fn a_read_only_card_says_not_applicable_and_counts_only_real_obligations() {
     // The invented id is reported and counted nowhere. The `issue` on the
     // read-only risk describes the code, so it is counted but does not reject.
     assert_eq!(feedback["coverage"]["unknown"], serde_json::json!(["X9"]));
+    assert_eq!(feedback["coverage"]["unknown_more"], 0);
+    assert_eq!(feedback["effect_cut"], serde_json::json!(false));
     assert_eq!(feedback["coverage"]["na"], 1);
     assert_eq!(feedback["coverage"]["issue"], 1);
     assert_eq!(feedback["coverage"]["blocked"], 0);
@@ -1495,4 +1497,74 @@ fn cancelling_a_dependency_cancels_the_dependent_card() {
         "{}",
         feedback["integration"]["detail"]
     );
+}
+
+/// A worker effect longer than the card's byte budget is cut on whole
+/// grapheme clusters — a ZWJ family survives intact — and the card gets
+/// the runtime's explicit `effect_cut` flag at the moment of the cut,
+/// not something a viewer has to read off the text's last character.
+#[test]
+fn a_cut_stated_effect_is_marked_by_metadata_not_only_by_the_mark() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis_answered(
+        dir.path(),
+        "\"wrote hello.txt\\n\\n```effect\\n\" + \"\\U0001F468\\u200D\\U0001F469\\u200D\\U0001F467\\u200D\\U0001F466 \" * 12 + \"\\n```\"",
+    );
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let (feedback, from_event) = card(&core, &conversation, "t1");
+    let effect = feedback["effect"].as_str().expect("an effect");
+    // Bytes are the budget: the whole is at most EFFECT_LIMIT, never a
+    // split cluster: every ZWJ belongs to a complete family.
+    assert!(
+        effect.len() <= antislop::lean::tasks::EFFECT_LIMIT,
+        "{}",
+        effect.len()
+    );
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+    assert!(
+        effect.ends_with('…'),
+        "a cut effect ends with the mark: {effect}"
+    );
+    let families = effect.matches(family).count();
+    assert!(families >= 1, "{effect:?}");
+    assert_eq!(
+        effect.matches('\u{200D}').count(),
+        families * 3,
+        "no lone joiners: a cluster was never split"
+    );
+    // The cut is metadata the runtime stamped when it cut, carried whole
+    // into the announced event.
+    assert_eq!(feedback["effect_cut"], serde_json::json!(true));
+    assert_eq!(from_event, feedback);
+    let task = core
+        .store
+        .latest_plan(&conversation)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "t1")
+        .unwrap();
+    let report = task.report.as_deref().unwrap();
+    assert!(!report.contains("```effect"), "block removed: {report}");
+    assert!(report.contains("wrote hello.txt"), "{report}");
+}
+
+/// Honest card text that merely ends in an ellipsis was not cut: the
+/// metadata says so even though the old "recognise a cut by its trailing
+/// mark" reading would have been wrong.
+#[test]
+fn an_honest_ellipsis_is_not_reported_as_a_cut() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis_answered(
+        dir.path(),
+        "\"wrote hello.txt\\n\\n```effect\\ndone…\\n```\"",
+    );
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let (feedback, from_event) = card(&core, &conversation, "t1");
+    assert_eq!(feedback["effect"], "done…");
+    assert_eq!(feedback["effect_cut"], serde_json::json!(false));
+    assert_eq!(from_event, feedback);
 }

@@ -809,3 +809,122 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
     let calls = std::fs::read_to_string(dir.join("calls.log")).unwrap();
     assert_eq!(calls.matches("sleepy pytanie").count(), 2, "{calls}");
 }
+
+/// The runtime's new card-feedback shape — bounded effect text plus the
+/// explicit `effect_cut` flag, and a coverage preview with bounded unknown
+/// ids and an omitted count — written through the task row and announced as
+/// a `task` event, then read back: nothing the runtime stored changes on
+/// the way through SQLite, and the whole verdict keeps every id intact.
+#[test]
+fn new_card_feedback_payloads_survive_storage_and_events() {
+    use antislop::lean::{store::Store, tasks};
+    use serde_json::json;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("proj").unwrap();
+    let specs = [
+        json!({"id": "t1", "title": "x", "goal": "g", "writes": true,
+        "kind": "implementation", "verifier": {"focus": "f"}}),
+    ];
+    let mut task = store.add_plan(&conversation.id, &specs).unwrap().remove(0);
+
+    let obligations = vec![("R1".to_owned(), "risk".to_owned())];
+    let mut coverage = serde_json::Map::new();
+    coverage.insert("R1".into(), json!({"status": "ok", "note": "checked"}));
+    for id in ["W1", "W2", "W3"] {
+        coverage.insert(id.into(), json!({"status": "ok", "note": "n"}));
+    }
+    let enormous = format!("X{}", "y".repeat(500));
+    coverage.insert(enormous.clone(), json!({"status": "ok", "note": "n"}));
+    let verdict = tasks::Verdict {
+        approved: true,
+        findings: vec![],
+        coverage,
+    };
+    let full = serde_json::to_value(&verdict).unwrap();
+
+    // A diff stat longer than the effect budget: the stored text is cut on
+    // whole clusters and the flag records that the runtime cut it.
+    let files: Vec<String> = (0..40).map(|i| format!("src/m{i}.rs")).collect();
+    let stat = format!("{} files changed, 500 insertions(+)", "z".repeat(260));
+    let (effect, effect_cut) = tasks::effect(&stat, &files);
+    assert!(effect.len() <= tasks::EFFECT_LIMIT, "{}", effect.len());
+    assert!(effect_cut);
+    let (card_effect, card_cut) = tasks::effect_keys(&Some((effect.clone(), effect_cut)));
+
+    task.round = 2;
+    task.feedback = Some(json!({
+        "round": 2,
+        "effect": card_effect,
+        "effect_cut": card_cut,
+        "coverage": tasks::coverage(&verdict, &obligations),
+    }));
+    task.verdict = Some(full);
+    store.update_task(&task).unwrap();
+    store
+        .append_event(
+            &conversation.id,
+            None,
+            Some(&task.plan_id),
+            "task",
+            &json!({"id": "t1", "task": task.id, "status": task.status,
+                    "round": task.round, "reason": null,
+                    "feedback": task.feedback}),
+        )
+        .unwrap();
+
+    let feedback = task.feedback.clone().unwrap();
+    let stored = store.task_by_id(&task.id).unwrap().expect("task stored");
+    assert_eq!(stored.feedback, task.feedback);
+    let event = store
+        .events_since(&conversation.id, 0, 10)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == "task")
+        .expect("task event");
+    assert_eq!(event.payload["feedback"], feedback);
+
+    assert_eq!(feedback["effect"], effect);
+    assert_eq!(feedback["effect_cut"], json!(true));
+    assert!(feedback["effect"].as_str().unwrap().ends_with('…'));
+    // Unknown ids: all four shown (fewer than the limit), each within the
+    // preview's byte budget, the enormous one kept whole in the verdict.
+    let shown = feedback["coverage"]["unknown"].as_array().unwrap();
+    assert_eq!(shown.len(), 4);
+    assert_eq!(feedback["coverage"]["unknown_more"], 0);
+    assert!(
+        shown
+            .iter()
+            .all(|id| id.as_str().unwrap().len() <= tasks::UNKNOWN_ID_BYTES)
+    );
+    assert!(
+        shown.iter().any(|id| id.as_str().unwrap().ends_with('…')),
+        "the oversized id is cut, not dropped"
+    );
+    assert_eq!(feedback["coverage"]["total"], 1);
+    assert_eq!(feedback["coverage"]["ok"], 1);
+    let stored_verdict = stored.verdict.expect("verdict stored");
+    assert!(
+        stored_verdict["coverage"]
+            .as_object()
+            .unwrap()
+            .contains_key(&enormous),
+        "the full verdict still holds the whole id"
+    );
+
+    // Older feedback stays readable: a row without the new keys round-trips
+    // unchanged and the round contract never reads a cut from the text.
+    let mut old = task.clone();
+    old.round = 3;
+    old.feedback = Some(json!({"round": 3, "effect": "done…", "coverage": {"total": 0}}));
+    store.update_task(&old).unwrap();
+    let restored = store.task_by_id(&task.id).unwrap().expect("task");
+    assert_eq!(restored.feedback, old.feedback);
+    assert_eq!(
+        restored.feedback.as_ref().unwrap()["effect_cut"],
+        serde_json::Value::Null
+    );
+    assert!(!tasks::feedback_is_current(&restored.feedback.unwrap(), 2));
+}

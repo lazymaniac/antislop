@@ -1229,8 +1229,9 @@ impl Core {
                         "task": task.id,
                         "action": tasks::action::INTEGRATE_WITH_CONSENT,
                         "status": task.status,
-                        "files": integrated_files,
-                        "detail": notice
+                        "files": event_files(&integrated_files),
+                        "files_more": integrated_files.len().saturating_sub(tasks::FILE_LIMIT),
+                        "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
                     }),
                 )?;
                 self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
@@ -1265,7 +1266,7 @@ impl Core {
                         "action": tasks::action::KEEP_ON_BRANCH,
                         "status": task.status,
                         "branch": b,
-                        "detail": notice
+                        "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
                     }),
                 )?;
                 self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
@@ -1322,9 +1323,11 @@ impl Core {
                 }
                 task.verdict = Some(v_val);
                 let fixed = git::changed_files(&project, &base, &snapshot).unwrap_or_default();
+                let (effect, effect_cut) = tasks::effect(&stat, &fixed);
                 task.feedback = Some(json!({
                     "round": task.round,
-                    "effect": tasks::effect(&stat, &fixed),
+                    "effect": effect,
+                    "effect_cut": effect_cut,
                     "coverage": tasks::coverage(&verdict, &obligations),
                 }));
 
@@ -1354,7 +1357,7 @@ impl Core {
                             "action": tasks::action::VERIFY_MANUAL_SNAPSHOT,
                             "status": task.status,
                             "result": snapshot,
-                            "detail": notice
+                            "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
                         }),
                     )?;
                     self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
@@ -1388,7 +1391,7 @@ impl Core {
                             "action": tasks::action::VERIFY_MANUAL_SNAPSHOT,
                             "status": task.status,
                             "findings": verdict.findings,
-                            "detail": notice
+                            "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
                         }),
                     )?;
                 }
@@ -1428,7 +1431,10 @@ impl Core {
                         "task": task.id,
                         "action": tasks::action::RETRY_WITH_GUIDANCE,
                         "status": task.status,
+                        // whole guidance already queued to the worker as mail
                         "message": req.message
+                            .as_deref()
+                            .map(|m| tasks::bound(m, tasks::DETAIL_LIMIT))
                     }),
                 )?;
                 self.maybe_continue_plan(&req.conversation, &req.plan)?;
@@ -1481,7 +1487,7 @@ impl Core {
                         "task": task.id,
                         "action": tasks::action::FORCE_APPROVE,
                         "status": task.status,
-                        "detail": notice
+                        "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
                     }),
                 )?;
                 self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
@@ -1513,7 +1519,7 @@ impl Core {
                         "task": task.id,
                         "action": tasks::action::CANCEL_TASK,
                         "status": task.status,
-                        "detail": notice
+                        "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
                     }),
                 )?;
                 self.cancel_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
@@ -2515,6 +2521,10 @@ impl Core {
     /// `null` when that round has produced none yet.
     fn announce_task(&self, conversation: &str, task: &Task, reason: Option<&str>) {
         let scope_hash = task_scope_hash(task);
+        // The event's reason is the card's bounded line; the whole reason
+        // is already in the task's report or in the conversation, so a cut
+        // here never loses evidence the user or the orchestrator can read.
+        let reason = reason.map(|reason| tasks::bound(reason, tasks::DETAIL_LIMIT));
         let _ = self.store.append_event(
             conversation,
             None,
@@ -2872,16 +2882,19 @@ impl Core {
                               `git checkout {base} -- <file>` restores it",
                             touched.join(", ")
                         );
+                        let (effect, effect_cut) = tasks::effect_keys(&effect_text);
                         let _ = self.store.append_event(
                             conversation,
                             None,
                             Some(&task.plan_id),
                             "integration",
                             &json!({"id": spec.id, "title": spec.title,
-                                    "status": status::NEEDS_USER, "detail": text}),
+                                    "status": status::NEEDS_USER,
+                                    "detail": tasks::bound(&text, tasks::DETAIL_LIMIT)}),
                         );
                         task.report = Some(format!("{report}\n\n[in place] {text}"));
-                        task.feedback = Some(json!({"round": task.round, "effect": effect_text}));
+                        task.feedback = Some(json!({"round": task.round, "effect": effect,
+                                        "effect_cut": effect_cut}));
                         land(
                             task,
                             Outcome::InPlaceUserEdits,
@@ -2996,9 +3009,11 @@ impl Core {
                 (None, false) => Some(tasks::report_effect(&report)),
                 (None, true) => None,
             };
+            let (effect, effect_cut) = tasks::effect_keys(&effect);
             task.feedback = Some(json!({
                 "round": task.round,
                 "effect": effect,
+                "effect_cut": effect_cut,
                 "coverage": tasks::coverage(&verdict, &obligations),
             }));
             if incomplete {
@@ -3506,7 +3521,10 @@ impl Core {
             None,
             Some(&task.plan_id),
             "integration",
-            &json!({"id": spec.id, "title": spec.title, "status": status, "detail": text}),
+            // The event carries the bounded line; `note` below keeps the
+            // whole text in the report, like every other landing detail.
+            &json!({"id": spec.id, "title": spec.title, "status": status,
+                    "detail": tasks::bound(&text, tasks::DETAIL_LIMIT)}),
         );
         note(task, text.clone());
         if status == status::APPROVED {
@@ -3600,7 +3618,8 @@ impl Core {
             None,
             Some(&task.plan_id),
             "integration",
-            &json!({"id": spec.id, "title": spec.title, "status": status::APPROVED, "detail": text}),
+            &json!({"id": spec.id, "title": spec.title, "status": status::APPROVED,
+                    "detail": tasks::bound(&text, tasks::DETAIL_LIMIT)}),
         );
         let report = task.report.take().unwrap_or_default();
         task.report = Some(format!("{report}\n\n[in place] {text}"));
@@ -3768,6 +3787,14 @@ fn note(task: &mut Task, text: impl AsRef<str>) {
             .trim_start()
             .to_owned(),
     );
+}
+
+/// File names an event may carry: at most [`tasks::FILE_LIMIT`] of them,
+/// the same cut the card's integration makes, so a wide change never
+/// ships an unbounded list in a live event while the whole set stays
+/// readable in git and in the task's detail screens.
+fn event_files(files: &[String]) -> Vec<String> {
+    files.iter().take(tasks::FILE_LIMIT).cloned().collect()
 }
 
 /// Attaches one unambiguous integration outcome to the task's card feedback.

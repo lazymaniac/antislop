@@ -724,3 +724,96 @@ fn autonomous_orchestrator_unblocks_a_blocked_task_by_itself() {
         .clone();
     assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
 }
+
+/// Recovery announcements share the card's byte limits: the `task_recovery`
+/// event carries the bounded line, while the whole reason stays readable —
+/// guidance reaches the worker as mail in full, and a force-approve note
+/// stays whole in the task's report.
+#[test]
+fn recovery_events_carry_bounded_details_and_keep_the_whole_reason() {
+    let limit = antislop::lean::tasks::DETAIL_LIMIT;
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = core.start(&project).unwrap().id;
+    let plan = propose(&core, &conversation, "chain");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+
+    let t1_id = core.store.plan(&plan).unwrap()[0].id.clone();
+    let token = core
+        .task_freshness_token(&conversation, &plan, &t1_id)
+        .unwrap();
+    let guidance = format!("{} — tail", "g".repeat(4 * limit));
+    std::fs::write(dir.path().join("logged-in"), "").unwrap();
+    core.recover_task(TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: t1_id.clone(),
+        action: RecoveryAction::RetryWithGuidance,
+        consent_files: None,
+        freshness_token: token,
+        message: Some(guidance.clone()),
+    })
+    .unwrap();
+    wait_idle(&core, &conversation);
+
+    let events = core.store.events_since(&conversation, 0, 10_000).unwrap();
+    let retry = events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.kind == "task_recovery"
+                && event.payload["action"] == antislop::lean::tasks::action::RETRY_WITH_GUIDANCE
+        })
+        .expect("a retry recovery event");
+    let message = retry.payload["message"].as_str().expect("the message");
+    assert!(message.len() <= limit, "{} bytes", message.len());
+    let mail = core.store.mail(&conversation).unwrap();
+    assert!(
+        mail.iter().any(|mail| mail.text == guidance),
+        "the worker gets the whole guidance as mail"
+    );
+
+    // A second chain ends waiting again; a force approve with a huge note
+    // keeps the whole note in the report and a bounded line in the event.
+    std::fs::remove_file(dir.path().join("logged-in")).unwrap();
+    let plan2 = propose(&core, &conversation, "chain");
+    core.accept_plan(&conversation, &plan2).unwrap();
+    wait_idle(&core, &conversation);
+    let tasks2 = core.store.plan(&plan2).unwrap();
+    let token2 = core
+        .task_freshness_token(&conversation, &plan2, &tasks2[0].id)
+        .unwrap();
+    let note = "f".repeat(4 * limit);
+    core.recover_task(TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan2.clone(),
+        task: tasks2[0].id.clone(),
+        action: RecoveryAction::ForceApprove,
+        consent_files: None,
+        freshness_token: token2,
+        message: Some(note.clone()),
+    })
+    .unwrap();
+    let events = core.store.events_since(&conversation, 0, 10_000).unwrap();
+    let force = events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.kind == "task_recovery"
+                && event.payload["action"] == antislop::lean::tasks::action::FORCE_APPROVE
+        })
+        .expect("a force approve recovery event");
+    let detail = force.payload["detail"].as_str().expect("the detail");
+    assert!(detail.len() <= limit, "{} bytes", detail.len());
+    let forced = core.store.task_by_id(&tasks2[0].id).unwrap().expect("task");
+    assert!(
+        forced
+            .report
+            .as_deref()
+            .is_some_and(|report| report.contains(&note)),
+        "the report keeps the whole force-approve reason"
+    );
+}

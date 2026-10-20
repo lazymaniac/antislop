@@ -875,3 +875,36 @@ fn nothing_is_created_or_started_in_a_directory_that_is_not_trusted() {
     assert!(!daemon.status.success());
     assert!(String::from_utf8_lossy(&daemon.stderr).contains("not a trusted directory"));
 }
+
+/// The reply budget counts payload bytes, but the first event of a page
+/// is always taken whole: one oversized historical event must advance the
+/// cursor, never stall a follower. A reply therefore has no strict size
+/// ceiling deducible from the budget alone — the cursor, not the size,
+/// bounds it — and events over the budget wait for the next poll.
+#[test]
+fn an_oversized_first_event_still_advances_the_cursor() {
+    use antislop::lean::daemon::reply_event_count;
+    use antislop::lean::store::Event;
+    let event = |seq: u64, size: usize| Event {
+        seq,
+        turn_id: None,
+        plan_id: None,
+        kind: "notice".into(),
+        payload: json!({"text": "x".repeat(size)}),
+        created_ms: 0,
+    };
+    let budget = 1024 * 1024;
+    // Alone over the budget: still taken, so `next_after` moves past it.
+    let page = [event(9, 2 * budget)];
+    assert_eq!(reply_event_count(&page, budget), 1);
+    // Whole events only: the page stops at the first crossing and the
+    // rest is left for the next poll, which the advanced cursor opens.
+    let page = [event(10, 400_000), event(11, 400_000), event(12, 400_000)];
+    let taken = reply_event_count(&page, budget);
+    assert_eq!(taken, 2, "the third would cross the budget");
+    let next_after = page[taken - 1].seq;
+    assert_eq!(next_after, 11);
+    assert_eq!(reply_event_count(&page[taken..], budget), 1);
+    // Nothing to send is nothing to take.
+    assert_eq!(reply_event_count(&[], budget), 0);
+}

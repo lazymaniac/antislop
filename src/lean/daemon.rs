@@ -892,6 +892,26 @@ const LONGEST_WAIT: Duration = Duration::from_secs(20);
 const EVENTS_PER_REPLY: usize = 500;
 const REPLY_BYTES: usize = 1024 * 1024;
 
+/// How many of the (non-empty, ordered) events fit one reply: payload
+/// bytes add up until `reply_bytes` is crossed, but the first event is
+/// always taken whole — even one oversized historical event must not
+/// stall the cursor, so a reply's size has no strict ceiling deducible
+/// from `reply_bytes` alone; the cursor, not the size, bounds a reply.
+/// Everything left over waits for the next poll, which the returned
+/// `next_after`/`has_more` invite.
+pub fn reply_event_count(events: &[super::store::Event], reply_bytes: usize) -> usize {
+    let mut bytes = 0;
+    let mut taken = 0;
+    for event in events {
+        bytes += event.payload.to_string().len();
+        if taken > 0 && bytes > reply_bytes {
+            break;
+        }
+        taken += 1;
+    }
+    taken
+}
+
 /// `<state>/core.sock`, or, when that path is too long for a Unix socket, a
 /// short one named after the state directory in a private directory in /tmp.
 pub fn socket(state: &Path) -> PathBuf {
@@ -1369,16 +1389,8 @@ fn handle_events(
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    let mut bytes = 0;
-    let events: Vec<_> = events
-        .into_iter()
-        .enumerate()
-        .take_while(|(index, event)| {
-            bytes += event.payload.to_string().len();
-            *index == 0 || bytes <= REPLY_BYTES
-        })
-        .map(|(_, event)| event)
-        .collect();
+    let take = reply_event_count(&events, REPLY_BYTES);
+    let events: Vec<_> = events.into_iter().take(take).collect();
     let (oldest_seq, latest_seq, total) = core.store.event_bounds(conversation)?;
     let next_after = events.last().map(|e| e.seq);
     let has_more = match next_after {
