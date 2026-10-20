@@ -374,8 +374,11 @@ ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 elif "You verify" in prompt:
-    # Only R1, as an issue: C1… are asked for again.
-    coverage = {"R1": {"status": "issue", "note": "EUR added to PLN"}}
+    # The units check, as an issue: the rest is asked for again.
+    lines = re.findall(r"^- ([RCV][0-9]+): (.*)$", prompt, re.M)
+    uid = next(i for i, text in lines if "units and denominators" in text)
+    coverage = {"R1": {"status": "ok", "note": "the report flags the mixed currencies"},
+                uid: {"status": "issue", "note": "EUR added to PLN"}}
     say("verifier", "```verdict\n" + json.dumps({"approved": True, "findings": [], "coverage": coverage}) + "\n```", covered=False)
 elif "does not account" in prompt:
     assert "R1" not in ids, ids
