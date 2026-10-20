@@ -5542,3 +5542,74 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         "round two"
     );
 }
+
+#[test]
+fn every_reported_landing_earns_its_real_label_on_the_card() {
+    use antislop::lean::tasks::Outcome;
+    use antislop::lean::tui::{
+        graph::{Canvas, Filter, Graph, WIDTH},
+        view::View,
+    };
+    let mut view = View::default();
+    view.apply(&json!({"seq": 1, "kind": "plan_proposed", "payload": {
+        "plan": "p1", "tasks": [{"id": "t1", "title": "Store"}]}}));
+    // The daemon stamps these names through `Outcome::name`; the card must
+    // read every one of them back as its own label — never `not reported`.
+    for (outcome, label) in [
+        (Outcome::Committed, "committed"),
+        (Outcome::Applied, "applied uncommitted"),
+        (Outcome::LeftOnBranch, "on branch"),
+        (Outcome::NoChanges, "no changes"),
+        (Outcome::Conflict, "conflict"),
+        (Outcome::UserEdits, "user edits"),
+        (Outcome::InPlaceCommitted, "committed in place"),
+        (Outcome::InPlaceApplied, "applied in place"),
+        (Outcome::InPlaceUserEdits, "held for your edits"),
+        (Outcome::NotApplicable, "read-only none"),
+        (Outcome::ForceApproved, "force approved"),
+        (Outcome::Cancelled, "cancelled"),
+    ] {
+        let name = serde_json::to_value(outcome).unwrap();
+        view.apply(&json!({"seq": 2, "kind": "task", "payload": {
+            "id": "t1", "task": "u1", "status": "approved", "round": 1,
+            "feedback": {"round": 1, "effect": "1 file changed — src/a.rs",
+                         "integration": {"outcome": name, "detail": "kept whole"}}}}));
+        assert_eq!(view.tasks[0].integration.as_ref().unwrap()["outcome"], name);
+        let graph = Graph::new(&view);
+        let node = graph.node("worker:t1").expect("node");
+        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+        graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+        let text = canvas.lines().join(" ");
+        assert!(
+            text.contains(label),
+            "{name} must read `{label}`, got: {text}"
+        );
+        assert!(
+            !text.contains("not reported"),
+            "{name} came back unlabeled: {text}"
+        );
+    }
+}
+
+#[test]
+fn an_unblock_announcement_invalidates_the_card_like_a_retry() {
+    use antislop::lean::tui::view::View;
+    let mut view = View::default();
+    view.apply(&json!({"seq": 1, "kind": "plan_proposed", "payload": {
+        "plan": "p1", "tasks": [{"id": "t1", "title": "Store"}]}}));
+    view.apply(&json!({"seq": 2, "kind": "task", "payload": {
+        "id": "t1", "task": "u1", "status": "needs_user", "round": 1,
+        "feedback": {"round": 1, "effect": "2 files changed",
+                     "coverage": {"total": 3, "ok": 2, "missing": 1},
+                     "integration": {"outcome": "conflict", "detail": "in src/a.rs"}}}}));
+    assert!(view.tasks[0].effect.is_some() && view.tasks[0].integration.is_some());
+    // The unblock key's own announcement starts the work over, so the
+    // blocked round's card data is no longer shown.
+    view.apply(&json!({"seq": 3, "kind": "task_recovery", "payload": {
+        "task": "u1", "action": "unblock", "status": "queued",
+        "detail": "unblocked and queued again"}}));
+    assert_eq!(view.tasks[0].status, "queued");
+    assert!(view.tasks[0].effect.is_none());
+    assert!(view.tasks[0].obligations.is_none());
+    assert!(view.tasks[0].integration.is_none());
+}

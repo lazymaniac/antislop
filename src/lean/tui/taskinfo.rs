@@ -3,7 +3,7 @@
 //! effect, obligation coverage and integration are read here and only here,
 //! so the three views can never tell different stories about the same task.
 
-use super::super::tasks::status;
+use super::super::tasks::{Outcome, status};
 use super::view::{TaskRow, View, clean, status_label};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
@@ -119,9 +119,15 @@ pub fn effect_line(row: &TaskRow) -> Option<String> {
 /// Obligations the verdict settled over the task's real obligations.
 /// `None` when no verdict has reported coverage: shown as `?`, never `0`.
 pub fn settled_total(row: &TaskRow) -> Option<(u64, u64)> {
-    let coverage = row.obligations.as_ref()?;
-    let total = coverage["total"].as_u64()?;
-    let missing = coverage["missing"].as_u64().unwrap_or_default();
+    settled_from(row.obligations.as_ref()?.as_object()?)
+}
+
+fn settled_from(coverage: &serde_json::Map<String, Value>) -> Option<(u64, u64)> {
+    let total = coverage.get("total").and_then(Value::as_u64)?;
+    let missing = coverage
+        .get("missing")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     Some((total.saturating_sub(missing), total))
 }
 
@@ -144,10 +150,9 @@ pub fn coverage_full(row: &TaskRow) -> String {
                     .and_then(Value::as_u64)
                     .unwrap_or_default()
             };
-            let settled = count("total").saturating_sub(count("missing"));
+            let (settled, total) = settled_from(coverage).unwrap_or_default();
             let mut line = format!(
-                "{settled} of {} accounted · ok {} · issue {} · blocked {} · n/a {} · missing {}",
-                count("total"),
+                "{settled} of {total} accounted · ok {} · issue {} · blocked {} · n/a {} · missing {}",
                 count("ok"),
                 count("issue"),
                 count("blocked"),
@@ -167,28 +172,24 @@ pub fn coverage_full(row: &TaskRow) -> String {
     }
 }
 
-/// The one label saying how the task's result landed. An outcome the daemon
-/// did not report reads `not reported`, never a guessed landing.
+/// The one label saying how the task's result landed, read through the
+/// runtime's own outcome table. An outcome the daemon did not report (or
+/// named wrongly) reads `not reported`, never a guessed landing.
 pub fn integration_label(row: &TaskRow) -> String {
-    let outcome = row
-        .integration
+    row.integration
         .as_ref()
-        .and_then(|integration| integration["outcome"].as_str());
-    let label = match outcome {
-        Some("committed") => "committed",
-        Some("applied") => "applied uncommitted",
-        Some("in_place_committed") => "committed in place",
-        Some("in_place_applied") => "applied in place",
-        Some("no_changes") => "no changes",
-        Some("conflict") => "conflict",
-        Some("user_edits") => "user edits",
-        Some("left_on_branch") => "on branch",
-        Some("not_applicable") => "read-only none",
-        Some("force_approved") => "force approved",
-        Some("cancelled") => "cancelled",
-        _ => return "not reported".to_owned(),
-    };
-    label.to_owned()
+        .and_then(|integration| integration["outcome"].as_str())
+        .and_then(Outcome::named)
+        .map_or_else(
+            || "not reported".to_owned(),
+            |outcome| outcome.label().to_owned(),
+        )
+}
+
+/// The whole landing line a card or the details screen shows: the one label
+/// and the raw detail beside it.
+pub fn integration_line(row: &TaskRow) -> String {
+    format!("{} · {}", integration_label(row), integration_detail(row))
 }
 
 /// The raw landing detail, kept whole for lists and the details screen.
@@ -298,6 +299,24 @@ pub fn state_counts(view: &View) -> Vec<(&'static str, usize)> {
     counts
 }
 
+/// The coarse plan reading (approved, in progress, waiting, problems) built
+/// from the same per-state counts the state line shows, so the summary and
+/// the state line can never disagree about where a task stands. Every state
+/// belongs to exactly one group: unknown states count as problems, never as
+/// silently waiting.
+pub fn plan_rollup(view: &View) -> (usize, usize, usize, usize) {
+    let (mut approved, mut working, mut waiting, mut problems) = (0, 0, 0, 0);
+    for (state, count) in state_counts(view) {
+        match state {
+            status::APPROVED => approved += count,
+            status::WORKING | status::VERIFYING => working += count,
+            status::PROPOSED | status::QUEUED | status::WAITING => waiting += count,
+            _ => problems += count,
+        }
+    }
+    (approved, working, waiting, problems)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,11 +402,14 @@ mod tests {
             ("applied", "applied uncommitted"),
             ("in_place_committed", "committed in place"),
             ("in_place_applied", "applied in place"),
+            ("in_place_user_edits", "held for your edits"),
             ("no_changes", "no changes"),
             ("conflict", "conflict"),
             ("user_edits", "user edits"),
             ("left_on_branch", "on branch"),
             ("not_applicable", "read-only none"),
+            ("force_approved", "force approved"),
+            ("cancelled", "cancelled"),
         ] {
             let mut r = row("approved", 1);
             r.integration = Some(json!({"outcome": outcome}));
@@ -397,6 +419,23 @@ mod tests {
         let mut odd = row("approved", 1);
         odd.integration = Some(json!({"outcome": "quantum-merge"}));
         assert_eq!(integration_label(&odd), "not reported");
+    }
+
+    #[test]
+    fn the_landing_line_pairs_label_with_the_whole_detail() {
+        let mut r = row("approved", 2);
+        r.integration = Some(json!({
+            "outcome": "in_place_committed",
+            "detail": "committed in place as deadbee",
+        }));
+        assert_eq!(
+            integration_line(&r),
+            "committed in place · committed in place as deadbee"
+        );
+        assert_eq!(
+            integration_line(&row("working", 1)),
+            "not reported · detail not reported"
+        );
     }
 
     #[test]
@@ -465,5 +504,35 @@ mod tests {
                 .any(|(state, c)| *state == "needs_user" && *c == 1)
         );
         assert!(counts.iter().any(|(state, c)| *state == "other" && *c == 1));
+    }
+
+    #[test]
+    fn the_plan_rollup_groups_the_same_counts_it_is_given() {
+        let mut view = View::default();
+        view.tasks = vec![
+            row("approved", 1),
+            row("working", 1),
+            row("verifying", 1),
+            row("proposed", 0),
+            row("queued", 0),
+            row("waiting", 1),
+            row("failed", 1),
+            row("needs_user", 1),
+            row("skipped", 1),
+            row("cancelled", 1),
+            row("revised", 1),
+            TaskRow {
+                id: "t9".into(),
+                status: "some-new-state".into(),
+                ..TaskRow::default()
+            },
+        ];
+        let (approved, working, waiting, problems) = plan_rollup(&view);
+        assert_eq!((approved, working, waiting, problems), (1, 2, 3, 6));
+        assert_eq!(
+            approved + working + waiting + problems,
+            view.tasks.len(),
+            "no task disappears from the summary"
+        );
     }
 }

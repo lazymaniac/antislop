@@ -1,7 +1,7 @@
 //! What the screen shows, built only from the conversation's events, so a
 //! frontend that attaches later rebuilds the same state.
 
-use super::super::tasks::status;
+use super::super::tasks::{feedback_is_current, recovery_outcome, resets_card, status};
 use super::session::Block;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -1044,7 +1044,7 @@ impl View {
                     // belongs to one round only: anything stamped for another
                     // round is stale and reads as not reported.
                     let feedback = &payload["feedback"];
-                    let fresh = feedback["round"].as_u64() == Some(row.round);
+                    let fresh = feedback_is_current(feedback, row.round);
                     row.effect = if fresh {
                         feedback["effect"].as_str().map(str::to_owned)
                     } else {
@@ -1202,23 +1202,14 @@ impl View {
                     if !detail.is_empty() {
                         row.reason = Some(detail.clone());
                     }
-                    if matches!(
-                        action.as_str(),
-                        "retry_with_guidance" | "extend_rounds" | "unblock"
-                    ) {
+                    if resets_card(&action) {
                         row.effect = None;
                         row.obligations = None;
                         row.integration = None;
                     }
                     // Outcomes this event can name by itself, without
                     // reading them out of prose.
-                    let outcome = match action.as_str() {
-                        "keep_on_branch" => Some("left_on_branch"),
-                        "force_approve" => Some("force_approved"),
-                        "cancel_task" => Some("cancelled"),
-                        _ => None,
-                    };
-                    if let Some(outcome) = outcome {
+                    if let Some(outcome) = recovery_outcome(&action) {
                         let mut integration = row
                             .integration
                             .take()

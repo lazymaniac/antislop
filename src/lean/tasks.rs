@@ -632,7 +632,7 @@ fn obligations_text(obligations: &[(String, String)]) -> String {
 
 /// The obligations a verdict does not account for: missing, with another
 /// status than ok, issue, blocked or n/a, or without a note on what was
-/// checked or why it does not apply.
+/// checked or why it does not apply. One reading with the card's counters.
 pub fn unaccounted<'a>(
     verdict: &Verdict,
     obligations: &'a [(String, String)],
@@ -640,16 +640,12 @@ pub fn unaccounted<'a>(
     obligations
         .iter()
         .filter(|(id, _)| {
-            let entry = &verdict
+            let entry = verdict
                 .coverage
                 .get(id.as_str())
                 .cloned()
                 .unwrap_or_default();
-            let status = entry["status"].as_str().map(str::to_ascii_lowercase);
-            let noted = entry["note"]
-                .as_str()
-                .is_some_and(|note| !note.trim().is_empty());
-            !(noted && matches!(status.as_deref(), Some("ok" | "issue" | "blocked" | "n/a")))
+            counted_status(&entry) == "missing"
         })
         .collect()
 }
@@ -749,8 +745,106 @@ pub enum Outcome {
     Cancelled,
 }
 
-/// How one obligation of a verdict counts on a card. An entry with a valid
-/// status but no note is no answer, like `unaccounted` treats it.
+/// Every outcome with its card name and card label, side by side so the
+/// sets can never drift: the daemon stamps `name`, a frontend reads a name
+/// back with `named` and shows `label`.
+const OUTCOMES: [(Outcome, &str, &str); 12] = [
+    (Outcome::Committed, "committed", "committed"),
+    (Outcome::Applied, "applied", "applied uncommitted"),
+    (Outcome::LeftOnBranch, "left_on_branch", "on branch"),
+    (Outcome::NoChanges, "no_changes", "no changes"),
+    (Outcome::Conflict, "conflict", "conflict"),
+    (Outcome::UserEdits, "user_edits", "user edits"),
+    (
+        Outcome::InPlaceCommitted,
+        "in_place_committed",
+        "committed in place",
+    ),
+    (
+        Outcome::InPlaceApplied,
+        "in_place_applied",
+        "applied in place",
+    ),
+    (
+        Outcome::InPlaceUserEdits,
+        "in_place_user_edits",
+        "held for your edits",
+    ),
+    (Outcome::NotApplicable, "not_applicable", "read-only none"),
+    (Outcome::ForceApproved, "force_approved", "force approved"),
+    (Outcome::Cancelled, "cancelled", "cancelled"),
+];
+
+impl Outcome {
+    /// The name the daemon stamps for this outcome, its snake_case name.
+    pub fn name(self) -> &'static str {
+        OUTCOMES
+            .iter()
+            .find(|(outcome, _, _)| *outcome == self)
+            .map_or("not reported", |(_, name, _)| *name)
+    }
+
+    /// The card label for this outcome.
+    pub fn label(self) -> &'static str {
+        OUTCOMES
+            .iter()
+            .find(|(outcome, _, _)| *outcome == self)
+            .map_or("not reported", |(_, _, label)| *label)
+    }
+
+    /// The outcome a reported name means; `None` when it names nothing.
+    pub fn named(name: &str) -> Option<Self> {
+        OUTCOMES
+            .iter()
+            .find(|(_, outcome, _)| *outcome == name)
+            .map(|(outcome, _, _)| *outcome)
+    }
+}
+
+/// The names a recovery carries in its events, in one place: the daemon
+/// stamps them, the frontend reads them back. `UNBLOCK` names the unblock
+/// key's restart, kept in the same list so the clearing rule has one source.
+pub mod action {
+    pub const INTEGRATE_WITH_CONSENT: &str = "integrate_with_consent";
+    pub const KEEP_ON_BRANCH: &str = "keep_on_branch";
+    pub const VERIFY_MANUAL_SNAPSHOT: &str = "verify_manual_snapshot";
+    pub const RETRY_WITH_GUIDANCE: &str = "retry_with_guidance";
+    pub const EXTEND_ROUNDS: &str = "extend_rounds";
+    pub const FORCE_APPROVE: &str = "force_approve";
+    pub const CANCEL_TASK: &str = "cancel_task";
+    pub const UNBLOCK: &str = "unblock";
+}
+
+/// Actions that start the work over: whatever an earlier round showed on
+/// the card no longer stands once one is announced.
+pub fn resets_card(action: &str) -> bool {
+    matches!(
+        action,
+        action::RETRY_WITH_GUIDANCE | action::EXTEND_ROUNDS | action::UNBLOCK
+    )
+}
+
+/// The landing a recovery event settles by itself, named as a card reads
+/// it; `None` for actions whose landing only the runtime's own report knows.
+pub fn recovery_outcome(action: &str) -> Option<&'static str> {
+    let outcome = match action {
+        action::KEEP_ON_BRANCH => Outcome::LeftOnBranch,
+        action::FORCE_APPROVE => Outcome::ForceApproved,
+        action::CANCEL_TASK => Outcome::Cancelled,
+        _ => return None,
+    };
+    Some(outcome.name())
+}
+
+/// Card data belongs to exactly one round: stamped for another round it
+/// is stale and must not show.
+pub fn feedback_is_current(feedback: &Value, round: u64) -> bool {
+    feedback["round"].as_u64() == Some(round)
+}
+
+/// How one obligation of a verdict counts, on a card and in `unaccounted`
+/// alike: only a status the verdict format allows, with a note, is an
+/// answer; an entry with a valid status but no note counts as `missing`.
 fn counted_status(entry: &Value) -> &'static str {
     let status = entry["status"].as_str().map(str::to_ascii_lowercase);
     let noted = entry["note"]
@@ -760,7 +854,7 @@ fn counted_status(entry: &Value) -> &'static str {
         (true, Some("ok")) => "ok",
         (true, Some("issue")) => "issue",
         (true, Some("blocked")) => "blocked",
-        (true, Some("n/a" | "na")) => "na",
+        (true, Some("n/a")) => "na",
         _ => "missing",
     }
 }
@@ -1857,7 +1951,83 @@ mod tests {
             (Outcome::Cancelled, "cancelled"),
         ] {
             assert_eq!(serde_json::to_value(outcome).unwrap(), json!(name));
+            assert_eq!(outcome.name(), name);
+            assert_eq!(Outcome::named(name), Some(outcome));
         }
+    }
+
+    #[test]
+    fn every_outcome_has_its_own_honest_label() {
+        let mut labels = std::collections::HashSet::new();
+        for (outcome, _, label) in OUTCOMES {
+            assert_eq!(outcome.label(), label);
+            assert!(!label.is_empty() && label != "not reported");
+            assert!(labels.insert(label), "label {label} used twice");
+        }
+        // An unknown or missing name is never dressed up as a landing.
+        assert_eq!(Outcome::named("quantum-merge"), None);
+    }
+
+    #[test]
+    fn restarting_actions_are_named_once_for_both_layers() {
+        for action in [
+            action::RETRY_WITH_GUIDANCE,
+            action::EXTEND_ROUNDS,
+            action::UNBLOCK,
+        ] {
+            assert!(resets_card(action), "{action} must clear the card");
+        }
+        for action in [
+            action::INTEGRATE_WITH_CONSENT,
+            action::KEEP_ON_BRANCH,
+            action::VERIFY_MANUAL_SNAPSHOT,
+            action::FORCE_APPROVE,
+            action::CANCEL_TASK,
+            "anything-else",
+        ] {
+            assert!(!resets_card(action), "{action} keeps the round's card");
+        }
+        assert_eq!(
+            recovery_outcome(action::KEEP_ON_BRANCH),
+            Some(Outcome::LeftOnBranch.name())
+        );
+        assert_eq!(
+            recovery_outcome(action::FORCE_APPROVE),
+            Some(Outcome::ForceApproved.name())
+        );
+        assert_eq!(
+            recovery_outcome(action::CANCEL_TASK),
+            Some(Outcome::Cancelled.name())
+        );
+        assert_eq!(recovery_outcome(action::RETRY_WITH_GUIDANCE), None);
+    }
+
+    #[test]
+    fn card_data_stays_with_the_round_it_was_stamped_for() {
+        assert!(feedback_is_current(&json!({"round": 2}), 2));
+        assert!(!feedback_is_current(&json!({"round": 1}), 2));
+        assert!(!feedback_is_current(&json!({"round": 3}), 2));
+        assert!(!feedback_is_current(&Value::Null, 0));
+        assert!(!feedback_is_current(&json!({}), 0));
+    }
+
+    #[test]
+    fn card_counts_and_unaccounted_read_one_status_the_same_way() {
+        // `na` without the slash is not a status the verdict format allows:
+        // it is no answer for the counters and none for the runtime alike.
+        let obligations = vec![("R1".to_owned(), "risk".to_owned())];
+        let mut entries = serde_json::Map::new();
+        entries.insert("R1".into(), json!({"status": "na", "note": "excuse"}));
+        let verdict = verdict_with(entries);
+        assert_eq!(coverage(&verdict, &obligations)["na"], 0);
+        assert_eq!(coverage(&verdict, &obligations)["missing"], 1);
+        assert_eq!(
+            unaccounted(&verdict, &obligations)
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["R1"]
+        );
     }
 
     #[test]

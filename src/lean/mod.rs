@@ -1208,7 +1208,7 @@ impl Core {
                     "task_recovery",
                     &json!({
                         "task": task.id,
-                        "action": "integrate_with_consent",
+                        "action": tasks::action::INTEGRATE_WITH_CONSENT,
                         "status": task.status,
                         "files": integrated_files,
                         "detail": notice
@@ -1243,7 +1243,7 @@ impl Core {
                     "task_recovery",
                     &json!({
                         "task": task.id,
-                        "action": "keep_on_branch",
+                        "action": tasks::action::KEEP_ON_BRANCH,
                         "status": task.status,
                         "branch": b,
                         "detail": notice
@@ -1332,7 +1332,7 @@ impl Core {
                         "task_recovery",
                         &json!({
                             "task": task.id,
-                            "action": "verify_manual_snapshot",
+                            "action": tasks::action::VERIFY_MANUAL_SNAPSHOT,
                             "status": task.status,
                             "result": snapshot,
                             "detail": notice
@@ -1366,7 +1366,7 @@ impl Core {
                         "task_recovery",
                         &json!({
                             "task": task.id,
-                            "action": "verify_manual_snapshot",
+                            "action": tasks::action::VERIFY_MANUAL_SNAPSHOT,
                             "status": task.status,
                             "findings": verdict.findings,
                             "detail": notice
@@ -1407,7 +1407,7 @@ impl Core {
                     "task_recovery",
                     &json!({
                         "task": task.id,
-                        "action": "retry_with_guidance",
+                        "action": tasks::action::RETRY_WITH_GUIDANCE,
                         "status": task.status,
                         "message": req.message
                     }),
@@ -1428,7 +1428,7 @@ impl Core {
                     "task_recovery",
                     &json!({
                         "task": task.id,
-                        "action": "extend_rounds",
+                        "action": tasks::action::EXTEND_ROUNDS,
                         "status": task.status
                     }),
                 )?;
@@ -1460,7 +1460,7 @@ impl Core {
                     "task_recovery",
                     &json!({
                         "task": task.id,
-                        "action": "force_approve",
+                        "action": tasks::action::FORCE_APPROVE,
                         "status": task.status,
                         "detail": notice
                     }),
@@ -1489,7 +1489,7 @@ impl Core {
                     "task_recovery",
                     &json!({
                         "task": task.id,
-                        "action": "cancel_task",
+                        "action": tasks::action::CANCEL_TASK,
                         "status": task.status,
                         "detail": notice
                     }),
@@ -3401,13 +3401,14 @@ fn land(
     on_branch: Option<&str>,
     files: &[String],
 ) {
+    let round = u64::from(task.round);
     let mut feedback = task
         .feedback
         .take()
-        .filter(|feedback| feedback["round"].as_u64() == Some(u64::from(task.round)))
+        .filter(|feedback| tasks::feedback_is_current(feedback, round))
         .unwrap_or_else(|| json!({"round": task.round}));
     let mut integration = json!({
-        "outcome": outcome,
+        "outcome": outcome.name(),
         "source": source,
         "detail": tasks::bound(detail, tasks::DETAIL_LIMIT),
     });

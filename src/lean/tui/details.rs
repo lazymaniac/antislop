@@ -375,9 +375,8 @@ impl Details {
                             taskinfo::coverage_full(task)
                         )));
                         task_lines.push(plain(format!(
-                            "Integration: {} · {}",
-                            taskinfo::integration_label(task),
-                            taskinfo::integration_detail(task)
+                            "Integration: {}",
+                            taskinfo::integration_line(task)
                         )));
                         task_lines.push(plain(taskinfo::next_step(view, task)));
                         task_lines.push(plain(format!("Task {}: {}", task.id, task.title)));

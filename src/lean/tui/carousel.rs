@@ -336,11 +336,7 @@ impl Carousel {
         lines.push(Line::from(vec![
             Span::styled("  Integration: ", theme.dim()),
             Span::styled(
-                format!(
-                    "{} · {}",
-                    taskinfo::integration_label(task),
-                    taskinfo::integration_detail(task)
-                ),
+                taskinfo::integration_line(task),
                 Style::default().fg(Color::Magenta),
             ),
         ]));
@@ -374,37 +370,11 @@ impl Carousel {
             ]));
         }
 
-        // Plan metrics summary
-        let approved = view.tasks.iter().filter(|t| t.status == "approved").count();
-        let working = view
-            .tasks
-            .iter()
-            .filter(|t| t.status == "working" || t.status == "verifying")
-            .count();
-        let queued = view
-            .tasks
-            .iter()
-            .filter(|t| matches!(t.status.as_str(), "proposed" | "queued" | "waiting"))
-            .count();
-        let problems = view
-            .tasks
-            .iter()
-            .filter(|t| {
-                matches!(
-                    t.status.as_str(),
-                    "failed" | "needs_user" | "cancelled" | "skipped" | "revised"
-                )
-            })
-            .count();
-        let unclassified = view
-            .tasks
-            .len()
-            .saturating_sub(approved + working + queued + problems);
-        let problems = problems + unclassified;
-
+        // Plan metrics summary: the coarse reading and the per-state line
+        // come from one interpretation of the task states (taskinfo), so
+        // they can never disagree about how many tasks stand where.
+        let (approved, working, queued, problems) = taskinfo::plan_rollup(view);
         lines.push(Line::styled("", Style::default()));
-        // Plan state counters: the coarse reading first, then every state's
-        // own count, so no task ever disappears into an unnamed bucket.
         let per_state = taskinfo::state_counts(view)
             .into_iter()
             .filter(|(_, count)| *count > 0)
