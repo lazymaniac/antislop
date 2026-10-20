@@ -12,12 +12,16 @@ local_checks = true
 local_commits = true
 
 [providers.codex]
-binary = "/opt/homebrew/bin/codex"
+binary = "codex"
 isolation = "read_only"
 
 [providers.agy]
-binary = "/Users/sebastian/.local/bin/agy"
+binary = "agy"
 isolation = "tool_free"
+
+[providers.claude]
+binary = "claude"
+isolation = "read_only"
 
 [providers.opencode]
 command = ["omlx", "launch", "opencode", "--model", "Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp", "--"]
@@ -26,7 +30,7 @@ isolation = "read_only"
 [role_providers]
 orchestrator = ["codex"]
 executor = ["opencode"]
-verifier = ["opencode"]
+verifier = ["claude"]
 
 [profiles.orchestrator]
 provider = "codex"
@@ -49,8 +53,7 @@ work_kinds = ["implementation", "refactoring", "static_analysis", "test_design",
 roles = ["executor"]
 
 [profiles.review]
-provider = "opencode"
-model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
+provider = "claude"
 effort = "deep"
 work_kinds = ["orchestration", "context", "requirements", "options", "planning", "architecture", "dependencies", "implementation", "refactoring", "static_analysis", "test_design", "testing", "security", "performance", "integration", "research", "writing", "analysis", "delivery"]
 roles = ["verifier"]
