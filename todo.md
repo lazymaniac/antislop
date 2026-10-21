@@ -109,3 +109,7 @@ Pozostałe:
 
 - [x] Dostarczanie wiadomosci do wszystkich rol, ograniczone ponowienia, ochrona przed petlami odpowiedzi; poczta nie blokuje schedulerow planu.
 - [x] Bezpieczne sprzatanie osieroconych plikow konfiguracji z ochrona aktywnych zapisow.
+
+- [x] t8: porównano zapisane wyniki t4/t5/t6/t7; konflikt details.rs rozstrzygnięty z zachowaniem helperów i obu zachowań, bez końcowych zmian src/tests. Macierz sześciu wymagań i ręczne kontrole terminala: docs/lean-core.md, sekcja „Bramka integracyjna t8”.
+- [x] t8: powtórzona końcowa bramka: fmt, clippy -D warnings, check i pełny cargo test --no-fail-fast — exit 0; 496/496, 0 pominiętych. Wszystkie 31 wcześniejszych awarii teraz OK; log /tmp/antislop-t8-final-verification.log. Dowody wykonania sześciu wymagań w docs/lean-core.md.
+- [ ] t8: ręczna kontrola w prawdziwym terminalu: zaznaczanie/kopiowanie OSC 52, /config z zapisem na żywo, pojedynczy węzeł zadania i Overview, Checks przez kilka rund.
