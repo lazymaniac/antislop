@@ -1018,3 +1018,55 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
         identity["pid"]
     );
 }
+
+#[test]
+fn checks_falls_back_only_when_old_daemon_rejects_operation() {
+    use std::os::unix::net::UnixListener;
+
+    for unsupported in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(antislop::lean::daemon::socket(dir.path())).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&stream).read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["op"],
+                "task_checks"
+            );
+            let error = if unsupported {
+                "unknown variant `task_checks`, expected `task`"
+            } else {
+                "conversation does not own plan"
+            };
+            writeln!(stream, "{}", json!({"error": error})).unwrap();
+            if unsupported {
+                let (mut stream, _) = listener.accept().unwrap();
+                line.clear();
+                BufReader::new(&stream).read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(
+                    request,
+                    json!({"op": "task", "conversation": "c", "plan": "p", "id": "t"})
+                );
+                writeln!(stream, "{}", json!({"data": {"round": 3}})).unwrap();
+            }
+        });
+        let result = Client::at(dir.path()).call(&Request::TaskChecks {
+            conversation: Some("c".into()),
+            plan: "p".into(),
+            id: "t".into(),
+        });
+        if unsupported {
+            assert_eq!(result.unwrap()["round"], 3);
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("conversation does not own plan")
+            );
+        }
+        server.join().unwrap();
+    }
+}

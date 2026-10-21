@@ -1939,7 +1939,28 @@ impl Client {
     /// daemon is started again (and picks up the work) and the request,
     /// which changes nothing, is repeated once.
     pub fn call(&self, request: &Request) -> Result<Value> {
-        match (self.call_once(request), &self.origin) {
+        let result = self.call_once(request);
+        // A busy daemon may intentionally keep its previous build while a new
+        // frontend connects. Only an unsupported operation permits fallback;
+        // scope and other validation errors must reach the caller unchanged.
+        let result = match (&result, request) {
+            (
+                Err(Error::Invalid(message)),
+                Request::TaskChecks {
+                    conversation,
+                    plan,
+                    id,
+                },
+            ) if message.contains("unknown variant `task_checks`") => {
+                self.call_once(&Request::TaskScoped {
+                    conversation: conversation.clone(),
+                    plan: plan.clone(),
+                    id: id.clone(),
+                })
+            }
+            _ => result,
+        };
+        match (result, &self.origin) {
             (Err(error), Some((project, config, state)))
                 // State the user deleted stays deleted.
                 if matches!(request, Request::Events { .. } | Request::EventsPaged { .. })
