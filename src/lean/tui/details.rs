@@ -169,6 +169,9 @@ pub struct Details {
     /// How many check events the last task fetch had seen.
     pub fetched_checks: u64,
     pub fetched_task_events: u64,
+    pub fetch_failures: u32,
+    pub fetch_retry_after: Option<std::time::Instant>,
+    pub fetch_error: Option<String>,
     /// Scroll memory per (agent_key, tab_index)
     pub scroll_memory: HashMap<(String, usize), usize>,
     /// Query memory per (agent_key, tab_index)
@@ -192,7 +195,27 @@ pub struct Details {
 }
 
 impl Details {
+    pub(super) fn fetch_failed(&mut self, error: &str) -> bool {
+        self.fetched_round = None;
+        self.fetched_task_events = u64::MAX;
+        self.fetch_failures = self.fetch_failures.saturating_add(1);
+        // One immediate recovery attempt, then exponential backoff capped at 30s.
+        let seconds = if self.fetch_failures == 1 {
+            0
+        } else {
+            (1u64 << self.fetch_failures.saturating_sub(2).min(5)).min(30)
+        };
+        self.fetch_retry_after =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(seconds));
+        let changed = self.fetch_error.as_deref() != Some(error);
+        self.fetch_error = Some(error.into());
+        changed
+    }
+
     pub(super) fn load_task(&mut self, mut task: Value, checks_only: bool) {
+        self.fetch_failures = 0;
+        self.fetch_retry_after = None;
+        self.fetch_error = None;
         if checks_only {
             if let Some(complete) = &mut self.task {
                 complete["checks"] = task["checks"].take();
@@ -218,6 +241,9 @@ impl Details {
             reveal_check: false,
             fetched_checks: 0,
             fetched_task_events: 0,
+            fetch_failures: 0,
+            fetch_retry_after: None,
+            fetch_error: None,
             scroll_memory: HashMap::new(),
             query_memory: HashMap::new(),
             query: String::new(),
@@ -280,6 +306,9 @@ impl Details {
         self.fetched_round = None;
         self.fetched_generation = None;
         self.fetched_plan = None;
+        self.fetch_failures = 0;
+        self.fetch_retry_after = None;
+        self.fetch_error = None;
         self.scroll = *self
             .scroll_memory
             .get(&(self.key.clone(), self.tab))

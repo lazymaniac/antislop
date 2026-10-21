@@ -629,6 +629,12 @@ impl App {
             .details
             .as_ref()
             .and_then(|details| {
+                if details
+                    .fetch_retry_after
+                    .is_some_and(|deadline| std::time::Instant::now() < deadline)
+                {
+                    return Some(false);
+                }
                 let fetched = details.fetched_round;
                 let now = self.task_row_round(&details.key)?;
                 // Checks the verifier settles meanwhile change the Checks tab.
@@ -1396,9 +1402,9 @@ impl App {
                             && details.fetched_plan.as_ref() == Some(&plan)
                     })
                 {
-                    details.fetched_round = None;
-                    details.fetched_task_events = u64::MAX;
-                    self.notice = Some(format!("✗ {error}"));
+                    if details.fetch_failed(&error) {
+                        self.notice = Some(format!("✗ {error}"));
+                    }
                 } else if conversation != self.conversation
                     && let Some(state) = self.conversation_states.get_mut(&conversation)
                     && state.task_request_id == request_id
@@ -1408,8 +1414,7 @@ impl App {
                             && details.fetched_plan.as_ref() == Some(&plan)
                     })
                 {
-                    details.fetched_round = None;
-                    details.fetched_task_events = u64::MAX;
+                    details.fetch_failed(&error);
                 }
             }
             Update::Task {

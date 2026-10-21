@@ -7004,3 +7004,55 @@ fn selection_at_minimum_terminal_with_real_ascii_and_no_color_environment() {
         assert!(selection.text().is_none());
     }
 }
+
+#[test]
+fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
+    use antislop::lean::tui::details::CHECKS;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    app.view.plan = Some("p1".into());
+    app.view.tasks.push(antislop::lean::tui::view::TaskRow {
+        id: "t1".into(),
+        round: 1,
+        ..Default::default()
+    });
+    app.open_details("worker:t1".into());
+    app.details.as_mut().unwrap().tab = CHECKS;
+    let batch = || Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![],
+        idle: false,
+        autonomous: false,
+    };
+    app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+    assert!(app.notice.take().is_some());
+    app.apply_update(batch());
+    app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+    let issued = app.task_request_id;
+    assert!(
+        app.notice.is_none(),
+        "the same failure must not re-raise a dismissed notice"
+    );
+    for _ in 0..100 {
+        app.apply_update(batch());
+    }
+    assert_eq!(app.task_request_id, issued);
+    assert!(updates.try_recv().is_err());
+    app.details.as_mut().unwrap().fetch_retry_after = Some(std::time::Instant::now());
+    app.apply_update(batch());
+    assert_eq!(app.task_request_id, issued + 1);
+    app.apply_update(Update::Task {
+        conversation: "test-conv".into(),
+        generation: 1,
+        plan: Some("p1".into()),
+        request_id: app.task_request_id,
+        key: "worker:t1".into(),
+        round: 1,
+        task: json!({"id":"u1","round":1,"checks":[]}),
+    });
+    let details = app.details.as_ref().unwrap();
+    assert_eq!(details.fetch_failures, 0);
+    assert!(details.fetch_retry_after.is_none());
+    assert!(details.fetch_error.is_none());
+}

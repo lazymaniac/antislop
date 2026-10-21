@@ -369,7 +369,7 @@ directory to run both. The socket is `<state>/core.sock`, or
   report to the orchestrator stay pinned to it even if another plan is
   proposed meanwhile. Queuing a plan is one transaction.
 - A failed or skipped task skips everything that depends on it, transitively.
-  A failed task's report keeps the controlled agent failure description and points to daemon stderr for the raw cause.
+  A failed task's report keeps the agent failure cause with credentials redacted.
 - A verdict that approves while listing high or medium findings is a
   rejection. A task verifier's obligations are the task's risks (`R1`…),
   the checks of every verification (`V1`…: each requirement with its
@@ -739,7 +739,7 @@ worker/verifier role addresses or sessions.
 
 The t12 fixes were reread in daemon::serve, trust::Registry::write and
 agent::persisted_error. Their existing untrusted-entrypoint/prepared-database,
-symlink and diagnostic-separation tests remain in the full suite. The t13 session-cache and
+symlink and credential-redaction tests remain in the full suite. The t13 session-cache and
 layout-cache tests verify invalidation for changed content, width, search and
 raw display. Config editor tests cover drafts on transport/validation failures,
 external edits, all editable field paths, global-file selection, and running
@@ -748,18 +748,21 @@ and modal isolation. These are concrete contract and counterexample checks;
 a fresh worker run is recorded, not a claim that an independent read-only
 verifier executed commands.
 
-Process failures keep a controlled description in the turn and `turn_finished`
-event; the turn's provider and failed/cancelled status remain structured fields.
-The agent's `process_exit` event retains the numeric exit code or signal separately.
-The full process failure cause (including the bounded stderr tail and exit status
-when available) is written to the daemon's stderr, rather than to SQLite. This
-stream can contain credentials supplied by the CLI and must be handled as raw
-diagnostics. The normal background launcher redirects it to the state's
-`daemon.log`; it is not copied into conversation events, task reports or prompts. A diagnostic write failure is stated in the persisted description.
+Process failures keep their actionable cause in the turn, task report and
+`turn_finished` event, so the TUI shows it. Credential redaction replaces known
+secret environment values, URLs and labelled credentials before clipping;
+provider and exit-status text and ordinary error descriptions remain visible.
+Redaction is best effort: arbitrary unlabelled secrets in CLI prose cannot be
+recognized reliably. The formatter is pure and does not write raw failures to
+stderr or `daemon.log`. The `process_exit` event also retains the numeric exit
+code or signal separately.
 
 Check-event refreshes in the same round use `task_checks` with conversation, plan and
 task authorization. The response contains only `id`, `round`, and `checks`;
 it does not read reports or calculate filesystem freshness. Initial task details, verdict/task events,
 and changes of round retain the full `task` read and its freshness contract.
-A failed details request is retried on the next event batch, including an empty
-batch; task verdict events also invalidate an open Checks panel in the same round.
+A failed details request gets one immediate recovery attempt on the next event
+batch, including an empty batch. Further failures back off exponentially from
+one second to at most 30 seconds, and identical errors do not re-raise a dismissed
+notice. Successful responses and changing the inspected task reset the backoff.
+Task verdict events also invalidate an open Checks panel in the same round.

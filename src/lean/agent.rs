@@ -545,17 +545,63 @@ fn tail(text: &str, max: usize) -> String {
 /// Longest tool output or reasoning kept in an event.
 pub const OUTPUT: usize = 2000;
 
-/// Keep arbitrary CLI diagnostics out of SQLite while exposing the full cause
-/// on the daemon's diagnostic stream. No secret inference is involved.
+/// Redact credentials before retaining the actionable CLI failure in the UI,
+/// reports and events. This function has no diagnostic-output side effects.
+/// Unknown, unlabelled secrets cannot be inferred reliably from arbitrary prose.
 pub(crate) fn persisted_error(text: &str) -> String {
-    failure_diagnostic(text, &mut std::io::stderr())
+    redact_error(
+        text,
+        std::env::vars_os().filter_map(|(key, value)| {
+            let key = key.to_string_lossy().to_ascii_uppercase();
+            (key.contains("TOKEN")
+                || key.contains("SECRET")
+                || key.contains("PASSWORD")
+                || key.contains("API_KEY")
+                || key.contains("PRIVATE_KEY"))
+            .then(|| value.into_string().ok())
+            .flatten()
+        }),
+    )
 }
 
-fn failure_diagnostic(text: &str, output: &mut impl std::io::Write) -> String {
-    match writeln!(output, "agent process failure: {text}") {
-        Ok(()) => "agent process failed; raw cause written to daemon stderr".into(),
-        Err(_) => "agent process failed; could not write raw cause to daemon stderr".into(),
+fn redact_error(text: &str, secrets: impl Iterator<Item = String>) -> String {
+    let mut secrets: Vec<_> = secrets.filter(|secret| !secret.is_empty()).collect();
+    secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+    let mut text = text.to_owned();
+    for secret in secrets {
+        text = text.replace(&secret, "[REDACTED]");
     }
+    let mut result = String::new();
+    let mut credential_next = false;
+    for part in text.split_inclusive(char::is_whitespace) {
+        let word = part.trim_end_matches(char::is_whitespace);
+        let whitespace = &part[word.len()..];
+        if word.is_empty() {
+            result.push_str(whitespace);
+            continue;
+        }
+        let lower = word.to_ascii_lowercase();
+        let assignment = lower.split_once('=').or_else(|| lower.split_once(':'));
+        let sensitive = assignment.is_some_and(|(key, _)| {
+            key.contains("token")
+                || key.contains("secret")
+                || key.contains("password")
+                || key.contains("api_key")
+                || key.contains("apikey")
+                || key.contains("authorization")
+        });
+        let label = lower == "bearer"
+            || sensitive
+                && assignment.is_some_and(|(_, value)| value.trim_matches(['\"', '\'']).is_empty());
+        if credential_next || word.contains("://") || sensitive && !label {
+            result.push_str("[REDACTED]");
+        } else {
+            result.push_str(word);
+        }
+        credential_next = label;
+        result.push_str(whitespace);
+    }
+    clip(&result, OUTPUT)
 }
 
 /// The start of `text`, at most `limit` characters, marked when cut.
@@ -1036,15 +1082,33 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn persisted_diagnostics_exclude_unknown_secrets_and_keep_the_raw_cause() {
-        let raw =
-            "codex exited with status 7: https://user:file-only-password@host/token=encoded-secret";
-        let mut diagnostic = Vec::new();
-        let stored = failure_diagnostic(raw, &mut diagnostic);
-        assert!(!stored.contains("file-only-password"));
-        assert!(!stored.contains("encoded-secret"));
-        assert!(stored.contains("daemon stderr"));
-        assert!(String::from_utf8(diagnostic).unwrap().contains(raw));
+    fn persisted_diagnostics_keep_causes_and_redact_credentials() {
+        let raw = "codex exited with status 7: login required https://user:file-only-password@host/token=encoded-secret password: hidden token=encoded Bearer   abcdef";
+        let stored = redact_error(raw, std::iter::empty());
+        for secret in [
+            "file-only-password",
+            "encoded-secret",
+            "hidden",
+            "abcdef",
+            "token=encoded",
+        ] {
+            assert!(!stored.contains(secret), "{stored}");
+        }
+        assert!(stored.contains("codex exited with status 7: login required"));
+        for cause in [
+            "already has an active writer",
+            "thread-store conflict",
+            "login required",
+        ] {
+            assert_eq!(persisted_error(cause), cause);
+        }
+        assert_eq!(
+            redact_error(
+                "failure: abcdefgh",
+                ["abc".into(), "abcdefgh".into()].into_iter()
+            ),
+            "failure: [REDACTED]"
+        );
     }
 
     #[test]

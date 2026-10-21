@@ -172,7 +172,7 @@ fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
 }
 
 #[test]
-fn failed_comments_point_to_raw_diagnostics_and_reopening_retries_them() {
+fn failed_comments_keep_visible_cause_and_reopening_retries_them() {
     use antislop::lean::{COMMENT_ORCHESTRATOR, tui::view::View};
     let dir = tempfile::tempdir().unwrap();
     let core = Core::open(
@@ -205,7 +205,7 @@ fn failed_comments_point_to_raw_diagnostics_and_reopening_retries_them() {
             .error
             .as_deref()
             .unwrap()
-            .contains("raw cause written to daemon stderr")
+            .contains("thread-store conflict")
     );
     let mut view = View::default();
     for event in core.store.events_since(&conversation.id, 0, 500).unwrap() {
@@ -215,7 +215,7 @@ fn failed_comments_point_to_raw_diagnostics_and_reopening_retries_them() {
     assert!(
         view.comment_error(comment.id)
             .unwrap()
-            .contains("raw cause written to daemon stderr")
+            .contains("thread-store conflict")
     );
     assert!(view.comment_activity().is_none());
     let reopened = core
@@ -432,11 +432,7 @@ fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
         .unwrap()
         .unwrap();
     assert_eq!(turn.status, TurnStatus::Failed);
-    assert!(
-        turn.error
-            .unwrap()
-            .contains("raw cause written to daemon stderr")
-    );
+    assert!(turn.error.unwrap().contains("login required"));
 
     core.send(&conversation.id, "now it works").unwrap();
     wait_idle(&core, &conversation.id);
@@ -1126,7 +1122,8 @@ fn process_failure_does_not_persist_credentials_from_cli_files() {
         .unwrap();
     assert_eq!(turn.status, TurnStatus::Failed);
     let stored = turn.error.unwrap();
-    assert!(stored.contains("daemon stderr"));
+    assert!(stored.contains("codex ended without a result (exit status: 1): login required"));
+    assert!(stored.contains("[REDACTED]"));
     assert!(!stored.contains("file-only-secret"));
     let events =
         serde_json::to_string(&core.store.events_since(&conversation.id, 0, 500).unwrap()).unwrap();
