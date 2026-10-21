@@ -29,7 +29,6 @@ pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
         "worker" | "verifier" => vec![0, 1, RESULT, CHECKS, COMMENTS],
         "plan-verifier" | "auditor" => vec![0, REVIEW, COMMENTS],
-        "orchestrator" | "comment-orchestrator" => vec![0, 1, COMMENTS],
         _ => vec![0, 1, COMMENTS],
     }
 }

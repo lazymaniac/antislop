@@ -2429,34 +2429,12 @@ impl App {
             KeyCode::Char('d') if control && self.input.is_empty() => {
                 self.scroll = self.scroll.saturating_sub(5);
             }
-            KeyCode::Char('u') if control => self.input.delete_to_start(),
-            KeyCode::Char('k') if control => self.input.delete_to_end(),
-            KeyCode::Char('w') if control => self.input.delete_word_back(),
-            KeyCode::Char('e') if control => self.input.move_end(),
-            KeyCode::Char('j') if control => self.input.insert_char('\n'),
-            KeyCode::Enter if alt => self.input.insert_char('\n'),
             KeyCode::Char('s') if control => self.submit(),
-            KeyCode::Enter => self.submit(),
-            KeyCode::Backspace if alt || control => {
-                self.input.delete_word_back();
-            }
-            KeyCode::Backspace => {
-                self.input.backspace();
-            }
-            KeyCode::Delete => {
-                self.input.delete();
-            }
-            KeyCode::Left if alt || control => self.input.move_word_left(),
-            KeyCode::Left => self.input.move_left(),
-            KeyCode::Right if alt || control => self.input.move_word_right(),
-            KeyCode::Right => self.input.move_right(),
-            KeyCode::Home if alt || control => self.input.move_buffer_start(),
-            KeyCode::Home => self.input.move_home(),
+            KeyCode::Enter if !alt => self.submit(),
             KeyCode::End if alt || control => {
                 self.input.move_buffer_end();
                 self.scroll = 0;
             }
-            KeyCode::End => self.input.move_end(),
             KeyCode::PageUp => self.scroll += 10,
             KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
             KeyCode::Up => {
@@ -2495,8 +2473,7 @@ impl App {
             KeyCode::Char('@') if !control && self.input.is_empty() => {
                 self.picker = Some(Picker::new(Kind::Recipients));
             }
-            KeyCode::Char(ch) if !control => self.input.insert_char(ch),
-            _ => {}
+            _ => self.input.edit_key(key),
         }
         true
     }
@@ -2772,38 +2749,11 @@ impl App {
                     self.save_comment_draft(&editor.target, editor.input);
                 }
             }
-            KeyCode::Enter if alt => editor.input.insert_char('\n'),
-            KeyCode::Char('j') if control => editor.input.insert_char('\n'),
             KeyCode::Char('s') if control => self.submit_comment(),
-            KeyCode::Enter => self.submit_comment(),
-            KeyCode::Char('w') if control => editor.input.delete_word_back(),
-            KeyCode::Char('u') if control => editor.input.delete_to_start(),
-            KeyCode::Char('k') if control => editor.input.delete_to_end(),
-            KeyCode::Char('a') if control => editor.input.move_home(),
-            KeyCode::Char('e') if control => editor.input.move_end(),
-            KeyCode::Backspace if alt || control => {
-                editor.input.delete_word_back();
-            }
-            KeyCode::Backspace => {
-                editor.input.backspace();
-            }
-            KeyCode::Delete => {
-                editor.input.delete();
-            }
-            KeyCode::Left if alt || control => editor.input.move_word_left(),
-            KeyCode::Right if alt || control => editor.input.move_word_right(),
-            KeyCode::Left => editor.input.move_left(),
-            KeyCode::Right => editor.input.move_right(),
-            KeyCode::Home if alt || control => editor.input.move_buffer_start(),
-            KeyCode::End if alt || control => editor.input.move_buffer_end(),
-            KeyCode::Home => editor.input.move_home(),
-            KeyCode::End => editor.input.move_end(),
+            KeyCode::Enter if !alt => self.submit_comment(),
             KeyCode::Up => editor.input.move_up(self.editor_width.max(1)),
             KeyCode::Down => editor.input.move_down(self.editor_width.max(1)),
-            KeyCode::Char(ch) if !control => {
-                editor.input.insert_char(ch);
-            }
-            _ => {}
+            _ => editor.input.edit_key(key),
         }
     }
 
@@ -3914,6 +3864,42 @@ impl App {
         );
     }
 
+    fn mouse_scroll(&mut self, down: bool) {
+        let code = if down { KeyCode::Down } else { KeyCode::Up };
+        if self.help.is_some() {
+            self.help_scroll = if down {
+                (self.help_scroll + 3).min(self.help_max_scroll())
+            } else {
+                self.help_scroll.saturating_sub(3)
+            };
+        } else if let Some(pv) = &mut self.plan_view {
+            pv.key(event::KeyEvent::new(code, KeyModifiers::NONE), &self.view);
+        } else if let Some(diff) = &mut self.diff {
+            diff.key(code);
+        } else if let Some(details) = &mut self.details {
+            details.scroll = if down {
+                details.scroll + 3
+            } else {
+                details.scroll.saturating_sub(3)
+            };
+        } else if self.focus == Focus::Graph {
+            let graph = Graph::new_with_viewport(
+                &self.view,
+                self.graph_filter.as_deref(),
+                &self.graph_collapsed,
+                self.graph_grouping,
+                self.graph_viewport,
+            );
+            self.scroll_graph_node(&graph, down, 3);
+        } else {
+            self.scroll = if down {
+                self.scroll.saturating_sub(3)
+            } else {
+                self.scroll + 3
+            };
+        }
+    }
+
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
         if self.selection_blocked() {
             self.text_selection = Default::default();
@@ -3944,55 +3930,8 @@ impl App {
             self.text_selection.mouse(mouse);
         }
         match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                if self.help.is_some() {
-                    self.help_scroll = self.help_scroll.saturating_sub(3);
-                } else if let Some(pv) = &mut self.plan_view {
-                    pv.key(
-                        event::KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-                        &self.view,
-                    );
-                } else if let Some(diff) = &mut self.diff {
-                    diff.key(KeyCode::Up);
-                } else if let Some(details) = &mut self.details {
-                    details.scroll = details.scroll.saturating_sub(3);
-                } else if self.focus == Focus::Graph {
-                    let graph = Graph::new_with_viewport(
-                        &self.view,
-                        self.graph_filter.as_deref(),
-                        &self.graph_collapsed,
-                        self.graph_grouping,
-                        self.graph_viewport,
-                    );
-                    self.scroll_graph_node(&graph, false, 3);
-                } else {
-                    self.scroll += 3;
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if self.help.is_some() {
-                    self.help_scroll = (self.help_scroll + 3).min(self.help_max_scroll());
-                } else if let Some(pv) = &mut self.plan_view {
-                    pv.key(
-                        event::KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-                        &self.view,
-                    );
-                } else if let Some(diff) = &mut self.diff {
-                    diff.key(KeyCode::Down);
-                } else if let Some(details) = &mut self.details {
-                    details.scroll += 3;
-                } else if self.focus == Focus::Graph {
-                    let graph = Graph::new_with_viewport(
-                        &self.view,
-                        self.graph_filter.as_deref(),
-                        &self.graph_collapsed,
-                        self.graph_grouping,
-                        self.graph_viewport,
-                    );
-                    self.scroll_graph_node(&graph, true, 3);
-                } else {
-                    self.scroll = self.scroll.saturating_sub(3);
-                }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 let col = mouse.column;

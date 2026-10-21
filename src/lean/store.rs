@@ -590,10 +590,7 @@ impl Store {
         let resolved_plan: Option<String> = match plan_id {
             Some(pid) => Some(pid.to_string()),
             None => {
-                if let Some(task_uuid) = role
-                    .strip_prefix("worker:")
-                    .or_else(|| role.strip_prefix("verifier:"))
-                {
+                if let Some(task_uuid) = super::task_role(role).map(|(id, _)| id) {
                     db.query_row(
                         "SELECT plan_id FROM tasks WHERE id=?1",
                         [task_uuid],
@@ -1994,10 +1991,7 @@ impl Store {
                 if turn.plan_id.as_deref() == Some(plan_id) {
                     return true;
                 }
-                if let Some(tid) = turn
-                    .role
-                    .strip_prefix("worker:")
-                    .or_else(|| turn.role.strip_prefix("verifier:"))
+                if let Some(tid) = super::task_role(&turn.role).map(|(id, _)| id)
                     && task_ids.contains(tid)
                 {
                     return true;
@@ -2009,20 +2003,17 @@ impl Store {
         let mut agents_map: std::collections::BTreeMap<String, PlanAgentInfo> =
             std::collections::BTreeMap::new();
         for turn in &turns {
-            let (task_id, task_label) = if let Some(tid) = turn
-                .role
-                .strip_prefix("worker:")
-                .or_else(|| turn.role.strip_prefix("verifier:"))
-            {
-                let label = tasks
-                    .iter()
-                    .find(|t| t.id == tid)
-                    .and_then(|t| t.spec["id"].as_str())
-                    .map(|s| s.to_string());
-                (Some(tid.to_string()), label)
-            } else {
-                (None, None)
-            };
+            let (task_id, task_label) =
+                if let Some(tid) = super::task_role(&turn.role).map(|(id, _)| id) {
+                    let label = tasks
+                        .iter()
+                        .find(|t| t.id == tid)
+                        .and_then(|t| t.spec["id"].as_str())
+                        .map(|s| s.to_string());
+                    (Some(tid.to_string()), label)
+                } else {
+                    (None, None)
+                };
             let entry = agents_map
                 .entry(turn.role.clone())
                 .or_insert_with(|| PlanAgentInfo {

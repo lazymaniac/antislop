@@ -29,6 +29,14 @@ use store::{
 };
 use tasks::{Outcome, TaskSpec, Verdict, status};
 
+/// A task role address. Bare task IDs are handled by callers that accept them;
+/// storage and UI callers must only recognize explicit worker/verifier roles.
+pub(crate) fn task_role(key: &str) -> Option<(&str, bool)> {
+    key.strip_prefix("verifier:")
+        .map(|id| (id, true))
+        .or_else(|| key.strip_prefix("worker:").map(|id| (id, false)))
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConversationSummary {
     pub id: String,
@@ -438,13 +446,7 @@ impl Core {
         }
 
         let plan = self.store.latest_plan(conversation)?;
-        let (task_id_str, is_verifier) = if let Some(id) = to.strip_prefix("verifier:") {
-            (id, true)
-        } else if let Some(id) = to.strip_prefix("worker:") {
-            (id, false)
-        } else {
-            (to, false)
-        };
+        let (task_id_str, is_verifier) = task_role(to).unwrap_or((to, false));
 
         if let Some(task) = plan.iter().find(|t| t.spec["id"] == task_id_str) {
             let target_role = if is_verifier {
@@ -3190,13 +3192,7 @@ impl Core {
                 })
                 .collect(),
             to => {
-                let (target_id, is_verifier) = if let Some(id) = to.strip_prefix("verifier:") {
-                    (id, true)
-                } else if let Some(id) = to.strip_prefix("worker:") {
-                    (id, false)
-                } else {
-                    (to, false)
-                };
+                let (target_id, is_verifier) = task_role(to).unwrap_or((to, false));
                 let known = plan.iter().any(|task| task.spec["id"] == target_id);
                 // An approved task takes no more turns of its own, but its
                 // worker still answers messages (`answer_waiting`).

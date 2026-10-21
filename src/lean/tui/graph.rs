@@ -188,8 +188,10 @@ pub struct Graph {
 
 /// Canonical UI identity; role addresses in events and storage stay intact.
 pub fn task_node_key(key: &str) -> String {
-    key.strip_prefix("verifier:")
-        .map_or_else(|| key.to_owned(), |id| format!("worker:{id}"))
+    match crate::lean::task_role(key) {
+        Some((id, true)) => format!("worker:{id}"),
+        _ => key.to_owned(),
+    }
 }
 
 fn column_x(column: u16) -> u16 {
@@ -608,9 +610,9 @@ impl Graph {
     pub fn node(&self, key: &str) -> Option<&Node> {
         self.nodes.iter().find(|node| {
             node.key == key
-                || key
-                    .strip_prefix("verifier:")
-                    .is_some_and(|id| node.key.strip_prefix("worker:") == Some(id))
+                || crate::lean::task_role(key).is_some_and(|(id, verifier)| {
+                    verifier && node.key.strip_prefix("worker:") == Some(id)
+                })
         })
     }
 
