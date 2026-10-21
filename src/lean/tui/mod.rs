@@ -1152,7 +1152,14 @@ impl App {
                     };
                     if let Some(editor) = editor {
                         editor.pending = false;
-                        editor.status = match reply {
+                        editor.status = match reply.and_then(|value| {
+                            let saved = config::ConfigEditor::from_reply(value.clone())?;
+                            if saved.path != editor.path {
+                                return Err("Configuration reply refers to a different file".into());
+                            }
+                            editor.applied(&saved.base_source);
+                            Ok(value)
+                        }) {
                             Ok(value) => {
                                 if value["warnings"].as_array().is_some_and(|w| !w.is_empty()) {
                                     format!("Applied live with warnings: {}", value["warnings"])
@@ -1164,24 +1171,36 @@ impl App {
                         };
                     }
                 } else {
-                    match reply.and_then(|v| {
-                        config::ConfigEditor::new(
-                            v["toml"].as_str().unwrap_or_default(),
-                            v["path"].as_str().unwrap_or_default().into(),
-                        )
-                        .map_err(|e| e.to_string())
-                    }) {
-                        Ok(mut editor) => {
+                    match reply.and_then(config::ConfigEditor::from_reply) {
+                        Ok(mut fresh) => {
                             if active {
-                                if self.config_editor.is_none() {
-                                    self.config_editor = Some(editor);
+                                if let Some(editor) = &mut self.config_editor {
+                                    editor.refresh(fresh);
+                                } else {
+                                    self.config_editor = Some(fresh);
                                 }
                             } else {
-                                editor.visible = false;
-                                self.config_drafts.entry(project).or_insert(editor);
+                                fresh.visible = false;
+                                if let Some(editor) = self.config_drafts.get_mut(&project) {
+                                    editor.refresh(fresh);
+                                } else {
+                                    self.config_drafts.insert(project, fresh);
+                                }
                             }
                         }
-                        Err(error) => self.notice = Some(error),
+                        Err(error) => {
+                            let editor = if active {
+                                self.config_editor.as_mut()
+                            } else {
+                                self.config_drafts.get_mut(&project)
+                            };
+                            if let Some(editor) = editor {
+                                editor.pending = false;
+                                editor.reload_requested = false;
+                                editor.status = error.clone();
+                            }
+                            self.notice = Some(error);
+                        }
                     }
                 }
             }
@@ -2061,8 +2080,27 @@ impl App {
         let client = self.client.clone();
         let updates = self.updates.clone();
         let project = self.client.state_dir().to_string_lossy().into_owned();
+        let expected = if save {
+            self.config_editor
+                .as_ref()
+                .map(|e| (e.base_source.clone(), e.path.clone()))
+        } else {
+            None
+        };
         std::thread::spawn(move || {
-            let reply = client.call(&request).map_err(|e| e.to_string());
+            let reply = (|| {
+                if let Some((source, path)) = expected {
+                    let current = config::ConfigEditor::from_reply(
+                        client
+                            .call(&Request::GetConfig)
+                            .map_err(|e| e.to_string())?,
+                    )?;
+                    if current.base_source != source || current.path != path {
+                        return Err("Configuration changed externally. Reopen /config or use Ctrl+R to reload; draft preserved.".into());
+                    }
+                }
+                client.call(&request).map_err(|e| e.to_string())
+            })();
             let _ = updates.send(Update::Config {
                 project,
                 save,
@@ -2074,13 +2112,24 @@ impl App {
     fn open_config(&mut self) {
         if let Some(editor) = &mut self.config_editor {
             editor.visible = true;
-        } else {
-            self.config_request(Request::GetConfig, false);
+            if editor.pending {
+                return;
+            }
+            editor.pending = true;
         }
+        self.config_request(Request::GetConfig, false);
     }
 
     pub fn key(&mut self, key: event::KeyEvent) -> bool {
         if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
+                if !editor.pending {
+                    editor.pending = true;
+                    editor.reload_requested = true;
+                    self.config_request(Request::GetConfig, false);
+                }
+                return true;
+            }
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
                 if !editor.pending {
                     if let Some(toml) = editor.source() {

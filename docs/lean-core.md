@@ -618,5 +618,8 @@ The TUI configuration modal uses GetConfig and SetConfig asynchronously. It keep
 separate field draft from chat and reports validation errors beside fields. Ctrl+S
 publishes valid changes through the daemon; running turns retain their existing
 profile snapshot. Failed requests keep the draft for retry. Optional overrides can
-be cleared; args and command fields accept JSON arrays of strings. Saving rewrites
-configuration formatting and does not preserve TOML comments.
+be cleared; args and command fields accept JSON arrays of strings. Saving patches the loaded TOML document and preserves unrelated comments and
+formatting. Reopening refreshes a clean draft. External changes block stale drafts;
+Ctrl+R explicitly reloads and discards edits. A pre-save read checks the loaded
+source and target path again; GetConfig/SetConfig are separate requests, so this
+check does not provide an atomic compare-and-swap against concurrent writers.

@@ -8,6 +8,7 @@ use ratatui::{
     widgets::{Clear, Paragraph},
 };
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[derive(Debug)]
 pub struct Field {
@@ -25,6 +26,53 @@ pub struct ConfigEditor {
     pub status: String,
     pub pending: bool,
     pub visible: bool,
+    pub conflict: bool,
+    pub reload_requested: bool,
+    pub base_source: String,
+    baseline: BTreeMap<Vec<String>, String>,
+}
+
+impl Field {
+    fn value(&self) -> Result<Value, String> {
+        let text = &self.input.text;
+        let key = self.path.last().ok_or("Missing field path")?.as_str();
+        match key {
+            "args" | "command" if !text.is_empty() => serde_json::from_str::<Vec<String>>(text)
+                .map(|v| serde_json::json!(v))
+                .map_err(|e| e.to_string()),
+            "args" => Ok(serde_json::json!([])),
+            "max_parallel" => text
+                .parse::<i64>()
+                .map(|v| serde_json::json!(v))
+                .map_err(|e| e.to_string()),
+            "local_write" | "local_commits" | "required_gates" => text
+                .parse::<bool>()
+                .map(Value::Bool)
+                .map_err(|e| e.to_string()),
+            "command" | "model" if text.is_empty() => Ok(Value::Null),
+            "binary" if text.is_empty() && self.path[0] == "profiles" => Ok(Value::Null),
+            _ => Ok(Value::String(text.clone())),
+        }
+    }
+}
+
+fn toml_value(value: &Value) -> Result<toml_edit::Value, String> {
+    match value {
+        Value::String(s) => Ok(s.as_str().into()),
+        Value::Bool(b) => Ok((*b).into()),
+        Value::Number(n) => n
+            .as_i64()
+            .map(Into::into)
+            .ok_or_else(|| "Integer exceeds TOML range".into()),
+        Value::Array(values) => {
+            let mut array = toml_edit::Array::new();
+            for value in values {
+                array.push(toml_value(value)?);
+            }
+            Ok(array.into())
+        }
+        _ => Err("Unsupported configuration value".into()),
+    }
 }
 
 impl ConfigEditor {
@@ -46,8 +94,13 @@ impl ConfigEditor {
             status: String::new(),
             pending: false,
             visible: true,
+            conflict: false,
+            reload_requested: false,
+            base_source: source.into(),
+            baseline: BTreeMap::new(),
         };
         editor.flatten(vec![], &value);
+        editor.baseline = editor.inputs();
         Ok(editor)
     }
 
@@ -82,42 +135,57 @@ impl ConfigEditor {
         }
     }
 
-    pub fn source(&mut self) -> Option<String> {
-        let mut root = serde_json::json!({"schema_version": 1});
+    fn inputs(&self) -> BTreeMap<Vec<String>, String> {
+        self.fields
+            .iter()
+            .map(|f| (f.path.clone(), f.input.text.clone()))
+            .collect()
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.inputs() != self.baseline
+    }
+
+    pub fn from_reply(value: Value) -> Result<Self, String> {
+        #[derive(serde::Deserialize)]
+        struct Reply {
+            toml: String,
+            path: String,
+        }
+        let reply: Reply = serde_json::from_value(value)
+            .map_err(|e| format!("Invalid configuration reply: {e}"))?;
+        if reply.path.is_empty() {
+            return Err("Invalid configuration reply: empty path".into());
+        }
+        Self::new(&reply.toml, reply.path).map_err(|e| e.to_string())
+    }
+
+    /// Refresh clean drafts; preserve edits and block a save after an external change.
+    pub fn refresh(&mut self, mut fresh: Self) {
+        fresh.visible = self.visible;
+        if self.reload_requested || !self.is_dirty() {
+            *self = fresh;
+        } else {
+            self.pending = false;
+            self.conflict = self.base_source != fresh.base_source || self.path != fresh.path;
+            if self.conflict {
+                self.status = "Changed externally. Ctrl+R: reload and discard this draft.".into();
+            }
+        }
+    }
+
+    pub fn applied(&mut self, source: &str) {
+        self.base_source = source.into();
+        self.baseline = self.inputs();
+        self.conflict = false;
+    }
+
+    fn parse_draft(&mut self) -> Option<Value> {
+        let mut root = serde_json::json!({"schema_version": 1, "profiles": {}, "providers": {}, "routing": {}});
         let mut invalid = false;
         for field in &mut self.fields {
             field.error = None;
-            let text = &field.input.text;
-            let key = field.path.last().unwrap().as_str();
-            if !field.choices.is_empty() && !field.choices.contains(&text.as_str()) {
-                field.error = Some(format!("Choose one of: {}", field.choices.join(", ")));
-                invalid = true;
-                continue;
-            }
-            if field.path == ["policy", "max_parallel"] && text == "0" {
-                field.error = Some("Must be at least 1".into());
-                invalid = true;
-                continue;
-            }
-
-            let parsed = match key {
-                "args" | "command" if !text.is_empty() => serde_json::from_str::<Vec<String>>(text)
-                    .map(|v| serde_json::json!(v))
-                    .map_err(|e| e.to_string()),
-                "max_parallel" => text
-                    .parse::<usize>()
-                    .map(|n| serde_json::json!(n))
-                    .map_err(|e| e.to_string()),
-                "local_write" | "local_commits" | "required_gates" => text
-                    .parse::<bool>()
-                    .map(Value::Bool)
-                    .map_err(|e| e.to_string()),
-                "args" if text.is_empty() => Ok(serde_json::json!([])),
-                "command" | "model" if text.is_empty() => Ok(Value::Null),
-                "binary" if text.is_empty() && field.path[0] == "profiles" => Ok(Value::Null),
-                _ => Ok(Value::String(text.clone())),
-            };
-            match parsed {
+            match field.value() {
                 Ok(value) => {
                     let mut cursor = &mut root;
                     for component in &field.path[..field.path.len() - 1] {
@@ -126,7 +194,7 @@ impl ConfigEditor {
                         }
                         cursor = &mut cursor[component];
                     }
-                    cursor[key] = value;
+                    cursor[field.path.last().unwrap()] = value;
                 }
                 Err(error) => {
                     field.error = Some(error);
@@ -134,95 +202,96 @@ impl ConfigEditor {
                 }
             }
         }
-        if invalid {
-            return None;
-        }
-        for field in &mut self.fields {
-            let key = field.path.last().unwrap().as_str();
-            let target = if field.path[0] == "routing" || field.path[0] == "orchestrator" {
-                Some("profiles")
-            } else if key == "provider" {
-                Some("providers")
-            } else {
-                None
-            };
-            let value = field.path.iter().fold(&root, |value, key| &value[key]);
-            let nonempty =
-                |text: &str| !text.trim().is_empty() && !text.chars().any(char::is_control);
-            if matches!(key, "args" | "command")
-                && let Some(tokens) = value.as_array()
-                && ((key == "command" && tokens.is_empty())
-                    || tokens
-                        .iter()
-                        .any(|v| !nonempty(v.as_str().unwrap_or_default())))
-            {
-                field.error =
-                    Some("Tokens must be nonempty and contain no control characters".into());
-                invalid = true;
-            }
-            if matches!(key, "binary" | "model") && !value.is_null() {
-                let command = &root[&field.path[0]][&field.path[1]]["command"];
-                if !(key == "binary" && field.path[0] == "providers" && !command.is_null())
-                    && !nonempty(value.as_str().unwrap_or_default())
-                {
-                    field.error = Some("Must be nonempty and contain no control characters".into());
-                    invalid = true;
-                }
-            }
-            if field.path == ["routing", "orchestration", "executor"]
-                && value != &root["orchestrator"]["profile"]
-            {
-                field.error = Some("Must match orchestrator.profile".into());
-                invalid = true;
-            }
-            if let Some(target) = target
-                && root[target].get(&field.input.text).is_none()
-            {
-                field.error = Some(format!("Unknown {} entry", target));
-                invalid = true;
-            }
-        }
-        if invalid {
-            return None;
-        }
-        let result = serde_json::from_value::<Config>(root.clone())
+        if invalid { None } else { Some(root) }
+    }
+
+    fn validate_draft(&mut self, value: Value) -> bool {
+        let result = serde_json::from_value::<Config>(value)
             .map_err(|e| e.to_string())
             .and_then(|c| c.validate().map_err(|e| e.to_string()));
         if let Err(error) = result {
-            self.fields[self.selected].error = Some(error);
+            // The Config validator owns semantic and cross-field rules. Show its
+            // error beside edited fields, including edits that interact.
+            let mut marked = false;
+            for field in &mut self.fields {
+                if self.baseline.get(&field.path) != Some(&field.input.text) {
+                    field.error = Some(error.clone());
+                    marked = true;
+                }
+            }
+            if !marked && let Some(field) = self.fields.get_mut(self.selected) {
+                field.error = Some(error);
+            }
+            false
+        } else {
+            true
+        }
+    }
+
+    pub fn source(&mut self) -> Option<String> {
+        if self.conflict {
             return None;
         }
-        fn emit(value: &Value, path: &[String], out: &mut String) {
-            let table = value.as_object().unwrap();
-            if !path.is_empty() {
-                out.push_str(&format!(
-                    "\n[{}]\n",
-                    path.iter()
-                        .map(|p| serde_json::to_string(p).unwrap())
-                        .collect::<Vec<_>>()
-                        .join(".")
-                ));
-            }
-            for (key, value) in table {
-                if !value.is_object() && !value.is_null() {
-                    out.push_str(&format!(
-                        "{} = {}\n",
-                        serde_json::to_string(key).unwrap(),
-                        value
-                    ));
-                }
-            }
-            for (key, value) in table {
-                if value.is_object() {
-                    let mut child = path.to_vec();
-                    child.push(key.clone());
-                    emit(value, &child, out);
-                }
+        let value = self.parse_draft()?;
+        if !self.validate_draft(value) {
+            return None;
+        }
+        match self.emit_draft() {
+            Ok(source) => Some(source),
+            Err(error) => {
+                self.status = error;
+                None
             }
         }
-        let mut source = String::new();
-        emit(&root, &[], &mut source);
-        Some(source)
+    }
+
+    /// Patch the loaded document so unrelated TOML comments and formatting survive.
+    fn emit_draft(&self) -> Result<String, String> {
+        let mut doc = self
+            .base_source
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| e.to_string())?;
+        if let Some(profiles) = doc.get_mut("profiles").and_then(|p| p.as_table_like_mut()) {
+            let removed: Vec<String> = profiles
+                .iter()
+                .map(|(name, _)| name.to_owned())
+                .filter(|name| {
+                    !self
+                        .fields
+                        .iter()
+                        .any(|f| f.path[0] == "profiles" && &f.path[1] == name)
+                })
+                .collect();
+            for name in removed {
+                profiles.remove(&name);
+            }
+        }
+        for field in &self.fields {
+            if self.baseline.get(&field.path) == Some(&field.input.text) {
+                continue;
+            }
+            let value = field.value()?;
+            let mut cursor = doc.as_item_mut();
+            for component in &field.path[..field.path.len() - 1] {
+                if cursor.get(component).is_none() {
+                    cursor[component] = toml_edit::Item::Table(toml_edit::Table::new());
+                }
+                cursor = &mut cursor[component];
+            }
+            let key = field.path.last().unwrap();
+            if value.is_null() {
+                if let Some(table) = cursor.as_table_like_mut() {
+                    table.remove(key);
+                }
+            } else {
+                let mut replacement = toml_value(&value)?;
+                if let Some(existing) = cursor.get(key).and_then(|item| item.as_value()) {
+                    *replacement.decor_mut() = existing.decor().clone();
+                }
+                cursor[key] = toml_edit::Item::Value(replacement);
+            }
+        }
+        Ok(doc.to_string())
     }
 
     pub fn paste(&mut self, text: &str) {
@@ -251,13 +320,16 @@ impl ConfigEditor {
                 index += 1;
             }
             let name = format!("new-profile-{index}");
-            let provider = self
+            let Some(provider) = self
                 .fields
                 .iter()
-                .find(|f| f.path[0] == "providers")
-                .unwrap()
-                .path[1]
-                .clone();
+                .find(|f| f.path.first().is_some_and(|p| p == "providers"))
+                .and_then(|f| f.path.get(1))
+                .cloned()
+            else {
+                self.status = "Cannot add a profile: no provider is configured.".into();
+                return;
+            };
             self.selected = self.fields.len();
             self.flatten(vec!["profiles".into(), name], &serde_json::json!({"provider":provider,"model":null,"effort":"high","binary":null,"args":[],"command":null}));
             self.status = "Unsaved changes".into();
@@ -316,16 +388,28 @@ impl ConfigEditor {
     }
 
     pub fn draw(&self, frame: &mut Frame) {
+        self.draw_with_theme(
+            frame,
+            &Theme::from_env(),
+            super::trust::config_dir()
+                .ok()
+                .map(|p| p.join("antislop.toml"))
+                .as_deref(),
+        );
+    }
+
+    pub fn draw_with_theme(
+        &self,
+        frame: &mut Frame,
+        theme: &Theme,
+        global: Option<&std::path::Path>,
+    ) {
         let area = frame.area();
         if area.width < 12 || area.height < 5 {
             return;
         }
-        let theme = Theme::from_env();
         frame.render_widget(Clear, area);
-        let global = super::trust::config_dir()
-            .ok()
-            .map(|p| p.join("antislop.toml"));
-        let origin = if global.as_deref() == Some(std::path::Path::new(&self.path)) {
+        let origin = if global == Some(std::path::Path::new(&self.path)) {
             "global"
         } else {
             "project"
@@ -369,7 +453,7 @@ impl ConfigEditor {
             theme.selected(),
         ));
         lines.push(Line::raw(
-            "Tab: field  Enter: cycle  Ctrl+N/D: add/delete profile  Ctrl+S: apply  Esc: close",
+            "Tab: field  Enter: cycle  Ctrl+N/D: add/delete profile  Ctrl+S: apply  Ctrl+R: reload  Esc: close",
         ));
         lines.push(Line::raw(super::sanitize_line(
             selected.error.as_deref().unwrap_or(&self.status),
@@ -444,5 +528,26 @@ mod tests {
         editor.fields[route].input = InputBuffer::with_text("unknown-profile");
         assert!(editor.source().is_none());
         assert!(editor.fields[route].error.is_some());
+    }
+    #[test]
+    fn document_patching_preserves_comments_and_reports_integer_overflow_at_the_field() {
+        let source = include_str!("../../../examples/antislop.toml")
+            .replace("max_parallel = 4", "max_parallel = 4 # keep this comment");
+        let mut editor = ConfigEditor::new(&source, "antislop.toml".into()).unwrap();
+        let index = editor
+            .fields
+            .iter()
+            .position(|f| f.path == ["policy", "max_parallel"])
+            .unwrap();
+        editor.fields[index].input = InputBuffer::with_text("2");
+        assert!(
+            editor
+                .source()
+                .unwrap()
+                .contains("max_parallel = 2 # keep this comment")
+        );
+        editor.fields[index].input = InputBuffer::with_text("18446744073709551615");
+        assert!(editor.source().is_none());
+        assert!(editor.fields[index].error.is_some());
     }
 }

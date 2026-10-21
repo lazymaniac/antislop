@@ -91,3 +91,7 @@ string-array syntax, including command tokens. Empty optional fields remove over
 Ctrl+N adds a profile with a generated name; Ctrl+D removes the selected profile.
 Ctrl+S validates, saves, and applies the configuration live. Running turns finish
 with their old profile. Errors retain the draft; Esc closes it and `/config` reopens it.
+
+Reopening refreshes the configuration. If another client changed it, the draft is
+preserved and saving is blocked. Ctrl+R explicitly reloads and discards edits.
+Unrelated TOML comments and formatting are preserved.
