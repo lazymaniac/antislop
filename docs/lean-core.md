@@ -323,6 +323,9 @@ directory to run both. The socket is `<state>/core.sock`, or
   wrapped lines in draft (preserving `preferred_col`); when on row 0 (or draft is empty), ↑ stashes the
   draft into `history_draft` and recalls sent messages history (successive ↑ moves backward); when browsing
   history, ↓ on the last row moves forward and restores `history_draft` with its exact cursor and column position.
+  The latest 1,000 submitted messages persist in `input-history.db` in the project’s state directory
+  (normally `.antislop/`) and are restored on startup. Each project keeps its own history;
+  concurrent frontends append separate rows without overwriting each other.
   PgUp/PgDn scroll transcript, Ctrl+A run proposed plan (on empty draft) or Home, Ctrl+R resume plan
   (on empty draft) or search history, Ctrl+U/Ctrl+K delete to start/end of line, Ctrl+W or Alt+Backspace
   delete word backward, Ctrl+E move to end of line, Alt/Ctrl+Left and Alt/Ctrl+Right word navigation,

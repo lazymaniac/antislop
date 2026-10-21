@@ -1467,6 +1467,7 @@ fn build() -> &'static str {
 #[derive(Clone)]
 pub struct Client {
     socket: PathBuf,
+    state: PathBuf,
     /// Something the user should know about the daemon they reached.
     pub notice: Option<String>,
     /// Project, configuration and state, to start the daemon again if it
@@ -1479,9 +1480,15 @@ impl Client {
     pub fn at(state: &Path) -> Self {
         Self {
             socket: socket(state),
+            state: state.to_owned(),
             notice: None,
             origin: None,
         }
+    }
+
+    /// The state directory this daemon serves, including custom `--state` paths.
+    pub fn state_dir(&self) -> &Path {
+        &self.state
     }
 
     /// Stops the daemon and waits for it to release its state lock.

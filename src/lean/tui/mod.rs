@@ -7,6 +7,7 @@ pub mod details;
 pub mod diffview;
 pub mod editor;
 pub mod graph;
+mod history;
 pub mod palette;
 pub mod planview;
 pub mod sanitize;
@@ -201,6 +202,7 @@ pub struct App {
     pub help_scroll: usize,
     pub terminal_area: Rect,
     pub history: Vec<String>,
+    history_path: Option<std::path::PathBuf>,
     pub history_index: Option<usize>,
     pub history_draft: String,
     pub history_draft_cursor: usize,
@@ -282,6 +284,7 @@ impl App {
             help_scroll: 0,
             terminal_area: Rect::new(0, 0, 80, 24),
             history: vec![],
+            history_path: None,
             history_index: None,
             history_draft: String::new(),
             history_draft_cursor: 0,
@@ -942,6 +945,22 @@ impl App {
         };
     }
 
+    /// Restores the project's input history before a conversation is opened.
+    pub fn load_history(&mut self, state: &std::path::Path) {
+        let path = state.join("input-history.db");
+        self.history = match history::load(&path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.notice = Some(format!(
+                    "Cannot load input history ({}): {error}",
+                    path.display()
+                ));
+                Vec::new()
+            }
+        };
+        self.history_path = Some(path);
+    }
+
     pub fn record_history(&mut self, text: &str) {
         self.history_index = None;
         self.history_draft.clear();
@@ -951,6 +970,17 @@ impl App {
         let trimmed = text.trim();
         if !trimmed.is_empty() && self.history.last().map(String::as_str) != Some(trimmed) {
             self.history.push(trimmed.to_owned());
+            if self.history.len() > history::LIMIT {
+                self.history.remove(0);
+            }
+            if let Some(path) = &self.history_path
+                && let Err(error) = history::append(path, trimmed)
+            {
+                self.notice = Some(format!(
+                    "Cannot save input history ({}): {error}",
+                    path.display()
+                ));
+            }
         }
     }
 
@@ -1594,6 +1624,9 @@ impl App {
                 }
             },
         };
+        if self.active_project != index && self.history_path.is_some() {
+            self.load_history(conn.client.state_dir());
+        }
         self.active_project = index;
         self.client = conn.client.clone();
         self.project = conn.name.clone();
@@ -3969,6 +4002,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         help_scroll: 0,
         terminal_area: Rect::default(),
         history: vec![],
+        history_path: None,
         history_index: None,
         history_draft: String::new(),
         history_draft_cursor: 0,
@@ -4008,6 +4042,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
             }
         },
     };
+    app.load_history(&options.state);
     app.register_project(workspace::ProjectConn::new(
         options.project.clone(),
         client.clone(),

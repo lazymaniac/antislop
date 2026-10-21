@@ -5479,3 +5479,94 @@ fn an_unblock_announcement_invalidates_the_card_like_a_retry() {
     assert!(view.tasks[0].obligations.is_none());
     assert!(view.tasks[0].integration.is_none());
 }
+
+#[test]
+fn sent_history_survives_restart_and_recall_restores_the_draft() {
+    let state = tempfile::tempdir().unwrap();
+    let first = "pierwsza wiadomość";
+    let last = "zażółć 👩‍💻\ne\u{301} druga linia";
+    {
+        let mut app = App::test_app();
+        app.load_history(state.path());
+        app.record_history(first);
+        app.input = InputBuffer::with_text(last);
+        app.submit();
+        assert!(app.input.text.is_empty());
+    }
+    let mut app = App::test_app();
+    app.load_history(state.path());
+    assert_eq!(app.history, [first, last]);
+    app.record_history(last); // Consecutive duplicates stay suppressed after restart.
+    app.input = InputBuffer::with_text("mój szkic 👩‍💻");
+    let draft = app.input.clone();
+    app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert_eq!(app.input.text, last);
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    assert_eq!(app.input, draft);
+    drop(app);
+    let mut reopened = App::test_app();
+    reopened.load_history(state.path());
+    assert_eq!(reopened.history, [first, last]);
+}
+
+#[test]
+fn separate_frontends_append_history_without_losing_each_others_messages() {
+    let state = tempfile::tempdir().unwrap();
+    let mut first = App::test_app();
+    let mut second = App::test_app();
+    first.load_history(state.path());
+    second.load_history(state.path());
+    first.record_history("first window");
+    second.record_history("second window");
+    first.record_history("first window again");
+    let mut reopened = App::test_app();
+    reopened.load_history(state.path());
+    assert_eq!(
+        reopened.history,
+        ["first window", "second window", "first window again"]
+    );
+}
+
+#[test]
+fn project_switches_use_each_daemons_history_directory() {
+    use antislop::lean::tui::workspace::ProjectConn;
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let mut app = App::test_app();
+    app.projects = vec![
+        ProjectConn::new(first.path().into(), Client::at(first.path())),
+        ProjectConn::new(second.path().into(), Client::at(second.path())),
+    ];
+    app.load_history(first.path());
+    app.record_history("first project");
+    app.switch_project(1, Some("second-conversation".into()));
+    assert!(app.history.is_empty());
+    app.record_history("second project");
+    app.switch_project(0, Some("first-conversation".into()));
+    assert_eq!(app.history, ["first project"]);
+    app.switch_project(1, Some("second-conversation".into()));
+    assert_eq!(app.history, ["second project"]);
+}
+
+#[test]
+fn history_storage_errors_keep_the_input_and_report_the_raw_reason() {
+    let state = tempfile::tempdir().unwrap();
+    let mut app = App::test_app();
+    app.load_history(state.path());
+    let connection = rusqlite::Connection::open(state.path().join("input-history.db")).unwrap();
+    connection.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    app.input = InputBuffer::with_text("keep this draft");
+    let draft = app.input.clone();
+    app.record_history("a message");
+    assert_eq!(app.history, ["a message"]);
+    assert_eq!(app.input, draft);
+    let notice = app.notice.as_deref().unwrap();
+    assert!(notice.contains("Cannot save input history"), "{notice}");
+    assert!(notice.contains("database is locked"), "{notice}");
+    connection.execute_batch("ROLLBACK").unwrap();
+    // A subsequent submission retries storage normally.
+    app.record_history("next message");
+    let mut reopened = App::test_app();
+    reopened.load_history(state.path());
+    assert_eq!(reopened.history, ["next message"]);
+}
