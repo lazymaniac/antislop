@@ -10,7 +10,7 @@ local_write = true
 local_commits = true
 
 [providers.codex]
-binary = "codex"
+command = ["codex", "--sandbox", "danger-full-access"]
 
 [providers.agy]
 binary = "agy"
@@ -37,7 +37,7 @@ effort = "low"
 
 [profiles.review]
 provider = "claude"
-effort = "high"
+effort = "low"
 
 # Every task kind has a dedicated verifier assignment. Runtime creates separate
 # verifier agents/sessions; a shared profile never means a shared verifier agent.

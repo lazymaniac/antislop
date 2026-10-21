@@ -24,6 +24,7 @@ ratatui = "0.30.2"
 crossterm = "0.29.0"
 unicode-width = "0.2"
 unicode-segmentation = "1.13"
+toml_edit = "0.25.17"
 
 [dev-dependencies]
 tempfile = "3"
