@@ -757,6 +757,18 @@ fn test_task_scoped_query_includes_freshness_token() {
         }))
         .unwrap();
     assert_eq!(task_resp2["freshness_token"].as_str().unwrap(), token);
+    let checks = daemon
+        .call_raw(&json!({"op":"task_checks","conversation":conv_id,"plan":plan_id,"id":"t1"}))
+        .unwrap();
+    assert_eq!(checks["id"], task_resp["id"]);
+    assert_eq!(checks["round"], task_resp["round"]);
+    assert!(checks["checks"].is_array());
+    assert_eq!(checks.as_object().unwrap().len(), 3);
+    let other = daemon.call_raw(&json!({"op":"start"})).unwrap();
+    let error = daemon
+        .call_raw(&json!({"op":"task_checks","conversation":other["id"],"plan":plan_id,"id":"t1"}))
+        .unwrap_err();
+    assert!(error.contains("does not belong"), "{error}");
 }
 
 #[test]

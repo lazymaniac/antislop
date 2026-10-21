@@ -172,7 +172,7 @@ fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
 }
 
 #[test]
-fn failed_comments_keep_the_raw_error_and_reopening_retries_them() {
+fn failed_comments_point_to_raw_diagnostics_and_reopening_retries_them() {
     use antislop::lean::{COMMENT_ORCHESTRATOR, tui::view::View};
     let dir = tempfile::tempdir().unwrap();
     let core = Core::open(
@@ -205,7 +205,7 @@ fn failed_comments_keep_the_raw_error_and_reopening_retries_them() {
             .error
             .as_deref()
             .unwrap()
-            .contains("already has an active writer")
+            .contains("raw cause written to daemon stderr")
     );
     let mut view = View::default();
     for event in core.store.events_since(&conversation.id, 0, 500).unwrap() {
@@ -215,7 +215,7 @@ fn failed_comments_keep_the_raw_error_and_reopening_retries_them() {
     assert!(
         view.comment_error(comment.id)
             .unwrap()
-            .contains("thread-store conflict")
+            .contains("raw cause written to daemon stderr")
     );
     assert!(view.comment_activity().is_none());
     let reopened = core
@@ -432,7 +432,11 @@ fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
         .unwrap()
         .unwrap();
     assert_eq!(turn.status, TurnStatus::Failed);
-    assert!(turn.error.unwrap().contains("login required"));
+    assert!(
+        turn.error
+            .unwrap()
+            .contains("raw cause written to daemon stderr")
+    );
 
     core.send(&conversation.id, "now it works").unwrap();
     wait_idle(&core, &conversation.id);
@@ -1098,4 +1102,43 @@ fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
     assert!(calls.contains("live-model"));
     assert!(calls.contains("model_reasoning_effort=\"low\""));
     assert!(calls.starts_with(&running));
+}
+
+#[test]
+fn process_failure_does_not_persist_credentials_from_cli_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let script = fake_codex(dir.path());
+    let source = std::fs::read_to_string(&script).unwrap().replace(
+        "login required",
+        "login required https://user:file-only-secret@host/encoded-token",
+    );
+    std::fs::write(&script, source).unwrap();
+    let core = Core::open(&dir.path().join("state"), config(&script)).unwrap();
+    let conversation = core.start(&project).unwrap();
+    core.send(&conversation.id, "fail please").unwrap();
+    wait_idle(&core, &conversation.id);
+    let turn = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.status, TurnStatus::Failed);
+    let stored = turn.error.unwrap();
+    assert!(stored.contains("daemon stderr"));
+    assert!(!stored.contains("file-only-secret"));
+    let events =
+        serde_json::to_string(&core.store.events_since(&conversation.id, 0, 500).unwrap()).unwrap();
+    assert!(!events.contains("file-only-secret"));
+    assert!(!events.contains("encoded-token"));
+    assert!(
+        core.store
+            .events_since(&conversation.id, 0, 500)
+            .unwrap()
+            .iter()
+            .any(|event| event.kind == "agent"
+                && event.payload["type"] == "process_exit"
+                && event.payload["code"] == 1)
+    );
 }

@@ -311,7 +311,7 @@ sys.exit(1)
         proposed[0]["review"]["error"]
             .as_str()
             .unwrap()
-            .contains("login required")
+            .contains("raw cause written to daemon stderr")
     );
     assert_eq!(proposed[0]["automatic"], false);
     let tasks = core.store.latest_plan(&conversation).unwrap();

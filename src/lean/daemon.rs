@@ -197,6 +197,12 @@ pub enum Request {
         plan: String,
         id: String,
     },
+    /// Current-round Checks without reports or filesystem freshness work.
+    TaskChecks {
+        conversation: String,
+        plan: String,
+        id: String,
+    },
     TaskScoped {
         conversation: Option<String>,
         plan: String,
@@ -345,6 +351,11 @@ enum WireRequest {
         id: String,
         #[serde(default)]
         scope_hash: Option<String>,
+    },
+    TaskChecks {
+        conversation: String,
+        plan: String,
+        id: String,
     },
     Task {
         #[serde(default)]
@@ -576,6 +587,15 @@ impl From<Request> for WireRequest {
                 plan,
                 id,
                 scope_hash,
+            },
+            Request::TaskChecks {
+                conversation,
+                plan,
+                id,
+            } => WireRequest::TaskChecks {
+                conversation,
+                plan,
+                id,
             },
             Request::Task { plan, id } => WireRequest::Task {
                 conversation: None,
@@ -840,6 +860,15 @@ impl From<WireRequest> for Request {
                     }
                 }
             }
+            WireRequest::TaskChecks {
+                conversation,
+                plan,
+                id,
+            } => Request::TaskChecks {
+                conversation,
+                plan,
+                id,
+            },
             WireRequest::Task {
                 conversation,
                 plan,
@@ -1348,6 +1377,15 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         } => {
             validate_project_conversation(core, project, &conversation)?;
             json!(core.set_comment(&conversation, id, &status)?)
+        }
+        Request::TaskChecks {
+            conversation,
+            plan,
+            id,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
+            core.store.task_checks_in_plan(&plan, &id)?
         }
         Request::Task { plan, id } => {
             let conv = core.store.plan_conversation(&plan)?;

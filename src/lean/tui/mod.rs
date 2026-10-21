@@ -111,6 +111,23 @@ pub enum Update {
         round: u64,
         task: Value,
     },
+    TaskChecks {
+        conversation: String,
+        plan: Option<String>,
+        generation: u64,
+        request_id: u64,
+        key: String,
+        round: u64,
+        task: Value,
+    },
+    TaskFailed {
+        conversation: String,
+        generation: u64,
+        plan: String,
+        request_id: u64,
+        key: String,
+        error: String,
+    },
     SendResult {
         conversation: String,
         generation: u64,
@@ -612,7 +629,7 @@ impl App {
             .details
             .as_ref()
             .and_then(|details| {
-                let fetched = details.fetched_round?;
+                let fetched = details.fetched_round;
                 let now = self.task_row_round(&details.key)?;
                 // Checks the verifier settles meanwhile change the Checks tab.
                 let checks = details.tab == CHECKS
@@ -622,7 +639,7 @@ impl App {
                             .and_then(|id| self.view.task_check_events.get(id))
                             .copied()
                             .unwrap_or(0);
-                Some(fetched != now || checks)
+                Some(fetched != Some(now) || checks)
             })
             .unwrap_or(false);
         if stale {
@@ -648,6 +665,11 @@ impl App {
             return;
         };
         let round = self.task_row_round(&key).unwrap_or(0);
+        let task_events = self.view.task_detail_events.get(&id).copied().unwrap_or(0);
+        let task_changed = self
+            .details
+            .as_ref()
+            .is_some_and(|details| details.fetched_task_events != task_events);
         self.task_request_id += 1;
         let request_id = self.task_request_id;
         if let Some(details) = self
@@ -656,11 +678,31 @@ impl App {
             .filter(|details| details.task_id() == Some(id.as_str()))
         {
             details.fetched_round = Some(round);
+            details.fetched_generation = Some(self.generation);
+            details.fetched_plan = Some(plan.clone());
             details.fetched_checks = self.view.task_check_events.get(&id).copied().unwrap_or(0);
+            details.fetched_task_events = task_events;
         }
-        let request = Request::Task {
-            plan: plan.clone(),
-            id,
+        let checks_only = self.details.as_ref().is_some_and(|details| {
+            !task_changed
+                && details.tab == CHECKS
+                && details
+                    .task
+                    .as_ref()
+                    .and_then(|task| task["round"].as_u64())
+                    == Some(round)
+        });
+        let request = if checks_only {
+            Request::TaskChecks {
+                conversation: self.conversation.clone(),
+                plan: plan.clone(),
+                id,
+            }
+        } else {
+            Request::Task {
+                plan: plan.clone(),
+                id,
+            }
         };
         let plan_id = plan;
         let conversation = self.conversation.clone();
@@ -669,16 +711,37 @@ impl App {
         let updates = self.updates.clone();
         std::thread::spawn(move || {
             let _ = updates.send(match client.call(&request) {
-                Ok(task) => Update::Task {
+                Ok(task) => {
+                    if checks_only {
+                        Update::TaskChecks {
+                            conversation,
+                            plan: Some(plan_id),
+                            generation,
+                            request_id,
+                            key,
+                            round,
+                            task,
+                        }
+                    } else {
+                        Update::Task {
+                            conversation,
+                            plan: Some(plan_id),
+                            generation,
+                            request_id,
+                            key,
+                            round,
+                            task,
+                        }
+                    }
+                }
+                Err(error) => Update::TaskFailed {
                     conversation,
-                    plan: Some(plan_id),
                     generation,
+                    plan: plan_id,
                     request_id,
                     key,
-                    round,
-                    task,
+                    error: error.to_string(),
                 },
-                Err(error) => Update::Notice(format!("✗ {error}")),
             });
         });
     }
@@ -1158,6 +1221,7 @@ impl App {
     }
 
     fn apply_update_inner(&mut self, update: Update) {
+        let checks_only = matches!(&update, Update::TaskChecks { .. });
         match update {
             Update::Config {
                 project,
@@ -1315,15 +1379,60 @@ impl App {
                 }
                 self.notice = Some(text);
             }
+            Update::TaskFailed {
+                conversation,
+                generation,
+                plan,
+                request_id,
+                key,
+                error,
+            } => {
+                if conversation == self.conversation
+                    && self.view.plan.as_ref() == Some(&plan)
+                    && request_id == self.task_request_id
+                    && let Some(details) = self.details.as_mut().filter(|details| {
+                        details.key == key
+                            && details.fetched_generation == Some(generation)
+                            && details.fetched_plan.as_ref() == Some(&plan)
+                    })
+                {
+                    details.fetched_round = None;
+                    details.fetched_task_events = u64::MAX;
+                    self.notice = Some(format!("✗ {error}"));
+                } else if conversation != self.conversation
+                    && let Some(state) = self.conversation_states.get_mut(&conversation)
+                    && state.task_request_id == request_id
+                    && let Some(details) = state.details.as_mut().filter(|details| {
+                        details.key == key
+                            && details.fetched_generation == Some(generation)
+                            && details.fetched_plan.as_ref() == Some(&plan)
+                    })
+                {
+                    details.fetched_round = None;
+                    details.fetched_task_events = u64::MAX;
+                }
+            }
             Update::Task {
                 conversation,
                 plan,
-                generation: _,
+                generation,
+                request_id,
+                key,
+                round,
+                task,
+            }
+            | Update::TaskChecks {
+                conversation,
+                plan,
+                generation,
                 request_id,
                 key,
                 round,
                 task,
             } => {
+                if task["round"].as_u64().is_some_and(|actual| actual != round) {
+                    return;
+                }
                 // A task that moved on while its record was in flight must
                 // not show the earlier round's report or verdict.
                 let round_current = match self.task_row_round(&key) {
@@ -1334,17 +1443,34 @@ impl App {
                     && request_id == self.task_request_id
                     && self.view.plan.as_ref() == plan.as_ref()
                     && round_current
-                    && let Some(details) =
-                        self.details.as_mut().filter(|details| details.key == key)
+                    && let Some(details) = self.details.as_mut().filter(|details| {
+                        details.key == key
+                            && details
+                                .fetched_generation
+                                .is_none_or(|issued| issued == generation)
+                            && details
+                                .fetched_plan
+                                .as_ref()
+                                .is_none_or(|issued| Some(issued) == plan.as_ref())
+                    })
                 {
-                    details.task = Some(task);
-                } else if let Some(state) = self.conversation_states.get_mut(&conversation)
+                    details.load_task(task, checks_only);
+                } else if conversation != self.conversation
+                    && let Some(state) = self.conversation_states.get_mut(&conversation)
                     && state.task_request_id == request_id
-                    && round_current
-                    && let Some(details) =
-                        state.details.as_mut().filter(|details| details.key == key)
+                    && let Some(details) = state.details.as_mut().filter(|details| {
+                        details.key == key
+                            && details.fetched_round == Some(round)
+                            && details
+                                .fetched_generation
+                                .is_none_or(|issued| issued == generation)
+                            && details
+                                .fetched_plan
+                                .as_ref()
+                                .is_none_or(|issued| Some(issued) == plan.as_ref())
+                    })
                 {
-                    details.task = Some(task);
+                    details.load_task(task, checks_only);
                 }
             }
             Update::Diff {

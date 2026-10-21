@@ -249,6 +249,7 @@ pub struct View {
     /// Latest check event for each plan-local task id; unrelated tasks do not
     /// invalidate an open inspector. Entries are bounded by task count.
     pub task_check_events: HashMap<String, u64>,
+    pub task_detail_events: HashMap<String, u64>,
     pub transcript: Vec<Entry>,
     pub tasks: Vec<TaskRow>,
     /// The plan the task rows show.
@@ -961,6 +962,7 @@ impl View {
                 }
                 self.task_rows.clear();
                 self.task_check_events.clear();
+                self.task_detail_events.clear();
                 self.agents
                     .retain(|key, _| !key.starts_with("worker:") && !key.starts_with("verifier:"));
                 self.links.clear();
@@ -1030,6 +1032,10 @@ impl View {
                 let id = clean_line(&text("id"));
                 let index = self.tasks.iter().position(|row| row.id == id);
                 if let Some(index) = index {
+                    // A verdict can change Checks without emitting a check event.
+                    self.check_events += 1;
+                    self.task_check_events.insert(id.clone(), self.check_events);
+                    *self.task_detail_events.entry(id.clone()).or_default() += 1;
                     self.task_rows.insert(text("task"), index);
                     let row = &mut self.tasks[index];
                     let (was, was_round) = (row.status.clone(), row.round);
@@ -1462,8 +1468,12 @@ impl View {
         let diff = key
             .strip_prefix("worker:")
             .map(|task| format!("diff:{task}"));
+        let verifier = key
+            .strip_prefix("worker:")
+            .map(|task| format!("verifier:{task}"));
         let checks = key
             .strip_prefix("verifier:")
+            .or_else(|| key.strip_prefix("worker:"))
             .map(|task| format!("check:{task}:"));
         self.comments
             .values()
@@ -1471,6 +1481,9 @@ impl View {
             .filter(|comment| comment.status != "deleted")
             .filter(|comment| {
                 comment.target == key
+                    || verifier
+                        .as_ref()
+                        .is_some_and(|target| comment.target == *target)
                     || checks
                         .as_ref()
                         .is_some_and(|checks| comment.target.starts_with(checks))
@@ -2639,6 +2652,41 @@ mod tests {
         assert!(!view.stale(&view.comments[&1]));
         view.apply(&plan(7, "p2"));
         assert!(view.stale(&view.comments[&1]));
+    }
+
+    #[test]
+    fn shared_worker_node_aggregates_comments_from_both_roles() {
+        let mut view = View::default();
+        for (id, target) in [
+            (1, "worker:t1"),
+            (2, "verifier:t1"),
+            (3, "diff:t1:src/a.rs:1"),
+            (4, "check:t1:V01"),
+            (5, "check:t10:V01"),
+        ] {
+            view.apply(&event(
+                id,
+                None,
+                "comment",
+                json!({"id":id,"target":target,"text":"evidence","status":"open"}),
+            ));
+        }
+        let ids: Vec<_> = view
+            .comments_on("worker:t1")
+            .iter()
+            .map(|comment| comment.id)
+            .collect();
+        assert_eq!(ids, [4, 3, 2, 1]);
+        let ids: Vec<_> = view
+            .comments_on("verifier:t1")
+            .iter()
+            .map(|comment| comment.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [4, 2],
+            "legacy verifier addresses keep their role-specific meaning"
+        );
     }
 
     #[test]

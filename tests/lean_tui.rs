@@ -6710,3 +6710,297 @@ mod text_selection_acceptance {
         assert!(selection.text().is_none());
     }
 }
+
+#[test]
+fn checks_retry_failed_fetch_on_next_empty_event_batch() {
+    use antislop::lean::tui::details::CHECKS;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(), generation: 1,
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
+        idle: false, autonomous: false,
+    });
+    app.open_details("worker:t1".into());
+    app.details.as_mut().unwrap().tab = CHECKS;
+    let issued = app.task_request_id;
+    let failure = updates.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(matches!(&failure, Update::TaskFailed { .. }));
+    app.apply_update(failure);
+    assert!(
+        app.notice
+            .as_ref()
+            .is_some_and(|notice| notice.contains('✗'))
+    );
+    let listener = UnixListener::bind(socket(dir.path())).unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        writeln!(stream, "{}", json!({"ok":true,"data":{"id":"u1","round":1,"checks":[{"id":"V01","status":"passed"}]}})).unwrap();
+    });
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![],
+        idle: false,
+        autonomous: false,
+    });
+    assert_eq!(app.task_request_id, issued + 1);
+    let reply = updates.recv_timeout(Duration::from_secs(3)).unwrap();
+    app.apply_update(reply);
+    server.join().unwrap();
+    assert_eq!(
+        app.details.as_ref().unwrap().task.as_ref().unwrap()["checks"][0]["status"],
+        "passed"
+    );
+}
+
+#[test]
+fn checks_refetch_on_task_verdict_in_the_same_round() {
+    use antislop::lean::tui::details::CHECKS;
+    let mut app = App::test_app();
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(), generation: 1,
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"verifying","round":1}})],
+        idle: false, autonomous: false,
+    });
+    app.open_details("worker:t1".into());
+    app.details.as_mut().unwrap().tab = CHECKS;
+    let issued = app.task_request_id;
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(), generation: 1,
+        events: vec![json!({"seq":3,"kind":"task","payload":{"id":"t1","task":"u1","status":"approved","round":1,"feedback":{"summary":"accepted"}}})],
+        idle: false, autonomous: false,
+    });
+    assert_eq!(app.task_request_id, issued + 1);
+}
+
+#[test]
+fn checks_refresh_requests_compact_authorized_projection_and_preserves_report() {
+    use antislop::lean::tui::details::CHECKS;
+    let dir = tempfile::tempdir().unwrap();
+    let listener = UnixListener::bind(socket(dir.path())).unwrap();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    let server = thread::spawn(move || {
+        for index in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if index == 1 {
+                assert_eq!(request["op"], "task_checks", "{request}");
+                assert_eq!(request["conversation"], "test-conv");
+                assert_eq!(request["plan"], "p1");
+            }
+            if index == 2 {
+                assert_eq!(
+                    request["op"], "task",
+                    "verdict must refresh its full record"
+                );
+            }
+            let data = if index == 2 {
+                json!({"id":"u1","round":1,"report":"updated report","verdict":{"coverage":{"V01":{"status":"ok","note":"accepted"}}},"checks":[]})
+            } else if index == 0 {
+                json!({"id":"u1","round":1,"report":"keep this report","checks":[]})
+            } else {
+                json!({"id":"u1","round":1,"checks":[{"id":"V01","status":"passed"}]})
+            };
+            writeln!(stream, "{}", json!({"data":data,"error":null})).unwrap();
+        }
+    });
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(), generation: 1,
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
+        idle: false, autonomous: false,
+    });
+    app.open_details("worker:t1".into());
+    app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+    app.details.as_mut().unwrap().tab = CHECKS;
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![json!({"seq":3,"kind":"check","payload":{"task":"u1","round":1}})],
+        idle: false,
+        autonomous: false,
+    });
+    app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+    let task = app.details.as_ref().unwrap().task.as_ref().unwrap();
+    assert_eq!(task["report"], "keep this report");
+    assert_eq!(task["checks"][0]["status"], "passed");
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(), generation: 1,
+        events: vec![json!({"seq":4,"kind":"task","payload":{"id":"t1","task":"u1","status":"approved","round":1}})],
+        idle: false, autonomous: false,
+    });
+    app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+    server.join().unwrap();
+    let task = app.details.as_ref().unwrap().task.as_ref().unwrap();
+    assert_eq!(task["verdict"]["coverage"]["V01"]["note"], "accepted");
+}
+
+#[test]
+fn task_replies_match_saved_conversation_plan_round_and_request_generation() {
+    let mut app = App::test_app();
+    app.view.plan = Some("plan-a".into());
+    app.view.tasks.push(antislop::lean::tui::view::TaskRow {
+        id: "t1".into(),
+        round: 3,
+        ..Default::default()
+    });
+    app.open_details("worker:t1".into());
+    let request = app.task_request_id;
+    let generation = app.generation;
+    let conversation = app.conversation.clone();
+    let reply = |plan: &str, round, generation| Update::Task {
+        conversation: conversation.clone(),
+        plan: Some(plan.into()),
+        generation,
+        request_id: request,
+        key: "worker:t1".into(),
+        round,
+        task: json!({"round":round,"report":"saved response"}),
+    };
+    let mut wrong_payload_round = reply("plan-a", 3, generation);
+    if let Update::Task { task, .. } = &mut wrong_payload_round {
+        task["round"] = json!(4);
+    }
+    app.apply_update(wrong_payload_round);
+    assert!(app.details.as_ref().unwrap().task.is_none());
+    app.apply_update(reply("plan-a", 3, generation + 100));
+    assert!(app.details.as_ref().unwrap().task.is_none());
+    app.open("other-conversation".into());
+    app.view.plan = Some("plan-b".into());
+    app.view.tasks.push(antislop::lean::tui::view::TaskRow {
+        id: "t1".into(),
+        round: 1,
+        ..Default::default()
+    });
+    app.apply_update(reply("plan-b", 3, generation));
+    app.apply_update(reply("plan-a", 2, generation));
+    assert!(
+        app.conversation_states[&conversation]
+            .details
+            .as_ref()
+            .unwrap()
+            .task
+            .is_none()
+    );
+    // The inactive conversation uses its own round, not the active one's.
+    app.apply_update(reply("plan-a", 3, generation));
+    assert_eq!(
+        app.conversation_states[&conversation]
+            .details
+            .as_ref()
+            .unwrap()
+            .task
+            .as_ref()
+            .unwrap()["round"],
+        3
+    );
+    app.open(conversation.clone());
+    // A→B→A changes the poller's generation; the saved request remains valid.
+    app.apply_update(reply("plan-a", 3, generation));
+    assert_eq!(
+        app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
+        "saved response"
+    );
+}
+
+#[test]
+fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
+    use antislop::lean::tui::details::CHECKS;
+    let mut app = App::test_app();
+    app.view.plan = Some("p1".into());
+    app.view.tasks.push(antislop::lean::tui::view::TaskRow {
+        id: "t1".into(),
+        round: 1,
+        ..Default::default()
+    });
+    app.open_details("worker:t1".into());
+    app.details.as_mut().unwrap().tab = CHECKS;
+    let mut issued = Vec::new();
+    for round in 1..=3 {
+        if round > 1 {
+            app.apply_update(Update::Events {
+                conversation:"test-conv".into(), generation:1,
+                events:vec![json!({"seq":round,"kind":"task","payload":{"id":"t1","task":"u1","status":"verifying","round":round}})],
+                idle:false, autonomous:false,
+            });
+        }
+        issued.push((round, app.task_request_id));
+        for &(reply_round, request_id) in issued.iter().rev() {
+            app.apply_update(Update::Task {
+                conversation:"test-conv".into(), plan:Some("p1".into()), generation:1,
+                request_id, key:"worker:t1".into(), round:reply_round,
+                task:json!({"round":reply_round,"checks":[{"id":format!("round-{reply_round}") }]}),
+            });
+        }
+        assert_eq!(
+            app.details.as_ref().unwrap().task.as_ref().unwrap()["checks"][0]["id"],
+            format!("round-{round}")
+        );
+    }
+}
+
+#[test]
+fn selection_at_minimum_terminal_with_real_ascii_and_no_color_environment() {
+    use antislop::lean::tui::selection::TextSelection;
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    if std::env::var_os("ANTISLOP_SELECTION_ENV_CHILD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "selection_at_minimum_terminal_with_real_ascii_and_no_color_environment",
+            ])
+            .env("ANTISLOP_SELECTION_ENV_CHILD", "1")
+            .env("NO_COLOR", "1")
+            .env("ANTISLOP_ASCII", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        return;
+    }
+    let area = Rect::new(0, 0, 12, 5);
+    let render = || {
+        let mut buffer = Buffer::empty(area);
+        for (y, row) in antislop::lean::tui::view::wrap("abcdefghij👩‍👩‍👧‍👦café", 12)
+            .iter()
+            .enumerate()
+        {
+            buffer.set_string(0, y as u16, row, Style::default().fg(Color::Red));
+        }
+        buffer
+    };
+    let mut selection = TextSelection::default();
+    for _ in 0..2 {
+        let mut buffer = render();
+        selection.draw_scrolled(&mut buffer, Some(area), "wrapped".into(), 0);
+        let mouse = |kind, column, row| MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 11, 0));
+        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 3, 1));
+        selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 3, 1));
+        selection.draw_scrolled(&mut buffer, Some(area), "wrapped".into(), 0);
+        without_color(&mut buffer);
+        in_ascii(&mut buffer);
+        assert_eq!(selection.text().as_deref(), Some("👩‍👩‍👧‍👦\ncafé"));
+        assert!(buffer[(10, 0)].modifier.contains(Modifier::REVERSED));
+        assert_eq!(buffer[(10, 0)].fg, Color::Reset);
+        let mut tiny = Buffer::empty(Rect::new(0, 0, 11, 4));
+        selection.draw_scrolled(&mut tiny, None, "terminal-too-small".into(), 0);
+        assert!(selection.text().is_none());
+    }
+}

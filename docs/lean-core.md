@@ -369,7 +369,7 @@ directory to run both. The socket is `<state>/core.sock`, or
   report to the orchestrator stay pinned to it even if another plan is
   proposed meanwhile. Queuing a plan is one transaction.
 - A failed or skipped task skips everything that depends on it, transitively.
-  A failed task's report keeps the agent's error.
+  A failed task's report keeps the controlled agent failure description and points to daemon stderr for the raw cause.
 - A verdict that approves while listing high or medium findings is a
   rejection. A task verifier's obligations are the task's risks (`R1`…),
   the checks of every verification (`V1`…: each requirement with its
@@ -739,7 +739,7 @@ worker/verifier role addresses or sessions.
 
 The t12 fixes were reread in daemon::serve, trust::Registry::write and
 agent::persisted_error. Their existing untrusted-entrypoint/prepared-database,
-symlink and redaction tests remain in the full suite. The t13 session-cache and
+symlink and diagnostic-separation tests remain in the full suite. The t13 session-cache and
 layout-cache tests verify invalidation for changed content, width, search and
 raw display. Config editor tests cover drafts on transport/validation failures,
 external edits, all editable field paths, global-file selection, and running
@@ -747,3 +747,19 @@ versus new turns. Selection tests cover graphemes, scrolling, content changes
 and modal isolation. These are concrete contract and counterexample checks;
 a fresh worker run is recorded, not a claim that an independent read-only
 verifier executed commands.
+
+Process failures keep a controlled description in the turn and `turn_finished`
+event; the turn's provider and failed/cancelled status remain structured fields.
+The agent's `process_exit` event retains the numeric exit code or signal separately.
+The full process failure cause (including the bounded stderr tail and exit status
+when available) is written to the daemon's stderr, rather than to SQLite. This
+stream can contain credentials supplied by the CLI and must be handled as raw
+diagnostics. The normal background launcher redirects it to the state's
+`daemon.log`; it is not copied into conversation events, task reports or prompts. A diagnostic write failure is stated in the persisted description.
+
+Check-event refreshes in the same round use `task_checks` with conversation, plan and
+task authorization. The response contains only `id`, `round`, and `checks`;
+it does not read reports or calculate filesystem freshness. Initial task details, verdict/task events,
+and changes of round retain the full `task` read and its freshness contract.
+A failed details request is retried on the next event batch, including an empty
+batch; task verdict events also invalidate an open Checks panel in the same round.

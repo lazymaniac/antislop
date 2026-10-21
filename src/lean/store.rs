@@ -1740,6 +1740,16 @@ impl Store {
         .collect()
     }
 
+    /// A compact current-round projection: no report/spec decoding or Git IO.
+    pub fn task_checks_in_plan(&self, plan: &str, task: &str) -> Result<Value> {
+        let (id, round): (String, u32) = self.db().query_row(
+            "SELECT id,round FROM tasks WHERE plan_id=?1 AND (id=?2 OR json_extract(spec, '$.id')=?2) ORDER BY position LIMIT 1",
+            params![plan, task],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(serde_json::json!({"id":id,"round":round,"checks":self.checks(&id, round)?}))
+    }
+
     /// Finds one task within a plan by UUID or the orchestrator's local id.
     pub fn task_in_plan_by_id(&self, plan_id: &str, task_id: &str) -> Result<Option<Task>> {
         // Return just one id, rather than decoding every task's reports and
@@ -2380,6 +2390,33 @@ mod tests {
                 .unwrap()
                 .get("feedback")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn checks_projection_does_not_decode_reports_or_other_task_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("core.db")).unwrap();
+        let conversation = store.create_conversation("/unused-project").unwrap();
+        store.db().execute(
+            "INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,round,report,verdict,created_ms) VALUES('u1',?1,'p1',0,'{\"id\":\"t1\"}','verifying',3,?2,'invalid json',0)",
+            params![conversation.id, "report".repeat(100_000)],
+        ).unwrap();
+        store
+            .set_check("u1", 2, "V01", "settled", Some("issue"), "old")
+            .unwrap();
+        store
+            .set_check("u1", 3, "V01", "settled", Some("ok"), "current")
+            .unwrap();
+        let projection = store.task_checks_in_plan("p1", "t1").unwrap();
+        assert_eq!(
+            projection,
+            serde_json::json!({"id":"u1","round":3,"checks":[{"id":"V01","state":"settled","status":"ok","note":"current"}]})
+        );
+        assert!(store.task_checks_in_plan("other-plan", "u1").is_err());
+        assert!(
+            store.task_in_plan_by_id("p1", "t1").is_err(),
+            "full read decodes the malformed verdict"
         );
     }
 

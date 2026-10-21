@@ -157,6 +157,9 @@ pub struct Details {
     /// The task round the last task fetch was issued for, so a reply for a
     /// round that already moved on can be dropped and refetched, not shown.
     pub fetched_round: Option<u64>,
+    /// Request identity belongs to the saved details, including across A→B→A.
+    pub fetched_generation: Option<u64>,
+    pub fetched_plan: Option<String>,
     /// The selected comment on the Comments tab.
     pub comment: usize,
     /// The selected check on the Checks tab.
@@ -165,6 +168,7 @@ pub struct Details {
     pub reveal_check: bool,
     /// How many check events the last task fetch had seen.
     pub fetched_checks: u64,
+    pub fetched_task_events: u64,
     /// Scroll memory per (agent_key, tab_index)
     pub scroll_memory: HashMap<(String, usize), usize>,
     /// Query memory per (agent_key, tab_index)
@@ -188,6 +192,17 @@ pub struct Details {
 }
 
 impl Details {
+    pub(super) fn load_task(&mut self, mut task: Value, checks_only: bool) {
+        if checks_only {
+            if let Some(complete) = &mut self.task {
+                complete["checks"] = task["checks"].take();
+                complete["round"] = task["round"].take();
+            }
+        } else {
+            self.task = Some(task);
+        }
+    }
+
     pub fn new(key: String) -> Self {
         Details {
             text_area: Default::default(),
@@ -196,10 +211,13 @@ impl Details {
             scroll: 0,
             task: None,
             fetched_round: None,
+            fetched_generation: None,
+            fetched_plan: None,
             comment: 0,
             check: 0,
             reveal_check: false,
             fetched_checks: 0,
+            fetched_task_events: 0,
             scroll_memory: HashMap::new(),
             query_memory: HashMap::new(),
             query: String::new(),
@@ -260,6 +278,8 @@ impl Details {
         // A different element is a different task: its old record is gone.
         self.task = None;
         self.fetched_round = None;
+        self.fetched_generation = None;
+        self.fetched_plan = None;
         self.scroll = *self
             .scroll_memory
             .get(&(self.key.clone(), self.tab))

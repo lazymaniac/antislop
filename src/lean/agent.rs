@@ -75,6 +75,11 @@ pub enum Event {
     Process {
         pid: u32,
     },
+    /// Controlled process status, safe to retain independently of diagnostics.
+    ProcessExit {
+        code: Option<i32>,
+        signal: Option<i32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -135,7 +140,7 @@ pub fn run(
         // A retry is only safe while the turn has shown nothing but its pid.
         let mut progressed = false;
         let result = run_once(spec, prompt, cancel, &mut |event| {
-            progressed |= !matches!(event, Event::Process { .. });
+            progressed |= !matches!(event, Event::Process { .. } | Event::ProcessExit { .. });
             on_event(event);
         });
         match &result {
@@ -230,6 +235,11 @@ fn run_once(
         }
     }
     let status = child.wait()?;
+    use std::os::unix::process::ExitStatusExt;
+    on_event(Event::ProcessExit {
+        code: status.code(),
+        signal: status.signal(),
+    });
     // Nothing the turn started outlives it.
     // SAFETY: signals the process group this runtime created for the turn.
     unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
@@ -284,7 +294,7 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
                 let sandbox = if read_only {
                     "read-only"
                 } else {
-                    "danger-full-access"
+                    "workspace-write"
                 };
                 command.arg("-c").arg(format!("sandbox_mode=\"{sandbox}\""));
                 command.arg("-c").arg(NO_CODEX_SUBAGENTS);
@@ -304,7 +314,7 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
                 .arg(if read_only {
                     "read-only"
                 } else {
-                    "danger-full-access"
+                    "workspace-write"
                 });
             for dir in &spec.add_dirs {
                 command.arg("--add-dir").arg(dir);
@@ -535,35 +545,17 @@ fn tail(text: &str, max: usize) -> String {
 /// Longest tool output or reasoning kept in an event.
 pub const OUTPUT: usize = 2000;
 
-/// Bound persisted failure diagnostics and remove known credentials inherited
-/// by the CLI. This is best effort: arbitrary secrets in CLI output cannot be
-/// inferred from their content alone.
+/// Keep arbitrary CLI diagnostics out of SQLite while exposing the full cause
+/// on the daemon's diagnostic stream. No secret inference is involved.
 pub(crate) fn persisted_error(text: &str) -> String {
-    redact_error(
-        text,
-        std::env::vars_os().filter_map(|(name, value)| {
-            let name = name.to_string_lossy().to_ascii_uppercase();
-            (name.contains("TOKEN")
-                || name.contains("SECRET")
-                || name.contains("PASSWORD")
-                || name.contains("API_KEY")
-                || name.contains("PRIVATE_KEY"))
-            .then(|| value.into_string().ok())
-            .flatten()
-        }),
-    )
+    failure_diagnostic(text, &mut std::io::stderr())
 }
 
-fn redact_error(text: &str, secrets: impl Iterator<Item = String>) -> String {
-    let mut secrets: Vec<_> = secrets.filter(|value| !value.is_empty()).collect();
-    // Replace longer values first so overlapping credentials cannot leave a
-    // suffix visible. Redact before clipping to avoid leaking a cut prefix.
-    secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
-    let mut text = text.to_owned();
-    for secret in secrets {
-        text = text.replace(&secret, "[REDACTED]");
+fn failure_diagnostic(text: &str, output: &mut impl std::io::Write) -> String {
+    match writeln!(output, "agent process failure: {text}") {
+        Ok(()) => "agent process failed; raw cause written to daemon stderr".into(),
+        Err(_) => "agent process failed; could not write raw cause to daemon stderr".into(),
     }
-    clip(&text, OUTPUT)
 }
 
 /// The start of `text`, at most `limit` characters, marked when cut.
@@ -1044,18 +1036,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn persisted_diagnostics_redact_before_clipping() {
-        let secret = "credential".repeat(300);
-        let text = format!("login failed: {secret}; retry login");
-        assert_eq!(
-            redact_error(&text, [secret].into_iter()),
-            "login failed: [REDACTED]; retry login"
-        );
-        assert!(redact_error(&"x".repeat(5000), std::iter::empty()).len() < 2100);
-        assert_eq!(
-            redact_error("abcdefgh", ["abc".into(), "abcdefgh".into()].into_iter()),
-            "[REDACTED]"
-        );
+    fn persisted_diagnostics_exclude_unknown_secrets_and_keep_the_raw_cause() {
+        let raw =
+            "codex exited with status 7: https://user:file-only-password@host/token=encoded-secret";
+        let mut diagnostic = Vec::new();
+        let stored = failure_diagnostic(raw, &mut diagnostic);
+        assert!(!stored.contains("file-only-password"));
+        assert!(!stored.contains("encoded-secret"));
+        assert!(stored.contains("daemon stderr"));
+        assert!(String::from_utf8(diagnostic).unwrap().contains(raw));
     }
 
     #[test]
@@ -1079,7 +1068,7 @@ mod tests {
                     .map(|arg| arg.to_string_lossy().into_owned())
                     .collect();
                 let expected = if access == Access::Write {
-                    "danger-full-access"
+                    "workspace-write"
                 } else {
                     "read-only"
                 };
@@ -1090,7 +1079,7 @@ mod tests {
                     "{args:?}"
                 );
                 assert!(args.iter().any(|arg| arg == "approval_policy=\"never\""));
-                assert!(!args.iter().any(|arg| arg.contains("workspace-write")));
+                assert!(!args.iter().any(|arg| arg.contains("danger-full-access")));
             }
         }
     }

@@ -31,6 +31,12 @@ fn copy_with_fallback(
         ));
     }
     let clean = sanitize(text);
+    if clean.len() > MAX_CLIPBOARD_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sanitized selection exceeds the 64 KiB clipboard limit",
+        ));
+    }
     match writer
         .write_all(clipboard_sequence(&clean).as_bytes())
         .and_then(|()| writer.flush())
@@ -142,6 +148,17 @@ mod tests {
         })
         .unwrap();
         assert!(output.len() < 90_000);
+    }
+
+    #[test]
+    fn expanded_tabs_cannot_exceed_clipboard_limit() {
+        let mut output = Vec::new();
+        let error = copy_with_fallback(&mut output, &"\t".repeat(MAX_CLIPBOARD_BYTES), |_| {
+            panic!("oversized sanitized text must not reach fallback")
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(output.is_empty());
     }
 
     struct BrokenWriter {
