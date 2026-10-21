@@ -1,3 +1,4 @@
+mod support;
 use antislop::{config::Config, lean::Core};
 use serde_json::Value;
 use std::path::Path;
@@ -55,6 +56,7 @@ def message(to, kind, text):
     let write = |name: &str, body: String| {
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
+        support::install_ledger_protocol(&path);
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         path
@@ -978,9 +980,14 @@ fn a_receipt_turn_does_not_occupy_the_plan_scheduler_slot() {
             &conversation,
             &[serde_json::json!({
                 "id": "t2", "title": "Second task", "goal": "read", "kind": "analysis",
+                "requirement_ids": ["fixture-requirement"], "criterion_ids": ["fixture.accept"],
                 "verifier": {"focus": "inspect"}
             })],
         )
+        .unwrap();
+    let run = core.store.latest_run(&conversation).unwrap().unwrap();
+    core.store
+        .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
         .unwrap();
     let accepted = core.accept_plan(&conversation, &tasks[0].plan_id);
     // Always release the fixture, including when an assertion would fail.
@@ -1042,5 +1049,296 @@ fn explicit_task_uuids_keep_mail_with_historical_agents_and_their_conversation()
     assert_eq!(
         core.store.plan(&original.plan_id).unwrap()[0].status,
         "approved"
+    );
+}
+
+#[test]
+fn direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns() {
+    use antislop::lean::store::AgentMessage;
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        r#"    answer = verdict(True) if "The worker's updated report:" in prompt else ('changed report' if 'make correction' in prompt else 'initial report')"#,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("initial approval", || core.is_idle(&conversation));
+    let first = core.store.latest_plan(&conversation).unwrap().remove(0);
+    let mut message = AgentMessage {
+        conversation: conversation.clone(),
+        plan: Some(first.plan_id.clone()),
+        recipient: format!("worker:{}", first.id),
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        expected_round: Some(first.round),
+        expected_run: None,
+        text: "make correction".into(),
+    };
+    let receipt = core.send_to_agent(&message).unwrap();
+    assert_eq!(
+        core.send_to_agent(&message).unwrap()["mail"],
+        receipt["mail"]
+    );
+    wait_until("corrected and verified", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .task_by_id(&first.id)
+                .unwrap()
+                .is_some_and(|task| task.round > first.round && task.status == "approved")
+    });
+    let corrected = core.store.task_by_id(&first.id).unwrap().unwrap();
+    assert_eq!(corrected.report.as_deref(), Some("changed report"));
+    assert_eq!(
+        core.store.task_round(&first.id, first.round).unwrap()["report"],
+        "initial report"
+    );
+    let before = prompts(dir.path()).len();
+    message.recipient = format!("verifier:{}", first.id);
+    message.operation_id = uuid::Uuid::new_v4().to_string();
+    message.expected_round = Some(corrected.round);
+    message.text = "recheck correction".into();
+    core.send_to_agent(&message).unwrap();
+    wait_until("rechecked", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .task_by_id(&first.id)
+                .unwrap()
+                .is_some_and(|task| task.round > corrected.round && task.status == "approved")
+    });
+    let rechecked = core.store.task_by_id(&first.id).unwrap().unwrap();
+    assert_eq!(rechecked.report, corrected.report);
+    let later = prompts(dir.path());
+    assert!(
+        !later[before..]
+            .iter()
+            .any(|(_, prompt)| prompt.contains("receipt-only"))
+    );
+    assert!(
+        later[before..]
+            .iter()
+            .any(|(_, prompt)| prompt.contains("recheck correction")
+                && prompt.contains("account again for your obligations"))
+    );
+}
+
+#[test]
+fn direct_worker_correction_invalidates_and_recomputes_the_dependency_chain() {
+    use antislop::lean::store::AgentMessage;
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Source'),task('t2', 'Consumer', ['t1']))",
+        r#"    if "The worker's updated report:" in prompt:
+        answer = verdict(True)
+    elif "make correction" in prompt:
+        answer = 'new upstream result'
+    elif "new upstream result" in prompt:
+        answer = 'consumer used new result'
+    else:
+        answer = 'initial report'"#,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("initial chain", || core.is_idle(&conversation));
+    let initial = core.store.latest_plan(&conversation).unwrap();
+    let source = &initial[0];
+    core.send_to_agent(&AgentMessage {
+        conversation: conversation.clone(),
+        plan: Some(source.plan_id.clone()),
+        recipient: format!("worker:{}", source.id),
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        expected_round: Some(source.round),
+        expected_run: None,
+        text: "make correction".into(),
+    })
+    .unwrap();
+    wait_until("recomputed chain", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .latest_plan(&conversation)
+                .unwrap()
+                .iter()
+                .zip(&initial)
+                .all(|(task, old)| task.status == "approved" && task.round > old.round)
+    });
+    let updated = core.store.latest_plan(&conversation).unwrap();
+    assert_eq!(
+        updated[1].report.as_deref(),
+        Some("consumer used new result")
+    );
+    assert!(updated[1].input_generation > initial[1].input_generation);
+}
+
+#[test]
+fn full_agent_text_survives_exhausted_diagnostic_budget_and_old_size_thresholds() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+for _ in range(40):
+    print(json.dumps({"type":"item.completed","item":{"type":"reasoning","text":"x"*2000}}))
+answer = "ąe\u0301👩‍💻" * 300000
+"#,
+        "    answer = 'unused'",
+    );
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    let request = "full request 👩‍💻 ".repeat(3500);
+    core.send(&conversation, &request).unwrap();
+    wait_until("large response", || core.is_idle(&conversation));
+    let expected = "ąe\u{301}👩‍💻".repeat(300000);
+    assert!(expected.len() > antislop::transport::MAX_FRAME);
+    assert_eq!(
+        core.store
+            .messages_by(&conversation, "orchestrator", 0)
+            .unwrap()
+            .last()
+            .unwrap()
+            .text,
+        expected
+    );
+    let events = core.store.events_since(&conversation, 0, 500).unwrap();
+    assert!(events.iter().any(|event| {
+        event.payload["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("further output"))
+    }));
+    let prompt = events
+        .iter()
+        .find(|event| event.payload["type"] == "prompt")
+        .unwrap()
+        .payload["text"]
+        .as_str()
+        .unwrap();
+    assert!(prompt.contains(&request));
+    let streamed = events
+        .iter()
+        .filter(|event| event.payload["type"] == "text")
+        .filter_map(|event| event.payload["delta"].as_str())
+        .collect::<String>();
+    assert_eq!(streamed, expected);
+    assert_eq!(
+        events
+            .iter()
+            .find(|event| event.kind == "agent_final")
+            .unwrap()
+            .payload["text"],
+        expected
+    );
+}
+
+#[test]
+fn worker_message_during_verification_requires_another_round_before_approval() {
+    use antislop::lean::store::AgentMessage;
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        r#"    answer = verdict(True) if "The worker's updated report:" in prompt else ('corrected report' if 'correct during verification' in prompt else 'first report')"#,
+    );
+    let binary = dir.path().join("agy");
+    let script = std::fs::read_to_string(&binary).unwrap().replace(
+        "if review:\n    answer = verdict(True)",
+        "if review:\n    time.sleep(0.4)\n    answer = verdict(True)",
+    );
+    std::fs::write(binary, script).unwrap();
+    let conversation = run(&core, dir.path());
+    wait_until("verifier started", || {
+        core.store.latest_plan(&conversation).unwrap()[0].status == "verifying"
+    });
+    let task = core.store.latest_plan(&conversation).unwrap().remove(0);
+    core.send_to_agent(&AgentMessage {
+        conversation: conversation.clone(),
+        plan: Some(task.plan_id.clone()),
+        recipient: format!("worker:{}", task.id),
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        expected_round: Some(task.round),
+        expected_run: None,
+        text: "correct during verification".into(),
+    })
+    .unwrap();
+    wait_until("correction verified", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .task_by_id(&task.id)
+                .unwrap()
+                .is_some_and(|updated| updated.status == "approved" && updated.round > task.round)
+    });
+    assert_eq!(
+        core.store
+            .task_by_id(&task.id)
+            .unwrap()
+            .unwrap()
+            .report
+            .as_deref(),
+        Some("corrected report")
+    );
+}
+
+#[test]
+fn direct_orchestrator_message_uses_normal_workflow_and_validates_the_run() {
+    use antislop::lean::store::AgentMessage;
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        "answer = 'response: ' + prompt.splitlines()[-1]",
+        "    answer = 'unused'",
+    );
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    core.send(&conversation, "first question").unwrap();
+    wait_until("first answer", || core.is_idle(&conversation));
+    let first = core
+        .store
+        .last_turn(&conversation, "orchestrator")
+        .unwrap()
+        .unwrap();
+    let message = AgentMessage {
+        conversation: conversation.clone(),
+        plan: None,
+        recipient: "orchestrator".into(),
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        expected_round: None,
+        expected_run: Some(first.id.clone()),
+        text: "next question".into(),
+    };
+    core.send_to_agent(&message).unwrap();
+    wait_until("direct answer", || core.is_idle(&conversation));
+    assert_eq!(
+        core.store
+            .messages_by(&conversation, "orchestrator", 0)
+            .unwrap()
+            .last()
+            .unwrap()
+            .text,
+        "response: next question"
+    );
+    assert!(
+        core.store.mail(&conversation).unwrap()[0]
+            .delivered_turn
+            .is_some()
+    );
+    assert!(
+        !prompts(dir.path())
+            .iter()
+            .any(|(_, prompt)| prompt.contains("receipt-only"))
+    );
+    core.send_to_agent(&message).unwrap();
+    assert_eq!(
+        core.store
+            .messages_by(&conversation, "user", 0)
+            .unwrap()
+            .len(),
+        2
+    );
+    let stale = AgentMessage {
+        operation_id: uuid::Uuid::new_v4().to_string(),
+        ..message
+    };
+    assert!(
+        core.send_to_agent(&stale)
+            .unwrap_err()
+            .to_string()
+            .contains("stale run")
     );
 }

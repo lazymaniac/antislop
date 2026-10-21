@@ -5,20 +5,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// Historical paste threshold, retained for API compatibility; no longer enforced.
 pub const MAX_PASTE_BYTES: usize = 64 * 1024;
 
-/// Normalizes paste text: replaces `\r\n` then standalone `\r` with `\n`,
-/// caps length at 64 KB, and sanitizes via `clean()`.
+/// Normalizes line endings and sanitizes terminal controls without clipping text.
 pub fn sanitize_paste(raw: &str) -> String {
-    let mut normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
-    if normalized.len() > MAX_PASTE_BYTES {
-        let mut end = MAX_PASTE_BYTES;
-        while end > 0 && !normalized.is_char_boundary(end) {
-            end -= 1;
-        }
-        normalized.truncate(end);
-    }
-    clean(&normalized)
+    clean(&raw.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
 /// Normalizes single-line paste (e.g. for palette / picker search queries):

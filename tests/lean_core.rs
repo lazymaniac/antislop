@@ -1074,7 +1074,7 @@ fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
     core.send(&conversation.id, "sleepy").unwrap();
     let log = dir.path().join("calls.log");
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !log.exists() {
+    while !std::fs::read_to_string(&log).is_ok_and(|text| text.ends_with("\n---\n")) {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(20));
     }

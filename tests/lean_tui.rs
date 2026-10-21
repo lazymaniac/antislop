@@ -457,7 +457,7 @@ fn tui_visual_lines_and_cjk_double_width() {
 }
 
 #[test]
-fn tui_paste_sanitization_and_character_boundary_capping() {
+fn tui_paste_sanitization_preserves_full_unicode_text() {
     // Normalization of CRLF and CR
     let raw = "linia 1\r\nlinia 2\rlinia 3";
     let sanitized = sanitize_paste(raw);
@@ -467,14 +467,14 @@ fn tui_paste_sanitization_and_character_boundary_capping() {
     let single = sanitize_single_line_paste("  polecenie\r\n parametr  \n");
     assert_eq!(single, "polecenie  parametr");
 
-    // 64 KB cap truncates cleanly without splitting multi-byte UTF-8
+    // Large Unicode pastes remain intact.
     let unit = "zażółć gęślą jaźń ";
     let repeat_count = (MAX_PASTE_BYTES / unit.len()) + 10;
     let huge = unit.repeat(repeat_count);
     assert!(huge.len() > MAX_PASTE_BYTES);
 
     let capped = sanitize_paste(&huge);
-    assert!(capped.len() <= MAX_PASTE_BYTES);
+    assert_eq!(capped, huge);
     assert!(capped.is_char_boundary(capped.len()));
 }
 
@@ -613,10 +613,11 @@ fn app_interaction_sequences_editing_and_paste() {
     app.paste("wklejka 1\r\nwklejka 2\r");
     assert_eq!(app.input.text, "wklejka 1\nwklejka 2\n");
 
-    // 6. Huge paste cap and notice
+    // 6. Large paste remains intact without a truncation notice
     let big = "a".repeat(MAX_PASTE_BYTES + 100);
     app.paste(&big);
-    assert_eq!(
+    assert!(app.input.text.ends_with(&big));
+    assert_ne!(
         app.notice.as_deref(),
         Some("Pasted text truncated to 64 KB")
     );
@@ -634,7 +635,11 @@ fn app_interaction_sequences_editing_and_paste() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text.contains("Pasted text"));
+    assert!(
+        text.contains("aaaa"),
+        "the full paste remains visible in the input"
+    );
+    assert!(!text.contains("truncated to"));
 }
 
 #[test]
@@ -1075,9 +1080,9 @@ fn app_graph_details_diff_navigation_and_search() {
 
     // Details tab navigation
     let tab0 = app.details.as_ref().unwrap().tab;
-    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_ne!(app.details.as_ref().unwrap().tab, tab0);
-    app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     assert_eq!(app.details.as_ref().unwrap().tab, tab0);
 
     // Open Diff from Details
@@ -1966,6 +1971,7 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
 
     // 3c. Task update for Conv-A
     app.apply_update(Update::Task {
+        documents: Default::default(),
         conversation: "conv-A".into(),
         plan: None,
         generation: 1,
@@ -2238,6 +2244,7 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
 
     // 4c. Details and Diff arrive after A -> B -> A
     app.apply_update(Update::Task {
+        documents: Default::default(),
         conversation: "conv-a".into(),
         plan: None,
         generation: 1,
@@ -5458,6 +5465,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
     assert_eq!(app.details.as_ref().unwrap().fetched_round, Some(1));
     // A late reply for the previous round is dropped, not shown.
     app.apply_update(Update::Task {
+        documents: Default::default(),
         conversation: "test-conv".into(),
         plan: Some("p1".into()),
         generation: 1,
@@ -5469,6 +5477,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
     assert!(app.details.as_ref().unwrap().task.is_none());
     // The reply for the round the fetch was issued for is taken.
     app.apply_update(Update::Task {
+        documents: Default::default(),
         conversation: "test-conv".into(),
         plan: Some("p1".into()),
         generation: 1,
@@ -5503,6 +5512,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
     );
     // The new round's record is accepted and the old one can no longer land.
     app.apply_update(Update::Task {
+        documents: Default::default(),
         conversation: "test-conv".into(),
         plan: Some("p1".into()),
         generation: 1,
@@ -5517,6 +5527,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         "a round-1 reply cannot overwrite round-2 details"
     );
     app.apply_update(Update::Task {
+        documents: Default::default(),
         conversation: "test-conv".into(),
         plan: Some("p1".into()),
         generation: 1,
@@ -6880,6 +6891,7 @@ fn task_replies_match_saved_conversation_plan_round_and_request_generation() {
     let generation = app.generation;
     let conversation = app.conversation.clone();
     let reply = |plan: &str, round, generation| Update::Task {
+        documents: Default::default(),
         conversation: conversation.clone(),
         plan: Some(plan.into()),
         generation,
@@ -6958,6 +6970,7 @@ fn checks_three_rounds_ignore_reverse_ordered_old_replies() {
         issued.push((round, app.task_request_id));
         for &(reply_round, request_id) in issued.iter().rev() {
             app.apply_update(Update::Task {
+        documents: Default::default(),
                 conversation:"test-conv".into(), plan:Some("p1".into()), generation:1,
                 request_id, key:"worker:t1".into(), round:reply_round,
                 task:json!({"round":reply_round,"checks":[{"id":format!("round-{reply_round}") }]}),
@@ -7066,6 +7079,7 @@ fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
     app.apply_update(batch());
     assert_eq!(app.task_request_id, issued + 1);
     app.apply_update(Update::Task {
+        documents: Default::default(),
         conversation: "test-conv".into(),
         generation: 1,
         plan: Some("p1".into()),
@@ -7107,6 +7121,7 @@ fn session_card_keeps_summary_fixed_and_follows_until_manually_scrolled() {
         },
     );
     app.details = Some(Details::new("worker:t1".into()));
+    app.details.as_mut().unwrap().panel_expanded[0] = true;
     let mut terminal = Terminal::new(TestBackend::new(90, 18)).unwrap();
     let screen = |terminal: &Terminal<TestBackend>| -> Vec<String> {
         terminal
@@ -7120,14 +7135,14 @@ fn session_card_keeps_summary_fixed_and_follows_until_manually_scrolled() {
     terminal.draw(|f| app.draw(f)).unwrap();
     let first = screen(&terminal);
     assert!(first[1].contains("Compact summary"));
-    assert!(first[2].contains("working"));
+    assert!(first[2].contains("Round 1"));
     assert!(first.iter().any(|line| line.contains("message 099")));
     assert!(
         first
             .iter()
             .any(|line| line.contains("Session") && line.contains("LIVE"))
     );
-    assert!(app.details.as_ref().unwrap().text_area.y >= 5);
+    assert!(app.details.as_ref().unwrap().text_area.y >= 4);
     let area = app.details.as_ref().unwrap().text_area;
     let thumb = antislop::lean::tui::theme::Theme::from_env().glyphs().thumb;
     assert_eq!(
@@ -7182,14 +7197,14 @@ fn session_card_keeps_summary_fixed_and_follows_until_manually_scrolled() {
     );
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert!(!app.details.as_ref().unwrap().follow);
-    app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
     terminal.draw(|f| app.draw(f)).unwrap();
     assert!(
         screen(&terminal)
             .iter()
             .any(|line| line.contains("Full goal available on demand"))
     );
-    app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
     terminal.draw(|f| app.draw(f)).unwrap();
     assert!(
         screen(&terminal)
@@ -7454,5 +7469,59 @@ fn configuration_kind_picker_includes_every_missing_kind() {
     assert!(
         !editor.is_dirty(),
         "browsing and cancelling must preserve the draft"
+    );
+}
+
+#[test]
+fn inspector_round_navigation_and_role_drafts_survive_reopening() {
+    use antislop::lean::tui::view::TaskRow;
+    let mut app = App::test_app();
+    app.view.plan = Some("plan".into());
+    let uuid = uuid::Uuid::new_v4().to_string();
+    app.view.tasks.push(TaskRow {
+        id: "t1".into(),
+        uuid: Some(uuid.clone()),
+        round: 2,
+        ..Default::default()
+    });
+    app.open_details("worker:t1".into());
+    {
+        let details = app.details.as_mut().unwrap();
+        details.available_rounds = vec![1, 2];
+        details.task = Some(json!({"round":2,"id":uuid}));
+    }
+    app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    app.paste("worker 👩‍💻e\u{301}");
+    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+    app.paste("verifier draft");
+    let details = app.details.as_ref().unwrap();
+    let worker = (app.conversation.clone(), format!("worker:{uuid}"));
+    let verifier = (app.conversation.clone(), format!("verifier:{uuid}"));
+    assert_eq!(
+        details.drafts.borrow()[&worker].input.text,
+        "worker 👩‍💻e\u{301}"
+    );
+    assert_eq!(
+        details.drafts.borrow()[&verifier].input.text,
+        "verifier draft"
+    );
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert_eq!(app.details.as_ref().unwrap().selected_round, Some(1));
+    app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.details.as_ref().unwrap().selected_round, Some(1));
+    app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert_eq!(app.details.as_ref().unwrap().selected_round, Some(1));
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.open_details("worker:t1".into());
+    let details = app.details.as_ref().unwrap();
+    assert_eq!(details.selected_round, None);
+    assert_eq!(
+        details.drafts.borrow()[&worker].input.text,
+        "worker 👩‍💻e\u{301}"
+    );
+    assert_eq!(
+        details.drafts.borrow()[&verifier].input.text,
+        "verifier draft"
     );
 }

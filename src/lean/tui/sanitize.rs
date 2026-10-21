@@ -5,83 +5,95 @@
 //! Preserve readable newlines and tabs (expanded to spaces).
 //! An unfinished escape or control string consumes the remainder of the input.
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum State {
+    #[default]
+    Text,
+    Escape,
+    Csi,
+    String,
+    StringEscape,
+}
+
+/// Carries escape parsing across transport chunks so an OSC or CSI sequence
+/// cannot leak into the display when it crosses a chunk boundary.
+#[derive(Default)]
+pub(super) struct Sanitizer {
+    state: State,
+}
+
+impl Sanitizer {
+    pub(super) fn push(&mut self, input: &str) -> String {
+        let mut output = String::with_capacity(input.len());
+        for c in input.chars() {
+            self.state = match self.state {
+                State::Text => match c {
+                    '\u{1b}' => State::Escape,
+                    // C1 CSI
+                    '\u{9b}' => State::Csi,
+                    // C1 DCS, OSC, SOS, PM, APC
+                    '\u{90}' | '\u{9d}' | '\u{98}' | '\u{9e}' | '\u{9f}' => State::String,
+                    '\n' => {
+                        output.push('\n');
+                        State::Text
+                    }
+                    '\t' => {
+                        output.push_str("    ");
+                        State::Text
+                    }
+                    // Bidirectional text override and isolate controls:
+                    // U+202A..=U+202E (LRE, RLE, PDF, LRO, RLO)
+                    // U+2066..=U+2069 (LRI, RLI, FSI, PDI)
+                    // U+200E, U+200F (LRM, RLM)
+                    // U+061C (ALM)
+                    '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{061c}' => State::Text,
+                    // Other control characters (C0: 0x00..=0x1F, 0x7F; C1: 0x80..=0x9F)
+                    c if c.is_control() => State::Text,
+                    c => {
+                        output.push(c);
+                        State::Text
+                    }
+                },
+                State::Escape => match c {
+                    '[' => State::Csi,
+                    // OSC (']'), DCS ('P'), SOS ('X'), PM ('^'), APC ('_')
+                    ']' | 'P' | '_' | '^' | 'X' => State::String,
+                    _ => State::Text,
+                },
+                State::Csi => {
+                    // CSI parameter and intermediate bytes: 0x20..=0x3F. Final byte: 0x40..=0x7E.
+                    if ('\u{40}'..='\u{7e}').contains(&c) {
+                        State::Text
+                    } else {
+                        State::Csi
+                    }
+                }
+                State::String => match c {
+                    // String terminator: BEL ('\x07') or C1 ST ('\u{9c}')
+                    '\u{7}' | '\u{9c}' => State::Text,
+                    // 7-bit ST: ESC '\'
+                    '\u{1b}' => State::StringEscape,
+                    _ => State::String,
+                },
+                State::StringEscape => {
+                    if c == '\\' {
+                        State::Text
+                    } else {
+                        State::String
+                    }
+                }
+            };
+        }
+        output
+    }
+}
+
 pub fn sanitize(input: &str) -> String {
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum State {
-        Text,
-        Escape,
-        Csi,
-        String,
-        StringEscape,
-    }
-
-    let mut state = State::Text;
-    let mut output = String::with_capacity(input.len());
-
-    for c in input.chars() {
-        state = match state {
-            State::Text => match c {
-                '\u{1b}' => State::Escape,
-                // C1 CSI
-                '\u{9b}' => State::Csi,
-                // C1 DCS, OSC, SOS, PM, APC
-                '\u{90}' | '\u{9d}' | '\u{98}' | '\u{9e}' | '\u{9f}' => State::String,
-                '\n' => {
-                    output.push('\n');
-                    State::Text
-                }
-                '\t' => {
-                    output.push_str("    ");
-                    State::Text
-                }
-                // Bidirectional text override and isolate controls:
-                // U+202A..=U+202E (LRE, RLE, PDF, LRO, RLO)
-                // U+2066..=U+2069 (LRI, RLI, FSI, PDI)
-                // U+200E, U+200F (LRM, RLM)
-                // U+061C (ALM)
-                '\u{202a}'..='\u{202e}'
-                | '\u{2066}'..='\u{2069}'
-                | '\u{200e}'
-                | '\u{200f}'
-                | '\u{061c}' => State::Text,
-                // Other control characters (C0: 0x00..=0x1F, 0x7F; C1: 0x80..=0x9F)
-                c if c.is_control() => State::Text,
-                c => {
-                    output.push(c);
-                    State::Text
-                }
-            },
-            State::Escape => match c {
-                '[' => State::Csi,
-                // OSC (']'), DCS ('P'), SOS ('X'), PM ('^'), APC ('_')
-                ']' | 'P' | '_' | '^' | 'X' => State::String,
-                _ => State::Text,
-            },
-            State::Csi => {
-                // CSI parameter and intermediate bytes: 0x20..=0x3F. Final byte: 0x40..=0x7E.
-                if ('\u{40}'..='\u{7e}').contains(&c) {
-                    State::Text
-                } else {
-                    State::Csi
-                }
-            }
-            State::String => match c {
-                // String terminator: BEL ('\x07') or C1 ST ('\u{9c}')
-                '\u{7}' | '\u{9c}' => State::Text,
-                // 7-bit ST: ESC '\'
-                '\u{1b}' => State::StringEscape,
-                _ => State::String,
-            },
-            State::StringEscape => {
-                if c == '\\' {
-                    State::Text
-                } else {
-                    State::String
-                }
-            }
-        };
-    }
-    output
+    Sanitizer::default().push(input)
 }
 
 /// [`sanitize`] collapsed to one printable line for fields a view renders

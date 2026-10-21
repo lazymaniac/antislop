@@ -21,6 +21,7 @@ pub enum Block {
     User(String),
     Reasoning(String),
     Text(String),
+    Final(String),
     Tool {
         name: String,
         detail: String,
@@ -182,7 +183,7 @@ pub fn render(provider: &str, blocks: &[Block], expand_prompts: bool) -> Vec<(St
                     text,
                     look.prompt,
                     "  ",
-                    PROMPT_LINES,
+                    usize::MAX,
                     Style::default().fg(Color::Cyan),
                 );
             }
@@ -196,7 +197,7 @@ pub fn render(provider: &str, blocks: &[Block], expand_prompts: bool) -> Vec<(St
                     dim().add_modifier(Modifier::ITALIC),
                 );
             }
-            Block::Text(text) => {
+            Block::Text(text) | Block::Final(text) => {
                 block(
                     &mut out,
                     text,
@@ -246,7 +247,7 @@ pub fn render(provider: &str, blocks: &[Block], expand_prompts: bool) -> Vec<(St
                     text,
                     "✉ ",
                     "  ",
-                    PROMPT_LINES,
+                    usize::MAX,
                     Style::default().fg(Color::Magenta),
                 );
             }
@@ -270,6 +271,102 @@ pub fn render(provider: &str, blocks: &[Block], expand_prompts: bool) -> Vec<(St
         }
     }
     out
+}
+
+/// Overview keeps the first prompt and the parser's final answer outside the
+/// collapsible chronological trace. Diagnostic events never enter this view.
+pub fn overview(provider: &str, blocks: &[Block], expanded: bool) -> Vec<(Style, String)> {
+    let first_prompt = blocks
+        .iter()
+        .position(|block| matches!(block, Block::Prompt(_)));
+    let final_index = blocks
+        .iter()
+        .rposition(|block| matches!(block, Block::Final(_)));
+    let final_text = final_index.and_then(|index| match &blocks[index] {
+        Block::Final(text) => Some(text.as_str()),
+        _ => None,
+    });
+    let mut duplicates = std::collections::HashSet::new();
+    for (index, block) in blocks.iter().enumerate() {
+        let Block::Final(answer) = block else {
+            continue;
+        };
+        if answer.is_empty() {
+            continue;
+        }
+        let mut remaining = answer.as_str();
+        let mut candidates = Vec::new();
+        for (index, block) in blocks[..index].iter().enumerate().rev() {
+            match block {
+                Block::Text(text) if remaining.ends_with(text) => {
+                    remaining = &remaining[..remaining.len() - text.len()];
+                    candidates.push(index);
+                    if remaining.is_empty() {
+                        break;
+                    }
+                }
+                Block::Tokens { .. } | Block::Note(_) | Block::End { .. } => {}
+                _ => break,
+            }
+        }
+        if remaining.is_empty() {
+            duplicates.extend(candidates);
+        }
+    }
+    let trace = blocks
+        .iter()
+        .enumerate()
+        .filter(|(index, block)| {
+            Some(*index) != first_prompt
+                && Some(*index) != final_index
+                && !duplicates.contains(index)
+                && matches!(
+                    block,
+                    Block::Prompt(_)
+                        | Block::User(_)
+                        | Block::Text(_)
+                        | Block::Final(_)
+                        | Block::Tool { .. }
+                        | Block::Mail(_)
+                )
+        })
+        .map(|(_, block)| block.clone())
+        .collect::<Vec<_>>();
+    let mut output = Vec::new();
+    if let Some(index) = first_prompt {
+        output.extend(render(provider, &blocks[index..=index], true));
+    }
+    if expanded {
+        output.push((dim(), "Session trace [-]".into()));
+        output.extend(render(provider, &trace, true));
+    } else {
+        let latest = trace
+            .last()
+            .map(|block| render(provider, std::slice::from_ref(block), true))
+            .and_then(|lines| {
+                lines
+                    .into_iter()
+                    .rev()
+                    .find(|(_, text)| !text.trim().is_empty())
+            })
+            .map_or_else(|| "waiting for activity".into(), |(_, text)| text);
+        output.push((dim(), format!("Session trace [+] · {latest}")));
+    }
+    if let Some(text) = final_text {
+        output.push((
+            Style::default().add_modifier(Modifier::BOLD),
+            "Final answer".into(),
+        ));
+        output.extend(render(provider, &[Block::Final(text.into())], true));
+    } else if let Some(Block::End { ok: false, text }) = blocks.last() {
+        output.push((dim(), format!("Session failed: {text}")));
+    } else if blocks
+        .iter()
+        .any(|block| matches!(block, Block::End { .. }))
+    {
+        output.push((dim(), "Legacy history: final answer was not recorded separately; earlier text may have been truncated.".into()));
+    }
+    output
 }
 
 #[cfg(test)]
@@ -375,5 +472,43 @@ mod tests {
         assert!(folded.contains("… +14 more lines"));
         let full = text(&render("codex", &[prompt], true));
         assert!(full.contains("p19") && !full.contains("more lines"));
+    }
+}
+
+#[cfg(test)]
+mod overview_tests {
+    use super::*;
+    #[test]
+    fn overview_keeps_prompt_and_final_outside_trace_and_omits_diagnostics() {
+        let prompt = "full prompt\n".repeat(2000);
+        let answer = "full final 👩‍💻\n".repeat(4000);
+        let blocks = vec![
+            Block::Prompt(prompt.clone()),
+            Block::Reasoning("hidden reasoning".into()),
+            Block::Tool {
+                name: "shell".into(),
+                detail: "check".into(),
+            },
+            Block::Output {
+                name: "shell".into(),
+                text: "hidden output".into(),
+                exit_code: Some(0),
+            },
+            Block::User("another instruction".into()),
+            Block::Text(answer.clone()),
+            Block::Final(answer.clone()),
+        ];
+        for expanded in [false, true] {
+            let text = overview("codex", &blocks, expanded)
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(text.matches("full prompt").count(), 2000);
+            assert_eq!(text.matches("full final").count(), 4000);
+            assert!(!text.contains("hidden reasoning"));
+            assert!(!text.contains("hidden output"));
+            assert_eq!(text.contains("Ran check"), expanded);
+        }
     }
 }

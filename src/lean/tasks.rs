@@ -10,6 +10,12 @@ use unicode_segmentation::UnicodeSegmentation;
 #[serde(deny_unknown_fields)]
 pub struct TaskSpec {
     pub id: String,
+    #[serde(default)]
+    pub requirement_ids: Vec<String>,
+    #[serde(default)]
+    pub criterion_ids: Vec<String>,
+    #[serde(default)]
+    pub plan_item_ids: Vec<String>,
     pub title: String,
     pub goal: String,
     /// One concise sentence describing the worker's task on the graph.
@@ -55,6 +61,7 @@ pub struct Verdict {
 pub const MAX_ROUNDS: u32 = 3;
 
 pub mod status {
+    pub const STALE: &str = "stale";
     pub const PROPOSED: &str = "proposed";
     pub const QUEUED: &str = "queued";
     pub const WORKING: &str = "working";
@@ -72,7 +79,7 @@ pub mod status {
     pub fn finished(status: &str) -> bool {
         matches!(
             status,
-            APPROVED | NEEDS_USER | FAILED | SKIPPED | CANCELLED | REVISED | WAITING
+            STALE | APPROVED | NEEDS_USER | FAILED | SKIPPED | CANCELLED | REVISED | WAITING
         )
     }
 }
@@ -257,15 +264,25 @@ pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskSpec>>>) {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Plan {
+        #[serde(default)]
+        run_id: Option<String>,
         tasks: Vec<TaskSpec>,
     }
     let plan = serde_json::from_str::<Plan>(body)
         .map_err(Error::from)
         .and_then(|plan| {
+            let _ = plan.run_id;
             validate(&plan.tasks)?;
             Ok(plan.tasks)
         });
     (text, Some(plan))
+}
+
+/// Explicit run binding in a planner proposal. Runtime checks ownership.
+pub fn proposed_run(answer: &str) -> Option<String> {
+    fenced(answer, "plan")
+        .and_then(|(_, body)| serde_json::from_str::<Value>(body).ok())
+        .and_then(|v| v["run_id"].as_str().map(str::to_owned))
 }
 
 /// One step of a ```recover block: how the orchestrator unblocks a task.
@@ -700,6 +717,24 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
             _ => (agent.title, agent.focus),
         };
         tasks.push(TaskSpec {
+            requirement_ids: tasks
+                .iter()
+                .flat_map(|t| t.requirement_ids.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            criterion_ids: tasks
+                .iter()
+                .flat_map(|t| t.criterion_ids.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            plan_item_ids: tasks
+                .iter()
+                .flat_map(|t| t.plan_item_ids.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
             id,
             title: agent.title.to_owned(),
             summary: Some(summary.to_owned()),
@@ -1476,12 +1511,9 @@ pub fn user_edits_note(files: &[String]) -> String {
     )
 }
 
-/// Longest report of one approved dependency put into a prompt.
-const UPSTREAM_LIMIT: usize = 6_000;
-
 /// What the tasks this one depends on concluded. Their reports live only in
 /// the runtime's store, out of reach of an agent reading files, so an
-/// approved dependency's report (cut to a bound) is handed over; a task with
+/// approved dependency's full report is handed over; a task with
 /// no approved dependency gets nothing.
 pub fn upstream_note(done: &[(&str, &str, &str)]) -> String {
     if done.is_empty() {
@@ -1492,10 +1524,6 @@ pub fn upstream_note(done: &[(&str, &str, &str)]) -> String {
          the record of that work, so do not ask those tasks for it again:\n",
     );
     for (id, title, report) in done {
-        let report = match report.char_indices().nth(UPSTREAM_LIMIT) {
-            Some((end, _)) => format!("{}\n[report truncated]", &report[..end]),
-            None => (*report).to_owned(),
-        };
         note.push_str(&format!("\n### {id}: {title}\n{report}\n"));
     }
     note
@@ -1689,16 +1717,6 @@ pub fn code_review_prompt(
     )
 }
 
-/// Longest user request handed to a reviewer in one prompt.
-const REQUEST_LIMIT: usize = 60_000;
-
-fn bounded(text: &str, limit: usize) -> String {
-    match text.char_indices().nth(limit) {
-        Some((end, _)) => format!("{}\n[truncated]", &text[..end]),
-        None => text.to_owned(),
-    }
-}
-
 pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskSpec]) -> String {
     format!(
         "You review a plan before any of it runs or the user sees it. The \
@@ -1706,7 +1724,7 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskSpec]) -> St
          you need yourself; work read-only. {OUTSIDE}\n\n\
          The user's request:\n<<<\n{}\n>>>\n\n\
          The orchestrator's plan:\n{}\n\n{}{}",
-        bounded(request, REQUEST_LIMIT),
+        request,
         plan_text(plan),
         PLAN_CHECKS,
         VERDICT_FORMAT
@@ -1719,10 +1737,7 @@ pub fn plan_review_followup(request: &str, plan: &[TaskSpec]) -> String {
         if request.is_empty() {
             String::new()
         } else {
-            format!(
-                "The user wrote since:\n<<<\n{}\n>>>\n\n",
-                bounded(request, REQUEST_LIMIT)
-            )
+            format!("The user wrote since:\n<<<\n{}\n>>>\n\n", request)
         },
         plan_text(plan),
         PLAN_CHECKS,
@@ -1765,9 +1780,7 @@ pub fn audit_prompt(project: &str, request: &str, results: &str) -> String {
          to check what the results claim; work read-only. {OUTSIDE}\n\n\
          The user's request:\n<<<\n{}\n>>>\n\n\
          Results of the plan that ran:\n{results}\n\n{}{}",
-        bounded(request, REQUEST_LIMIT),
-        AUDIT_CHECKS,
-        VERDICT_FORMAT
+        request, AUDIT_CHECKS, VERDICT_FORMAT
     )
 }
 
@@ -1777,10 +1790,7 @@ pub fn audit_followup(request: &str, results: &str) -> String {
         if request.is_empty() {
             String::new()
         } else {
-            format!(
-                "The user wrote since:\n<<<\n{}\n>>>\n\n",
-                bounded(request, REQUEST_LIMIT)
-            )
+            format!("The user wrote since:\n<<<\n{}\n>>>\n\n", request)
         },
         AUDIT_CHECKS,
         VERDICT_FORMAT
@@ -1900,13 +1910,12 @@ pub fn findings_text(findings: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn upstream_note_carries_bounded_reports() {
+    fn upstream_note_carries_full_reports() {
         assert_eq!(upstream_note(&[]), "");
-        let long = "é".repeat(UPSTREAM_LIMIT + 5);
+        let long = "é".repeat(60_005);
         let note = upstream_note(&[("t1", "Audit", "found F1"), ("t2", "Perf", &long)]);
         assert!(note.contains("### t1: Audit\nfound F1\n"));
-        assert!(note.ends_with("[report truncated]\n"));
-        assert!(note.chars().count() < 2 * UPSTREAM_LIMIT);
+        assert!(note.ends_with(&format!("{long}\n")));
     }
 
     #[test]
@@ -2058,6 +2067,9 @@ mod tests {
     #[test]
     fn parallel_peers_follow_long_dependency_chains() {
         let task = |at: usize, deps: Vec<String>| TaskSpec {
+            requirement_ids: vec![],
+            criterion_ids: vec![],
+            plan_item_ids: vec![],
             id: format!("t{at}"),
             depends_on: deps,
             ..serde_json::from_value(serde_json::json!({

@@ -7,9 +7,12 @@ pub mod clipboard;
 pub mod config;
 pub mod details;
 pub mod diffview;
+pub mod document;
 pub mod editor;
 pub mod graph;
 mod history;
+mod inspection;
+pub mod ledger;
 pub mod palette;
 pub mod planview;
 pub mod sanitize;
@@ -64,6 +67,19 @@ use view::{
 };
 
 pub enum Update {
+    AgentMessage {
+        conversation: String,
+        recipient: String,
+        operation: String,
+        text: String,
+        result: std::result::Result<Value, String>,
+    },
+    Ledger {
+        conversation: String,
+        request_id: u64,
+        kind: String,
+        reply: std::result::Result<Value, String>,
+    },
     Config {
         project: String,
         save: bool,
@@ -110,6 +126,7 @@ pub enum Update {
         key: String,
         round: u64,
         task: Value,
+        documents: std::collections::HashMap<String, document::Document>,
     },
     TaskFailed {
         conversation: String,
@@ -170,6 +187,7 @@ pub struct ConversationState {
     pub details: Option<Details>,
     pub diff: Option<DiffView>,
     pub plan_view: Option<PlanView>,
+    pub ledger_view: Option<ledger::LedgerView>,
     pub scroll: usize,
     pub task_request_id: u64,
     pub diff_request_id: u64,
@@ -191,6 +209,7 @@ pub struct App {
     pending_clipboard: Option<String>,
     pub config_editor: Option<config::ConfigEditor>,
     config_drafts: std::collections::HashMap<String, config::ConfigEditor>,
+    agent_drafts: details::Drafts,
     pub client: Client,
     pub project: String,
     pub conversation: String,
@@ -219,6 +238,7 @@ pub struct App {
     pub details: Option<Details>,
     pub diff: Option<DiffView>,
     pub plan_view: Option<PlanView>,
+    pub ledger_view: Option<ledger::LedgerView>,
     pub editor: Option<Editor>,
     pub picker: Option<Picker>,
     pub help: Option<Help>,
@@ -288,6 +308,7 @@ impl App {
             pending_clipboard: None,
             config_editor: None,
             config_drafts: Default::default(),
+            agent_drafts: Default::default(),
             client,
             project: "test".into(),
             conversation: "test-conv".into(),
@@ -310,6 +331,7 @@ impl App {
             details: None,
             diff: None,
             plan_view: None,
+            ledger_view: None,
             editor: None,
             picker: None,
             help: None,
@@ -460,6 +482,7 @@ impl App {
                     details: self.details.clone(),
                     diff: self.diff.clone(),
                     plan_view: self.plan_view.clone(),
+                    ledger_view: self.ledger_view.clone(),
                     scroll: self.scroll,
                     task_request_id: self.task_request_id,
                     diff_request_id: self.diff_request_id,
@@ -497,6 +520,7 @@ impl App {
             self.details = state.details;
             self.diff = state.diff;
             self.plan_view = state.plan_view;
+            self.ledger_view = state.ledger_view;
             self.scroll = state.scroll;
             self.task_request_id = state.task_request_id;
             self.diff_request_id = state.diff_request_id;
@@ -518,6 +542,7 @@ impl App {
             self.details = None;
             self.diff = None;
             self.plan_view = None;
+            self.ledger_view = None;
             self.editor = None;
             self.confirmation = None;
             self.selected = ORCHESTRATOR.into();
@@ -621,15 +646,19 @@ impl App {
         let stale = self
             .details
             .as_ref()
-            .and_then(|details| {
+            .map(|details| {
                 if details
                     .fetch_retry_after
                     .is_some_and(|deadline| std::time::Instant::now() < deadline)
                 {
-                    return Some(false);
+                    return false;
                 }
                 let fetched = details.fetched_round;
-                let now = self.task_row_round(&details.key)?;
+                let now = details
+                    .selected_round
+                    .or_else(|| self.task_row_round(&details.key))
+                    .or(details.fetched_round)
+                    .unwrap_or(0);
                 // Checks the verifier settles meanwhile change the Checks tab.
                 let checks = details.tab == CHECKS
                     && details.fetched_checks
@@ -638,7 +667,23 @@ impl App {
                             .and_then(|id| self.view.task_check_events.get(id))
                             .copied()
                             .unwrap_or(0);
-                Some(fetched != Some(now) || checks)
+                let latest = self
+                    .task_row_round(&details.key)
+                    .or_else(|| {
+                        self.view.agents.get(&details.key).map(|agent| {
+                            if agent.running {
+                                u64::from(agent.turns)
+                            } else {
+                                u64::from(agent.turns.saturating_sub(1))
+                            }
+                        })
+                    })
+                    .unwrap_or(0);
+                let rounds_changed = latest != details.latest_observed;
+                let session = matches!(details.tab, 0 | 1 | details::REVIEW)
+                    && details.selected_round.is_none()
+                    && details.fetched_events != self.view.after;
+                fetched != Some(now) || checks || session || rounds_changed
             })
             .unwrap_or(false);
         if stale {
@@ -658,12 +703,20 @@ impl App {
                 .as_ref()
                 .and_then(|details| details.task_id().map(str::to_owned)),
         ) else {
+            self.fetch_run();
             return;
         };
         let Some(key) = self.details.as_ref().map(|details| details.key.clone()) else {
             return;
         };
-        let round = self.task_row_round(&key).unwrap_or(0);
+        let latest_observed = self.task_row_round(&key).unwrap_or(0);
+        let selected_round = self
+            .details
+            .as_ref()
+            .and_then(|details| details.selected_round);
+        let round = selected_round
+            .or_else(|| self.task_row_round(&key))
+            .unwrap_or(0);
         self.task_request_id += 1;
         let request_id = self.task_request_id;
         if let Some(details) = self
@@ -671,52 +724,109 @@ impl App {
             .as_mut()
             .filter(|details| details.task_id() == Some(id.as_str()))
         {
+            details.latest_observed = latest_observed;
+            details.fetched_events = self.view.after;
             details.fetched_round = Some(round);
             details.fetched_generation = Some(self.generation);
             details.fetched_plan = Some(plan.clone());
             details.fetched_checks = self.view.task_check_events.get(&id).copied().unwrap_or(0);
         }
-        let request = if self
+        let history_id = self
             .details
             .as_ref()
-            .is_some_and(|details| details.tab == CHECKS)
-        {
-            Request::TaskChecks {
-                conversation: Some(self.conversation.clone()),
-                plan: plan.clone(),
-                id,
-            }
-        } else {
-            Request::Task {
-                plan: plan.clone(),
-                id,
-            }
-        };
+            .and_then(|details| details.task_uuid.clone())
+            .unwrap_or_else(|| id.clone());
+        let checks_only = self
+            .details
+            .as_ref()
+            .is_some_and(|details| details.tab == CHECKS);
         let plan_id = plan;
         let conversation = self.conversation.clone();
         let generation = self.generation;
         let client = self.client.clone();
         let updates = self.updates.clone();
         std::thread::spawn(move || {
-            let _ = updates.send(match client.call(&request) {
+            let _ = updates.send(
+                match inspection::task_snapshot(
+                    &client,
+                    &conversation,
+                    &plan_id,
+                    &history_id,
+                    selected_round,
+                    checks_only,
+                ) {
+                    Ok(task) => Update::Task {
+                        conversation,
+                        plan: Some(plan_id),
+                        generation,
+                        request_id,
+                        key,
+                        round,
+                        task: task.task,
+                        documents: task.documents,
+                    },
+                    Err(error) => Update::TaskFailed {
+                        conversation,
+                        generation,
+                        plan: plan_id,
+                        request_id,
+                        key,
+                        error: error.to_string(),
+                    },
+                },
+            );
+        });
+    }
+
+    fn fetch_run(&mut self) {
+        let Some(details) = self
+            .details
+            .as_mut()
+            .filter(|details| details.task_id().is_none() && details.key != "conversation")
+        else {
+            return;
+        };
+        self.task_request_id += 1;
+        let request_id = self.task_request_id;
+        let key = details.key.clone();
+        let selected = details.selected_round;
+        let plan = self.view.plan.clone();
+        details.fetched_generation = Some(self.generation);
+        details.fetched_plan = plan.clone();
+        details.latest_observed = self.view.agents.get(&key).map_or(0, |agent| {
+            if agent.running {
+                u64::from(agent.turns)
+            } else {
+                u64::from(agent.turns.saturating_sub(1))
+            }
+        });
+        details.fetched_events = self.view.after;
+        let conversation = self.conversation.clone();
+        let generation = self.generation;
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        std::thread::spawn(move || {
+            let update = match inspection::run_snapshot(&client, &conversation, &key, selected) {
                 Ok(task) => Update::Task {
                     conversation,
-                    plan: Some(plan_id),
+                    plan,
                     generation,
                     request_id,
                     key,
-                    round,
-                    task,
+                    round: task.task["round"].as_u64().unwrap_or(0),
+                    task: task.task,
+                    documents: task.documents,
                 },
                 Err(error) => Update::TaskFailed {
                     conversation,
+                    plan: plan.unwrap_or_default(),
                     generation,
-                    plan: plan_id,
                     request_id,
                     key,
                     error: error.to_string(),
                 },
-            });
+            };
+            let _ = updates.send(update);
         });
     }
 
@@ -725,10 +835,18 @@ impl App {
             details.switch_key(key);
         } else {
             let mut details = Details::new(key);
+            details.conversation = self.conversation.clone();
+            details.drafts = std::rc::Rc::clone(&self.agent_drafts);
             details.scroll_memory = self.details_scroll_memory.clone();
             details.query_memory = self.details_query_memory.clone();
             details.restore_current_tab();
             self.details = Some(details);
+        }
+        if let Some(details) = &mut self.details {
+            details.task_uuid = details
+                .task_id()
+                .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
+                .and_then(|task| task.uuid.clone());
         }
         self.fetch_task();
     }
@@ -1100,6 +1218,79 @@ impl App {
         });
     }
 
+    fn submit_agent_message(&mut self) {
+        let Some(details) = self
+            .details
+            .as_ref()
+            .filter(|details| details.selected_round.is_none())
+        else {
+            return;
+        };
+        let (conversation, recipient) = details.composer_key();
+        let plan = self.view.plan.clone();
+        let expected_run = details
+            .task
+            .as_ref()
+            .and_then(|task| task["_latest_run"].as_str())
+            .map(str::to_owned);
+        let expected_round = details
+            .task
+            .as_ref()
+            .and_then(|task| task["round"].as_u64())
+            .map(|round| round as u32);
+        let addressed = if let Some((role, _)) = recipient.split_once(':') {
+            let Some(uuid) = details.task.as_ref().and_then(|task| task["id"].as_str()) else {
+                return;
+            };
+            format!("{role}:{uuid}")
+        } else {
+            recipient.clone()
+        };
+        let mut drafts = self.agent_drafts.borrow_mut();
+        let composer = drafts
+            .entry((conversation.clone(), recipient.clone()))
+            .or_default();
+        if composer.sending || composer.input.text.trim().is_empty() {
+            return;
+        }
+        let text = composer.input.text.clone();
+        if composer.sent_text.as_ref() != Some(&text) {
+            composer.operation = None;
+        }
+        composer.sent_text = Some(text.clone());
+        let operation = composer
+            .operation
+            .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone();
+        composer.sending = true;
+        composer.error = None;
+        composer.address = Some(addressed.clone());
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        std::thread::spawn(move || {
+            let result = client
+                .call(&Request::SendToAgent {
+                    message: super::store::AgentMessage {
+                        conversation: conversation.clone(),
+                        plan,
+                        recipient: addressed,
+                        operation_id: operation.clone(),
+                        expected_round,
+                        expected_run,
+                        text: text.clone(),
+                    },
+                })
+                .map_err(|error| error.to_string());
+            let _ = updates.send(Update::AgentMessage {
+                conversation,
+                recipient,
+                operation,
+                text,
+                result,
+            });
+        });
+    }
+
     pub fn submit_comment(&mut self) {
         if self.sending_comment {
             self.notice = Some("Sending comment in progress; draft preserved.".into());
@@ -1128,6 +1319,26 @@ impl App {
         let conversation = self.conversation.clone();
         let plan = self.view.plan.clone();
         let generation = self.generation;
+        let round = self
+            .details
+            .as_ref()
+            .filter(|details| details.task_id().is_some())
+            .and_then(|details| {
+                details.selected_round.or_else(|| {
+                    details
+                        .task
+                        .as_ref()
+                        .and_then(|task| task["round"].as_u64())
+                })
+            })
+            .map(|round| round as u32);
+        let run = self
+            .details
+            .as_ref()
+            .filter(|details| details.task_id().is_none())
+            .and_then(|details| details.task.as_ref())
+            .and_then(|task| task["_run"].as_str())
+            .map(str::to_owned);
         // A comment on a plan line carries the line itself, so the agent need
         // not count lines in the document.
         let quote = editor
@@ -1169,12 +1380,21 @@ impl App {
                     plan: rejected.to_owned(),
                     reason,
                 })
-            } else {
+            } else if round.is_none() && run.is_none() {
                 client.call(&Request::CommentScoped {
                     conversation: conversation.clone(),
                     plan: plan.clone(),
                     target: editor.target.clone(),
                     text,
+                })
+            } else {
+                client.call(&Request::CommentAt {
+                    conversation: conversation.clone(),
+                    plan: plan.clone(),
+                    target: editor.target.clone(),
+                    text,
+                    round,
+                    run,
                 })
             };
             let _ = updates.send(Update::CommentResult {
@@ -1188,6 +1408,132 @@ impl App {
         });
     }
 
+    fn open_ledger(&mut self, kind: super::ledger::LedgerKind) {
+        let view = self
+            .ledger_view
+            .get_or_insert_with(|| ledger::LedgerView::new(kind));
+        view.visible = true;
+        view.kind = kind;
+        self.ledger_action(ledger::Action::Fetch);
+    }
+
+    fn ledger_action(&mut self, action: ledger::Action) {
+        let Some(view) = self.ledger_view.as_mut() else {
+            return;
+        };
+        if matches!(action, ledger::Action::None) || view.pending {
+            return;
+        }
+        let conversation = self.conversation.clone();
+        let (kind, request) = match &action {
+            ledger::Action::Fetch => ("page", Some(view.request(&conversation))),
+            ledger::Action::Detail | ledger::Action::Source => {
+                let Some(entry) = view.selected_entry() else {
+                    return;
+                };
+                if matches!(action, ledger::Action::Detail) {
+                    (
+                        "detail",
+                        Some(Request::GetLedgerEntry {
+                            conversation: conversation.clone(),
+                            run_id: entry.run_id.clone(),
+                            id: entry.spec.id.clone(),
+                            revision: None,
+                        }),
+                    )
+                } else {
+                    (
+                        "source",
+                        Some(Request::GetLedgerSource {
+                            conversation: conversation.clone(),
+                            run_id: entry.run_id.clone(),
+                            source_id: entry.spec.source.source_id.clone(),
+                        }),
+                    )
+                }
+            }
+            ledger::Action::Apply {
+                proposal,
+                hash,
+                change,
+            } => (
+                "applied",
+                Some(Request::ApplyLedgerChange {
+                    proposal_id: proposal.clone(),
+                    diff_hash: hash.clone(),
+                    change: change.clone(),
+                }),
+            ),
+            ledger::Action::Prepare { .. } => ("preview", None),
+            ledger::Action::Runs => (
+                "runs",
+                Some(Request::ListRuns {
+                    conversation: conversation.clone(),
+                }),
+            ),
+            ledger::Action::Proposal => {
+                let Some(page) = &view.page else {
+                    return;
+                };
+                (
+                    "preview",
+                    Some(Request::GetLedgerProposal {
+                        conversation: conversation.clone(),
+                        run_id: page.run.id.clone(),
+                    }),
+                )
+            }
+            ledger::Action::Create => (
+                "created",
+                Some(Request::CreateRun {
+                    conversation: conversation.clone(),
+                    goal: "Manually maintained requirements".into(),
+                }),
+            ),
+            ledger::Action::None => return,
+        };
+        view.pending_kind = kind.to_owned();
+        if matches!(action, ledger::Action::Proposal) {
+            view.prepared_draft = None;
+        }
+        if matches!(action, ledger::Action::Prepare { .. }) {
+            view.prepared_draft = view
+                .editing
+                .as_ref()
+                .and_then(|key| view.drafts.get(key).map(|form| (key.clone(), form.clone())));
+        }
+        view.pending = true;
+        view.request_id = view.request_id.wrapping_add(1);
+        let request_id = view.request_id;
+        let kind = kind.to_owned();
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        std::thread::spawn(move || {
+            let reply=(|| -> crate::Result<Value> {
+                if let ledger::Action::Prepare {mut change,source} = action {
+                    if !source.trim().is_empty() {
+                        let registered=client.call(&Request::AddLedgerSource{conversation:conversation.clone(),run_id:change.run_id.clone(),text:source.clone()})?;
+                        let id=registered["id"].as_str().ok_or_else(||crate::Error::Invalid("source registration returned no identity".into()))?;
+                        for e in &mut change.entries {e.source=super::ledger::SourceSpan{source_id:id.into(),start:0,end:source.len()};}
+                    }
+                    let proposal=client.call(&Request::ProposeLedgerChange{change:change.clone()})?;
+                    Ok(serde_json::json!({"change":change,"proposal":proposal}))
+                } else {
+                    let value=client.call(&request.unwrap())?;
+                    if kind=="created" {
+                        Ok(serde_json::json!({"run":value,"entries":[],"total":0,"offset":0,"has_more":false}))
+                    } else {Ok(value)}
+                }
+            })().map_err(|error|error.to_string());
+            let _ = updates.send(Update::Ledger {
+                conversation,
+                request_id,
+                kind,
+                reply,
+            });
+        });
+    }
+
     pub fn apply_update(&mut self, update: Update) {
         self.apply_update_inner(update);
         self.text_selection
@@ -1196,6 +1542,65 @@ impl App {
 
     fn apply_update_inner(&mut self, update: Update) {
         match update {
+            Update::AgentMessage {
+                conversation,
+                recipient,
+                operation,
+                text,
+                result,
+            } => {
+                let mut drafts = self.agent_drafts.borrow_mut();
+                let composer = drafts.entry((conversation, recipient)).or_default();
+                if composer.operation.as_ref() != Some(&operation) {
+                    return;
+                }
+                composer.sending = false;
+                match result {
+                    Ok(receipt) => {
+                        composer.mail = receipt["mail"].as_u64();
+                        composer.delivery =
+                            Some(receipt["state"].as_str().unwrap_or("queued").to_owned());
+                        if self.view.messages.iter().any(|message| {
+                            composer.mail.is_some_and(|id| message.id == id.to_string())
+                                && message.state == "delivered"
+                        }) {
+                            composer.delivery = Some("delivered".into());
+                        }
+                        if composer.input.text == text {
+                            composer.input.clear();
+                        }
+                        composer.operation = None;
+                        composer.error = None;
+                    }
+                    Err(error) => {
+                        composer.error = Some(error);
+                    }
+                }
+            }
+            Update::Ledger {
+                conversation,
+                request_id,
+                kind,
+                reply,
+            } => {
+                let view = if conversation == self.conversation {
+                    self.ledger_view.as_mut()
+                } else {
+                    self.conversation_states
+                        .get_mut(&conversation)
+                        .and_then(|s| s.ledger_view.as_mut())
+                };
+                if let Some(view) = view
+                    && view.request_id == request_id
+                {
+                    let refresh =
+                        reply.is_ok() && matches!(kind.as_str(), "applied" | "created" | "runs");
+                    view.reply(&kind, reply);
+                    if refresh && conversation == self.conversation {
+                        self.ledger_action(ledger::Action::Fetch);
+                    }
+                }
+            }
             Update::Config {
                 project,
                 save,
@@ -1270,6 +1675,35 @@ impl App {
                 idle,
                 autonomous,
             } => {
+                for event in &events {
+                    if event["kind"] == "mail_delivered" {
+                        for ((owner, _), composer) in self.agent_drafts.borrow_mut().iter_mut() {
+                            if owner == &conversation
+                                && event["payload"]["ids"].as_array().is_some_and(|ids| {
+                                    ids.iter().any(|id| {
+                                        id.as_u64() == composer.mail && composer.mail.is_some()
+                                    })
+                                })
+                            {
+                                composer.delivery = Some("delivered".into());
+                            }
+                        }
+                    } else if event["kind"] == "mail_delivery_failed" {
+                        for ((owner, _), composer) in self.agent_drafts.borrow_mut().iter_mut() {
+                            if owner == &conversation
+                                && composer.address.as_deref()
+                                    == event["payload"]["recipient"].as_str()
+                            {
+                                composer.error = Some(format!(
+                                    "Delivery failed; queued: {}",
+                                    event["payload"]["reason"]
+                                        .as_str()
+                                        .unwrap_or("unknown error")
+                                ));
+                            }
+                        }
+                    }
+                }
                 if conversation == self.conversation && generation == self.generation {
                     let mut saw_manual_plan = false;
                     for event in &events {
@@ -1281,6 +1715,25 @@ impl App {
                     }
                     self.view.idle = idle;
                     self.view.autonomous = Some(autonomous);
+                    if events.iter().any(|e| {
+                        matches!(
+                            e["kind"].as_str(),
+                            Some(
+                                "ledger_changed"
+                                    | "ledger_evidence"
+                                    | "ledger_review"
+                                    | "ledger_source_added"
+                                    | "task"
+                            )
+                        )
+                    }) && let Some(ledger) = self.ledger_view.as_mut().filter(|v| v.visible)
+                    {
+                        if ledger.editing.is_none() && ledger.preview.is_none() {
+                            self.ledger_action(ledger::Action::Fetch);
+                        } else if events.iter().any(|e| e["kind"] == "ledger_changed") {
+                            ledger.error=Some("Scope changed; draft preserved. Ctrl+R reloads the revision before a new preview.".into());
+                        }
+                    }
                     // Events run in batches, never per frame: if one started
                     // a new round for the task the details show, the stored
                     // record on screen belongs to the old round. Refetch it
@@ -1361,12 +1814,12 @@ impl App {
                 error,
             } => {
                 if conversation == self.conversation
-                    && self.view.plan.as_ref() == Some(&plan)
+                    && self.view.plan.as_deref().unwrap_or_default() == plan
                     && request_id == self.task_request_id
                     && let Some(details) = self.details.as_mut().filter(|details| {
                         details.key == key
                             && details.fetched_generation == Some(generation)
-                            && details.fetched_plan.as_ref() == Some(&plan)
+                            && details.fetched_plan.as_deref().unwrap_or_default() == plan
                     })
                 {
                     if details.fetch_failed(&error) {
@@ -1378,7 +1831,7 @@ impl App {
                     && let Some(details) = state.details.as_mut().filter(|details| {
                         details.key == key
                             && details.fetched_generation == Some(generation)
-                            && details.fetched_plan.as_ref() == Some(&plan)
+                            && details.fetched_plan.as_deref().unwrap_or_default() == plan
                     })
                 {
                     details.fetch_failed(&error);
@@ -1392,6 +1845,7 @@ impl App {
                 key,
                 round,
                 task,
+                documents,
             } => {
                 if task["round"].as_u64().is_some_and(|actual| actual != round) {
                     return;
@@ -1399,7 +1853,13 @@ impl App {
                 // A task that moved on while its record was in flight must
                 // not show the earlier round's report or verdict.
                 let round_current = match self.task_row_round(&key) {
-                    Some(current) => current == round,
+                    Some(current) => {
+                        self.details
+                            .as_ref()
+                            .and_then(|details| details.selected_round)
+                            .unwrap_or(current)
+                            == round
+                    }
                     None => true,
                 };
                 if conversation == self.conversation
@@ -1418,6 +1878,7 @@ impl App {
                     })
                 {
                     details.load_task(task);
+                    details.documents = documents;
                 } else if conversation != self.conversation
                     && let Some(state) = self.conversation_states.get_mut(&conversation)
                     && state.task_request_id == request_id
@@ -1434,6 +1895,7 @@ impl App {
                     })
                 {
                     details.load_task(task);
+                    details.documents = documents;
                 }
             }
             Update::Diff {
@@ -1581,6 +2043,8 @@ impl App {
         let conversation = self.conversation.clone();
         match text.as_str() {
             "" => {}
+            "/requirements" => self.open_ledger(super::ledger::LedgerKind::Requirement),
+            "/plan-items" => self.open_ledger(super::ledger::LedgerKind::PlanItem),
             "/plan" => {
                 if self.view.plan.is_some()
                     || !self.view.tasks.is_empty()
@@ -2078,6 +2542,8 @@ impl App {
                 let help = self.help_here();
                 self.show_help(help);
             }
+            Command::Requirements => self.open_ledger(super::ledger::LedgerKind::Requirement),
+            Command::PlanItems => self.open_ledger(super::ledger::LedgerKind::PlanItem),
             Command::Config => self.open_config(),
             Command::Projects => self.open_projects_picker(),
             Command::Quit => return false,
@@ -2241,6 +2707,23 @@ impl App {
     }
 
     fn key_inner(&mut self, key: event::KeyEvent) -> bool {
+        if self.ledger_view.as_ref().is_some_and(|v| v.visible) {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+                self.open_conversation_picker();
+                return true;
+            }
+            // An open conversation picker owns its keys until it closes.
+            if self.picker.is_some() {
+                return self.picker_key(key);
+            }
+            let action = self
+                .ledger_view
+                .as_mut()
+                .unwrap()
+                .key(key, &self.conversation);
+            self.ledger_action(action);
+            return true;
+        }
         self.text_selection
             .invalidate_context(&self.selection_context());
         if key.code == KeyCode::Char('y')
@@ -2666,8 +3149,7 @@ impl App {
                 self.editor = Some(Editor { target, input });
             }
             KeyCode::Enter => {
-                self.details = Some(Details::new(self.selected.clone()));
-                self.fetch_task();
+                self.open_details(self.selected.clone());
             }
             _ => {}
         }
@@ -2874,6 +3356,30 @@ impl App {
             return;
         };
 
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        if details.editing && !(control && key.code == KeyCode::Char('w')) {
+            if key.code == KeyCode::Esc {
+                details.editing = false;
+                return;
+            }
+            if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::ALT) {
+                self.submit_agent_message();
+                return;
+            }
+            let draft_key = details.composer_key();
+            let mut drafts = details.drafts.borrow_mut();
+            let composer = drafts.entry(draft_key).or_default();
+            match key.code {
+                KeyCode::Up => composer
+                    .input
+                    .move_up(details.input_width[details.active_panel]),
+                KeyCode::Down => composer
+                    .input
+                    .move_down(details.input_width[details.active_panel]),
+                _ => composer.input.edit_key(key),
+            }
+            return;
+        }
         if details.searching {
             details.pending_g = false;
             details.follow = false;
@@ -2887,7 +3393,15 @@ impl App {
                     details.searching = false;
                 }
                 KeyCode::Backspace => {
-                    details.query.pop();
+                    if let Some((index, _)) =
+                        unicode_segmentation::UnicodeSegmentation::grapheme_indices(
+                            details.query.as_str(),
+                            true,
+                        )
+                        .next_back()
+                    {
+                        details.query.truncate(index);
+                    }
                     details.scroll = 0;
                 }
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -2936,6 +3450,16 @@ impl App {
                 return;
             }
             KeyCode::Char('i') if details.tab == 0 && plain => {
+                if details.selected_round.is_none()
+                    && (details.task_id().is_none() || details.task_uuid.is_some())
+                {
+                    details.editing = true;
+                    let draft_key = details.composer_key();
+                    details.drafts.borrow_mut().entry(draft_key).or_default();
+                }
+                return;
+            }
+            KeyCode::Char('m') if details.tab == 0 && plain => {
                 details.show_info = !details.show_info;
                 details.scroll = 0;
                 details.follow = !details.show_info;
@@ -2945,11 +3469,21 @@ impl App {
                 details.raw = !details.raw;
                 return;
             }
-            KeyCode::Enter if details.tab == 0 => {
-                details.expand_prompts = !details.expand_prompts;
+            KeyCode::Char('w') if control => {
+                details.panel_scroll[details.active_panel] = details.scroll;
+                if details.task_id().is_some() {
+                    details.active_panel = 1 - details.active_panel;
+                }
+                details.scroll = details.panel_scroll[details.active_panel];
                 return;
             }
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Enter if details.tab == 0 => {
+                details.expand_prompts = !details.expand_prompts;
+                details.panel_expanded[details.active_panel] =
+                    !details.panel_expanded[details.active_panel];
+                return;
+            }
+            KeyCode::Char(c @ '1'..='7') => {
                 if let Some(tab) = details.nth_tab((c as usize) - ('1' as usize)) {
                     details.switch_tab(tab);
                 }
@@ -2992,10 +3526,20 @@ impl App {
                 self.open_diff(&key);
                 return;
             }
-            KeyCode::Right | KeyCode::Tab => {
+            KeyCode::Right => {
+                details.change_round(&self.view, 1);
+                self.fetch_task();
+                return;
+            }
+            KeyCode::Left => {
+                details.change_round(&self.view, -1);
+                self.fetch_task();
+                return;
+            }
+            KeyCode::Tab => {
                 details.switch_tab(details.neighbour_tab(1));
             }
-            KeyCode::Left | KeyCode::BackTab => {
+            KeyCode::BackTab => {
                 details.switch_tab(details.neighbour_tab(-1));
             }
             KeyCode::Down => details.scroll = details.scroll.saturating_add(1),
@@ -3034,6 +3578,10 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if self.ledger_view.as_ref().is_some_and(|v| v.visible) && self.picker.is_none() {
+            self.ledger_view.as_mut().unwrap().paste(text);
+            return;
+        }
         if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
             editor.paste(text);
             return;
@@ -3041,8 +3589,18 @@ impl App {
         if self.help.is_some() || self.trust_prompt.is_some() {
             return;
         }
-        if text.len() > editor::MAX_PASTE_BYTES {
-            self.notice = Some("Pasted text truncated to 64 KB".into());
+        if let Some(details) = &mut self.details {
+            if details.editing && details.selected_round.is_none() {
+                let key = details.composer_key();
+                details
+                    .drafts
+                    .borrow_mut()
+                    .entry(key)
+                    .or_default()
+                    .input
+                    .insert_str(&sanitize_paste(text));
+            }
+            return;
         }
         if let Some(picker) = &mut self.picker {
             let clean_text = sanitize_single_line_paste(text);
@@ -3068,6 +3626,13 @@ impl App {
         self.text_area = None;
         if draw_min_term_guard(frame, frame.area()) {
             self.text_selection = Default::default();
+            return;
+        }
+        if let Some(ledger) = self.ledger_view.as_mut().filter(|v| v.visible) {
+            ledger.draw(frame, frame.area());
+            if let Some(picker) = &mut self.picker {
+                picker.draw(frame, &self.view);
+            }
             return;
         }
         if let Some(editor) = self.config_editor.as_ref().filter(|e| e.visible) {
@@ -3364,6 +3929,9 @@ impl App {
     }
 
     fn selection_blocked(&self) -> bool {
+        if self.ledger_view.as_ref().is_some_and(|v| v.visible) {
+            return true;
+        }
         self.help.is_some()
             || self.picker.is_some()
             || self.editor.is_some()
@@ -4040,6 +4608,11 @@ impl App {
     }
 
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        if let Some(view) = self.ledger_view.as_mut().filter(|v| v.visible) {
+            let action = view.mouse(mouse);
+            self.ledger_action(action);
+            return true;
+        }
         if self.selection_blocked() {
             self.text_selection = Default::default();
         }
@@ -4341,6 +4914,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         pending_clipboard: None,
         config_editor: None,
         config_drafts: Default::default(),
+        agent_drafts: Default::default(),
         client: client.clone(),
         project: options
             .project
@@ -4366,6 +4940,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         details: None,
         diff: None,
         plan_view: None,
+        ledger_view: None,
         editor: None,
         picker: None,
         help: None,
@@ -5214,6 +5789,7 @@ pub mod tests {
         };
         app.view.agents.insert("worker:t1".into(), agent(40));
         let mut details = details::Details::new("worker:t1".into());
+        details.panel_expanded[0] = true;
         details.switch_tab(0);
         app.details = Some(details);
         let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();

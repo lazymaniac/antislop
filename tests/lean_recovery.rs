@@ -1,3 +1,4 @@
+mod support;
 use antislop::{
     config::Config,
     lean::{Core, RecoveryAction, TaskRecoveryRequest},
@@ -80,6 +81,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status"
     )
     .unwrap();
     for script in [&codex, &agy] {
+        support::install_ledger_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
     }
@@ -225,7 +227,7 @@ fn accepting_runs_the_plan_the_user_saw_not_a_newer_one() {
 }
 
 #[test]
-fn supervised_tasks_cut_off_by_a_restart_continue_automatically() {
+fn legacy_supervised_tasks_require_ledger_extraction_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
@@ -247,12 +249,18 @@ fn supervised_tasks_cut_off_by_a_restart_continue_automatically() {
     let core = open(dir.path());
     wait_idle(&core, &conversation);
     let after = core.store.plan(&tasks[0].plan_id).unwrap();
-    assert_eq!(statuses(&core, &tasks[0].plan_id), ["approved", "approved"]);
-    assert!(after.iter().all(|task| task.round > 0));
+    assert_eq!(statuses(&core, &tasks[0].plan_id), ["queued", "queued"]);
+    assert!(after.iter().all(|task| task.round == 0));
+    assert!(
+        core.resume_plan(&conversation, &tasks[0].plan_id)
+            .unwrap_err()
+            .to_string()
+            .contains("legacy plan")
+    );
 }
 
 #[test]
-fn an_autonomous_plan_cut_off_by_a_restart_resumes_by_itself() {
+fn legacy_autonomous_plan_cannot_resume_without_ledger_extraction() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     std::fs::write(dir.path().join("logged-in"), "").unwrap();
@@ -272,7 +280,13 @@ fn an_autonomous_plan_cut_off_by_a_restart_resumes_by_itself() {
 
     let core = open_in_mode(dir.path(), "autonomous");
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &tasks[0].plan_id), ["approved"]);
+    assert_eq!(statuses(&core, &tasks[0].plan_id), ["queued"]);
+    assert!(
+        core.resume_plan(&conversation, &tasks[0].plan_id)
+            .unwrap_err()
+            .to_string()
+            .contains("legacy plan")
+    );
 }
 
 #[test]
@@ -631,11 +645,14 @@ fn test_mechanical_audit_gate_prevents_false_success() {
         audit_event.payload["approved"], false,
         "mechanical gate must override to false"
     );
-    let issue_str = audit_event.payload["findings"][0]["issue"]
-        .as_str()
-        .unwrap();
     assert!(
-        issue_str.contains("Blocked") || issue_str.contains("not approved"),
+        audit_event.payload["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["issue"]
+                .as_str()
+                .is_some_and(|issue| issue.contains("Blocked") || issue.contains("not approved"))),
         "findings must note unapproved tasks"
     );
     assert!(

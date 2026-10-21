@@ -1,6 +1,10 @@
 //! Small rows, each written on its own, plus an append-only event log. Nothing
 //! here grows with the size of the project the agents work on.
 
+#[path = "history.rs"]
+mod history;
+pub use history::{AgentMessage, ContentOwner, HistoryScope};
+
 use crate::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -10,6 +14,7 @@ use std::sync::Mutex;
 
 pub struct Store {
     connection: Mutex<Connection>,
+    content: super::content::Content,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -141,6 +146,8 @@ pub struct TaskVerdictInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanHistory {
+    pub ledger_mode: String,
+    pub run_id: Option<String>,
     pub id: String,
     pub conversation_id: String,
     pub created_ms: i64,
@@ -195,6 +202,8 @@ pub struct Comment {
 /// is the worker's latest answer and `verdict` its verifier's latest one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
+    #[serde(default)]
+    pub input_generation: i64,
     pub id: String,
     pub plan_id: String,
     pub spec: Value,
@@ -252,7 +261,7 @@ impl TurnStatus {
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Tables only ever get added; a change to an existing one raises it and
 /// migrates from the version found.
-const SCHEMA: u32 = 6;
+const SCHEMA: u32 = 8;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -417,16 +426,23 @@ impl Store {
                 ALTER TABLE events_v6 RENAME TO events;
                 CREATE INDEX events_by_conversation ON events(conversation_id,seq);
                 CREATE INDEX events_by_plan ON events(conversation_id,plan_id,seq);")?;
-            transaction.pragma_update(None, "user_version", SCHEMA)?;
+            transaction.pragma_update(None, "user_version", 6)?;
             transaction.commit()?;
         }
+        super::ledger::migrate(&connection)?;
+        Self::migrate_history(&connection)?;
         connection.pragma_update(None, "user_version", SCHEMA)?;
         Ok(Self {
             connection: Mutex::new(connection),
+            content: super::content::Content::new(path),
         })
     }
 
-    fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(super) fn decode_content(&self, text: &str) -> Result<String> {
+        self.content.decode(text)
+    }
+
+    pub(super) fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.connection.lock().expect("store mutex")
     }
 
@@ -516,18 +532,19 @@ impl Store {
 
     /// Stores a message and announces it in the event log in one transaction.
     pub fn add_message(&self, conversation: &str, author: &str, text: &str) -> Result<Message> {
+        let stored_text = self.content.encode(text)?;
         let mut db = self.db();
         let tx = db.transaction()?;
         tx.execute(
             "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,?2,?3,?4)",
-            params![conversation, author, text, now_ms()],
+            params![conversation, author, stored_text, now_ms()],
         )?;
         let seq = tx.last_insert_rowid() as u64;
         tx.execute(
             "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,NULL,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
             params![
                 conversation,
-                serde_json::json!({"seq":seq,"author":author,"text":text}).to_string()
+                serde_json::json!({"seq":seq,"author":author,"text":stored_text}).to_string()
             ],
         )?;
         tx.commit()?;
@@ -547,7 +564,7 @@ impl Store {
             Ok(Message {
                 seq: row.get::<_, i64>(0)? as u64,
                 author: row.get(1)?,
-                text: row.get(2)?,
+                text: self.content.sql_text(row, 2)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -569,7 +586,7 @@ impl Store {
             Ok(Message {
                 seq: row.get::<_, i64>(0)? as u64,
                 author: row.get(1)?,
-                text: row.get(2)?,
+                text: self.content.sql_text(row, 2)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -595,12 +612,13 @@ impl Store {
         upto_message: u64,
         plan_id: Option<&str>,
     ) -> Result<Turn> {
-        let db = self.db();
+        let mut db = self.db();
+        let tx = db.transaction()?;
         let resolved_plan: Option<String> = match plan_id {
             Some(pid) => Some(pid.to_string()),
             None => {
                 if let Some(task_uuid) = super::task_role(role).map(|(id, _)| id) {
-                    db.query_row(
+                    tx.query_row(
                         "SELECT plan_id FROM tasks WHERE id=?1",
                         [task_uuid],
                         |row| row.get::<_, Option<String>>(0),
@@ -621,7 +639,7 @@ impl Store {
             upto_message,
             plan_id: resolved_plan.clone(),
         };
-        db.execute(
+        tx.execute(
             "INSERT INTO turns(id,conversation_id,plan_id,role,provider,status,upto_message,started_ms)
              VALUES(?1,?2,?3,?4,?5,'running',?6,?7)",
             params![
@@ -634,6 +652,13 @@ impl Store {
                 now_ms()
             ],
         )?;
+        let scope = super::task_role(role).map(|(task, _)| task);
+        tx.execute(
+            "INSERT INTO turn_scopes(turn_id,task_id,round)
+            SELECT ?1,id,round FROM tasks WHERE id=?2 AND conversation_id=?3 AND plan_id=?4",
+            params![turn.id, scope, conversation, resolved_plan],
+        )?;
+        tx.commit()?;
         Ok(turn)
     }
 
@@ -820,12 +845,31 @@ impl Store {
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
                 .collect::<std::result::Result<Vec<(String, String)>, _>>()?
         };
-        tx.execute(
-            "UPDATE tasks SET status='queued',
-               report=COALESCE(report || char(10) || char(10), '') || '[interrupted] the daemon stopped while this task ran'
-             WHERE status IN ('queued','working','verifying')",
-            [],
-        )?;
+        let interrupted = {
+            let mut statement = tx.prepare(
+                "SELECT id,report FROM tasks WHERE status IN ('queued','working','verifying')",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for (id, report) in interrupted {
+            let mut text = report
+                .as_deref()
+                .map(|text| self.content.decode(text))
+                .transpose()?
+                .unwrap_or_default();
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str("[interrupted] the daemon stopped while this task ran");
+            tx.execute(
+                "UPDATE tasks SET status='queued',report=?2 WHERE id=?1",
+                params![id, self.content.encode(&text)?],
+            )?;
+        }
         tx.commit()?;
         Ok(plans)
     }
@@ -887,6 +931,7 @@ impl Store {
         let mut tasks = vec![];
         for (position, spec) in specs.iter().enumerate() {
             let task = Task {
+                input_generation: 0,
                 id: crate::id(),
                 plan_id: plan_id.clone(),
                 spec: spec.clone(),
@@ -979,13 +1024,30 @@ impl Store {
         rows.map(|row| {
             let (id, plan_id, spec, status, round, report, verdict, base, result, feedback) = row?;
             Ok(Task {
+                input_generation: db
+                    .query_row(
+                        "SELECT generation FROM task_inputs WHERE task_id=?1",
+                        [&id],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or(0),
                 id,
                 plan_id,
                 spec: serde_json::from_str(&spec)?,
                 status,
                 round: round as u32,
-                report,
-                verdict: verdict.map(|v| serde_json::from_str(&v)).transpose()?,
+                report: report
+                    .as_deref()
+                    .map(|text| self.content.decode(text))
+                    .transpose()?,
+                verdict: verdict
+                    .map(|v| {
+                        self.content
+                            .decode(&v)
+                            .and_then(|text| Ok(serde_json::from_str(&text)?))
+                    })
+                    .transpose()?,
                 base,
                 result,
                 feedback: feedback.map(|v| serde_json::from_str(&v)).transpose()?,
@@ -1060,19 +1122,52 @@ impl Store {
     }
 
     pub fn update_task(&self, task: &Task) -> Result<()> {
-        self.db().execute(
-            "UPDATE tasks SET status=?2,round=?3,report=?4,verdict=?5,base=?6,result=?7,feedback=?8 WHERE id=?1",
+        let stored_report = task
+            .report
+            .as_deref()
+            .map(|text| self.content.encode(text))
+            .transpose()?;
+        let stored_verdict = task
+            .verdict
+            .as_ref()
+            .map(|value| self.content.encode(&value.to_string()))
+            .transpose()?;
+        let mut snapshot = serde_json::to_value(task)?;
+        for (field, encoded) in [("report", &stored_report), ("verdict", &stored_verdict)] {
+            if let Some(encoded) = encoded {
+                let reference: Value = serde_json::from_str(
+                    encoded
+                        .strip_prefix("\0antislop-content:")
+                        .expect("encoded content"),
+                )?;
+                snapshot[field] = serde_json::json!({"session_content":reference});
+            }
+        }
+        let content = self.content.write(&serde_json::to_string(&snapshot)?)?;
+        let mut db = self.db();
+        let transaction = db.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE tasks SET status=?2,round=?3,report=?4,verdict=?5,base=?6,result=?7,feedback=?8 WHERE id=?1 AND coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)=?9",
             params![
                 task.id,
                 task.status,
                 task.round as i64,
-                task.report,
-                task.verdict.as_ref().map(Value::to_string),
+                stored_report,
+                stored_verdict,
                 task.base,
                 task.result,
-                task.feedback.as_ref().map(Value::to_string)
+                task.feedback.as_ref().map(Value::to_string),
+                task.input_generation
             ],
         )?;
+        crate::require(
+            changed == 1,
+            "stale task generation; result retained in turn history",
+        )?;
+        transaction.execute("INSERT INTO task_rounds(task_id,round,status,content) VALUES(?1,?2,?3,?4)
+            ON CONFLICT(task_id,round) DO UPDATE SET status=excluded.status,content=excluded.content",
+            params![task.id, task.round, task.status, serde_json::to_string(&content)?])?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -1096,13 +1191,24 @@ impl Store {
 
     /// Records a message for `role` and announces it.
     pub fn add_mail(&self, conversation: &str, role: &str, mail: &Mail) -> Result<Mail> {
+        self.add_mail_from(conversation, role, mail, None)
+    }
+
+    pub fn add_mail_from(
+        &self,
+        conversation: &str,
+        role: &str,
+        mail: &Mail,
+        source_turn: Option<&str>,
+    ) -> Result<Mail> {
+        let stored_text = self.content.encode(&mail.text)?;
         let mut db = self.db();
         let tx = db.transaction()?;
         let now = now_ms();
         tx.execute(
             "INSERT INTO mail(conversation_id,sender,recipient,kind,text,created_ms)
              VALUES(?1,?2,?3,?4,?5,?6)",
-            params![conversation, mail.sender, role, mail.kind, mail.text, now],
+            params![conversation, mail.sender, role, mail.kind, stored_text, now],
         )?;
         let mail = Mail {
             id: tx.last_insert_rowid() as u64,
@@ -1112,9 +1218,14 @@ impl Store {
             state: "queued".into(),
             ..mail.clone()
         };
+        if let Some(turn) = source_turn {
+            tx.execute("INSERT INTO mail_sources(mail_id,turn_id) SELECT ?1,id FROM turns WHERE id=?2 AND conversation_id=?3",params![mail.id as i64,turn,conversation])?;
+        }
+        let mut payload = serde_json::to_value(&mail)?;
+        payload["text"] = stored_text.into();
         tx.execute(
             "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,NULL,'mail',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, serde_json::to_value(&mail)?.to_string()],
+            params![conversation, payload.to_string()],
         )?;
         tx.commit()?;
         Ok(mail)
@@ -1128,6 +1239,18 @@ impl Store {
         comment: &Comment,
         text: impl Fn(u64) -> String,
     ) -> Result<Comment> {
+        self.add_comment_at(conversation, comment, None, None, text)
+    }
+
+    pub fn add_comment_at(
+        &self,
+        conversation: &str,
+        comment: &Comment,
+        round: Option<u32>,
+        run: Option<&str>,
+        text: impl Fn(u64) -> String,
+    ) -> Result<Comment> {
+        let stored_text = self.content.encode(&comment.text)?;
         let mut db = self.db();
         let tx = db.transaction()?;
         let now = now_ms();
@@ -1140,12 +1263,12 @@ impl Store {
                 comment.plan_id,
                 comment.target,
                 comment.label,
-                comment.text,
+                stored_text,
                 now
             ],
         )?;
         let id = tx.last_insert_rowid() as u64;
-        let text = text(id);
+        let text = self.content.encode(&text(id))?;
         tx.execute(
             "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)",
             params![conversation, text, now],
@@ -1171,8 +1294,15 @@ impl Store {
             ..comment.clone()
         };
         tx.execute(
+            "INSERT INTO comment_scopes(comment_id,round,run) VALUES(?1,?2,?3)",
+            params![comment.id as i64, round, run],
+        )?;
+        let mut payload = self.comment_payload(&comment)?;
+        payload["round"] = serde_json::to_value(round)?;
+        payload["run"] = serde_json::to_value(run)?;
+        tx.execute(
             "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,?3,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, serde_json::to_value(&comment)?.to_string(), comment.plan_id],
+            params![conversation, payload.to_string(), comment.plan_id],
         )?;
         tx.commit()?;
         Ok(comment)
@@ -1181,6 +1311,7 @@ impl Store {
     /// Stores a comment on the plan as a draft: the user is still writing,
     /// and the orchestrator hears of it only when the user sends the review.
     pub fn add_draft_comment(&self, conversation: &str, comment: &Comment) -> Result<Comment> {
+        let stored_text = self.content.encode(&comment.text)?;
         let mut db = self.db();
         let tx = db.transaction()?;
         let now = now_ms();
@@ -1193,7 +1324,7 @@ impl Store {
                 comment.plan_id,
                 comment.target,
                 comment.label,
-                comment.text,
+                stored_text,
                 now
             ],
         )?;
@@ -1205,7 +1336,7 @@ impl Store {
         };
         tx.execute(
             "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,?3,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, serde_json::to_value(&comment)?.to_string(), comment.plan_id],
+            params![conversation, self.comment_payload(&comment)?.to_string(), comment.plan_id],
         )?;
         tx.commit()?;
         Ok(comment)
@@ -1216,7 +1347,7 @@ impl Store {
     pub fn send_draft_comments(&self, conversation: &str, plan_id: &str) -> Result<Vec<Comment>> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let drafts = Self::comment_rows(
+        let drafts = self.comment_rows(
             &tx,
             "conversation_id=?1 AND status='draft' AND (plan_id=?2 OR plan_id IS NULL)",
             params![conversation, plan_id],
@@ -1238,6 +1369,7 @@ impl Store {
             })
             .collect::<Vec<_>>()
             .join("\n\n");
+        let text = self.content.encode(&text)?;
         tx.execute(
             "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)",
             params![conversation, text, now],
@@ -1262,7 +1394,7 @@ impl Store {
             comment.message = message;
             tx.execute(
                 "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,?3,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-                params![conversation, serde_json::to_value(&comment)?.to_string(), comment.plan_id],
+                params![conversation, self.comment_payload(&comment)?.to_string(), comment.plan_id],
             )?;
             sent.push(comment);
         }
@@ -1280,7 +1412,8 @@ impl Store {
         if changed == 0 {
             return Err(Error::Invalid(format!("no comment {id}")));
         }
-        let mut comment = Self::comment_rows(&tx, "id=?1", params![id as i64])?
+        let mut comment = self
+            .comment_rows(&tx, "id=?1", params![id as i64])?
             .pop()
             .ok_or_else(|| Error::Invalid(format!("no comment {id}")))?;
         if comment.message == 0 && status != "deleted" {
@@ -1298,6 +1431,7 @@ impl Store {
                 comment.label,
                 comment.text
             );
+            let text = self.content.encode(&text)?;
             tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)", params![conversation, text, now_ms()])?;
             comment.message = tx.last_insert_rowid() as u64;
             tx.execute(
@@ -1311,7 +1445,7 @@ impl Store {
         }
         tx.execute(
             "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,?3,'comment',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, serde_json::to_value(&comment)?.to_string(), comment.plan_id],
+            params![conversation, self.comment_payload(&comment)?.to_string(), comment.plan_id],
         )?;
         tx.commit()?;
         Ok(comment)
@@ -1332,7 +1466,7 @@ impl Store {
     ) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let comments = Self::comment_rows(
+        let comments = self.comment_rows(
             &tx,
             "conversation_id=?1 AND status='open' AND message<=?2 AND (target='plan' OR target LIKE 'plan:%')",
             params![conversation, upto as i64],
@@ -1459,14 +1593,21 @@ impl Store {
 
     /// The conversation's comments with that status, oldest first.
     pub fn comments(&self, conversation: &str, status: &str) -> Result<Vec<Comment>> {
-        Self::comment_rows(
+        self.comment_rows(
             &self.db(),
             "conversation_id=?1 AND status=?2",
             params![conversation, status],
         )
     }
 
+    fn comment_payload(&self, comment: &Comment) -> Result<Value> {
+        let mut payload = serde_json::to_value(comment)?;
+        payload["text"] = self.content.encode(&comment.text)?.into();
+        Ok(payload)
+    }
+
     fn comment_rows(
+        &self,
         db: &Connection,
         filter: &str,
         values: impl rusqlite::Params,
@@ -1481,7 +1622,7 @@ impl Store {
                 plan_id: row.get(1)?,
                 target: row.get(2)?,
                 label: row.get(3)?,
-                text: row.get(4)?,
+                text: self.content.sql_text(row, 4)?,
                 status: row.get(5)?,
                 message: row.get::<_, i64>(6)? as u64,
             })
@@ -1502,7 +1643,7 @@ impl Store {
                 sender: row.get(1)?,
                 recipient: row.get(2)?,
                 kind: row.get(3)?,
-                text: row.get(4)?,
+                text: self.content.sql_text(row, 4)?,
                 created_ms: row.get(5)?,
                 delivered_turn: None,
                 delivered_ms: None,
@@ -1572,7 +1713,7 @@ impl Store {
                 sender: row.get(1)?,
                 recipient: row.get(2)?,
                 kind: row.get(3)?,
-                text: row.get(4)?,
+                text: self.content.sql_text(row, 4)?,
                 created_ms: row.get(5)?,
                 delivered_turn,
                 delivered_ms: row.get(7)?,
@@ -1665,7 +1806,7 @@ impl Store {
     ) -> Result<HistoryPage> {
         self.conversation(conversation)?;
         let (oldest_seq, latest_seq, total) = self.event_bounds(conversation)?;
-        let events = self.events_since(conversation, after, limit)?;
+        let events = self.events_since_budget(conversation, after, limit, 1024 * 1024)?;
         let next_after = events.last().map(|e| e.seq);
         let has_more = match next_after {
             Some(last_seq) => last_seq < latest_seq,
@@ -1709,6 +1850,15 @@ impl Store {
         kind: &str,
         payload: &Value,
     ) -> Result<u64> {
+        let mut payload = payload.clone();
+        if kind == "agent" || kind == "agent_final" {
+            for field in ["text", "delta"] {
+                if let Some(text) = payload[field].as_str() {
+                    let reference = self.content.write(text)?;
+                    payload[field] = serde_json::json!({"session_content": reference});
+                }
+            }
+        }
         let db = self.db();
         let resolved_plan: Option<String> = match plan_id {
             Some(pid) => Some(pid.to_string()),
@@ -1745,6 +1895,18 @@ impl Store {
     }
 
     pub fn events_since(&self, conversation: &str, after: u64, limit: usize) -> Result<Vec<Event>> {
+        self.events_since_budget(conversation, after, limit, usize::MAX)
+    }
+
+    /// The first event is always returned whole, even when it is larger than
+    /// the page budget. No later event is discarded from the durable stream.
+    pub fn events_since_budget(
+        &self,
+        conversation: &str,
+        after: u64,
+        limit: usize,
+        budget: usize,
+    ) -> Result<Vec<Event>> {
         let db = self.db();
         let mut statement = db.prepare(
             "SELECT seq,turn_id,plan_id,kind,payload,created_ms FROM events
@@ -1761,18 +1923,70 @@ impl Store {
                     row.get::<_, i64>(5)?,
                 ))
             })?;
-        rows.map(|row| {
+        let mut events = Vec::new();
+        let mut bytes = 0usize;
+        for row in rows {
             let (seq, turn_id, plan_id, kind, payload, created_ms) = row?;
-            Ok(Event {
+            let payload = self.hydrate_event_payload(&kind, &payload)?;
+            let weight = payload.to_string().len();
+            if !events.is_empty() && bytes.saturating_add(weight) > budget {
+                break;
+            }
+            bytes = bytes.saturating_add(weight);
+            events.push(Event {
                 seq: seq as u64,
                 turn_id,
                 plan_id,
                 kind,
-                payload: serde_json::from_str(&payload)?,
+                payload,
                 created_ms,
-            })
-        })
-        .collect()
+            });
+            if bytes >= budget {
+                break;
+            }
+        }
+        Ok(events)
+    }
+
+    fn hydrate_event_payload(&self, kind: &str, encoded: &str) -> Result<Value> {
+        let mut payload: Value = serde_json::from_str(encoded)?;
+        for field in ["text", "delta", "report"] {
+            if let Some(text) = payload[field].as_str() {
+                payload[field] = self.content.decode(text)?.into();
+            }
+        }
+        if kind == "agent" || kind == "agent_final" {
+            for field in ["text", "delta"] {
+                if let Some(reference) = payload[field].get("session_content") {
+                    let reference = serde_json::from_value(reference.clone())?;
+                    payload[field] = self.content.read(&reference)?.into();
+                }
+            }
+        }
+        Ok(payload)
+    }
+
+    /// Reads only one bounded piece of an event's text after checking ownership.
+    pub fn session_content(
+        &self,
+        conversation: &str,
+        event: u64,
+        field: &str,
+        offset: u64,
+    ) -> Result<super::content::Chunk> {
+        crate::require(
+            matches!(field, "text" | "delta"),
+            "invalid session content field",
+        )?;
+        let encoded: String = self.db().query_row(
+            "SELECT payload FROM events WHERE conversation_id=?1 AND seq=?2 AND kind IN ('agent','agent_final')",
+            params![conversation, event as i64], |row| row.get(0))?;
+        let payload: Value = serde_json::from_str(&encoded)?;
+        let reference = payload[field]
+            .get("session_content")
+            .ok_or_else(|| Error::Invalid("historical event has no content reference".into()))?;
+        self.content
+            .chunk(&serde_json::from_value(reference.clone())?, offset)
     }
 
     /// Finds one task within a plan by UUID or the orchestrator's local id.
@@ -1819,13 +2033,30 @@ impl Store {
         task.map(
             |(id, plan_id, spec, status, round, report, verdict, base, result, feedback)| {
                 Ok(Task {
+                    input_generation: db
+                        .query_row(
+                            "SELECT generation FROM task_inputs WHERE task_id=?1",
+                            [&id],
+                            |r| r.get(0),
+                        )
+                        .optional()?
+                        .unwrap_or(0),
                     id,
                     plan_id,
                     spec: serde_json::from_str(&spec)?,
                     status,
                     round: round as u32,
-                    report,
-                    verdict: verdict.map(|v| serde_json::from_str(&v)).transpose()?,
+                    report: report
+                        .as_deref()
+                        .map(|text| self.content.decode(text))
+                        .transpose()?,
+                    verdict: verdict
+                        .map(|v| {
+                            self.content
+                                .decode(&v)
+                                .and_then(|text| Ok(serde_json::from_str(&text)?))
+                        })
+                        .transpose()?,
                     base,
                     result,
                     feedback: feedback.map(|v| serde_json::from_str(&v)).transpose()?,
@@ -1902,13 +2133,13 @@ impl Store {
     /// All comments in the conversation, optionally filtered by status.
     pub fn comments_all(&self, conversation: &str, status: Option<&str>) -> Result<Vec<Comment>> {
         if let Some(st) = status {
-            Self::comment_rows(
+            self.comment_rows(
                 &self.db(),
                 "conversation_id=?1 AND status=?2",
                 params![conversation, st],
             )
         } else {
-            Self::comment_rows(&self.db(), "conversation_id=?1", params![conversation])
+            self.comment_rows(&self.db(), "conversation_id=?1", params![conversation])
         }
     }
 
@@ -1920,13 +2151,13 @@ impl Store {
         status: Option<&str>,
     ) -> Result<Vec<Comment>> {
         if let Some(st) = status {
-            Self::comment_rows(
+            self.comment_rows(
                 &self.db(),
                 "conversation_id=?1 AND plan_id=?2 AND status=?3",
                 params![conversation, plan_id, st],
             )
         } else {
-            Self::comment_rows(
+            self.comment_rows(
                 &self.db(),
                 "conversation_id=?1 AND plan_id=?2",
                 params![conversation, plan_id],
@@ -2122,7 +2353,16 @@ impl Store {
             }
         }
 
+        let run_id: Option<String> = db
+            .query_row(
+                "SELECT run_id FROM plan_runs WHERE plan_id=?1",
+                [plan_id],
+                |r| r.get(0),
+            )
+            .optional()?;
         Ok(PlanHistory {
+            ledger_mode: if run_id.is_some() { "ledger" } else { "legacy" }.into(),
+            run_id,
             id: plan_id.to_string(),
             conversation_id: conversation.to_string(),
             created_ms,
@@ -2191,7 +2431,7 @@ mod tests {
         assert_eq!(
             db.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
                 .unwrap(),
-            6
+            SCHEMA
         );
         assert_eq!(db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('events_by_plan','events_by_conversation')", [], |row| row.get::<_, u32>(0)).unwrap(), 2);
     }

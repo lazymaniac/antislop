@@ -949,3 +949,10 @@ mod snapshot_tests {
         assert_eq!(again, commit, "nothing committed twice");
     }
 }
+
+/// Stable identity of the integrated files, including uncommitted content.
+/// Git's copied index reuses unchanged objects; no repository text enters SQLite.
+pub fn integrated_fingerprint(project: &Path) -> Result<String> {
+    let snapshot = snapshot(project, "requirements integrated snapshot")?;
+    ok(project, &["rev-parse", &format!("{snapshot}^{{tree}}")])
+}

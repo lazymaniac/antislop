@@ -207,3 +207,36 @@ To prevent foreign-scope access, corruption, or unintended cross-project modific
    - Rejects requests with: `task <id> does not belong to plan <plan_id>`.
 
 Optimistic concurrency control via `scope_hash` continues to be supported; when a client provides a stale hash on a scoped operation (`AcceptScoped`, `ResumeScoped`, `ReviewScoped`, `CancelScoped`), the daemon rejects with `"stale_scope"`.
+
+
+## Durable round history (schema 8)
+
+`turn_scopes` records a task UUID and round when a turn starts. Historical turns
+without explicit attribution remain unassigned. `task_rounds` retains each round's
+report, verdict, Git references and status in immutable session artifacts; updating
+the current task does not overwrite an older round. Comments may carry a round or
+run scope; comments without scope remain shared.
+
+Full agent text, prompts, final parser answers, mailbox input, and worker reports
+are stored under `<state>/session-content/`. SQLite holds references. Existing
+untagged text rows remain readable. Previously clipped history cannot be recovered.
+The diagnostic budget still applies to reasoning and tool output, never agent text.
+
+The protocol adds `task_rounds`, `task_round`, paginated `session_events` and
+`session_content` (a UTF-8 chunk addressed by event, field and byte offset). Task
+history requires the task UUID and validates project, conversation and plan.
+`send_to_agent` takes an explicit recipient, an operation UUID, and the expected
+current round or run. Replaying an operation returns its receipt instead of
+sending twice. Legacy send operations retain their existing behavior.
+
+A JSON message larger than one transport frame is transferred in ordered
+`antislop_chunk` envelopes. Each frame remains bounded; there is no aggregate
+message-length limit. Old small JSON-line requests and responses are unchanged.
+External CLI argument limits are reported as actual process errors; prompts are
+never silently shortened to fit them.
+
+The inspector opens the newest round/run on each opening. Selecting history stops
+following; selecting the latest restores following. Worker and verifier panels are
+side by side at 80 columns or wider; Ctrl+W chooses the full-width panel below that.
+Prompt and final answer are outside the collapsible session trace. Each recipient's
+composer keeps its own draft across closing the inspector and conversation changes.

@@ -9,6 +9,11 @@ the old runtime, its context reader, recovery/proof machinery and requirement
 audits were deleted once the lean core handled "przeanalizuj architekturę
 projektu" end to end.
 
+Schema 7 adds [versioned requirement and plan-item ledgers](requirement-ledgers.md),
+run revisions, independent integrated-result evidence and TUI scope editing.
+The historical notes below describe earlier milestones; the ledger document
+defines the current completion and legacy-recovery contract.
+
 ## Principles
 
 - **Agents work on the files.** Every agent is a native CLI session (Codex,
@@ -354,8 +359,8 @@ directory to run both. The socket is `<state>/core.sock`, or
   drafts are remembered on modal close and restored when commenting on that target again.
   Drafts reserve a display column for the insertion cursor; cursor rows and viewport offsets support
   more than 65,535 lines. Search queries and activity labels are bounded to the viewport before conversion
-  to terminal coordinates. Bracketed paste normalizes CRLF/CR to LF, sanitizes control characters, caps
-  length at 64 KB at character boundaries, and routes paste according to modal ownership. The layout
+  to terminal coordinates. Bracketed paste normalizes CRLF/CR to LF, sanitizes control characters without clipping content,
+  and routes paste according to modal ownership. The layout
   enforces a 12x5 minimum terminal guard and an 85-column breakpoint switching between side-by-side
   split and single-panel compact views.
 - `antislop chat "message"` (or piped input) prints events line by line and
@@ -651,7 +656,9 @@ Worker/verifier role addresses remain compatible with stored events and mail,
 but map to one graph node. Overview pins a summary of at most three lines above the session card;
 there is no separate Session tab. The card opens at the latest output and follows
 new entries. Scrolling upward or `gg` pauses following; `G`/End resumes it.
-`i` switches the card to the full task context and back to the live transcript.
+`m` switches the card to the full task context. `i` edits a role-specific message.
+Left/Right select a durable round, Tab/Shift+Tab select a tab, Ctrl+W selects a role,
+and Enter folds the trace while leaving the full prompt and final answer visible.
 The summary stays fixed and shrinks away on the smallest terminals. Checks invalidation handles round changes,
 same-round verdict changes and live events of the selected task. Drag selection
 and double-click word selection capture rendered graphemes in viewport-sized

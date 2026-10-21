@@ -244,6 +244,8 @@ pub struct CommentProgress {
 
 #[derive(Debug, Default)]
 pub struct View {
+    pub retain_session_history: bool,
+    pub comment_scopes: HashMap<u64, (Option<u64>, Option<String>)>,
     /// Local projection revision; repeated frames do not rebuild graph layout.
     pub layout_revision: u64,
     /// How many check events arrived: an open Checks tab refetches on change.
@@ -321,6 +323,13 @@ pub fn dim() -> Style {
 }
 
 impl View {
+    pub(super) fn session_history() -> Self {
+        Self {
+            retain_session_history: true,
+            ..Self::default()
+        }
+    }
+
     pub fn comment_state(&self, id: u64) -> &str {
         match self.comments.get(&id) {
             Some(comment) if comment.status != "open" => &comment.status,
@@ -497,7 +506,9 @@ impl View {
             Some(NEXT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         // Keep the latest turns whole: drop from the oldest turn's start.
         let turns = |feed: &[Block]| feed.iter().filter(|b| matches!(b, Block::Turn(_))).count();
-        while agent.feed.len() > SESSION_LINES || turns(&agent.feed) > FEED_TURNS {
+        while !self.retain_session_history
+            && (agent.feed.len() > SESSION_LINES || turns(&agent.feed) > FEED_TURNS)
+        {
             let end = agent
                 .feed
                 .iter()
@@ -739,6 +750,16 @@ impl View {
                 if !key.is_empty() {
                     let sid = text("id");
                     self.feed(&key, Block::Note(format!("session {sid}")));
+                }
+            }
+            "agent" if payload["type"] == "user" => {
+                if !key.is_empty() {
+                    self.feed(&key, Block::User(text("text")));
+                }
+            }
+            "agent_final" => {
+                if !key.is_empty() {
+                    self.feed(&key, Block::Final(text("text")));
                 }
             }
             "agent" if payload["type"] == "text" => {
@@ -1410,6 +1431,15 @@ impl View {
                 let Ok(comment) = serde_json::from_value::<Comment>(payload.clone()) else {
                     return;
                 };
+                if payload.get("round").is_some() || payload.get("run").is_some() {
+                    self.comment_scopes.insert(
+                        comment.id,
+                        (
+                            payload["round"].as_u64(),
+                            payload["run"].as_str().map(str::to_owned),
+                        ),
+                    );
+                }
                 let name = target_name(&comment.target);
                 if comment.status == "open" {
                     self.comment_progress.insert(

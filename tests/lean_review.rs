@@ -1,3 +1,4 @@
+mod support;
 use antislop::{config::Config, lean::Core};
 use serde_json::Value;
 use std::path::Path;
@@ -40,6 +41,7 @@ fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Co
     let write = |name: &str, body: String| {
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
+        support::install_ledger_protocol(&path);
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         path

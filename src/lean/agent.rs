@@ -66,7 +66,7 @@ pub enum Event {
         text: String,
         exit_code: Option<i64>,
     },
-    /// What the agent was asked, clipped, at the start of a turn.
+    /// The full prompt at the start of a turn.
     Prompt {
         text: String,
     },

@@ -1,3 +1,4 @@
+mod support;
 use antislop::{config::Config, lean::Core};
 use serde_json::Value;
 use std::path::Path;
@@ -68,6 +69,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
     )
     .unwrap();
     for script in [&codex, &agy] {
+        support::install_ledger_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
     }
@@ -146,6 +148,7 @@ print(json.dumps({{"event": "result", "result": {{"conversation_id": session, "s
     )
     .unwrap();
     for script in [&codex, &agy] {
+        support::install_ledger_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
     }

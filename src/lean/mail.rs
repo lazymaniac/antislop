@@ -120,7 +120,16 @@ impl Core {
                     ORCHESTRATOR | COMMENT_ORCHESTRATOR | PLAN_VERIFIER | AUDITOR
                 )
             };
+            let direct_orchestrator = target.role == ORCHESTRATOR
+                && self
+                    .store
+                    .pending_mail(conversation, &target.role)
+                    .is_ok_and(|mail| {
+                        mail.iter()
+                            .all(|mail| mail.kind == "agent_work" || mail.kind == "copy")
+                    });
             supported
+                && !direct_orchestrator
                 && failures
                     .get(&(conversation.to_owned(), target.role.clone()))
                     .is_none_or(|failed| target.newest > *failed)

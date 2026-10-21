@@ -20,18 +20,25 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-pub const TABS: [&str; 6] = [
-    "Overview", "Messages", "Result", "Checks", "Comments", "Review",
+pub const TABS: [&str; 7] = [
+    "Overview",
+    "Messages",
+    "Result",
+    "Checks",
+    "Comments",
+    "Review",
+    "Requirements",
 ];
 pub const RESULT: usize = 2;
 pub const CHECKS: usize = 3;
 pub const COMMENTS: usize = 4;
 pub const REVIEW: usize = 5;
+pub const REQUIREMENTS: usize = 6;
 
 /// Task addresses share one set of tabs, including legacy verifier keys.
 pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
-        "worker" | "verifier" => vec![0, 1, RESULT, CHECKS, COMMENTS],
+        "worker" | "verifier" => vec![0, 1, RESULT, CHECKS, COMMENTS, REQUIREMENTS],
         "plan-verifier" | "auditor" => vec![0, REVIEW, COMMENTS],
         _ => vec![0, 1, COMMENTS],
     }
@@ -85,7 +92,7 @@ impl SessionCache {
         self.blocks.truncate(shared);
         self.records.truncate(shared);
         for block in &blocks[shared..] {
-            let lines = super::session::render(provider, std::slice::from_ref(block), expanded);
+            let lines = super::session::render(provider, std::slice::from_ref(block), true);
             let search_text = lines
                 .iter()
                 .map(|(_, line)| line.as_str())
@@ -149,9 +156,48 @@ impl LayoutCache {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct OverviewCache {
+    key: String,
+    revision: Option<u64>,
+    expanded: bool,
+    record: Rc<DetailRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Composer {
+    pub input: super::InputBuffer,
+    pub sending: bool,
+    pub operation: Option<String>,
+    pub error: Option<String>,
+    pub sent_text: Option<String>,
+    pub mail: Option<u64>,
+    pub delivery: Option<String>,
+    pub address: Option<String>,
+}
+
+pub type Drafts = std::rc::Rc<std::cell::RefCell<HashMap<(String, String), Composer>>>;
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Details {
     /// Last rendered document viewport, excluding the scrollbar.
     pub text_area: Rect,
+    /// None follows the current round; an explicit older round freezes selection.
+    pub selected_round: Option<u64>,
+    pub available_rounds: Vec<u64>,
+    pub latest_observed: u64,
+    pub active_panel: usize,
+    pub panel_scroll: [usize; 2],
+    pub panel_expanded: [bool; 2],
+    pub documents: HashMap<String, super::document::Document>,
+    pub round_agents: HashMap<String, super::view::Agent>,
+    panel_layout: [LayoutCache; 2],
+    overview_cache: [Option<OverviewCache>; 2],
+    pub fetched_events: u64,
+    pub task_uuid: Option<String>,
+    pub conversation: String,
+    pub drafts: Drafts,
+    pub editing: bool,
+    pub input_width: [usize; 2],
     pub key: String,
     pub tab: usize,
     /// Lines scrolled down from the top.
@@ -221,12 +267,60 @@ impl Details {
         self.fetch_failures = 0;
         self.fetch_retry_after = None;
         self.fetch_error = None;
+        self.fetched_round = task["round"].as_u64().or(self.fetched_round);
+        if let Some(id) = task["id"].as_str() {
+            self.task_uuid = Some(id.into());
+        }
+        self.available_rounds = task["_rounds"]
+            .as_array()
+            .map(|rounds| {
+                rounds
+                    .iter()
+                    .filter_map(|round| round["round"].as_u64())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.documents.clear();
+        self.round_agents.clear();
+        if let Some(transcripts) = task["_transcripts"].as_object() {
+            for (key, events) in transcripts {
+                let mut projection = View::session_history();
+                if let Some(events) = events.as_array() {
+                    for event in events {
+                        projection.apply(event);
+                    }
+                }
+                let mut agent = projection.agents.into_values().next().unwrap_or_default();
+                // The durable projection is already scoped to one round.
+                agent.feed_dropped = 0;
+                self.round_agents.insert(key.clone(), agent);
+            }
+        }
+        if self.task.as_ref().and_then(|old| old["round"].as_u64()) != task["round"].as_u64() {
+            self.overview_cache = Default::default();
+        }
         self.task = Some(task);
     }
 
     pub fn new(key: String) -> Self {
         Details {
             text_area: Default::default(),
+            selected_round: None,
+            available_rounds: Vec::new(),
+            latest_observed: 0,
+            active_panel: usize::from(key.starts_with("verifier:")),
+            panel_scroll: [0; 2],
+            panel_expanded: [false; 2],
+            documents: HashMap::new(),
+            round_agents: HashMap::new(),
+            panel_layout: Default::default(),
+            overview_cache: Default::default(),
+            fetched_events: 0,
+            task_uuid: None,
+            conversation: String::new(),
+            drafts: Default::default(),
+            editing: false,
+            input_width: [1; 2],
             key,
             tab: 0,
             scroll: 0,
@@ -285,6 +379,15 @@ impl Details {
         self.save_current_tab();
         self.key = new_key;
         self.show_info = false;
+        self.selected_round = None;
+        self.task_uuid = None;
+        self.available_rounds.clear();
+        self.documents.clear();
+        self.round_agents.clear();
+        self.overview_cache = Default::default();
+        self.panel_scroll = [0; 2];
+        self.panel_expanded = [false; 2];
+        self.active_panel = usize::from(self.key.starts_with("verifier:"));
         self.session_cache.clear();
         // A different element is a different task: its old record is gone.
         self.task = None;
@@ -296,6 +399,49 @@ impl Details {
         self.fetch_error = None;
         self.restore_current_tab();
         self.searching = false;
+    }
+
+    fn composer_recipient(&self, key: &str) -> String {
+        match (key.split_once(':'), &self.task_uuid) {
+            (Some((role, _)), Some(uuid)) => format!("{role}:{uuid}"),
+            _ => key.to_owned(),
+        }
+    }
+
+    pub fn composer_key(&self) -> (String, String) {
+        let keys = self.session_keys();
+        let key = keys.get(self.active_panel).unwrap_or(&self.key);
+        (self.conversation.clone(), self.composer_recipient(key))
+    }
+
+    pub fn change_round(&mut self, view: &View, direction: isize) {
+        let latest = self
+            .task_id()
+            .and_then(|id| view.tasks.iter().find(|task| task.id == id))
+            .map_or_else(
+                || self.available_rounds.last().copied().unwrap_or(0),
+                |task| task.round,
+            );
+        let mut rounds = self.available_rounds.clone();
+        if !rounds.contains(&latest) {
+            rounds.push(latest);
+            rounds.sort_unstable();
+        }
+        let current = self.selected_round.unwrap_or(latest);
+        if let Some(index) = rounds.iter().position(|round| *round == current) {
+            let next = (index as isize + direction)
+                .clamp(0, rounds.len().saturating_sub(1) as isize) as usize;
+            let round = rounds[next];
+            self.selected_round = (round != latest).then_some(round);
+            self.editing = false;
+            self.task = None;
+            self.documents.clear();
+            self.round_agents.clear();
+            self.overview_cache = Default::default();
+            self.scroll = 0;
+            self.panel_scroll = [0; 2];
+            self.follow = false;
+        }
     }
 
     pub fn save_current_tab(&mut self) {
@@ -319,10 +465,28 @@ impl Details {
             .unwrap_or_default();
     }
 
+    fn comments<'a>(&self, view: &'a View) -> Vec<&'a super::view::Comment> {
+        let round = self
+            .selected_round
+            .or_else(|| self.task.as_ref().and_then(|task| task["round"].as_u64()));
+        let run = self.task.as_ref().and_then(|task| task["_run"].as_str());
+        view.comments_on(&self.key)
+            .into_iter()
+            .filter(|comment| {
+                view.comment_scopes
+                    .get(&comment.id)
+                    .is_none_or(|(scope_round, scope_run)| {
+                        scope_round.is_none_or(|value| Some(value) == round)
+                            && scope_run.as_deref().is_none_or(|value| Some(value) == run)
+                    })
+            })
+            .collect()
+    }
+
     /// The id of the selected comment, on the Comments tab.
     pub fn selected_comment(&self, view: &View) -> Option<u64> {
         (self.tab == COMMENTS)
-            .then(|| view.comments_on(&self.key).get(self.comment).map(|c| c.id))
+            .then(|| self.comments(view).get(self.comment).map(|c| c.id))
             .flatten()
     }
 
@@ -351,102 +515,38 @@ impl Details {
         Self::render_records(&records, &self.query, self.raw)
     }
 
-    /// Compact, fixed summary. Long context stays available through `i`.
+    /// Compact header; source prompts remain in the session document.
     fn summary(&self, view: &View, theme: &Theme) -> Vec<Line<'static>> {
-        let task = self
-            .task_id()
-            .and_then(|id| view.tasks.iter().find(|t| t.id == id));
-        let agent = self
+        let key = self
             .session_keys()
-            .into_iter()
-            .filter_map(|key| view.agents.get(&key))
-            .max_by_key(|agent| (agent.running, agent.feed_revision));
-        let mut lines = Vec::new();
-        if let Some(task) = task {
-            lines.push(Line::styled(
-                format!("{} · {}", task.id, task.title),
-                theme.title(),
+            .get(self.active_panel)
+            .cloned()
+            .unwrap_or_else(|| self.key.clone());
+        let agent = self
+            .round_agents
+            .get(&key)
+            .or_else(|| view.agents.get(&key));
+        let mut summary = agent.map_or_else(String::new, |agent| {
+            format!(
+                "{} · {} · {}",
+                agent.provider,
+                agent.model.as_deref().unwrap_or("default model"),
+                agent.effort.as_deref().unwrap_or("default effort")
+            )
+        });
+        if let Some(task) = self
+            .task_id()
+            .and_then(|id| view.tasks.iter().find(|task| task.id == id))
+        {
+            summary.push_str(&format!(
+                " · {}",
+                task.summary.as_deref().unwrap_or(&task.title)
             ));
-            let round = taskinfo::round_shown(task.round)
-                .map_or_else(|| "not started".into(), |r| format!("round {r}"));
-            let mut state = vec![
-                Span::styled(
-                    status_label(&task.status).to_owned(),
-                    theme.status(&task.status),
-                ),
-                Span::styled(format!(" · {round}"), theme.dim()),
-            ];
-            if let Some(agent) = agent.filter(|a| !a.provider.is_empty()) {
-                state.push(Span::styled(
-                    format!(
-                        " · {}{}",
-                        agent.provider,
-                        agent
-                            .model
-                            .as_ref()
-                            .map_or(String::new(), |model| format!(" / {model}"))
-                    ),
-                    theme.dim(),
-                ));
-            }
-            lines.push(Line::from(state));
-            lines.push(Line::styled(
-                task.reason
-                    .clone()
-                    .or_else(|| taskinfo::cause(task))
-                    .unwrap_or_else(|| task.goal.clone()),
-                theme.dim(),
-            ));
-        } else if self.key == "conversation" {
-            let done = view
-                .tasks
-                .iter()
-                .filter(|task| status::finished(&task.status))
-                .count();
-            lines.push(Line::styled("Conversation", theme.title()));
-            lines.push(Line::styled(
-                format!(
-                    "{} · {done}/{} tasks complete",
-                    if view.paused {
-                        "paused"
-                    } else if view.idle {
-                        "idle"
-                    } else {
-                        "active"
-                    },
-                    view.tasks.len()
-                ),
-                theme.dim(),
-            ));
-        } else {
-            lines.push(Line::styled(agent_name(&self.key), theme.title()));
-            if let Some(agent) = agent {
-                lines.push(Line::styled(
-                    format!(
-                        "{} · {}{}",
-                        agent.provider,
-                        if agent.running { "working" } else { "idle" },
-                        agent
-                            .model
-                            .as_ref()
-                            .map_or(String::new(), |m| format!(" · {m}"))
-                    ),
-                    theme.dim(),
-                ));
-                lines.push(Line::styled(agent.activity.clone(), theme.dim()));
-            }
         }
-        // Each header row stays one row even if a task title or failure reason
-        // contains control sequences or embedded newlines.
-        for line in &mut lines {
-            for span in &mut line.spans {
-                span.content = theme
-                    .clean(&span.content)
-                    .replace(['\n', '\r', '\t'], " ")
-                    .into();
-            }
-        }
-        lines
+        vec![Line::styled(
+            theme.clean(&summary).replace(['\n', '\r', '\t'], " "),
+            theme.dim(),
+        )]
     }
 
     fn session_keys(&self) -> Vec<String> {
@@ -515,7 +615,10 @@ impl Details {
             )
         };
         let is_conv = self.key == "conversation";
-        let agent = view.agents.get(&self.key);
+        let agent = self
+            .round_agents
+            .get(&self.key)
+            .or_else(|| view.agents.get(&self.key));
         let task = self
             .task_id()
             .and_then(|id| view.tasks.iter().find(|task| task.id == id));
@@ -523,6 +626,19 @@ impl Details {
         let mut records = vec![];
 
         match self.tab {
+            REQUIREMENTS => {
+                let mut lines = vec![label("Requirement ledger · shared across all rounds")];
+                if let Some(stored) = &self.task {
+                    for (field,name) in [("requirement_ids","Requirements"),("criterion_ids","Criteria"),("plan_item_ids","Plan items")] {
+                        let ids = stored["spec"][field].as_array().map(|ids|ids.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+                        lines.push(plain(format!("{name}: {ids}")));
+                    }
+                    lines.push(plain(format!("Input generation: {}",stored["input_generation"])));
+                }
+                lines.push(plain("Open /requirements or /plan-items for sources, evidence and version history. Task approval alone does not verify requirements.".into()));
+                let text = lines.iter().map(|(_,text)|text.as_str()).collect::<Vec<_>>().join(" ");
+                records.push(Rc::new(DetailRecord {lines,search_text:text,raw_value:None}));
+            }
             0 => {
                 if is_conv {
                     let mut conv_lines = vec![];
@@ -745,7 +861,7 @@ impl Details {
                             search_text: heading,
                             raw_value: Some(serde_json::json!({ "agent": key })),
                         }));
-                        let agent = view.agents.get(&key);
+                        let agent = self.round_agents.get(&key).or_else(|| self.selected_round.is_none().then(||view.agents.get(&key)).flatten());
                         if let Some(agent) = agent
                             && (!agent.feed.is_empty() || !agent.session.is_empty() || agent.pid.is_some())
                         {
@@ -809,6 +925,14 @@ impl Details {
                     }
                 }
             }
+            1 if self.task.as_ref().is_some_and(|task| task["messages"].is_array()) => {
+                for message in self.task.as_ref().unwrap()["messages"].as_array().unwrap() {
+                    let text = format!("{} -> {} · {}\n{}",message["sender"].as_str().unwrap_or_default(),message["recipient"].as_str().unwrap_or_default(),
+                        if message["delivered_turn"].is_string() {"delivered"} else {"queued"},message["text"].as_str().unwrap_or_default());
+                    records.push(Rc::new(DetailRecord {lines:vec![plain(text.clone())],search_text:text,raw_value:Some(message.clone())}));
+                }
+                if records.is_empty() { records.push(Rc::new(DetailRecord{lines:vec![(dim(),"No messages in this round.".into())],search_text:String::new(),raw_value:None})); }
+            }
             1 => {
                 let mailbox_items = view.mailbox.get(&self.key);
                 match mailbox_items {
@@ -834,6 +958,12 @@ impl Details {
                     }
                 }
             }
+            REVIEW if self.round_agents.contains_key(&self.key) => {
+                let lines = self.round_agents[&self.key].feed.iter().filter_map(|block| match block {
+                    super::session::Block::Final(text) => Some(plain(text.clone())), _ => None,
+                }).collect::<Vec<_>>();
+                records.push(Rc::new(DetailRecord {search_text:lines.iter().map(|(_,text)| text.as_str()).collect::<Vec<_>>().join(" "),lines,raw_value:None}));
+            }
             REVIEW => match view.reviews.get(&self.key) {
                 Some(review) if !review.is_empty() => {
                     records.push(Rc::new(DetailRecord {
@@ -853,7 +983,7 @@ impl Details {
                 })),
             },
             COMMENTS => {
-                let comments = view.comments_on(&self.key);
+                let comments = self.comments(view);
                 if comments.is_empty() {
                     records.push(Rc::new(DetailRecord {
                         lines: vec![(
@@ -880,8 +1010,9 @@ impl Details {
                         } else {
                             ""
                         };
+                        let scope = view.comment_scopes.get(&comment.id).map_or(" · shared", |(round,run)| if round.is_none() && run.is_none() {" · shared"} else {""});
                         let header_str = format!(
-                            "#{} {} · {state}{stale}",
+                            "#{} {} · {state}{stale}{scope}",
                             comment.id,
                             super::view::target_name(&comment.target)
                         );
@@ -1161,6 +1292,295 @@ impl Details {
         records
     }
 
+    fn draw_overview(&mut self, frame: &mut Frame, view: &View, body: Rect, theme: &Theme) {
+        let keys = self.session_keys();
+        self.active_panel = self.active_panel.min(keys.len().saturating_sub(1));
+        let areas = if keys.len() == 2 && body.width >= 80 {
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(body)
+                .to_vec()
+        } else {
+            vec![body]
+        };
+        for (visible, area) in areas.iter().enumerate() {
+            let panel = if areas.len() == 1 {
+                self.active_panel
+            } else {
+                visible
+            };
+            let key = &keys[panel];
+            let active = panel == self.active_panel;
+            let running = self
+                .round_agents
+                .get(key)
+                .or_else(|| view.agents.get(key))
+                .is_some_and(|agent| agent.running);
+            let mut block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(if active { theme.dim() } else { theme.faint() })
+                .title(theme.clean(&format!(
+                    " {}Session · {} · {} ",
+                    if active { "> " } else { "" },
+                    key.split(':').next().unwrap_or(key),
+                    if running && self.selected_round.is_none() {
+                        "LIVE"
+                    } else {
+                        "history"
+                    }
+                )));
+            if theme.ascii {
+                block = block.border_set(ratatui::symbols::border::Set {
+                    top_left: "+",
+                    top_right: "+",
+                    bottom_left: "+",
+                    bottom_right: "+",
+                    vertical_left: "|",
+                    vertical_right: "|",
+                    horizontal_top: "-",
+                    horizontal_bottom: "-",
+                });
+            }
+            let inner = block.inner(*area);
+            frame.render_widget(block, *area);
+            let [inner, composer_area] =
+                Layout::vertical([Constraint::Min(1), Constraint::Length(4.min(inner.height))])
+                    .areas(inner);
+            let draft_key = (self.conversation.clone(), self.composer_recipient(key));
+            let drafts = self.drafts.borrow();
+            let composer = drafts.get(&draft_key);
+            let input = composer.map(|composer| &composer.input);
+            let status = if self.selected_round.is_some() {
+                "Return to current round to send"
+            } else if composer.is_some_and(|composer| composer.sending) {
+                "Sending..."
+            } else if let Some(error) = composer.and_then(|composer| composer.error.as_deref()) {
+                error
+            } else if active && self.editing {
+                "Enter send · Alt+Enter newline · Esc navigation"
+            } else {
+                composer
+                    .and_then(|composer| composer.delivery.as_deref())
+                    .unwrap_or("i message")
+            };
+            let status_area = Rect::new(
+                composer_area.x,
+                composer_area.y,
+                composer_area.width,
+                1.min(composer_area.height),
+            );
+            frame.render_widget(
+                Paragraph::new(theme.clean(status)).style(theme.dim()),
+                status_area,
+            );
+            let input_area = Rect::new(
+                composer_area.x,
+                composer_area.y.saturating_add(1),
+                composer_area.width,
+                composer_area.height.saturating_sub(1),
+            );
+            self.input_width[panel] = usize::from(input_area.width).max(1);
+            if let Some(input) = input {
+                let text = theme.clean(&input.text);
+                let lines = wrap(&text, usize::from(input_area.width));
+                let (column, row) = input.visual_cursor(usize::from(input_area.width));
+                let start = row.saturating_sub(usize::from(input_area.height.saturating_sub(1)));
+                frame.render_widget(
+                    Paragraph::new(
+                        lines
+                            .into_iter()
+                            .skip(start)
+                            .take(usize::from(input_area.height))
+                            .map(Line::raw)
+                            .collect::<Vec<_>>(),
+                    ),
+                    input_area,
+                );
+                if active && self.editing && input_area.width > 0 && input_area.height > 0 {
+                    frame.set_cursor_position((
+                        input_area
+                            .x
+                            .saturating_add(column.min(input_area.width.saturating_sub(1))),
+                        input_area
+                            .y
+                            .saturating_add(row.saturating_sub(start) as u16)
+                            .min(input_area.bottom().saturating_sub(1)),
+                    ));
+                }
+            }
+            drop(drafts);
+            let document_area = Rect::new(
+                inner.x,
+                inner.y,
+                inner.width.saturating_sub(1),
+                inner.height,
+            );
+            if let Some(document) = self.documents.get(key) {
+                let requested = if active {
+                    self.scroll
+                } else {
+                    self.panel_scroll[panel]
+                };
+                match document.viewport(
+                    usize::from(document_area.width),
+                    usize::from(document_area.height),
+                    requested,
+                    active && self.follow && self.panel_expanded[panel],
+                    self.panel_expanded[panel],
+                ) {
+                    Ok(Some(page)) => {
+                        self.panel_scroll[panel] = page.scroll;
+                        if active {
+                            self.scroll = page.scroll;
+                            self.text_area = document_area;
+                        }
+                        frame.render_widget(
+                            Paragraph::new(
+                                page.lines
+                                    .into_iter()
+                                    .map(|(dim, text)| {
+                                        Line::styled(
+                                            theme.clean(&text),
+                                            if dim { theme.dim() } else { Style::default() },
+                                        )
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ),
+                            document_area,
+                        );
+                        if page.total > usize::from(document_area.height) && inner.width > 0 {
+                            let bottom =
+                                page.total.saturating_sub(usize::from(document_area.height));
+                            let mut state = ScrollbarState::new(bottom.saturating_add(1))
+                                .position(page.scroll)
+                                .viewport_content_length(usize::from(document_area.height));
+                            frame.render_stateful_widget(
+                                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                                    .begin_symbol(None)
+                                    .end_symbol(None),
+                                inner,
+                                &mut state,
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        frame.render_widget(
+                            Paragraph::new("Preparing session view...").style(theme.dim()),
+                            document_area,
+                        );
+                    }
+                    Err(error) => {
+                        frame.render_widget(
+                            Paragraph::new(theme.clean(&error.to_string())).style(theme.dim()),
+                            document_area,
+                        );
+                    }
+                }
+                continue;
+            }
+            let agent = self.round_agents.get(key).or_else(|| {
+                (self.selected_round.is_none())
+                    .then(|| view.agents.get(key))
+                    .flatten()
+            });
+            let revision = agent.and_then(|agent| agent.feed_revision);
+            if revision.is_none()
+                || self.overview_cache[panel].as_ref().is_none_or(|cache| {
+                    cache.key != *key
+                        || cache.revision != revision
+                        || cache.expanded != self.panel_expanded[panel]
+                })
+            {
+                let lines = agent.map_or_else(
+                    || vec![(theme.dim(), "No session events for this agent.".into())],
+                    |agent| {
+                        super::session::overview(
+                            &agent.provider,
+                            &agent.feed,
+                            self.panel_expanded[panel],
+                        )
+                    },
+                );
+                self.overview_cache[panel] = Some(OverviewCache {
+                    key: key.clone(),
+                    revision,
+                    expanded: self.panel_expanded[panel],
+                    record: Rc::new(DetailRecord {
+                        search_text: String::new(),
+                        raw_value: None,
+                        lines,
+                    }),
+                });
+            }
+            let record = Rc::clone(
+                &self.overview_cache[panel]
+                    .as_ref()
+                    .expect("cached overview")
+                    .record,
+            );
+            let lines = self.panel_layout[panel].update(
+                vec![record],
+                "",
+                false,
+                usize::from(document_area.width),
+            );
+            let bottom = lines.len().saturating_sub(usize::from(inner.height));
+            let scroll = if active && self.follow && self.panel_expanded[panel] {
+                bottom
+            } else if active {
+                self.scroll.min(bottom)
+            } else {
+                self.panel_scroll[panel].min(bottom)
+            };
+            self.panel_scroll[panel] = scroll;
+            if active {
+                self.scroll = scroll;
+                self.text_area = document_area;
+            }
+            let end = scroll
+                .saturating_add(usize::from(inner.height))
+                .min(lines.len());
+            let visible = lines[scroll..end]
+                .iter()
+                .cloned()
+                .map(|line| {
+                    Line::from(
+                        line.spans
+                            .into_iter()
+                            .map(|span| {
+                                Span::styled(
+                                    theme.clean(&span.content),
+                                    if theme.color {
+                                        span.style
+                                    } else {
+                                        Style {
+                                            fg: None,
+                                            bg: None,
+                                            ..span.style
+                                        }
+                                    },
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            frame.render_widget(Paragraph::new(visible), document_area);
+            if lines.len() > usize::from(inner.height) && inner.width > 0 {
+                let mut state = ScrollbarState::new(bottom.saturating_add(1))
+                    .position(scroll)
+                    .viewport_content_length(usize::from(inner.height));
+                let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(None)
+                    .end_symbol(None)
+                    .track_symbol(Some(theme.glyphs().track))
+                    .thumb_symbol(theme.glyphs().thumb)
+                    .track_style(theme.faint())
+                    .thumb_style(theme.dim());
+                frame.render_stateful_widget(scrollbar, inner, &mut state);
+            }
+        }
+    }
+
     pub fn draw(&mut self, frame: &mut Frame, view: &View) {
         if !tabs_for(&self.key).contains(&self.tab) {
             self.tab = 0;
@@ -1177,7 +1597,7 @@ impl Details {
         } else {
             0
         };
-        let [header, summary_area, body, footer] = Layout::vertical([
+        let [header, summary_area, mut body, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(summary_height),
             Constraint::Min(1),
@@ -1200,12 +1620,64 @@ impl Details {
                 Style::default().fg(Color::Cyan),
             ));
         }
+        for span in &mut tabs_line.spans {
+            span.content = theme.clean(&span.content).into();
+            if !theme.color {
+                span.style = Style {
+                    fg: None,
+                    bg: None,
+                    ..span.style
+                };
+            }
+        }
         frame.render_widget(Paragraph::new(tabs_line), header);
         frame.render_widget(Paragraph::new(summary).style(theme.bar()), summary_area);
 
+        if body.height > 1 && self.key != "conversation" {
+            let latest = self
+                .task_id()
+                .and_then(|id| view.tasks.iter().find(|task| task.id == id))
+                .map_or_else(
+                    || {
+                        self.task
+                            .as_ref()
+                            .and_then(|task| task["round"].as_u64())
+                            .unwrap_or(0)
+                    },
+                    |task| task.round,
+                );
+            let selected = self.selected_round.unwrap_or(latest);
+            let label = format!(
+                "Round {} · {} · Left/Right choose · Tab tabs",
+                selected,
+                if self.selected_round.is_none() {
+                    "current"
+                } else {
+                    "history · return to current to send"
+                }
+            );
+            frame.render_widget(
+                Paragraph::new(theme.clean(&label)).style(theme.dim()),
+                Rect::new(body.x, body.y, body.width, 1),
+            );
+            body.y = body.y.saturating_add(1);
+            body.height = body.height.saturating_sub(1);
+        }
+        if self.tab == 0
+            && !self.show_info
+            && self.key != "conversation"
+            && self.query.is_empty()
+            && !self.raw
+        {
+            self.draw_overview(frame, view, body, &theme);
+            let hint = "i message · Ctrl+W panel · Enter trace · m metadata · Left/Right rounds · Esc back";
+            frame.render_widget(Paragraph::new(theme.clean(hint)).style(theme.dim()), footer);
+            return;
+        }
+
         let block = if self.tab == 0 {
             let title = if self.show_info {
-                " Task info · i session "
+                " Task info · m session "
             } else if self.follow {
                 " Session · LIVE "
             } else {
@@ -1215,7 +1687,7 @@ impl Details {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(theme.faint())
-                .style(theme.card())
+                .style(Style::default())
                 .title(title)
                 .padding(Padding::horizontal(u16::from(body.width >= 20)))
         } else {
@@ -1230,6 +1702,63 @@ impl Details {
             inner.height,
         );
         let width = usize::from(inner.width.saturating_sub(1));
+        let document_key = match self.tab {
+            1 => Some("messages"),
+            RESULT => Some("result"),
+            REVIEW => Some("review"),
+            _ => None,
+        };
+        if let Some(document) = document_key.and_then(|key| self.documents.get(key)) {
+            match document.viewport(width, usize::from(inner.height), self.scroll, false, false) {
+                Ok(Some(page)) => {
+                    self.scroll = page.scroll;
+                    frame.render_widget(
+                        Paragraph::new(
+                            page.lines
+                                .into_iter()
+                                .map(|(_, text)| Line::raw(theme.clean(&text)))
+                                .collect::<Vec<_>>(),
+                        ),
+                        self.text_area,
+                    );
+                    if page.total > usize::from(inner.height) && inner.width > 0 {
+                        let mut state = ScrollbarState::new(
+                            page.total
+                                .saturating_sub(usize::from(inner.height))
+                                .saturating_add(1),
+                        )
+                        .position(page.scroll)
+                        .viewport_content_length(usize::from(inner.height));
+                        frame.render_stateful_widget(
+                            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                                .begin_symbol(None)
+                                .end_symbol(None),
+                            inner,
+                            &mut state,
+                        );
+                    }
+                }
+                Ok(None) => {
+                    frame.render_widget(
+                        Paragraph::new("Preparing history view...").style(theme.dim()),
+                        self.text_area,
+                    );
+                }
+                Err(error) => {
+                    frame.render_widget(
+                        Paragraph::new(theme.clean(&error.to_string())).style(theme.dim()),
+                        self.text_area,
+                    );
+                }
+            }
+            let hint = details_footer_hint_for(&self.key, self.tab, usize::from(footer.width));
+            frame.render_widget(
+                Paragraph::new(theme.clean(&hint)).style(theme.dim()),
+                footer,
+            );
+            return;
+        }
+
         let records = self.records(view);
         let lines = self
             .layout_cache
@@ -1298,13 +1827,13 @@ pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
 pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
     if tab == 0 {
         if width >= 90 {
-            "←/→ tabs · ↑/↓ PgUp/PgDn · gg/G top/live · i info · / search · c comment · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ PgUp/PgDn · gg/G top/live · m info · / search · c comment · Esc back"
         } else if width >= 65 {
-            "←/→ tabs · ↑/↓ scroll · gg/G top/live · i info · / search · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ scroll · gg/G top/live · m info · / search · Esc back"
         } else if width >= 45 {
-            "←/→ tabs · gg/G top/live · i info · Esc"
+            "Tab tabs · ←/→ rounds · gg/G top/live · m info · Esc"
         } else {
-            "gg/G · i info · Esc back"
+            "gg/G · m info · Esc back"
         }
     } else if tab == CHECKS {
         if width >= 80 {
@@ -1318,7 +1847,7 @@ pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
         if width >= 95 {
             "←/→ tab · ↑/↓ select · / search · v raw · c comment · r resolve · o reopen · x delete · d diff · ? help · Esc back"
         } else if width >= 65 {
-            "←/→ tabs · ↑/↓ select · / search · v raw · c add · r/o/x status · d diff · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ select · / search · v raw · c add · r/o/x status · d diff · Esc back"
         } else if width >= 45 {
             "←/→ tab · ↑/↓ select · c add · r/o/x · Esc"
         } else {
@@ -1326,11 +1855,11 @@ pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
         }
     } else {
         if width >= 90 {
-            "←/→ tabs · ↑/↓ PgUp/PgDn · gg/G top/end · / search · c comment · d diff · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ PgUp/PgDn · gg/G top/end · / search · c comment · d diff · Esc back"
         } else if width >= 65 {
-            "←/→ tabs · ↑/↓ scroll · gg/G top/end · / search · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ scroll · gg/G top/end · / search · Esc back"
         } else if width >= 45 {
-            "←/→ tabs · gg/G top/end · Esc"
+            "Tab tabs · ←/→ rounds · gg/G top/end · Esc"
         } else {
             "gg/G · ↑/↓ · Esc back"
         }
@@ -1565,7 +2094,8 @@ mod tests {
             },
         );
         let mut details = Details::new("worker:t1".into());
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        details.panel_expanded[0] = true;
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
         let screen = |terminal: &Terminal<TestBackend>| {
             terminal
                 .backend()
@@ -1602,8 +2132,7 @@ mod tests {
         let mut narrow = Terminal::new(TestBackend::new(16, 30)).unwrap();
         narrow.draw(|frame| details.draw(frame, &view)).unwrap();
         assert!(
-            details
-                .layout_cache
+            details.panel_layout[0]
                 .lines
                 .iter()
                 .all(|line| line.width() <= 15)
@@ -1653,6 +2182,7 @@ mod tests {
                 },
             );
             let mut details = Details::new(key.into());
+            details.panel_expanded = [true; 2];
             let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
             terminal.draw(|frame| details.draw(frame, &view)).unwrap();
             assert!(details.scroll > 0, "{key}");
@@ -1799,11 +2329,25 @@ mod tests {
             |key: &str| -> Vec<&str> { tabs_for(key).into_iter().map(|tab| TABS[tab]).collect() };
         assert_eq!(
             names("worker:t1"),
-            ["Overview", "Messages", "Result", "Checks", "Comments"]
+            [
+                "Overview",
+                "Messages",
+                "Result",
+                "Checks",
+                "Comments",
+                "Requirements"
+            ]
         );
         assert_eq!(
             names("verifier:t1"),
-            ["Overview", "Messages", "Result", "Checks", "Comments"]
+            [
+                "Overview",
+                "Messages",
+                "Result",
+                "Checks",
+                "Comments",
+                "Requirements"
+            ]
         );
         assert_eq!(names("auditor"), ["Overview", "Review", "Comments"]);
         assert_eq!(names("plan-verifier"), ["Overview", "Review", "Comments"]);
@@ -1819,14 +2363,17 @@ mod tests {
         details.switch_tab(details.neighbour_tab(1));
         assert_eq!(details.tab, COMMENTS);
         details.switch_tab(details.neighbour_tab(1));
+        assert_eq!(details.tab, REQUIREMENTS);
+        details.switch_tab(details.neighbour_tab(1));
         assert_eq!(details.tab, 0);
         details.switch_tab(details.neighbour_tab(-1));
-        assert_eq!(details.tab, COMMENTS);
+        assert_eq!(details.tab, REQUIREMENTS);
         // Number keys count the visible tabs equally for both task roles.
         assert_eq!(details.nth_tab(2), Some(RESULT));
         assert_eq!(details.nth_tab(3), Some(CHECKS));
         assert_eq!(details.nth_tab(4), Some(COMMENTS));
-        assert_eq!(details.nth_tab(5), None);
+        assert_eq!(details.nth_tab(5), Some(REQUIREMENTS));
+        assert_eq!(details.nth_tab(6), None);
         let verifier = Details::new("verifier:t1".into());
         assert_eq!(verifier.nth_tab(3), Some(CHECKS));
     }

@@ -44,10 +44,10 @@ verification against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8` is in
 | 25 | A structural problem in adjacent code | Autonomous: the writer may fix a small one with evidence and report it; supervised: it names the problem and the fix, the user decides | prompt (`worker_prompt`) |
 | 26 | Well-kept code needs no cosmetic patch | Refactoring obligation: the report says why no change is needed | prompt |
 | 27 | 99 of 100 obligations done | An independent auditor lists every obligation of the user's messages; a gap is a high finding and the orchestrator proposes a plan for it | runtime: `lean_review::autonomous_mode_runs_a_checked_plan_and_reports_audit_gaps` |
-| 28 | A requirement with several qualifiers, a test checks one | Audit and requirements obligations keep every qualifier | prompt |
-| 29 | Extraction misses a requirement in the middle of the source | The auditor and the requirements verifier read the user's messages themselves | prompt |
+| 28 | A requirement with several qualifiers, a test checks one | Original source spans and qualifiers remain immutable; every mandatory criterion needs current integrated evidence | runtime: `lean_ledger::long_document_preserves_middle_negative_obligation_without_copying_document_into_sqlite`, `lean_ledger::completion_gate_requires_source_coverage_current_audit_and_integrated_evidence` |
+| 29 | Extraction misses a requirement in the middle of the source | Both source-verification sessions receive full sources; a rejected compliance audit closes completion even after an earlier approval | runtime: `lean_ledger::compliance_sessions_verify_integrated_files_and_reopen_after_file_changes`; identifying semantic omissions remains the independent agents' responsibility |
 | 30 | A report that skips a checklist item, a risk or an N/A reason is rejected | Risks, the common checks of design §7.6 and the kind's checklist are numbered obligations; a verdict must account for each with a status and a note; a gap is asked for once more, then the task waits for the user; an `issue` or `blocked` never approves; the Kontrole tab shows each obligation and its account | runtime: `lean_review::a_verdict_that_skips_an_obligation_is_asked_again_and_never_approves`, `tasks::a_verdict_counts_only_with_every_obligation_accounted_for` |
-| 31 | A change of requirements after a review invalidates what depends on it | A new plan is reviewed again; comments on an earlier plan are marked as such; the audit checks the results against all the user's messages | runtime: `view::comments_are_listed_on_their_element_and_marked_stale_on_a_new_plan`; prompt |
+| 31 | A change of requirements after a review invalidates what depends on it | Atomic spec revisions invalidate dependent task generations and evidence; affected processes stop while independent work continues | runtime: `lean_ledger::semantic_edit_invalidates_dependency_closure_but_keeps_independent_tasks`, `lean_ledger::live_scope_edit_cancels_only_affected_process_and_rejects_late_task_updates` |
 | 32 | One policy duplicated across adapters | Architecture obligation: no policy duplicated across modules | prompt |
 | 33 | A pattern without a need | Architecture obligation: no pattern or layer without a present need | prompt |
 | 34 | Three parameters valid alone break the contract together | Test-design obligation: interactions of three or more coupled parameters, not only pairs | prompt |
@@ -57,6 +57,10 @@ verification against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8` is in
 | 38 | A high-ranked variant misses an obligation | Options obligation: excluded before ranking | prompt |
 | 39 | Sham alternatives or unequal benchmark conditions | Options and performance obligations: real alternatives under the same conditions | prompt |
 | 40 | An experiment shows a better variant | Options obligation: the choice is reopened whatever is already built | prompt |
+
+RequirementLedger, PlanItemLedger and the requirements completion gate are
+implemented as [versioned records](requirement-ledgers.md). The remaining
+models listed below still use the lean obligation approach.
 
 ## Deliberate departures from the design
 

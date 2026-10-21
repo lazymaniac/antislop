@@ -3,10 +3,12 @@
 
 pub mod agent;
 pub mod cli;
+pub mod content;
 pub mod daemon;
 pub mod diff;
 pub mod feedback;
 pub mod git;
+pub mod ledger;
 mod mail;
 pub mod projects;
 pub mod risks;
@@ -97,6 +99,7 @@ pub fn plan_scope_hash(tasks: &[Task]) -> String {
         data.push('\0');
         data.push_str(&task.status);
         data.push('\0');
+        data.push_str(&task.input_generation.to_string());
         data.push_str(&task.round.to_string());
         data.push('\0');
         data.push_str(&task.spec.to_string());
@@ -122,7 +125,13 @@ pub fn diff_scope_hash(
 
 /// Scope hash of a task stage.
 pub fn task_scope_hash(task: &Task) -> String {
-    crate::hash(format!("{}:{}:{}:{}", task.id, task.status, task.round, task.spec).as_bytes())
+    crate::hash(
+        format!(
+            "{}:{}:{}:{}:{}",
+            task.id, task.status, task.round, task.input_generation, task.spec
+        )
+        .as_bytes(),
+    )
 }
 
 const ORCHESTRATOR: &str = "orchestrator";
@@ -140,14 +149,11 @@ pub const COMMENT_PREFIX: &str = "[user comment #";
 const PLAN_VERIFIER: &str = "plan-verifier";
 /// Checks, after a plan ran, that the user's request was fully delivered.
 const AUDITOR: &str = "auditor";
-/// Extra worker turns, per round, for messages that arrived while it worked.
-/// Most reasoning, tool output and text kept in the events of one turn.
+/// Diagnostic reasoning and tool output retained per turn; agent text is unlimited.
 const TURN_BUDGET: usize = 64 * 1024;
-/// Longest block of agent text kept in one event.
-const TURN_TEXT: usize = 4000;
 
 /// What of a turn's stream is being recorded: fragments of text waiting to be
-/// stored as one block, and how much of the budget is used.
+/// stored as one block, and how much of the diagnostic budget is used.
 #[derive(Default)]
 struct TurnLog {
     text: String,
@@ -169,8 +175,6 @@ impl TurnLog {
 }
 
 const MAIL_TURNS: usize = 2;
-/// Longest worker report handed back to the orchestrator per task.
-const REPORT_LIMIT: usize = 40_000;
 
 pub struct Core {
     pub store: Store,
@@ -187,6 +191,7 @@ pub struct Core {
     in_place: Mutex<()>,
     /// Mail work must not occupy the plan scheduler's ownership slot.
     mail_jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    task_cancels: Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,
     mail_failures: Mutex<HashMap<(String, String), u64>>,
     turn_locks: Mutex<mail::TurnLocks>,
     /// Conversations with an orchestrator loop running, and its cancel flag.
@@ -277,6 +282,7 @@ impl Core {
             integrating: Mutex::new(()),
             in_place: Mutex::new(()),
             mail_jobs: Mutex::new(HashMap::new()),
+            task_cancels: Mutex::new(HashMap::new()),
             mail_failures: Mutex::new(HashMap::new()),
             turn_locks: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
@@ -518,6 +524,31 @@ impl Core {
         )))
     }
 
+    pub fn send_to_agent(
+        self: &Arc<Self>,
+        message: &store::AgentMessage,
+    ) -> Result<serde_json::Value> {
+        let _scope = self.integrating.lock().expect("integration mutex");
+        let reply = self.store.enqueue_agent_message(message)?;
+        if reply["state"] == "delivered" {
+            return Ok(reply);
+        }
+        if message.recipient.contains(':')
+            && let Some(plan) = &message.plan
+        {
+            let tasks = self.store.plan(plan)?;
+            for task in tasks {
+                self.announce_task(&message.conversation, &task, None);
+            }
+            self.maybe_continue_plan(&message.conversation, plan)?;
+        }
+        if message.recipient == ORCHESTRATOR {
+            self.wake(&message.conversation);
+        }
+        self.answer_in_background(&message.conversation, message.plan.as_deref().unwrap_or(""));
+        Ok(reply)
+    }
+
     pub fn conversation_scope_hash(&self, conversation: &str) -> Result<String> {
         let latest_seq = self.store.latest_event_seq(conversation)?;
         let paused = self.store.paused(conversation)?;
@@ -538,7 +569,13 @@ impl Core {
 
     pub fn plan_scope_hash(&self, _conversation: &str, plan_id: &str) -> Result<String> {
         let tasks = self.store.plan(plan_id)?;
-        Ok(plan_scope_hash(&tasks))
+        let revision = match self.store.plan_run(plan_id)? {
+            Some(id) => Some(self.store.run(_conversation, &id)?.spec_revision),
+            None => None,
+        };
+        Ok(crate::hash(
+            format!("{}:{revision:?}", plan_scope_hash(&tasks)).as_bytes(),
+        ))
     }
 
     pub fn diff_scope_hash(&self, conversation: &str, plan: &str, id: &str) -> Result<String> {
@@ -583,7 +620,21 @@ impl Core {
             } else if tasks.iter().any(|t| t.status == status::CANCELLED) {
                 "cancelled".to_owned()
             } else if tasks.iter().all(|t| t.status == status::APPROVED) {
-                "done".to_owned()
+                let complete = if let Some(plan) = &active_plan
+                    && let Some(run) = self.store.plan_run(plan)?
+                {
+                    self.ledger_fingerprint(&conv.id)
+                        .and_then(|fp| self.store.requirements_gaps(&conv.id, &run, &fp))
+                        .is_ok_and(|gaps| gaps.is_empty())
+                } else {
+                    false
+                };
+                if complete {
+                    "done"
+                } else {
+                    "requirements_pending"
+                }
+                .to_owned()
             } else {
                 "idle".to_owned()
             };
@@ -636,6 +687,18 @@ impl Core {
         target: &str,
         text: &str,
     ) -> Result<Comment> {
+        self.comment_at(conversation, plan_id, target, text, None, None)
+    }
+
+    pub fn comment_at(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: Option<&str>,
+        target: &str,
+        text: &str,
+        round: Option<u32>,
+        run: Option<&str>,
+    ) -> Result<Comment> {
         self.store.conversation(conversation)?;
         let text = text.trim();
         require(!text.is_empty(), "the comment is empty")?;
@@ -644,7 +707,13 @@ impl Core {
             Some(pid) => self.store.plan(pid)?,
             None => self.store.latest_plan(conversation)?,
         };
-        let label = comment_label(target, &plan);
+        let mut label = comment_label(target, &plan);
+        if let Some(round) = round {
+            label.push_str(&format!(" · round {round}"));
+        }
+        if let Some(run) = run {
+            label.push_str(&format!(" · run {run}"));
+        }
         let resolved_plan_id = match plan_id {
             Some(pid) => Some(pid.to_string()),
             None => plan.first().map(|task| task.plan_id.clone()),
@@ -663,9 +732,11 @@ impl Core {
         if is_plan_target(target) {
             return self.store.add_draft_comment(conversation, &new);
         }
-        let comment = self.store.add_comment(conversation, &new, |id| {
-            format!("{COMMENT_PREFIX}{id} on {label}] {text}")
-        })?;
+        let comment = self
+            .store
+            .add_comment_at(conversation, &new, round, run, |id| {
+                format!("{COMMENT_PREFIX}{id} on {label}] {text}")
+            })?;
         self.wake(conversation);
         Ok(comment)
     }
@@ -735,6 +806,16 @@ impl Core {
     }
 
     pub fn cancel(&self, conversation: &str) {
+        for (owner, flag) in self
+            .task_cancels
+            .lock()
+            .expect("task cancel mutex")
+            .values()
+        {
+            if owner == conversation {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
         for flags in [&self.running, &self.plans, &self.reviews, &self.mail_jobs] {
             if let Some(flag) = flags.lock().expect("flags mutex").get(conversation) {
                 flag.store(true, Ordering::SeqCst);
@@ -752,16 +833,12 @@ impl Core {
     }
 
     pub fn is_idle(&self, conversation: &str) -> bool {
-        !self
-            .running
-            .lock()
-            .expect("running mutex")
-            .contains_key(conversation)
-            && !self
-                .plans
-                .lock()
-                .expect("plans mutex")
-                .contains_key(conversation)
+        // A plan hands its report to the orchestrator while holding plans.
+        // Read those two slots in the same order to observe that handoff atomically.
+        let plans = self.plans.lock().expect("plans mutex");
+        let running = self.running.lock().expect("running mutex");
+        !plans.contains_key(conversation)
+            && !running.contains_key(conversation)
             && !self
                 .reviews
                 .lock()
@@ -806,6 +883,7 @@ impl Core {
         data.push('\0');
         data.push_str(&task.id);
         data.push('\0');
+        data.push_str(&task.input_generation.to_string());
         data.push_str(&task.round.to_string());
         data.push('\0');
         data.push_str(&task.status);
@@ -817,6 +895,16 @@ impl Core {
         data.push_str(&head);
         data.push('\0');
         data.push_str(&fp);
+        data.push_str(&task.input_generation.to_string());
+        if let Some(run) = self.store.plan_run(plan_id)? {
+            data.push_str(
+                &self
+                    .store
+                    .run(conversation, &run)?
+                    .spec_revision
+                    .to_string(),
+            );
+        }
         Ok(crate::hash(data.as_bytes()))
     }
 
@@ -1129,6 +1217,20 @@ impl Core {
     /// Agents resume their own sessions with what they already did; a change
     /// that was approved but could not be integrated is integrated again.
     pub fn resume_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<Vec<Task>> {
+        require(
+            self.store
+                .plan_belongs_to_conversation(conversation, plan_id)?,
+            "plan does not belong to conversation",
+        )?;
+        if self.store.plan_run(plan_id)?.is_none() {
+            require(
+                !self.store.messages_by(conversation, "user", 0)?.is_empty(),
+                "legacy plan needs original user sources before requirement extraction and a newly verified task mapping",
+            )?;
+            self.store.add_message(conversation,RUNTIME,&format!("Legacy plan {plan_id} cannot resume without source extraction and independent ledger verification. Read the original user sources and historical plan as input, then propose a replacement task plan with explicit run_id, requirement_ids, criterion_ids and plan_item_ids. Historical reports are not completion evidence."))?;
+            self.wake(conversation);
+            return Err(Error::Invalid("legacy plan needs requirement extraction and a newly verified task mapping before execution; replanning requested".into()));
+        }
         self.start_plan(conversation, plan_id, |store| {
             require(
                 store.requeue_plan(conversation, plan_id)? > 0,
@@ -1182,7 +1284,7 @@ impl Core {
         let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
 
         let _one_at_a_time = self.integrating.lock().expect("integration mutex");
-
+        self.store.assert_task_inputs(&task)?;
         let current_token = self.task_freshness_token(&req.conversation, &req.plan, &task.id)?;
         require(req.freshness_token == current_token, "stale_token")?;
         require(
@@ -1793,7 +1895,7 @@ impl Core {
             let plans = self.plans.lock().expect("plans mutex");
             if !plans.contains_key(conversation) {
                 drop(plans);
-                let _ = self.start_plan(conversation, plan_id, |_| Ok(()));
+                self.start_plan_with_scope_lock(conversation, plan_id, |_| Ok(()))?;
             }
         }
         Ok(())
@@ -1805,11 +1907,27 @@ impl Core {
         plan_id: &str,
         queue: impl FnOnce(&Store) -> Result<()>,
     ) -> Result<Vec<Task>> {
+        let _integration = self.integrating.lock().expect("integration mutex");
+        self.start_plan_with_scope_lock(conversation, plan_id, queue)
+    }
+
+    /// Caller holds the integration/scope mutex, including recovery paths.
+    fn start_plan_with_scope_lock(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: &str,
+        queue: impl FnOnce(&Store) -> Result<()>,
+    ) -> Result<Vec<Task>> {
         let mut plans = self.plans.lock().expect("plans mutex");
         require(
             !plans.contains_key(conversation),
             "a plan is already running",
         )?;
+        let run = self.store.plan_run(plan_id)?.ok_or_else(|| Error::Invalid("legacy plan needs requirement extraction and a newly verified task mapping before execution".into()))?;
+        self.validate_ledger_plan(conversation, plan_id, &run)?;
+        for task in self.store.plan(plan_id)? {
+            self.store.assert_task_inputs(&task)?;
+        }
         queue(&self.store)?;
         self.blocked_seen
             .lock()
@@ -1840,7 +1958,8 @@ impl Core {
             // do not run the premature audit or report; await recovery action.
             let tasks = core.store.plan(&plan_id).unwrap_or_default();
             let has_blocked = tasks.iter().any(|t| {
-                t.status == status::NEEDS_USER
+                t.status == status::STALE
+                    || t.status == status::NEEDS_USER
                     || t.status == status::WAITING
                     || t.status == status::FAILED
             });
@@ -2091,6 +2210,10 @@ impl Core {
         let Some(answer) = self.turn(setup, cancel, |first| {
             let mut prompt = orchestrator_prompt(&project, first || answered == 0, &asked, &open);
             prompt.push_str(&comment_context);
+            if let Ok(Some(run)) = self.store.latest_run(conversation) {
+                prompt.push_str(&self.ledger_context(conversation, &run.id).unwrap_or_default());
+                prompt.push_str("\nYour plan JSON must contain run_id and each task must include requirement_ids, criterion_ids and plan_item_ids. Cover every mandatory criterion and every plan item. Preserve the active run for corrections and continuations.\n");
+            }
             prompt
         })?
         else {
@@ -2113,6 +2236,7 @@ impl Core {
             (answer, None)
         };
         let (answer, unblocking) = tasks::parse_recoveries(&answer);
+        let proposed_run = tasks::proposed_run(&answer);
         let (text, plan) = tasks::parse_plan(&answer);
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
         if !unblocking.is_empty() {
@@ -2139,7 +2263,7 @@ impl Core {
                     conversation,
                     &project,
                     &text,
-                    (&config, &specs),
+                    (&config, &specs, proposed_run.as_deref()),
                     addressed.as_deref(),
                     cancel,
                 )?
@@ -2185,17 +2309,62 @@ impl Core {
         conversation: &str,
         project: &Path,
         text: &str,
-        proposal: (&Config, &[TaskSpec]),
+        proposal: (&Config, &[TaskSpec], Option<&str>),
         addressed: Option<&[u64]>,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        let (config, specs) = proposal;
+        let (config, specs, proposed_run) = proposal;
+        let run = match self.ensure_requirements(conversation, cancel) {
+            Ok(run) => run,
+            Err(error) => {
+                self.notice(
+                    conversation,
+                    &format!("requirements preparation failed: {error}"),
+                );
+                return Ok(());
+            }
+        };
+        if proposed_run != Some(run.id.as_str()) {
+            self.store.append_event(conversation,None,None,"ledger_plan_rejected",&json!({"error":"planner must explicitly bind the verified run_id; regenerating plan"}))?;
+            if self
+                .store
+                .count_since_user(conversation, "requirements-planner")?
+                < tasks::MAX_ROUNDS as usize
+            {
+                self.store.add_message(conversation, "requirements-planner", &format!("Create a task plan from the verified ledger, with explicit run_id {} and task requirement_ids, criterion_ids, plan_item_ids. {}", run.id, self.ledger_context(conversation, &run.id)?))?;
+            }
+            return Ok(());
+        }
         let values = specs
             .iter()
             .map(serde_json::to_value)
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let tasks = self.store.add_plan(conversation, &values)?;
         let plan_id = tasks[0].plan_id.clone();
+        self.store.link_plan_run(conversation, &plan_id, &run.id)?;
+        if let Err(error) = self.validate_ledger_plan(conversation, &plan_id, &run.id) {
+            self.store
+                .set_plan_status(&plan_id, status::PROPOSED, status::REVISED)?;
+            self.notice(
+                conversation,
+                &format!("plan ledger mapping rejected: {error}"),
+            );
+            if self
+                .store
+                .count_since_user(conversation, "requirements-planner")?
+                < tasks::MAX_ROUNDS as usize
+            {
+                self.store.add_message(
+                    conversation,
+                    "requirements-planner",
+                    &format!(
+                        "Regenerate the task plan from the verified ledger. {error}. {}",
+                        self.ledger_context(conversation, &run.id)?
+                    ),
+                )?;
+            }
+            return Ok(());
+        }
         // Capture the answered boundary before the verifier runs: comments
         // added during either turn have not been incorporated in this plan.
         let answered = self.store.last_orchestration_answered(conversation)?;
@@ -2275,7 +2444,7 @@ impl Core {
         } else {
             None
         };
-        let scope_hash = plan_scope_hash(&tasks);
+        let scope_hash = self.plan_scope_hash(conversation, &plan_id)?;
         let document = tasks::render_plan_document(text, specs);
         let parallel = tasks::parallel_peers(specs);
         self.store.append_event(
@@ -2401,7 +2570,13 @@ impl Core {
             .as_ref()
             .map_or("unconfigured", |profile| agent::name(profile.provider));
         let resume = self.store.last_session(conversation, &role, provider)?;
-        let inbox = self.store.pending_mail(conversation, &role)?;
+        let mut inbox = self.store.pending_mail(conversation, &role)?;
+        if mail_only && role == ORCHESTRATOR {
+            inbox.retain(|mail| mail.kind != "agent_work");
+        }
+        if mail_only && inbox.is_empty() {
+            return Ok(None);
+        }
         let comments: Vec<u64> = if role == ORCHESTRATOR || role == COMMENT_ORCHESTRATOR {
             let answered = self.store.last_orchestration_answered(conversation)?;
             self.store
@@ -2420,14 +2595,17 @@ impl Core {
             upto_message,
             plan_id.as_deref(),
         )?;
+        let persistence_error = std::cell::RefCell::new(None);
         let announce = |kind: &str, payload: serde_json::Value| {
-            let _ = self.store.append_event(
+            if let Err(error) = self.store.append_event(
                 conversation,
                 Some(&turn.id),
                 turn.plan_id.as_deref(),
                 kind,
                 &payload,
-            );
+            ) {
+                persistence_error.borrow_mut().get_or_insert(error);
+            }
         };
         let log = std::cell::RefCell::new(TurnLog::default());
         // A verifier reports its checks while it works; they are recorded as
@@ -2446,14 +2624,11 @@ impl Core {
         let flush_text = |log: &std::cell::RefCell<TurnLog>| {
             let mut log = log.borrow_mut();
             let text = std::mem::take(&mut log.text);
-            if text.trim().is_empty() || !log.admit(text.len().min(TURN_TEXT)) {
+            if text.is_empty() {
                 return;
             }
             log.stored_text = true;
-            announce(
-                "agent",
-                json!({"type": "text", "delta": agent::clip(&text, TURN_TEXT)}),
-            );
+            announce("agent", json!({"type": "text", "delta": text}));
         };
         // What ran, for the history and its export (design §15).
         announce(
@@ -2478,19 +2653,39 @@ impl Core {
                 access,
                 resume: resume.clone(),
             };
-            let mut text = if inbox.is_empty() {
+            let prompt_mail = inbox
+                .iter()
+                .filter(|mail| !(role == ORCHESTRATOR && mail.kind == "agent_work"))
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut text = if prompt_mail.is_empty() {
                 String::new()
             } else {
-                tasks::inbox_text(&inbox)
+                tasks::inbox_text(&prompt_mail)
             };
             text.push_str(&prompt(resume.is_none()));
+            if let Some((id, _)) = task_role(&role)
+                && let Some(task) = self.store.task_by_id(id)?
+            {
+                if !mail_only {
+                    require(
+                        task.status != status::STALE,
+                        "task was invalidated before its process started",
+                    )?;
+                    self.store.assert_task_inputs(&task)?;
+                }
+                text.push_str(&self.task_ledger_context(conversation, &task)?);
+            }
+            for message in &inbox {
+                if message.sender == "user" {
+                    announce("agent", json!({"type":"user","text":message.text}));
+                }
+            }
             // What the agent was asked, for its session view.
             announce(
                 "agent",
-                serde_json::to_value(agent::Event::Prompt {
-                    text: agent::clip_tail(&text, agent::OUTPUT),
-                })
-                .unwrap_or_default(),
+                serde_json::to_value(agent::Event::Prompt { text: text.clone() })
+                    .unwrap_or_default(),
             );
             agent::run(&spec, &text, cancel, &mut |event| {
                 match &event {
@@ -2505,6 +2700,9 @@ impl Core {
                     agent::Event::Text { delta } => {
                         log.borrow_mut().text.push_str(delta);
                         record(progress.borrow_mut().push(delta));
+                        if log.borrow().text.len() >= content::CHUNK_BYTES {
+                            flush_text(&log);
+                        }
                         return;
                     }
                     _ => {}
@@ -2546,10 +2744,19 @@ impl Core {
                 );
                 // Some CLIs report the answer only at the end.
                 if !log.borrow().stored_text {
-                    let preview = agent::clip(&outcome.text, TURN_TEXT);
-                    if !preview.trim().is_empty() {
+                    let preview = &outcome.text;
+                    if !preview.is_empty() {
                         announce("agent", json!({"type": "text", "delta": preview}));
                     }
+                }
+                announce("agent_final", json!({"text": outcome.text}));
+                if let Some(error) = persistence_error.borrow_mut().take() {
+                    self.store.finish_turn(
+                        &turn.id,
+                        TurnStatus::Failed,
+                        Some(&error.to_string()),
+                    )?;
+                    return Err(error);
                 }
                 self.store.finish_turn(&turn.id, TurnStatus::Done, None)?;
                 let delivered: Vec<u64> = inbox.iter().map(|mail| mail.id).collect();
@@ -2578,6 +2785,9 @@ impl Core {
     /// Stores one check the verifier reported and tells frontends, when it
     /// changed what they show.
     fn record_check(&self, conversation: &str, task: &Task, update: &tasks::CheckUpdate) {
+        if self.store.assert_task_inputs(task).is_err() {
+            return;
+        }
         let state = if update.status.is_some() {
             "settled"
         } else {
@@ -2714,9 +2924,15 @@ impl Core {
                             }
                             let mut task_clone = task.clone();
                             let tx = done_tx.clone();
+                            let task_cancel =
+                                Arc::new(AtomicBool::new(cancel.load(Ordering::SeqCst)));
+                            self.task_cancels.lock().expect("task cancel mutex").insert(
+                                task.id.clone(),
+                                (conversation.into(), task_cancel.clone()),
+                            );
                             scope.spawn(move || {
                                 if let Err(error) =
-                                    self.run_task(conversation, &mut task_clone, cancel)
+                                    self.run_task(conversation, &mut task_clone, &task_cancel)
                                 {
                                     task_clone.report = Some(error.to_string());
                                     let _ = self.stop(
@@ -2728,6 +2944,10 @@ impl Core {
                                 }
                                 let _ =
                                     self.answer_waiting(conversation, &task_clone.plan_id, cancel);
+                                self.task_cancels
+                                    .lock()
+                                    .expect("task cancel mutex")
+                                    .remove(&task_clone.id);
                                 let _ = tx.send(spec_id);
                             });
                         }
@@ -2761,6 +2981,7 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<()> {
         let config = self.config_snapshot();
+        self.store.assert_task_inputs(task)?;
         let mut spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let in_place = spec.writes && config.workspace.mode == WorkspaceMode::InPlace;
@@ -2857,7 +3078,8 @@ impl Core {
             .into_iter()
             .filter_map(|task| serde_json::from_value(task.spec).ok())
             .collect();
-        let upstream = self.upstream(&task.plan_id, &spec)?;
+        let upstream =
+            self.upstream(&task.plan_id, &spec)? + &self.task_ledger_context(conversation, task)?;
         let worker = format!("worker:{}", task.id);
         let verifier = format!("verifier:{}", task.id);
         // A resumed task keeps its rounds and its verifier's last word.
@@ -2876,6 +3098,11 @@ impl Core {
             }
         }
         let mut findings = verdict.map(|verdict| verdict.findings).unwrap_or_default();
+        let mut dependents_invalidated = self
+            .store
+            .pending_mail(conversation, &worker)?
+            .iter()
+            .any(|mail| mail.kind == "agent_work");
         let resumed = task.round > 0;
         let first_round = task.round + 1;
         // Supervised: a few rounds run on their own, then the user decides.
@@ -2891,9 +3118,32 @@ impl Core {
             let config = self.config_snapshot();
             task.round = round;
             task.verdict = None;
-            // A new round starts without an earlier round's card result.
+            // A verifier-only request checks the same result; a worker round
+            // begins without exposing the preceding report as its new result.
+            let recheck = task.report.is_some()
+                && self
+                    .store
+                    .pending_mail(conversation, &verifier)?
+                    .iter()
+                    .any(|mail| mail.kind == "agent_work")
+                && self.store.pending_mail(conversation, &worker)?.is_empty();
+            if !recheck && resumed && !dependents_invalidated {
+                self.store.invalidate_task_dependents(conversation, task)?;
+                dependents_invalidated = true;
+            }
+            if !recheck {
+                task.report = None;
+            }
             task.feedback = None;
-            self.set_status(conversation, task, status::WORKING)?;
+            self.set_status(
+                conversation,
+                task,
+                if recheck {
+                    status::VERIFYING
+                } else {
+                    status::WORKING
+                },
+            )?;
             let worker_setup = || TurnSetup {
                 conversation,
                 plan_id: Some(task.plan_id.clone()),
@@ -2910,17 +3160,23 @@ impl Core {
                 access,
                 upto_message: 0,
             };
-            let report = self.turn(worker_setup(), cancel, |first| {
-                if first || round == 1 {
-                    tasks::worker_prompt(&project_text, &spec, &team, autonomous)
-                        + &upstream
-                        + &tasks::user_edits_note(&user_edits)
-                } else if resumed && round == first_round {
-                    tasks::worker_resume(&findings)
-                } else {
-                    tasks::worker_followup(&findings)
-                }
-            })?;
+            let report = if recheck {
+                task.report.clone()
+            } else {
+                self.turn(worker_setup(), cancel, |first| {
+                    if first || round == 1 {
+                        tasks::worker_prompt(&project_text, &spec, &team, autonomous)
+                            + &upstream
+                            + &tasks::user_edits_note(&user_edits)
+                    } else if resumed && round == first_round {
+                        tasks::worker_resume(&findings)
+                            + &upstream
+                            + &tasks::user_edits_note(&user_edits)
+                    } else {
+                        tasks::worker_followup(&findings)
+                    }
+                })?
+            };
             let Some(report) = report else {
                 return self.stop_task(conversation, task, &worker, cancel);
             };
@@ -3126,6 +3382,21 @@ impl Core {
                     Some("the verifier's verdict still leaves obligations unaccounted for"),
                 );
             }
+            let worker_mail = self
+                .store
+                .pending_mail(conversation, &worker)?
+                .iter()
+                .any(|mail| mail.kind == "agent_work");
+            let verifier_mail = self
+                .store
+                .pending_mail(conversation, &verifier)?
+                .iter()
+                .any(|mail| mail.kind == "agent_work");
+            if worker_mail || verifier_mail {
+                self.store.update_task(task)?;
+                findings = verdict.findings;
+                continue;
+            }
             if verdict.approved {
                 return match &worktree {
                     Some(path) => {
@@ -3135,6 +3406,10 @@ impl Core {
                         self.finish_in_place(conversation, task, &spec, &project, &config)
                     }
                     None => {
+                        let _integration = self.integrating.lock().expect("integration mutex");
+                        if self.defer_agent_work(conversation, task)? {
+                            return Ok(());
+                        }
                         land(
                             task,
                             Outcome::NotApplicable,
@@ -3297,7 +3572,28 @@ impl Core {
                 };
                 origin = format!("{prefix}:{}", source.id);
             }
-            self.store.add_mail(
+            let source_role = plan
+                .iter()
+                .find(|task| task.spec["id"] == own_task)
+                .map(|task| {
+                    format!(
+                        "{}:{}",
+                        if sender.ends_with("/verifier") {
+                            "verifier"
+                        } else if sender.ends_with("/review") {
+                            "code-review"
+                        } else {
+                            "worker"
+                        },
+                        task.id
+                    )
+                })
+                .unwrap_or_else(|| sender.into());
+            let source_turn = self
+                .store
+                .last_turn(conversation, &source_role)?
+                .map(|turn| turn.id);
+            self.store.add_mail_from(
                 conversation,
                 &role,
                 &Mail {
@@ -3311,6 +3607,7 @@ impl Core {
                     delivered_ms: None,
                     state: "queued".into(),
                 },
+                source_turn.as_deref(),
             )?;
         }
         self.answer_in_background(conversation, plan_id.unwrap_or(""));
@@ -3461,6 +3758,25 @@ impl Core {
         git::snapshot(project, "User working tree before task")
     }
 
+    fn defer_agent_work(&self, conversation: &str, task: &mut Task) -> Result<bool> {
+        let pending = [
+            format!("worker:{}", task.id),
+            format!("verifier:{}", task.id),
+        ]
+        .iter()
+        .map(|role| self.store.pending_mail(conversation, role))
+        .collect::<Result<Vec<_>>>()?
+        .iter()
+        .flatten()
+        .any(|mail| mail.kind == "agent_work");
+        if pending {
+            task.verdict = None;
+            task.feedback = None;
+            self.set_status(conversation, task, status::QUEUED)?;
+        }
+        Ok(pending)
+    }
+
     /// Lands an approved writer's work on the user's branch as one change.
     /// Anything that would touch the user's own edits, or conflict, waits for
     /// the user with the work kept on its branch.
@@ -3473,6 +3789,10 @@ impl Core {
         worktree: &Path,
         config: &Config,
     ) -> Result<()> {
+        let _integration = self.integrating.lock().expect("integration mutex");
+        if self.defer_agent_work(conversation, task)? {
+            return Ok(());
+        }
         let base = task.base.clone().unwrap_or_default();
         let result = git::head(worktree)?;
         let note = |task: &mut Task, text: String| {
@@ -3480,6 +3800,7 @@ impl Core {
             task.report = Some(format!("{report}\n\n[integration] {text}"));
         };
         if result == base {
+            self.store.assert_task_inputs(task)?;
             note(task, "no file changes".into());
             git::remove_worktree(project, worktree, &branch(task))?;
             land(
@@ -3514,7 +3835,7 @@ impl Core {
         let change = git::squash(worktree, &base, &spec.title)?;
         task.result = Some(change.clone());
         let outcome = {
-            let _one_at_a_time = self.integrating.lock().expect("integration mutex");
+            self.store.assert_task_inputs(task)?;
             let changed = git::changed_files(project, &base, &change)?;
             let dirty = git::uncommitted(project)?;
             let protected: Vec<String> = self
@@ -3655,6 +3976,11 @@ impl Core {
         project: &Path,
         config: &Config,
     ) -> Result<()> {
+        let _integration = self.integrating.lock().expect("integration mutex");
+        if self.defer_agent_work(conversation, task)? {
+            return Ok(());
+        }
+        self.store.assert_task_inputs(task)?;
         let (Some(base), Some(result)) = (task.base.clone(), task.result.clone()) else {
             land(
                 task,
@@ -3671,7 +3997,6 @@ impl Core {
         let commit = if files.is_empty() {
             None
         } else if config.policy.local_commits {
-            let _one_at_a_time = self.integrating.lock().expect("integration mutex");
             Some(git::commit_paths(project, &files, &spec.title)?)
         } else {
             None
@@ -3751,10 +4076,6 @@ impl Core {
         let mut results = String::new();
         for task in &tasks {
             let report = task.report.as_deref().unwrap_or("(no report)");
-            let report = match report.char_indices().nth(REPORT_LIMIT) {
-                Some((end, _)) => format!("{}\n[report truncated]", &report[..end]),
-                None => report.to_owned(),
-            };
             let findings = if task.status == status::APPROVED {
                 "none".into()
             } else if let Some(verdict) = task
@@ -3783,6 +4104,12 @@ impl Core {
                 task.spec["goal"].as_str().unwrap_or_default(),
             ));
         }
+        let compliance_gaps = if cancel.load(Ordering::SeqCst) {
+            vec!["compliance audit cancelled".to_owned()]
+        } else {
+            self.compliance_audit(conversation, plan_id, cancel)
+                .unwrap_or_else(|error| vec![format!("compliance audit failed: {error}")])
+        };
         let mut text = format!(
             "The plan finished. Results of each task follow. Answer the user's \
              request using them; verify anything doubtful in the files yourself.\n{results}"
@@ -3804,7 +4131,15 @@ impl Core {
                     }
                 },
             )?;
-            let has_unapproved = tasks.iter().any(|t| t.status != status::APPROVED);
+            let has_unapproved =
+                tasks.iter().any(|t| t.status != status::APPROVED) || !compliance_gaps.is_empty();
+            if let Ok(ref mut verdict) = audit {
+                for gap in &compliance_gaps {
+                    verdict
+                        .findings
+                        .push(json!({"severity":"high", "issue":gap,"where":"requirement ledger"}));
+                }
+            }
             if has_unapproved
                 && let Ok(ref mut verdict) = audit
                 && verdict.approved
@@ -3845,6 +4180,9 @@ impl Core {
                      user the result is unaudited.\n"
                 ),
             });
+        }
+        if !compliance_gaps.is_empty() {
+            text.push_str(&format!("\nRuntime requirements_complete gate is CLOSED. Do not claim success. Open obligations:\n{}\nPropose executor work for missing evidence; verifiers stay read-only.\n", compliance_gaps.join("\n")));
         }
         Ok(text)
     }

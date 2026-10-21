@@ -57,6 +57,109 @@ pub fn build_identity(executable: &Path) -> Result<String> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
+    CommentAt {
+        conversation: String,
+        plan: Option<String>,
+        target: String,
+        text: String,
+        round: Option<u32>,
+        run: Option<String>,
+    },
+
+    SendToAgent {
+        message: super::store::AgentMessage,
+    },
+    TaskRounds {
+        conversation: String,
+        plan: String,
+        id: String,
+    },
+    TaskRound {
+        conversation: String,
+        plan: String,
+        id: String,
+        round: u32,
+        references: Option<bool>,
+    },
+    SessionEvents {
+        conversation: String,
+        turn: String,
+        after: u64,
+        limit: Option<usize>,
+        include_messages: Option<bool>,
+    },
+    HistoryContent {
+        conversation: String,
+        owner: super::store::ContentOwner,
+        offset: u64,
+    },
+    HistoryMessages {
+        conversation: String,
+        scope: super::store::HistoryScope,
+        after: u64,
+        limit: Option<usize>,
+    },
+    SessionContent {
+        conversation: String,
+        event: u64,
+        field: String,
+        offset: u64,
+    },
+
+    ListRuns {
+        conversation: String,
+    },
+    GetLedgerProposal {
+        conversation: String,
+        run_id: String,
+    },
+
+    ListRequirements {
+        query: super::ledger::LedgerQuery,
+    },
+    ListPlanItems {
+        query: super::ledger::LedgerQuery,
+    },
+    GetLedgerEntry {
+        conversation: String,
+        run_id: String,
+        id: String,
+        revision: Option<i64>,
+    },
+    GetLedgerDiff {
+        conversation: String,
+        run_id: String,
+        from_revision: i64,
+        to_revision: i64,
+    },
+    GetEvidence {
+        conversation: String,
+        run_id: String,
+        entry_id: Option<String>,
+    },
+    ProposeLedgerChange {
+        change: super::ledger::LedgerChange,
+    },
+    ApplyLedgerChange {
+        proposal_id: String,
+        diff_hash: String,
+        change: super::ledger::LedgerChange,
+    },
+    CreateRun {
+        conversation: String,
+        goal: String,
+    },
+    AddLedgerSource {
+        conversation: String,
+        run_id: String,
+        text: String,
+    },
+    GetLedgerSource {
+        conversation: String,
+        run_id: String,
+        source_id: String,
+    },
+
     /// Which binary the daemon runs and whether it is executing work.
     Identity,
     GetConfig,
@@ -243,6 +346,111 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum WireRequest {
+    CommentAt {
+        conversation: String,
+        plan: Option<String>,
+        target: String,
+        text: String,
+        round: Option<u32>,
+        run: Option<String>,
+    },
+
+    SendToAgent {
+        message: super::store::AgentMessage,
+    },
+    TaskRounds {
+        conversation: String,
+        plan: String,
+        id: String,
+    },
+    TaskRound {
+        conversation: String,
+        plan: String,
+        id: String,
+        round: u32,
+        #[serde(default)]
+        references: Option<bool>,
+    },
+    SessionEvents {
+        conversation: String,
+        turn: String,
+        after: u64,
+        limit: Option<usize>,
+        #[serde(default)]
+        include_messages: Option<bool>,
+    },
+    HistoryContent {
+        conversation: String,
+        owner: super::store::ContentOwner,
+        offset: u64,
+    },
+    HistoryMessages {
+        conversation: String,
+        scope: super::store::HistoryScope,
+        after: u64,
+        limit: Option<usize>,
+    },
+    SessionContent {
+        conversation: String,
+        event: u64,
+        field: String,
+        offset: u64,
+    },
+
+    ListRuns {
+        conversation: String,
+    },
+    GetLedgerProposal {
+        conversation: String,
+        run_id: String,
+    },
+
+    ListRequirements {
+        query: super::ledger::LedgerQuery,
+    },
+    ListPlanItems {
+        query: super::ledger::LedgerQuery,
+    },
+    GetLedgerEntry {
+        conversation: String,
+        run_id: String,
+        id: String,
+        revision: Option<i64>,
+    },
+    GetLedgerDiff {
+        conversation: String,
+        run_id: String,
+        from_revision: i64,
+        to_revision: i64,
+    },
+    GetEvidence {
+        conversation: String,
+        run_id: String,
+        entry_id: Option<String>,
+    },
+    ProposeLedgerChange {
+        change: super::ledger::LedgerChange,
+    },
+    ApplyLedgerChange {
+        proposal_id: String,
+        diff_hash: String,
+        change: super::ledger::LedgerChange,
+    },
+    CreateRun {
+        conversation: String,
+        goal: String,
+    },
+    AddLedgerSource {
+        conversation: String,
+        run_id: String,
+        text: String,
+    },
+    GetLedgerSource {
+        conversation: String,
+        run_id: String,
+        source_id: String,
+    },
+
     Identity,
     GetConfig,
     SetConfig {
@@ -394,6 +602,162 @@ enum WireRequest {
 impl From<Request> for WireRequest {
     fn from(req: Request) -> Self {
         match req {
+            Request::CommentAt {
+                conversation,
+                plan,
+                target,
+                text,
+                round,
+                run,
+            } => WireRequest::CommentAt {
+                conversation,
+                plan,
+                target,
+                text,
+                round,
+                run,
+            },
+            Request::SendToAgent { message } => WireRequest::SendToAgent { message },
+            Request::TaskRounds {
+                conversation,
+                plan,
+                id,
+            } => WireRequest::TaskRounds {
+                conversation,
+                plan,
+                id,
+            },
+            Request::TaskRound {
+                conversation,
+                plan,
+                id,
+                round,
+                references,
+            } => WireRequest::TaskRound {
+                conversation,
+                plan,
+                id,
+                round,
+                references,
+            },
+            Request::SessionEvents {
+                conversation,
+                turn,
+                after,
+                limit,
+                include_messages,
+            } => WireRequest::SessionEvents {
+                conversation,
+                turn,
+                after,
+                limit,
+                include_messages,
+            },
+            Request::HistoryContent {
+                conversation,
+                owner,
+                offset,
+            } => WireRequest::HistoryContent {
+                conversation,
+                owner,
+                offset,
+            },
+            Request::HistoryMessages {
+                conversation,
+                scope,
+                after,
+                limit,
+            } => WireRequest::HistoryMessages {
+                conversation,
+                scope,
+                after,
+                limit,
+            },
+            Request::SessionContent {
+                conversation,
+                event,
+                field,
+                offset,
+            } => WireRequest::SessionContent {
+                conversation,
+                event,
+                field,
+                offset,
+            },
+            Request::ListRuns { conversation } => WireRequest::ListRuns { conversation },
+            Request::GetLedgerProposal {
+                conversation,
+                run_id,
+            } => WireRequest::GetLedgerProposal {
+                conversation,
+                run_id,
+            },
+
+            Request::ListRequirements { query } => WireRequest::ListRequirements { query },
+            Request::ListPlanItems { query } => WireRequest::ListPlanItems { query },
+            Request::GetLedgerEntry {
+                conversation,
+                run_id,
+                id,
+                revision,
+            } => WireRequest::GetLedgerEntry {
+                conversation,
+                run_id,
+                id,
+                revision,
+            },
+            Request::GetLedgerDiff {
+                conversation,
+                run_id,
+                from_revision,
+                to_revision,
+            } => WireRequest::GetLedgerDiff {
+                conversation,
+                run_id,
+                from_revision,
+                to_revision,
+            },
+            Request::GetEvidence {
+                conversation,
+                run_id,
+                entry_id,
+            } => WireRequest::GetEvidence {
+                conversation,
+                run_id,
+                entry_id,
+            },
+            Request::ProposeLedgerChange { change } => WireRequest::ProposeLedgerChange { change },
+            Request::ApplyLedgerChange {
+                proposal_id,
+                diff_hash,
+                change,
+            } => WireRequest::ApplyLedgerChange {
+                proposal_id,
+                diff_hash,
+                change,
+            },
+            Request::CreateRun { conversation, goal } => {
+                WireRequest::CreateRun { conversation, goal }
+            }
+            Request::AddLedgerSource {
+                conversation,
+                run_id,
+                text,
+            } => WireRequest::AddLedgerSource {
+                conversation,
+                run_id,
+                text,
+            },
+            Request::GetLedgerSource {
+                conversation,
+                run_id,
+                source_id,
+            } => WireRequest::GetLedgerSource {
+                conversation,
+                run_id,
+                source_id,
+            },
+
             Request::Identity => WireRequest::Identity,
             Request::GetConfig => WireRequest::GetConfig,
             Request::SetConfig {
@@ -653,6 +1017,162 @@ impl From<Request> for WireRequest {
 impl From<WireRequest> for Request {
     fn from(wire: WireRequest) -> Self {
         match wire {
+            WireRequest::CommentAt {
+                conversation,
+                plan,
+                target,
+                text,
+                round,
+                run,
+            } => Request::CommentAt {
+                conversation,
+                plan,
+                target,
+                text,
+                round,
+                run,
+            },
+            WireRequest::SendToAgent { message } => Request::SendToAgent { message },
+            WireRequest::TaskRounds {
+                conversation,
+                plan,
+                id,
+            } => Request::TaskRounds {
+                conversation,
+                plan,
+                id,
+            },
+            WireRequest::TaskRound {
+                conversation,
+                plan,
+                id,
+                round,
+                references,
+            } => Request::TaskRound {
+                conversation,
+                plan,
+                id,
+                round,
+                references,
+            },
+            WireRequest::SessionEvents {
+                conversation,
+                turn,
+                after,
+                limit,
+                include_messages,
+            } => Request::SessionEvents {
+                conversation,
+                turn,
+                after,
+                limit,
+                include_messages,
+            },
+            WireRequest::HistoryContent {
+                conversation,
+                owner,
+                offset,
+            } => Request::HistoryContent {
+                conversation,
+                owner,
+                offset,
+            },
+            WireRequest::HistoryMessages {
+                conversation,
+                scope,
+                after,
+                limit,
+            } => Request::HistoryMessages {
+                conversation,
+                scope,
+                after,
+                limit,
+            },
+            WireRequest::SessionContent {
+                conversation,
+                event,
+                field,
+                offset,
+            } => Request::SessionContent {
+                conversation,
+                event,
+                field,
+                offset,
+            },
+            WireRequest::ListRuns { conversation } => Request::ListRuns { conversation },
+            WireRequest::GetLedgerProposal {
+                conversation,
+                run_id,
+            } => Request::GetLedgerProposal {
+                conversation,
+                run_id,
+            },
+
+            WireRequest::ListRequirements { query } => Request::ListRequirements { query },
+            WireRequest::ListPlanItems { query } => Request::ListPlanItems { query },
+            WireRequest::GetLedgerEntry {
+                conversation,
+                run_id,
+                id,
+                revision,
+            } => Request::GetLedgerEntry {
+                conversation,
+                run_id,
+                id,
+                revision,
+            },
+            WireRequest::GetLedgerDiff {
+                conversation,
+                run_id,
+                from_revision,
+                to_revision,
+            } => Request::GetLedgerDiff {
+                conversation,
+                run_id,
+                from_revision,
+                to_revision,
+            },
+            WireRequest::GetEvidence {
+                conversation,
+                run_id,
+                entry_id,
+            } => Request::GetEvidence {
+                conversation,
+                run_id,
+                entry_id,
+            },
+            WireRequest::ProposeLedgerChange { change } => Request::ProposeLedgerChange { change },
+            WireRequest::ApplyLedgerChange {
+                proposal_id,
+                diff_hash,
+                change,
+            } => Request::ApplyLedgerChange {
+                proposal_id,
+                diff_hash,
+                change,
+            },
+            WireRequest::CreateRun { conversation, goal } => {
+                Request::CreateRun { conversation, goal }
+            }
+            WireRequest::AddLedgerSource {
+                conversation,
+                run_id,
+                text,
+            } => Request::AddLedgerSource {
+                conversation,
+                run_id,
+                text,
+            },
+            WireRequest::GetLedgerSource {
+                conversation,
+                run_id,
+                source_id,
+            } => Request::GetLedgerSource {
+                conversation,
+                run_id,
+                source_id,
+            },
+
             WireRequest::Identity => Request::Identity,
             WireRequest::GetConfig => Request::GetConfig,
             WireRequest::SetConfig {
@@ -1053,10 +1573,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
                     },
                 };
             let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-            if let Ok(mut bytes) = serde_json::to_vec(&response) {
-                bytes.push(b'\n');
-                let _ = stream.write_all(&bytes);
-            }
+            let _ = crate::transport::write(&mut stream, &response);
             if shutdown && response.error.is_none() {
                 let _ = std::fs::remove_file(&socket);
                 std::process::exit(0);
@@ -1076,6 +1593,105 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         "the daemon is stopping",
     )?;
     Ok(match request {
+        Request::ListRuns { conversation } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.store.list_runs(&conversation)?)
+        }
+        Request::GetLedgerProposal {
+            conversation,
+            run_id,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.store.latest_ledger_proposal(&conversation, &run_id)?
+        }
+        Request::ListRequirements { query } => {
+            validate_project_conversation(core, project, &query.conversation)?;
+            json!(core.ledger_query(query, super::ledger::LedgerKind::Requirement)?)
+        }
+        Request::ListPlanItems { query } => {
+            validate_project_conversation(core, project, &query.conversation)?;
+            json!(core.ledger_query(query, super::ledger::LedgerKind::PlanItem)?)
+        }
+        Request::GetLedgerEntry {
+            conversation,
+            run_id,
+            id,
+            revision,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            let fp = core.ledger_fingerprint(&conversation).unwrap_or_default();
+            let entries = core
+                .store
+                .ledger_statuses(&conversation, &run_id, revision, &fp)?;
+            let entry = entries
+                .into_iter()
+                .find(|e| e.spec.id == id)
+                .ok_or_else(|| Error::Invalid("unknown ledger entry".into()))?;
+            json!({"entry":entry,"history":core.store.ledger_entry_history(&conversation, &run_id, &id)?,"evidence":core.store.ledger_evidence(&conversation,&run_id,Some(&id))?,"tasks":core.store.ledger_entry_tasks(&conversation,&run_id,&id)?})
+        }
+        Request::GetLedgerDiff {
+            conversation,
+            run_id,
+            from_revision,
+            to_revision,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(
+                core.store
+                    .ledger_diff(&conversation, &run_id, from_revision, to_revision)?
+            )
+        }
+        Request::GetEvidence {
+            conversation,
+            run_id,
+            entry_id,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(
+                core.store
+                    .ledger_evidence(&conversation, &run_id, entry_id.as_deref())?
+            )
+        }
+        Request::ProposeLedgerChange { change } => {
+            validate_project_conversation(core, project, &change.conversation)?;
+            let (proposal_id, diff) = core.store.propose_ledger_change(&change, &core.state)?;
+            let diff_hash = super::ledger::diff_hash(&diff)?;
+            json!({"proposal_id":proposal_id,"diff_hash":diff_hash,"diff":diff})
+        }
+        Request::ApplyLedgerChange {
+            proposal_id,
+            diff_hash,
+            change,
+        } => {
+            validate_project_conversation(core, project, &change.conversation)?;
+            json!(core.apply_user_ledger_change(&proposal_id, &diff_hash, &change)?)
+        }
+        Request::CreateRun { conversation, goal } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.store.create_run(&conversation, &goal)?)
+        }
+        Request::AddLedgerSource {
+            conversation,
+            run_id,
+            text,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.store.register_document_source(
+                &conversation,
+                &run_id,
+                &text,
+                &core.state
+            )?)
+        }
+        Request::GetLedgerSource {
+            conversation,
+            run_id,
+            source_id,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!({"text":core.store.ledger_source_text(&conversation,&run_id,&source_id,&core.state)?})
+        }
+
         Request::GetConfig => {
             let _guard = core
                 .config_update
@@ -1195,6 +1811,13 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         Request::Send { conversation, text } => {
             validate_project_conversation(core, project, &conversation)?;
             core.submit_addressed(&conversation, &text, None)?
+        }
+        Request::SendToAgent { message } => {
+            validate_project_conversation(core, project, &message.conversation)?;
+            if let Some(plan) = &message.plan {
+                validate_conversation_plan(core, &message.conversation, plan)?;
+            }
+            core.send_to_agent(&message)?
         }
         Request::SendAddressed {
             conversation,
@@ -1352,7 +1975,61 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
                     .comments_by_plan(&conversation, p, filter_status)?,
                 None => core.store.comments_all(&conversation, filter_status)?,
             };
-            json!(comments)
+            let mut values = serde_json::to_value(comments)?;
+            if let Some(values) = values.as_array_mut() {
+                for comment in values {
+                    let scope = core
+                        .store
+                        .comment_scope(&conversation, comment["id"].as_u64().unwrap_or(0))?;
+                    comment["round"] = scope["round"].clone();
+                    comment["run"] = scope["run"].clone();
+                }
+            }
+            values
+        }
+        Request::CommentAt {
+            conversation,
+            plan,
+            target,
+            text,
+            round,
+            run,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            if let Some(plan) = &plan {
+                validate_conversation_plan(core, &conversation, plan)?;
+            }
+            if let Some(run) = &run {
+                core.store
+                    .assert_comment_run(&conversation, plan.as_deref(), &target, run)?;
+            }
+            if let Some(round) = round {
+                let plan = plan
+                    .as_ref()
+                    .ok_or_else(|| Error::Invalid("round comment requires a plan".into()))?;
+                let (role, id) = target
+                    .split_once(':')
+                    .ok_or_else(|| Error::Invalid("round comment requires a task".into()))?;
+                require(
+                    matches!(role, "worker" | "verifier" | "check" | "diff"),
+                    "round comment requires a task",
+                )?;
+                let id = id.split(':').next().unwrap_or(id);
+                let task = core
+                    .store
+                    .task_in_plan_by_id(plan, id)?
+                    .ok_or_else(|| Error::Invalid("comment task is outside this plan".into()))?;
+                core.store
+                    .task_round_with_references(&task.id, round, true)?;
+            }
+            json!(core.comment_at(
+                &conversation,
+                plan.as_deref(),
+                &target,
+                &text,
+                round,
+                run.as_deref()
+            )?)
         }
         Request::Comment {
             conversation,
@@ -1381,6 +2058,83 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         } => {
             validate_project_conversation(core, project, &conversation)?;
             json!(core.set_comment(&conversation, id, &status)?)
+        }
+        Request::TaskRounds {
+            conversation,
+            plan,
+            id,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
+            require(
+                uuid::Uuid::parse_str(&id).is_ok(),
+                "task history requires a task UUID",
+            )?;
+            validate_plan_task(core, &plan, &id)?;
+            json!(core.store.task_rounds(&id)?)
+        }
+        Request::TaskRound {
+            conversation,
+            plan,
+            id,
+            round,
+            references,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            validate_conversation_plan(core, &conversation, &plan)?;
+            require(
+                uuid::Uuid::parse_str(&id).is_ok(),
+                "task history requires a task UUID",
+            )?;
+            validate_plan_task(core, &plan, &id)?;
+            core.store
+                .task_round_with_references(&id, round, references.unwrap_or(false))?
+        }
+        Request::SessionEvents {
+            conversation,
+            turn,
+            after,
+            limit,
+            include_messages,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.store.session_events_with_messages(
+                &conversation,
+                &turn,
+                after,
+                limit.unwrap_or(100),
+                include_messages.unwrap_or(true),
+            )?
+        }
+        Request::HistoryContent {
+            conversation,
+            owner,
+            offset,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.store.history_content(&conversation, &owner, offset)?)
+        }
+        Request::HistoryMessages {
+            conversation,
+            scope,
+            after,
+            limit,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.store
+                .history_messages(&conversation, &scope, after, limit.unwrap_or(100))?
+        }
+        Request::SessionContent {
+            conversation,
+            event,
+            field,
+            offset,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(
+                core.store
+                    .session_content(&conversation, event, &field, offset)?
+            )
         }
         Request::Task { plan, id } => {
             let conv = core.store.plan_conversation(&plan)?;
@@ -1549,7 +2303,9 @@ fn handle_events(
     let lim = limit.unwrap_or(EVENTS_PER_REPLY).min(EVENTS_PER_REPLY);
     let deadline = Instant::now() + Duration::from_millis(wait_ms).min(LONGEST_WAIT);
     let events = loop {
-        let events = core.store.events_since(conversation, after, lim)?;
+        let events = core
+            .store
+            .events_since_budget(conversation, after, lim, REPLY_BYTES)?;
         if !events.is_empty() || Instant::now() >= deadline {
             break events;
         }
@@ -1985,9 +2741,7 @@ impl Client {
         };
         stream.set_read_timeout(Some(wait + Duration::from_secs(10)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-        let mut bytes = serde_json::to_vec(request)?;
-        bytes.push(b'\n');
-        stream.write_all(&bytes)?;
+        crate::transport::write(&mut stream, request)?;
         let response: Response = crate::transport::read(&mut BufReader::new(stream))?
             .ok_or_else(|| Error::Invalid(DISCONNECTED.into()))?;
         match response.error {

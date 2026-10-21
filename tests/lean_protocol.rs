@@ -1,4 +1,5 @@
 mod common;
+mod support;
 use antislop::lean::daemon::{Client, Request};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -23,6 +24,7 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "outpu
 "#,
     )
     .unwrap();
+    support::install_ledger_protocol(&script);
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     script
 }
@@ -33,11 +35,13 @@ fn fake_agy(dir: &Path) -> PathBuf {
         &script,
         r#"#!/usr/bin/env python3
 import json, sys
+prompt = sys.argv[-1]
 print(json.dumps({"event": "init", "conversation_id": "worker-1"}))
 print(json.dumps({"event": "result", "result": {"conversation_id": "worker-1", "status": "SUCCESS", "response": "ok", "usage": {}}}))
 "#,
     )
     .unwrap();
+    support::install_ledger_protocol(&script);
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     script
 }
@@ -1069,4 +1073,116 @@ fn checks_falls_back_only_when_old_daemon_rejects_operation() {
         }
         server.join().unwrap();
     }
+}
+
+#[test]
+fn ledger_protocol_preserves_exact_diff_approval_revision_and_idempotency() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(dir.path());
+    let agy = fake_agy(dir.path());
+    let config = write_config(dir.path(), &codex, &agy);
+    let state = dir.path().join("state");
+    let daemon = DaemonGuard::start(&project, &config, &state);
+    let conversation = daemon.call_raw(&json!({"op":"start"})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let run = daemon
+        .call_raw(
+            &json!({"op":"create_run","conversation":conversation,"goal":"User-controlled scope"}),
+        )
+        .unwrap();
+    let run_id = run["id"].as_str().unwrap();
+    let text = "Never split 👩‍💻 or combining e\u{301}; preserve every qualifier.";
+    let source=daemon.call_raw(&json!({"op":"add_ledger_source","conversation":conversation,"run_id":run_id,"text":text})).unwrap();
+    let change = json!({"conversation":conversation,"run_id":run_id,"expected_spec_revision":0,"operation_id":"create-requirement-once","reason":"User adds explicit scope","entries":[{"id":"REQ-1","kind":"requirement","source":{"source_id":source["id"],"start":0,"end":text.len()},"interpretation":"Preserve grapheme clusters and qualifiers","criteria":[{"id":"REQ-1.C1","text":"Independently exercise ZWJ and combining sequences","mandatory":true}]}]});
+    let proposal = daemon
+        .call_raw(&json!({"op":"propose_ledger_change","change":change}))
+        .unwrap();
+    let repeated = daemon
+        .call_raw(&json!({"op":"propose_ledger_change","change":change}))
+        .unwrap();
+    assert_eq!(proposal["proposal_id"], repeated["proposal_id"]);
+    let mut tampered = change.clone();
+    tampered["entries"][0]["mandatory"] = json!(false);
+    assert!(daemon.call_raw(&json!({"op":"apply_ledger_change","proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"change":tampered})).is_err());
+    let apply = json!({"op":"apply_ledger_change","proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"change":change});
+    let result = daemon.call_raw(&apply).unwrap();
+    assert_eq!(result["spec_revision"], 1);
+    assert_eq!(daemon.call_raw(&apply).unwrap(), result);
+    let query = json!({"conversation":conversation,"run_id":run_id,"offset":0,"limit":1,"missing_coverage":true});
+    let page = daemon
+        .call_raw(&json!({"op":"list_requirements","query":query}))
+        .unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["entries"][0]["status"], "identified");
+    assert_eq!(page["entries"][0]["original"], text);
+    let entry=daemon.call_raw(&json!({"op":"get_ledger_entry","conversation":conversation,"run_id":run_id,"id":"REQ-1","revision":1})).unwrap();
+    assert_eq!(entry["history"].as_array().unwrap().len(), 1);
+    assert!(entry["evidence"].as_array().unwrap().is_empty());
+    let diff=daemon.call_raw(&json!({"op":"get_ledger_diff","conversation":conversation,"run_id":run_id,"from_revision":0,"to_revision":1})).unwrap();
+    assert_eq!(diff["after"][0]["id"], "REQ-1");
+    assert_eq!(daemon.call_raw(&json!({"op":"get_ledger_source","conversation":conversation,"run_id":run_id,"source_id":source["id"]})).unwrap()["text"],text);
+    assert_eq!(
+        daemon
+            .call_raw(&json!({"op":"list_runs","conversation":conversation}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let other = daemon.call_raw(&json!({"op":"start"})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        daemon
+            .call_raw(
+                &json!({"op":"get_ledger_entry","conversation":other,"run_id":run_id,"id":"REQ-1"})
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn chunked_transport_round_trips_sources_larger_than_four_megabytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let config = write_config(dir.path(), &fake_codex(dir.path()), &fake_agy(dir.path()));
+    let daemon = DaemonGuard::start(&project, &config, &dir.path().join("state"));
+    let conversation = daemon.client.call(&Request::Start).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let run = daemon
+        .client
+        .call(&Request::CreateRun {
+            conversation: conversation.clone(),
+            goal: "large source".into(),
+        })
+        .unwrap();
+    let run_id = run["id"].as_str().unwrap().to_owned();
+    let text = "👩‍💻e\u{301}\n\"\\".repeat(400_000);
+    assert!(text.len() > antislop::transport::MAX_FRAME);
+    let source = daemon
+        .client
+        .call(&Request::AddLedgerSource {
+            conversation: conversation.clone(),
+            run_id: run_id.clone(),
+            text: text.clone(),
+        })
+        .unwrap();
+    let restored = daemon
+        .client
+        .call(&Request::GetLedgerSource {
+            conversation,
+            run_id,
+            source_id: source["id"].as_str().unwrap().into(),
+        })
+        .unwrap();
+    assert_eq!(restored["text"], text);
 }

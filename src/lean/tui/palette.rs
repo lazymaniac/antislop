@@ -17,6 +17,8 @@ const SELECTION_HELP: &str = "Ctrl+Y           copy selection (drag / double cli
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    Requirements,
+    PlanItems,
     Config,
     Accept,
     Reject,
@@ -42,7 +44,15 @@ pub enum Command {
     Projects,
 }
 
-const COMMANDS: [(Command, &str); 23] = [
+const COMMANDS: [(Command, &str); 25] = [
+    (
+        Command::Requirements,
+        "Browse and edit requirements · /requirements",
+    ),
+    (
+        Command::PlanItems,
+        "Browse and edit plan items · /plan-items",
+    ),
     (Command::Config, "Edit configuration live · /config"),
     (Command::Accept, "Accept proposed plan · Ctrl+A"),
     (Command::Reject, "Reject proposed plan · /reject"),
@@ -400,15 +410,15 @@ impl Help {
                 "q                quit (work continues in daemon)",
             ],
             Help::Details => &[
-                "1–5, ←/→, Tab    tabs (task: Overview, Messages, Result, Checks, Comments)",
+                "1–6, Tab/Shift+Tab  tabs; Left/Right select round",
                 "↑/↓ PgUp/PgDn    scroll; on Comments select",
                 "gg / G           first / last entry; G follows live session",
-                "i                task info / session (Overview)",
+                "m                task info / session (Overview)",
                 "Ctrl+D / Ctrl+U  half page down / up",
                 "c                comment on agent",
                 SELECTION_HELP,
                 "r / o / x        resolve / reopen / delete comment",
-                "Enter            fold / unfold prompts (Overview)",
+                "Enter            fold / unfold session trace (Overview)",
                 "d                task diff",
                 "Esc              back to graph",
             ],
@@ -656,7 +666,7 @@ mod tests {
         // So cursor_x should be 8 + 1 + 5 = 14.
         let (cursor_x, cursor_y) = terminal.get_cursor_position().unwrap().into();
         assert_eq!(cursor_x, 14);
-        assert_eq!(cursor_y, 6);
+        assert_eq!(cursor_y, 5);
 
         // 2. Double-width CJK character takes 2 visual columns
         picker.query = "漢".into();
