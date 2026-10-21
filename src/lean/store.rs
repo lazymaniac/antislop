@@ -244,7 +244,7 @@ impl TurnStatus {
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Tables only ever get added; a change to an existing one raises it and
 /// migrates from the version found.
-const SCHEMA: u32 = 5;
+const SCHEMA: u32 = 6;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -397,6 +397,19 @@ impl Store {
              UPDATE events SET plan_id = json_extract(events.payload, '$.plan')
              WHERE events.plan_id IS NULL AND json_extract(events.payload, '$.plan') IS NOT NULL;",
         )?;
+        // 5 → 6: global daemon events share the readable event stream.
+        if found < 6 {
+            connection.execute_batch("BEGIN IMMEDIATE;
+                CREATE TABLE events_v6(seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT REFERENCES conversations(id), turn_id TEXT, plan_id TEXT,
+                    kind TEXT NOT NULL, payload TEXT NOT NULL, created_ms INTEGER NOT NULL DEFAULT 0);
+                INSERT INTO events_v6 SELECT seq,conversation_id,turn_id,plan_id,kind,payload,created_ms FROM events;
+                DROP TABLE events;
+                ALTER TABLE events_v6 RENAME TO events;
+                CREATE INDEX events_by_conversation ON events(conversation_id,seq);
+                CREATE INDEX events_by_plan ON events(conversation_id,plan_id,seq);
+                COMMIT;")?;
+        }
         connection.pragma_update(None, "user_version", SCHEMA)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -1571,7 +1584,7 @@ impl Store {
         let db = self.db();
         let seq: Option<i64> = db
             .query_row(
-                "SELECT seq FROM events WHERE conversation_id=?1 ORDER BY seq DESC LIMIT 1",
+                "SELECT seq FROM events WHERE (conversation_id=?1 OR conversation_id IS NULL) ORDER BY seq DESC LIMIT 1",
                 [conversation],
                 |row| row.get(0),
             )
@@ -1583,7 +1596,7 @@ impl Store {
         let db = self.db();
         let mut statement = db.prepare(
             "SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0), COUNT(*)
-             FROM events WHERE conversation_id=?1",
+             FROM events WHERE (conversation_id=?1 OR conversation_id IS NULL)",
         )?;
         let row = statement.query_row([conversation], |row| {
             Ok((
@@ -1623,20 +1636,19 @@ impl Store {
         })
     }
 
-    /// Global daemon events also exist before the first conversation.
-    pub fn record_config_update(&self, path: &Path) -> Result<()> {
+    /// Reserve the log entry before applying the file update; insertion failures
+    /// therefore leave both the file and the active configuration untouched.
+    pub fn record_config_update(
+        &self,
+        path: &Path,
+        apply: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         let db = self.db();
-        db.execute_batch(
-            "CREATE TABLE IF NOT EXISTS daemon_events(
-            seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
-            payload TEXT NOT NULL, created_ms INTEGER NOT NULL)",
-        )?;
+        let transaction = db.unchecked_transaction()?;
         let payload = serde_json::json!({"path": path});
-        db.execute("INSERT INTO daemon_events(kind,payload,created_ms) VALUES('config_updated',?1,CAST(unixepoch('subsec')*1000 AS INTEGER))", [payload.to_string()])?;
-        drop(db);
-        for conversation in self.conversations()? {
-            self.append_event(&conversation.id, None, None, "config_updated", &payload)?;
-        }
+        transaction.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(NULL,'config_updated',?1,CAST(unixepoch('subsec')*1000 AS INTEGER))", [payload.to_string()])?;
+        apply()?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -1687,7 +1699,7 @@ impl Store {
         let db = self.db();
         let mut statement = db.prepare(
             "SELECT seq,turn_id,plan_id,kind,payload,created_ms FROM events
-             WHERE conversation_id=?1 AND seq>?2 ORDER BY seq LIMIT ?3",
+             WHERE (conversation_id=?1 OR conversation_id IS NULL) AND seq>?2 ORDER BY seq LIMIT ?3",
         )?;
         let rows =
             statement.query_map(params![conversation, after as i64, limit as i64], |row| {

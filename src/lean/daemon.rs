@@ -11,6 +11,7 @@ use std::io::{BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 /// Creates `path` if needed and insists it is a real directory private to
@@ -946,8 +947,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     // reading it so an edit made meanwhile still counts as newer.
     let loaded = modified(config_path);
     let core = Core::open(state, Config::load(config_path)?)?;
-    core.config_modified
-        .store(loaded, std::sync::atomic::Ordering::SeqCst);
+    core.config_modified.store(loaded, Ordering::SeqCst);
     let project = project.canonicalize()?;
     // Work starts only in a directory the user trusted. A project trusted
     // before the list was the user's own is carried over.
@@ -997,18 +997,17 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
             let request = crate::transport::read::<Request>(&mut BufReader::new(&stream))
                 .and_then(|request| request.ok_or_else(|| Error::Invalid("empty request".into())));
             let shutdown = matches!(request, Ok(Request::Shutdown | Request::ForceShutdown));
-            let response = match request
-                .and_then(|request| handle(&core, &project, &config_path, loaded, request))
-            {
-                Ok(data) => Response {
-                    data: Some(data),
-                    error: None,
-                },
-                Err(error) => Response {
-                    data: None,
-                    error: Some(error.to_string()),
-                },
-            };
+            let response =
+                match request.and_then(|request| handle(&core, &project, &config_path, request)) {
+                    Ok(data) => Response {
+                        data: Some(data),
+                        error: None,
+                    },
+                    Err(error) => Response {
+                        data: None,
+                        error: Some(error.to_string()),
+                    },
+                };
             let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
             if let Ok(mut bytes) = serde_json::to_vec(&response) {
                 bytes.push(b'\n');
@@ -1023,13 +1022,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     Ok(())
 }
 
-fn handle(
-    core: &Arc<Core>,
-    project: &Path,
-    config: &Path,
-    _loaded: u64,
-    request: Request,
-) -> Result<Value> {
+fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> Result<Value> {
     require(
         !core.state.join("stopped").exists()
             || matches!(
@@ -1040,28 +1033,51 @@ fn handle(
     )?;
     Ok(match request {
         Request::GetConfig => {
-            let _guard = core.config_update.lock().expect("config update mutex");
+            let _guard = core
+                .config_update
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             json!({"toml": std::fs::read_to_string(config)?, "path": config})
         }
         Request::SetConfig { toml } => {
             let parsed = Config::from_toml(&toml)?;
-            let _guard = core.config_update.lock().expect("config update mutex");
-            atomic_config_write(config, &toml)?;
-            core.replace_config(parsed);
-            core.config_modified
-                .store(modified(config), std::sync::atomic::Ordering::SeqCst);
-            core.store.record_config_update(config)?;
-            json!({"toml": toml, "path": config})
+            let _guard = core
+                .config_update
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let mut applied = false;
+            let mut warning = None;
+            let result = core.store.record_config_update(config, || {
+                warning = atomic_config_write(config, &toml)?;
+                core.replace_config(parsed);
+                core.config_modified
+                    .store(modified(config), Ordering::SeqCst);
+                applied = true;
+                Ok(())
+            });
+            if let Err(error) = result {
+                if !applied {
+                    return Err(error);
+                }
+                warning = Some(match warning {
+                    Some(previous) => format!("{previous}; {error}"),
+                    None => error.to_string(),
+                });
+            }
+            json!({"toml": toml, "path": config, "applied": true, "warning": warning})
         }
         Request::Identity => {
-            let _guard = core.config_update.lock().expect("config update mutex");
+            let _guard = core
+                .config_update
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             json!({
                 "build": build(),
                 "busy": core.busy(),
                 "pid": std::process::id(),
                 "project": project,
                 "config": config,
-                "config_modified": core.config_modified.load(std::sync::atomic::Ordering::SeqCst),
+                "config_modified": core.config_modified.load(Ordering::SeqCst),
             })
         }
         Request::Shutdown => {
@@ -1475,12 +1491,16 @@ fn handle_events(
     }))
 }
 
-/// When the configuration file last changed, so a daemon running on an
-/// older version of it is replaced.
 /// Replace only after a complete write in the destination directory.
-fn atomic_config_write(path: &Path, text: &str) -> Result<()> {
+fn atomic_config_write(path: &Path, text: &str) -> Result<Option<String>> {
+    let resolved = path.canonicalize()?;
+    let path = resolved.as_path();
     let temporary = path.with_file_name(format!(".antislop-config-{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<Option<String>> {
+        let directory = std::fs::File::open(
+            path.parent()
+                .ok_or_else(|| Error::Invalid("configuration has no parent directory".into()))?,
+        )?;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1489,7 +1509,7 @@ fn atomic_config_write(path: &Path, text: &str) -> Result<()> {
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&temporary, path)?;
-        Ok(())
+        Ok(directory.sync_all().err().map(|error| error.to_string()))
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
@@ -1497,6 +1517,7 @@ fn atomic_config_write(path: &Path, text: &str) -> Result<()> {
     result
 }
 
+/// Modification stamp used to detect configuration changed outside the daemon.
 fn modified(path: &Path) -> u64 {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -1763,7 +1784,7 @@ mod live_config_tests {
         )
         .unwrap();
         let old = core.config_snapshot();
-        let call = |request| handle(&core, dir.path(), &path, 0, request);
+        let call = |request| handle(&core, dir.path(), &path, request);
         assert!(
             call(Request::SetConfig {
                 toml: "bad = [".into()
@@ -1785,6 +1806,55 @@ mod live_config_tests {
             modified(&path)
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), updated);
+        let conversation = core.start(dir.path()).unwrap();
+        assert!(
+            core.store
+                .events_since(&conversation.id, 0, 100)
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == "config_updated")
+        );
+        let db = rusqlite::Connection::open(core.state.join("core.db")).unwrap();
+        db.execute_batch("CREATE TRIGGER reject_config_event BEFORE INSERT ON events WHEN NEW.kind='config_updated' BEGIN SELECT RAISE(FAIL,'injected log failure'); END;").unwrap();
+        let failure = call(Request::SetConfig {
+            toml: original.into(),
+        })
+        .unwrap_err();
+        assert!(failure.to_string().contains("injected log failure"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), updated);
+        assert_eq!(core.config_snapshot().policy.max_parallel, 1);
+        db.execute_batch("DROP TRIGGER reject_config_event;
+            CREATE TABLE deferred_failure(id TEXT REFERENCES conversations(id) DEFERRABLE INITIALLY DEFERRED);
+            CREATE TRIGGER fail_config_commit AFTER INSERT ON events WHEN NEW.kind='config_updated'
+            BEGIN INSERT INTO deferred_failure VALUES('missing'); END;").unwrap();
+        let applied = call(Request::SetConfig {
+            toml: original.into(),
+        })
+        .unwrap();
+        assert_eq!(applied["applied"], true);
+        assert!(applied["warning"].as_str().unwrap().contains("FOREIGN KEY"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(core.config_snapshot().policy.max_parallel, 4);
+    }
+
+    #[test]
+    fn atomic_write_preserves_symlink_and_rejects_missing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.toml");
+        let link = dir.path().join("link.toml");
+        std::fs::write(&target, "old").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        atomic_config_write(&link, "new").unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        std::fs::remove_file(&target).unwrap();
+        assert!(atomic_config_write(&link, "again").is_err());
+        assert!(!target.exists());
     }
 
     #[test]

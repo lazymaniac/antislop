@@ -932,6 +932,9 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
         .unwrap()
         .replace("max_parallel = 4", "max_parallel = 1")
         .replace("effort = \"high\"", "effort = \"low\"");
+    assert_ne!(text, before["toml"].as_str().unwrap());
+    assert!(text.contains("max_parallel = 1"));
+    assert!(text.contains("effort = \"low\""));
     daemon
         .call_raw(&json!({"op": "set_config", "toml": text}))
         .unwrap();

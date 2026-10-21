@@ -206,11 +206,17 @@ struct TurnSetup<'a> {
 impl Core {
     /// Pin configuration for one decision or operation. Existing snapshots survive updates.
     pub fn config_snapshot(&self) -> Arc<Config> {
-        self.config.read().expect("configuration lock").clone()
+        self.config
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     pub fn replace_config(&self, config: Config) {
-        *self.config.write().expect("configuration lock") = Arc::new(config);
+        *self
+            .config
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = Arc::new(config);
     }
 
     pub fn open(state: &Path, config: Config) -> Result<Arc<Self>> {
@@ -2818,10 +2824,6 @@ impl Core {
         let mut previous: Option<String> = None;
         for round in first_round..=last_round {
             let config = self.config_snapshot();
-            require(
-                !in_place || config.policy.local_write,
-                "in-place writers need policy.local_write",
-            )?;
             task.round = round;
             task.verdict = None;
             // A new round starts without an earlier round's card result.
@@ -2831,9 +2833,7 @@ impl Core {
                 conversation,
                 plan_id: Some(task.plan_id.clone()),
                 role: worker.clone(),
-                profile: self
-                    .config_snapshot()
-                    .resolve(spec.kind, RoleKind::Executor),
+                profile: config.resolve(spec.kind, RoleKind::Executor),
                 cwd: workdir.clone(),
                 add_dirs: if spec.writes {
                     vec![]
@@ -2940,7 +2940,6 @@ impl Core {
                 _ => None,
             };
             self.set_status(conversation, task, status::VERIFYING)?;
-            let config = self.config_snapshot();
             let setup = TurnSetup {
                 conversation,
                 plan_id: Some(task.plan_id.clone()),

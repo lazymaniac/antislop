@@ -1083,9 +1083,15 @@ fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
     updated.profiles.get_mut("orchestrator").unwrap().model = Some("live-model".into());
     updated.profiles.get_mut("orchestrator").unwrap().effort = antislop::config::Effort::Low;
     updated.policy.max_parallel = 1;
+    assert!(!core.is_idle(&conversation.id));
     core.replace_config(updated);
     wait_idle(&core, &conversation.id);
-    assert!(!running.contains("live-model"));
+    let completed = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        completed, running,
+        "configuration update restarted the active turn"
+    );
+    assert!(!completed.contains("live-model"));
     core.send(&conversation.id, "next request").unwrap();
     wait_idle(&core, &conversation.id);
     let calls = std::fs::read_to_string(log).unwrap();
