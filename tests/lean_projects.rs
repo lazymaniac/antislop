@@ -233,3 +233,93 @@ fn an_untrusted_directory_is_asked_about_before_anything_is_created_there() {
     app.open_project(&path_a.to_string_lossy());
     assert_eq!(app.projects.len(), 1);
 }
+
+#[test]
+fn configuration_precedence_and_errors_without_creating_state() {
+    // Resolve in an isolated child so concurrent tests never mutate process env.
+    if let Some(project) = std::env::var_os("ANTISLOP_TEST_RESOLVE_PROJECT") {
+        let selected = antislop::lean::cli::resolve_config(Path::new(&project), None).unwrap();
+        println!("SELECTED={}", selected.display());
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let global = root.path().join("global");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&global).unwrap();
+    let local_file = project.join("antislop.toml");
+    let global_file = global.join("antislop.toml");
+    let valid = include_str!("../examples/antislop.toml");
+    let run = |args: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+            .current_dir(&project)
+            .env("ANTISLOP_CONFIG_DIR", &global)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(!project.join(".antislop").exists());
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let assert_selected = |expected: &Path| {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "configuration_precedence_and_errors_without_creating_state",
+                "--nocapture",
+            ])
+            .env("ANTISLOP_TEST_RESOLVE_PROJECT", &project)
+            .env("ANTISLOP_CONFIG_DIR", &global)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(String::from_utf8(output.stdout).unwrap().contains(&format!(
+            "SELECTED={}",
+            expected.canonicalize().unwrap().display()
+        )));
+    };
+    // Neither file: report both candidates, without creating either file.
+    let error = run(&["chat", "hello"]);
+    assert!(error.contains("no configuration at"), "{error}");
+    assert!(error.contains(local_file.to_str().unwrap()), "{error}");
+    assert!(error.contains(global_file.to_str().unwrap()), "{error}");
+    assert!(!global_file.exists());
+    // Only project, only global, then both: assert the actual canonical selection.
+    std::fs::write(&local_file, valid).unwrap();
+    assert_selected(&local_file);
+    assert!(run(&["chat", "hello"]).contains("not trusted"));
+    std::fs::remove_file(&local_file).unwrap();
+    std::fs::write(&global_file, valid).unwrap();
+    assert_selected(&global_file);
+    assert!(run(&["chat", "hello"]).contains("not trusted"));
+    std::fs::write(&local_file, valid).unwrap();
+    assert_selected(&local_file);
+    assert!(run(&["chat", "hello"]).contains("not trusted"));
+    std::fs::write(&global_file, "invalid TOML").unwrap();
+    assert!(run(&["chat", "hello"]).contains("not trusted"));
+    // A broken project file must not fall back to the valid global file.
+    std::fs::write(&global_file, valid).unwrap();
+    std::fs::write(&local_file, "invalid TOML").unwrap();
+    assert_selected(&local_file);
+    assert!(run(&["chat", "hello"]).contains("not trusted"));
+    assert!(run(&["chat", "--trust", "hello"]).contains("invalid TOML configuration"));
+    antislop::lean::trust::Registry::at(&global)
+        .untrust(&project)
+        .unwrap();
+    // An explicit file wins even over the broken project file.
+    std::fs::write(project.join("custom.toml"), valid).unwrap();
+    assert!(run(&["chat", "--config", "custom.toml", "hello"]).contains("not trusted"));
+    let error = run(&["chat", "--config", "absent.toml", "hello"]);
+    assert!(
+        error.contains(project.join("absent.toml").to_str().unwrap()),
+        "{error}"
+    );
+    assert!(error.contains("No such file"), "{error}");
+    let link = project.join("linked.toml");
+    std::os::unix::fs::symlink(project.join("custom.toml"), &link).unwrap();
+    assert_eq!(
+        antislop::lean::cli::resolve_config(&project, Some(&link)).unwrap(),
+        project.join("custom.toml").canonicalize().unwrap()
+    );
+}

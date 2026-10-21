@@ -11,6 +11,7 @@ use std::io::{BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 /// Creates `path` if needed and insists it is a real directory private to
@@ -58,6 +59,11 @@ pub fn build_identity(executable: &Path) -> Result<String> {
 pub enum Request {
     /// Which binary the daemon runs and whether it is executing work.
     Identity,
+    GetConfig,
+    SetConfig {
+        toml: String,
+        expected_revision: String,
+    },
     /// Stops an idle daemon so a frontend from another build can replace it.
     Shutdown,
     ForceShutdown,
@@ -232,6 +238,11 @@ fn default_true() -> bool {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum WireRequest {
     Identity,
+    GetConfig,
+    SetConfig {
+        toml: String,
+        expected_revision: String,
+    },
     Shutdown,
     ForceShutdown,
     Conversations,
@@ -372,6 +383,14 @@ impl From<Request> for WireRequest {
     fn from(req: Request) -> Self {
         match req {
             Request::Identity => WireRequest::Identity,
+            Request::GetConfig => WireRequest::GetConfig,
+            Request::SetConfig {
+                toml,
+                expected_revision,
+            } => WireRequest::SetConfig {
+                toml,
+                expected_revision,
+            },
             Request::Shutdown => WireRequest::Shutdown,
             Request::ForceShutdown => WireRequest::ForceShutdown,
             Request::Conversations => WireRequest::Conversations,
@@ -614,6 +633,14 @@ impl From<WireRequest> for Request {
     fn from(wire: WireRequest) -> Self {
         match wire {
             WireRequest::Identity => Request::Identity,
+            WireRequest::GetConfig => Request::GetConfig,
+            WireRequest::SetConfig {
+                toml,
+                expected_revision,
+            } => Request::SetConfig {
+                toml,
+                expected_revision,
+            },
             WireRequest::Shutdown => Request::Shutdown,
             WireRequest::ForceShutdown => Request::ForceShutdown,
             WireRequest::Conversations => Request::Conversations,
@@ -945,6 +972,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
         ),
     )?;
     let core = Core::open(state, Config::load(config_path)?)?;
+    core.config_modified.store(loaded, Ordering::SeqCst);
     let config_path = config_path.canonicalize()?;
     let socket = socket(state);
     if let Some(parent) = socket.parent() {
@@ -980,18 +1008,17 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
             let request = crate::transport::read::<Request>(&mut BufReader::new(&stream))
                 .and_then(|request| request.ok_or_else(|| Error::Invalid("empty request".into())));
             let shutdown = matches!(request, Ok(Request::Shutdown | Request::ForceShutdown));
-            let response = match request
-                .and_then(|request| handle(&core, &project, &config_path, loaded, request))
-            {
-                Ok(data) => Response {
-                    data: Some(data),
-                    error: None,
-                },
-                Err(error) => Response {
-                    data: None,
-                    error: Some(error.to_string()),
-                },
-            };
+            let response =
+                match request.and_then(|request| handle(&core, &project, &config_path, request)) {
+                    Ok(data) => Response {
+                        data: Some(data),
+                        error: None,
+                    },
+                    Err(error) => Response {
+                        data: None,
+                        error: Some(error.to_string()),
+                    },
+                };
             let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
             if let Ok(mut bytes) = serde_json::to_vec(&response) {
                 bytes.push(b'\n');
@@ -1006,13 +1033,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     Ok(())
 }
 
-fn handle(
-    core: &Arc<Core>,
-    project: &Path,
-    config: &Path,
-    loaded: u64,
-    request: Request,
-) -> Result<Value> {
+fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> Result<Value> {
     require(
         !core.state.join("stopped").exists()
             || matches!(
@@ -1022,14 +1043,81 @@ fn handle(
         "the daemon is stopping",
     )?;
     Ok(match request {
-        Request::Identity => json!({
-            "build": build(),
-            "busy": core.busy(),
-            "pid": std::process::id(),
-            "project": project,
-            "config": config,
-            "config_modified": loaded,
-        }),
+        Request::GetConfig => {
+            let _guard = core
+                .config_update
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            {
+                let toml = std::fs::read_to_string(config)?;
+                json!({"revision": crate::hash(&toml), "toml": toml, "path": config})
+            }
+        }
+        Request::SetConfig {
+            toml,
+            expected_revision,
+        } => {
+            let parsed = Config::from_toml(&toml)?;
+            let _guard = core
+                .config_update
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            require(
+                crate::hash(std::fs::read(config)?) == expected_revision,
+                "configuration changed: reload before saving; draft preserved",
+            )?;
+            let prepared = PreparedConfigWrite::prepare(config, &toml)?;
+            let mut applied = false;
+            let mut warnings = Vec::new();
+            let result = core.store.publish_config_with_event(config, || {
+                prepared.publish()?;
+                core.replace_config(parsed);
+                core.config_modified
+                    .store(modified(config), Ordering::SeqCst);
+                applied = true;
+                Ok(())
+            });
+            if let Err(error) = result {
+                if !applied {
+                    return Err(error);
+                }
+                warnings.push(ConfigUpdateWarning {
+                    stage: ConfigUpdateStage::EventCommit,
+                    message: error.to_string(),
+                });
+            }
+            if let Err(error) = prepared.sync_directory() {
+                warnings.push(ConfigUpdateWarning {
+                    stage: ConfigUpdateStage::DirectorySync,
+                    message: error.to_string(),
+                });
+            }
+            let status = if warnings.is_empty() {
+                ConfigUpdateStatus::Applied
+            } else {
+                ConfigUpdateStatus::AppliedWithWarnings
+            };
+            serde_json::to_value(ConfigUpdateReply {
+                toml,
+                path: config.to_path_buf(),
+                status,
+                warnings,
+            })?
+        }
+        Request::Identity => {
+            let _guard = core
+                .config_update
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            json!({
+                "build": build(),
+                "busy": core.busy(),
+                "pid": std::process::id(),
+                "project": project,
+                "config": config,
+                "config_modified": core.config_modified.load(Ordering::SeqCst),
+            })
+        }
         Request::Shutdown => {
             require(
                 !core.busy(),
@@ -1441,8 +1529,93 @@ fn handle_events(
     }))
 }
 
-/// When the configuration file last changed, so a daemon running on an
-/// older version of it is replaced.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConfigUpdateStatus {
+    Applied,
+    AppliedWithWarnings,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConfigUpdateStage {
+    EventCommit,
+    DirectorySync,
+}
+
+#[derive(Serialize)]
+struct ConfigUpdateWarning {
+    stage: ConfigUpdateStage,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct ConfigUpdateReply {
+    toml: String,
+    path: PathBuf,
+    status: ConfigUpdateStatus,
+    warnings: Vec<ConfigUpdateWarning>,
+}
+
+/// Prepare and flush file contents before acquiring the event store lock.
+struct PreparedConfigWrite {
+    target: PathBuf,
+    temporary: PathBuf,
+    directory: std::fs::File,
+}
+
+impl PreparedConfigWrite {
+    fn prepare(path: &Path, text: &str) -> Result<Self> {
+        let target = path.canonicalize()?;
+        let temporary =
+            target.with_file_name(format!(".antislop-config-{}.tmp", uuid::Uuid::new_v4()));
+        let directory = std::fs::File::open(
+            target
+                .parent()
+                .ok_or_else(|| Error::Invalid("configuration has no parent directory".into()))?,
+        )?;
+        let prepared = Self {
+            target,
+            temporary,
+            directory,
+        };
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&prepared.temporary)?;
+        file.set_permissions(std::fs::metadata(&prepared.target)?.permissions())?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        Ok(prepared)
+    }
+
+    fn publish(&self) -> Result<()> {
+        std::fs::rename(&self.temporary, &self.target)?;
+        Ok(())
+    }
+
+    fn sync_directory(&self) -> Result<()> {
+        self.directory.sync_all()?;
+        Ok(())
+    }
+}
+
+impl Drop for PreparedConfigWrite {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.temporary);
+    }
+}
+
+#[cfg(test)]
+fn atomic_config_write(path: &Path, text: &str) -> Result<()> {
+    let prepared = PreparedConfigWrite::prepare(path, text)?;
+    prepared.publish()?;
+    prepared.sync_directory()
+}
+
+/// Modification stamp used to detect configuration changed outside the daemon.
 fn modified(path: &Path) -> u64 {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -1531,6 +1704,8 @@ impl Client {
     /// and configuration path, a busy daemon keeps the build and configuration
     /// its work started with; the frontend reconnects and explains the delay.
     pub fn connect(project: &Path, config: &Path, state: &Path) -> Result<Self> {
+        let canonical_config = config.canonicalize()?;
+        let config = canonical_config.as_path();
         private_directory(state)?;
         let mut client = Self::at(state);
         client.origin = Some((project.into(), config.into(), state.into()));
@@ -1689,4 +1864,180 @@ fn wait_unlocked(state: &Path) -> Result<()> {
         std::thread::sleep(Duration::from_millis(20));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod live_config_tests {
+    use super::*;
+
+    #[test]
+    fn abrupt_exit_before_and_after_config_publish_keeps_a_complete_file() {
+        const CHILD: &str = "ANTISLOP_TEST_CONFIG_EXIT_PHASE";
+        if let Some(phase) = std::env::var_os(CHILD) {
+            let path = PathBuf::from(std::env::var_os("ANTISLOP_TEST_CONFIG_EXIT_PATH").unwrap());
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("max_parallel = 4", "max_parallel = 1");
+            let prepared = PreparedConfigWrite::prepare(&path, &text).unwrap();
+            if phase == "published" {
+                prepared.publish().unwrap();
+            }
+            // Exit without dropping PreparedConfigWrite, as after a process
+            // interruption between preparation, publication and directory sync.
+            std::process::exit(0);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = include_str!("../../examples/antislop.toml");
+        for phase in ["prepared", "published"] {
+            std::fs::write(&path, original).unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "lean::daemon::live_config_tests::abrupt_exit_before_and_after_config_publish_keeps_a_complete_file"])
+                .env(CHILD, phase)
+                .env("ANTISLOP_TEST_CONFIG_EXIT_PATH", &path)
+                .stdout(std::process::Stdio::null())
+                .status().unwrap();
+            assert!(status.success());
+            let expected = if phase == "prepared" {
+                original.to_owned()
+            } else {
+                original.replace("max_parallel = 4", "max_parallel = 1")
+            };
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+            Config::load(&path).unwrap();
+            atomic_config_write(&path, original).unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn configuration_requests_validate_before_writing_and_record_the_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = include_str!("../../examples/antislop.toml");
+        std::fs::write(&path, original).unwrap();
+        let core = Core::open(
+            &dir.path().join(".antislop"),
+            Config::from_toml(original).unwrap(),
+        )
+        .unwrap();
+        let old = core.config_snapshot();
+        let call = |request| handle(&core, dir.path(), &path, request);
+        assert!(
+            call(Request::SetConfig {
+                toml: "bad = [".into(),
+                expected_revision: crate::hash(original),
+            })
+            .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(*core.config_snapshot(), *old);
+        let updated = original.replace("max_parallel = 4", "max_parallel = 1");
+        call(Request::SetConfig {
+            toml: updated.clone(),
+            expected_revision: crate::hash(original),
+        })
+        .unwrap();
+        assert_eq!(core.config_snapshot().policy.max_parallel, 1);
+        assert_eq!(old.policy.max_parallel, 4);
+        let stale = call(Request::SetConfig {
+            toml: original.into(),
+            expected_revision: crate::hash(original),
+        })
+        .unwrap_err();
+        assert!(stale.to_string().contains("configuration changed"));
+        assert_eq!(core.config_snapshot().policy.max_parallel, 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), updated);
+        assert_eq!(call(Request::GetConfig).unwrap()["toml"], updated);
+        assert_eq!(
+            call(Request::Identity).unwrap()["config_modified"],
+            modified(&path)
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), updated);
+        let conversation = core.start(dir.path()).unwrap();
+        assert!(
+            core.store
+                .events_since(&conversation.id, 0, 100)
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == "config_updated")
+        );
+        let db = rusqlite::Connection::open(core.state.join("core.db")).unwrap();
+        db.execute_batch("CREATE TRIGGER reject_config_event BEFORE INSERT ON events WHEN NEW.kind='config_updated' BEGIN SELECT RAISE(FAIL,'injected log failure'); END;").unwrap();
+        let failure = call(Request::SetConfig {
+            toml: original.into(),
+            expected_revision: crate::hash(&updated),
+        })
+        .unwrap_err();
+        assert!(failure.to_string().contains("injected log failure"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), updated);
+        assert_eq!(core.config_snapshot().policy.max_parallel, 1);
+        db.execute_batch("DROP TRIGGER reject_config_event;
+            CREATE TABLE deferred_failure(id TEXT REFERENCES conversations(id) DEFERRABLE INITIALLY DEFERRED);
+            CREATE TRIGGER fail_config_commit AFTER INSERT ON events WHEN NEW.kind='config_updated'
+            BEGIN INSERT INTO deferred_failure VALUES('missing'); END;").unwrap();
+        let applied = call(Request::SetConfig {
+            toml: original.into(),
+            expected_revision: crate::hash(&updated),
+        })
+        .unwrap();
+        assert_eq!(applied["status"], "applied_with_warnings");
+        assert_eq!(applied["warnings"][0]["stage"], "event_commit");
+        assert!(
+            applied["warnings"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("FOREIGN KEY")
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(core.config_snapshot().policy.max_parallel, 4);
+    }
+
+    #[test]
+    fn preparing_config_does_not_publish_and_drop_removes_the_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("config.toml");
+        std::fs::write(&target, "old").unwrap();
+        let prepared = PreparedConfigWrite::prepare(&target, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(&prepared.temporary).unwrap(), "new");
+        let temporary = prepared.temporary.clone();
+        drop(prepared);
+        assert!(!temporary.exists());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old");
+    }
+
+    #[test]
+    fn atomic_write_preserves_symlink_and_rejects_missing_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.toml");
+        let link = dir.path().join("link.toml");
+        std::fs::write(&target, "old").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        atomic_config_write(&link, "new").unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        std::fs::remove_file(&target).unwrap();
+        assert!(atomic_config_write(&link, "again").is_err());
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn failed_atomic_rename_preserves_destination_and_cleans_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("config.toml");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("original"), "unchanged").unwrap();
+        assert!(atomic_config_write(&destination, "replacement").is_err());
+        assert_eq!(
+            std::fs::read_to_string(destination.join("original")).unwrap(),
+            "unchanged"
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 }

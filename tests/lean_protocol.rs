@@ -928,3 +928,64 @@ fn an_oversized_first_event_still_advances_the_cursor() {
     // Nothing to send is nothing to take.
     assert_eq!(reply_event_count(&[], budget), 0);
 }
+
+#[test]
+fn live_config_updates_are_validated_and_preserve_daemon_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let canonical = temp.path().canonicalize().unwrap();
+    let project = canonical.as_path();
+    let codex = fake_codex(project);
+    let agy = fake_agy(project);
+    let config = write_config(project, &codex, &agy);
+    let state = project.join(".antislop");
+    let daemon = DaemonGuard::start(project, &config, &state);
+    let before = daemon.call_raw(&json!({"op": "get_config"})).unwrap();
+    let identity = daemon.call_raw(&json!({"op": "identity"})).unwrap();
+    assert!(
+        daemon
+            .call_raw(&json!({"op": "set_config", "toml": "invalid = ["}))
+            .is_err()
+    );
+    assert_eq!(
+        daemon.call_raw(&json!({"op": "get_config"})).unwrap(),
+        before
+    );
+    let text = before["toml"]
+        .as_str()
+        .unwrap()
+        .replace("max_parallel = 4", "max_parallel = 1")
+        .replace("effort = \"high\"", "effort = \"low\"");
+    assert_ne!(text, before["toml"].as_str().unwrap());
+    assert!(text.contains("max_parallel = 1"));
+    assert!(text.contains("effort = \"low\""));
+    daemon
+        .call_raw(
+            &json!({"op": "set_config", "toml": text, "expected_revision": before["revision"]}),
+        )
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
+    assert_eq!(
+        daemon.call_raw(&json!({"op": "get_config"})).unwrap()["toml"],
+        text
+    );
+    assert_eq!(
+        daemon.call_raw(&json!({"op": "identity"})).unwrap()["pid"],
+        identity["pid"]
+    );
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+        .current_dir(project)
+        .arg("chat")
+        .arg("--config")
+        .arg(&config)
+        .arg("--state")
+        .arg(&state)
+        .arg("hello")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        daemon.call_raw(&json!({"op": "identity"})).unwrap()["pid"],
+        identity["pid"]
+    );
+}

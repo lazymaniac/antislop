@@ -75,18 +75,12 @@ pub fn connect(path: &Path, registry: &Registry) -> Result<ProjectConn, ConnectE
     if !registry.is_trusted(&path) {
         return Err(ConnectError::NotTrusted(path));
     }
-    let config = path.join("antislop.toml");
-    if !config.is_file() {
-        return Err(fail(&format!(
-            "no configuration at {}: a project needs its own antislop.toml",
-            config.display()
-        )));
-    }
+    let config = super::super::cli::resolve_config(&path, None).map_err(|e| fail(&e))?;
+    crate::config::Config::load(&config).map_err(|e| fail(&e))?;
     let state = path.join(".antislop");
     super::super::daemon::private_directory(&state).map_err(|e| fail(&e))?;
     let state = state.canonicalize().map_err(|e| fail(&e))?;
-    let client = Client::connect(&path, &config.canonicalize().map_err(|e| fail(&e))?, &state)
-        .map_err(|e| fail(&e))?;
+    let client = Client::connect(&path, &config, &state).map_err(|e| fail(&e))?;
     Ok(ProjectConn::new(path, client))
 }
 
@@ -157,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_created_for_a_directory_that_is_not_trusted_or_has_no_configuration() {
+    fn nothing_is_created_for_an_untrusted_directory_or_invalid_project_configuration() {
         let config = tempfile::tempdir().unwrap();
         let registry = Registry::at(config.path());
         let project = tempfile::tempdir().unwrap();
@@ -168,10 +162,11 @@ mod tests {
         );
         assert!(!project.path().join(".antislop").exists());
 
+        std::fs::write(project.path().join("antislop.toml"), "invalid TOML").unwrap();
         registry.trust(project.path()).unwrap();
         let error = connect(project.path(), &registry).err().unwrap();
         assert!(
-            matches!(&error, ConnectError::Failed(text) if text.contains("antislop.toml")),
+            matches!(&error, ConnectError::Failed(text) if text.contains("invalid TOML configuration")),
             "{error:?}"
         );
         assert!(!project.path().join(".antislop").exists());

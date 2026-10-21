@@ -47,7 +47,7 @@ Ledgery i bramki jakości (§3, §6.4-6.7, §7.6, §10.1, M2Q):
 
 TUI (§8):
 
-- [ ] Zakładki szczegółów agenta: Overview, Session, Artifacts, Findings, Messages, Evidence, Checks. Brakuje Artifacts, Findings i Evidence jako osobnych zakładek (§8.4).
+- [ ] Zakładki szczegółów agenta: Overview (ze scalona Session), Artifacts, Findings, Messages, Evidence, Checks. Brakuje Artifacts, Findings i Evidence jako osobnych zakładek (§8.4).
 - [ ] Widoki runu z czatu/palety: Requirements, Options, Risks, Quality gates (pokrycie, dowody, pominięcia, różnice rewizji) (§6.6, §8.4).
 - [ ] Filtry relacji w grafie (supervises, depends_on, verifies, communicates_with) oraz podświetlenie krawędzi komunikacji z czasem i licznikiem (§8.3).
 - [ ] Pełny zestaw 12 statusów węzła (queued, starting, running, waiting_agent, waiting_user, verifying, changes_requested, paused, blocked, failed, completed, cancelled) z tekstem/symbolem i opcjonalnym kolorem (§8.3).
@@ -91,15 +91,17 @@ Pozostałe:
 - [ ] Historia runu mierząca czas do zaakceptowanego wyniku, czas pracy użytkownika, liczbę rund, blokad, konfliktów i zmian zakresu (§15).
 - [ ] Decyzja o licencji i dystrybucji Architect (§20, pkt 4).
 
-- [ ] zunifikowac workera z weryfikatorem w jednym nodzie na grafie
-- [ ] zunifikowac zakladke overview z session
-- [ ] Globalny fallback konfiguracji, gdy brak projektowego antislop.toml (t2: brak implementacji w drzewie bramki t14).
-- [ ] Edytor dowolnej opcji konfiguracji w TUI i zastosowanie na zywo w daemonie (t3/t7: brak implementacji w drzewie t14).
-- [ ] Zaznaczanie i kopiowanie tekstu sesji myszka (t8: brak implementacji w drzewie t14).
+- [x] zunifikowac workera z weryfikatorem w jednym nodzie na grafie
+- [x] zunifikowac zakladke overview z session
+- [x] Globalny fallback konfiguracji, gdy brak projektowego antislop.toml (t2).
+- [x] Edytor dowolnej opcji konfiguracji w TUI i zastosowanie na zywo w daemonie (t3/t7).
+- [x] Zaznaczanie i kopiowanie tekstu sesji myszka (t8).
 - [x] Odswiezanie otwartych Checks po zmianie rundy i zdarzeniach check.
 - [x] T14: sprawdzenie globalnego zaufania przed otwarciem stanu daemona; brak migracji zaufania z bazy projektu; bezpieczny plik tymczasowy rejestru.
 - [x] T14: ograniczenie utrwalanych bledow tur i redakcja znanych sekretow ze srodowiska (nie obejmuje calego transkryptu).
 - [x] T13: lokalne uniewaznianie Checks; odczyt jednego zadania bez dekodowania calego planu i ponownego odczytu dla freshness token.
-- [ ] T13: lekki endpoint Checks bez fingerprintu Git, cache transkryptu i layoutu grafu; ponowny audyt po integracji brakujacych zmian.
-- [ ] T14: zamkniecie bramki po integracji brakujacych wynikow t2-t8 i pelnej weryfikacji.
-- [x] T14: test routingu niezalezny od lokalnego antislop.toml; ponowny przebieg testow daemon/socket i reaping bez EPERM. 427 testow zaliczonych; 1 test zapisujacy git config pominiety zgodnie z zakazem zadania.
+- [x] T13: cache rekordow i zawijania transkryptu; przeglad zintegrowanego kodu.
+- [ ] T13: lekki endpoint Checks bez fingerprintu Git i cache layoutu grafu.
+- [x] T14: integracja lancucha b6356f1 z baza main d050f2c, przeglad nowego kodu i pelna bramka: check, fmt, clippy -D warnings oraz 471 testow (bez pominiec).
+- [x] T14: usuniety lokalny test routingu zgodnie ze zmiana uzytkownika; antislop.toml bez zmian.
+- [x] T14: SetConfig porownuje rewizje pod blokada; clipboard ma limit 64 KiB; test przerwania procesu przed i po publikacji konfiguracji.

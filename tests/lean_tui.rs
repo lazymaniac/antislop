@@ -160,7 +160,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
         let graph = Graph::new(&view);
         let worker = graph.node("worker:t1").unwrap();
         let verifier = graph.node("verifier:t1").unwrap();
-        assert!(verifier.y >= worker.y + worker.height);
+        assert_eq!(verifier.key, worker.key);
         for key in ["worker:t1", "verifier:t1"] {
             let node = graph.node(key).unwrap();
             assert_eq!(
@@ -180,11 +180,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
             // line alone holds state, and the running role's doing text
             // has a line of its own.
             assert!(!text.contains("exec cargo check"));
-            if key == format!("{active_role}:t1") {
-                assert!(text.contains("doing: exec cargo"), "{text}");
-            } else {
-                assert!(!text.contains("doing"), "{text}");
-            }
+            assert!(text.contains("doing: exec cargo"), "{text}");
             if key == "worker:t1" {
                 assert!(text.contains("Popraw zapis"), "{text}");
                 assert!(text.contains("👩‍💻") && text.contains("e\u{301}"), "{text}");
@@ -245,7 +241,7 @@ fn graph_scrolls_through_many_short_cards() {
     }
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(app.offset.1 > start);
-    assert_eq!(app.selected, "verifier:t10");
+    assert_eq!(app.selected, "worker:t10");
     let text: String = terminal
         .backend()
         .buffer()
@@ -2872,7 +2868,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
 
     // Worker and verifier alignment: verifier sits directly below worker
     assert_eq!(w1.0, v1.0);
-    assert!(v1.1 > w1.1);
+    assert_eq!(v1, w1);
 
     // Columns advance with dependency depth: w1.0 < w2.0 <= w4.0
     assert!(w1.0 < w2.0);
@@ -2903,7 +2899,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     let mut large_view = View::default();
     large_view.tasks = large_tasks;
     let large_graph = Graph::new(&large_view);
-    assert_eq!(large_graph.nodes.len(), 3 + 500 * 2);
+    assert_eq!(large_graph.nodes.len(), 3 + 500);
     assert!(large_graph.width > 0);
     assert!(large_graph.height > 0);
 
@@ -2941,7 +2937,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     let mut cyclic_view = View::default();
     cyclic_view.tasks = cyclic_tasks;
     let cyclic_graph = Graph::new(&cyclic_view);
-    assert_eq!(cyclic_graph.nodes.len(), 3 + 4 * 2);
+    assert_eq!(cyclic_graph.nodes.len(), 3 + 4);
     for node in &cyclic_graph.nodes {
         assert!(node.visible);
     }
@@ -3034,7 +3030,7 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
 
     // 2. Visible-only navigation and Collapsing
     let next_below = graph.neighbour("worker:t1", 0, 1);
-    assert_eq!(next_below.as_deref(), Some("verifier:t1"));
+    assert_ne!(next_below.as_deref(), Some("verifier:t1"));
 
     let mut collapsed = std::collections::HashSet::new();
     collapsed.insert("t1".into());
@@ -3045,7 +3041,7 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
     let v1 = collapsed_graph.node("verifier:t1").unwrap();
     assert!(w1.visible);
     assert!(w1.collapsed);
-    assert!(!v1.visible);
+    assert!(v1.visible);
 
     let next_below_collapsed = collapsed_graph.neighbour("worker:t1", 0, 1);
     assert_ne!(next_below_collapsed.as_deref(), Some("verifier:t1"));
@@ -3360,6 +3356,10 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     details.switch_tab(0);
     assert_eq!(details.tab, 0);
     assert_eq!(details.scroll, 15);
+    assert!(
+        !details.follow,
+        "restored Overview keeps its scroll position"
+    );
     assert_eq!(details.query, "analiza");
 
     // Switch back to verifier:t1: active tab is 0 (never scrolled for verifier:t1)
@@ -3409,7 +3409,7 @@ fn test_inspector_whole_record_search_and_raw_view() {
         "findings": ["Ustalenie A: klucz_analityczny_xyz"],
         "artifacts": ["src/main.rs", "target/report.json"]
     }));
-    details.tab = 3; // WYNIK tab
+    details.tab = antislop::lean::tui::details::RESULT; // WYNIK tab
 
     let mut view = antislop::lean::tui::view::View::default();
     view.tasks.push(antislop::lean::tui::view::TaskRow {
@@ -3476,8 +3476,8 @@ fn test_inspector_explicit_missing_data_notices() {
         ..Default::default()
     });
 
-    // Tab 3: OUTCOME -> explicit notices for missing report, artifacts, evidence
-    details.tab = 3;
+    // Result -> explicit notices for missing report, artifacts, evidence
+    details.tab = antislop::lean::tui::details::RESULT;
     let lines = details.lines(&view);
     let all_text = lines
         .iter()
@@ -3497,8 +3497,8 @@ fn test_inspector_explicit_missing_data_notices() {
         "must contain explicit missing evidence notice: {all_text}"
     );
 
-    // Tab 4: CHECKS -> explicit notices for missing controls data
-    details.tab = 4;
+    // Checks -> explicit notices for missing controls data
+    details.tab = antislop::lean::tui::details::CHECKS;
     let lines_checks = details.lines(&view);
     let all_checks = lines_checks
         .iter()
@@ -3510,8 +3510,8 @@ fn test_inspector_explicit_missing_data_notices() {
         "must contain controls text: {all_checks}"
     );
 
-    // Tab 5: COMMENTS -> explicit notice for missing comments
-    details.tab = 5;
+    // Comments -> explicit notice for missing comments
+    details.tab = antislop::lean::tui::details::COMMENTS;
     let lines_comments = details.lines(&view);
     let all_comments = lines_comments
         .iter()
@@ -3523,8 +3523,8 @@ fn test_inspector_explicit_missing_data_notices() {
         "must contain explicit missing comments notice: {all_comments}"
     );
 
-    // Tab 1: SESSION -> explicit notice when no sessions are retained
-    details.tab = 1;
+    // Overview: session history -> explicit notice when no sessions are retained
+    details.tab = 0;
     let lines_sessions = details.lines(&view);
     let all_sessions = lines_sessions
         .iter()
@@ -3538,11 +3538,11 @@ fn test_inspector_explicit_missing_data_notices() {
 }
 
 #[test]
-fn session_inspector_shows_only_the_terminal_transcript() {
+fn overview_includes_the_terminal_transcript_without_database_mirrors() {
     use antislop::lean::tui::session::Block;
     use antislop::lean::tui::view::{Agent, View};
     let mut details = Details::new("worker:t1".into());
-    details.tab = 1;
+    details.tab = 0;
     details.history_unavailable = true;
     details.sessions.push(antislop::lean::store::SessionInfo {
         turn_id: "database-turn".into(),
@@ -3578,12 +3578,53 @@ fn session_inspector_shows_only_the_terminal_transcript() {
             ..Default::default()
         },
     );
+    view.tasks.push(antislop::lean::tui::view::TaskRow {
+        id: "t1".into(),
+        goal: "Shared task overview".into(),
+        ..Default::default()
+    });
+    view.agents.insert(
+        "verifier:t1".into(),
+        Agent {
+            provider: "claude".into(),
+            feed: vec![Block::Text("Verifier evidence".into())],
+            ..Default::default()
+        },
+    );
     let text = details
         .lines(&view)
         .into_iter()
         .map(|(_, line)| line)
         .collect::<Vec<_>>()
         .join("\n");
+    assert!(text.contains("Shared task overview"));
+    assert!(text.contains("Session · worker"));
+    assert!(text.contains("Session · verifier"));
+    assert!(text.contains("Verifier evidence"));
+    details.switch_key("verifier:t1".into());
+    let verifier_text = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(verifier_text.contains("Shared task overview"));
+    assert!(verifier_text.contains("• Ran exec cargo check"));
+    assert!(verifier_text.contains("Verifier evidence"));
+    details.query = "Verifier evidence".into();
+    details.raw = true;
+    let filtered = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(filtered.contains("\"session\""));
+    assert!(filtered.contains("Verifier evidence"));
+    assert!(!filtered.contains("exec cargo check"));
+    details.query.clear();
+    details.raw = false;
+    details.switch_key("worker:t1".into());
     assert!(text.contains("codex · idle"));
     assert!(text.contains("• Ran exec cargo check"), "{text}");
     assert_eq!(text.matches("exec cargo check").count(), 1);
@@ -3657,7 +3698,14 @@ fn test_recipient_selection_and_broadcast() {
     assert!(items.iter().any(|(label, act)| label.contains("orchestrator") && matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == "orchestrator")));
     assert!(items.iter().any(|(label, act)| label.contains("worker:t1")
         && matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == "worker:t1")));
-    assert!(items.iter().any(|(label, act)| label.contains("verifier:t1") && matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == "verifier:t1")));
+    assert_eq!(items.len(), 6, "both protocol roles remain selectable");
+    for status in ["working", "verifying", "approved"] {
+        view.tasks[0].status = status.into();
+        for role in ["worker", "verifier"] {
+            let address = format!("{role}:t1");
+            assert!(picker.items(&view).iter().any(|(_, act)| matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == &address)));
+        }
+    }
 
     // Test app recipient action execution
     let mut app = App::test_app();
@@ -4071,7 +4119,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
         GroupingMode::Dependency,
         Some((78, 20)),
     );
-    assert_eq!(adaptive_cycle.nodes.len(), 3 + 2 * 2);
+    assert_eq!(adaptive_cycle.nodes.len(), 3 + 2);
 
     // 5. Compaction after collapsing and filtering
     let mut collapsed = std::collections::HashSet::new();
@@ -4086,7 +4134,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
     let p1_w = collapsed_graph.node("worker:p1").unwrap();
     let p1_v = collapsed_graph.node("verifier:p1").unwrap();
     assert!(p1_w.visible && p1_w.collapsed);
-    assert!(!p1_v.visible);
+    assert!(p1_v.visible);
 
     // Filter compaction
     let filtered_graph = Graph::new_with_viewport(
@@ -4214,6 +4262,76 @@ fn test_adaptive_graph_collision_and_routing_safety() {
 }
 
 #[test]
+fn task_card_mouse_selection_uses_one_identity_for_both_phases() {
+    use antislop::lean::tui::{graph::Graph, view::TaskRow};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut app = App::test_app();
+    app.view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            status: "working".into(),
+            ..Default::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            status: "verifying".into(),
+            ..Default::default()
+        },
+    ];
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+    let mut terminal = Terminal::new(TestBackend::new(160, 70)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let inner = app.graph_area.unwrap();
+    let graph = Graph::new_with_viewport(
+        &app.view,
+        None,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+    );
+    let node = graph.node("verifier:t2").unwrap();
+    app.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: inner.x + node.x + 3 - app.offset.0,
+        row: inner.y + node.y + 2 - app.offset.1,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(
+        app.selected, "worker:t2",
+        "clicking verifier state selects its task"
+    );
+    app.toggle_selected_collapse();
+    app.select_node("verifier:t2".into());
+    assert_eq!(app.selected, "worker:t2");
+    assert!(
+        app.graph_collapsed.contains("t2"),
+        "role alias preserves collapse"
+    );
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.graph_collapsed.contains("t2"));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let details = app.details.as_ref().unwrap();
+    assert_eq!(details.key, "worker:t2");
+    assert!(
+        antislop::lean::tui::details::tabs_for(&details.key)
+            .contains(&antislop::lean::tui::details::CHECKS)
+    );
+    app.key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+    assert_eq!(
+        app.details.as_ref().unwrap().tab,
+        antislop::lean::tui::details::CHECKS
+    );
+    app.details = None;
+    let mut tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
+    tiny.draw(|frame| app.draw(frame)).unwrap();
+    assert!(
+        app.graph_area.is_none(),
+        "small-terminal guard clears stale mouse bounds"
+    );
+}
+
+#[test]
 fn test_adaptive_graph_navigation_and_resize_stability() {
     use antislop::lean::tui::graph::Graph;
     use antislop::lean::tui::view::TaskRow;
@@ -4281,7 +4399,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
 
     // 3. Arrow navigation
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.selected, "verifier:t2");
+    assert_eq!(app.selected, "worker:t3");
 
     // 4. Resize terminal to 160x50: viewport dynamically adapts
     let mut term_large = Terminal::new(TestBackend::new(160, 50)).unwrap();
@@ -4451,11 +4569,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
 
     let v1 = filtered_graph.node("verifier:t1").unwrap();
     assert!(v1.visible);
-    assert_eq!(
-        v1.y,
-        antislop::lean::tui::graph::HEIGHT + 2,
-        "Verifier at row 1 immediately below worker:t1"
-    );
+    assert_eq!(v1.y, w1.y, "Verifier address resolves to the task card");
 
     // 2. Column selection according to visible tasks:
     // Only "task 3" visible (raw topological depth was 2).
@@ -4750,7 +4864,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
             app.graph_grouping,
             app.graph_viewport,
         );
-        assert_eq!(g_cycle.nodes.len(), 3 + 2 * 2);
+        assert_eq!(g_cycle.nodes.len(), 3 + 2);
 
         // 4. Filtering and compaction through App:
         app.set_graph_filter(Some("cy1".into()));
@@ -4780,8 +4894,8 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         );
         assert!(g_collapsed.node("worker:cy1").unwrap().collapsed);
         assert!(
-            !g_collapsed.node("verifier:cy1").unwrap().visible,
-            "Collapsed verifier is hidden and compacted"
+            g_collapsed.node("verifier:cy1").unwrap().visible,
+            "Collapsed task remains addressable by either role"
         );
 
         // 6. Stability on selection and activity updates:
@@ -5018,10 +5132,10 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         },
     );
     let (worker_now, _) = card(&view, "worker:t1");
-    assert!(worker_now.contains("awaiting verdict r1"), "{worker_now}");
+    assert!(worker_now.contains("verifier r1"), "{worker_now}");
     assert!(
-        !worker_now.contains("cargo test"),
-        "worker keeps its own line"
+        worker_now.contains("cargo test"),
+        "task shows its active verifier"
     );
     let (verifier_now, _) = card(&view, "verifier:t1");
     assert!(verifier_now.contains("checking r1"), "{verifier_now}");
@@ -5407,7 +5521,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
         "round two"
     );
-    app.details.as_mut().unwrap().tab = 4; // Checks
+    app.details.as_mut().unwrap().tab = 3; // Checks (Overview and Session are merged)
     let issued = app.task_request_id;
     let check = |id: &str, task: &str, seq| Update::Events {
         conversation: "test-conv".into(),
@@ -5592,4 +5706,1007 @@ fn history_storage_errors_keep_the_input_and_report_the_raw_reason() {
     let mut reopened = App::test_app();
     reopened.load_history(state.path());
     assert_eq!(reopened.history, ["next message"]);
+}
+
+#[test]
+fn configuration_modal_preserves_chat_and_failed_draft_and_handles_tiny_terminals() {
+    use antislop::lean::tui::config::ConfigEditor;
+    let mut app = App::test_app();
+    app.input = InputBuffer::with_text("unsent chat 👩‍💻");
+    app.config_editor = Some(
+        ConfigEditor::new(
+            include_str!("../examples/antislop.toml"),
+            "/project/antislop.toml".into(),
+        )
+        .unwrap(),
+    );
+    let selected = app.config_editor.as_ref().unwrap().selected;
+    app.paste("e\u{301}👩‍💻");
+    let draft = app.config_editor.as_ref().unwrap().fields[selected]
+        .input
+        .text
+        .clone();
+    app.apply_update(Update::Config {
+        project: app.client.state_dir().to_string_lossy().into_owned(),
+        save: true,
+        reply: Err("daemon disconnected".into()),
+    });
+    assert_eq!(
+        app.config_editor.as_ref().unwrap().fields[selected]
+            .input
+            .text,
+        draft
+    );
+    assert_eq!(
+        app.config_editor.as_ref().unwrap().status,
+        "daemon disconnected"
+    );
+    app.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert!(
+        !app.config_editor.as_ref().unwrap().fields[selected]
+            .input
+            .text
+            .ends_with('💻')
+    );
+    assert_eq!(app.input.text, "unsent chat 👩‍💻");
+    for (width, height) in [(1, 1), (11, 4), (12, 5), (80, 24)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+    }
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.config_editor.as_ref().unwrap().visible);
+    app.command("/config");
+    assert!(app.config_editor.as_ref().unwrap().visible);
+}
+
+#[test]
+fn configuration_palette_and_profile_actions_are_available() {
+    use antislop::lean::tui::config::ConfigEditor;
+    let picker = Picker::new(Kind::Commands);
+    assert!(
+        picker
+            .items(&Default::default())
+            .iter()
+            .any(|(label, _)| label.contains("/config"))
+    );
+    let mut editor = ConfigEditor::new(
+        include_str!("../examples/antislop.toml"),
+        "antislop.toml".into(),
+    )
+    .unwrap();
+    let count = editor.fields.len();
+    editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(editor.fields.len() > count);
+    assert!(editor.source().is_some());
+    editor.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_eq!(editor.fields.len(), count);
+}
+
+#[test]
+fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
+    use antislop::lean::tui::details::CHECKS;
+    let mut app = App::test_app();
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(), generation: 1,
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
+        idle: false, autonomous: false,
+    });
+    app.open_details("worker:t1".into());
+    app.details.as_mut().unwrap().tab = CHECKS;
+    let request = app.task_request_id;
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![
+            json!({"seq":3,"kind":"check","payload":{"task":"u1","round":1,"approved":true}}),
+        ],
+        idle: false,
+        autonomous: false,
+    });
+    assert_eq!(app.task_request_id, request + 1);
+    assert_eq!(
+        app.details.as_ref().unwrap().fetched_checks,
+        app.view.check_events
+    );
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![],
+        idle: false,
+        autonomous: false,
+    });
+    assert_eq!(app.task_request_id, request + 1);
+}
+
+#[test]
+fn configuration_save_shortcut_keeps_draft_after_transport_failure() {
+    use antislop::lean::tui::config::ConfigEditor;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    app.config_editor = Some(
+        ConfigEditor::new(
+            include_str!("../examples/antislop.toml"),
+            "antislop.toml".into(),
+        )
+        .unwrap(),
+    );
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(app.config_editor.as_ref().unwrap().pending);
+    let update = updates.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(matches!(
+        &update,
+        Update::Config {
+            save: true,
+            reply: Err(_),
+            ..
+        }
+    ));
+    app.apply_update(update);
+    let editor = app.config_editor.as_mut().unwrap();
+    assert!(!editor.pending);
+    assert!(!editor.status.is_empty());
+    assert!(editor.source().is_some());
+}
+
+#[test]
+fn configuration_load_and_save_use_live_daemon_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = UnixListener::bind(socket(dir.path())).unwrap();
+    let (captured, requests) = mpsc::channel();
+    let server = thread::spawn(move || {
+        for save in [false, false, true] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            captured.send(request.clone()).unwrap();
+            let source = if save {
+                request["toml"].as_str().unwrap()
+            } else {
+                include_str!("../examples/antislop.toml")
+            };
+            let response = json!({"data":{"toml":source,"path":"/project/antislop.toml","status":"applied","warnings":[]},"error":null});
+            writeln!(stream, "{response}").unwrap();
+        }
+    });
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    app.input = InputBuffer::with_text("chat draft");
+    app.command("/config");
+    assert_eq!(
+        requests.recv_timeout(Duration::from_secs(3)).unwrap()["op"],
+        "get_config"
+    );
+    app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+    let editor = app.config_editor.as_mut().unwrap();
+    let parallel = editor
+        .fields
+        .iter_mut()
+        .find(|f| f.path == ["policy", "max_parallel"])
+        .unwrap();
+    parallel.input = InputBuffer::with_text("2");
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert_eq!(
+        requests.recv_timeout(Duration::from_secs(3)).unwrap()["op"],
+        "get_config"
+    );
+    let saved = requests.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(saved["op"], "set_config");
+    assert_eq!(
+        antislop::config::Config::from_toml(saved["toml"].as_str().unwrap())
+            .unwrap()
+            .policy
+            .max_parallel,
+        2
+    );
+    app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+    assert_eq!(
+        app.config_editor.as_ref().unwrap().status,
+        "Saved and applied live."
+    );
+    assert_eq!(app.input.text, "chat draft");
+    server.join().unwrap();
+}
+
+mod config_editor_acceptance {
+    use super::*;
+    use antislop::{config::Config, lean::tui::config::ConfigEditor};
+    use std::{
+        collections::BTreeSet,
+        path::Path,
+        process::{Child, Command, Stdio},
+        time::Instant,
+    };
+
+    const SOURCE: &str = include_str!("../examples/antislop.toml");
+
+    struct Daemon {
+        child: Child,
+        client: Client,
+    }
+    impl Daemon {
+        fn start(project: &Path, config: &Path, state: &Path, registry: &Path) -> Self {
+            antislop::lean::trust::Registry::at(registry)
+                .trust(project)
+                .unwrap();
+            let child = Command::new(env!("CARGO_BIN_EXE_antislop"))
+                .args(["__core"])
+                .arg(project)
+                .arg(config)
+                .arg(state)
+                .env("ANTISLOP_CONFIG_DIR", registry)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .unwrap();
+            let daemon = Self {
+                child,
+                client: Client::at(state),
+            };
+            wait(|| daemon.client.call(&Request::Identity).is_ok());
+            daemon
+        }
+    }
+    impl Drop for Daemon {
+        fn drop(&mut self) {
+            let _ = self.client.call(&Request::ForceShutdown);
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+    fn wait(mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    fn pump(app: &mut App, updates: &mpsc::Receiver<Update>) {
+        app.apply_update(updates.recv_timeout(Duration::from_secs(5)).unwrap());
+    }
+    fn edit(editor: &mut ConfigEditor, index: usize, text: &str, cycle: bool) {
+        editor.selected = index;
+        if cycle {
+            for _ in 0..6 {
+                if editor.fields[index].input.text == text {
+                    return;
+                }
+                editor.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            }
+            panic!(
+                "could not cycle {} to {text}",
+                editor.fields[index].path.join(".")
+            );
+        }
+        editor.key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        while !editor.fields[index].input.is_empty() {
+            editor.key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        }
+        for ch in text.chars() {
+            editor.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert_eq!(editor.fields[index].input.text, text);
+    }
+
+    /// Explicit struct literals make additions fail compilation, including fields
+    /// serde would otherwise omit. Populate optional values before enumerating
+    /// serialized leaves independently of the editor's field construction.
+    fn serialized_config_field_paths() -> BTreeSet<Vec<String>> {
+        use antislop::config::{
+            CommandLine, OrchestratorConfig, Policy, Profile, ProviderConfig, RoleRouting,
+            WorkspaceConfig,
+        };
+        let config = Config::from_toml(SOURCE).unwrap();
+        let fixture = Config {
+            schema_version: config.schema_version,
+            workspace: WorkspaceConfig {
+                mode: config.workspace.mode,
+            },
+            policy: Policy {
+                mode: config.policy.mode,
+                local_write: config.policy.local_write,
+                local_commits: config.policy.local_commits,
+                required_gates: config.policy.required_gates,
+                max_parallel: config.policy.max_parallel,
+            },
+            providers: config
+                .providers
+                .into_iter()
+                .map(|(name, provider)| {
+                    (
+                        name,
+                        ProviderConfig {
+                            binary: provider.binary,
+                            args: vec!["--schema-probe".into()],
+                            command: Some(CommandLine(vec!["schema-probe".into()])),
+                        },
+                    )
+                })
+                .collect(),
+            profiles: config
+                .profiles
+                .into_iter()
+                .map(|(name, profile)| {
+                    (
+                        name,
+                        Profile {
+                            provider: profile.provider,
+                            model: Some("schema-probe".into()),
+                            effort: profile.effort,
+                            binary: Some("schema-probe".into()),
+                            args: vec!["--schema-probe".into()],
+                            command: Some(CommandLine(vec!["schema-probe".into()])),
+                        },
+                    )
+                })
+                .collect(),
+            orchestrator: OrchestratorConfig {
+                profile: config.orchestrator.profile,
+            },
+            routing: config
+                .routing
+                .into_iter()
+                .map(|(kind, route)| {
+                    (
+                        kind,
+                        RoleRouting {
+                            executor: route.executor,
+                            verifier: route.verifier,
+                        },
+                    )
+                })
+                .collect(),
+        };
+        fn leaves(value: &Value, path: Vec<String>, output: &mut BTreeSet<Vec<String>>) {
+            if let Some(table) = value.as_object() {
+                for (key, value) in table {
+                    let mut child = path.clone();
+                    child.push(key.clone());
+                    leaves(value, child, output);
+                }
+            } else {
+                output.insert(path);
+            }
+        }
+        let mut paths = BTreeSet::new();
+        leaves(&serde_json::to_value(fixture).unwrap(), vec![], &mut paths);
+        // Schema version is a protocol constant, not a user-editable option.
+        assert!(paths.remove(&vec!["schema_version".into()]));
+        paths
+    }
+
+    #[test]
+    fn every_config_field_is_edited_and_written_to_the_selected_file() {
+        for global_active in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let project = dir.path().join("project");
+            let registry = dir.path().join("global");
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::create_dir_all(&registry).unwrap();
+            let local = project.join("antislop.toml");
+            let global = registry.join("antislop.toml");
+            std::fs::write(&local, SOURCE).unwrap();
+            std::fs::write(&global, SOURCE).unwrap();
+            let (target, untouched) = if global_active {
+                (&global, &local)
+            } else {
+                (&local, &global)
+            };
+            let daemon = Daemon::start(&project, target, &project.join(".antislop"), &registry);
+            let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
+            app.command("/config");
+            pump(&mut app, &updates);
+            let editor = app.config_editor.as_mut().unwrap();
+            let expected_paths = serialized_config_field_paths();
+            assert_eq!(
+                editor
+                    .fields
+                    .iter()
+                    .map(|f| f.path.clone())
+                    .collect::<BTreeSet<_>>(),
+                expected_paths
+            );
+            let mut expected_values = vec![];
+            for index in 0..editor.fields.len() {
+                let field = &editor.fields[index];
+                let path = field.path.clone();
+                let old = field.input.text.clone();
+                let key = path.last().unwrap().as_str();
+                let (new, cycle) = match key {
+                    "mode" if path[0] == "workspace" => (json!("in-place"), true),
+                    "mode" => (json!("autonomous"), true),
+                    "local_write" | "local_commits" | "required_gates" => {
+                        (json!(old != "true"), true)
+                    }
+                    "max_parallel" => (json!(2), false),
+                    "provider" => (json!(if old == "codex" { "agy" } else { "codex" }), true),
+                    "effort" => (json!(if old == "low" { "medium" } else { "low" }), true),
+                    "binary" => (json!("/tmp/config-editor-test-binary"), false),
+                    "args" => (json!(["--edited", "two words"]), false),
+                    "command" => (
+                        json!(["/tmp/config-editor-test-command", "--launch"]),
+                        false,
+                    ),
+                    "model" => (json!("edited-model"), false),
+                    _ => (
+                        json!(if old == "reasoning" {
+                            "execution"
+                        } else {
+                            "reasoning"
+                        }),
+                        false,
+                    ),
+                };
+                let text = new
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| new.to_string());
+                assert_ne!(text, old, "field must actually change: {path:?}");
+                edit(editor, index, &text, cycle);
+                expected_values.push((path, new));
+            }
+            app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+            pump(&mut app, &updates);
+            assert_eq!(
+                app.config_editor.as_ref().unwrap().status,
+                "Saved and applied live."
+            );
+            let written = serde_json::to_value(Config::load(target).unwrap()).unwrap();
+            for (path, expected) in expected_values {
+                let actual = path.iter().fold(&written, |value, key| &value[key]);
+                assert_eq!(actual, &expected, "written value for {path:?}");
+            }
+            assert_eq!(std::fs::read_to_string(untouched).unwrap(), SOURCE);
+            assert!(
+                std::fs::read_to_string(target)
+                    .unwrap()
+                    .contains("# Copy to your project")
+            );
+            // Clearing optional overrides and argument lists must remove them from disk.
+            let editor = app.config_editor.as_mut().unwrap();
+            for index in 0..editor.fields.len() {
+                let field = &editor.fields[index];
+                let key = field.path.last().unwrap().as_str();
+                if matches!(key, "args" | "command")
+                    || field.path[0] == "profiles" && matches!(key, "binary" | "model")
+                {
+                    edit(editor, index, "", false);
+                }
+            }
+            app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+            pump(&mut app, &updates);
+            assert_eq!(
+                app.config_editor.as_ref().unwrap().status,
+                "Saved and applied live."
+            );
+            let cleared = Config::load(target).unwrap();
+            assert!(
+                cleared
+                    .providers
+                    .values()
+                    .all(|p| p.args.is_empty() && p.command.is_none())
+            );
+            assert!(cleared.profiles.values().all(|p| p.args.is_empty()
+                && p.command.is_none()
+                && p.binary.is_none()
+                && p.model.is_none()));
+            // Add and remove a profile through actual SetConfig writes.
+            app.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+            let name = app
+                .config_editor
+                .as_ref()
+                .unwrap()
+                .fields
+                .last()
+                .unwrap()
+                .path[1]
+                .clone();
+            app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+            pump(&mut app, &updates);
+            assert!(Config::load(target).unwrap().profiles.contains_key(&name));
+            app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+            app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+            pump(&mut app, &updates);
+            assert!(!Config::load(target).unwrap().profiles.contains_key(&name));
+            assert_eq!(std::fs::read_to_string(untouched).unwrap(), SOURCE);
+        }
+    }
+
+    #[test]
+    fn configuration_render_respects_environment_and_shows_origin_notice_and_field_error() {
+        const CHILD: &str = "ANTISLOP_CONFIG_EDITOR_RENDER_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "config_editor_acceptance::configuration_render_respects_environment_and_shows_origin_notice_and_field_error", "--nocapture"])
+                .env(CHILD, "1").env("NO_COLOR", "1").env("ANTISLOP_ASCII", "1").env("ANTISLOP_CONFIG_DIR", dir.path()).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let global = antislop::lean::trust::config_dir()
+            .unwrap()
+            .join("antislop.toml");
+        for is_global in [false, true] {
+            let path = if is_global {
+                global.clone()
+            } else {
+                global.parent().unwrap().join("project/antislop.toml")
+            };
+            let mut editor =
+                ConfigEditor::new(SOURCE, path.to_string_lossy().into_owned()).unwrap();
+            let index = editor
+                .fields
+                .iter()
+                .position(|f| f.path == ["policy", "max_parallel"])
+                .unwrap();
+            edit(&mut editor, index, "invalid-number", false);
+            assert!(editor.source().is_none());
+            let mut terminal = Terminal::new(TestBackend::new(160, 16)).unwrap();
+            terminal.draw(|frame| editor.draw(frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
+            assert!(text.contains(if is_global {
+                "Configuration (global):"
+            } else {
+                "Configuration (project):"
+            }));
+            assert!(text.contains("Running turns finish with their old profile."));
+            assert!(text.contains("policy.max_parallel = invalid-number ERROR:"));
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .all(|c| c.fg == Color::Reset && c.bg == Color::Reset && c.symbol().is_ascii())
+            );
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .any(|c| c.modifier.contains(Modifier::REVERSED))
+            );
+        }
+    }
+    #[test]
+    fn reload_and_presave_checks_preserve_drafts_and_reject_external_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let path = project.join("antislop.toml");
+        std::fs::write(&path, SOURCE).unwrap();
+        let daemon = Daemon::start(
+            &project,
+            &path,
+            &project.join(".antislop"),
+            &dir.path().join("registry"),
+        );
+        let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
+        app.command("/config");
+        pump(&mut app, &updates);
+        let index = app
+            .config_editor
+            .as_ref()
+            .unwrap()
+            .fields
+            .iter()
+            .position(|f| f.path == ["policy", "max_parallel"])
+            .unwrap();
+        edit(app.config_editor.as_mut().unwrap(), index, "2", false);
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let external = SOURCE.replace("max_parallel = 4", "max_parallel = 10");
+        std::fs::write(&path, &external).unwrap();
+        app.command("/config");
+        pump(&mut app, &updates);
+        assert!(app.config_editor.as_ref().unwrap().conflict);
+        assert_eq!(
+            app.config_editor.as_ref().unwrap().fields[index].input.text,
+            "2"
+        );
+        app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), external);
+        app.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        pump(&mut app, &updates);
+        assert_eq!(
+            app.config_editor.as_ref().unwrap().fields[index].input.text,
+            "10"
+        );
+        assert!(!app.config_editor.as_ref().unwrap().is_dirty());
+        edit(app.config_editor.as_mut().unwrap(), index, "3", false);
+        let newer = external.replace("max_parallel = 10", "max_parallel = 11");
+        std::fs::write(&path, &newer).unwrap();
+        app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        pump(&mut app, &updates);
+        assert!(
+            app.config_editor
+                .as_ref()
+                .unwrap()
+                .status
+                .contains("changed externally")
+        );
+        assert_eq!(
+            app.config_editor.as_ref().unwrap().fields[index].input.text,
+            "3"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+        // A failed reload must retain the draft too.
+        std::fs::write(&path, "broken = [").unwrap();
+        app.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        pump(&mut app, &updates);
+        assert_eq!(
+            app.config_editor.as_ref().unwrap().fields[index].input.text,
+            "3"
+        );
+        assert!(!app.config_editor.as_ref().unwrap().pending);
+    }
+
+    #[test]
+    fn a_clean_reopened_editor_refetches_and_malformed_replies_are_explicit() {
+        let mut app = App::test_app();
+        for reply in [
+            json!({}),
+            json!({"toml": SOURCE}),
+            json!({"path":"file"}),
+            json!({"toml":SOURCE,"path":""}),
+        ] {
+            app.apply_update(Update::Config {
+                project: app.client.state_dir().to_string_lossy().into_owned(),
+                save: false,
+                reply: Ok(reply),
+            });
+            assert!(
+                app.notice
+                    .as_ref()
+                    .unwrap()
+                    .contains("Invalid configuration reply")
+            );
+            assert!(app.config_editor.is_none());
+        }
+        let mut editor = ConfigEditor::new(SOURCE, "antislop.toml".into()).unwrap();
+        editor.visible = false;
+        editor.refresh(
+            ConfigEditor::new(
+                &SOURCE.replace("max_parallel = 4", "max_parallel = 9"),
+                "antislop.toml".into(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            editor
+                .fields
+                .iter()
+                .find(|f| f.path == ["policy", "max_parallel"])
+                .unwrap()
+                .input
+                .text,
+            "9"
+        );
+        editor.fields.retain(|f| f.path[0] != "providers");
+        editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert!(editor.status.contains("no provider"));
+    }
+
+    #[test]
+    fn saved_profile_affects_the_next_turn_and_keeps_the_running_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let binary = dir.path().join("fake-codex");
+        let log = dir.path().join("calls.log");
+        let script = format!(
+            r#"#!/bin/sh
+printf '%s\n---\n' "$*" >> '{}'
+echo '{{"type":"thread.started","thread_id":"cfg-test"}}'
+sleep 2
+echo '{{"type":"item.completed","item":{{"type":"agent_message","text":"done"}}}}'
+echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}'
+"#,
+            log.display()
+        );
+        std::fs::write(&binary, script).unwrap();
+        std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = project.join("antislop.toml");
+        let mut initial = ConfigEditor::new(SOURCE, path.to_string_lossy().into_owned()).unwrap();
+        for (field, text) in [
+            (
+                vec!["providers", "codex", "binary"],
+                binary.to_str().unwrap(),
+            ),
+            (vec!["profiles", "orchestrator", "model"], "before-save"),
+        ] {
+            let index = initial.fields.iter().position(|f| f.path == field).unwrap();
+            edit(&mut initial, index, text, false);
+        }
+        std::fs::write(&path, initial.source().unwrap()).unwrap();
+        let daemon = Daemon::start(
+            &project,
+            &path,
+            &project.join(".antislop"),
+            &dir.path().join("registry"),
+        );
+        let conversation = daemon.client.call(&Request::Start).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        daemon
+            .client
+            .call(&Request::Send {
+                conversation: conversation.clone(),
+                text: "first turn".into(),
+            })
+            .unwrap();
+        wait(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("before-save")));
+        assert_eq!(
+            daemon.client.call(&Request::Identity).unwrap()["busy"],
+            true
+        );
+        let first = std::fs::read_to_string(&log).unwrap();
+        let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
+        app.command("/config");
+        pump(&mut app, &updates);
+        let editor = app.config_editor.as_mut().unwrap();
+        let index = editor
+            .fields
+            .iter()
+            .position(|f| f.path == ["profiles", "orchestrator", "model"])
+            .unwrap();
+        edit(editor, index, "after-save", false);
+        let index = editor
+            .fields
+            .iter()
+            .position(|f| f.path == ["profiles", "orchestrator", "effort"])
+            .unwrap();
+        edit(editor, index, "low", true);
+        app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        pump(&mut app, &updates);
+        assert_eq!(
+            app.config_editor.as_ref().unwrap().status,
+            "Saved and applied live."
+        );
+        assert_eq!(
+            Config::load(&path).unwrap().profiles["orchestrator"]
+                .model
+                .as_deref(),
+            Some("after-save")
+        );
+        wait(|| daemon.client.call(&Request::Identity).unwrap()["busy"] == false);
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            first,
+            "saving restarted the active CLI"
+        );
+        daemon
+            .client
+            .call(&Request::Send {
+                conversation,
+                text: "second turn".into(),
+            })
+            .unwrap();
+        wait(|| {
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .contains("after-save")
+        });
+        wait(|| daemon.client.call(&Request::Identity).unwrap()["busy"] == false);
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(calls.starts_with(&first));
+        let turns: Vec<_> = calls.split("\n---\n").filter(|s| !s.is_empty()).collect();
+        assert_eq!(turns.len(), 2);
+        assert!(turns[1].contains("after-save"));
+        assert!(turns[1].contains("model_reasoning_effort=\"low\""));
+    }
+    #[test]
+    fn semantic_failures_match_the_authoritative_config_validator() {
+        for (path, input, replacement) in [
+            (
+                vec!["policy", "max_parallel"],
+                "0",
+                ("max_parallel = 4", "max_parallel = 0"),
+            ),
+            (
+                vec!["orchestrator", "profile"],
+                "missing",
+                ("profile = \"orchestrator\"", "profile = \"missing\""),
+            ),
+            (
+                vec!["providers", "codex", "command"],
+                "[]",
+                ("binary = \"codex\"", "binary = \"codex\"\ncommand = []"),
+            ),
+        ] {
+            let mut editor = ConfigEditor::new(SOURCE, "antislop.toml".into()).unwrap();
+            let index = editor.fields.iter().position(|f| f.path == path).unwrap();
+            edit(&mut editor, index, input, false);
+            let expected = Config::from_toml(&SOURCE.replace(replacement.0, replacement.1))
+                .unwrap_err()
+                .to_string();
+            assert!(editor.source().is_none());
+            assert_eq!(
+                editor.fields[index].error.as_deref(),
+                Some(expected.as_str())
+            );
+            assert_eq!(editor.fields[index].input.text, input);
+        }
+    }
+}
+
+mod text_selection_acceptance {
+    use super::*;
+    use antislop::lean::tui::{
+        PlanView,
+        clipboard::clipboard_sequence,
+        selection::TextSelection,
+        view::{Entry, TaskRow},
+    };
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    #[test]
+    fn text_selection_copies_rendered_graphemes_and_clears_on_content_change() {
+        let area = Rect::new(2, 3, 14, 2);
+        let mut selection = TextSelection::default();
+        let render = || {
+            let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 20, 8));
+            buffer.set_string(2, 3, "á 👩‍👩‍👧‍👦 test", Style::default());
+            buffer
+        };
+        let mut buffer = render();
+        selection.draw_scrolled(&mut buffer, Some(area), "details:0".into(), 0);
+        let mouse = |kind, column| MouseEvent {
+            kind,
+            column,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2));
+        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 5));
+        selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5));
+        assert_eq!(selection.text().as_deref(), Some("á 👩‍👩‍👧‍👦"));
+        let mut buffer = render();
+        selection.draw_scrolled(&mut buffer, Some(area), "details:0".into(), 0);
+        assert!(buffer[(5, 3)].modifier.contains(Modifier::REVERSED));
+        selection.draw_scrolled(&mut render(), Some(area), "details:1".into(), 0);
+        assert_eq!(selection.text(), None);
+        assert_eq!(
+            clipboard_sequence("\x1b[31mfoo\x1b[0m"),
+            "\x1b]52;c;Zm9v\x07"
+        );
+    }
+
+    #[test]
+    fn text_selection_integrates_chat_agent_details_plan_and_modal_isolation() {
+        for mode in 0..3 {
+            let mut app = App::test_app();
+            app.input = InputBuffer::with_text("retained draft");
+            app.view.idle = true;
+            match mode {
+                0 => app.view.transcript.push(Entry {
+                    style: Style::default(),
+                    text: "sample café 👩‍👩‍👧‍👦".into(),
+                }),
+                1 => {
+                    app.view.tasks.push(TaskRow {
+                        id: "t1".into(),
+                        title: "sample café 👩‍👩‍👧‍👦".into(),
+                        ..Default::default()
+                    });
+                    app.details = Some(Details::new("worker:t1".into()));
+                }
+                _ => {
+                    app.view.plan_doc = "sample café 👩‍👩‍👧‍👦".into();
+                    app.plan_view = Some(PlanView::new("p1".into()));
+                }
+            }
+            let mut terminal = Terminal::new(TestBackend::new(60, 24)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let mut hit = None;
+            for y in 0..24 {
+                for x in 0..54 {
+                    let text: String = (x..x + 6).map(|col| buffer[(col, y)].symbol()).collect();
+                    if text == "sample" {
+                        hit = Some((x, y));
+                    }
+                }
+            }
+            let (x, y) = hit.unwrap_or_else(|| {
+                panic!("selection text must be visible in mode {mode}: {buffer:?}")
+            });
+            let mouse = |kind| MouseEvent {
+                kind,
+                column: x + 2,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            };
+            app.mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+            app.mouse(mouse(MouseEventKind::Up(MouseButton::Left)));
+            app.mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+            app.mouse(mouse(MouseEventKind::Up(MouseButton::Left)));
+            assert_eq!(
+                app.text_selection.text().as_deref(),
+                Some("sample"),
+                "mode {mode}"
+            );
+            terminal
+                .draw(|frame| {
+                    app.draw(frame);
+                    without_color(frame.buffer_mut());
+                    in_ascii(frame.buffer_mut());
+                })
+                .unwrap();
+            assert!(
+                terminal.backend().buffer()[(x + 2, y)]
+                    .modifier
+                    .contains(Modifier::REVERSED)
+            );
+            assert_eq!(app.text_selection.text().as_deref(), Some("sample"));
+            assert_eq!(app.input.text, "retained draft");
+            if mode == 1 {
+                app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+                assert!(
+                    app.text_selection.text().is_none(),
+                    "tab changes invalidate immediately"
+                );
+            } else {
+                app.apply_update(Update::Events {
+                conversation: app.conversation.clone(),
+                generation: app.generation,
+                events: vec![json!({"seq": 1, "kind": "conversation_state", "payload": {"state": "waiting"}})],
+                idle: true,
+                autonomous: false,
+            });
+                assert!(
+                    app.text_selection.text().is_none(),
+                    "content updates invalidate immediately"
+                );
+            }
+            app.help = Some(Help::Chat);
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            app.mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+            app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left)));
+            assert!(app.text_selection.text().is_none());
+            assert_eq!(app.input.text, "retained draft");
+        }
+    }
+
+    #[test]
+    fn text_selection_survives_scrolling_without_copying_unseen_rows() {
+        let area = Rect::new(0, 0, 8, 2);
+        let mut selection = TextSelection::default();
+        let render = |first: &str, second: &str| {
+            let mut buffer = Buffer::empty(area);
+            buffer.set_string(0, 0, first, Style::default());
+            buffer.set_string(0, 1, second, Style::default());
+            buffer
+        };
+        selection.draw_scrolled(&mut render("one", "café"), Some(area), "chat".into(), 10);
+        let mouse = |kind, column| MouseEvent {
+            kind,
+            column,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0));
+        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 3));
+        selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 3));
+        let mut scrolled = render("café", "three");
+        selection.draw_scrolled(&mut scrolled, Some(area), "chat".into(), 11);
+        assert_eq!(selection.text().as_deref(), Some("café"));
+        assert!(scrolled[(3, 0)].modifier.contains(Modifier::REVERSED));
+        assert!(!scrolled[(0, 1)].modifier.contains(Modifier::REVERSED));
+        selection.draw_scrolled(&mut render("three", "four"), Some(area), "chat".into(), 12);
+        assert_eq!(selection.text().as_deref(), Some("café"));
+        selection.draw_scrolled(
+            &mut render("three", "four"),
+            Some(area),
+            "new content".into(),
+            12,
+        );
+        assert!(selection.text().is_none());
+    }
 }

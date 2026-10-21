@@ -23,11 +23,19 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use store::{
     Comment, Conversation, Mail, Message, PlanHistory, PlansPage, Store, Task, TurnStatus,
 };
 use tasks::{Outcome, TaskSpec, Verdict, status};
+
+/// A task role address. Bare task IDs are handled by callers that accept them;
+/// storage and UI callers must only recognize explicit worker/verifier roles.
+pub(crate) fn task_role(key: &str) -> Option<(&str, bool)> {
+    key.strip_prefix("verifier:")
+        .map(|id| (id, true))
+        .or_else(|| key.strip_prefix("worker:").map(|id| (id, false)))
+}
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConversationSummary {
@@ -167,7 +175,9 @@ pub struct Core {
     pub store: Store,
     /// One process owns a state directory at a time.
     _lock: std::fs::File,
-    config: Config,
+    config: RwLock<Arc<Config>>,
+    config_update: Mutex<()>,
+    config_modified: std::sync::atomic::AtomicU64,
     /// Private state directory; writers' worktrees live under it.
     state: PathBuf,
     /// Writers land on the user's branch one at a time.
@@ -202,6 +212,21 @@ struct TurnSetup<'a> {
 }
 
 impl Core {
+    /// Pin configuration for one decision or operation. Existing snapshots survive updates.
+    pub fn config_snapshot(&self) -> Arc<Config> {
+        self.config
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn replace_config(&self, config: Config) {
+        *self
+            .config
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = Arc::new(config);
+    }
+
     pub fn open(state: &Path, config: Config) -> Result<Arc<Self>> {
         daemon::private_directory(state)?;
         // Keeps the state (and worktrees in it) out of the project's git status.
@@ -242,7 +267,9 @@ impl Core {
         let core = Arc::new(Self {
             store,
             _lock: lock,
-            config,
+            config: RwLock::new(Arc::new(config)),
+            config_update: Mutex::new(()),
+            config_modified: std::sync::atomic::AtomicU64::new(0),
             state: state.canonicalize()?,
             integrating: Mutex::new(()),
             in_place: Mutex::new(()),
@@ -425,13 +452,7 @@ impl Core {
         }
 
         let plan = self.store.latest_plan(conversation)?;
-        let (task_id_str, is_verifier) = if let Some(id) = to.strip_prefix("verifier:") {
-            (id, true)
-        } else if let Some(id) = to.strip_prefix("worker:") {
-            (id, false)
-        } else {
-            (to, false)
-        };
+        let (task_id_str, is_verifier) = task_role(to).unwrap_or((to, false));
 
         if let Some(task) = plan.iter().find(|t| t.spec["id"] == task_id_str) {
             let target_role = if is_verifier {
@@ -695,10 +716,11 @@ impl Core {
     /// Whether the conversation runs on by itself: the mode the user set for
     /// it, else the configured one.
     pub fn autonomous(&self, conversation: &str) -> Result<bool> {
+        let config = self.config_snapshot();
         Ok(self
             .store
             .mode(conversation)?
-            .unwrap_or_else(|| self.config.policy.automatic_progression()))
+            .unwrap_or_else(|| config.policy.automatic_progression()))
     }
 
     /// Changes the conversation's mode for what it does next (design §6.2);
@@ -848,6 +870,7 @@ impl Core {
 
     /// A writer's change as files with per-file counts and numbered lines.
     pub fn diff(&self, conversation: &str, plan: &str, id: &str) -> Result<serde_json::Value> {
+        let config = self.config_snapshot();
         let task = self.task_unscoped(plan, id)?;
         let (dir, base, result) = self.change(conversation, &task)?;
         let mut patch = git::patch(&dir, &base, result.as_deref())?;
@@ -862,7 +885,7 @@ impl Core {
         let scope_hash = diff_scope_hash(conversation, plan, id, &base, result.as_deref());
         let spec: Option<TaskSpec> = serde_json::from_value(task.spec.clone()).ok();
         let reviewer = spec.and_then(|s| {
-            self.config
+            config
                 .resolve(s.kind, RoleKind::Verifier)
                 .ok()
                 .map(|profile| {
@@ -926,7 +949,9 @@ impl Core {
                 conversation: &conversation,
                 plan_id: Some(plan_id.clone()),
                 role: role.clone(),
-                profile: core.config.resolve(spec.kind, RoleKind::Verifier),
+                profile: core
+                    .config_snapshot()
+                    .resolve(spec.kind, RoleKind::Verifier),
                 cwd: dir.clone(),
                 add_dirs: vec![],
                 access: agent::Access::ReadOnly,
@@ -1136,6 +1161,7 @@ impl Core {
         req: TaskRecoveryRequest,
         actor: &str,
     ) -> Result<TaskRecoveryResponse> {
+        let config = self.config_snapshot();
         let conv = self.store.conversation(&req.conversation)?;
         let project = PathBuf::from(conv.project);
         let mut task = self.task(&req.plan, &req.task)?;
@@ -1188,7 +1214,7 @@ impl Core {
                     &base,
                     &change,
                     req.consent_files.as_deref(),
-                    self.config.policy.local_commits,
+                    config.policy.local_commits,
                 )?;
                 let mut card = (Outcome::Applied, None);
                 match outcome {
@@ -1312,7 +1338,7 @@ impl Core {
                     conversation: &req.conversation,
                     plan_id: Some(task.plan_id.clone()),
                     role: verifier.clone(),
-                    profile: self.config.resolve(spec.kind, RoleKind::Verifier),
+                    profile: config.resolve(spec.kind, RoleKind::Verifier),
                     cwd: project.clone(),
                     add_dirs: vec![],
                     access: agent::Access::ReadOnly,
@@ -1357,8 +1383,7 @@ impl Core {
                 if verdict.approved {
                     task.result = Some(snapshot.clone());
                     task.status = status::APPROVED.to_string();
-                    let (outcome, commit) = if self.config.policy.local_commits && !fixed.is_empty()
-                    {
+                    let (outcome, commit) = if config.policy.local_commits && !fixed.is_empty() {
                         (
                             Outcome::InPlaceCommitted,
                             Some(git::commit_paths(&project, &fixed, &spec.title)?),
@@ -1525,7 +1550,14 @@ impl Core {
                     )?;
                     // integrate takes the same mutex; the recovery guard already serializes it.
                     drop(_one_at_a_time);
-                    self.integrate(&req.conversation, &mut task, &spec, &project, &worktree)?;
+                    self.integrate(
+                        &req.conversation,
+                        &mut task,
+                        &spec,
+                        &project,
+                        &worktree,
+                        &config,
+                    )?;
                     require(
                         task.status == status::APPROVED,
                         "the result is not integrated; resolve the recorded integration problem",
@@ -1844,7 +1876,8 @@ impl Core {
     /// changes are not part of their work, and the user is told so before
     /// they start (design §11.1).
     fn warn_of_uncommitted(&self, conversation: &str, writes: bool) {
-        if !writes || self.config.workspace.mode == WorkspaceMode::InPlace {
+        let config = self.config_snapshot();
+        if !writes || config.workspace.mode == WorkspaceMode::InPlace {
             return;
         }
         let Ok(project) = self.store.conversation(conversation) else {
@@ -1948,6 +1981,7 @@ impl Core {
         upto: u64,
         cancel: &AtomicBool,
     ) -> Result<()> {
+        let config = self.config_snapshot();
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         // A failed turn may never have reached the agent: repeat everything
         // asked since the last answer.
@@ -1970,9 +2004,7 @@ impl Core {
                 ORCHESTRATOR
             }
             .into(),
-            profile: self
-                .config
-                .resolve(WorkKind::Orchestration, RoleKind::Orchestrator),
+            profile: config.resolve(WorkKind::Orchestration, RoleKind::Orchestrator),
             cwd: project.clone(),
             add_dirs: vec![],
             access: agent::Access::ReadOnly,
@@ -2084,7 +2116,7 @@ impl Core {
         }
         match plan {
             Some(Ok(specs)) => {
-                let specs = if self.config.policy.required_gates {
+                let specs = if config.policy.required_gates {
                     tasks::with_required_agents(specs)
                 } else {
                     specs
@@ -2093,7 +2125,7 @@ impl Core {
                     conversation,
                     &project,
                     &text,
-                    &specs,
+                    (&config, &specs),
                     addressed.as_deref(),
                     cancel,
                 )?
@@ -2139,10 +2171,11 @@ impl Core {
         conversation: &str,
         project: &Path,
         text: &str,
-        specs: &[TaskSpec],
+        proposal: (&Config, &[TaskSpec]),
         addressed: Option<&[u64]>,
         cancel: &AtomicBool,
     ) -> Result<()> {
+        let (config, specs) = proposal;
         let values = specs
             .iter()
             .map(serde_json::to_value)
@@ -2154,7 +2187,7 @@ impl Core {
         let answered = self.store.last_orchestration_answered(conversation)?;
         let project_text = project.to_string_lossy().into_owned();
         let planning_gaps = planning_gaps(specs);
-        if !self.config.policy.required_gates && !tasks::missing_quality_agents(specs).is_empty() {
+        if !config.policy.required_gates && !tasks::missing_quality_agents(specs).is_empty() {
             let _ = self.store.append_event(
                 conversation,
                 None,
@@ -2265,6 +2298,7 @@ impl Core {
         cancel: &AtomicBool,
         prompt: impl FnOnce(bool, &str) -> String,
     ) -> Result<std::result::Result<Verdict, String>> {
+        let config = self.config_snapshot();
         let answered = self.store.last_answered(conversation, role)?;
         let all = self.store.messages_by(conversation, "user", 0)?;
         let upto = all.last().map_or(0, |message| message.seq);
@@ -2279,9 +2313,7 @@ impl Core {
             conversation,
             plan_id: plan_id.map(str::to_string),
             role: role.into(),
-            profile: self
-                .config
-                .resolve(WorkKind::Orchestration, RoleKind::Verifier),
+            profile: config.resolve(WorkKind::Orchestration, RoleKind::Verifier),
             cwd: project.to_path_buf(),
             add_dirs: vec![],
             access: agent::Access::ReadOnly,
@@ -2619,7 +2651,8 @@ impl Core {
                         }
                         // The plan's limit on tasks running at once; the rest
                         // stay queued until one finishes.
-                        if in_flight_ids.len() >= self.config.policy.max_parallel {
+                        let config = self.config_snapshot();
+                        if in_flight_ids.len() >= config.policy.max_parallel {
                             continue;
                         }
                         let writes = task.spec["writes"].as_bool().unwrap_or(false);
@@ -2627,7 +2660,7 @@ impl Core {
                             serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
                         // In place, writers take turns in the user's directory
                         // whatever their scopes; the others wait queued.
-                        let one_at_a_time = self.config.workspace.mode == WorkspaceMode::InPlace;
+                        let one_at_a_time = config.workspace.mode == WorkspaceMode::InPlace;
                         let write_conflict = writes
                             && (one_at_a_time && !in_flight_writers.is_empty()
                                 || in_flight_writers.values().any(|active_scope| {
@@ -2681,9 +2714,10 @@ impl Core {
     /// Worker and verifier take turns until the verifier approves or the
     /// rounds run out; the worker resumes its own session with the findings.
     fn run_task(&self, conversation: &str, task: &mut Task, cancel: &AtomicBool) -> Result<()> {
+        let config = self.config_snapshot();
         let mut spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
-        let in_place = spec.writes && self.config.workspace.mode == WorkspaceMode::InPlace;
+        let in_place = spec.writes && config.workspace.mode == WorkspaceMode::InPlace;
         let autonomous = self.autonomous(conversation)?;
         // In place, writers take turns in the user's directory.
         let _writing = if in_place {
@@ -2692,7 +2726,7 @@ impl Core {
                 "tasks that change files need the project to be a git repository: run `git init` and commit first",
             )?;
             require(
-                self.config.policy.local_write,
+                config.policy.local_write,
                 "in-place writers need policy.local_write",
             )?;
             loop {
@@ -2789,10 +2823,10 @@ impl Core {
             && verdict.approved
         {
             if let Some(path) = &worktree {
-                return self.integrate(conversation, task, &spec, &project, path);
+                return self.integrate(conversation, task, &spec, &project, path, &config);
             }
             if in_place {
-                return self.finish_in_place(conversation, task, &spec, &project);
+                return self.finish_in_place(conversation, task, &spec, &project, &config);
             }
         }
         let mut findings = verdict.map(|verdict| verdict.findings).unwrap_or_default();
@@ -2808,6 +2842,7 @@ impl Core {
         };
         let mut previous: Option<String> = None;
         for round in first_round..=last_round {
+            let config = self.config_snapshot();
             task.round = round;
             task.verdict = None;
             // A new round starts without an earlier round's card result.
@@ -2817,7 +2852,7 @@ impl Core {
                 conversation,
                 plan_id: Some(task.plan_id.clone()),
                 role: worker.clone(),
-                profile: self.config.resolve(spec.kind, RoleKind::Executor),
+                profile: config.resolve(spec.kind, RoleKind::Executor),
                 cwd: workdir.clone(),
                 add_dirs: if spec.writes {
                     vec![]
@@ -2928,7 +2963,7 @@ impl Core {
                 conversation,
                 plan_id: Some(task.plan_id.clone()),
                 role: verifier.clone(),
-                profile: self.config.resolve(spec.kind, RoleKind::Verifier),
+                profile: config.resolve(spec.kind, RoleKind::Verifier),
                 cwd: workdir.clone(),
                 add_dirs: add_dirs.clone(),
                 access: agent::Access::ReadOnly,
@@ -2964,7 +2999,7 @@ impl Core {
                     conversation,
                     plan_id: Some(task.plan_id.clone()),
                     role: verifier.clone(),
-                    profile: self.config.resolve(spec.kind, RoleKind::Verifier),
+                    profile: config.resolve(spec.kind, RoleKind::Verifier),
                     cwd: workdir.clone(),
                     add_dirs: add_dirs.clone(),
                     access: agent::Access::ReadOnly,
@@ -3041,8 +3076,12 @@ impl Core {
             }
             if verdict.approved {
                 return match &worktree {
-                    Some(path) => self.integrate(conversation, task, &spec, &project, path),
-                    None if in_place => self.finish_in_place(conversation, task, &spec, &project),
+                    Some(path) => {
+                        self.integrate(conversation, task, &spec, &project, path, &config)
+                    }
+                    None if in_place => {
+                        self.finish_in_place(conversation, task, &spec, &project, &config)
+                    }
                     None => {
                         land(
                             task,
@@ -3170,13 +3209,7 @@ impl Core {
                 })
                 .collect(),
             to => {
-                let (target_id, is_verifier) = if let Some(id) = to.strip_prefix("verifier:") {
-                    (id, true)
-                } else if let Some(id) = to.strip_prefix("worker:") {
-                    (id, false)
-                } else {
-                    (to, false)
-                };
+                let (target_id, is_verifier) = task_role(to).unwrap_or((to, false));
                 let live: Vec<_> = plan
                     .iter()
                     .filter(|task| task.spec["id"] == target_id || task.id == target_id)
@@ -3311,7 +3344,7 @@ impl Core {
                         conversation,
                         plan_id: Some(task.plan_id.clone()),
                         role: role.clone(),
-                        profile: self.config.resolve(spec.kind, kind),
+                        profile: self.config_snapshot().resolve(spec.kind, kind),
                         cwd: project.clone(),
                         add_dirs: vec![],
                         access: agent::Access::ReadOnly,
@@ -3485,6 +3518,7 @@ impl Core {
         spec: &TaskSpec,
         project: &Path,
         worktree: &Path,
+        config: &Config,
     ) -> Result<()> {
         let base = task.base.clone().unwrap_or_default();
         let result = git::head(worktree)?;
@@ -3506,7 +3540,7 @@ impl Core {
             );
             return self.set_status(conversation, task, status::APPROVED);
         }
-        let policy = &self.config.policy;
+        let policy = &config.policy;
         if !policy.local_write {
             let text = format!(
                 "local writes are not allowed; the change is on branch {}",
@@ -3666,6 +3700,7 @@ impl Core {
         task: &mut Task,
         spec: &TaskSpec,
         project: &Path,
+        config: &Config,
     ) -> Result<()> {
         let (Some(base), Some(result)) = (task.base.clone(), task.result.clone()) else {
             land(
@@ -3682,7 +3717,7 @@ impl Core {
         let files = git::changed_files(project, &base, &result)?;
         let commit = if files.is_empty() {
             None
-        } else if self.config.policy.local_commits {
+        } else if config.policy.local_commits {
             let _one_at_a_time = self.integrating.lock().expect("integration mutex");
             Some(git::commit_paths(project, &files, &spec.title)?)
         } else {

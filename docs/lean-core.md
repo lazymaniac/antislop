@@ -281,8 +281,8 @@ directory to run both. The socket is `<state>/core.sock`, or
   so the draw loop never waits. The screen has two panels: the chat (messages,
   the orchestrator's tool calls, reviews, mail) and the team graph. The graph
   draws every agent as a box: the orchestrator between the plan verifier and
-  the auditor on top, below them each task's worker with its verifier right
-  under it, tasks in columns by dependency depth. Edges are routed through the
+  the auditor on top, below them one node per task combining worker and verifier,
+  with tasks in columns by dependency depth. Edges are routed through the
   gaps between boxes: dependencies, verification, messages (with a count,
   highlighted for 10 s after one is sent) and supervision; `f` cycles which
   relations are shown (supervision only on its own, since it reaches every
@@ -294,11 +294,11 @@ directory to run both. The socket is `<state>/core.sock`, or
   the single visible panel in compact mode); in the graph, arrows select the nearest node in that
   direction and Enter opens its details full screen. The tabs depend on the agent
   (`tabs_for` in `details.rs`): Overview (task, scope, goal, the verifier's focus and,
-  for a verifier, its risks), Session (the CLI's transcript drawn like that CLI does:
+  for a verifier, its risks, followed by both sessions' transcripts drawn like the CLI:
   prompt, reasoning, commands with their output, answers; it follows the newest entry
   until the user scrolls up, and `Enter` folds prompts), Messages (mail to and from it),
-  Result (a worker's report and commits) or Checks (each obligation of a verifier's
-  task, risks and checklist, with how the latest verdict accounted for it), Review (the
+  Result (a worker's report and commits), Checks (each task obligation,
+  risk and checklist item, with how the latest verdict accounted for it), Review (the
   plan verifier's and the auditor's latest verdict) and Comments. A dedicated conversation
   inspector opens via `Ctrl+I` or palette (`Ctrl+P`). Within inspectors, `v` toggles between Readable
   and Raw JSON view, `/` searches whole records (`DetailRecord`) with query highlighting, and per-tab
@@ -445,14 +445,14 @@ directory to run both. The socket is `<state>/core.sock`, or
   dies it is started again (picking up the work) and following goes on.
   Only following is repeated; a request that changes something is not
   (state the user deleted is not recreated either).
-- The daemon runs with the configuration it read at start. A frontend that
-  finds `antislop.toml` changed restarts an idle daemon; a busy one keeps
-  its configuration for the running work and the frontend says the new one
-  applies once that work is done (scenario 17).
+- `/config` applies validated configuration through the running daemon. New
+  turns take a new immutable profile snapshot; running turns retain theirs.
+  File changes outside this protocol still use idle-daemon restart/reconnect
+  behavior; they are not watched and applied automatically (scenario 17).
 - With `NO_COLOR` set the TUI draws no color. Nothing depends on color
   alone: task states have marks (✓ ✗ ! ● ○ –), the selected node a double
   border, the active tab brackets, obligations ✓ ✗ – ?, diff lines + and −;
-  relations are told apart by layout (a verifier sits under its worker,
+  relations are told apart by layout (worker/verifier share a task node,
   dependencies run between columns, messages carry counts) and `f` shows one
   kind at a time (design §17).
 - Without a UTF-8 locale, or with `ANTISLOP_ASCII` set, the TUI draws in
@@ -614,55 +614,78 @@ CLI versions (1) and session resume per CLI (2) are settled above and in
 [Known limits](#known-limits). The name (3) is `antislop`. The licence and distribution (4) are left to
 the owner, as the design asks.
 
-## Integration status
+The TUI configuration modal uses GetConfig and SetConfig asynchronously. It keeps a
+separate field draft from chat and reports validation errors beside fields. Ctrl+S
+publishes valid changes through the daemon; running turns retain their existing
+profile snapshot. Failed requests keep the draft for retry. Optional overrides can
+be cleared; args and command fields accept JSON arrays of strings. Saving patches the loaded TOML document and preserves unrelated comments and
+formatting. Reopening refreshes a clean draft. External changes block stale drafts;
+Ctrl+R explicitly reloads and discards edits. A pre-save read checks the source
+and path. GetConfig returns a content revision; SetConfig requires
+`expected_revision` and compares it under the daemon configuration lock before
+publishing. Stale saves fail without changing the file, runtime or event log.
+Clients omitting the revision are rejected. Uncoordinated external file writers
+do not share this lock, so they must not write concurrently with SetConfig.
 
-The t14 integration gate inspected the available tree. The following requested
-behaviors must not be treated as delivered until their implementations are
-integrated and checked together:
 
-| Requirement | Current behavior |
-| --- | --- |
-| Global configuration when the project has none | Missing; the CLI uses `./antislop.toml` or an explicit `--config` path. |
-| Edit any configuration option and apply it live | Missing; Core keeps the configuration read at startup. |
-| One worker/verifier graph node per task | Missing; workers and verifiers have separate nodes. |
-| Overview merged with Session | Missing; both tabs remain available separately. |
-| Checks refreshed after every round | The open details panel refetches on a changed task round; the Checks tab refetches only for check events of its own task. |
-| Select transcript text | Missing; mouse support provides navigation and clicks, without drag selection or clipboard copying. |
+## Integrated configuration and TUI behavior
 
-The daemon now checks the user-owned trust registry before opening project
-state, including direct `__core` calls. A project's stored trust flag cannot
-grant global trust. Registry writes create a unique temporary file exclusively,
-sync it, rename it atomically, and sync the directory; the old predictable
-`trusted.json.tmp` path is not used.
+The t14 candidate combines main's unfinished-work preservation with chain
+b6356f1 (t2/t3/t7/t8/t9, including the ported t4/t5/Checks changes). Configuration
+resolution uses an explicit file, then the project file, then the global file in
+`ANTISLOP_CONFIG_DIR`, `XDG_CONFIG_HOME/antislop`, or `~/.config/antislop`.
+Resolution is read-only. Both CLI and multi-project TUI require trust before
+creating project state. The `/config` modal edits every serialized option,
+optional overrides, command arrays and profiles, preserving TOML comments,
+drafts on failure, and the running turn's profile snapshot. A shared global
+file affects other projects when they next load it; active daemons remain
+independent until updated or restarted.
 
-Persisted turn failure diagnostics are limited to 2000 characters (plus a
-truncation marker). Values of inherited environment variables whose names
-contain TOKEN, SECRET, PASSWORD, API_KEY or PRIVATE_KEY are replaced before
-clipping. This preserves actionable failure text while redacting known
-credentials; it does not identify arbitrary secrets or redact all transcript
-events. Full log redaction and retention remain open.
+Worker/verifier role addresses remain compatible with stored events and mail,
+but map to one graph node. Overview contains the summary and both sessions;
+there is no separate Session tab. Checks invalidation handles round changes,
+same-round verdict changes and live events of the selected task. Drag selection
+and double-click word selection capture rendered graphemes in viewport-sized
+storage; Ctrl+Y copies sanitized text. Clipboard sending rejects more than
+64 KiB before allocating a base64 control string. OSC 52 failure can invoke
+`pbcopy` directly (no shell), with a one-second timeout and bounded stderr.
+Silent terminal refusal of OSC 52 cannot be detected.
 
-Two t13 costs have been reduced: Checks invalidation is now scoped to the open
-task, and fetching a task decodes only its record rather than the entire plan.
-The lookup uses a plan/position index and preserves local-id/UUID resolution;
-freshness calculation reuses that task record. Freshness still runs Git and
-working-tree fingerprint operations. A lightweight Checks endpoint, transcript
-render caching, and graph layout caching remain open. The graph canvas itself
-remains bounded by viewport area. Performance approval of the requested combined
-UI requires the missing implementations.
+Security review of the new code: config writes prepare a UUID-named sibling
+with exclusive creation, initial mode 0600, and no following of a pre-existing
+temporary symlink. They preserve the selected file's permissions, flush the
+contents, atomically rename on the same filesystem, and sync the directory.
+Configured target symlinks intentionally resolve to their existing destination.
+Validation, stale-revision and pre-publication event failures leave old state
+intact. A post-publication event-commit failure returns applied-with-warnings;
+the on-disk configuration is authoritative on restart. Abrupt-exit tests before
+and after rename verify that a complete old or new file remains and retry works.
+An interruption may leave an unused temporary file; this test is process-exit
+coverage, not a simulation of storage-device power loss.
 
-Gate validation: `cargo check`, `cargo fmt --check` and
-`cargo clippy --all-targets -- -D warnings` passed. The suite was run with
-`cargo test --no-fail-fast -- --skip snapshot_path_comparisons_preserve_modes_deletions_and_literal_names`:
-427 tests passed, none failed, and one was filtered out. The filtered test
-writes Git configuration, which the t14 task instructions prohibit. The earlier
-EPERM failures did not recur in the current environment. The routing test now
-uses an explicit fixture derived from the example configuration, preserving its
-provider/launcher assertions without depending on editable local preferences.
-The trust and diagnostic-redaction regression tests passed, including rejection
-of a prepared database's trust flag. A Checks regression confirms that another
-task's events and repeated redraws do not issue requests, while the open task's
-check event refetches once. Protocol tests cover scoped task queries, freshness
-and stale-request rejection. This gate is not approved: the unavailable features
-still require integration and validation together. These tests do not constitute
-a crash-injection audit or a host-overload benchmark.
+The earlier t12 trust-order, database-trust migration, diagnostic and registry
+temporary-file findings predate this chain. Existing t14 fixes are preserved;
+no further baseline security refactor is included. Diagnostic redaction remains
+best effort for known inherited secrets and does not cover arbitrary transcript
+content.
+
+The t13 recheck finds task-scoped Checks invalidation and single-record task
+reads in this candidate. SessionCache reuses unchanged transcript records and
+LayoutCache avoids repeated JSON/search rendering and wrapping on idle redraws
+(covered by shared-record and wrapped-layout tests). Graph canvas and selection
+storage remain bounded by viewport area. Graph layout is still reconstructed,
+and the task endpoint still computes a Git freshness fingerprint; these are
+remaining baseline performance costs, not an assertion of a host-overload
+benchmark. No synthetic host-overload benchmark was run.
+
+
+Integration validation on this candidate: `cargo check`, `cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings`, and the complete `cargo test` passed.
+All 471 tests passed, with no ignored or filtered tests. Socket tests and the
+process-group reap test ran successfully in this environment. The local routing
+test was removed to match the user's change; `antislop.toml` was not modified.
+Manual conflict resolutions were limited to `src/lean/mod.rs` (unfinished-work
+and stopped-task mail semantics combined with configuration snapshots),
+`src/lean/daemon.rs` (configuration stamp initialized after trust and Core open),
+and this document (replace obsolete missing-feature claims with integrated
+behavior). No duplicate t4/t5 or obsolete-run branches were merged.

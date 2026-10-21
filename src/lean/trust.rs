@@ -7,6 +7,23 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Shared user configuration directory; reading it never creates anything.
+pub fn config_dir() -> Result<PathBuf> {
+    let nonempty = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+    let dir = if let Some(dir) = nonempty("ANTISLOP_CONFIG_DIR") {
+        PathBuf::from(dir)
+    } else if let Some(dir) = nonempty("XDG_CONFIG_HOME") {
+        PathBuf::from(dir).join("antislop")
+    } else if let Some(home) = nonempty("HOME") {
+        PathBuf::from(home).join(".config").join("antislop")
+    } else {
+        return Err(Error::Invalid(
+            "no place for the list of trusted directories: set HOME or ANTISLOP_CONFIG_DIR".into(),
+        ));
+    };
+    Ok(dir)
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Stored {
     trusted: Vec<String>,
@@ -22,19 +39,7 @@ impl Registry {
     /// `ANTISLOP_CONFIG_DIR`, else `$XDG_CONFIG_HOME/antislop`, else
     /// `~/.config/antislop`.
     pub fn from_env() -> Result<Self> {
-        let nonempty = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
-        let dir = if let Some(dir) = nonempty("ANTISLOP_CONFIG_DIR") {
-            PathBuf::from(dir)
-        } else if let Some(dir) = nonempty("XDG_CONFIG_HOME") {
-            PathBuf::from(dir).join("antislop")
-        } else if let Some(home) = nonempty("HOME") {
-            PathBuf::from(home).join(".config").join("antislop")
-        } else {
-            return Err(Error::Invalid(
-                "no place for the list of trusted directories: set HOME or ANTISLOP_CONFIG_DIR"
-                    .into(),
-            ));
-        };
+        let dir = config_dir()?;
         Ok(Self::at(&dir))
     }
 

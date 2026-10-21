@@ -13,8 +13,11 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+const SELECTION_HELP: &str = "Ctrl+Y           copy selection (drag / double click selects)";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    Config,
     Accept,
     Reject,
     Plan,
@@ -39,7 +42,8 @@ pub enum Command {
     Projects,
 }
 
-const COMMANDS: [(Command, &str); 22] = [
+const COMMANDS: [(Command, &str); 23] = [
+    (Command::Config, "Edit configuration live · /config"),
     (Command::Accept, "Accept proposed plan · Ctrl+A"),
     (Command::Reject, "Reject proposed plan · /reject"),
     (Command::Plan, "Open plan document viewer · Ctrl+L / /plan"),
@@ -154,7 +158,9 @@ impl Picker {
                         .split_once(':')
                         .and_then(|(_, id)| view.tasks.iter().find(|task| task.id == id));
                     let label = match task {
-                        Some(task) => format!("{} · {}", agent_name(&node.key), task.title),
+                        Some(task) => {
+                            format!("{} task · {} · worker verifier", task.id, task.title)
+                        }
                         None => agent_name(&node.key),
                     };
                     (label, Action::Select(node.key.clone()))
@@ -359,6 +365,7 @@ impl Help {
                 "Alt+Enter, Ctrl+J  newline in draft",
                 "↑/↓              line in draft; sent history at edges",
                 "PgUp/PgDn        scroll conversation",
+                SELECTION_HELP,
                 "Ctrl+D / Ctrl+U  half page down / up",
                 "Tab              team panel",
                 "Ctrl+A / Ctrl+R  accept/resume (if empty); Home/search",
@@ -386,18 +393,20 @@ impl Help {
                 "g                toggle grouping (dependencies / state)",
                 "f                relation filter: all, dependencies, verification, messages, supervision",
                 "PgUp/PgDn, wheel scroll full task / verification text",
+                SELECTION_HELP,
                 "Ctrl+D / Ctrl+U  half page down / up",
                 "Ctrl+P           command palette",
                 "Tab, Esc         chat",
                 "q                quit (work continues in daemon)",
             ],
             Help::Details => &[
-                "←/→, Tab         tabs",
+                "1–5, ←/→, Tab    tabs (task: Overview, Messages, Result, Checks, Comments)",
                 "↑/↓ PgUp/PgDn    scroll; on Comments select",
                 "Ctrl+D / Ctrl+U  half page down / up",
                 "c                comment on agent",
+                SELECTION_HELP,
                 "r / o / x        resolve / reopen / delete comment",
-                "Enter            fold / unfold prompts (Session)",
+                "Enter            fold / unfold prompts (Overview)",
                 "d                task diff",
                 "Esc              back to graph",
             ],
@@ -617,8 +626,8 @@ mod tests {
         assert_eq!(
             items,
             [(
-                "t1 verifier · Parser".to_owned(),
-                Action::Select("verifier:t1".into())
+                "t1 task · Parser · worker verifier".to_owned(),
+                Action::Select("worker:t1".into())
             )]
         );
     }

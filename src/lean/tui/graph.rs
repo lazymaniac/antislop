@@ -1,4 +1,4 @@
-//! The team as a two-dimensional graph: boxes for agents, orthogonal edges for
+//! The team as a two-dimensional graph: one card per task, orthogonal edges for
 //! what relates them. The layout depends only on the plan's shape, so nodes
 //! stay put while events arrive.
 
@@ -17,13 +17,13 @@ pub const WIDTH: u16 = 26;
 const MAX_SUMMARY_LINES: usize = 4;
 const MAX_EFFECT_LINES: usize = 2;
 /// Fixed slots inside a card, counted from its top, each starting right
-/// where the previous block can end: title row, state row, one activity
+/// where the previous block can end: title, phase, verifier state, one activity
 /// line, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
 /// effect lines and the meta line at the bottom. The height is that same
 /// arithmetic's end, so frame and slots are one rule that cannot drift
 /// apart: heights and positions depend only on the plan's shape, filters
 /// and grouping — never on activity, an effect, a verdict or a retry.
-const ACTIVITY_ROW: u16 = 2;
+const ACTIVITY_ROW: u16 = 3;
 const BODY_ROW: u16 = ACTIVITY_ROW + 1;
 const EFFECT_ROW: u16 = BODY_ROW + MAX_SUMMARY_LINES as u16;
 pub const HEIGHT: u16 = EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1;
@@ -186,6 +186,14 @@ pub struct Graph {
     pub grouping: GroupingMode,
 }
 
+/// Canonical UI identity; role addresses in events and storage stay intact.
+pub fn task_node_key(key: &str) -> String {
+    match crate::lean::task_role(key) {
+        Some((id, true)) => format!("worker:{id}"),
+        _ => key.to_owned(),
+    }
+}
+
 fn column_x(column: u16) -> u16 {
     MARGIN + column * (WIDTH + GAP_X)
 }
@@ -330,6 +338,10 @@ impl Graph {
                     .is_some_and(|t| {
                         t.title.to_lowercase().contains(&q_lower)
                             || t.status.to_lowercase().contains(&q_lower)
+                            || taskinfo::worker_status(t).to_lowercase().contains(&q_lower)
+                            || taskinfo::verifier_status(t)
+                                .to_lowercase()
+                                .contains(&q_lower)
                             || t.goal.to_lowercase().contains(&q_lower)
                             || t.focus.to_lowercase().contains(&q_lower)
                             || t.summary
@@ -353,10 +365,8 @@ impl Graph {
         let mut visible_tasks: Vec<(usize, u16)> = Vec::new();
         for (i, task) in view.tasks.iter().enumerate() {
             let id = &task.id;
-            let is_task_collapsed =
-                collapsed.contains(id) || collapsed.contains(&format!("task:{id}"));
             let worker_vis = matches_query(&format!("worker:{id}"));
-            let verifier_vis = !is_task_collapsed && matches_query(&format!("verifier:{id}"));
+            let verifier_vis = matches_query(&format!("verifier:{id}"));
             if worker_vis || verifier_vis {
                 visible_tasks.push((i, columns[i]));
             }
@@ -387,8 +397,8 @@ impl Graph {
 
         if let Some((vp_w, _)) = viewport {
             // Flow: the first row holds the orchestrator and its verifiers, the
-            // workers it spawns follow, wrapping at the viewport width, and
-            // the agents that check them come after.
+            // tasks it spawns follow, wrapping at the viewport width.
+            // Each task card contains both execution and verification.
             let max_cols = ((vp_w.saturating_sub(MARGIN) + GAP_X) / (WIDTH + GAP_X)).max(1);
             let mut push = |key: &str, col: u16, row: u16, vis: bool| {
                 graph.nodes.push(Node {
@@ -433,8 +443,7 @@ impl Graph {
                     tasks.clone()
                 })
                 .collect();
-            let task_rows = (ordered.len() as u16).div_ceil(max_cols);
-            let (worker_base, verifier_base) = (admin_rows, admin_rows + task_rows);
+            let worker_base = admin_rows;
 
             for (slot, &task_idx) in ordered.iter().enumerate() {
                 placed_tasks.insert(task_idx);
@@ -445,19 +454,13 @@ impl Graph {
                 let worker_key = format!("worker:{id}");
                 let verifier_key = format!("verifier:{id}");
                 let worker_vis = matches_query(&worker_key);
-                let verifier_vis = !is_task_collapsed && matches_query(&verifier_key);
+                let verifier_vis = matches_query(&verifier_key);
 
                 let mut worker = Node::new(worker_key, column_x(col), row_y(worker_base + offset));
                 worker.collapsed = is_task_collapsed;
                 worker.group = Some(format!("task:{id}"));
-                worker.visible = worker_vis;
+                worker.visible = worker_vis || verifier_vis;
                 graph.nodes.push(worker);
-
-                let mut verifier =
-                    Node::new(verifier_key, column_x(col), row_y(verifier_base + offset));
-                verifier.group = Some(format!("task:{id}"));
-                verifier.visible = verifier_vis;
-                graph.nodes.push(verifier);
             }
         } else {
             let mut place_admin = |key: &str, col: u16, row: u16, vis: bool| {
@@ -478,9 +481,8 @@ impl Graph {
             for &rel_depth in &sorted_rel_depths {
                 let tasks_at_depth = rel_depth_tasks.get_mut(&rel_depth).unwrap();
                 tasks_at_depth.sort_unstable();
-                let mut current_row = if admin_vis { 1 } else { 0 };
-
-                for &task_idx in tasks_at_depth.iter() {
+                let first_row = u16::from(admin_vis);
+                for (current_row, &task_idx) in (first_row..).zip(tasks_at_depth.iter()) {
                     placed_tasks.insert(task_idx);
                     let task = &view.tasks[task_idx];
                     let id = &task.id;
@@ -489,27 +491,13 @@ impl Graph {
                     let worker_key = format!("worker:{id}");
                     let verifier_key = format!("verifier:{id}");
                     let worker_vis = matches_query(&worker_key);
-                    let verifier_vis = !is_task_collapsed && matches_query(&verifier_key);
+                    let verifier_vis = matches_query(&verifier_key);
 
                     let mut worker = Node::new(worker_key, column_x(rel_depth), row_y(current_row));
                     worker.collapsed = is_task_collapsed;
                     worker.group = Some(format!("task:{id}"));
-                    worker.visible = worker_vis;
+                    worker.visible = worker_vis || verifier_vis;
                     graph.nodes.push(worker);
-
-                    let next_row = if worker_vis {
-                        current_row + 1
-                    } else {
-                        current_row
-                    };
-
-                    let mut verifier =
-                        Node::new(verifier_key, column_x(rel_depth), row_y(next_row));
-                    verifier.group = Some(format!("task:{id}"));
-                    verifier.visible = verifier_vis;
-                    graph.nodes.push(verifier);
-
-                    current_row = if verifier_vis { next_row + 1 } else { next_row };
                 }
             }
         }
@@ -528,15 +516,6 @@ impl Graph {
                     visible: false,
                     group: Some(format!("task:{id}")),
                     collapsed: is_task_collapsed,
-                });
-                graph.nodes.push(Node {
-                    key: format!("verifier:{id}"),
-                    x: 0,
-                    y: 0,
-                    height: HEIGHT,
-                    visible: false,
-                    group: Some(format!("task:{id}")),
-                    collapsed: false,
                 });
             }
         }
@@ -559,6 +538,9 @@ impl Graph {
         }
 
         let mut edge = |from: String, to: String, kind: Kind, label: Option<String>| {
+            if from == to {
+                return;
+            }
             graph.edges.push(Edge {
                 from,
                 to,
@@ -581,12 +563,6 @@ impl Graph {
         for task in &view.tasks {
             let worker = format!("worker:{}", task.id);
             edge(ORCHESTRATOR.into(), worker.clone(), Kind::Supervises, None);
-            edge(
-                format!("verifier:{}", task.id),
-                worker.clone(),
-                Kind::Verifies,
-                Some("V".into()),
-            );
             for parent in &task.depends_on {
                 if index.contains_key(parent.as_str()) {
                     edge(
@@ -598,17 +574,20 @@ impl Graph {
                 }
             }
         }
-        let mut links: Vec<_> = view.links.iter().collect();
-        links.sort_by(|a, b| a.0.cmp(b.0));
-        for ((from, to), link) in links {
-            edge(
-                from.clone(),
-                to.clone(),
-                Kind::Mail {
-                    recent: link.last.elapsed() < RECENT,
-                },
-                Some(format!("M✉{}", link.count)),
-            );
+        // Both runtime roles share one visual endpoint. Sum their mail and
+        // retain a recent highlight if either underlying link is recent.
+        let mut links = std::collections::BTreeMap::<(String, String), (u32, bool)>::new();
+        for ((from, to), link) in &view.links {
+            let pair = (task_node_key(from), task_node_key(to));
+            if pair.0 == pair.1 {
+                continue;
+            }
+            let (count, recent) = links.entry(pair).or_default();
+            *count = count.saturating_add(link.count);
+            *recent |= link.last.elapsed() < RECENT;
+        }
+        for ((from, to), (count, recent)) in links {
+            edge(from, to, Kind::Mail { recent }, Some(format!("M✉{count}")));
         }
         graph.width = graph
             .nodes
@@ -629,7 +608,12 @@ impl Graph {
     }
 
     pub fn node(&self, key: &str) -> Option<&Node> {
-        self.nodes.iter().find(|node| node.key == key)
+        self.nodes.iter().find(|node| {
+            node.key == key
+                || crate::lean::task_role(key).is_some_and(|(id, verifier)| {
+                    verifier && node.key.strip_prefix("worker:") == Some(id)
+                })
+        })
     }
 
     /// The nearest node from `key` in a direction (dx, dy), each -1, 0 or 1.
@@ -645,7 +629,7 @@ impl Graph {
         let (fx, fy) = center(from);
         self.nodes
             .iter()
-            .filter(|node| node.visible && node.key != key)
+            .filter(|node| node.visible && node.key != from.key)
             .filter_map(|node| {
                 let (x, y) = center(node);
                 let (along, across) = if dx != 0 {
@@ -830,6 +814,7 @@ impl Graph {
                 canvas.text(lx, ly, label, edge.kind.style());
             }
         }
+        let selected = task_node_key(selected);
         for node in self.nodes.iter().filter(|n| n.visible) {
             draw_node(view, canvas, node, node.key == selected, theme, tick);
         }
@@ -847,17 +832,35 @@ pub enum Health {
 }
 
 pub fn health(view: &View, key: &str) -> Health {
-    if let Some((who, id)) = key.split_once(':') {
+    if let Some((_, id)) = key.split_once(':') {
         let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
             return Health::Idle;
         };
-        let verifier = who != "worker";
+        if matches!(task.status.as_str(), "failed" | "needs_user") {
+            return Health::Problem;
+        }
+        for role in ["worker", "verifier"] {
+            if view
+                .agents
+                .get(&format!("{role}:{id}"))
+                .is_some_and(|agent| {
+                    agent.activity.starts_with('✗') || agent.activity.starts_with('⚠')
+                })
+            {
+                return Health::Problem;
+            }
+        }
+        if ["worker", "verifier"].iter().any(|role| {
+            view.agents
+                .get(&format!("{role}:{id}"))
+                .is_some_and(|agent| agent.running)
+        }) {
+            return Health::Working;
+        }
         return match task.status.as_str() {
-            "failed" | "needs_user" => Health::Problem,
             "waiting" => Health::Waiting,
             "approved" => Health::Done,
-            "working" if !verifier => Health::Working,
-            "verifying" if verifier => Health::Working,
+            "working" | "verifying" => Health::Working,
             _ => Health::Idle,
         };
     }
@@ -880,15 +883,24 @@ pub fn health(view: &View, key: &str) -> Health {
 fn describe(view: &View, key: &str) -> String {
     let agent = view.agents.get(key);
     let provider = agent.map(|agent| agent.provider.as_str());
-    if let Some((who, id)) = key.split_once(':') {
+    if let Some((_, id)) = key.split_once(':') {
         let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
             return "?".into();
         };
-        let status = if who == "worker" {
-            taskinfo::worker_status(task)
+        let status = if task.status == "verifying" {
+            format!("verifier r{}", task.round)
         } else {
-            taskinfo::verifier_status(task)
+            format!("{} · worker", taskinfo::worker_status(task))
         };
+        let active = if task.status == "verifying" {
+            "verifier"
+        } else {
+            "worker"
+        };
+        let provider = view
+            .agents
+            .get(&format!("{active}:{id}"))
+            .map(|agent| agent.provider.as_str());
         return taskinfo::with_provider(&status, provider);
     }
     let working = health(view, key) == Health::Working;
@@ -918,17 +930,9 @@ fn describe(view: &View, key: &str) -> String {
 /// with details through taskinfo, and independent of the
 /// state word and the provider.
 fn activity_line(view: &View, key: &str) -> Option<String> {
-    let (role, task) = key.split_once(':').and_then(|(role, id)| {
-        view.tasks
-            .iter()
-            .find(|task| task.id == id)
-            .map(|t| (role, t))
-    })?;
-    if role == "worker" {
-        taskinfo::worker_activity(view, task)
-    } else {
-        taskinfo::verifier_activity(view, task)
-    }
+    let (_, id) = key.split_once(':')?;
+    let task = view.tasks.iter().find(|task| task.id == id)?;
+    taskinfo::task_activity(view, task)
 }
 
 /// The same bounded, grapheme-safe text drives both layout and rendering.
@@ -1082,7 +1086,10 @@ fn draw_node(
         canvas.put(x, cy, bar, fill.patch(accent));
     }
     let inner = usize::from(WIDTH - 4);
-    let name = agent_name(&node.key);
+    let name = node
+        .key
+        .strip_prefix("worker:")
+        .map_or_else(|| agent_name(&node.key), |id| format!("{id} task"));
     let title = if node.collapsed {
         format!("{} [+]", truncate(&name, inner.saturating_sub(7)))
     } else {
@@ -1119,6 +1126,28 @@ fn draw_node(
             tone
         }),
     );
+    if let Some(task) = task {
+        canvas.text(
+            x + 2,
+            y + 2,
+            &truncate(
+                &format!(
+                    "V: {}{}",
+                    taskinfo::verifier_status(task),
+                    if task.obligations.is_some() {
+                        format!(" · {}", taskinfo::coverage_short(task))
+                    } else {
+                        String::new()
+                    }
+                ),
+                inner,
+            ),
+            fill.patch(tone),
+        );
+    }
+    if node.collapsed {
+        return;
+    }
     // The activity line: what this role is doing, waits for, or stopped
     // with, on its own row — status and provider cannot crowd it out.
     if let Some(line) = activity_line(view, &node.key) {
@@ -1134,7 +1163,37 @@ fn draw_node(
             fill.patch(style),
         );
     }
-    for (row, line) in card_lines(view, &node.key).iter().enumerate() {
+    let summary = if let Some(task) = task.filter(|task| {
+        task.verifier_summary
+            .as_ref()
+            .is_some_and(|s| !clean(s).trim().is_empty())
+    }) {
+        let mut lines = fit_lines(
+            &clean(
+                task.summary
+                    .as_deref()
+                    .filter(|text| !clean(text).trim().is_empty())
+                    .unwrap_or(&task.title),
+            )
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+            inner,
+            MAX_SUMMARY_LINES / 2,
+        );
+        lines.extend(fit_lines(
+            &clean(task.verifier_summary.as_deref().unwrap_or_default())
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            inner,
+            MAX_SUMMARY_LINES / 2,
+        ));
+        lines
+    } else {
+        card_lines(view, &node.key)
+    };
+    for (row, line) in summary.iter().enumerate() {
         canvas.text(
             x + 2,
             y + BODY_ROW + row as u16,
@@ -1457,6 +1516,101 @@ mod tests {
     }
 
     #[test]
+    fn role_aliases_share_one_card_even_when_collapsed_or_filtered() {
+        let mut row = task("t1", &[]);
+        row.status = "verifying".into();
+        row.round = 2;
+        row.summary = Some("Execute storage migration.".into());
+        row.verifier_summary = Some("Validate roundtrips.".into());
+        let mut view = view(vec![row, task("t2", &["t1"])]);
+        view.links.insert(
+            ("verifier:t1".into(), "worker:t2".into()),
+            super::super::view::Link {
+                count: 1,
+                last: std::time::Instant::now(),
+            },
+        );
+        view.links.insert(
+            ("verifier:t1".into(), "worker:t1".into()),
+            super::super::view::Link {
+                count: 1,
+                last: std::time::Instant::now(),
+            },
+        );
+        view.links.insert(
+            ("worker:t1".into(), "verifier:t2".into()),
+            super::super::view::Link {
+                count: 2,
+                last: std::time::Instant::now() - RECENT * 2,
+            },
+        );
+        let collapsed = std::collections::HashSet::from(["t1".to_owned()]);
+        for grouping in [GroupingMode::Dependency, GroupingMode::Status] {
+            for viewport in [None, Some((78, 20))] {
+                let graph = Graph::new_with_viewport(&view, None, &collapsed, grouping, viewport);
+                assert_eq!(graph.nodes.len(), 5);
+                assert!(
+                    graph
+                        .nodes
+                        .iter()
+                        .all(|node| !node.key.starts_with("verifier:"))
+                );
+                let node = graph.node("verifier:t1").unwrap();
+                assert_eq!(node, graph.node("worker:t1").unwrap());
+                assert!(node.visible && node.collapsed);
+                let routes = graph.edge_routes(Filter::Mail);
+                assert_eq!(routes.len(), 1);
+                assert_eq!((routes[0].0, routes[0].1), ("worker:t1", "worker:t2"));
+                let mail = graph
+                    .edges
+                    .iter()
+                    .find(|edge| matches!(edge.kind, Kind::Mail { .. }))
+                    .unwrap();
+                assert_eq!(mail.label.as_deref(), Some("M✉3"));
+                assert_eq!(mail.kind, Kind::Mail { recent: true });
+                let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, HEIGHT);
+                graph.render(&view, &mut canvas, Filter::All, "verifier:t1");
+                let text = canvas.lines().join("\n");
+                assert!(text.contains("verifier r2") && text.contains("checking r2"));
+                assert!(!text.contains("Execute") && !text.contains("Validate"));
+                for query in ["verifier:t1", "roundtrips", "checking r2"] {
+                    let filtered = Graph::new_with_viewport(
+                        &view,
+                        Some(query),
+                        &collapsed,
+                        grouping,
+                        viewport,
+                    );
+                    assert!(filtered.node("worker:t1").unwrap().visible);
+                    assert!(!filtered.node("worker:t2").unwrap().visible);
+                }
+            }
+        }
+        view.tasks[0].status = "failed".into();
+        view.agents.insert(
+            "worker:t1".into(),
+            super::super::view::Agent {
+                running: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(health(&view, "worker:t1"), Health::Problem);
+        view.tasks[0].status = "verifying".into();
+        for role in ["worker", "verifier"] {
+            view.agents.clear();
+            view.agents.insert(
+                format!("{role}:t1"),
+                super::super::view::Agent {
+                    activity: "✗ process exited".into(),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(health(&view, "worker:t1"), Health::Problem);
+            assert_eq!(health(&view, "verifier:t1"), Health::Problem);
+        }
+    }
+
+    #[test]
     fn summaries_are_bounded_and_truncated_at_grapheme_boundaries() {
         let mut row = task("t1", &[]);
         row.summary = Some("👩‍💻e\u{301}".repeat(100));
@@ -1476,7 +1630,7 @@ mod tests {
         assert_eq!(graph.node("worker:t1").unwrap().height, HEIGHT);
         let worker = graph.node("worker:t1").unwrap();
         let verifier = graph.node("verifier:t1").unwrap();
-        assert!(verifier.y >= worker.y + worker.height + GAP_Y);
+        assert_eq!(verifier.key, worker.key);
         for (_, _, path) in graph.edge_routes(Filter::All) {
             assert!(
                 graph
@@ -1570,7 +1724,7 @@ mod tests {
         assert_eq!(health(&view, "verifier:t1"), Health::Problem);
         assert_eq!(health(&view, "worker:t2"), Health::Waiting);
         assert_eq!(health(&view, "worker:t3"), Health::Working);
-        assert_eq!(health(&view, "verifier:t3"), Health::Idle);
+        assert_eq!(health(&view, "verifier:t3"), Health::Working);
         assert_eq!(health(&view, "worker:t4"), Health::Done);
         // An orchestrator turn that failed is a problem until it runs again.
         view.agents.insert(
@@ -1613,7 +1767,7 @@ mod tests {
     }
 
     #[test]
-    fn tasks_sit_in_columns_by_dependency_depth_with_their_verifier_below() {
+    fn tasks_sit_in_columns_by_dependency_depth_with_one_card_per_task() {
         let view = view(vec![task("t1", &[]), task("t2", &["t1"]), task("t3", &[])]);
         let graph = Graph::new(&view);
         let at = |key: &str| {
@@ -1621,8 +1775,8 @@ mod tests {
             (node.x, node.y)
         };
         assert_eq!(at("worker:t1"), (column_x(0), row_y(1)));
-        assert_eq!(at("verifier:t1"), (column_x(0), row_y(2)));
-        assert_eq!(at("worker:t3"), (column_x(0), row_y(3)));
+        assert_eq!(at("verifier:t1"), at("worker:t1"));
+        assert_eq!(at("worker:t3"), (column_x(0), row_y(2)));
         assert_eq!(at("worker:t2"), (column_x(1), row_y(1)));
         assert_eq!(at(ORCHESTRATOR), (column_x(1), 0));
     }
@@ -1672,7 +1826,11 @@ mod tests {
             "the activity line is independent of the provider: {}",
             rows[2]
         );
-        assert!(rows[2].contains("doing: cargo check"), "{}", rows[2]);
+        assert!(
+            rows[usize::from(ACTIVITY_ROW)].contains("doing: cargo check"),
+            "{}",
+            rows[2]
+        );
 
         // Effect and verdict: the round's card data changes no geometry and
         // takes its own slot without pushing the summary away.
@@ -1794,7 +1952,7 @@ mod tests {
         let graph = Graph::new(&view);
         let go = |from: &str, dx, dy| graph.neighbour(from, dx, dy);
         assert_eq!(go("worker:t1", 1, 0).as_deref(), Some("worker:t2"));
-        assert_eq!(go("worker:t1", 0, 1).as_deref(), Some("verifier:t1"));
+        assert_eq!(go("worker:t1", 0, 1).as_deref(), Some("worker:t3"));
         assert_eq!(go("verifier:t1", 0, 1).as_deref(), Some("worker:t3"));
         assert_eq!(go("worker:t2", -1, 0).as_deref(), Some("worker:t1"));
         assert_eq!(go(ORCHESTRATOR, 0, 1).as_deref(), Some("worker:t2"));
@@ -1823,13 +1981,7 @@ mod tests {
         assert_eq!(chars[usize::from(next.x - 1)], '▶', "{row}");
         assert_eq!(chars[usize::from(worker.right())], '─', "{row}");
         assert_eq!(chars[usize::from(next.x)], '█', "the selected card's bar");
-        // The verifier's edge points up into its worker.
-        let x = usize::from(worker.x + WIDTH / 2);
-        assert_eq!(
-            lines[usize::from(worker.y + HEIGHT)].chars().nth(x),
-            Some('▲')
-        );
-        assert!(lines[usize::from(worker.y)].contains("t1 worker"));
+        assert!(lines[usize::from(worker.y)].contains("t1 task"));
         // A message between them is counted beside the source.
         assert!(lines[usize::from(worker.mid_y() - 1)].contains("✉2"));
         assert!(lines[usize::from(worker.y + 1)].contains("proposed"));

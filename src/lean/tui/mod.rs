@@ -3,6 +3,8 @@
 //! poller thread long-polls events and every action runs on its own thread,
 //! so typing, scrolling and sending stay instant.
 
+pub mod clipboard;
+pub mod config;
 pub mod details;
 pub mod diffview;
 pub mod editor;
@@ -11,6 +13,7 @@ mod history;
 pub mod palette;
 pub mod planview;
 pub mod sanitize;
+pub mod selection;
 pub mod session;
 pub mod taskinfo;
 pub mod theme;
@@ -61,6 +64,11 @@ use view::{
 };
 
 pub enum Update {
+    Config {
+        project: String,
+        save: bool,
+        reply: std::result::Result<Value, String>,
+    },
     Events {
         conversation: String,
         generation: u64,
@@ -168,6 +176,12 @@ pub struct ConversationState {
 }
 
 pub struct App {
+    pub text_selection: selection::TextSelection,
+    text_area: Option<Rect>,
+    text_origin: usize,
+    pending_clipboard: Option<String>,
+    pub config_editor: Option<config::ConfigEditor>,
+    config_drafts: std::collections::HashMap<String, config::ConfigEditor>,
     pub client: Client,
     pub project: String,
     pub conversation: String,
@@ -228,6 +242,8 @@ pub struct App {
     pub confirmation: Option<ConfirmationCard>,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
+    /// The last rendered graph viewport in terminal coordinates, for hit testing.
+    pub graph_area: Option<Rect>,
     pub graph_viewport: Option<(u16, u16)>,
     pub trust_prompt: Option<String>,
     /// The way out for a stopped step, while the user picks one.
@@ -256,6 +272,12 @@ impl App {
 
     pub fn test_app_with_client_and_updates(client: Client, updates: mpsc::Sender<Update>) -> App {
         App {
+            text_selection: Default::default(),
+            text_area: None,
+            text_origin: 0,
+            pending_clipboard: None,
+            config_editor: None,
+            config_drafts: Default::default(),
             client,
             project: "test".into(),
             conversation: "test-conv".into(),
@@ -311,6 +333,7 @@ impl App {
             details_scroll_memory: std::collections::HashMap::new(),
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,
+            graph_area: None,
             trust_prompt: None,
             unblock: None,
             projects: Vec::new(),
@@ -1129,7 +1152,80 @@ impl App {
     }
 
     pub fn apply_update(&mut self, update: Update) {
+        self.apply_update_inner(update);
+        self.text_selection
+            .invalidate_context(&self.selection_context());
+    }
+
+    fn apply_update_inner(&mut self, update: Update) {
         match update {
+            Update::Config {
+                project,
+                save,
+                reply,
+            } => {
+                let active = project == self.client.state_dir().to_string_lossy();
+                if save {
+                    let editor = if active {
+                        self.config_editor.as_mut()
+                    } else {
+                        self.config_drafts.get_mut(&project)
+                    };
+                    if let Some(editor) = editor {
+                        editor.pending = false;
+                        editor.status = match reply.and_then(|value| {
+                            let saved = config::ConfigEditor::from_reply(value.clone())?;
+                            if saved.path != editor.path {
+                                return Err("Configuration reply refers to a different file".into());
+                            }
+                            editor.applied(&saved.base_source);
+                            Ok(value)
+                        }) {
+                            Ok(value) => {
+                                if value["warnings"].as_array().is_some_and(|w| !w.is_empty()) {
+                                    format!("Applied live with warnings: {}", value["warnings"])
+                                } else {
+                                    "Saved and applied live.".into()
+                                }
+                            }
+                            Err(error) => error,
+                        };
+                    }
+                } else {
+                    match reply.and_then(config::ConfigEditor::from_reply) {
+                        Ok(mut fresh) => {
+                            if active {
+                                if let Some(editor) = &mut self.config_editor {
+                                    editor.refresh(fresh);
+                                } else {
+                                    self.config_editor = Some(fresh);
+                                }
+                            } else {
+                                fresh.visible = false;
+                                if let Some(editor) = self.config_drafts.get_mut(&project) {
+                                    editor.refresh(fresh);
+                                } else {
+                                    self.config_drafts.insert(project, fresh);
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let editor = if active {
+                                self.config_editor.as_mut()
+                            } else {
+                                self.config_drafts.get_mut(&project)
+                            };
+                            if let Some(editor) = editor {
+                                editor.pending = false;
+                                editor.reload_requested = false;
+                                editor.status = error.clone();
+                            }
+                            self.notice = Some(error);
+                        }
+                    }
+                }
+            }
+
             Update::Events {
                 conversation,
                 generation,
@@ -1487,6 +1583,7 @@ impl App {
             _ if text.starts_with("/unblock ") => {
                 self.open_unblock(Some(text.trim_start_matches("/unblock ").trim().to_owned()));
             }
+            "/config" => self.open_config(),
             "/project" => self.open_projects_picker(),
             _ if text.starts_with("/project ") => {
                 let proj = text.trim_start_matches("/project ").trim().to_string();
@@ -1631,6 +1728,18 @@ impl App {
         };
         if self.active_project != index && self.history_path.is_some() {
             self.load_history(conn.client.state_dir());
+        }
+        if self.client.state_dir() != conn.client.state_dir() {
+            if let Some(mut editor) = self.config_editor.take() {
+                editor.visible = false;
+                self.config_drafts.insert(
+                    self.client.state_dir().to_string_lossy().into_owned(),
+                    editor,
+                );
+            }
+            self.config_editor = self
+                .config_drafts
+                .remove(conn.client.state_dir().to_string_lossy().as_ref());
         }
         self.active_project = index;
         self.client = conn.client.clone();
@@ -1880,6 +1989,7 @@ impl App {
                 let help = self.help_here();
                 self.show_help(help);
             }
+            Command::Config => self.open_config(),
             Command::Projects => self.open_projects_picker(),
             Command::Quit => return false,
         }
@@ -1987,7 +2097,102 @@ impl App {
         }
     }
 
+    fn config_request(&self, request: Request, save: bool) {
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        let project = self.client.state_dir().to_string_lossy().into_owned();
+        let expected = if save {
+            self.config_editor
+                .as_ref()
+                .map(|e| (e.base_source.clone(), e.path.clone()))
+        } else {
+            None
+        };
+        std::thread::spawn(move || {
+            let reply = (|| {
+                if let Some((source, path)) = expected {
+                    let current = config::ConfigEditor::from_reply(
+                        client
+                            .call(&Request::GetConfig)
+                            .map_err(|e| e.to_string())?,
+                    )?;
+                    if current.base_source != source || current.path != path {
+                        return Err("Configuration changed externally. Reopen /config or use Ctrl+R to reload; draft preserved.".into());
+                    }
+                }
+                client.call(&request).map_err(|e| e.to_string())
+            })();
+            let _ = updates.send(Update::Config {
+                project,
+                save,
+                reply,
+            });
+        });
+    }
+
+    fn open_config(&mut self) {
+        if let Some(editor) = &mut self.config_editor {
+            editor.visible = true;
+            if editor.pending {
+                return;
+            }
+            editor.pending = true;
+        }
+        self.config_request(Request::GetConfig, false);
+    }
+
     pub fn key(&mut self, key: event::KeyEvent) -> bool {
+        let keep_running = self.key_inner(key);
+        self.text_selection
+            .invalidate_context(&self.selection_context());
+        if self.selection_blocked() {
+            self.text_selection = Default::default();
+        }
+        keep_running
+    }
+
+    fn key_inner(&mut self, key: event::KeyEvent) -> bool {
+        self.text_selection
+            .invalidate_context(&self.selection_context());
+        if key.code == KeyCode::Char('y')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && !self.selection_blocked()
+        {
+            self.pending_clipboard = self.text_selection.text();
+            return true;
+        }
+        if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
+                if !editor.pending {
+                    editor.pending = true;
+                    editor.reload_requested = true;
+                    self.config_request(Request::GetConfig, false);
+                }
+                return true;
+            }
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+                if !editor.pending {
+                    if let Some(toml) = editor.source() {
+                        editor.pending = true;
+                        editor.status = "Applying...".into();
+                        let expected_revision = crate::hash(&editor.base_source);
+                        self.config_request(
+                            Request::SetConfig {
+                                toml,
+                                expected_revision,
+                            },
+                            true,
+                        );
+                    } else if let Some(index) = editor.fields.iter().position(|f| f.error.is_some())
+                    {
+                        editor.selected = index;
+                    }
+                }
+            } else {
+                editor.key(key);
+            }
+            return true;
+        }
         self.settle_focus();
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -2236,34 +2441,12 @@ impl App {
             KeyCode::Char('d') if control && self.input.is_empty() => {
                 self.scroll = self.scroll.saturating_sub(5);
             }
-            KeyCode::Char('u') if control => self.input.delete_to_start(),
-            KeyCode::Char('k') if control => self.input.delete_to_end(),
-            KeyCode::Char('w') if control => self.input.delete_word_back(),
-            KeyCode::Char('e') if control => self.input.move_end(),
-            KeyCode::Char('j') if control => self.input.insert_char('\n'),
-            KeyCode::Enter if alt => self.input.insert_char('\n'),
             KeyCode::Char('s') if control => self.submit(),
-            KeyCode::Enter => self.submit(),
-            KeyCode::Backspace if alt || control => {
-                self.input.delete_word_back();
-            }
-            KeyCode::Backspace => {
-                self.input.backspace();
-            }
-            KeyCode::Delete => {
-                self.input.delete();
-            }
-            KeyCode::Left if alt || control => self.input.move_word_left(),
-            KeyCode::Left => self.input.move_left(),
-            KeyCode::Right if alt || control => self.input.move_word_right(),
-            KeyCode::Right => self.input.move_right(),
-            KeyCode::Home if alt || control => self.input.move_buffer_start(),
-            KeyCode::Home => self.input.move_home(),
+            KeyCode::Enter if !alt => self.submit(),
             KeyCode::End if alt || control => {
                 self.input.move_buffer_end();
                 self.scroll = 0;
             }
-            KeyCode::End => self.input.move_end(),
             KeyCode::PageUp => self.scroll += 10,
             KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
             KeyCode::Up => {
@@ -2302,18 +2485,13 @@ impl App {
             KeyCode::Char('@') if !control && self.input.is_empty() => {
                 self.picker = Some(Picker::new(Kind::Recipients));
             }
-            KeyCode::Char(ch) if !control => self.input.insert_char(ch),
-            _ => {}
+            _ => self.input.edit_key(key),
         }
         true
     }
 
     fn graph_key(&mut self, key: event::KeyEvent) -> bool {
-        if let Some((role, id)) = self.selected.split_once(':')
-            && role == "verifier"
-        {
-            self.graph_collapsed.remove(id);
-        }
+        self.selected = graph::task_node_key(&self.selected);
         let graph = Graph::new_with_viewport(
             &self.view,
             self.graph_filter.as_deref(),
@@ -2424,12 +2602,7 @@ impl App {
     }
 
     pub fn select_node(&mut self, key: String) {
-        if let Some((role, id)) = key.split_once(':')
-            && role == "verifier"
-        {
-            self.graph_collapsed.remove(id);
-        }
-        self.selected = key;
+        self.selected = graph::task_node_key(&key);
     }
 
     pub fn toggle_selected_collapse(&mut self) {
@@ -2442,9 +2615,6 @@ impl App {
             self.graph_collapsed.remove(&task_id);
         } else {
             self.graph_collapsed.insert(task_id);
-            if self.selected.starts_with("verifier:") {
-                self.selected = format!("worker:{}", self.selected.trim_start_matches("verifier:"));
-            }
         }
     }
 
@@ -2591,38 +2761,11 @@ impl App {
                     self.save_comment_draft(&editor.target, editor.input);
                 }
             }
-            KeyCode::Enter if alt => editor.input.insert_char('\n'),
-            KeyCode::Char('j') if control => editor.input.insert_char('\n'),
             KeyCode::Char('s') if control => self.submit_comment(),
-            KeyCode::Enter => self.submit_comment(),
-            KeyCode::Char('w') if control => editor.input.delete_word_back(),
-            KeyCode::Char('u') if control => editor.input.delete_to_start(),
-            KeyCode::Char('k') if control => editor.input.delete_to_end(),
-            KeyCode::Char('a') if control => editor.input.move_home(),
-            KeyCode::Char('e') if control => editor.input.move_end(),
-            KeyCode::Backspace if alt || control => {
-                editor.input.delete_word_back();
-            }
-            KeyCode::Backspace => {
-                editor.input.backspace();
-            }
-            KeyCode::Delete => {
-                editor.input.delete();
-            }
-            KeyCode::Left if alt || control => editor.input.move_word_left(),
-            KeyCode::Right if alt || control => editor.input.move_word_right(),
-            KeyCode::Left => editor.input.move_left(),
-            KeyCode::Right => editor.input.move_right(),
-            KeyCode::Home if alt || control => editor.input.move_buffer_start(),
-            KeyCode::End if alt || control => editor.input.move_buffer_end(),
-            KeyCode::Home => editor.input.move_home(),
-            KeyCode::End => editor.input.move_end(),
+            KeyCode::Enter if !alt => self.submit_comment(),
             KeyCode::Up => editor.input.move_up(self.editor_width.max(1)),
             KeyCode::Down => editor.input.move_down(self.editor_width.max(1)),
-            KeyCode::Char(ch) if !control => {
-                editor.input.insert_char(ch);
-            }
-            _ => {}
+            _ => editor.input.edit_key(key),
         }
     }
 
@@ -2689,7 +2832,7 @@ impl App {
                 details.raw = !details.raw;
                 return;
             }
-            KeyCode::Enter if details.tab == 1 => {
+            KeyCode::Enter if details.tab == 0 => {
                 details.expand_prompts = !details.expand_prompts;
                 return;
             }
@@ -2769,6 +2912,10 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
+            editor.paste(text);
+            return;
+        }
         if self.help.is_some() || self.trust_prompt.is_some() {
             return;
         }
@@ -2795,19 +2942,48 @@ impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
         self.settle_focus();
         self.terminal_area = frame.area();
+        self.graph_area = None;
+        self.text_area = None;
         if draw_min_term_guard(frame, frame.area()) {
+            self.text_selection = Default::default();
+            return;
+        }
+        if let Some(editor) = self.config_editor.as_ref().filter(|e| e.visible) {
+            self.text_selection = Default::default();
+            editor.draw(frame);
             return;
         }
         if let Some(pv) = &mut self.plan_view {
             let theme = Theme::from_env();
             pv.draw(frame, frame.area(), &self.view, &theme);
+            self.text_area = Some(Rect::new(
+                pv.doc_area.x.saturating_add(planview::GUTTER as u16),
+                pv.doc_area.y,
+                pv.doc_area.width.saturating_sub(planview::GUTTER as u16),
+                pv.doc_area.height,
+            ));
+            self.text_origin = pv.scroll;
         } else if let Some(diff) = &mut self.diff {
             diff.draw(frame, &self.view);
         } else if let Some(details) = &mut self.details {
             details.draw(frame, &self.view);
+            self.text_area = Some(details.text_area);
+            self.text_origin = details.scroll;
         } else {
             self.draw_main(frame);
         }
+        let selection_area = if self.selection_blocked() {
+            None
+        } else {
+            self.text_area
+        };
+        let context = self.selection_context();
+        self.text_selection.draw_scrolled(
+            frame.buffer_mut(),
+            selection_area,
+            context,
+            self.text_origin,
+        );
         if let Some(editor) = &self.editor {
             let area = frame.area();
             // Leave a column for the insertion cursor after a full line.
@@ -3046,6 +3222,38 @@ impl App {
                 box_area,
             );
         }
+    }
+
+    fn selection_context(&self) -> String {
+        use std::hash::{Hash, Hasher};
+        let details = self.details.as_ref().map(|details| {
+            let mut query = std::collections::hash_map::DefaultHasher::new();
+            details.query.hash(&mut query);
+            (&details.key, details.tab, details.raw, query.finish())
+        });
+        format!(
+            "{}:{}:{}:{:?}:{:?}",
+            self.conversation,
+            self.generation,
+            self.view.after,
+            details,
+            self.plan_view.as_ref().map(|p| &p.plan_id)
+        )
+    }
+
+    fn selection_blocked(&self) -> bool {
+        self.help.is_some()
+            || self.picker.is_some()
+            || self.editor.is_some()
+            || self.diff.is_some()
+            || self.unblock.is_some()
+            || self.trust_prompt.is_some()
+            || self.project_trust.is_some()
+            || self
+                .confirmation
+                .as_ref()
+                .is_some_and(|c| c.status == ConfirmationStatus::Pending)
+            || self.config_editor.as_ref().is_some_and(|e| e.visible)
     }
 
     fn draw_main(&mut self, frame: &mut Frame) {
@@ -3518,17 +3726,15 @@ impl App {
         let buf = frame.buffer_mut();
         let body_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
         draw_rows(buf, body_area, &cards[start..end]);
+        self.text_area = Some(body_area);
+        self.text_origin = start;
 
         let scroll_area = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
         scrollbar(buf, theme, scroll_area, cards.len(), start, height);
     }
 
     fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
-        if let Some((role, id)) = self.selected.split_once(':')
-            && role == "verifier"
-        {
-            self.graph_collapsed.remove(id);
-        }
+        self.selected = graph::task_node_key(&self.selected);
         let focused = self.focus == Focus::Graph;
         let block = Block::default()
             .borders(Borders::ALL)
@@ -3548,6 +3754,7 @@ impl App {
         let inner = padded(frame_inner);
 
         self.graph_viewport = Some((inner.width, inner.height));
+        self.graph_area = Some(inner);
         let graph = Graph::new_with_viewport(
             &self.view,
             self.graph_filter.as_deref(),
@@ -3669,7 +3876,51 @@ impl App {
         );
     }
 
+    fn mouse_scroll(&mut self, down: bool) {
+        let code = if down { KeyCode::Down } else { KeyCode::Up };
+        if self.help.is_some() {
+            self.help_scroll = if down {
+                (self.help_scroll + 3).min(self.help_max_scroll())
+            } else {
+                self.help_scroll.saturating_sub(3)
+            };
+        } else if let Some(pv) = &mut self.plan_view {
+            pv.key(event::KeyEvent::new(code, KeyModifiers::NONE), &self.view);
+        } else if let Some(diff) = &mut self.diff {
+            diff.key(code);
+        } else if let Some(details) = &mut self.details {
+            details.scroll = if down {
+                details.scroll + 3
+            } else {
+                details.scroll.saturating_sub(3)
+            };
+        } else if self.focus == Focus::Graph {
+            let graph = Graph::new_with_viewport(
+                &self.view,
+                self.graph_filter.as_deref(),
+                &self.graph_collapsed,
+                self.graph_grouping,
+                self.graph_viewport,
+            );
+            self.scroll_graph_node(&graph, down, 3);
+        } else {
+            self.scroll = if down {
+                self.scroll.saturating_sub(3)
+            } else {
+                self.scroll + 3
+            };
+        }
+    }
+
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        if self.selection_blocked() {
+            self.text_selection = Default::default();
+        }
+        self.text_selection
+            .invalidate_context(&self.selection_context());
+        if self.config_editor.as_ref().is_some_and(|e| e.visible) {
+            return true;
+        }
         self.settle_focus();
         if self.trust_prompt.is_some() || self.project_trust.is_some() {
             return true;
@@ -3687,56 +3938,12 @@ impl App {
             }
             return true;
         }
+        if !self.selection_blocked() {
+            self.text_selection.mouse(mouse);
+        }
         match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                if self.help.is_some() {
-                    self.help_scroll = self.help_scroll.saturating_sub(3);
-                } else if let Some(pv) = &mut self.plan_view {
-                    pv.key(
-                        event::KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-                        &self.view,
-                    );
-                } else if let Some(diff) = &mut self.diff {
-                    diff.key(KeyCode::Up);
-                } else if let Some(details) = &mut self.details {
-                    details.scroll = details.scroll.saturating_sub(3);
-                } else if self.focus == Focus::Graph {
-                    let graph = Graph::new_with_viewport(
-                        &self.view,
-                        self.graph_filter.as_deref(),
-                        &self.graph_collapsed,
-                        self.graph_grouping,
-                        self.graph_viewport,
-                    );
-                    self.scroll_graph_node(&graph, false, 3);
-                } else {
-                    self.scroll += 3;
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if self.help.is_some() {
-                    self.help_scroll = (self.help_scroll + 3).min(self.help_max_scroll());
-                } else if let Some(pv) = &mut self.plan_view {
-                    pv.key(
-                        event::KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-                        &self.view,
-                    );
-                } else if let Some(diff) = &mut self.diff {
-                    diff.key(KeyCode::Down);
-                } else if let Some(details) = &mut self.details {
-                    details.scroll += 3;
-                } else if self.focus == Focus::Graph {
-                    let graph = Graph::new_with_viewport(
-                        &self.view,
-                        self.graph_filter.as_deref(),
-                        &self.graph_collapsed,
-                        self.graph_grouping,
-                        self.graph_viewport,
-                    );
-                    self.scroll_graph_node(&graph, true, 3);
-                } else {
-                    self.scroll = self.scroll.saturating_sub(3);
-                }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 let col = mouse.column;
@@ -3758,6 +3965,30 @@ impl App {
                     || self.editor.is_some()
                     || self.help.is_some()
                 {
+                    return true;
+                }
+                if let Some(inner) = self.graph_area
+                    && inner.contains((col, row).into())
+                {
+                    let graph = Graph::new_with_viewport(
+                        &self.view,
+                        self.graph_filter.as_deref(),
+                        &self.graph_collapsed,
+                        self.graph_grouping,
+                        self.graph_viewport,
+                    );
+                    let x = col.saturating_sub(inner.x).saturating_add(self.offset.0);
+                    let y = row.saturating_sub(inner.y).saturating_add(self.offset.1);
+                    if let Some(node) = graph.nodes.iter().find(|node| {
+                        node.visible
+                            && x >= node.x
+                            && x < node.x.saturating_add(graph::WIDTH)
+                            && y >= node.y
+                            && y < node.y.saturating_add(node.height)
+                    }) {
+                        self.select_node(node.key.clone());
+                    }
+                    self.focus = Focus::Graph;
                     return true;
                 }
                 if row == area.y && area.width > 0 {
@@ -3976,6 +4207,12 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     let conversation = options.conversation(&client)?;
     let (updates, received) = mpsc::channel();
     let mut app = App {
+        text_selection: Default::default(),
+        text_area: None,
+        text_origin: 0,
+        pending_clipboard: None,
+        config_editor: None,
+        config_drafts: Default::default(),
         client: client.clone(),
         project: options
             .project
@@ -4034,6 +4271,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         details_scroll_memory: std::collections::HashMap::new(),
         details_query_memory: std::collections::HashMap::new(),
         graph_viewport: None,
+        graph_area: None,
         unblock: None,
         projects: Vec::new(),
         active_project: 0,
@@ -4077,6 +4315,17 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                     in_ascii(frame.buffer_mut());
                 }
             })?;
+            // OSC 52 shares the rendering thread and is emitted between complete frames.
+            if let Some(text) = app.pending_clipboard.take() {
+                match clipboard::copy_text(&mut std::io::stdout().lock(), &text) {
+                    Ok(clipboard::CopyMethod::Osc52) => {}
+                    Ok(clipboard::CopyMethod::Fallback { osc52_error }) => {
+                        app.notice =
+                            Some(format!("OSC 52 failed: {osc52_error}; copied with pbcopy"));
+                    }
+                    Err(error) => app.notice = Some(error.to_string()),
+                }
+            }
             if !event::poll(Duration::from_millis(100))? {
                 continue;
             }
@@ -4789,7 +5038,7 @@ pub mod tests {
     }
 
     #[test]
-    fn enter_folds_and_unfolds_prompts_on_the_session_tab_only() {
+    fn enter_folds_and_unfolds_prompts_on_overview_only() {
         let mut app = test_app();
         app.view.agents.insert(
             "worker:t1".into(),
@@ -4802,9 +5051,10 @@ pub mod tests {
             },
         );
         app.details = Some(details::Details::new("worker:t1".into()));
-        app.key(key_press(KeyCode::Enter));
-        assert!(!app.details.as_ref().unwrap().expand_prompts, "Overview");
         app.details.as_mut().unwrap().switch_tab(1);
+        app.key(key_press(KeyCode::Enter));
+        assert!(!app.details.as_ref().unwrap().expand_prompts, "Messages");
+        app.details.as_mut().unwrap().switch_tab(0);
         app.key(key_press(KeyCode::Enter));
         let details = app.details.as_mut().unwrap();
         assert!(details.expand_prompts);
@@ -4836,7 +5086,7 @@ pub mod tests {
         };
         app.view.agents.insert("worker:t1".into(), agent(40));
         let mut details = details::Details::new("worker:t1".into());
-        details.switch_tab(1);
+        details.switch_tab(0);
         app.details = Some(details);
         let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
         let screen = |term: &Terminal<TestBackend>| -> String {
@@ -4849,7 +5099,19 @@ pub mod tests {
         };
 
         term.draw(|f| app.draw(f)).unwrap();
-        assert!(screen(&term).contains("entry 39"), "starts at the newest");
+        assert_eq!(
+            app.details.as_ref().unwrap().scroll,
+            0,
+            "Overview opens at the top"
+        );
+        assert!(!screen(&term).contains("entry 39"));
+        app.details.as_mut().unwrap().switch_tab(1);
+        app.details.as_mut().unwrap().switch_tab(0);
+        term.draw(|f| app.draw(f)).unwrap();
+        assert_eq!(app.details.as_ref().unwrap().scroll, 0);
+        app.key(key_press(KeyCode::End));
+        term.draw(|f| app.draw(f)).unwrap();
+        assert!(screen(&term).contains("entry 39"));
 
         // New entries scroll into view by themselves.
         app.view.agents.insert("worker:t1".into(), agent(55));
@@ -5068,5 +5330,38 @@ pub mod tests {
         });
         click_header(&mut app, 80, "[Team]");
         assert_eq!(app.focus, Focus::Chat);
+    }
+    #[test]
+    fn copy_shortcut_queues_text_for_the_rendering_thread() {
+        let mut app = test_app();
+        let area = Rect::new(0, 0, 8, 1);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        buffer.set_string(0, 0, "safe", Style::default());
+        app.text_selection
+            .draw_scrolled(&mut buffer, Some(area), app.selection_context(), 0);
+        for (kind, column) in [
+            (MouseEventKind::Down(MouseButton::Left), 0),
+            (MouseEventKind::Drag(MouseButton::Left), 3),
+        ] {
+            app.text_selection.mouse(event::MouseEvent {
+                kind,
+                column,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+        assert!(app.key(key_ctrl('y')));
+        let text = app
+            .pending_clipboard
+            .take()
+            .expect("key queues text, never writes stdout");
+        assert_eq!(text, "safe");
+        let mut output = Vec::new();
+        assert_eq!(
+            clipboard::copy_text(&mut output, &text).unwrap(),
+            clipboard::CopyMethod::Osc52
+        );
+        assert_eq!(output, b"\x1b]52;c;c2FmZQ==\x07");
+        assert!(app.pending_clipboard.is_none());
     }
 }

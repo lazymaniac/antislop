@@ -1,6 +1,7 @@
 //! Input buffer and text editing abstractions for chat and comment drafts.
 
 use super::view::clean;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -151,6 +152,39 @@ pub struct InputBuffer {
 }
 
 impl InputBuffer {
+    /// Shared draft editing. Submission, history and vertical navigation belong
+    /// to the caller, since chat and comment dialogs handle them differently.
+    pub fn edit_key(&mut self, key: KeyEvent) {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Enter if alt => self.insert_char('\n'),
+            KeyCode::Char('j') if control => self.insert_char('\n'),
+            KeyCode::Char('w') if control => self.delete_word_back(),
+            KeyCode::Char('u') if control => self.delete_to_start(),
+            KeyCode::Char('k') if control => self.delete_to_end(),
+            KeyCode::Char('a') if control => self.move_home(),
+            KeyCode::Char('e') if control => self.move_end(),
+            KeyCode::Backspace if alt || control => self.delete_word_back(),
+            KeyCode::Backspace => {
+                self.backspace();
+            }
+            KeyCode::Delete => {
+                self.delete();
+            }
+            KeyCode::Left if alt || control => self.move_word_left(),
+            KeyCode::Right if alt || control => self.move_word_right(),
+            KeyCode::Left => self.move_left(),
+            KeyCode::Right => self.move_right(),
+            KeyCode::Home if alt || control => self.move_buffer_start(),
+            KeyCode::End if alt || control => self.move_buffer_end(),
+            KeyCode::Home => self.move_home(),
+            KeyCode::End => self.move_end(),
+            KeyCode::Char(ch) if !control => self.insert_char(ch),
+            _ => {}
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             text: String::new(),

@@ -1026,3 +1026,76 @@ fn new_card_feedback_payloads_survive_storage_and_events() {
     );
     assert!(!tasks::feedback_is_current(&restored.feedback.unwrap(), 2));
 }
+
+#[test]
+fn missing_configuration_reports_project_and_global_candidates() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let global = root.path().join("user-config");
+    std::fs::create_dir(&project).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+        .current_dir(&project)
+        .env("ANTISLOP_CONFIG_DIR", &global)
+        .args(["chat", "hello"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("no configuration at"), "{error}");
+    for candidate in [project.join("antislop.toml"), global.join("antislop.toml")] {
+        assert!(error.contains(candidate.to_str().unwrap()), "{error}");
+    }
+    assert!(!global.exists());
+    assert!(!project.join(".antislop").exists());
+}
+
+#[test]
+fn configuration_snapshots_survive_live_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = fake_codex(dir.path());
+    let initial = config(&codex);
+    let core = Core::open(&dir.path().join(".antislop"), initial.clone()).unwrap();
+    let in_flight = core.config_snapshot();
+    let mut updated = initial.clone();
+    updated.policy.max_parallel = 1;
+    updated.orchestrator.profile = "review".into();
+    core.replace_config(updated.clone());
+    assert_eq!(*in_flight, initial);
+    assert_eq!(*core.config_snapshot(), updated);
+}
+
+#[test]
+fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = fake_codex(dir.path());
+    let initial = config(&codex);
+    let core = Core::open(&dir.path().join(".antislop"), initial.clone()).unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    core.send(&conversation.id, "sleepy").unwrap();
+    let log = dir.path().join("calls.log");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !log.exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let running = std::fs::read_to_string(&log).unwrap();
+    let mut updated = initial;
+    updated.profiles.get_mut("orchestrator").unwrap().model = Some("live-model".into());
+    updated.profiles.get_mut("orchestrator").unwrap().effort = antislop::config::Effort::Low;
+    updated.policy.max_parallel = 1;
+    assert!(!core.is_idle(&conversation.id));
+    core.replace_config(updated);
+    wait_idle(&core, &conversation.id);
+    let completed = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        completed, running,
+        "configuration update restarted the active turn"
+    );
+    assert!(!completed.contains("live-model"));
+    core.send(&conversation.id, "next request").unwrap();
+    wait_idle(&core, &conversation.id);
+    let calls = std::fs::read_to_string(log).unwrap();
+    assert!(calls.contains("live-model"));
+    assert!(calls.contains("model_reasoning_effort=\"low\""));
+    assert!(calls.starts_with(&running));
+}

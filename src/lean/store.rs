@@ -244,7 +244,7 @@ impl TurnStatus {
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Tables only ever get added; a change to an existing one raises it and
 /// migrates from the version found.
-const SCHEMA: u32 = 5;
+const SCHEMA: u32 = 6;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -398,6 +398,20 @@ impl Store {
              UPDATE events SET plan_id = json_extract(events.payload, '$.plan')
              WHERE events.plan_id IS NULL AND json_extract(events.payload, '$.plan') IS NOT NULL;",
         )?;
+        // 5 → 6: global daemon events share the readable event stream.
+        if found < 6 {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute_batch("CREATE TABLE events_v6(seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT REFERENCES conversations(id), turn_id TEXT, plan_id TEXT,
+                    kind TEXT NOT NULL, payload TEXT NOT NULL, created_ms INTEGER NOT NULL DEFAULT 0);
+                INSERT INTO events_v6 SELECT seq,conversation_id,turn_id,plan_id,kind,payload,created_ms FROM events;
+                DROP TABLE events;
+                ALTER TABLE events_v6 RENAME TO events;
+                CREATE INDEX events_by_conversation ON events(conversation_id,seq);
+                CREATE INDEX events_by_plan ON events(conversation_id,plan_id,seq);")?;
+            transaction.pragma_update(None, "user_version", SCHEMA)?;
+            transaction.commit()?;
+        }
         connection.pragma_update(None, "user_version", SCHEMA)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -577,10 +591,7 @@ impl Store {
         let resolved_plan: Option<String> = match plan_id {
             Some(pid) => Some(pid.to_string()),
             None => {
-                if let Some(task_uuid) = role
-                    .strip_prefix("worker:")
-                    .or_else(|| role.strip_prefix("verifier:"))
-                {
+                if let Some(task_uuid) = super::task_role(role).map(|(id, _)| id) {
                     db.query_row(
                         "SELECT plan_id FROM tasks WHERE id=?1",
                         [task_uuid],
@@ -1587,7 +1598,7 @@ impl Store {
         let db = self.db();
         let seq: Option<i64> = db
             .query_row(
-                "SELECT seq FROM events WHERE conversation_id=?1 ORDER BY seq DESC LIMIT 1",
+                "SELECT seq FROM events WHERE (conversation_id=?1 OR conversation_id IS NULL) ORDER BY seq DESC LIMIT 1",
                 [conversation],
                 |row| row.get(0),
             )
@@ -1599,7 +1610,7 @@ impl Store {
         let db = self.db();
         let mut statement = db.prepare(
             "SELECT COALESCE(MIN(seq), 0), COALESCE(MAX(seq), 0), COUNT(*)
-             FROM events WHERE conversation_id=?1",
+             FROM events WHERE (conversation_id=?1 OR conversation_id IS NULL)",
         )?;
         let row = statement.query_row([conversation], |row| {
             Ok((
@@ -1637,6 +1648,22 @@ impl Store {
             latest_seq,
             history_unavailable,
         })
+    }
+
+    /// Reserve the event before publishing an already prepared file. The callback
+    /// must only rename the file and swap the snapshot; writes and fsync happen outside this lock.
+    pub fn publish_config_with_event(
+        &self,
+        path: &Path,
+        publish: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let db = self.db();
+        let transaction = db.unchecked_transaction()?;
+        let payload = serde_json::json!({"path": path});
+        transaction.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(NULL,'config_updated',?1,CAST(unixepoch('subsec')*1000 AS INTEGER))", [payload.to_string()])?;
+        publish()?;
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn append_event(
@@ -1686,7 +1713,7 @@ impl Store {
         let db = self.db();
         let mut statement = db.prepare(
             "SELECT seq,turn_id,plan_id,kind,payload,created_ms FROM events
-             WHERE conversation_id=?1 AND seq>?2 ORDER BY seq LIMIT ?3",
+             WHERE (conversation_id=?1 OR conversation_id IS NULL) AND seq>?2 ORDER BY seq LIMIT ?3",
         )?;
         let rows =
             statement.query_map(params![conversation, after as i64, limit as i64], |row| {
@@ -1998,10 +2025,7 @@ impl Store {
                 if turn.plan_id.as_deref() == Some(plan_id) {
                     return true;
                 }
-                if let Some(tid) = turn
-                    .role
-                    .strip_prefix("worker:")
-                    .or_else(|| turn.role.strip_prefix("verifier:"))
+                if let Some(tid) = super::task_role(&turn.role).map(|(id, _)| id)
                     && task_ids.contains(tid)
                 {
                     return true;
@@ -2013,20 +2037,17 @@ impl Store {
         let mut agents_map: std::collections::BTreeMap<String, PlanAgentInfo> =
             std::collections::BTreeMap::new();
         for turn in &turns {
-            let (task_id, task_label) = if let Some(tid) = turn
-                .role
-                .strip_prefix("worker:")
-                .or_else(|| turn.role.strip_prefix("verifier:"))
-            {
-                let label = tasks
-                    .iter()
-                    .find(|t| t.id == tid)
-                    .and_then(|t| t.spec["id"].as_str())
-                    .map(|s| s.to_string());
-                (Some(tid.to_string()), label)
-            } else {
-                (None, None)
-            };
+            let (task_id, task_label) =
+                if let Some(tid) = super::task_role(&turn.role).map(|(id, _)| id) {
+                    let label = tasks
+                        .iter()
+                        .find(|t| t.id == tid)
+                        .and_then(|t| t.spec["id"].as_str())
+                        .map(|s| s.to_string());
+                    (Some(tid.to_string()), label)
+                } else {
+                    (None, None)
+                };
             let entry = agents_map
                 .entry(turn.role.clone())
                 .or_insert_with(|| PlanAgentInfo {
@@ -2140,6 +2161,33 @@ mod tests {
             store.approved_writer_results("/project").unwrap(),
             [("base-1".into(), "result-1".into()),]
         );
+    }
+
+    #[test]
+    fn failed_event_migration_rolls_back_the_schema_and_releases_the_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core.db");
+        drop(Store::open(&path).unwrap());
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("PRAGMA user_version=5; CREATE VIEW event_view AS SELECT * FROM events;")
+            .unwrap();
+        assert!(Store::open(&path).is_err());
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            5
+        );
+        let tables: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='events_v6'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+        db.execute_batch("DROP VIEW event_view;").unwrap();
+        drop(db);
+        assert!(Store::open(&path).is_ok());
     }
 
     #[test]

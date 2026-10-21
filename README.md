@@ -14,8 +14,8 @@ is in [docs/parity.md](docs/parity.md).
 
 ## Use
 
-Put an `antislop.toml` in the project (start from
-[examples/antislop.toml](examples/antislop.toml)) and run:
+Configure `antislop.toml` in the project or in the global configuration directory
+(start from [examples/antislop.toml](examples/antislop.toml)) and run:
 
 ```sh
 antislop                         # TUI on the project's latest conversation
@@ -37,14 +37,20 @@ The internal daemon entrypoint checks the same user-owned trust registry before
 opening project state. Trust stored in a project database does not grant access.
 Registry updates use an exclusively created temporary file and an atomic rename.
 
-Configuration currently requires the project's `antislop.toml` or `--config FILE`;
-there is no global configuration fallback or live configuration editor yet.
-Workers and verifiers still have separate graph nodes, and Overview and Session
-remain separate tabs. Checks refresh on round changes and check events for the
-open task; events for other tasks do not trigger an extra request.
-Mouse navigation is supported; dragging to select and copy transcript text is not
-implemented. See [the integration status](docs/lean-core.md#integration-status)
-for the remaining work.
+Configuration precedence is `--config FILE`, then `./antislop.toml`, then
+`$ANTISLOP_CONFIG_DIR/antislop.toml`, `$XDG_CONFIG_HOME/antislop/antislop.toml`, or
+`~/.config/antislop/antislop.toml` (the first configured global directory).
+An invalid or inaccessible project file reports an error instead of falling back.
+Resolving a configuration creates nothing. The editor saves to the selected file;
+when using a shared global file, saving also affects future starts of other projects.
+
+Each task has one graph node for its worker and verifier; their runtime sessions
+remain separate. Overview combines the task summary and both session transcripts.
+Checks refresh after each round and verdict, and live check events refresh only the
+open task. Drag to select rendered text in chat, plan or agent details; double-click
+selects a word and Ctrl+Y copies up to 64 KiB through OSC 52. On an OSC 52 write
+failure, macOS uses `pbcopy` as a fallback. A terminal silently ignoring OSC 52
+cannot be detected. Selection respects complete grapheme clusters.
 
 `antislop stop` does not require a configuration file and succeeds if the daemon
 is already stopped. It refuses to stop while agents are working unless `--force`
@@ -97,3 +103,16 @@ scripts/cargo.sh clippy --all-targets -- -D warnings
 
 Tests use small fake CLIs written in Python (`python3` must be on `PATH`); they
 consume no provider usage.
+
+Open `/config` (also in Ctrl+P) to edit the active project or global configuration.
+Tab/Shift+Tab select fields; Enter cycles enum and boolean values. Arrays use JSON
+string-array syntax, including command tokens. Empty optional fields remove overrides.
+Ctrl+N adds a profile with a generated name; Ctrl+D removes the selected profile.
+Ctrl+S validates, saves, and applies the configuration live. Running turns finish
+with their old profile. Errors retain the draft; Esc closes it and `/config` reopens it.
+
+Reopening refreshes the configuration. If another client changed it, the draft is
+preserved and saving is blocked. Ctrl+R explicitly reloads and discards edits.
+The daemon compares the loaded revision under its configuration-write lock, so a
+second client cannot overwrite a newer daemon-mediated edit. Unrelated TOML
+comments and formatting are preserved.
