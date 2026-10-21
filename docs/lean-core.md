@@ -613,3 +613,10 @@ Design §20's open decisions stand as follows. Isolation and the supported
 CLI versions (1) and session resume per CLI (2) are settled above and in
 [Known limits](#known-limits). The name (3) is `antislop`. The licence and distribution (4) are left to
 the owner, as the design asks.
+
+The TUI configuration modal uses GetConfig and SetConfig asynchronously. It keeps a
+separate field draft from chat and reports validation errors beside fields. Ctrl+S
+publishes valid changes through the daemon; running turns retain their existing
+profile snapshot. Failed requests keep the draft for retry. Optional overrides can
+be cleared; args and command fields accept JSON arrays of strings. Saving rewrites
+configuration formatting and does not preserve TOML comments.

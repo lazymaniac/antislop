@@ -84,3 +84,10 @@ scripts/cargo.sh clippy --all-targets -- -D warnings
 
 Tests use small fake CLIs written in Python (`python3` must be on `PATH`); they
 consume no provider usage.
+
+Open `/config` (also in Ctrl+P) to edit the active project or global configuration.
+Tab/Shift+Tab select fields; Enter cycles enum and boolean values. Arrays use JSON
+string-array syntax, including command tokens. Empty optional fields remove overrides.
+Ctrl+N adds a profile with a generated name; Ctrl+D removes the selected profile.
+Ctrl+S validates, saves, and applies the configuration live. Running turns finish
+with their old profile. Errors retain the draft; Esc closes it and `/config` reopens it.

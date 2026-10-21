@@ -158,8 +158,8 @@ pub struct TaskRow {
     pub integration: Option<Value>,
 }
 
-/// One agent on the team graph: the orchestrator, the plan verifier, the
-/// auditor, and each task's worker and verifier. Keys are `orchestrator`,
+/// One runtime agent: the orchestrator, the plan verifier, the auditor,
+/// and each task's worker and verifier (shown together on one task card). Keys are `orchestrator`,
 /// `plan-verifier`, `auditor`, `worker:t1`, `verifier:t1`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Agent {
@@ -174,9 +174,13 @@ pub struct Agent {
     pub activity: String,
     pub session: Vec<String>,
     /// What the agent's CLI did and printed, drawn like that CLI does.
+    /// Runtime mutations go through `View::feed`; hand-built feeds leave
+    /// `feed_revision` unset to request exact cache comparison.
     pub feed: Vec<Block>,
     /// Entries dropped from the start of `feed` to keep it bounded.
     pub feed_dropped: usize,
+    /// Updated with every runtime feed mutation; `None` means untracked data.
+    pub feed_revision: Option<u64>,
     /// Finished turns, and how many of them the CLI reported tokens for.
     pub turns: u32,
     pub reported: u32,
@@ -481,6 +485,11 @@ impl View {
     fn feed(&mut self, key: &str, block: Block) {
         let agent = self.agents.entry(key.to_owned()).or_default();
         agent.feed.push(block);
+        // Unique across views too: switching conversations can restore an old
+        // Details cache while replay builds a fresh View of that conversation.
+        static NEXT_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        agent.feed_revision =
+            Some(NEXT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         // Keep the latest turns whole: drop from the oldest turn's start.
         let turns = |feed: &[Block]| feed.iter().filter(|b| matches!(b, Block::Turn(_))).count();
         while agent.feed.len() > SESSION_LINES || turns(&agent.feed) > FEED_TURNS {
@@ -1956,6 +1965,10 @@ mod tests {
             view.feed("worker:t1", Block::Turn(format!("turn {turn}")));
             view.feed("worker:t1", Block::Text(format!("answer {turn}")));
         }
+        let revision = view.agents["worker:t1"].feed_revision.unwrap();
+        let mut other = View::default();
+        other.feed("worker:t1", Block::Text("independent view".into()));
+        assert_ne!(other.agents["worker:t1"].feed_revision, Some(revision));
         let agent = &view.agents["worker:t1"];
         assert_eq!(
             agent

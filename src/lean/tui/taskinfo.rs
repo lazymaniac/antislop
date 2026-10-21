@@ -137,6 +137,15 @@ pub fn doing(view: &View, key: &str) -> Option<String> {
     (!text.is_empty() && text != "starting turn").then_some(text)
 }
 
+/// Live activity for the task card follows the currently executing phase.
+pub fn task_activity(view: &View, row: &TaskRow) -> Option<String> {
+    if row.status == status::VERIFYING {
+        verifier_activity(view, row)
+    } else {
+        worker_activity(view, row)
+    }
+}
+
 /// The worker's own line under the state: what it is doing while it runs,
 /// the concrete dependencies it waits for while queued, or the cause it
 /// stopped with. Independent of the state word and the provider, and

@@ -3,6 +3,7 @@
 //! poller thread long-polls events and every action runs on its own thread,
 //! so typing, scrolling and sending stay instant.
 
+pub mod config;
 pub mod details;
 pub mod diffview;
 pub mod editor;
@@ -61,6 +62,11 @@ use view::{
 };
 
 pub enum Update {
+    Config {
+        project: String,
+        save: bool,
+        reply: std::result::Result<Value, String>,
+    },
     Events {
         conversation: String,
         generation: u64,
@@ -168,6 +174,8 @@ pub struct ConversationState {
 }
 
 pub struct App {
+    pub config_editor: Option<config::ConfigEditor>,
+    config_drafts: std::collections::HashMap<String, config::ConfigEditor>,
     pub client: Client,
     pub project: String,
     pub conversation: String,
@@ -228,6 +236,8 @@ pub struct App {
     pub confirmation: Option<ConfirmationCard>,
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
+    /// The last rendered graph viewport in terminal coordinates, for hit testing.
+    pub graph_area: Option<Rect>,
     pub graph_viewport: Option<(u16, u16)>,
     pub trust_prompt: Option<String>,
     /// The way out for a stopped step, while the user picks one.
@@ -256,6 +266,8 @@ impl App {
 
     pub fn test_app_with_client_and_updates(client: Client, updates: mpsc::Sender<Update>) -> App {
         App {
+            config_editor: None,
+            config_drafts: Default::default(),
             client,
             project: "test".into(),
             conversation: "test-conv".into(),
@@ -311,6 +323,7 @@ impl App {
             details_scroll_memory: std::collections::HashMap::new(),
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,
+            graph_area: None,
             trust_prompt: None,
             unblock: None,
             projects: Vec::new(),
@@ -1125,6 +1138,54 @@ impl App {
 
     pub fn apply_update(&mut self, update: Update) {
         match update {
+            Update::Config {
+                project,
+                save,
+                reply,
+            } => {
+                let active = project == self.client.state_dir().to_string_lossy();
+                if save {
+                    let editor = if active {
+                        self.config_editor.as_mut()
+                    } else {
+                        self.config_drafts.get_mut(&project)
+                    };
+                    if let Some(editor) = editor {
+                        editor.pending = false;
+                        editor.status = match reply {
+                            Ok(value) => {
+                                if value["warnings"].as_array().is_some_and(|w| !w.is_empty()) {
+                                    format!("Applied live with warnings: {}", value["warnings"])
+                                } else {
+                                    "Saved and applied live.".into()
+                                }
+                            }
+                            Err(error) => error,
+                        };
+                    }
+                } else {
+                    match reply.and_then(|v| {
+                        config::ConfigEditor::new(
+                            v["toml"].as_str().unwrap_or_default(),
+                            v["path"].as_str().unwrap_or_default().into(),
+                        )
+                        .map_err(|e| e.to_string())
+                    }) {
+                        Ok(mut editor) => {
+                            if active {
+                                if self.config_editor.is_none() {
+                                    self.config_editor = Some(editor);
+                                }
+                            } else {
+                                editor.visible = false;
+                                self.config_drafts.entry(project).or_insert(editor);
+                            }
+                        }
+                        Err(error) => self.notice = Some(error),
+                    }
+                }
+            }
+
             Update::Events {
                 conversation,
                 generation,
@@ -1482,6 +1543,7 @@ impl App {
             _ if text.starts_with("/unblock ") => {
                 self.open_unblock(Some(text.trim_start_matches("/unblock ").trim().to_owned()));
             }
+            "/config" => self.open_config(),
             "/project" => self.open_projects_picker(),
             _ if text.starts_with("/project ") => {
                 let proj = text.trim_start_matches("/project ").trim().to_string();
@@ -1626,6 +1688,18 @@ impl App {
         };
         if self.active_project != index && self.history_path.is_some() {
             self.load_history(conn.client.state_dir());
+        }
+        if self.client.state_dir() != conn.client.state_dir() {
+            if let Some(mut editor) = self.config_editor.take() {
+                editor.visible = false;
+                self.config_drafts.insert(
+                    self.client.state_dir().to_string_lossy().into_owned(),
+                    editor,
+                );
+            }
+            self.config_editor = self
+                .config_drafts
+                .remove(conn.client.state_dir().to_string_lossy().as_ref());
         }
         self.active_project = index;
         self.client = conn.client.clone();
@@ -1875,6 +1949,7 @@ impl App {
                 let help = self.help_here();
                 self.show_help(help);
             }
+            Command::Config => self.open_config(),
             Command::Projects => self.open_projects_picker(),
             Command::Quit => return false,
         }
@@ -1982,7 +2057,46 @@ impl App {
         }
     }
 
+    fn config_request(&self, request: Request, save: bool) {
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        let project = self.client.state_dir().to_string_lossy().into_owned();
+        std::thread::spawn(move || {
+            let reply = client.call(&request).map_err(|e| e.to_string());
+            let _ = updates.send(Update::Config {
+                project,
+                save,
+                reply,
+            });
+        });
+    }
+
+    fn open_config(&mut self) {
+        if let Some(editor) = &mut self.config_editor {
+            editor.visible = true;
+        } else {
+            self.config_request(Request::GetConfig, false);
+        }
+    }
+
     pub fn key(&mut self, key: event::KeyEvent) -> bool {
+        if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+                if !editor.pending {
+                    if let Some(toml) = editor.source() {
+                        editor.pending = true;
+                        editor.status = "Applying...".into();
+                        self.config_request(Request::SetConfig { toml }, true);
+                    } else if let Some(index) = editor.fields.iter().position(|f| f.error.is_some())
+                    {
+                        editor.selected = index;
+                    }
+                }
+            } else {
+                editor.key(key);
+            }
+            return true;
+        }
         self.settle_focus();
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -2304,11 +2418,7 @@ impl App {
     }
 
     fn graph_key(&mut self, key: event::KeyEvent) -> bool {
-        if let Some((role, id)) = self.selected.split_once(':')
-            && role == "verifier"
-        {
-            self.graph_collapsed.remove(id);
-        }
+        self.selected = graph::task_node_key(&self.selected);
         let graph = Graph::new_with_viewport(
             &self.view,
             self.graph_filter.as_deref(),
@@ -2419,12 +2529,7 @@ impl App {
     }
 
     pub fn select_node(&mut self, key: String) {
-        if let Some((role, id)) = key.split_once(':')
-            && role == "verifier"
-        {
-            self.graph_collapsed.remove(id);
-        }
-        self.selected = key;
+        self.selected = graph::task_node_key(&key);
     }
 
     pub fn toggle_selected_collapse(&mut self) {
@@ -2437,9 +2542,6 @@ impl App {
             self.graph_collapsed.remove(&task_id);
         } else {
             self.graph_collapsed.insert(task_id);
-            if self.selected.starts_with("verifier:") {
-                self.selected = format!("worker:{}", self.selected.trim_start_matches("verifier:"));
-            }
         }
     }
 
@@ -2684,7 +2786,7 @@ impl App {
                 details.raw = !details.raw;
                 return;
             }
-            KeyCode::Enter if details.tab == 1 => {
+            KeyCode::Enter if details.tab == 0 => {
                 details.expand_prompts = !details.expand_prompts;
                 return;
             }
@@ -2764,6 +2866,10 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
+            editor.paste(text);
+            return;
+        }
         if self.help.is_some() || self.trust_prompt.is_some() {
             return;
         }
@@ -2790,7 +2896,12 @@ impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
         self.settle_focus();
         self.terminal_area = frame.area();
+        self.graph_area = None;
         if draw_min_term_guard(frame, frame.area()) {
+            return;
+        }
+        if let Some(editor) = self.config_editor.as_ref().filter(|e| e.visible) {
+            editor.draw(frame);
             return;
         }
         if let Some(pv) = &mut self.plan_view {
@@ -3519,11 +3630,7 @@ impl App {
     }
 
     fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
-        if let Some((role, id)) = self.selected.split_once(':')
-            && role == "verifier"
-        {
-            self.graph_collapsed.remove(id);
-        }
+        self.selected = graph::task_node_key(&self.selected);
         let focused = self.focus == Focus::Graph;
         let block = Block::default()
             .borders(Borders::ALL)
@@ -3543,6 +3650,7 @@ impl App {
         let inner = padded(frame_inner);
 
         self.graph_viewport = Some((inner.width, inner.height));
+        self.graph_area = Some(inner);
         let graph = Graph::new_with_viewport(
             &self.view,
             self.graph_filter.as_deref(),
@@ -3665,6 +3773,9 @@ impl App {
     }
 
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        if self.config_editor.as_ref().is_some_and(|e| e.visible) {
+            return true;
+        }
         self.settle_focus();
         if self.trust_prompt.is_some() || self.project_trust.is_some() {
             return true;
@@ -3753,6 +3864,30 @@ impl App {
                     || self.editor.is_some()
                     || self.help.is_some()
                 {
+                    return true;
+                }
+                if let Some(inner) = self.graph_area
+                    && inner.contains((col, row).into())
+                {
+                    let graph = Graph::new_with_viewport(
+                        &self.view,
+                        self.graph_filter.as_deref(),
+                        &self.graph_collapsed,
+                        self.graph_grouping,
+                        self.graph_viewport,
+                    );
+                    let x = col.saturating_sub(inner.x).saturating_add(self.offset.0);
+                    let y = row.saturating_sub(inner.y).saturating_add(self.offset.1);
+                    if let Some(node) = graph.nodes.iter().find(|node| {
+                        node.visible
+                            && x >= node.x
+                            && x < node.x.saturating_add(graph::WIDTH)
+                            && y >= node.y
+                            && y < node.y.saturating_add(node.height)
+                    }) {
+                        self.select_node(node.key.clone());
+                    }
+                    self.focus = Focus::Graph;
                     return true;
                 }
                 if row == area.y && area.width > 0 {
@@ -3971,6 +4106,8 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     let conversation = options.conversation(&client)?;
     let (updates, received) = mpsc::channel();
     let mut app = App {
+        config_editor: None,
+        config_drafts: Default::default(),
         client: client.clone(),
         project: options
             .project
@@ -4029,6 +4166,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         details_scroll_memory: std::collections::HashMap::new(),
         details_query_memory: std::collections::HashMap::new(),
         graph_viewport: None,
+        graph_area: None,
         unblock: None,
         projects: Vec::new(),
         active_project: 0,
@@ -4784,7 +4922,7 @@ pub mod tests {
     }
 
     #[test]
-    fn enter_folds_and_unfolds_prompts_on_the_session_tab_only() {
+    fn enter_folds_and_unfolds_prompts_on_overview_only() {
         let mut app = test_app();
         app.view.agents.insert(
             "worker:t1".into(),
@@ -4797,9 +4935,10 @@ pub mod tests {
             },
         );
         app.details = Some(details::Details::new("worker:t1".into()));
-        app.key(key_press(KeyCode::Enter));
-        assert!(!app.details.as_ref().unwrap().expand_prompts, "Overview");
         app.details.as_mut().unwrap().switch_tab(1);
+        app.key(key_press(KeyCode::Enter));
+        assert!(!app.details.as_ref().unwrap().expand_prompts, "Messages");
+        app.details.as_mut().unwrap().switch_tab(0);
         app.key(key_press(KeyCode::Enter));
         let details = app.details.as_mut().unwrap();
         assert!(details.expand_prompts);
@@ -4831,7 +4970,7 @@ pub mod tests {
         };
         app.view.agents.insert("worker:t1".into(), agent(40));
         let mut details = details::Details::new("worker:t1".into());
-        details.switch_tab(1);
+        details.switch_tab(0);
         app.details = Some(details);
         let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
         let screen = |term: &Terminal<TestBackend>| -> String {
@@ -4844,7 +4983,19 @@ pub mod tests {
         };
 
         term.draw(|f| app.draw(f)).unwrap();
-        assert!(screen(&term).contains("entry 39"), "starts at the newest");
+        assert_eq!(
+            app.details.as_ref().unwrap().scroll,
+            0,
+            "Overview opens at the top"
+        );
+        assert!(!screen(&term).contains("entry 39"));
+        app.details.as_mut().unwrap().switch_tab(1);
+        app.details.as_mut().unwrap().switch_tab(0);
+        term.draw(|f| app.draw(f)).unwrap();
+        assert_eq!(app.details.as_ref().unwrap().scroll, 0);
+        app.key(key_press(KeyCode::End));
+        term.draw(|f| app.draw(f)).unwrap();
+        assert!(screen(&term).contains("entry 39"));
 
         // New entries scroll into view by themselves.
         app.view.agents.insert("worker:t1".into(), agent(55));

@@ -160,7 +160,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
         let graph = Graph::new(&view);
         let worker = graph.node("worker:t1").unwrap();
         let verifier = graph.node("verifier:t1").unwrap();
-        assert!(verifier.y >= worker.y + worker.height);
+        assert_eq!(verifier.key, worker.key);
         for key in ["worker:t1", "verifier:t1"] {
             let node = graph.node(key).unwrap();
             assert_eq!(
@@ -180,11 +180,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
             // line alone holds state, and the running role's doing text
             // has a line of its own.
             assert!(!text.contains("exec cargo check"));
-            if key == format!("{active_role}:t1") {
-                assert!(text.contains("doing: exec cargo"), "{text}");
-            } else {
-                assert!(!text.contains("doing"), "{text}");
-            }
+            assert!(text.contains("doing: exec cargo"), "{text}");
             if key == "worker:t1" {
                 assert!(text.contains("Popraw zapis"), "{text}");
                 assert!(text.contains("👩‍💻") && text.contains("e\u{301}"), "{text}");
@@ -245,7 +241,7 @@ fn graph_scrolls_through_many_short_cards() {
     }
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(app.offset.1 > start);
-    assert_eq!(app.selected, "verifier:t10");
+    assert_eq!(app.selected, "worker:t10");
     let text: String = terminal
         .backend()
         .buffer()
@@ -2872,7 +2868,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
 
     // Worker and verifier alignment: verifier sits directly below worker
     assert_eq!(w1.0, v1.0);
-    assert!(v1.1 > w1.1);
+    assert_eq!(v1, w1);
 
     // Columns advance with dependency depth: w1.0 < w2.0 <= w4.0
     assert!(w1.0 < w2.0);
@@ -2903,7 +2899,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     let mut large_view = View::default();
     large_view.tasks = large_tasks;
     let large_graph = Graph::new(&large_view);
-    assert_eq!(large_graph.nodes.len(), 3 + 500 * 2);
+    assert_eq!(large_graph.nodes.len(), 3 + 500);
     assert!(large_graph.width > 0);
     assert!(large_graph.height > 0);
 
@@ -2941,7 +2937,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     let mut cyclic_view = View::default();
     cyclic_view.tasks = cyclic_tasks;
     let cyclic_graph = Graph::new(&cyclic_view);
-    assert_eq!(cyclic_graph.nodes.len(), 3 + 4 * 2);
+    assert_eq!(cyclic_graph.nodes.len(), 3 + 4);
     for node in &cyclic_graph.nodes {
         assert!(node.visible);
     }
@@ -3034,7 +3030,7 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
 
     // 2. Visible-only navigation and Collapsing
     let next_below = graph.neighbour("worker:t1", 0, 1);
-    assert_eq!(next_below.as_deref(), Some("verifier:t1"));
+    assert_ne!(next_below.as_deref(), Some("verifier:t1"));
 
     let mut collapsed = std::collections::HashSet::new();
     collapsed.insert("t1".into());
@@ -3045,7 +3041,7 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
     let v1 = collapsed_graph.node("verifier:t1").unwrap();
     assert!(w1.visible);
     assert!(w1.collapsed);
-    assert!(!v1.visible);
+    assert!(v1.visible);
 
     let next_below_collapsed = collapsed_graph.neighbour("worker:t1", 0, 1);
     assert_ne!(next_below_collapsed.as_deref(), Some("verifier:t1"));
@@ -3360,6 +3356,10 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     details.switch_tab(0);
     assert_eq!(details.tab, 0);
     assert_eq!(details.scroll, 15);
+    assert!(
+        !details.follow,
+        "restored Overview keeps its scroll position"
+    );
     assert_eq!(details.query, "analiza");
 
     // Switch back to verifier:t1: active tab is 0 (never scrolled for verifier:t1)
@@ -3409,7 +3409,7 @@ fn test_inspector_whole_record_search_and_raw_view() {
         "findings": ["Ustalenie A: klucz_analityczny_xyz"],
         "artifacts": ["src/main.rs", "target/report.json"]
     }));
-    details.tab = 3; // WYNIK tab
+    details.tab = antislop::lean::tui::details::RESULT; // WYNIK tab
 
     let mut view = antislop::lean::tui::view::View::default();
     view.tasks.push(antislop::lean::tui::view::TaskRow {
@@ -3476,8 +3476,8 @@ fn test_inspector_explicit_missing_data_notices() {
         ..Default::default()
     });
 
-    // Tab 3: OUTCOME -> explicit notices for missing report, artifacts, evidence
-    details.tab = 3;
+    // Result -> explicit notices for missing report, artifacts, evidence
+    details.tab = antislop::lean::tui::details::RESULT;
     let lines = details.lines(&view);
     let all_text = lines
         .iter()
@@ -3497,8 +3497,8 @@ fn test_inspector_explicit_missing_data_notices() {
         "must contain explicit missing evidence notice: {all_text}"
     );
 
-    // Tab 4: CHECKS -> explicit notices for missing controls data
-    details.tab = 4;
+    // Checks -> explicit notices for missing controls data
+    details.tab = antislop::lean::tui::details::CHECKS;
     let lines_checks = details.lines(&view);
     let all_checks = lines_checks
         .iter()
@@ -3510,8 +3510,8 @@ fn test_inspector_explicit_missing_data_notices() {
         "must contain controls text: {all_checks}"
     );
 
-    // Tab 5: COMMENTS -> explicit notice for missing comments
-    details.tab = 5;
+    // Comments -> explicit notice for missing comments
+    details.tab = antislop::lean::tui::details::COMMENTS;
     let lines_comments = details.lines(&view);
     let all_comments = lines_comments
         .iter()
@@ -3523,8 +3523,8 @@ fn test_inspector_explicit_missing_data_notices() {
         "must contain explicit missing comments notice: {all_comments}"
     );
 
-    // Tab 1: SESSION -> explicit notice when no sessions are retained
-    details.tab = 1;
+    // Overview: session history -> explicit notice when no sessions are retained
+    details.tab = 0;
     let lines_sessions = details.lines(&view);
     let all_sessions = lines_sessions
         .iter()
@@ -3538,11 +3538,11 @@ fn test_inspector_explicit_missing_data_notices() {
 }
 
 #[test]
-fn session_inspector_shows_only_the_terminal_transcript() {
+fn overview_includes_the_terminal_transcript_without_database_mirrors() {
     use antislop::lean::tui::session::Block;
     use antislop::lean::tui::view::{Agent, View};
     let mut details = Details::new("worker:t1".into());
-    details.tab = 1;
+    details.tab = 0;
     details.history_unavailable = true;
     details.sessions.push(antislop::lean::store::SessionInfo {
         turn_id: "database-turn".into(),
@@ -3578,12 +3578,53 @@ fn session_inspector_shows_only_the_terminal_transcript() {
             ..Default::default()
         },
     );
+    view.tasks.push(antislop::lean::tui::view::TaskRow {
+        id: "t1".into(),
+        goal: "Shared task overview".into(),
+        ..Default::default()
+    });
+    view.agents.insert(
+        "verifier:t1".into(),
+        Agent {
+            provider: "claude".into(),
+            feed: vec![Block::Text("Verifier evidence".into())],
+            ..Default::default()
+        },
+    );
     let text = details
         .lines(&view)
         .into_iter()
         .map(|(_, line)| line)
         .collect::<Vec<_>>()
         .join("\n");
+    assert!(text.contains("Shared task overview"));
+    assert!(text.contains("Session · worker"));
+    assert!(text.contains("Session · verifier"));
+    assert!(text.contains("Verifier evidence"));
+    details.switch_key("verifier:t1".into());
+    let verifier_text = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(verifier_text.contains("Shared task overview"));
+    assert!(verifier_text.contains("• Ran exec cargo check"));
+    assert!(verifier_text.contains("Verifier evidence"));
+    details.query = "Verifier evidence".into();
+    details.raw = true;
+    let filtered = details
+        .lines(&view)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(filtered.contains("\"session\""));
+    assert!(filtered.contains("Verifier evidence"));
+    assert!(!filtered.contains("exec cargo check"));
+    details.query.clear();
+    details.raw = false;
+    details.switch_key("worker:t1".into());
     assert!(text.contains("codex · idle"));
     assert!(text.contains("• Ran exec cargo check"), "{text}");
     assert_eq!(text.matches("exec cargo check").count(), 1);
@@ -3657,7 +3698,14 @@ fn test_recipient_selection_and_broadcast() {
     assert!(items.iter().any(|(label, act)| label.contains("orchestrator") && matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == "orchestrator")));
     assert!(items.iter().any(|(label, act)| label.contains("worker:t1")
         && matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == "worker:t1")));
-    assert!(items.iter().any(|(label, act)| label.contains("verifier:t1") && matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == "verifier:t1")));
+    assert_eq!(items.len(), 6, "both protocol roles remain selectable");
+    for status in ["working", "verifying", "approved"] {
+        view.tasks[0].status = status.into();
+        for role in ["worker", "verifier"] {
+            let address = format!("{role}:t1");
+            assert!(picker.items(&view).iter().any(|(_, act)| matches!(act, antislop::lean::tui::palette::Action::Address(a) if a == &address)));
+        }
+    }
 
     // Test app recipient action execution
     let mut app = App::test_app();
@@ -4071,7 +4119,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
         GroupingMode::Dependency,
         Some((78, 20)),
     );
-    assert_eq!(adaptive_cycle.nodes.len(), 3 + 2 * 2);
+    assert_eq!(adaptive_cycle.nodes.len(), 3 + 2);
 
     // 5. Compaction after collapsing and filtering
     let mut collapsed = std::collections::HashSet::new();
@@ -4086,7 +4134,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
     let p1_w = collapsed_graph.node("worker:p1").unwrap();
     let p1_v = collapsed_graph.node("verifier:p1").unwrap();
     assert!(p1_w.visible && p1_w.collapsed);
-    assert!(!p1_v.visible);
+    assert!(p1_v.visible);
 
     // Filter compaction
     let filtered_graph = Graph::new_with_viewport(
@@ -4214,6 +4262,76 @@ fn test_adaptive_graph_collision_and_routing_safety() {
 }
 
 #[test]
+fn task_card_mouse_selection_uses_one_identity_for_both_phases() {
+    use antislop::lean::tui::{graph::Graph, view::TaskRow};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut app = App::test_app();
+    app.view.tasks = vec![
+        TaskRow {
+            id: "t1".into(),
+            status: "working".into(),
+            ..Default::default()
+        },
+        TaskRow {
+            id: "t2".into(),
+            status: "verifying".into(),
+            ..Default::default()
+        },
+    ];
+    app.focus = Focus::Graph;
+    app.selected = "worker:t1".into();
+    let mut terminal = Terminal::new(TestBackend::new(160, 70)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let inner = app.graph_area.unwrap();
+    let graph = Graph::new_with_viewport(
+        &app.view,
+        None,
+        &app.graph_collapsed,
+        app.graph_grouping,
+        app.graph_viewport,
+    );
+    let node = graph.node("verifier:t2").unwrap();
+    app.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: inner.x + node.x + 3 - app.offset.0,
+        row: inner.y + node.y + 2 - app.offset.1,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(
+        app.selected, "worker:t2",
+        "clicking verifier state selects its task"
+    );
+    app.toggle_selected_collapse();
+    app.select_node("verifier:t2".into());
+    assert_eq!(app.selected, "worker:t2");
+    assert!(
+        app.graph_collapsed.contains("t2"),
+        "role alias preserves collapse"
+    );
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(app.graph_collapsed.contains("t2"));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let details = app.details.as_ref().unwrap();
+    assert_eq!(details.key, "worker:t2");
+    assert!(
+        antislop::lean::tui::details::tabs_for(&details.key)
+            .contains(&antislop::lean::tui::details::CHECKS)
+    );
+    app.key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+    assert_eq!(
+        app.details.as_ref().unwrap().tab,
+        antislop::lean::tui::details::CHECKS
+    );
+    app.details = None;
+    let mut tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
+    tiny.draw(|frame| app.draw(frame)).unwrap();
+    assert!(
+        app.graph_area.is_none(),
+        "small-terminal guard clears stale mouse bounds"
+    );
+}
+
+#[test]
 fn test_adaptive_graph_navigation_and_resize_stability() {
     use antislop::lean::tui::graph::Graph;
     use antislop::lean::tui::view::TaskRow;
@@ -4281,7 +4399,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
 
     // 3. Arrow navigation
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.selected, "verifier:t2");
+    assert_eq!(app.selected, "worker:t3");
 
     // 4. Resize terminal to 160x50: viewport dynamically adapts
     let mut term_large = Terminal::new(TestBackend::new(160, 50)).unwrap();
@@ -4451,11 +4569,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
 
     let v1 = filtered_graph.node("verifier:t1").unwrap();
     assert!(v1.visible);
-    assert_eq!(
-        v1.y,
-        antislop::lean::tui::graph::HEIGHT + 2,
-        "Verifier at row 1 immediately below worker:t1"
-    );
+    assert_eq!(v1.y, w1.y, "Verifier address resolves to the task card");
 
     // 2. Column selection according to visible tasks:
     // Only "task 3" visible (raw topological depth was 2).
@@ -4750,7 +4864,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
             app.graph_grouping,
             app.graph_viewport,
         );
-        assert_eq!(g_cycle.nodes.len(), 3 + 2 * 2);
+        assert_eq!(g_cycle.nodes.len(), 3 + 2);
 
         // 4. Filtering and compaction through App:
         app.set_graph_filter(Some("cy1".into()));
@@ -4780,8 +4894,8 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         );
         assert!(g_collapsed.node("worker:cy1").unwrap().collapsed);
         assert!(
-            !g_collapsed.node("verifier:cy1").unwrap().visible,
-            "Collapsed verifier is hidden and compacted"
+            g_collapsed.node("verifier:cy1").unwrap().visible,
+            "Collapsed task remains addressable by either role"
         );
 
         // 6. Stability on selection and activity updates:
@@ -5018,10 +5132,10 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         },
     );
     let (worker_now, _) = card(&view, "worker:t1");
-    assert!(worker_now.contains("awaiting verdict r1"), "{worker_now}");
+    assert!(worker_now.contains("verifier r1"), "{worker_now}");
     assert!(
-        !worker_now.contains("cargo test"),
-        "worker keeps its own line"
+        worker_now.contains("cargo test"),
+        "task shows its active verifier"
     );
     let (verifier_now, _) = card(&view, "verifier:t1");
     assert!(verifier_now.contains("checking r1"), "{verifier_now}");
@@ -5569,4 +5683,201 @@ fn history_storage_errors_keep_the_input_and_report_the_raw_reason() {
     let mut reopened = App::test_app();
     reopened.load_history(state.path());
     assert_eq!(reopened.history, ["next message"]);
+}
+
+#[test]
+fn configuration_modal_preserves_chat_and_failed_draft_and_handles_tiny_terminals() {
+    use antislop::lean::tui::config::ConfigEditor;
+    let mut app = App::test_app();
+    app.input = InputBuffer::with_text("unsent chat 👩‍💻");
+    app.config_editor = Some(
+        ConfigEditor::new(
+            include_str!("../examples/antislop.toml"),
+            "/project/antislop.toml".into(),
+        )
+        .unwrap(),
+    );
+    let selected = app.config_editor.as_ref().unwrap().selected;
+    app.paste("e\u{301}👩‍💻");
+    let draft = app.config_editor.as_ref().unwrap().fields[selected]
+        .input
+        .text
+        .clone();
+    app.apply_update(Update::Config {
+        project: app.client.state_dir().to_string_lossy().into_owned(),
+        save: true,
+        reply: Err("daemon disconnected".into()),
+    });
+    assert_eq!(
+        app.config_editor.as_ref().unwrap().fields[selected]
+            .input
+            .text,
+        draft
+    );
+    assert_eq!(
+        app.config_editor.as_ref().unwrap().status,
+        "daemon disconnected"
+    );
+    app.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert!(
+        !app.config_editor.as_ref().unwrap().fields[selected]
+            .input
+            .text
+            .ends_with('💻')
+    );
+    assert_eq!(app.input.text, "unsent chat 👩‍💻");
+    for (width, height) in [(1, 1), (11, 4), (12, 5), (80, 24)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+    }
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!app.config_editor.as_ref().unwrap().visible);
+    app.command("/config");
+    assert!(app.config_editor.as_ref().unwrap().visible);
+}
+
+#[test]
+fn configuration_palette_and_profile_actions_are_available() {
+    use antislop::lean::tui::config::ConfigEditor;
+    let picker = Picker::new(Kind::Commands);
+    assert!(
+        picker
+            .items(&Default::default())
+            .iter()
+            .any(|(label, _)| label.contains("/config"))
+    );
+    let mut editor = ConfigEditor::new(
+        include_str!("../examples/antislop.toml"),
+        "antislop.toml".into(),
+    )
+    .unwrap();
+    let count = editor.fields.len();
+    editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(editor.fields.len() > count);
+    assert!(editor.source().is_some());
+    editor.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_eq!(editor.fields.len(), count);
+}
+
+#[test]
+fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
+    use antislop::lean::tui::details::CHECKS;
+    let mut app = App::test_app();
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(), generation: 1,
+        events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
+        idle: false, autonomous: false,
+    });
+    app.open_details("worker:t1".into());
+    app.details.as_mut().unwrap().tab = CHECKS;
+    let request = app.task_request_id;
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![
+            json!({"seq":3,"kind":"check","payload":{"task":"u1","round":1,"approved":true}}),
+        ],
+        idle: false,
+        autonomous: false,
+    });
+    assert_eq!(app.task_request_id, request + 1);
+    assert_eq!(
+        app.details.as_ref().unwrap().fetched_checks,
+        app.view.check_events
+    );
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![],
+        idle: false,
+        autonomous: false,
+    });
+    assert_eq!(app.task_request_id, request + 1);
+}
+
+#[test]
+fn configuration_save_shortcut_keeps_draft_after_transport_failure() {
+    use antislop::lean::tui::config::ConfigEditor;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    app.config_editor = Some(
+        ConfigEditor::new(
+            include_str!("../examples/antislop.toml"),
+            "antislop.toml".into(),
+        )
+        .unwrap(),
+    );
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(app.config_editor.as_ref().unwrap().pending);
+    let update = updates.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(matches!(
+        &update,
+        Update::Config {
+            save: true,
+            reply: Err(_),
+            ..
+        }
+    ));
+    app.apply_update(update);
+    let editor = app.config_editor.as_mut().unwrap();
+    assert!(!editor.pending);
+    assert!(!editor.status.is_empty());
+    assert!(editor.source().is_some());
+}
+
+#[test]
+fn configuration_load_and_save_use_live_daemon_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = UnixListener::bind(socket(dir.path())).unwrap();
+    let (captured, requests) = mpsc::channel();
+    let server = thread::spawn(move || {
+        for save in [false, true] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            captured.send(request.clone()).unwrap();
+            let source = if save {
+                request["toml"].as_str().unwrap()
+            } else {
+                include_str!("../examples/antislop.toml")
+            };
+            let response = json!({"data":{"toml":source,"path":"/project/antislop.toml","status":"applied","warnings":[]},"error":null});
+            writeln!(stream, "{response}").unwrap();
+        }
+    });
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    app.input = InputBuffer::with_text("chat draft");
+    app.command("/config");
+    assert_eq!(
+        requests.recv_timeout(Duration::from_secs(3)).unwrap()["op"],
+        "get_config"
+    );
+    app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+    let editor = app.config_editor.as_mut().unwrap();
+    let parallel = editor
+        .fields
+        .iter_mut()
+        .find(|f| f.path == ["policy", "max_parallel"])
+        .unwrap();
+    parallel.input = InputBuffer::with_text("2");
+    app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    let saved = requests.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(saved["op"], "set_config");
+    assert_eq!(
+        antislop::config::Config::from_toml(saved["toml"].as_str().unwrap())
+            .unwrap()
+            .policy
+            .max_parallel,
+        2
+    );
+    app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
+    assert_eq!(
+        app.config_editor.as_ref().unwrap().status,
+        "Saved and applied live."
+    );
+    assert_eq!(app.input.text, "chat draft");
+    server.join().unwrap();
 }
