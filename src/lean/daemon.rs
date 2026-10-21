@@ -60,6 +60,7 @@ pub enum Request {
     Identity,
     /// Stops an idle daemon so a frontend from another build can replace it.
     Shutdown,
+    ForceShutdown,
     Conversations,
     Start,
     StartIn {
@@ -232,6 +233,7 @@ fn default_true() -> bool {
 enum WireRequest {
     Identity,
     Shutdown,
+    ForceShutdown,
     Conversations,
     Start {
         #[serde(default)]
@@ -371,6 +373,7 @@ impl From<Request> for WireRequest {
         match req {
             Request::Identity => WireRequest::Identity,
             Request::Shutdown => WireRequest::Shutdown,
+            Request::ForceShutdown => WireRequest::ForceShutdown,
             Request::Conversations => WireRequest::Conversations,
             Request::Start => WireRequest::Start { project: None },
             Request::StartIn { project } => WireRequest::Start {
@@ -612,6 +615,7 @@ impl From<WireRequest> for Request {
         match wire {
             WireRequest::Identity => Request::Identity,
             WireRequest::Shutdown => Request::Shutdown,
+            WireRequest::ForceShutdown => Request::ForceShutdown,
             WireRequest::Conversations => Request::Conversations,
             WireRequest::Start { project } => match project {
                 Some(project) => Request::StartIn { project },
@@ -978,7 +982,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let request = crate::transport::read::<Request>(&mut BufReader::new(&stream))
                 .and_then(|request| request.ok_or_else(|| Error::Invalid("empty request".into())));
-            let shutdown = matches!(request, Ok(Request::Shutdown)) && !core.busy();
+            let shutdown = matches!(request, Ok(Request::Shutdown | Request::ForceShutdown));
             let response = match request
                 .and_then(|request| handle(&core, &project, &config_path, loaded, request))
             {
@@ -996,7 +1000,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
                 bytes.push(b'\n');
                 let _ = stream.write_all(&bytes);
             }
-            if shutdown {
+            if shutdown && response.error.is_none() {
                 let _ = std::fs::remove_file(&socket);
                 std::process::exit(0);
             }
@@ -1012,6 +1016,14 @@ fn handle(
     loaded: u64,
     request: Request,
 ) -> Result<Value> {
+    require(
+        !core.state.join("stopped").exists()
+            || matches!(
+                request,
+                Request::Identity | Request::Shutdown | Request::ForceShutdown
+            ),
+        "the daemon is stopping",
+    )?;
     Ok(match request {
         Request::Identity => json!({
             "build": build(),
@@ -1022,7 +1034,28 @@ fn handle(
             "config_modified": loaded,
         }),
         Request::Shutdown => {
-            require(!core.busy(), "the daemon is executing work")?;
+            require(
+                !core.busy(),
+                "the daemon is executing work; use antislop stop --force to cancel it",
+            )?;
+            std::fs::write(core.state.join("stopped"), [])?;
+            Value::Null
+        }
+        Request::ForceShutdown => {
+            std::fs::write(core.state.join("stopped"), [])?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while core.busy() && Instant::now() < deadline {
+                for conversation in core.conversations()? {
+                    core.cancel(&conversation.id);
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            // End any CLI still alive before recording interrupted work.
+            for (pid, started_ms, provider) in core.store.running_processes()? {
+                super::agent::reap(pid, started_ms, &provider);
+            }
+            core.store.interrupt_running_turns()?;
+            core.store.interrupt_unfinished_tasks()?;
             Value::Null
         }
         Request::Conversations => json!(core.conversations()?),
@@ -1451,6 +1484,44 @@ impl Client {
         }
     }
 
+    /// Stops the daemon and waits for it to release its state lock.
+    /// With force, running agents are cancelled before the daemon exits.
+    /// Returns false if none is running; never creates state or starts a daemon.
+    pub fn stop(state: &Path, force: bool) -> Result<bool> {
+        if !state.try_exists()? {
+            return Ok(false);
+        }
+        private_directory(state)?;
+        let state = state.canonicalize()?;
+        let client = Self::at(&state);
+        if let Some(parent) = client.socket.parent() {
+            if !parent.try_exists()? {
+                return Ok(false);
+            }
+            private_directory(parent)?;
+        }
+        let request = if force {
+            Request::ForceShutdown
+        } else {
+            Request::Shutdown
+        };
+        match client.call(&request) {
+            Ok(_) => {
+                wait_unlocked(&state)?;
+                Ok(true)
+            }
+            Err(Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Connects to the project's daemon, starting it (or replacing an idle one
     /// from another build or configuration) as needed. For the same project
     /// and configuration path, a busy daemon keeps the build and configuration
@@ -1496,6 +1567,11 @@ impl Client {
             )?;
             client.call(&Request::Shutdown)?;
             wait_unlocked(state)?;
+        }
+        match std::fs::remove_file(state.join("stopped")) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
         let log = std::fs::OpenOptions::new()
             .create(true)
@@ -1545,7 +1621,8 @@ impl Client {
                 // State the user deleted stays deleted.
                 if matches!(request, Request::Events { .. } | Request::EventsPaged { .. })
                     && lost(&error)
-                    && state.join("core.db").exists() =>
+                    && state.join("core.db").exists()
+                    && !state.join("stopped").exists() =>
             {
                 Self::connect(project, config, state).map_err(|_| error)?;
                 self.call_once(request)

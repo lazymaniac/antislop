@@ -152,6 +152,31 @@ pub fn ensure_trusted<R: BufRead, W: Write>(
     registry.trust(project)
 }
 
+/// Stops the existing daemon without starting one or loading configuration.
+pub fn stop(args: &[String]) -> Result<()> {
+    let mut state = None;
+    let mut force = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--state" => {
+                state = Some(PathBuf::from(args.next().ok_or_else(|| {
+                    crate::Error::Invalid("--state requires a value".into())
+                })?));
+            }
+            "--force" => force = true,
+            _ => return Err(crate::Error::Invalid(format!("unknown stop option {arg}"))),
+        }
+    }
+    let state = state.unwrap_or_else(|| PathBuf::from(".antislop"));
+    if Client::stop(&state, force)? {
+        println!("daemon stopped");
+    } else {
+        println!("daemon is not running");
+    }
+    Ok(())
+}
+
 pub fn chat(args: &[String]) -> Result<()> {
     let mut options = Options::parse(args)?;
     // Before anything is created or started in this directory.

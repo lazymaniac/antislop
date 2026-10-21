@@ -20,6 +20,8 @@ Put an `antislop.toml` in the project (start from
 ```sh
 antislop                         # TUI on the project's latest conversation
 antislop --new                   # TUI on a new conversation
+antislop stop                    # stop the idle daemon (--state DIR supported)
+antislop stop --force            # cancel running agents and stop the daemon
 antislop "Review architecture"   # line mode, exits when idle
 antislop --config FILE --state DIR   # the directory you start it in is the project
 ```
@@ -30,6 +32,10 @@ per directory in `~/.config/antislop/trusted.json` (`$XDG_CONFIG_HOME` or
 `ANTISLOP_CONFIG_DIR` move it), so it survives deleting `.antislop/`. Nothing is
 created or started in the directory before you answer. Without a terminal, pass
 `--trust` to answer yes.
+
+`antislop stop` does not require a configuration file and succeeds if the daemon
+is already stopped. It refuses to stop while agents are working unless `--force`
+is passed. Forced shutdown cancels running agents and preserves conversation history.
 
 Several projects can be open in one screen: `Ctrl+G` switches between them and
 opens another by path (`/project PATH`); each keeps its own configuration,

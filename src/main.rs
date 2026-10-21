@@ -5,6 +5,8 @@ antislop — a team of CLI agents working on your project
 
 usage:
   antislop [chat] [options] [message]
+  antislop stop [--state DIR] [--force]
+                              stop the daemon; --force cancels running work
   antislop eval SUITE --cli CLI [--model M] [--effort E] [--arm A] [--jobs N]
                               calibrate verifiers on seeded cases (evals/)
                               against a plain one-agent review
@@ -53,6 +55,7 @@ fn run() -> Result<()> {
              to send a message that starts with \"export\", add more words"
                 .into(),
         )),
+        Some("stop") => antislop::lean::cli::stop(&args[1..]),
         Some("chat") => antislop::lean::cli::chat(&args[1..]),
         Some("eval") => antislop::lean::eval::eval(&args[1..]),
         _ => antislop::lean::cli::chat(&args),

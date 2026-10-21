@@ -511,9 +511,107 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
         "{calls}"
     );
 
-    antislop::lean::daemon::Client::at(&dir.join("state"))
-        .call(&antislop::lean::daemon::Request::Shutdown)
+    let client = antislop::lean::daemon::Client::at(&dir.join("state"));
+    let conversation = client
+        .call(&antislop::lean::daemon::Request::Conversations)
+        .unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    client
+        .call(&antislop::lean::daemon::Request::Send {
+            conversation: conversation.clone(),
+            text: "sleepy".into(),
+        })
         .unwrap();
+    let stop = |force: bool| {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"));
+        command.current_dir(&dir).args(["stop", "--state", "state"]);
+        if force {
+            command.arg("--force");
+        }
+        command.output().unwrap()
+    };
+    let busy = stop(false);
+    assert!(!busy.status.success(), "{busy:?}");
+    assert!(
+        String::from_utf8_lossy(&busy.stderr).contains("the daemon is executing work"),
+        "{busy:?}"
+    );
+    assert_eq!(pid(&dir.join("state")), daemon);
+    let follower = antislop::lean::daemon::Client::connect(
+        &project,
+        &dir.join("antislop.toml"),
+        &dir.join("state"),
+    )
+    .unwrap();
+    let forced = stop(true);
+    assert!(forced.status.success(), "{forced:?}");
+    assert!(
+        client
+            .call(&antislop::lean::daemon::Request::Identity)
+            .is_err()
+    );
+    // An existing frontend must not automatically restart an explicitly stopped daemon.
+    assert!(
+        follower
+            .call(&antislop::lean::daemon::Request::Events {
+                conversation,
+                after: 0,
+                wait_ms: 0,
+            })
+            .is_err()
+    );
+    assert!(
+        client
+            .call(&antislop::lean::daemon::Request::Identity)
+            .is_err()
+    );
+    let store = antislop::lean::store::Store::open(&dir.join("state/core.db")).unwrap();
+    assert!(store.running_processes().unwrap().is_empty());
+    drop(store);
+    // The saved conversation remains usable after a forced shutdown.
+    assert!(chat(&dir, &project, "after force").contains("answer: after force"));
+    // Stopping works even after configuration has been removed.
+    std::fs::remove_file(dir.join("antislop.toml")).unwrap();
+    let stopped = stop(false);
+    assert!(stopped.status.success(), "{stopped:?}");
+    assert!(String::from_utf8_lossy(&stopped.stdout).contains("daemon stopped"));
+    assert!(
+        client
+            .call(&antislop::lean::daemon::Request::Identity)
+            .is_err()
+    );
+    let again = stop(false);
+    assert!(again.status.success(), "{again:?}");
+    assert!(String::from_utf8_lossy(&again.stdout).contains("daemon is not running"));
+}
+
+#[test]
+fn stopping_without_a_daemon_creates_no_state() {
+    let dir = tempfile::tempdir().unwrap();
+    for args in [vec!["stop"], vec!["stop", "--state", "custom"]] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+            .current_dir(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("daemon is not running"));
+    }
+    for args in [
+        vec!["stop", "--state"],
+        vec!["stop", "--new"],
+        vec!["stop", "oops"],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+            .current_dir(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+    }
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
 
 #[test]
