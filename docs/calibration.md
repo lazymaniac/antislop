@@ -134,10 +134,10 @@ No level changed a verdict, on small or large cases. Higher effort
 bought time and tokens: agy at `high` took 3.7× its `low` time and wrote
 5.6× the tokens. codex's times varied more between runs than between
 levels. Routing was tuned from this: the example configuration's
-`review` profile, which all verifiers use, went from `deep` (`high`) to
-`standard` (`medium`). That keeps a margin over the lowest level that was
+`review` profile, which all verifiers use, went from `high` to
+`medium`. That keeps a margin over the lowest level that was
 enough, because real code is harder than seeded cases. Workers and the
-orchestrator keep `deep`, since nothing here measures their effort.
+orchestrator keep `high`, since nothing here measures their effort.
 
 ### Large changes
 
@@ -359,7 +359,7 @@ verification is requeued with its task, so the worker first gets a turn
 - **Light effort was enough for verifiers here**, on small and large
   cases alike. `low`, default and `high` gave the same verdicts on
   claude, codex and agy, and agy took a third to a quarter of the time
-  at `low`. The example's verifiers now run at `standard`.
+  at `low`. The example's verifiers now run at `medium`.
 - **Reading outside the project is held only by instruction.** agy's
   `plan` mode and claude's `plan` mode confine writing, not reading.
 - **Read-only codex cannot run checks that write**, temporary files

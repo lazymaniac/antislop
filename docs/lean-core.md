@@ -30,6 +30,18 @@ projektu" end to end.
 
 ## Agents
 
+Profiles in `antislop.toml` select a provider, model and effort; routing assigns
+these profiles to work kinds and roles. There is no need to repeat providers
+in a separate `[role_providers]` section. That optional legacy section only
+restricts which providers a role may use; it does not choose a profile or act
+as a fallback. If present, its restrictions are still enforced.
+
+Effort values are `low`, `medium`, `high` and `xhigh`, passed directly to the
+CLI. Support depends on the selected model; an unsupported level produces the
+CLI's error rather than silently lowering the effort. Legacy names `light`,
+`standard` and `deep` are accepted as aliases for `low`, `medium` and `high`.
+Gemini has no native effort flag, so no effort argument is sent to it.
+
 `lean::agent::run(spec, prompt, cancel, on_event)` starts one CLI turn and
 streams normalized events: `Session(id)`, `Text(delta)`, `Tool{name, detail}`,
 `Usage`, and finally `Done{text}` or a failure with the CLI's own message.
@@ -52,7 +64,7 @@ inline configuration is preserved. Native `task` subagents and interactive
 questions are denied. Additional scope paths are allowed through its
 `external_directory` permission; other external paths are denied. This is a
 CLI permission policy, not an OS sandbox. Effort maps to `--variant`
-(`low`/`medium`/`high`), whose effect depends on the selected model/provider.
+(`low`/`medium`/`high`/`xhigh`), whose effect depends on the selected model/provider.
 The JSON parser records session IDs, completed tool calls and per-step token
 usage, and returns only the final model step's text after a `stop` finish.
 Tool-call steps alone, truncated responses and error events do not count as

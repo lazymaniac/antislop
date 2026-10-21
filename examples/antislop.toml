@@ -37,42 +37,39 @@ binary = "agy"
 isolation = "tool_free"
 
 # To use OpenCode via oMLX, configure this provider and set worker/verifier
-# profile providers and role_providers to "opencode". Pin --model to avoid
+# profile providers to "opencode". Pin --model to avoid
 # the launcher's interactive model picker; -- forwards the remaining CLI flags.
 # [providers.opencode]
 # command = ["omlx", "launch", "opencode", "--model", "YOUR_MODEL", "--"]
 # isolation = "read_only"
 # Set profile model = "omlx/YOUR_MODEL" to pin the OpenCode model per turn.
 
-[role_providers]
-orchestrator = ["codex"]
-executor = ["agy"]
-verifier = ["agy"]
-
+# Profiles select the provider directly; no separate role provider list is needed.
+# Effort: low, medium, high, xhigh (availability depends on the selected model).
 [profiles.orchestrator]
 provider = "codex"
-effort = "deep"
+effort = "high"
 work_kinds = ["orchestration"]
 roles = ["orchestrator"]
 
 [profiles.reasoning]
 provider = "agy"
-effort = "deep"
+effort = "high"
 work_kinds = ["context", "requirements", "options", "planning", "architecture", "dependencies", "security", "performance", "analysis"]
 roles = ["executor"]
 
 [profiles.execution]
 provider = "agy"
-effort = "deep"
+effort = "high"
 work_kinds = ["implementation", "refactoring", "static_analysis", "test_design", "testing", "integration", "research", "writing", "delivery"]
 roles = ["executor"]
 
-# Measured (docs/calibration.md): verifiers at light and at deep gave the same
-# verdicts on every case, deep at about three times light's time on agy.
-# standard keeps a margin for code harder than the measured cases.
+# Measured (docs/calibration.md): verifiers at low and at high gave the same
+# verdicts on every case, high at about three times low's time on agy.
+# medium keeps a margin for code harder than the measured cases.
 [profiles.review]
 provider = "agy"
-effort = "standard"
+effort = "medium"
 work_kinds = ["orchestration", "context", "requirements", "options", "planning", "architecture", "dependencies", "implementation", "refactoring", "static_analysis", "test_design", "testing", "security", "performance", "integration", "research", "writing", "analysis", "delivery"]
 roles = ["verifier"]
 

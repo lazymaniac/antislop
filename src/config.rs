@@ -21,9 +21,13 @@ pub enum ProviderKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Effort {
-    Light,
-    Standard,
-    Deep,
+    #[serde(alias = "light")]
+    Low,
+    #[serde(alias = "standard")]
+    Medium,
+    #[serde(alias = "deep")]
+    High,
+    Xhigh,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -102,13 +106,15 @@ impl Default for WorkspaceConfig {
 }
 
 impl ProviderKind {
-    /// Built-in reasoning effort scale for each supported CLI.
+    /// Pass the requested effort to the CLI; model-specific support is checked
+    /// by the provider. Gemini has no native effort flag.
     pub fn native_effort(self, effort: Effort) -> Option<&'static str> {
         match self {
             Self::Codex | Self::Agy | Self::Claude | Self::Opencode => Some(match effort {
-                Effort::Light => "low",
-                Effort::Standard => "medium",
-                Effort::Deep => "high",
+                Effort::Low => "low",
+                Effort::Medium => "medium",
+                Effort::High => "high",
+                Effort::Xhigh => "xhigh",
             }),
             Self::Gemini => None,
         }
@@ -311,7 +317,7 @@ impl Config {
             if source.contains("effort_map") || source.contains("native_effort") {
                 return Error::Invalid(
                     "effort_map and native_effort were removed from the configuration: \
-                     each CLI's reasoning ladder (light, standard, deep) is built in"
+                     each CLI's reasoning ladder (low, medium, high, xhigh) is built in"
                         .into(),
                 );
             }
@@ -544,6 +550,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn effort_levels_reach_the_cli_and_legacy_names_remain_readable() {
+        let example = include_str!("../examples/antislop.toml");
+        for (name, expected) in [
+            ("low", "low"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("xhigh", "xhigh"),
+            ("light", "low"),
+            ("standard", "medium"),
+            ("deep", "high"),
+        ] {
+            let config = Config::from_toml(
+                &example.replace("effort = \"high\"", &format!("effort = \"{name}\"")),
+            )
+            .unwrap();
+            for provider in [
+                ProviderKind::Codex,
+                ProviderKind::Agy,
+                ProviderKind::Claude,
+                ProviderKind::Opencode,
+                ProviderKind::Gemini,
+            ] {
+                let mut config = config.clone();
+                let provider_config = config.providers[&ProviderKind::Codex].clone();
+                config.providers.insert(provider, provider_config);
+                config.profiles.get_mut("orchestrator").unwrap().provider = provider;
+                let resolved = config
+                    .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
+                    .unwrap();
+                assert_eq!(
+                    resolved.native_effort.as_deref(),
+                    (provider != ProviderKind::Gemini).then_some(expected)
+                );
+                assert_eq!(serde_json::to_value(resolved.effort).unwrap(), expected);
+            }
+        }
+        assert!(
+            Config::from_toml(&example.replace("effort = \"high\"", "effort = \"typo\"")).is_err()
+        );
+    }
+
+    #[test]
+    fn role_provider_limits_are_optional_but_still_enforced_when_present() {
+        let example = include_str!("../examples/antislop.toml");
+        let config = Config::from_toml(example).unwrap();
+        assert!(config.role_providers.is_empty());
+        let allowed = format!("{example}\n[role_providers]\nexecutor = [\"agy\"]\n");
+        assert!(Config::from_toml(&allowed).is_ok());
+        let forbidden = format!("{example}\n[role_providers]\nexecutor = [\"codex\"]\n");
+        let error = Config::from_toml(&forbidden).unwrap_err().to_string();
+        assert!(error.contains("role provider limit"), "{error}");
+    }
+
+    #[test]
     fn the_example_routes_every_kind_to_a_worker_and_a_verifier() {
         let text = include_str!("../examples/antislop.toml");
         let config = Config::from_toml(text).unwrap();
@@ -569,14 +629,6 @@ mod tests {
     #[test]
     fn profile_command_supports_platform_launchers_for_workers_and_verifiers() {
         let text = include_str!("../examples/antislop.toml")
-            .replace(
-                "executor = [\"agy\"]",
-                "executor = [\"codex\", \"agy\"]",
-            )
-            .replace(
-                "verifier = [\"agy\"]",
-                "verifier = [\"codex\", \"agy\"]",
-            )
             .replace(
                 "[profiles.execution]\nprovider = \"agy\"",
                 "[profiles.execution]\nprovider = \"codex\"\ncommand = \"omlx launch codex\"",
@@ -620,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn local_workers_and_verifiers_use_opencode_through_omlx() {
+    fn local_workers_use_opencode_and_verifiers_use_claude() {
         let config = Config::from_toml(include_str!("../antislop.toml")).unwrap();
         let orchestrator = config
             .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
@@ -632,6 +684,12 @@ mod tests {
                     continue;
                 }
                 let profile = config.resolve(*kind, role).unwrap();
+                if role == RoleKind::Verifier {
+                    assert_eq!(profile.provider, ProviderKind::Claude);
+                    assert_eq!(profile.binary, PathBuf::from("claude"));
+                    assert_eq!(profile.native_effort.as_deref(), Some("high"));
+                    continue;
+                }
                 assert_eq!(profile.provider, ProviderKind::Opencode);
                 assert_eq!(profile.binary, PathBuf::from("omlx"));
                 assert_eq!(

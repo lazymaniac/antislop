@@ -27,34 +27,31 @@ isolation = "read_only"
 command = ["omlx", "launch", "opencode", "--model", "Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp", "--"]
 isolation = "read_only"
 
-[role_providers]
-orchestrator = ["codex"]
-executor = ["opencode"]
-verifier = ["claude"]
-
+# Profiles select the provider directly; no separate role provider list is needed.
+# Effort: low, medium, high, xhigh (availability depends on the selected model).
 [profiles.orchestrator]
 provider = "codex"
-effort = "deep"
+effort = "high"
 work_kinds = ["orchestration"]
 roles = ["orchestrator"]
 
 [profiles.reasoning]
 provider = "opencode"
 model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
-effort = "deep"
+effort = "high"
 work_kinds = ["context", "requirements", "options", "planning", "architecture", "dependencies", "security", "performance", "analysis"]
 roles = ["executor"]
 
 [profiles.execution]
 provider = "opencode"
 model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
-effort = "deep"
+effort = "high"
 work_kinds = ["implementation", "refactoring", "static_analysis", "test_design", "testing", "integration", "research", "writing", "delivery"]
 roles = ["executor"]
 
 [profiles.review]
 provider = "claude"
-effort = "deep"
+effort = "high"
 work_kinds = ["orchestration", "context", "requirements", "options", "planning", "architecture", "dependencies", "implementation", "refactoring", "static_analysis", "test_design", "testing", "security", "performance", "integration", "research", "writing", "analysis", "delivery"]
 roles = ["verifier"]
 
