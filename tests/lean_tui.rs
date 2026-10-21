@@ -5967,6 +5967,93 @@ mod config_editor_acceptance {
         assert_eq!(editor.fields[index].input.text, text);
     }
 
+    /// Explicit struct literals make additions fail compilation, including fields
+    /// serde would otherwise omit. Populate optional values before enumerating
+    /// serialized leaves independently of the editor's field construction.
+    fn serialized_config_field_paths() -> BTreeSet<Vec<String>> {
+        use antislop::config::{
+            CommandLine, OrchestratorConfig, Policy, Profile, ProviderConfig, RoleRouting,
+            WorkspaceConfig,
+        };
+        let config = Config::from_toml(SOURCE).unwrap();
+        let fixture = Config {
+            schema_version: config.schema_version,
+            workspace: WorkspaceConfig {
+                mode: config.workspace.mode,
+            },
+            policy: Policy {
+                mode: config.policy.mode,
+                local_write: config.policy.local_write,
+                local_commits: config.policy.local_commits,
+                required_gates: config.policy.required_gates,
+                max_parallel: config.policy.max_parallel,
+            },
+            providers: config
+                .providers
+                .into_iter()
+                .map(|(name, provider)| {
+                    (
+                        name,
+                        ProviderConfig {
+                            binary: provider.binary,
+                            args: vec!["--schema-probe".into()],
+                            command: Some(CommandLine(vec!["schema-probe".into()])),
+                        },
+                    )
+                })
+                .collect(),
+            profiles: config
+                .profiles
+                .into_iter()
+                .map(|(name, profile)| {
+                    (
+                        name,
+                        Profile {
+                            provider: profile.provider,
+                            model: Some("schema-probe".into()),
+                            effort: profile.effort,
+                            binary: Some("schema-probe".into()),
+                            args: vec!["--schema-probe".into()],
+                            command: Some(CommandLine(vec!["schema-probe".into()])),
+                        },
+                    )
+                })
+                .collect(),
+            orchestrator: OrchestratorConfig {
+                profile: config.orchestrator.profile,
+            },
+            routing: config
+                .routing
+                .into_iter()
+                .map(|(kind, route)| {
+                    (
+                        kind,
+                        RoleRouting {
+                            executor: route.executor,
+                            verifier: route.verifier,
+                        },
+                    )
+                })
+                .collect(),
+        };
+        fn leaves(value: &Value, path: Vec<String>, output: &mut BTreeSet<Vec<String>>) {
+            if let Some(table) = value.as_object() {
+                for (key, value) in table {
+                    let mut child = path.clone();
+                    child.push(key.clone());
+                    leaves(value, child, output);
+                }
+            } else {
+                output.insert(path);
+            }
+        }
+        let mut paths = BTreeSet::new();
+        leaves(&serde_json::to_value(fixture).unwrap(), vec![], &mut paths);
+        // Schema version is a protocol constant, not a user-editable option.
+        assert!(paths.remove(&vec!["schema_version".into()]));
+        paths
+    }
+
     #[test]
     fn every_config_field_is_edited_and_written_to_the_selected_file() {
         for global_active in [false, true] {
@@ -5989,53 +6076,7 @@ mod config_editor_acceptance {
             app.command("/config");
             pump(&mut app, &updates);
             let editor = app.config_editor.as_mut().unwrap();
-            let mut expected_paths = BTreeSet::new();
-            expected_paths.insert(vec!["workspace".to_string(), "mode".into()]);
-            for key in [
-                "mode",
-                "local_write",
-                "local_commits",
-                "required_gates",
-                "max_parallel",
-            ] {
-                expected_paths.insert(vec!["policy".into(), key.into()]);
-            }
-            for provider in ["codex", "agy"] {
-                for key in ["binary", "args", "command"] {
-                    expected_paths.insert(vec!["providers".into(), provider.into(), key.into()]);
-                }
-            }
-            for profile in ["orchestrator", "reasoning", "execution", "review"] {
-                for key in ["provider", "model", "effort", "binary", "args", "command"] {
-                    expected_paths.insert(vec!["profiles".into(), profile.into(), key.into()]);
-                }
-            }
-            for kind in [
-                "orchestration",
-                "context",
-                "requirements",
-                "options",
-                "planning",
-                "architecture",
-                "dependencies",
-                "implementation",
-                "refactoring",
-                "static_analysis",
-                "test_design",
-                "testing",
-                "security",
-                "performance",
-                "integration",
-                "research",
-                "writing",
-                "analysis",
-                "delivery",
-            ] {
-                for role in ["executor", "verifier"] {
-                    expected_paths.insert(vec!["routing".into(), kind.into(), role.into()]);
-                }
-            }
-            expected_paths.insert(vec!["orchestrator".into(), "profile".into()]);
+            let expected_paths = serialized_config_field_paths();
             assert_eq!(
                 editor
                     .fields
