@@ -768,8 +768,9 @@ pub const COMMON_CHECKS: &str = "every requirement of the goal accounted for, \
      the touched code is left in a better, cleaner state than it was found";
 
 /// What a task's verifier must account for in its verdict, with ids: the
-/// risks its task names (`R1`…), the common checks (`V1`…) and its kind's
-/// checklist (`C1`…).
+/// risks its task names (`R1`…), the common checks (`V1`…), its kind's
+/// checklist (`C1`…) and the share of the design's risk catalog (`R001`…)
+/// that belongs to its kind.
 pub fn obligations(task: &TaskSpec) -> Vec<(String, String)> {
     let risks = task
         .verifier
@@ -785,6 +786,7 @@ pub fn obligations(task: &TaskSpec) -> Vec<(String, String)> {
     risks
         .chain(numbered("V", COMMON_CHECKS))
         .chain(numbered("C", checklist(task.kind)))
+        .chain(super::risks::for_kind(task.kind))
         .collect()
 }
 
@@ -1621,7 +1623,7 @@ pub fn verifier_prompt(
          files yourself with your tools. Work read-only. {PROJECT_RULES}\n\n\
          Task: {}\nGoal: {}\nScope: {}\nYour focus: {}\n\n\
          Your obligations (the task's risks, the checks of every verification, \
-         then those for this kind of work):\n{}{risks}\n\n\
+         then those for this kind of work, then the catalog risks of this kind of work):\n{}{risks}\n\n\
          The worker's report:\n<<<\n{report}\n>>>\n\n{}{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
         task.title,
         task.goal,
@@ -2193,7 +2195,9 @@ mod tests {
         assert_eq!(obligations[1].0, "V1");
         assert_eq!(
             obligations.len(),
-            1 + COMMON_CHECKS.split("; ").count() + checklist(task.kind).split("; ").count()
+            1 + COMMON_CHECKS.split("; ").count()
+                + checklist(task.kind).split("; ").count()
+                + crate::lean::risks::for_kind(task.kind).count()
         );
 
         let mut skipped = parse_verdict("```verdict\n{\"approved\": true}\n```");

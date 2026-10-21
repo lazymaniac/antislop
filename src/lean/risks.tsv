@@ -1,0 +1,240 @@
+R001	requirements	Wykonanie innego zadania niż zlecone.	Mapa wymagań i rezultatów.
+R002	context	Pominięcie istotnego kontekstu.	Lista przejrzanych modułów i nieznanych obszarów.
+R003	orchestration	Utrata ustaleń po kompakcji.	Porównanie pakietu przekazania z trwałymi decyzjami.
+R004	context	Niewykorzystanie informacji w długim kontekście.	Pytania kontrolne o ważne ograniczenia.
+R005	requirements	Nieuzyskanie potrzebnego doprecyzowania.	Niewiadome zmieniające kryteria akceptacji.
+R006	planning	Założenia przedstawione jako wymagania.	Odrębna ewidencja decyzji i hipotez.
+R007	planning	Plan bez testów, integracji lub migracji.	Rubric planu i mapa ryzyk.
+R008	planning	Zbyt duże lub zbyt rozdrobnione zadania.	Wielkość wspólnego kontekstu i liczba przekazań.
+R009	context	Nierozpoznany konflikt instrukcji projektu.	Indeks instrukcji z zakresem i pochodzeniem.
+R010	architecture	Ślepe kopiowanie wzorców z innego projektu.	Porównanie propozycji z istniejącą architekturą.
+R101	context	Zbadanie innego repozytorium, brancha lub snapshotu.	Porównaj katalog, HEAD, status i hash wejść.
+R102	context	Wnioskowanie o zachowaniu wyłącznie z nazw, sygnatur lub stubów.	Prześledź implementację i uruchom reprezentatywną ścieżkę.
+R103	context	Uznanie nieaktualnej dokumentacji za stan rzeczywisty.	Porównaj dokument z kodem, konfiguracją i uruchomieniem.
+R104	context	Pominięcie konsumenta zmienianego kontraktu.	Znajdź wywołania, eksporty i użycia poza modułem.
+R105	context	Pominięcie zależności przechodniej lub pośredniego efektu.	Prześledź graf wywołań, danych i zależności.
+R106	context	Pominięcie konfiguracji zmieniającej zachowanie.	Sprawdź precedence plików, env, CLI i defaults.
+R107	context	Błędne określenie źródła prawdy danych.	Porównaj zapis, cache, projekcje i odtwarzanie.
+R108	context	Brak rozpoznania niezmiennika istniejących danych.	Sprawdź schemat, walidację i rzeczywiste przypadki.
+R109	context	Pominięcie kontraktu błędów istniejącego API.	Odczytaj typy błędów i reakcje wywołujących.
+R110	context	Pominięcie cyklu życia, zamykania lub anulowania.	Prześledź start, stop, cleanup i restart.
+R111	context	Założenie sekwencyjności faktycznie współbieżnej ścieżki.	Sprawdź taski, wątki, blokady i współdzielone dane.
+R112	context	Pominięcie semantyki czasu, kolejności lub powtórzeń.	Sprawdź zegary, kolejki, retry i opóźnione odpowiedzi.
+R113	context	Odczyt tylko jednej platformy lub kombinacji features.	Porównaj cfg, platformy i wspierane warianty.
+R114	context	Posługiwanie się API innej wersji niż zainstalowana.	Porównaj lockfile, toolchain i dokumentację wersji.
+R115	context	Pominięcie formatu serializacji i kompatybilności danych.	Sprawdź producentów, parsery i stare zapisane rekordy.
+R116	context	Pominięcie stanu istniejących danych i migracji.	Sprawdź historię schematu oraz odtwarzanie starego stanu.
+R117	security	Brak rozpoznania granic zaufania i uprawnień.	Prześledź pochodzenie danych i decyzje autoryzacji.
+R118	context	Brak wiarygodnego baseline zachowania i analiz.	Uruchom właściwe sprawdzenia przed zmianą.
+R119	requirements	Pominięcie zakazów i wymagań negatywnych w kontekście.	Porównaj pełne źródło z pakietami dla ról.
+R120	context	Uznanie złego istniejącego kodu za obowiązujący standard.	Porównaj konwencję z regułami języka i kontraktem jakości.
+R121	context	Niezauważenie dostępnego mechanizmu we własnym projekcie.	Wyszukaj implementacje według zachowania, nie tylko nazwy.
+R122	context	Utrata kwalifikatorów i pochodzenia przy streszczeniu.	Porównaj streszczenie z fragmentami źródłowymi.
+R123	context	Fakt staje się nieaktualny po równoległej zmianie.	Porównaj hashe zależności faktu z bieżącym stanem.
+R124	context	Wyszukiwanie wyłącznie danych potwierdzających pierwszy pomysł.	Sprawdź zapytania, odrzucone źródła i kontrdowody.
+R125	context	Zamknięcie niewiadomej przez dopisanie wygodnego założenia.	Sprawdź metodę rozstrzygnięcia każdej unknown.
+R126	planning	Brak preconditions lub postconditions operacji.	Sprawdź każdą operację modelu.
+R127	planning	Kontrakty modułów poprawne osobno, lecz nieskładalne.	Zasymuluj przekazanie danych i błędów między modułami.
+R128	planning	Nieokreślone przejście dla zdarzenia w danym stanie.	Przejdź tabelę stan × zdarzenie.
+R129	planning	Reprezentacja dopuszcza niemożliwy lub sprzeczny stan.	Spróbuj skonstruować wszystkie kombinacje pól.
+R130	planning	Model opisuje wynik, lecz pomija efekty uboczne.	Spisz zapisy, komunikaty i działania zewnętrzne.
+R131	planning	Brak analizy awarii pomiędzy dwoma zapisami.	Wprowadź awarię po każdym istotnym efekcie.
+R132	planning	Retry może podwoić efekt.	Zasymuluj brak potwierdzenia po wykonaniu.
+R133	planning	Poprawność zależy od niegwarantowanej kolejności.	Odwróć i opóźnij zdarzenia.
+R134	planning	Sprawdzenie safety bez sprawdzenia postępu.	Poszukaj blokady, starvation i nieskończonej pętli.
+R135	planning	Nieokreślona własność zasobu i moment zwolnienia.	Prześledź właściciela w każdej gałęzi.
+R136	planning	Anulowanie pozostawia niespójny stan pośredni.	Przerwij każdą istotną fazę modelu.
+R137	performance	Plan działa tylko dla małej skali danych.	Oceń wzrost kosztu, kolejek i danych trwałych.
+R138	dependencies	Założenie niegwarantowanego zachowania biblioteki.	Porównaj kontrakt wersji i eksperyment.
+R139	planning	Kołowe uzasadnienie poprawności między komponentami.	Sprawdź zależności przesłanek.
+R140	planning	Pseudokod ukrywa trudność pod 'obsłuż poprawnie'.	Rozwiń kroki decydujące o kontrakcie.
+R141	test_design	Błędny podział wejść na klasy równoważności.	Szukaj przypadków o różnym zachowaniu w jednej klasie.
+R142	planning	Symulacja powtarza rozumowanie autora bez kontrprzykładu.	Porównaj scenariusze autora i verifiera.
+R143	planning	Brak modelu stanów częściowych i checkpointów.	Zasymuluj wznowienie z każdego trwałego etapu.
+R144	test_design	Strategia testów wynika wyłącznie z planowanego kodu.	Porównaj oracle z wymaganiami i modelem.
+R145	refactoring	Kolejność refaktoru utrudnia kontrolę zmiany zachowania.	Porównaj kroki transformacji i testy ochronne.
+R146	integration	Pominięcie integracji, rollout lub kompatybilności.	Prześledź całość dostarczanego rezultatu.
+R147	planning	Brak mapowania wstecz z elementu modelu do celu.	Sprawdź uzasadnienie każdej operacji i bytu.
+R148	planning	Dopisana funkcja zwiększa zakres pod pozorem kompletności.	Porównaj model z wymaganiami i Boy Scout Rule.
+R149	planning	Nieudowodnione założenie krytyczne dla wyniku symulacji.	Podważ przesłanki każdego scenariusza.
+R150	planning	Implementacja odchodzi od modelu bez jego rewizji.	Porównaj patch z kontraktami i symulacjami.
+R011	orchestration	Naruszanie przydzielonej roli.	Porównanie działań z kontraktem roli.
+R012	orchestration	Powtarzanie tych samych kroków.	Historia działań i brak nowego wyniku.
+R013	orchestration	Brak rozpoznania końca pracy.	Kryteria zakończenia zamiast liczby tur.
+R014	orchestration	Rozmowa odchodzi od celu.	Powiązanie wątku z zadaniem.
+R015	orchestration	Nieprzekazanie ważnej informacji.	Niezamknięte zależności w handoff.
+R016	orchestration	Zignorowanie uwagi innego agenta.	Findings i odpowiedzi mają trwały status.
+R017	orchestration	Deklaracje nie odpowiadają działaniom.	Porównanie raportu ze zdarzeniami narzędzi.
+R018	orchestration	Duplikacja pracy i niepotrzebne role.	Pokrywające się kontrakty i rezultaty.
+R019	orchestration	Deadlock lub cykl zależności.	Walidacja DAG i graf oczekiwania.
+R020	orchestration	Burza wiadomości i utrata czytelności.	Powtarzane statusy i kolejka dostarczenia.
+R021	implementation	Wymyślone symbole, API lub możliwości biblioteki.	Build, typy, odczyt rzeczywistej dokumentacji.
+R022	implementation	Powtarzalny, redundantny kod.	Analiza podobieństwa i przegląd diffu.
+R023	architecture	Rozbuchane abstrakcje i konfiguracja.	Liczba nowych warstw względem potrzeby.
+R024	refactoring	Zaniechany potrzebny refaktor.	Obejścia i duplikacja wymuszone starą strukturą.
+R025	refactoring	Nieuzasadniona przebudowa pod pretekstem refaktoru.	Porównaj diff z problemem i RefactorReport.
+R026	implementation	Atrapy, TODO i hardcode zamiast funkcji.	Scenariusz użytkownika i analiza ścieżek.
+R027	implementation	Ukrywanie błędów, puste catch i cichy fallback.	Testy awarii i review obsługi błędów.
+R028	integration	Niezgodność wsteczna, schema/API drift.	Contract tests i porównanie publicznych interfejsów.
+R029	implementation	Martwy kod, zbędne zależności i komentarze bez wartości.	Użycia symboli, manifest i rubric czytelności.
+R030	integration	Lokalnie poprawna zmiana psuje spójność systemu.	Testy przepływu przez moduły.
+R151	implementation	Niespójne znaczenie tej samej reguły w wielu miejscach.	Porównaj obliczenia i polityki w modułach.
+R152	implementation	Funkcja miesza odczyt, politykę, transformację i efekty.	Prześledź odpowiedzialności i zależności.
+R153	implementation	Nazwa ukrywa jednostkę, zakres albo efekt uboczny.	Porównaj nazwy z kontraktami i wywołaniami.
+R154	implementation	Prymitywne typy pozwalają pomylić różne pojęcia.	Zamień argumenty lub jednostki w kontrprzykładzie.
+R155	architecture	Publiczny interfejs ujawnia zbędne szczegóły implementacji.	Sprawdź eksporty i rzeczywistych odbiorców.
+R156	implementation	Niespójne konwencje błędów i obsługi rezultatów.	Prześledź błędy od źródła do odbiorcy.
+R157	architecture	Ukryty wspólny stan komplikuje reasoning i testy.	Znajdź mutable globals, singletony i niejawne zależności.
+R158	architecture	Warstwa pośrednia nie dodaje kontraktu ani wartości.	Prześledź forwarding i potrzeby konsumentów.
+R159	architecture	Zbyt duży moduł łączy niezależne przyczyny zmiany.	Porównaj obowiązki i historię zmian.
+R160	implementation	Komentarze zastępują poprawny model i czytelny kod.	Porównaj komentarz z zachowaniem i typami.
+R161	implementation	Obsługa błędu zwraca pozorny sukces lub pusty wynik.	Wymuś błąd zależności i prześledź wynik.
+R162	implementation	Fallback osłabia wymagany kontrakt.	Wymuś niedostępność podstawowej ścieżki.
+R163	implementation	Panic/unwrap/exception występuje na osiągalnym błędnym wejściu.	Prześledź preconditions i kontrprzykład.
+R164	implementation	Mutacja wejścia zaskakuje wywołującego.	Sprawdź aliasy, użycia i stan po wywołaniu.
+R165	implementation	Zbędne kopie lub alokacje wynikają ze złego modelu własności.	Prześledź cykl danych i profil pamięci.
+R166	implementation	Niedopasowany poziom abstrakcji rozprasza prostą operację.	Odtwórz ścieżkę czytania i powód każdej warstwy.
+R167	implementation	Duplikacja semantyczna pozostaje mimo różnych nazw.	Porównaj podobne reguły i transformacje.
+R168	implementation	Zbyt agresywne DRY łączy podobne, lecz niezależne reguły.	Sprawdź różne powody zmiany.
+R169	implementation	Rozwiązanie nie jest idiomatyczne dla języka/frameworka.	Porównaj z właściwymi standardami i oficjalnym API.
+R170	implementation	Tymczasowy spike, debug lub TODO trafia do produktu.	Przejrzyj finalny patch i ścieżki wykonania.
+R171	refactoring	Refaktor jest zaplanowany, ale nigdy wykonany.	Porównaj RefactorPlan, patch i RefactorReport.
+R172	refactoring	Transformacja zmienia obserwowalne zachowanie niejawnie.	Porównaj kontrakty i characterization tests przed/po.
+R173	refactoring	Nowa abstrakcja ma wyłącznie hipotetyczne użycie.	Sprawdź obecnych konsumentów i wymagania.
+R174	refactoring	Refaktor obejmuje tylko nowy kod mimo blokady w istniejącym.	Prześledź cały zmieniony przepływ.
+R175	refactoring	Porządki rozlewają się na niezwiązany obszar.	Porównaj problem, wpływ i zakres zadania.
+R176	refactoring	Brak testów zachowania przed ryzykowną transformacją.	Sprawdź baseline i ochronę kontraktów.
+R177	refactoring	Duży jednorazowy rewrite uniemożliwia lokalizację regresji.	Porównaj kroki refaktoru i dowody pośrednie.
+R178	refactoring	Pozostawione martwe ścieżki i stare mechanizmy.	Sprawdź użycia, konfiguracje i kompatybilność.
+R179	refactoring	Mechaniczne leczenie smell pogarsza rozwiązanie.	Porównaj złożoność i kontrakty przed/po.
+R180	refactoring	Boy Scout Rule pominięta lub spełniona kosmetycznym commitem.	Sprawdź napotkane problemy i efekt transformacji.
+R181	static_analysis	Analizowano tylko domyślny target lub część workspace.	Porównaj zakres raportu z macierzą celów.
+R182	static_analysis	Wykluczone features ukrywają błąd.	Sprawdź konfiguracje kompilacji i pokrycie.
+R183	static_analysis	Exit code 0 ukrywa warnings lub findings.	Odczytaj pełne wyjście, nie tylko kod procesu.
+R184	static_analysis	Dodanie allow/suppression usuwa alarm zamiast przyczyny.	Porównaj reguły i adnotacje przed/po.
+R185	static_analysis	Zmiana baseline lub severity daje pozorną poprawę.	Porównaj konfiguracje analizatorów i findings.
+R186	static_analysis	Stare zastrzeżenie jest ignorowane jako preexisting.	Porównaj baseline z finalnym zakresem analizy.
+R187	static_analysis	Analizator nie uruchomił się albo przerwał pracę.	Sprawdź kompletność output i środowiska.
+R188	static_analysis	Analizowano wcześniejszy hash kodu.	Porównaj wejścia dowodów z kandydatem dostarczenia.
+R189	static_analysis	Bezmyślne włączenie każdej reguły tworzy sprzeczny standard.	Sprawdź dokumentację i uzgodniony kontrakt reguł.
+R190	static_analysis	Fałszywy alarm uznany bez reprodukcji i uzasadnienia.	Sprawdź dowód triage i oryginalne finding.
+R031	testing	Brak lub niepełna weryfikacja.	Kryteria bez dowodów.
+R032	orchestration	Błędny werdykt recenzenta.	Niezależna reprodukcja, kalibracja ocen.
+R033	delivery	Przedwczesne ogłoszenie ukończenia.	Końcowa mapa wymagań i artefaktów.
+R034	testing	Test odtwarza implementację zamiast wymagania.	Odczyt asercji i specyfikacji osobno.
+R035	testing	Test przechodzi mimo złego wyniku.	Kontrolowana zmiana/błąd, mutation gdy uzasadnione.
+R036	testing	Nadmiar mocków ukrywa błędną integrację.	Granice mocków i rzeczywiste contract/E2E tests.
+R037	test_design	Pominięte przypadki negatywne i graniczne.	Mapa ryzyk oraz klasy wejść.
+R038	testing	Osłabienie/usunięcie testów, żeby było zielono.	Diff testów i baseline.
+R039	testing	Flaky tests i mylenie regresji z błędem środowiska.	Powtórzenie konkretnej awarii i kontrola środowiska.
+R040	testing	Zielone coverage lub exit code uznane za jakość.	Ocena kryteriów niezależna od metryki.
+R041	orchestration	Wykonawca i verifier podzielają błędne założenie.	Nowa sesja, odrębne źródła i testy.
+R042	orchestration	Recenzent ulega uzasadnieniu wykonawcy.	Ocena artefaktu przed lekturą uzasadnienia.
+R043	orchestration	Recenzent sam poprawia i zatwierdza.	Pochodzenie artefaktu i autor zmian.
+R044	orchestration	Nieskończone spory o styl.	Finding bez kryterium lub dowodu.
+R045	integration	Zatwierdzenie nieaktualnego diffu.	Hash artefaktu i rewizji wejścia.
+R046	integration	Niezależne gałęzie psują się po połączeniu.	Walidacja zintegrowanego kandydata.
+R047	integration	Konflikt rozwiązany semantycznie błędnie.	Review resolution diff i testy kontraktu.
+R048	integration	Nadpisanie pracy użytkownika lub innego agenta.	Snapshot, lease i kontrola zmian przed zapisem.
+R049	testing	Agent ocenia inną wersję niż test runner.	Input hashes i przypięte środowisko.
+R050	testing	Wyniki tests/logs zostały zmodyfikowane przez wykonawcę.	Pochodzenie dowodu i zapis przez runner.
+R051	security	Błędna autoryzacja lub izolacja tenantów.	Negatywne testy dostępu i model uprawnień.
+R052	security	SQL/command/template injection i XSS.	Analiza przepływu danych i testy payloadów.
+R053	security	Path traversal, symlinki i niebezpieczne pliki tymczasowe.	Testy ścieżek, praw i wyścigów.
+R054	security	SSRF, niebezpieczna deserializacja lub parsowanie.	Model wejść i kontrolowane testy ataku.
+R055	security	Sekrety w kodzie, logach lub raportach.	Secret scanning i kontrola przepływu danych.
+R056	security	Niebezpieczna kryptografia, sesje i domyślne ustawienia.	Review użytych bibliotek i konfiguracji.
+R057	dependencies	Wymyślony pakiet i slopsquatting.	Istnienie, pochodzenie i historia pakietu.
+R058	security	Podatna zależność lub niekontrolowany install script.	Lockfile, advisory scan i zakres działania instalacji.
+R059	security	Testy/skrypty wykonują nieoczekiwane działania.	Review poleceń, izolacja i obserwacja skutków.
+R060	dependencies	Naruszenie licencji lub niejasne pochodzenie kodu.	Ewidencja źródeł i licencji nowych materiałów.
+R061	security	Prompt injection przejmuje cel agenta.	Pochodzenie treści i próby zmiany instrukcji.
+R062	security	Nadużycie dostępnego narzędzia.	Zgodność operacji z rolą i zgodą.
+R063	security	Eskalacja tożsamości i uprawnień.	Każda zmiana polityki ma uprawnionego autora.
+R064	security	Złośliwy plugin/MCP lub element supply chain.	Jawna lista integracji i ich wersji.
+R065	security	Nieoczekiwane wykonanie kodu z danych.	Analiza granicy dane–polecenie.
+R066	security	Zatrucie pamięci lub pakietu przekazania.	Pochodzenie decyzji i oryginalne źródła.
+R067	security	Podszywanie się w komunikacji agentów.	Tożsamość nadawcy nadawana przez daemon.
+R068	security	Kaskadowe rozprzestrzenienie błędnej decyzji.	Graf zależności od wersji artefaktu.
+R069	delivery	Nadmierne zaufanie użytkownika do pozornej pewności.	Dowody obok werdyktu i jawne niewiadome.
+R070	orchestration	Agent działa poza uzgodnionym zespołem/zakresem.	Ewidencja procesów, narzędzi i natywnych subagentów.
+R071	performance	Zła złożoność algorytmu.	Pomiar skalowania na rosnącym wejściu.
+R072	performance	N+1, zbędne I/O i powtarzane wywołania sieci.	Profilowanie i licznik operacji.
+R073	performance	Nieograniczone alokacje, wycieki i brak streaming.	Profil pamięci pod realistycznym obciążeniem.
+R074	performance	Race conditions, deadlock i zagłodzenie.	Testy współbieżności oraz graf blokad.
+R075	performance	Blokowanie event loop lub wątku TUI.	Opóźnienia wejścia i ślady długich operacji.
+R076	performance	Nieprawidłowe retry, brak idempotencji i cancel.	Fault injection i przerwanie w trakcie.
+R077	performance	Niepoprawny cache i stale data.	Zmiana wejścia z kontrolą unieważnienia.
+R078	integration	Nieprawidłowa transakcja lub utrata danych.	Awaria między zapisami i kontrola invariants.
+R079	performance	Benchmark niereprezentatywny albo bez baseline.	Review danych, środowiska i metodologii.
+R080	performance	Optymalizacja psuje semantykę lub złożoność kodu.	Testy zachowania oraz analiza trade-off.
+R081	research	Wymyślone źródło, cytat lub wynik pomiaru.	Niezależne otwarcie źródła/odczyt evidence.
+R082	research	Cytowanie nie wspiera przypisanego twierdzenia.	Mapowanie claim → fragment źródła.
+R083	research	Nieaktualne dane i przeniesienie starych wyników na dziś.	Daty zdarzeń, publikacji i odczytu.
+R084	research	Cherry-picking i pozorna niezależność źródeł.	Źródła pierwotne i graf ich zależności.
+R085	analysis	Korelacja przedstawiona jako przyczynowość.	Review metody i siły wniosków.
+R086	analysis	Błąd jednostek, mianownika, arytmetyki lub transformacji.	Niezależne przeliczenie i testy danych.
+R087	analysis	Brakujące dane i nieujawnione założenia.	Data provenance i rejestr braków.
+R088	writing	Ogólniki, powtórzenia i tekst bez informacji.	Rubric wartości treści i zgodności z briefem.
+R089	writing	Sprzeczne sekcje po scaleniu dokumentu.	Wspólny słownik, wymagania i odwołania.
+R090	writing	Zbyt silny wniosek lub brak niepewności.	Porównanie rekomendacji z zakresem dowodów.
+R091	integration	Niezgodna wersja CLI lub schema drift.	Probe i fixtures wspieranych protokołów.
+R092	integration	Brak logowania, sieci lub limit dostawcy.	Kategoryzacja błędów provider-specific.
+R093	integration	Resume niewłaściwej albo utraconej sesji.	Trwały provider_session_id i zgodność workspace.
+R094	integration	Podwójne działanie po awarii.	Idempotency key i uzgadnianie skutku.
+R095	delivery	Fałszywy status pracy lub dostarczenia wiadomości.	Status wywiedziony z receipt/zdarzeń.
+R096	delivery	Zgoda dotyczy starego zakresu.	Scope hash i rewizja polityki.
+R097	delivery	Nieznany koszt przedstawiony jako zero.	Pochodzenie i kompletność usage.
+R098	integration	Przeciążenie hosta bez limitów aplikacyjnych.	Błędy OS, pamięć, liczba procesów i dostępność.
+R099	orchestration	Nadmierny narzut procesu względem jakości.	Czas do akceptacji i porównanie baseline.
+R100	delivery	Niebezpieczny lub nieczytelny output w terminalu.	Kontrola escape sequences, rozmiaru i kodowania.
+R191	requirements	Wymaganie znika podczas ekstrakcji z długiego źródła.	Porównaj niezależną ekstrakcję z ledgerem.
+R192	requirements	Wymaganie częściowe jest oznaczone jako spełnione.	Sprawdź każde kryterium i kwalifikator osobno.
+R193	requirements	Krok planu jest po cichu usunięty albo zastąpiony.	Porównaj PlanItemLedger z oryginalnym planem.
+R194	delivery	Test ma link do wymagania, lecz go nie sprawdza.	Odczytaj oracle, asercje i ścieżkę.
+R195	delivery	Procent ukończenia ukrywa jedno krytyczne pominięcie.	Porównaj finalny status wszystkich obowiązków.
+R196	orchestration	Ryzyko pozostaje bez odpowiedzialnego weryfikatora.	Sprawdź pełny RiskCoverage wobec wersji katalogu.
+R197	requirements	Zbiorczy checkbox ukrywa nieprzeanalizowane podpunkty.	Sprawdź wyniki atomowych pozycji.
+R198	delivery	Not applicable jest wygodnym wyłączeniem trudnego ryzyka.	Sprawdź związek uzasadnienia z rzeczywistym zakresem.
+R199	delivery	Zmiana checklisty usuwa finding w trakcie pracy.	Porównaj przypięte wersje i historię.
+R200	delivery	Agent deklaruje wykonane sprawdzenie bez rzeczywistej czynności.	Porównaj raport z evidence i historią narzędzi.
+R201	architecture	Cykl zależności uniemożliwia niezależną zmianę modułów.	Zbuduj graf importów i zależności runtime.
+R202	architecture	Logika domeny przenika UI, transport i persystencję.	Prześledź miejsce realizacji reguł.
+R203	architecture	Pomijany wzorzec powoduje powieloną, zawodną mechanikę.	Porównaj problem z adekwatnymi wzorcami i idiomami.
+R204	architecture	Wzorzec jest zastosowany dogmatycznie bez potrzeby.	Porównaj prostszy wariant i koszt struktury.
+R205	architecture	Publiczne API utrwala szczegóły zewnętrznego dostawcy.	Prześledź typy i błędy przez granice.
+R206	architecture	Stan jest powielony bez reguły spójności.	Porównaj źródła prawdy i momenty aktualizacji.
+R207	architecture	Pozorna modularność ukrywa silne sprzężenie czasowe.	Zmień kolejność inicjalizacji i wywołań.
+R208	architecture	Kod wprowadza ryzyko bez oceny zasięgu szkody.	Prześledź awarię do danych i konsumentów.
+R209	architecture	Numeryczna ocena ryzyka zastępuje analizę scenariusza.	Sprawdź uzasadnienie ocen i skuteczność zabezpieczeń.
+R210	architecture	Ryzyko utrzymania lub odwrócenia zmiany jest pominięte.	Przeanalizuj awarię migracji i przyszłą zmianę kontraktu.
+R211	implementation	Parametr, env lub stan trwały nie ma opisanego kontraktu.	Porównaj interfejsy i odczyty z InputDomainMatrix.
+R212	implementation	Brak, null i wartość pusta są mylone.	Sprawdź każdą klasę osobno.
+R213	test_design	Zero, znaki i granice zakresu są pominięte.	Sprawdź minimum, maksimum i sąsiednie wartości.
+R214	implementation	Overflow, NaN lub nieskończoność łamią niezmiennik.	Wprowadź skrajne wartości właściwego typu.
+R215	implementation	Unicode, kodowanie lub normalizacja zmieniają znaczenie.	Sprawdź równoważne zapisy i niepoprawne bajty.
+R216	test_design	Nieprzeanalizowane kombinacje poprawnych osobno parametrów.	Zbuduj constraints i scenariusze interakcji.
+R217	test_design	Pairwise jest użyte dla reguły zależnej od wielu pól.	Porównaj stopień interakcji z modelem reguły.
+R218	implementation	Fragmentacja, EOF lub duże wejście zmieniają parser.	Przetestuj granice fragmentów i rozmiary.
+R219	test_design	Duplikaty i zła kolejność zdarzeń nie mają semantyki.	Podaj powtórzenia, opóźnienia i przestawienia.
+R220	test_design	Losowe przykłady są deklarowane jako pełna weryfikacja wejść.	Sprawdź uzasadnienie klas i pokrycie niezmienników.
+R221	dependencies	Agent pisze dostępny już mechanizm bez sprawdzenia alternatyw.	Odtwórz wyszukiwanie i reuse map.
+R222	dependencies	Popularność biblioteki zastępuje ocenę dopasowania.	Porównaj API z wymaganym kontraktem.
+R223	dependencies	Zależność bez licencji jest uznana za swobodnie dostępną.	Odczytaj właściwe pliki i pochodzenie.
+R224	dependencies	Sprawdzono tylko licencję bezpośredniej zależności.	Prześledź lockfile, features i komponenty natywne.
+R225	dependencies	AND, OR lub wyjątek WITH jest błędnie interpretowany.	Porównaj expression z tekstami licencji.
+R226	dependencies	Licencja nie odpowiada sposobowi dostarczania projektu.	Sprawdź docelową dystrybucję i zastosowanie.
+R227	dependencies	Noty, atrybucja lub wymagany kod nie trafiają do dostawy.	Skontroluj finalny pakiet wobec obowiązków.
+R228	dependencies	Kod skopiowany lub vendored omija kontrolę licencji.	Porównaj pochodzenie fragmentów i plików.
+R229	dependencies	Zmiana wersji lub features nie otwiera ponownie oceny.	Porównaj graf i hashe wejściowe raportu.
+R230	dependencies	Istnienie pakietu i brak znanych CVE daje fałszywe zaufanie.	Sprawdź provenance, utrzymanie i zakres skanera.
+R231	options	Pierwszy poprawny pomysł wygrywa bez porównania.	Sprawdź OptionsAnalysis i zakres poszukiwania.
+R232	options	Alternatywy są pozorne i celowo słabsze.	Porównaj odrębność mechanizmów i realność użycia.
+R233	options	Kryteria dopasowano po fakcie do preferowanego wariantu.	Sprawdź historię kryteriów i decyzji.
+R234	options	Warianty oceniono na innych danych lub warunkach.	Porównaj benchmarki, kontrakty i konfiguracje.
+R235	options	Średnia punktów kompensuje niespełnione wymaganie.	Sprawdź filtr dopuszczalności przed rankingiem.
+R236	options	Ocena lub przewaga jest wymyślona bez dowodu.	Odtwórz źródła, pomiary i eksperyment.
+R237	options	Pominięto istotną dostępną klasę rozwiązań.	Porównaj przestrzeń problemu z poszukiwaniami.
+R238	options	Decyzja jest niestabilna przy małej zmianie przesłanek.	Wykonaj analizę wrażliwości.
+R239	options	Koszt już napisanej implementacji blokuje lepszy wybór.	Porównaj aktualne dowody i przyszłe konsekwencje.
+R240	options	Zbadany zwycięzca jest reklamowany jako globalne optimum.	Sprawdź zakres twierdzenia i granice badania.

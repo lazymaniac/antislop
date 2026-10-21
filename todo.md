@@ -28,3 +28,61 @@ TODO list:
 - [ ] Brakuje uzycia ikonek, loaderow tak zeby uzytkownik mogl wizualnie odroznic rodzaje agentow i czy aktualnie pracuje, czekaja, maja problem itp. Tak samo stan orkiestratora powinien byc aktualizowany w oknie czatu bo teraz po wyslaniu wiadomosci brakuj jakiegokolwiek feedbacku do uzytkownika czy aplikacja cos robi.
 - [ ] W widoku grafu nie chce uzywac ramek wokol kart agentow, samo tlo karty powinno ich odroznic od tla canvasa
 - [ ] orkiestrator powinien reagowac na zmiany stanow w grafie i informowac uzytkownika o pistepach zakonczonych rund w pustaci krtokich komunikatow. problemy ktore boluja pistep rowniez powinny byc raportowane do orliestratora. 
+
+Niedokończone względem design.md:
+
+Ledgery i bramki jakości (§3, §6.4-6.7, §7.6, §10.1, M2Q):
+- [ ] RequirementLedger i PlanItemLedger w runtime: atomowe wymagania, statusy (identified..verified/stale/superseded_by_user), dowody, rodzic/dzieci (§6.6).
+- [ ] spec_revision na runie oraz unieważnianie zależnych zadań, raportów, modelu i dowodów po zmianie wymagań, modelu lub checklisty (§6.3, scenariusz 31).
+- [ ] ContextModel, rejestr Unknown, SolutionModel, SimulationCase, TraceabilityMap jako rekordy z bramkami context_ready, plan_ready, solution_selected, requirements_complete egzekwowanymi przez runtime (§6.4-6.5).
+- [ ] OptionsAnalysis i SolutionDecision jako ustrukturyzowane rekordy (warianty, kryteria, odrzucenia, wrażliwość, warunki ponownego otwarcia) (§6.7).
+- [ ] RiskCoverage: obowiązkowa pozycja RISK-Rxxx dla każdego wpisu katalogu ryzyk z §19, z wykonawcą, weryfikatorem i uzasadnieniem wyłączeń (§7.6).
+- [ ] ChecklistDefinition jako wersjonowany katalog z content_hash: wspólne V01-V08 i rozszerzenia każdej roli weryfikującej (§7.6).
+- [ ] Runtime odrzuca raport z pustą pozycją checklisty, brakującym ryzykiem, nieaktualnym dowodem lub niedozwolonym autorem (scenariusz 30).
+- [ ] Rekordy InputDomainMatrix, ChangeRisk, DependencyDecision, LicenseAssessment, RefactorReport zamiast samych obligacji w promptach (§10.1, §12.2).
+- [ ] ComplianceAudit: końcowe porównanie pełnego źródła z rejestrem wymagań, blokada ukończenia runu (§6.6, scenariusze 27-29).
+- [ ] Testy runtime zamiast samego promptu dla scenariuszy akceptacyjnych 11, 19-23, 34-40 (§18).
+- [ ] Graf unieważniania dowodów i QualityGate (required_check_ids, input_hashes, invalidation_dependencies) (§10.1).
+
+TUI (§8):
+- [ ] Zakładki szczegółów agenta: Overview, Session, Artifacts, Findings, Messages, Evidence, Checks. Brakuje Artifacts, Findings i Evidence jako osobnych zakładek (§8.4).
+- [ ] Widoki runu z czatu/palety: Requirements, Options, Risks, Quality gates (pokrycie, dowody, pominięcia, różnice rewizji) (§6.6, §8.4).
+- [ ] Filtry relacji w grafie (supervises, depends_on, verifies, communicates_with) oraz podświetlenie krawędzi komunikacji z czasem i licznikiem (§8.3).
+- [ ] Pełny zestaw 12 statusów węzła (queued, starting, running, waiting_agent, waiting_user, verifying, changes_requested, paused, blocked, failed, completed, cancelled) z tekstem/symbolem i opcjonalnym kolorem (§8.3).
+- [ ] Grupowanie po etapach/modułach i zwijanie zakończonych gałęzi w dużych zespołach (§8.3).
+- [ ] Komentarze do każdego elementu panelu agentów: relacja, sesja, tura, wiadomość, dowód, pozycja checklisty, bramka (§8.5).
+- [ ] Nagłówek z run i stage oraz pojęcie etapów (Intake..Delivery) w stanie runu (§6.1, §8.1).
+- [ ] Wybór sposobu dostarczenia wiadomości do aktywnego agenta: natywne sterowanie, kolejka na następną turę, przerwanie i wznowienie; UI pokazuje dostępny wariant (§8.4).
+- [ ] Komenda `antislop ui` ustalona w §8.2 (obecnie jest `antislop chat` i uruchomienie bez argumentów).
+
+Runtime, daemon, adaptery (§7, §9, §10, §13, §14):
+- [ ] request_id i klucz idempotencji dla zmian stanu w protokole daemona (§9.3).
+- [ ] Jeden aktywny klient sterujący i klienci podglądu; konflikt sterowania nie może być last-write-wins (§9.3).
+- [ ] Kontrakt adaptera: probe z capabilities, send z delivery_mode i receipt, interrupt z receipt rozróżniającym żądanie od potwierdzonego zatrzymania (§9.4).
+- [ ] Codex przez app-server (JSON-RPC, steering) zamiast exec --json (§9.5).
+- [ ] Uruchomienie i weryfikacja adaptera gemini na prawdziwym binarium, domknięcie macierzy wersji M0 (§16).
+- [ ] Profile uprawnień read-only, workspace-write, restricted-execution, extended-access; blokada startu sesji, gdy ograniczenia nie da się wymusić (§13).
+- [ ] Redakcja sekretów w logach i artefaktach, prawa plików, polityka retencji (§13).
+- [ ] Zużycie tokenów oznaczone reported / estimated / unavailable (obecnie tylko reported lub brak) (§14).
+- [ ] Natywne subagenty CLI wyłączone albo zarejestrowane jako zarządzane węzły; agy i gemini nie mają przełącznika (§9.5).
+- [ ] Szablony zespołów (small-change, feature, refactoring, security-fix, greenfield, research, document, analysis) jako wersjonowana definicja w kodzie, nie tylko opis w instrukcjach orkiestratora (§7.3).
+- [ ] Wersjonowane wbudowane role i szablony utrwalane przy starcie runu (§9.6).
+- [ ] Resume na poziomie zadania oraz ponawianie zadań w stanie waiting (§14).
+- [ ] Stan delivery_unknown i uzgadnianie z sesją przy niepewnym dostarczeniu wiadomości (§10.4).
+- [ ] Zdarzenie i uzasadnienie przy każdej zmianie składu zespołu (§7.3).
+- [ ] Walidacja wszystkich potrzebnych profili przed startem zespołu; brak CLI daje jawną propozycję zamiany lub blokadę (§7.4).
+
+Workspace (§11):
+- [ ] Projekt bez gita: utworzenie inicjalnego snapshotu/repozytorium przez runtime (design §11.1; obecnie writer prosi o git init).
+- [ ] Lease plików i osobne zasoby (porty, bazy, cache) dla równoległych worktree (§11.1).
+- [ ] Research, dokumenty i analizy bez gita: wersjonowane katalogi wejść/wyjść i artefakty z hashami (§11.2).
+- [ ] In-place: zadania read-only nie powinny widzieć częściowych zmian writera, a zmiany użytkownika w trakcie nie powinny być przypisywane writerowi (§11.1).
+
+Zgody i tryby (§6.2):
+- [ ] Supervised: pytanie o zgodę przy każdej rundzie poprawek (obecnie pierwsze 3 rundy bez pytania).
+- [ ] Żadnego automatycznego otwierania rundy poprawek po odrzuceniu wyniku w trybie supervised, zgoda per etap i per runda (§6.2).
+
+Pozostałe:
+- [ ] Eksport diagnostyczny lokalny i kontrolowany przez użytkownika (§15; został usunięty w todo wyżej, design go przewiduje).
+- [ ] Historia runu mierząca czas do zaakceptowanego wyniku, czas pracy użytkownika, liczbę rund, blokad, konfliktów i zmian zakresu (§15).
+- [ ] Decyzja o licencji i dystrybucji Architect (§20, pkt 4).

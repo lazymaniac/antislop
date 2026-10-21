@@ -72,11 +72,11 @@ verification against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8` is in
   and the agents read the project themselves. This keeps state independent
   of the repository's size.
 - Risks go only to the verifier paired with the task, never to the worker.
-- The risk catalog of design §19 is not loaded as an obligation per entry
-  for every verifier. The orchestrator names each task's own risks (they
-  become its verifier's `R` obligations), the kind checklists and the
-  common checks (`C`, `V`) carry the catalog's main checks, and a verifier
-  may name a risk outside them as a finding.
+- The risk catalog of design §19 is shared out among the kinds of work
+  (`src/lean/risks.tsv`, one kind per entry): a verifier gets as `R001`…
+  obligations only the entries of its worker's kind, besides the task's own
+  risks (`R1`…), the kind checklist (`C`) and the common checks (`V`). A
+  verifier may name a risk outside them as a finding.
 - A project without git is not turned into a repository by the runtime
   (design §11.1 creates one): read-only work runs without git, writers ask
   the user to run `git init` and commit first, so nothing of the user's is
