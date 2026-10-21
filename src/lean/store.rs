@@ -1623,6 +1623,23 @@ impl Store {
         })
     }
 
+    /// Global daemon events also exist before the first conversation.
+    pub fn record_config_update(&self, path: &Path) -> Result<()> {
+        let db = self.db();
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS daemon_events(
+            seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+            payload TEXT NOT NULL, created_ms INTEGER NOT NULL)",
+        )?;
+        let payload = serde_json::json!({"path": path});
+        db.execute("INSERT INTO daemon_events(kind,payload,created_ms) VALUES('config_updated',?1,CAST(unixepoch('subsec')*1000 AS INTEGER))", [payload.to_string()])?;
+        drop(db);
+        for conversation in self.conversations()? {
+            self.append_event(&conversation.id, None, None, "config_updated", &payload)?;
+        }
+        Ok(())
+    }
+
     pub fn append_event(
         &self,
         conversation: &str,

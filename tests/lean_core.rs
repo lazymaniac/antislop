@@ -1048,3 +1048,48 @@ fn missing_configuration_reports_project_and_global_candidates() {
     assert!(!global.exists());
     assert!(!project.join(".antislop").exists());
 }
+
+#[test]
+fn configuration_snapshots_survive_live_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = fake_codex(dir.path());
+    let initial = config(&codex);
+    let core = Core::open(&dir.path().join(".antislop"), initial.clone()).unwrap();
+    let in_flight = core.config_snapshot();
+    let mut updated = initial.clone();
+    updated.policy.max_parallel = 1;
+    updated.orchestrator.profile = "review".into();
+    core.replace_config(updated.clone());
+    assert_eq!(*in_flight, initial);
+    assert_eq!(*core.config_snapshot(), updated);
+}
+
+#[test]
+fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let codex = fake_codex(dir.path());
+    let initial = config(&codex);
+    let core = Core::open(&dir.path().join(".antislop"), initial.clone()).unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    core.send(&conversation.id, "sleepy").unwrap();
+    let log = dir.path().join("calls.log");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !log.exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let running = std::fs::read_to_string(&log).unwrap();
+    let mut updated = initial;
+    updated.profiles.get_mut("orchestrator").unwrap().model = Some("live-model".into());
+    updated.profiles.get_mut("orchestrator").unwrap().effort = antislop::config::Effort::Low;
+    updated.policy.max_parallel = 1;
+    core.replace_config(updated);
+    wait_idle(&core, &conversation.id);
+    assert!(!running.contains("live-model"));
+    core.send(&conversation.id, "next request").unwrap();
+    wait_idle(&core, &conversation.id);
+    let calls = std::fs::read_to_string(log).unwrap();
+    assert!(calls.contains("live-model"));
+    assert!(calls.contains("model_reasoning_effort=\"low\""));
+    assert!(calls.starts_with(&running));
+}

@@ -58,6 +58,10 @@ pub fn build_identity(executable: &Path) -> Result<String> {
 pub enum Request {
     /// Which binary the daemon runs and whether it is executing work.
     Identity,
+    GetConfig,
+    SetConfig {
+        toml: String,
+    },
     /// Stops an idle daemon so a frontend from another build can replace it.
     Shutdown,
     ForceShutdown,
@@ -232,6 +236,10 @@ fn default_true() -> bool {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum WireRequest {
     Identity,
+    GetConfig,
+    SetConfig {
+        toml: String,
+    },
     Shutdown,
     ForceShutdown,
     Conversations,
@@ -372,6 +380,8 @@ impl From<Request> for WireRequest {
     fn from(req: Request) -> Self {
         match req {
             Request::Identity => WireRequest::Identity,
+            Request::GetConfig => WireRequest::GetConfig,
+            Request::SetConfig { toml } => WireRequest::SetConfig { toml },
             Request::Shutdown => WireRequest::Shutdown,
             Request::ForceShutdown => WireRequest::ForceShutdown,
             Request::Conversations => WireRequest::Conversations,
@@ -614,6 +624,8 @@ impl From<WireRequest> for Request {
     fn from(wire: WireRequest) -> Self {
         match wire {
             WireRequest::Identity => Request::Identity,
+            WireRequest::GetConfig => Request::GetConfig,
+            WireRequest::SetConfig { toml } => Request::SetConfig { toml },
             WireRequest::Shutdown => Request::Shutdown,
             WireRequest::ForceShutdown => Request::ForceShutdown,
             WireRequest::Conversations => Request::Conversations,
@@ -934,6 +946,8 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     // reading it so an edit made meanwhile still counts as newer.
     let loaded = modified(config_path);
     let core = Core::open(state, Config::load(config_path)?)?;
+    core.config_modified
+        .store(loaded, std::sync::atomic::Ordering::SeqCst);
     let project = project.canonicalize()?;
     // Work starts only in a directory the user trusted. A project trusted
     // before the list was the user's own is carried over.
@@ -1013,7 +1027,7 @@ fn handle(
     core: &Arc<Core>,
     project: &Path,
     config: &Path,
-    loaded: u64,
+    _loaded: u64,
     request: Request,
 ) -> Result<Value> {
     require(
@@ -1025,14 +1039,31 @@ fn handle(
         "the daemon is stopping",
     )?;
     Ok(match request {
-        Request::Identity => json!({
-            "build": build(),
-            "busy": core.busy(),
-            "pid": std::process::id(),
-            "project": project,
-            "config": config,
-            "config_modified": loaded,
-        }),
+        Request::GetConfig => {
+            let _guard = core.config_update.lock().expect("config update mutex");
+            json!({"toml": std::fs::read_to_string(config)?, "path": config})
+        }
+        Request::SetConfig { toml } => {
+            let parsed = Config::from_toml(&toml)?;
+            let _guard = core.config_update.lock().expect("config update mutex");
+            atomic_config_write(config, &toml)?;
+            core.replace_config(parsed);
+            core.config_modified
+                .store(modified(config), std::sync::atomic::Ordering::SeqCst);
+            core.store.record_config_update(config)?;
+            json!({"toml": toml, "path": config})
+        }
+        Request::Identity => {
+            let _guard = core.config_update.lock().expect("config update mutex");
+            json!({
+                "build": build(),
+                "busy": core.busy(),
+                "pid": std::process::id(),
+                "project": project,
+                "config": config,
+                "config_modified": core.config_modified.load(std::sync::atomic::Ordering::SeqCst),
+            })
+        }
         Request::Shutdown => {
             require(
                 !core.busy(),
@@ -1446,6 +1477,26 @@ fn handle_events(
 
 /// When the configuration file last changed, so a daemon running on an
 /// older version of it is replaced.
+/// Replace only after a complete write in the destination directory.
+fn atomic_config_write(path: &Path, text: &str) -> Result<()> {
+    let temporary = path.with_file_name(format!(".antislop-config-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.set_permissions(std::fs::metadata(path)?.permissions())?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn modified(path: &Path) -> u64 {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -1694,4 +1745,59 @@ fn wait_unlocked(state: &Path) -> Result<()> {
         std::thread::sleep(Duration::from_millis(20));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod live_config_tests {
+    use super::*;
+
+    #[test]
+    fn configuration_requests_validate_before_writing_and_record_the_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = include_str!("../../examples/antislop.toml");
+        std::fs::write(&path, original).unwrap();
+        let core = Core::open(
+            &dir.path().join(".antislop"),
+            Config::from_toml(original).unwrap(),
+        )
+        .unwrap();
+        let old = core.config_snapshot();
+        let call = |request| handle(&core, dir.path(), &path, 0, request);
+        assert!(
+            call(Request::SetConfig {
+                toml: "bad = [".into()
+            })
+            .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(*core.config_snapshot(), *old);
+        let updated = original.replace("max_parallel = 4", "max_parallel = 1");
+        call(Request::SetConfig {
+            toml: updated.clone(),
+        })
+        .unwrap();
+        assert_eq!(core.config_snapshot().policy.max_parallel, 1);
+        assert_eq!(old.policy.max_parallel, 4);
+        assert_eq!(call(Request::GetConfig).unwrap()["toml"], updated);
+        assert_eq!(
+            call(Request::Identity).unwrap()["config_modified"],
+            modified(&path)
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), updated);
+    }
+
+    #[test]
+    fn failed_atomic_rename_preserves_destination_and_cleans_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("config.toml");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("original"), "unchanged").unwrap();
+        assert!(atomic_config_write(&destination, "replacement").is_err());
+        assert_eq!(
+            std::fs::read_to_string(destination.join("original")).unwrap(),
+            "unchanged"
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 }
