@@ -3,6 +3,7 @@
 //! poller thread long-polls events and every action runs on its own thread,
 //! so typing, scrolling and sending stay instant.
 
+pub mod clipboard;
 pub mod config;
 pub mod details;
 pub mod diffview;
@@ -12,6 +13,7 @@ mod history;
 pub mod palette;
 pub mod planview;
 pub mod sanitize;
+pub mod selection;
 pub mod session;
 pub mod taskinfo;
 pub mod theme;
@@ -174,9 +176,10 @@ pub struct ConversationState {
 }
 
 pub struct App {
-    pub text_selection: sanitize::TextSelection,
+    pub text_selection: selection::TextSelection,
     text_area: Option<Rect>,
     text_origin: usize,
+    pending_clipboard: Option<String>,
     pub config_editor: Option<config::ConfigEditor>,
     config_drafts: std::collections::HashMap<String, config::ConfigEditor>,
     pub client: Client,
@@ -272,6 +275,7 @@ impl App {
             text_selection: Default::default(),
             text_area: None,
             text_origin: 0,
+            pending_clipboard: None,
             config_editor: None,
             config_drafts: Default::default(),
             client,
@@ -2149,14 +2153,7 @@ impl App {
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && !self.selection_blocked()
         {
-            if let Some(text) = self.text_selection.text() {
-                let updates = self.updates.clone();
-                std::thread::spawn(move || {
-                    if let Err(error) = sanitize::copy_text(&text) {
-                        let _ = updates.send(Update::Notice(error.to_string()));
-                    }
-                });
-            }
+            self.pending_clipboard = self.text_selection.text();
             return true;
         }
         if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
@@ -3105,11 +3102,6 @@ impl App {
             let max_scroll = help.max_scroll(frame.area());
             self.help_scroll = self.help_scroll.min(max_scroll);
             help.draw_scroll(frame, self.help_scroll);
-            let a = frame.area();
-            frame.render_widget(
-                Paragraph::new("Ctrl+Y copy selection · drag / double click select"),
-                Rect::new(a.x, a.bottom().saturating_sub(1), a.width, 1),
-            );
         }
         if let Some(conf) = &self.confirmation
             && conf.status == ConfirmationStatus::Pending
@@ -4267,6 +4259,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         text_selection: Default::default(),
         text_area: None,
         text_origin: 0,
+        pending_clipboard: None,
         config_editor: None,
         config_drafts: Default::default(),
         client: client.clone(),
@@ -4371,6 +4364,17 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                     in_ascii(frame.buffer_mut());
                 }
             })?;
+            // OSC 52 shares the rendering thread and is emitted between complete frames.
+            if let Some(text) = app.pending_clipboard.take() {
+                match clipboard::copy_text(&mut std::io::stdout().lock(), &text) {
+                    Ok(clipboard::CopyMethod::Osc52) => {}
+                    Ok(clipboard::CopyMethod::Fallback { osc52_error }) => {
+                        app.notice =
+                            Some(format!("OSC 52 failed: {osc52_error}; copied with pbcopy"));
+                    }
+                    Err(error) => app.notice = Some(error.to_string()),
+                }
+            }
             if !event::poll(Duration::from_millis(100))? {
                 continue;
             }
@@ -5375,5 +5379,38 @@ pub mod tests {
         });
         click_header(&mut app, 80, "[Team]");
         assert_eq!(app.focus, Focus::Chat);
+    }
+    #[test]
+    fn copy_shortcut_queues_text_for_the_rendering_thread() {
+        let mut app = test_app();
+        let area = Rect::new(0, 0, 8, 1);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        buffer.set_string(0, 0, "safe", Style::default());
+        app.text_selection
+            .draw_scrolled(&mut buffer, Some(area), app.selection_context(), 0);
+        for (kind, column) in [
+            (MouseEventKind::Down(MouseButton::Left), 0),
+            (MouseEventKind::Drag(MouseButton::Left), 3),
+        ] {
+            app.text_selection.mouse(event::MouseEvent {
+                kind,
+                column,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+        assert!(app.key(key_ctrl('y')));
+        let text = app
+            .pending_clipboard
+            .take()
+            .expect("key queues text, never writes stdout");
+        assert_eq!(text, "safe");
+        let mut output = Vec::new();
+        assert_eq!(
+            clipboard::copy_text(&mut output, &text).unwrap(),
+            clipboard::CopyMethod::Osc52
+        );
+        assert_eq!(output, b"\x1b]52;c;c2FmZQ==\x07");
+        assert!(app.pending_clipboard.is_none());
     }
 }
