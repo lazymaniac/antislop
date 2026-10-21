@@ -2875,6 +2875,8 @@ impl App {
         };
 
         if details.searching {
+            details.pending_g = false;
+            details.follow = false;
             match key.code {
                 KeyCode::Esc => {
                     details.searching = false;
@@ -2898,6 +2900,21 @@ impl App {
         }
 
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        let plain = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let second_g = std::mem::take(&mut details.pending_g);
+        if key.code == KeyCode::Char('g') && plain {
+            if second_g {
+                details.follow = false;
+                details.scroll = 0;
+                details.check = 0;
+                details.comment = 0;
+            } else {
+                details.pending_g = true;
+            }
+            return;
+        }
         let comment = details.selected_comment(&self.view);
         let on_comments = details.tab == COMMENTS;
         let on_checks = details.tab == CHECKS;
@@ -2913,8 +2930,15 @@ impl App {
             }
             KeyCode::Char('/') => {
                 details.searching = true;
+                details.follow = false;
                 details.query.clear();
                 details.scroll = 0;
+                return;
+            }
+            KeyCode::Char('i') if details.tab == 0 && plain => {
+                details.show_info = !details.show_info;
+                details.scroll = 0;
+                details.follow = !details.show_info;
                 return;
             }
             KeyCode::Char('v') => {
@@ -2958,7 +2982,7 @@ impl App {
                 };
                 self.set_comment(comment.expect("selected"), status);
             }
-            KeyCode::Char('d') if control => details.scroll += 10,
+            KeyCode::Char('d') if control => details.scroll = details.scroll.saturating_add(10),
             KeyCode::Char('u') if control => {
                 details.follow = false;
                 details.scroll = details.scroll.saturating_sub(10);
@@ -2974,12 +2998,12 @@ impl App {
             KeyCode::Left | KeyCode::BackTab => {
                 details.switch_tab(details.neighbour_tab(-1));
             }
-            KeyCode::Down => details.scroll += 1,
+            KeyCode::Down => details.scroll = details.scroll.saturating_add(1),
             KeyCode::Up => {
                 details.follow = false;
                 details.scroll = details.scroll.saturating_sub(1);
             }
-            KeyCode::PageDown => details.scroll += 20,
+            KeyCode::PageDown => details.scroll = details.scroll.saturating_add(20),
             KeyCode::PageUp => {
                 details.follow = false;
                 details.scroll = details.scroll.saturating_sub(20);
@@ -2988,7 +3012,16 @@ impl App {
                 details.follow = false;
                 details.scroll = 0;
             }
-            KeyCode::End => details.scroll = usize::MAX,
+            KeyCode::End | KeyCode::Char('G') if plain => {
+                details.follow = details.tab == 0 && !details.show_info;
+                details.scroll = usize::MAX;
+                if on_checks {
+                    details.check = details.check_count().saturating_sub(1);
+                }
+                if on_comments {
+                    details.comment = self.view.comments_on(&details.key).len().saturating_sub(1);
+                }
+            }
             _ => {}
         }
         if self
@@ -3979,8 +4012,12 @@ impl App {
         } else if let Some(diff) = &mut self.diff {
             diff.key(code);
         } else if let Some(details) = &mut self.details {
+            details.pending_g = false;
+            if !down {
+                details.follow = false;
+            }
             details.scroll = if down {
-                details.scroll + 3
+                details.scroll.saturating_add(3)
             } else {
                 details.scroll.saturating_sub(3)
             };
@@ -5190,16 +5227,15 @@ pub mod tests {
         };
 
         term.draw(|f| app.draw(f)).unwrap();
-        assert_eq!(
-            app.details.as_ref().unwrap().scroll,
-            0,
-            "Overview opens at the top"
+        assert!(
+            app.details.as_ref().unwrap().follow,
+            "sessions open at the tail"
         );
-        assert!(!screen(&term).contains("entry 39"));
+        assert!(screen(&term).contains("entry 39"));
         app.details.as_mut().unwrap().switch_tab(1);
         app.details.as_mut().unwrap().switch_tab(0);
         term.draw(|f| app.draw(f)).unwrap();
-        assert_eq!(app.details.as_ref().unwrap().scroll, 0);
+        assert!(screen(&term).contains("entry 39"));
         app.key(key_press(KeyCode::End));
         term.draw(|f| app.draw(f)).unwrap();
         assert!(screen(&term).contains("entry 39"));

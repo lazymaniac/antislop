@@ -3,6 +3,7 @@
 
 use super::super::tasks::{TaskSpec, obligations, status};
 use super::taskinfo;
+use super::theme::Theme;
 use super::view::{View, agent_name, dim, duration, status_label, wrap};
 use crate::lean::store::SessionInfo;
 use ratatui::{
@@ -10,7 +11,10 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -187,8 +191,11 @@ pub struct Details {
     pub history_unavailable: bool,
     /// Prompts of the Overview tab are shown whole instead of folded.
     pub expand_prompts: bool,
-    /// Follow new entries after the user reaches the bottom or presses End.
+    /// Follow new entries by default; scrolling up pauses, G/End resumes.
     pub follow: bool,
+    /// Full task metadata, explicitly opened instead of the live transcript.
+    pub show_info: bool,
+    pub(super) pending_g: bool,
     session_cache: HashMap<String, SessionCache>,
     layout_cache: LayoutCache,
 }
@@ -242,7 +249,9 @@ impl Details {
             sessions: Vec::new(),
             history_unavailable: false,
             expand_prompts: false,
-            follow: false,
+            follow: true,
+            show_info: false,
+            pending_g: false,
             session_cache: HashMap::new(),
             layout_cache: LayoutCache::default(),
         }
@@ -275,7 +284,8 @@ impl Details {
             .scroll_memory
             .get(&(self.key.clone(), self.tab))
             .unwrap_or(&0);
-        self.follow = false;
+        self.follow = self.tab == 0 && !self.show_info;
+        self.pending_g = false;
         self.query = self
             .query_memory
             .get(&(self.key.clone(), self.tab))
@@ -290,6 +300,7 @@ impl Details {
         self.query_memory
             .insert((self.key.clone(), self.tab), self.query.clone());
         self.key = new_key;
+        self.show_info = false;
         self.session_cache.clear();
         // A different element is a different task: its old record is gone.
         self.task = None;
@@ -303,7 +314,8 @@ impl Details {
             .scroll_memory
             .get(&(self.key.clone(), self.tab))
             .unwrap_or(&0);
-        self.follow = false;
+        self.follow = self.tab == 0 && !self.show_info;
+        self.pending_g = false;
         self.query = self
             .query_memory
             .get(&(self.key.clone(), self.tab))
@@ -324,7 +336,8 @@ impl Details {
             .scroll_memory
             .get(&(self.key.clone(), self.tab))
             .unwrap_or(&0);
-        self.follow = false;
+        self.follow = self.tab == 0 && !self.show_info;
+        self.pending_g = false;
         self.query = self
             .query_memory
             .get(&(self.key.clone(), self.tab))
@@ -362,6 +375,113 @@ impl Details {
     pub fn lines(&mut self, view: &View) -> Vec<(Style, String)> {
         let records = self.records(view);
         Self::render_records(&records, &self.query, self.raw)
+    }
+
+    /// Compact, fixed summary. Long context stays available through `i`.
+    fn summary(&self, view: &View, theme: &Theme) -> Vec<Line<'static>> {
+        let task = self
+            .task_id()
+            .and_then(|id| view.tasks.iter().find(|t| t.id == id));
+        let agent = self
+            .session_keys()
+            .into_iter()
+            .filter_map(|key| view.agents.get(&key))
+            .max_by_key(|agent| (agent.running, agent.feed_revision));
+        let mut lines = Vec::new();
+        if let Some(task) = task {
+            lines.push(Line::styled(
+                format!("{} · {}", task.id, task.title),
+                theme.title(),
+            ));
+            let round = taskinfo::round_shown(task.round)
+                .map_or_else(|| "not started".into(), |r| format!("round {r}"));
+            let mut state = vec![
+                Span::styled(
+                    status_label(&task.status).to_owned(),
+                    theme.status(&task.status),
+                ),
+                Span::styled(format!(" · {round}"), theme.dim()),
+            ];
+            if let Some(agent) = agent.filter(|a| !a.provider.is_empty()) {
+                state.push(Span::styled(
+                    format!(
+                        " · {}{}",
+                        agent.provider,
+                        agent
+                            .model
+                            .as_ref()
+                            .map_or(String::new(), |model| format!(" / {model}"))
+                    ),
+                    theme.dim(),
+                ));
+            }
+            lines.push(Line::from(state));
+            lines.push(Line::styled(
+                task.reason
+                    .clone()
+                    .or_else(|| taskinfo::cause(task))
+                    .unwrap_or_else(|| task.goal.clone()),
+                theme.dim(),
+            ));
+        } else if self.key == "conversation" {
+            let done = view
+                .tasks
+                .iter()
+                .filter(|task| status::finished(&task.status))
+                .count();
+            lines.push(Line::styled("Conversation", theme.title()));
+            lines.push(Line::styled(
+                format!(
+                    "{} · {done}/{} tasks complete",
+                    if view.paused {
+                        "paused"
+                    } else if view.idle {
+                        "idle"
+                    } else {
+                        "active"
+                    },
+                    view.tasks.len()
+                ),
+                theme.dim(),
+            ));
+        } else {
+            lines.push(Line::styled(agent_name(&self.key), theme.title()));
+            if let Some(agent) = agent {
+                lines.push(Line::styled(
+                    format!(
+                        "{} · {}{}",
+                        agent.provider,
+                        if agent.running { "working" } else { "idle" },
+                        agent
+                            .model
+                            .as_ref()
+                            .map_or(String::new(), |m| format!(" · {m}"))
+                    ),
+                    theme.dim(),
+                ));
+                lines.push(Line::styled(agent.activity.clone(), theme.dim()));
+            }
+        }
+        // Each header row stays one row even if a task title or failure reason
+        // contains control sequences or embedded newlines.
+        for line in &mut lines {
+            for span in &mut line.spans {
+                span.content = theme
+                    .clean(&span.content)
+                    .replace(['\n', '\r', '\t'], " ")
+                    .into();
+            }
+        }
+        lines
+    }
+
+    fn session_keys(&self) -> Vec<String> {
+        match self.key.split_once(':') {
+            Some(("worker" | "verifier", id)) => {
+                vec![format!("worker:{id}"), format!("verifier:{id}")]
+            }
+            _ => vec![self.key.clone()],
+        }
     }
 
     fn render_records(
@@ -493,7 +613,7 @@ impl Details {
                             "idle": view.idle,
                         })),
                     }));
-                } else {
+                } else if self.show_info {
                     if let Some(agent) = agent.filter(|agent| !agent.provider.is_empty()) {
                         let mut cli = format!("CLI: {}", agent.provider);
                         if let Some(model) = &agent.model {
@@ -633,13 +753,16 @@ impl Details {
                         }));
                     }
                 }
-                if !is_conv {
-                    let keys = match self.key.split_once(':') {
-                        Some(("worker" | "verifier", id)) => {
-                            vec![format!("worker:{id}"), format!("verifier:{id}")]
-                        }
-                        _ => vec![self.key.clone()],
-                    };
+                if !self.show_info && !is_conv {
+                    let mut keys = self.session_keys();
+                    let has_events = |key: &String| view.agents.get(key).is_some_and(|agent|
+                        !agent.feed.is_empty() || !agent.session.is_empty() || agent.pid.is_some());
+                    if keys.iter().any(has_events) {
+                        keys.retain(has_events);
+                    }
+                    // Keep the currently running role at the tail of the shared
+                    // transcript, including a worker repairing a verifier round.
+                    keys.sort_by_key(|key| view.agents.get(key).map(|a| (a.running, a.feed_revision)));
                     for key in keys {
                         let role = key.split_once(':').map_or(key.as_str(), |(role, _)| role);
                         let heading = format!("Session · {role}");
@@ -1072,8 +1195,17 @@ impl Details {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let [header, body, footer] = Layout::vertical([
+        let theme = Theme::from_env();
+        let summary = self.summary(view, &theme);
+        // Even a five-row terminal keeps room for session content.
+        let summary_height = if self.tab == 0 {
+            (summary.len() as u16).min(area.height.saturating_sub(6))
+        } else {
+            0
+        };
+        let [header, summary_area, body, footer] = Layout::vertical([
             Constraint::Length(1),
+            Constraint::Length(summary_height),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
@@ -1095,8 +1227,26 @@ impl Details {
             ));
         }
         frame.render_widget(Paragraph::new(tabs_line), header);
+        frame.render_widget(Paragraph::new(summary).style(theme.bar()), summary_area);
 
-        let block = Block::default().borders(Borders::TOP);
+        let block = if self.tab == 0 {
+            let title = if self.show_info {
+                " Task info · i session "
+            } else if self.follow {
+                " Session · LIVE "
+            } else {
+                " Session · history · G live "
+            };
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(theme.faint())
+                .style(theme.card())
+                .title(title)
+                .padding(Padding::horizontal(u16::from(body.width >= 20)))
+        } else {
+            Block::default().borders(Borders::TOP)
+        };
         let inner = block.inner(body);
         frame.render_widget(block, body);
         self.text_area = Rect::new(
@@ -1120,19 +1270,35 @@ impl Details {
         {
             if at < self.scroll {
                 self.scroll = at;
-            } else if at >= self.scroll + height {
+            } else if at >= self.scroll.saturating_add(height) {
                 self.scroll = at + 1 - height;
             }
         }
-        if self.tab == 0 && self.follow {
+        if self.tab == 0 && !self.show_info && self.follow {
             self.scroll = bottom;
         } else {
             self.scroll = self.scroll.min(bottom);
             // Scrolling back down to the end picks the tail up again.
-            self.follow = self.tab == 0 && bottom > 0 && self.scroll >= bottom;
+            self.follow = self.tab == 0 && !self.show_info && self.scroll >= bottom;
         }
         let end = (self.scroll + height).min(lines.len());
-        frame.render_widget(Paragraph::new(lines[self.scroll..end].to_vec()), inner);
+        frame.render_widget(
+            Paragraph::new(lines[self.scroll..end].to_vec()),
+            self.text_area,
+        );
+        if lines.len() > height && inner.width > 0 {
+            let mut state = ScrollbarState::new(bottom.saturating_add(1))
+                .position(self.scroll)
+                .viewport_content_length(height);
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some(theme.glyphs().track))
+                .thumb_symbol(theme.glyphs().thumb)
+                .track_style(theme.faint())
+                .thumb_style(theme.dim());
+            frame.render_stateful_widget(scrollbar, inner, &mut state);
+        }
 
         let hint = if self.searching {
             format!(
@@ -1156,7 +1322,17 @@ pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
 }
 
 pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
-    if tab == CHECKS {
+    if tab == 0 {
+        if width >= 90 {
+            "←/→ tabs · ↑/↓ PgUp/PgDn · gg/G top/live · i info · / search · c comment · Esc back"
+        } else if width >= 65 {
+            "←/→ tabs · ↑/↓ scroll · gg/G top/live · i info · / search · Esc back"
+        } else if width >= 45 {
+            "←/→ tabs · gg/G top/live · i info · Esc"
+        } else {
+            "gg/G · i info · Esc back"
+        }
+    } else if tab == CHECKS {
         if width >= 80 {
             "←/→ tab · ↑/↓ select check · c comment on check · / search · v raw · d diff · ? help · Esc back"
         } else if width >= 45 {
@@ -1176,13 +1352,13 @@ pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
         }
     } else {
         if width >= 90 {
-            "←/→ tab · ↑/↓ PgUp/PgDn scroll · / search · v raw · c comment · d diff · ? help · Esc back to graph"
+            "←/→ tabs · ↑/↓ PgUp/PgDn · gg/G top/end · / search · c comment · d diff · Esc back"
         } else if width >= 65 {
-            "←/→ tabs · ↑/↓ scroll · / search · v raw · c comment · d diff · Esc back"
+            "←/→ tabs · ↑/↓ scroll · gg/G top/end · / search · Esc back"
         } else if width >= 45 {
-            "←/→ tab · ↑/↓ scroll · c com · d diff · Esc"
+            "←/→ tabs · gg/G top/end · Esc"
         } else {
-            "↑/↓ · Esc back"
+            "gg/G · ↑/↓ · Esc back"
         }
     }
 }
@@ -1484,15 +1660,9 @@ mod tests {
     }
 
     #[test]
-    fn overview_opens_at_summary_for_long_sessions_and_non_task_keys() {
+    fn overview_opens_at_latest_session_for_all_agent_roles() {
         use super::super::session::Block;
-        for key in [
-            "worker:t1",
-            "verifier:t1",
-            "orchestrator",
-            "auditor",
-            "conversation",
-        ] {
+        for key in ["worker:t1", "verifier:t1", "orchestrator", "auditor"] {
             let mut view = View::default();
             view.tasks.push(super::super::view::TaskRow {
                 id: "t1".into(),
@@ -1511,12 +1681,13 @@ mod tests {
             let mut details = Details::new(key.into());
             let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
             terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-            assert_eq!(details.scroll, 0, "{key}");
-            assert!(!details.follow, "{key}");
+            assert!(details.scroll > 0, "{key}");
+            assert!(details.follow, "{key}");
             details.switch_tab(1);
             details.switch_tab(0);
             terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-            assert_eq!(details.scroll, 0, "{key} on returning");
+            assert!(details.scroll > 0, "{key} on returning");
+            assert!(details.follow, "{key} on returning");
         }
     }
 

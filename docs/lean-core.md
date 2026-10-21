@@ -647,8 +647,11 @@ file affects other projects when they next load it; active daemons remain
 independent until updated or restarted.
 
 Worker/verifier role addresses remain compatible with stored events and mail,
-but map to one graph node. Overview contains the summary and both sessions;
-there is no separate Session tab. Checks invalidation handles round changes,
+but map to one graph node. Overview pins a summary of at most three lines above the session card;
+there is no separate Session tab. The card opens at the latest output and follows
+new entries. Scrolling upward or `gg` pauses following; `G`/End resumes it.
+`i` switches the card to the full task context and back to the live transcript.
+The summary stays fixed and shrinks away on the smallest terminals. Checks invalidation handles round changes,
 same-round verdict changes and live events of the selected task. Drag selection
 and double-click word selection capture rendered graphemes in viewport-sized
 storage; Ctrl+Y copies sanitized text. Clipboard sending rejects more than
