@@ -592,8 +592,13 @@ impl App {
                 let fetched = details.fetched_round?;
                 let now = self.task_row_round(&details.key)?;
                 // Checks the verifier settles meanwhile change the Checks tab.
-                let checks =
-                    details.tab == CHECKS && details.fetched_checks != self.view.check_events;
+                let checks = details.tab == CHECKS
+                    && details.fetched_checks
+                        != details
+                            .task_id()
+                            .and_then(|id| self.view.task_check_events.get(id))
+                            .copied()
+                            .unwrap_or(0);
                 Some(fetched != now || checks)
             })
             .unwrap_or(false);
@@ -628,7 +633,7 @@ impl App {
             .filter(|details| details.task_id() == Some(id.as_str()))
         {
             details.fetched_round = Some(round);
-            details.fetched_checks = self.view.check_events;
+            details.fetched_checks = self.view.task_check_events.get(&id).copied().unwrap_or(0);
         }
         let request = Request::Task {
             plan: plan.clone(),

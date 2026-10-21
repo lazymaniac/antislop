@@ -623,8 +623,33 @@ mod tests {
     }
 
     #[test]
-    fn local_workers_use_opencode_and_verifiers_use_claude() {
-        let config = Config::from_toml(include_str!("../antislop.toml")).unwrap();
+    fn platform_workers_use_opencode_and_verifiers_use_claude() {
+        // Test a fixed routing fixture rather than the user's editable local
+        // antislop.toml. Changing local preferences must not break the suite.
+        let mut fixture = include_str!("../examples/antislop.toml")
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        fixture["providers"]["opencode"]["command"] = toml_edit::value(
+            [
+                "omlx",
+                "launch",
+                "opencode",
+                "--model",
+                "Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp",
+                "--",
+            ]
+            .into_iter()
+            .collect::<toml_edit::Array>(),
+        );
+        fixture["providers"]["claude"]["binary"] = toml_edit::value("claude");
+        for name in ["reasoning", "execution"] {
+            fixture["profiles"][name]["provider"] = toml_edit::value("opencode");
+            fixture["profiles"][name]["model"] =
+                toml_edit::value("omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp");
+        }
+        fixture["profiles"]["review"]["provider"] = toml_edit::value("claude");
+        fixture["profiles"]["review"]["effort"] = toml_edit::value("high");
+        let config = Config::from_toml(&fixture.to_string()).unwrap();
         let orchestrator = config
             .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
             .unwrap();

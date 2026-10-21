@@ -289,6 +289,7 @@ impl Store {
                 report TEXT, verdict TEXT, base TEXT, result TEXT, feedback TEXT,
                 created_ms INTEGER NOT NULL);
              CREATE INDEX IF NOT EXISTS tasks_by_plan ON tasks(conversation_id, plan_id, position);
+             CREATE INDEX IF NOT EXISTS tasks_by_plan_position ON tasks(plan_id, position);
              CREATE TABLE IF NOT EXISTS mail(
                id INTEGER PRIMARY KEY AUTOINCREMENT,
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -1710,6 +1711,24 @@ impl Store {
             })
         })
         .collect()
+    }
+
+    /// Finds one task within a plan by UUID or the orchestrator's local id.
+    pub fn task_in_plan_by_id(&self, plan_id: &str, task_id: &str) -> Result<Option<Task>> {
+        // Return just one id, rather than decoding every task's reports and
+        // specs. Preserve the same first-in-plan resolution as plan().
+        let id: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT id FROM tasks WHERE plan_id=?1 AND (id=?2 OR json_extract(spec, '$.id')=?2)
+             ORDER BY position LIMIT 1",
+                params![plan_id, task_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.map(|id| self.task_by_id(&id))
+            .transpose()
+            .map(Option::flatten)
     }
 
     /// Finds a task by its globally unique UUID across all plans.

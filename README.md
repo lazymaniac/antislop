@@ -40,7 +40,8 @@ Registry updates use an exclusively created temporary file and an atomic rename.
 Configuration currently requires the project's `antislop.toml` or `--config FILE`;
 there is no global configuration fallback or live configuration editor yet.
 Workers and verifiers still have separate graph nodes, and Overview and Session
-remain separate tabs. Checks refresh on round changes and incoming check events.
+remain separate tabs. Checks refresh on round changes and check events for the
+open task; events for other tasks do not trigger an extra request.
 Mouse navigation is supported; dragging to select and copy transcript text is not
 implemented. See [the integration status](docs/lean-core.md#integration-status)
 for the remaining work.

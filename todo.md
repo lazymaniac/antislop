@@ -99,6 +99,7 @@ Pozostałe:
 - [x] Odswiezanie otwartych Checks po zmianie rundy i zdarzeniach check.
 - [x] T14: sprawdzenie globalnego zaufania przed otwarciem stanu daemona; brak migracji zaufania z bazy projektu; bezpieczny plik tymczasowy rejestru.
 - [x] T14: ograniczenie utrwalanych bledow tur i redakcja znanych sekretow ze srodowiska (nie obejmuje calego transkryptu).
-- [ ] T13: lokalne uniewaznianie Checks, lekki odczyt Checks, cache transkryptu i layoutu grafu; ponowny audyt po integracji brakujacych zmian.
+- [x] T13: lokalne uniewaznianie Checks; odczyt jednego zadania bez dekodowania calego planu i ponownego odczytu dla freshness token.
+- [ ] T13: lekki endpoint Checks bez fingerprintu Git, cache transkryptu i layoutu grafu; ponowny audyt po integracji brakujacych zmian.
 - [ ] T14: zamkniecie bramki po integracji brakujacych wynikow t2-t8 i pelnej weryfikacji.
-- [ ] T14: rozstrzygnac rozbieznosc lokalnego antislop.toml z testem local_workers_use_opencode_and_verifiers_use_claude; ponowic testy daemon/socket i reaping w srodowisku pozwalajacym na te operacje (obecnie EPERM).
+- [x] T14: test routingu niezalezny od lokalnego antislop.toml; ponowny przebieg testow daemon/socket i reaping bez EPERM. 427 testow zaliczonych; 1 test zapisujacy git config pominiety zgodnie z zakazem zadania.

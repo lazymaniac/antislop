@@ -242,6 +242,9 @@ pub struct CommentProgress {
 pub struct View {
     /// How many check events arrived: an open Checks tab refetches on change.
     pub check_events: u64,
+    /// Latest check event for each plan-local task id; unrelated tasks do not
+    /// invalidate an open inspector. Entries are bounded by task count.
+    pub task_check_events: HashMap<String, u64>,
     pub transcript: Vec<Entry>,
     pub tasks: Vec<TaskRow>,
     /// The plan the task rows show.
@@ -948,6 +951,7 @@ impl View {
                     }
                 }
                 self.task_rows.clear();
+                self.task_check_events.clear();
                 self.agents
                     .retain(|key, _| !key.starts_with("worker:") && !key.starts_with("verifier:"));
                 self.links.clear();
@@ -1138,7 +1142,17 @@ impl View {
                 self.push(Style::default().fg(Color::Yellow), text);
                 self.system_card("Mode", text.into(), super::theme::Tone::Queued);
             }
-            "check" => self.check_events += 1,
+            "check" => {
+                self.check_events += 1;
+                if let Some(row) = self
+                    .task_rows
+                    .get(&text("task"))
+                    .and_then(|&index| self.tasks.get(index))
+                {
+                    self.task_check_events
+                        .insert(row.id.clone(), self.check_events);
+                }
+            }
             "integration" => {
                 let approved = payload["status"] == "approved";
                 let title = clean_line(&format!("[{}] {}", text("id"), text("title")));

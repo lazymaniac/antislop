@@ -761,14 +761,13 @@ impl Core {
         plan_id: &str,
         task_id: &str,
     ) -> Result<String> {
+        let task = self.task_unscoped(plan_id, task_id)?;
+        self.freshness_for_task(conversation, plan_id, &task)
+    }
+
+    fn freshness_for_task(&self, conversation: &str, plan_id: &str, task: &Task) -> Result<String> {
         let conv = self.store.conversation(conversation)?;
         let project = PathBuf::from(conv.project);
-        let task = self
-            .store
-            .plan(plan_id)?
-            .into_iter()
-            .find(|task| task.id == task_id || task.spec["id"] == task_id)
-            .ok_or_else(|| crate::Error::Invalid(format!("no task {task_id} in plan {plan_id}")))?;
         let head = git::head(&project).unwrap_or_default();
         let scope: Vec<String> =
             serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
@@ -796,9 +795,7 @@ impl Core {
 
     pub fn task_unscoped(&self, plan: &str, id: &str) -> Result<Task> {
         self.store
-            .plan(plan)?
-            .into_iter()
-            .find(|task| task.id == id || task.spec["id"] == id)
+            .task_in_plan_by_id(plan, id)?
             .ok_or_else(|| crate::Error::Invalid(format!("no task {id} in plan {plan}")))
     }
 
@@ -807,7 +804,7 @@ impl Core {
     pub fn task(&self, plan: &str, id: &str) -> Result<Task> {
         let mut task = self.task_unscoped(plan, id)?;
         if let Ok(conv) = self.store.plan_conversation(plan) {
-            task.freshness_token = self.task_freshness_token(&conv, plan, &task.id).ok();
+            task.freshness_token = self.freshness_for_task(&conv, plan, &task).ok();
         }
         task.checks = self
             .store
@@ -819,7 +816,7 @@ impl Core {
 
     pub fn task_scoped(&self, conversation: &str, plan: &str, id: &str) -> Result<Task> {
         let mut task = self.task_unscoped(plan, id)?;
-        task.freshness_token = self.task_freshness_token(conversation, plan, &task.id).ok();
+        task.freshness_token = self.freshness_for_task(conversation, plan, &task).ok();
         task.checks = self
             .store
             .checks(&task.id, task.round)

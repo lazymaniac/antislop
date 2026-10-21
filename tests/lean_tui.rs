@@ -5407,6 +5407,29 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
         "round two"
     );
+    app.details.as_mut().unwrap().tab = 4; // Checks
+    let issued = app.task_request_id;
+    let check = |id: &str, task: &str, seq| Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![json!({"seq": seq, "kind": "check", "payload": {
+            "id": id, "task": task, "round": 2, "check": "V01", "state": "settled"}})],
+        idle: false,
+        autonomous: false,
+    };
+    app.apply_update(check("another-task", "u2", 5));
+    assert_eq!(
+        app.task_request_id, issued,
+        "unrelated Checks do not refetch"
+    );
+    app.apply_update(check("t1", "u1", 6));
+    assert_eq!(app.task_request_id, issued + 1, "own Checks refetch once");
+    terminal.draw(|f| app.draw(f)).unwrap();
+    assert_eq!(
+        app.task_request_id,
+        issued + 1,
+        "redraw does not refetch Checks"
+    );
 }
 
 #[test]

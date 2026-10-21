@@ -626,7 +626,7 @@ integrated and checked together:
 | Edit any configuration option and apply it live | Missing; Core keeps the configuration read at startup. |
 | One worker/verifier graph node per task | Missing; workers and verifiers have separate nodes. |
 | Overview merged with Session | Missing; both tabs remain available separately. |
-| Checks refreshed after every round | The open details panel refetches on a changed task round and the Checks tab refetches on check events. |
+| Checks refreshed after every round | The open details panel refetches on a changed task round; the Checks tab refetches only for check events of its own task. |
 | Select transcript text | Missing; mouse support provides navigation and clicks, without drag selection or clipboard copying. |
 
 The daemon now checks the user-owned trust registry before opening project
@@ -642,20 +642,27 @@ clipping. This preserves actionable failure text while redacting known
 credentials; it does not identify arbitrary secrets or redact all transcript
 events. Full log redaction and retention remain open.
 
-The t13 performance concerns also remain open: global Checks invalidation can
-refetch another task's details; fetching details loads the plan and freshness
-data; transcript rendering and graph layout are recomputed. The graph canvas
-itself remains bounded by viewport area. Performance approval of the requested
-combined UI requires the missing implementations.
+Two t13 costs have been reduced: Checks invalidation is now scoped to the open
+task, and fetching a task decodes only its record rather than the entire plan.
+The lookup uses a plan/position index and preserves local-id/UUID resolution;
+freshness calculation reuses that task record. Freshness still runs Git and
+working-tree fingerprint operations. A lightweight Checks endpoint, transcript
+render caching, and graph layout caching remain open. The graph canvas itself
+remains bounded by viewport area. Performance approval of the requested combined
+UI requires the missing implementations.
 
 Gate validation: `cargo check`, `cargo fmt --check` and
 `cargo clippy --all-targets -- -D warnings` passed. The suite was run with
 `cargo test --no-fail-fast -- --skip snapshot_path_comparisons_preserve_modes_deletions_and_literal_names`:
-403 tests passed, 24 failed, and one was filtered out. The filtered test writes
-Git configuration, which the t14 task instructions prohibit. Failures include
-daemon/socket tests reporting `Operation not permitted (os error 1)`, process
-reaping, and `local_workers_use_opencode_and_verifiers_use_claude`, whose fixed
-provider expectations disagree with the checked-in local configuration. The
-new trust and diagnostic-redaction regression tests passed, including rejection
-of a prepared database's trust flag. This gate is not approved; the unavailable
-features and failing tests require integration and another validation run.
+427 tests passed, none failed, and one was filtered out. The filtered test
+writes Git configuration, which the t14 task instructions prohibit. The earlier
+EPERM failures did not recur in the current environment. The routing test now
+uses an explicit fixture derived from the example configuration, preserving its
+provider/launcher assertions without depending on editable local preferences.
+The trust and diagnostic-redaction regression tests passed, including rejection
+of a prepared database's trust flag. A Checks regression confirms that another
+task's events and repeated redraws do not issue requests, while the open task's
+check event refetches once. Protocol tests cover scoped task queries, freshness
+and stale-request rejection. This gate is not approved: the unavailable features
+still require integration and validation together. These tests do not constitute
+a crash-injection audit or a host-overload benchmark.
