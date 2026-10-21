@@ -640,7 +640,8 @@ b6356f1 (t2/t3/t7/t8/t9, including the ported t4/t5/Checks changes). Configurati
 resolution uses an explicit file, then the project file, then the global file in
 `ANTISLOP_CONFIG_DIR`, `XDG_CONFIG_HOME/antislop`, or `~/.config/antislop`.
 Resolution is read-only. Both CLI and multi-project TUI require trust before
-creating project state. The `/config` modal edits every serialized option,
+creating project state. The `/config` modal edits every serialized user option
+(excluding the fixed protocol constant `schema_version`),
 optional overrides, command arrays and profiles, preserving TOML comments,
 drafts on failure, and the running turn's profile snapshot. A shared global
 file affects other projects when they next load it; active daemons remain
@@ -922,3 +923,37 @@ orchestration deletion check belongs to the editor; Config::validate is unchange
 
 When a structural section is empty, Ctrl+N restores access: an empty provider
 section takes priority; an empty routing section is offered outside providers.
+
+### Integration gate t8 (2026-10-21)
+
+The code remains at `3f4bd5eeb09dd1510e16905427a1493905f6b4ea`;
+t8 changes documentation only. README's configuration editor instructions match
+the key handling, draft validation and TOML patching implementation.
+
+| Operation | Evidence in `tests/lean_tui.rs` |
+| --- | --- |
+| Add/remove a profile | `config_editor_acceptance::every_config_field_is_edited_and_written_to_the_selected_file`: actual SetConfig writes, reload and presence/absence assertions, for both project and global files. |
+| Add/remove a provider | `configuration_provider_and_route_structural_edits_round_trip`: add, serialize, reload, delete, serialize and reload. |
+| Add/remove a route | `configuration_provider_and_route_structural_edits_round_trip`: the same round trip for a non-required route. |
+| Edit every user option | `config_editor_acceptance::every_config_field_is_edited_and_written_to_the_selected_file`: independently enumerates serialized fields, changes each value and checks persisted values; also clears optional overrides. `schema_version` is deliberately fixed. |
+| Reject invalid deletions without losing edits | `configuration_invalid_structural_deletion_preserves_draft_and_marks_field`: referenced provider, required gate route and orchestration. |
+| Recover empty sections / enumerate missing kinds | `configuration_empty_sections_can_be_restored`, `configuration_kind_picker_includes_every_missing_kind`. |
+
+Executed in t8: `cargo test --test lean_tui configuration_` ran eight passing
+tests and one environment-blocked test (exit 101). The blocked test,
+`configuration_load_and_save_use_live_daemon_requests`, failed at socket binding
+with `PermissionDenied: Operation not permitted`, before exercising the behavior.
+Log: `/tmp/antislop-t8.3lecSu/structural-tests.log`.
+
+Read in t8, without rerunning their daemon acceptance scenarios: the every-field
+and profile persistence test above, configuration source, and README instructions.
+The approved t7 handoff reports the complete suite on the same code outside the
+sandbox: 502 passed, no failures or ignored/filtered tests; fmt, clippy and check
+also passed. Its logs are at `/tmp/antislop-t7-rerun.E9NuAx/`; these are inherited
+results, not a new unrestricted execution by t8. No manual terminal session or
+performance benchmark was run in t8.
+
+User decisions remain open: accept best-effort secret redaction; decide whether
+to introduce coordination across processes for external configuration-file writers
+(the daemon lock does not cover them); decide whether to require a performance
+benchmark. This gate makes no new guarantees for these three limitations.
