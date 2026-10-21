@@ -399,16 +399,17 @@ impl Store {
         )?;
         // 5 → 6: global daemon events share the readable event stream.
         if found < 6 {
-            connection.execute_batch("BEGIN IMMEDIATE;
-                CREATE TABLE events_v6(seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute_batch("CREATE TABLE events_v6(seq INTEGER PRIMARY KEY AUTOINCREMENT,
                     conversation_id TEXT REFERENCES conversations(id), turn_id TEXT, plan_id TEXT,
                     kind TEXT NOT NULL, payload TEXT NOT NULL, created_ms INTEGER NOT NULL DEFAULT 0);
                 INSERT INTO events_v6 SELECT seq,conversation_id,turn_id,plan_id,kind,payload,created_ms FROM events;
                 DROP TABLE events;
                 ALTER TABLE events_v6 RENAME TO events;
                 CREATE INDEX events_by_conversation ON events(conversation_id,seq);
-                CREATE INDEX events_by_plan ON events(conversation_id,plan_id,seq);
-                COMMIT;")?;
+                CREATE INDEX events_by_plan ON events(conversation_id,plan_id,seq);")?;
+            transaction.pragma_update(None, "user_version", SCHEMA)?;
+            transaction.commit()?;
         }
         connection.pragma_update(None, "user_version", SCHEMA)?;
         Ok(Self {
@@ -1636,18 +1637,18 @@ impl Store {
         })
     }
 
-    /// Reserve the log entry before applying the file update; insertion failures
-    /// therefore leave both the file and the active configuration untouched.
-    pub fn record_config_update(
+    /// Reserve the event before publishing an already prepared file. The callback
+    /// must only rename the file and swap the snapshot; writes and fsync happen outside this lock.
+    pub fn publish_config_with_event(
         &self,
         path: &Path,
-        apply: impl FnOnce() -> Result<()>,
+        publish: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
         let db = self.db();
         let transaction = db.unchecked_transaction()?;
         let payload = serde_json::json!({"path": path});
         transaction.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(NULL,'config_updated',?1,CAST(unixepoch('subsec')*1000 AS INTEGER))", [payload.to_string()])?;
-        apply()?;
+        publish()?;
         transaction.commit()?;
         Ok(())
     }
@@ -2135,6 +2136,33 @@ mod tests {
             store.approved_writer_results("/project").unwrap(),
             [("base-1".into(), "result-1".into()),]
         );
+    }
+
+    #[test]
+    fn failed_event_migration_rolls_back_the_schema_and_releases_the_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core.db");
+        drop(Store::open(&path).unwrap());
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("PRAGMA user_version=5; CREATE VIEW event_view AS SELECT * FROM events;")
+            .unwrap();
+        assert!(Store::open(&path).is_err());
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            5
+        );
+        let tables: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='events_v6'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+        db.execute_batch("DROP VIEW event_view;").unwrap();
+        drop(db);
+        assert!(Store::open(&path).is_ok());
     }
 
     #[test]

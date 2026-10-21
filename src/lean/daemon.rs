@@ -1045,10 +1045,11 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
                 .config_update
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
+            let prepared = PreparedConfigWrite::prepare(config, &toml)?;
             let mut applied = false;
-            let mut warning = None;
-            let result = core.store.record_config_update(config, || {
-                warning = atomic_config_write(config, &toml)?;
+            let mut warnings = Vec::new();
+            let result = core.store.publish_config_with_event(config, || {
+                prepared.publish()?;
                 core.replace_config(parsed);
                 core.config_modified
                     .store(modified(config), Ordering::SeqCst);
@@ -1059,12 +1060,28 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
                 if !applied {
                     return Err(error);
                 }
-                warning = Some(match warning {
-                    Some(previous) => format!("{previous}; {error}"),
-                    None => error.to_string(),
+                warnings.push(ConfigUpdateWarning {
+                    stage: ConfigUpdateStage::EventCommit,
+                    message: error.to_string(),
                 });
             }
-            json!({"toml": toml, "path": config, "applied": true, "warning": warning})
+            if let Err(error) = prepared.sync_directory() {
+                warnings.push(ConfigUpdateWarning {
+                    stage: ConfigUpdateStage::DirectorySync,
+                    message: error.to_string(),
+                });
+            }
+            let status = if warnings.is_empty() {
+                ConfigUpdateStatus::Applied
+            } else {
+                ConfigUpdateStatus::AppliedWithWarnings
+            };
+            serde_json::to_value(ConfigUpdateReply {
+                toml,
+                path: config.to_path_buf(),
+                status,
+                warnings,
+            })?
         }
         Request::Identity => {
             let _guard = core
@@ -1491,30 +1508,88 @@ fn handle_events(
     }))
 }
 
-/// Replace only after a complete write in the destination directory.
-fn atomic_config_write(path: &Path, text: &str) -> Result<Option<String>> {
-    let resolved = path.canonicalize()?;
-    let path = resolved.as_path();
-    let temporary = path.with_file_name(format!(".antislop-config-{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<Option<String>> {
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConfigUpdateStatus {
+    Applied,
+    AppliedWithWarnings,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConfigUpdateStage {
+    EventCommit,
+    DirectorySync,
+}
+
+#[derive(Serialize)]
+struct ConfigUpdateWarning {
+    stage: ConfigUpdateStage,
+    message: String,
+}
+
+#[derive(Serialize)]
+struct ConfigUpdateReply {
+    toml: String,
+    path: PathBuf,
+    status: ConfigUpdateStatus,
+    warnings: Vec<ConfigUpdateWarning>,
+}
+
+/// Prepare and flush file contents before acquiring the event store lock.
+struct PreparedConfigWrite {
+    target: PathBuf,
+    temporary: PathBuf,
+    directory: std::fs::File,
+}
+
+impl PreparedConfigWrite {
+    fn prepare(path: &Path, text: &str) -> Result<Self> {
+        let target = path.canonicalize()?;
+        let temporary =
+            target.with_file_name(format!(".antislop-config-{}.tmp", uuid::Uuid::new_v4()));
         let directory = std::fs::File::open(
-            path.parent()
+            target
+                .parent()
                 .ok_or_else(|| Error::Invalid("configuration has no parent directory".into()))?,
         )?;
+        let prepared = Self {
+            target,
+            temporary,
+            directory,
+        };
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&temporary)?;
-        file.set_permissions(std::fs::metadata(path)?.permissions())?;
+            .open(&prepared.temporary)?;
+        file.set_permissions(std::fs::metadata(&prepared.target)?.permissions())?;
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
-        std::fs::rename(&temporary, path)?;
-        Ok(directory.sync_all().err().map(|error| error.to_string()))
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        Ok(prepared)
     }
-    result
+
+    fn publish(&self) -> Result<()> {
+        std::fs::rename(&self.temporary, &self.target)?;
+        Ok(())
+    }
+
+    fn sync_directory(&self) -> Result<()> {
+        self.directory.sync_all()?;
+        Ok(())
+    }
+}
+
+impl Drop for PreparedConfigWrite {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.temporary);
+    }
+}
+
+#[cfg(test)]
+fn atomic_config_write(path: &Path, text: &str) -> Result<()> {
+    let prepared = PreparedConfigWrite::prepare(path, text)?;
+    prepared.publish()?;
+    prepared.sync_directory()
 }
 
 /// Modification stamp used to detect configuration changed outside the daemon.
@@ -1831,10 +1906,30 @@ mod live_config_tests {
             toml: original.into(),
         })
         .unwrap();
-        assert_eq!(applied["applied"], true);
-        assert!(applied["warning"].as_str().unwrap().contains("FOREIGN KEY"));
+        assert_eq!(applied["status"], "applied_with_warnings");
+        assert_eq!(applied["warnings"][0]["stage"], "event_commit");
+        assert!(
+            applied["warnings"][0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("FOREIGN KEY")
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         assert_eq!(core.config_snapshot().policy.max_parallel, 4);
+    }
+
+    #[test]
+    fn preparing_config_does_not_publish_and_drop_removes_the_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("config.toml");
+        std::fs::write(&target, "old").unwrap();
+        let prepared = PreparedConfigWrite::prepare(&target, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(&prepared.temporary).unwrap(), "new");
+        let temporary = prepared.temporary.clone();
+        drop(prepared);
+        assert!(!temporary.exists());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old");
     }
 
     #[test]
