@@ -102,6 +102,7 @@ Pozostałe:
 - [x] T13: lokalne uniewaznianie Checks; odczyt jednego zadania bez dekodowania calego planu i ponownego odczytu dla freshness token.
 - [x] T13: cache rekordow i zawijania transkryptu; przeglad zintegrowanego kodu.
 - [ ] T13: lekki endpoint Checks bez fingerprintu Git i cache layoutu grafu.
-- [x] T14: integracja lancucha b6356f1 z baza main d050f2c, przeglad nowego kodu i pelna bramka: check, fmt, clippy -D warnings oraz 471 testow (bez pominiec).
+- [x] T14: integracja lancucha b6356f1 z baza main d050f2c, przeglad nowego kodu i pelna bramka: check, fmt, clippy -D warnings oraz 473 testow (bez pominiec).
 - [x] T14: usuniety lokalny test routingu zgodnie ze zmiana uzytkownika; antislop.toml bez zmian.
 - [x] T14: SetConfig porownuje rewizje pod blokada; clipboard ma limit 64 KiB; test przerwania procesu przed i po publikacji konfiguracji.
+- [x] T14: przeglad kontraktow i schematu 5→6; regresja profilu nowego verifiera w tej samej rundzie; surowy protokol odrzuca brakujaca i stara rewizje.

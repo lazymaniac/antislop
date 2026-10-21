@@ -2107,6 +2107,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn schema_five_events_migrate_without_losing_history_or_plan_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core.db");
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("/project").unwrap();
+        let other = store.create_conversation("/project").unwrap();
+        store
+            .append_event(
+                &conversation.id,
+                None,
+                Some("p1"),
+                "notice",
+                &serde_json::json!({"text": "preserved"}),
+            )
+            .unwrap();
+        let before = store.events_since(&conversation.id, 0, 100).unwrap();
+        drop(store);
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("BEGIN;
+            CREATE TABLE events_v5(seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL REFERENCES conversations(id),
+                turn_id TEXT, plan_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL,
+                created_ms INTEGER NOT NULL DEFAULT 0);
+            INSERT INTO events_v5 SELECT seq,conversation_id,turn_id,plan_id,kind,payload,created_ms FROM events;
+            DROP TABLE events;
+            ALTER TABLE events_v5 RENAME TO events;
+            PRAGMA user_version=5;
+            COMMIT;").unwrap();
+        drop(db);
+        let store = Store::open(&path).unwrap();
+        let after = store.events_since(&conversation.id, 0, 100).unwrap();
+        assert_eq!(
+            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(&after).unwrap()
+        );
+        assert!(store.events_since(&other.id, 0, 100).unwrap().is_empty());
+        store
+            .publish_config_with_event(Path::new("config.toml"), || Ok(()))
+            .unwrap();
+        let own = store.events_since(&conversation.id, 0, 100).unwrap();
+        let shared = store.events_since(&other.id, 0, 100).unwrap();
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0].kind, "config_updated");
+        assert_eq!(own.last().unwrap().seq, shared[0].seq);
+        assert!(shared[0].seq > before.last().unwrap().seq);
+        let db = Connection::open(&path).unwrap();
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            6
+        );
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('events_by_plan','events_by_conversation')", [], |row| row.get::<_, u32>(0)).unwrap(), 2);
+    }
+
+    #[test]
     fn approved_outputs_follow_completion_order_and_stay_with_their_project() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("core.db")).unwrap();

@@ -5,6 +5,60 @@ use std::time::{Duration, Instant};
 
 const CALLS: &str = "calls.jsonl";
 
+#[test]
+fn a_verifier_started_after_a_live_update_uses_the_new_profile_in_the_same_round() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let gate = dir.path().join("release-worker");
+    let marker = dir.path().join("worker-started");
+    let source = std::fs::read_to_string(&agy).unwrap().replace(
+        "else:\n    session, answer = \"worker\", \"first report for \"",
+        &format!("else:\n    import os, time\n    open({:?}, 'w').close()\n    while not os.path.exists({:?}): time.sleep(0.01)\n    session, answer = \"worker\", \"first report for \"", marker.to_string_lossy(), gate.to_string_lossy()),
+    );
+    std::fs::write(&agy, source).unwrap();
+    let initial = config(&codex, &agy);
+    let core = Core::open(&dir.path().join("state"), initial.clone()).unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    core.send(&conversation.id, "Assess storage and TUI")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let task = core.store.latest_plan(&conversation.id).unwrap().remove(0);
+    core.accept_plan(&conversation.id, &task.plan_id).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "worker did not reach the gate");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut updated = initial;
+    updated.profiles.get_mut("review").unwrap().model = Some("live-verifier-model".into());
+    core.replace_config(updated);
+    std::fs::write(gate, "continue").unwrap();
+    wait_idle(&core, &conversation.id);
+    let calls = std::fs::read_to_string(dir.path().join(CALLS)).unwrap();
+    let first_verifier: Value = calls
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|call| {
+            let prompt = call["args"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()
+                .as_str()
+                .unwrap();
+            prompt.contains("You verify") && prompt.contains("Task: Storage")
+        })
+        .unwrap();
+    assert!(
+        first_verifier["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "live-verifier-model"),
+        "{first_verifier}"
+    );
+}
+
 /// Codex-shaped orchestrator: proposes a two-task plan, then summarizes the
 /// runtime's results. Agy-shaped worker/verifier: the verifier rejects the
 /// storage task once, then approves the worker's fix.

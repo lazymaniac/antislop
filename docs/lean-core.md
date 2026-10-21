@@ -246,9 +246,16 @@ the user's version recoverable.
 - `pauses(conversation_id)` and `modes(conversation_id, autonomous)` — what
   the user set for a conversation.
 
-`PRAGMA user_version` holds the schema version (3). A build migrates an
-older state on open (1 → 2 gave events their time; earlier events keep 0,
-unknown; 2 → 3 gave turns their CLI's process group) and refuses a newer one instead of rewriting it. An agent's details
+`PRAGMA user_version` holds database schema version 6 (independent of the TOML
+configuration's `schema_version = 1`). Opening an older database migrates it:
+1 → 2 adds event timestamps; 2 → 3 adds process-group IDs; 3 → 4 adds plan
+associations; 4 → 5 adds compact task feedback; 5 → 6 rebuilds the events table
+transactionally to permit daemon-wide events with a NULL conversation id.
+Existing event sequence IDs, plan associations, payloads and timestamps are
+preserved, and both event indexes are recreated. Per-conversation reads include
+global config events without exposing another conversation's private events.
+A binary that only supports an older database schema refuses version 6 rather
+than rewriting it; downgrade requires a pre-migration backup. An agent's details
 show its time in turns where both ends are known.
 
 Writer worktrees live in `<state>/worktrees/<task>`, removed after a clean
@@ -681,7 +688,7 @@ benchmark. No synthetic host-overload benchmark was run.
 
 Integration validation on this candidate: `cargo check`, `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings`, and the complete `cargo test` passed.
-All 471 tests passed, with no ignored or filtered tests. Socket tests and the
+All 473 tests passed, with no ignored or filtered tests. Socket tests and the
 process-group reap test ran successfully in this environment. The local routing
 test was removed to match the user's change; `antislop.toml` was not modified.
 Manual conflict resolutions were limited to `src/lean/mod.rs` (unfinished-work
@@ -689,3 +696,54 @@ and stopped-task mail semantics combined with configuration snapshots),
 `src/lean/daemon.rs` (configuration stamp initialized after trust and Core open),
 and this document (replace obsolete missing-feature claims with integrated
 behavior). No duplicate t4/t5 or obsolete-run branches were merged.
+
+
+### Contract review and integration scope
+
+The explicit instruction to integrate chain b6356f1 also brings the minimal
+manifest change required by its clipboard implementation: `base64 = "0.22.1"`
+in Cargo.toml and the corresponding direct dependency entry in Cargo.lock.
+That crate/version was already present transitively in the lockfile; no package
+version or checksum changed. These two files are a declared exception to t14's
+original source/docs-only scope, necessary to compile t8's OSC 52 encoder and
+authorized by the later whole-chain integration instruction. In src/config.rs,
+the only change relative to d050f2c is deletion of the 40-line local routing test
+explicitly requested by the user; configuration parsing and validation are not
+removed. The user's antislop.toml remains untouched.
+
+Public protocol review: pre-existing operation names and optional conversation
+fields retain their wire forms. The new GetConfig returns `toml`, `path` and a
+content `revision`; SetConfig requires `toml` and `expected_revision`. Missing
+revision and stale revision requests are rejected; valid updates retain the
+daemon PID. The raw socket contract test checks all of those paths, file
+preservation on rejection, and subsequent ordinary chat operation. Returning
+`applied_with_warnings` after an event-commit failure means the file and runtime
+were updated; clients must not treat that reply as an unapplied transport error.
+The unit fault-injection test exercises both pre-publish rollback and post-publish
+warning behavior. External writers do not participate in the daemon lock.
+
+Conflict-resolution review: recover_task still delegates to recover_task_as with
+the actor used to authorize user-only recovery. Its new configuration snapshot
+is scoped to that recovery operation, and integrate receives that same snapshot.
+run_task keeps mutable task-spec recovery, existing worktree/in-place protection,
+and round policy snapshots. A new turn resolves its profile from the current
+configuration immediately before setup; it does not replace a running process.
+A regression initially failed when a verifier started in the same round retained
+the worker's earlier profile; resolving each turn's profile separately fixes it.
+answer_waiting still answers both worker and verifier mail for all stopped tasks,
+not just approved tasks. The existing recovery, unfinished-work, mail and writer
+flow suites cover these preserved paths. serve checks the user-owned trust
+registry before opening Core, then initializes the configuration modification
+stamp used by Identity. Role normalization changes UI node identity, not stored
+worker/verifier role addresses or sessions.
+
+The t12 fixes were reread in daemon::serve, trust::Registry::write and
+agent::persisted_error. Their existing untrusted-entrypoint/prepared-database,
+symlink and redaction tests remain in the full suite. The t13 session-cache and
+layout-cache tests verify invalidation for changed content, width, search and
+raw display. Config editor tests cover drafts on transport/validation failures,
+external edits, all editable field paths, global-file selection, and running
+versus new turns. Selection tests cover graphemes, scrolling, content changes
+and modal isolation. These are concrete contract and counterexample checks;
+a fresh worker run is recorded, not a claim that an independent read-only
+verifier executed commands.

@@ -940,6 +940,10 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
     let state = project.join(".antislop");
     let daemon = DaemonGuard::start(project, &config, &state);
     let before = daemon.call_raw(&json!({"op": "get_config"})).unwrap();
+    assert_eq!(
+        before["revision"],
+        antislop::hash(before["toml"].as_str().unwrap())
+    );
     let identity = daemon.call_raw(&json!({"op": "identity"})).unwrap();
     assert!(
         daemon
@@ -958,11 +962,21 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
     assert_ne!(text, before["toml"].as_str().unwrap());
     assert!(text.contains("max_parallel = 1"));
     assert!(text.contains("effort = \"low\""));
+    let missing_revision = daemon
+        .call_raw(&json!({"op": "set_config", "toml": text}))
+        .unwrap_err();
+    assert!(
+        missing_revision.contains("expected_revision"),
+        "{missing_revision}"
+    );
     daemon
         .call_raw(
             &json!({"op": "set_config", "toml": text, "expected_revision": before["revision"]}),
         )
         .unwrap();
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
+    let stale = daemon.call_raw(&json!({"op": "set_config", "toml": before["toml"], "expected_revision": before["revision"]})).unwrap_err();
+    assert!(stale.contains("configuration changed"), "{stale}");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
     assert_eq!(
         daemon.call_raw(&json!({"op": "get_config"})).unwrap()["toml"],

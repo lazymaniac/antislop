@@ -2852,7 +2852,9 @@ impl Core {
                 conversation,
                 plan_id: Some(task.plan_id.clone()),
                 role: worker.clone(),
-                profile: config.resolve(spec.kind, RoleKind::Executor),
+                profile: self
+                    .config_snapshot()
+                    .resolve(spec.kind, RoleKind::Executor),
                 cwd: workdir.clone(),
                 add_dirs: if spec.writes {
                     vec![]
@@ -2963,7 +2965,9 @@ impl Core {
                 conversation,
                 plan_id: Some(task.plan_id.clone()),
                 role: verifier.clone(),
-                profile: config.resolve(spec.kind, RoleKind::Verifier),
+                profile: self
+                    .config_snapshot()
+                    .resolve(spec.kind, RoleKind::Verifier),
                 cwd: workdir.clone(),
                 add_dirs: add_dirs.clone(),
                 access: agent::Access::ReadOnly,
@@ -2999,7 +3003,9 @@ impl Core {
                     conversation,
                     plan_id: Some(task.plan_id.clone()),
                     role: verifier.clone(),
-                    profile: config.resolve(spec.kind, RoleKind::Verifier),
+                    profile: self
+                        .config_snapshot()
+                        .resolve(spec.kind, RoleKind::Verifier),
                     cwd: workdir.clone(),
                     add_dirs: add_dirs.clone(),
                     access: agent::Access::ReadOnly,
