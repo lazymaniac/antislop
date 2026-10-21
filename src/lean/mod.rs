@@ -260,9 +260,15 @@ impl Core {
             core.wake(&conversation);
         }
         for (conversation, plan) in interrupted {
-            if core.autonomous(&conversation).unwrap_or(false) {
-                let _ = core.resume_plan(&conversation, &plan);
+            if let Err(error) = core.resume_plan(&conversation, &plan) {
+                core.notice(
+                    &conversation,
+                    &format!("could not resume plan {plan}: {error}"),
+                );
             }
+        }
+        for (conversation, plan) in core.store.pending_mail_plans()? {
+            core.answer_in_background(&conversation, &plan);
         }
         Ok(core)
     }
@@ -354,10 +360,7 @@ impl Core {
 
         if to == "all" {
             let plan = self.store.latest_plan(conversation)?;
-            let targets: Vec<_> = plan
-                .iter()
-                .filter(|task| !status::finished(&task.status))
-                .collect();
+            let targets: Vec<_> = plan.iter().collect();
             if targets.is_empty() {
                 self.store.append_event(
                     conversation,
@@ -409,6 +412,9 @@ impl Core {
                     state: "queued".into(),
                 },
             )?;
+            if let Some(task) = plan.first() {
+                self.answer_in_background(conversation, &task.plan_id);
+            }
             return Ok(json!({
                 "mail": mail_ids.first().copied().unwrap_or(0),
                 "mail_ids": mail_ids,
@@ -463,7 +469,7 @@ impl Core {
                     state: "queued".into(),
                 },
             )?;
-            if !is_verifier && task.status == status::APPROVED {
+            if status::finished(&task.status) {
                 self.answer_in_background(conversation, &task.plan_id);
             }
             return Ok(json!({
@@ -1125,6 +1131,14 @@ impl Core {
         self: &Arc<Self>,
         req: TaskRecoveryRequest,
     ) -> Result<TaskRecoveryResponse> {
+        self.recover_task_as(req, "user")
+    }
+
+    fn recover_task_as(
+        self: &Arc<Self>,
+        req: TaskRecoveryRequest,
+        actor: &str,
+    ) -> Result<TaskRecoveryResponse> {
         let conv = self.store.conversation(&req.conversation)?;
         let project = PathBuf::from(conv.project);
         let mut task = self.task(&req.plan, &req.task)?;
@@ -1185,14 +1199,10 @@ impl Core {
                         task.status = status::APPROVED.to_string();
                         notice = format!("committed as {commit}");
                         card = (Outcome::Committed, Some(commit));
-                        let worktree = self.state.join("worktrees").join(&task.id);
-                        let _ = git::remove_worktree(&project, &worktree, &branch(&task));
                     }
                     git::Integration::Applied => {
                         task.status = status::APPROVED.to_string();
                         notice = "applied to the working tree, not committed".to_string();
-                        let worktree = self.state.join("worktrees").join(&task.id);
-                        let _ = git::remove_worktree(&project, &worktree, &branch(&task));
                     }
                     git::Integration::Conflict(conflicts) => {
                         return Err(Error::Invalid(format!(
@@ -1207,7 +1217,21 @@ impl Core {
                         )));
                     }
                 }
-                integrated_files = req.consent_files.unwrap_or(all_changed);
+                integrated_files = req.consent_files.unwrap_or_else(|| all_changed.clone());
+                if integrated_files.len() < all_changed.len() {
+                    let current = git::snapshot(&project, "Check remaining task changes")?;
+                    if git::matching_paths(&project, &current, &change, &all_changed)?.len()
+                        != all_changed.len()
+                    {
+                        task.status = status::NEEDS_USER.to_string();
+                    }
+                }
+                if task.status == status::APPROVED {
+                    let worktree = self.state.join("worktrees").join(&task.id);
+                    if worktree.exists() {
+                        git::remove_worktree(&project, &worktree, &branch(&task))?;
+                    }
+                }
                 land(
                     &mut task,
                     card.0,
@@ -1226,6 +1250,7 @@ impl Core {
                     Some(&req.plan),
                     "task_recovery",
                     &json!({
+                        "actor": actor,
                         "task": task.id,
                         "action": tasks::action::INTEGRATE_WITH_CONSENT,
                         "status": task.status,
@@ -1234,14 +1259,16 @@ impl Core {
                         "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
                     }),
                 )?;
-                self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
+                if task.status == status::APPROVED {
+                    self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
+                }
                 self.maybe_continue_plan(&req.conversation, &req.plan)?;
             }
             RecoveryAction::KeepOnBranch => {
                 let b = branch(&task);
                 preserved_branch = Some(b.clone());
                 notice = format!("change preserved on branch {b}; working tree untouched");
-                task.status = status::APPROVED.to_string();
+                task.status = status::NEEDS_USER.to_string();
                 land(
                     &mut task,
                     Outcome::LeftOnBranch,
@@ -1262,6 +1289,7 @@ impl Core {
                     Some(&req.plan),
                     "task_recovery",
                     &json!({
+                        "actor": actor,
                         "task": task.id,
                         "action": tasks::action::KEEP_ON_BRANCH,
                         "status": task.status,
@@ -1269,8 +1297,6 @@ impl Core {
                         "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
                     }),
                 )?;
-                self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
-                self.maybe_continue_plan(&req.conversation, &req.plan)?;
             }
             RecoveryAction::VerifyManualSnapshot => {
                 let snapshot = git::snapshot(
@@ -1334,17 +1360,33 @@ impl Core {
                 if verdict.approved {
                     task.result = Some(snapshot.clone());
                     task.status = status::APPROVED.to_string();
-                    notice = format!("manual fixes verified and approved on snapshot {snapshot}");
+                    let (outcome, commit) = if self.config.policy.local_commits && !fixed.is_empty()
+                    {
+                        (
+                            Outcome::InPlaceCommitted,
+                            Some(git::commit_paths(&project, &fixed, &spec.title)?),
+                        )
+                    } else {
+                        (Outcome::InPlaceApplied, None)
+                    };
+                    notice = match &commit {
+                        Some(commit) => format!("manual fixes verified and committed as {commit}"),
+                        None => format!("manual fixes verified and applied on snapshot {snapshot}"),
+                    };
                     land(
                         &mut task,
-                        Outcome::InPlaceCommitted,
+                        outcome,
                         "recovery",
                         &notice,
-                        Some(&snapshot),
+                        commit.as_deref(),
                         None,
                         &fixed,
                     );
                     note(&mut task, notice.clone());
+                    let worktree = self.state.join("worktrees").join(&task.id);
+                    if worktree.exists() {
+                        git::remove_worktree(&project, &worktree, &branch(&task))?;
+                    }
                     self.store.update_task(&task)?;
                     self.announce_task(&req.conversation, &task, None);
                     self.store.append_event(
@@ -1353,6 +1395,7 @@ impl Core {
                         Some(&req.plan),
                         "task_recovery",
                         &json!({
+                            "actor": actor,
                             "task": task.id,
                             "action": tasks::action::VERIFY_MANUAL_SNAPSHOT,
                             "status": task.status,
@@ -1387,6 +1430,7 @@ impl Core {
                         Some(&req.plan),
                         "task_recovery",
                         &json!({
+                            "actor": actor,
                             "task": task.id,
                             "action": tasks::action::VERIFY_MANUAL_SNAPSHOT,
                             "status": task.status,
@@ -1409,11 +1453,11 @@ impl Core {
                         text: msg.clone(),
                         state: "queued".into(),
                     };
-                    let _ = self.store.add_mail(
+                    self.store.add_mail(
                         &req.conversation,
                         &format!("worker:{}", task.id),
                         &mail,
-                    );
+                    )?;
                 }
                 task.status = status::QUEUED.to_string();
                 task.verdict = None;
@@ -1428,6 +1472,7 @@ impl Core {
                     Some(&req.plan),
                     "task_recovery",
                     &json!({
+                        "actor": actor,
                         "task": task.id,
                         "action": tasks::action::RETRY_WITH_GUIDANCE,
                         "status": task.status,
@@ -1452,6 +1497,7 @@ impl Core {
                     Some(&req.plan),
                     "task_recovery",
                     &json!({
+                        "actor": actor,
                         "task": task.id,
                         "action": tasks::action::EXTEND_ROUNDS,
                         "status": task.status
@@ -1460,21 +1506,56 @@ impl Core {
                 self.maybe_continue_plan(&req.conversation, &req.plan)?;
             }
             RecoveryAction::ForceApprove => {
+                let worker_done = self
+                    .store
+                    .last_turn(&req.conversation, &format!("worker:{}", task.id))?
+                    .is_some_and(|turn| turn.status == TurnStatus::Done);
+                require(
+                    worker_done && task.report.is_some() && task.round > 0,
+                    "a task that never ran cannot be approved; retry it instead",
+                )?;
+                if spec.writes {
+                    require(
+                        task.base.is_some() && task.result.is_some(),
+                        "a writer must have a result commit before approval",
+                    )?;
+                    let worktree = self.state.join("worktrees").join(&task.id);
+                    git::add_worktree(
+                        &project,
+                        &worktree,
+                        &branch(&task),
+                        task.result.as_deref().unwrap(),
+                    )?;
+                    // integrate takes the same mutex; the recovery guard already serializes it.
+                    drop(_one_at_a_time);
+                    self.integrate(&req.conversation, &mut task, &spec, &project, &worktree)?;
+                    require(
+                        task.status == status::APPROVED,
+                        "the result is not integrated; resolve the recorded integration problem",
+                    )?;
+                }
                 task.status = status::APPROVED.to_string();
                 notice = req
                     .message
                     .as_deref()
-                    .map(|m| format!("force approved by user: {m}"))
-                    .unwrap_or_else(|| "force approved by user".to_string());
-                land(
-                    &mut task,
-                    Outcome::ForceApproved,
-                    "recovery",
-                    &notice,
-                    None,
-                    None,
-                    &[],
-                );
+                    .map(|m| format!("verification overridden by {actor}: {m}"))
+                    .unwrap_or_else(|| format!("verification overridden by {actor}"));
+                if spec.writes {
+                    if let Some(feedback) = task.feedback.as_mut() {
+                        feedback["verification_override"] =
+                            json!({"source": "recovery", "detail": notice});
+                    }
+                } else {
+                    land(
+                        &mut task,
+                        Outcome::ForceApproved,
+                        "recovery",
+                        &notice,
+                        None,
+                        None,
+                        &[],
+                    );
+                }
                 note(&mut task, notice.clone());
                 self.store.update_task(&task)?;
                 self.announce_task(&req.conversation, &task, None);
@@ -1484,6 +1565,7 @@ impl Core {
                     Some(&req.plan),
                     "task_recovery",
                     &json!({
+                        "actor": actor,
                         "task": task.id,
                         "action": tasks::action::FORCE_APPROVE,
                         "status": task.status,
@@ -1497,33 +1579,9 @@ impl Core {
                 self.maybe_continue_plan(&req.conversation, &req.plan)?;
             }
             RecoveryAction::CancelTask => {
-                task.status = status::CANCELLED.to_string();
-                notice = "cancelled by user recovery".to_string();
-                land(
-                    &mut task,
-                    Outcome::Cancelled,
-                    "recovery",
-                    &notice,
-                    None,
-                    None,
-                    &[],
-                );
-                self.store.update_task(&task)?;
-                self.announce_task(&req.conversation, &task, Some(&notice));
-                self.store.append_event(
-                    &req.conversation,
-                    None,
-                    Some(&req.plan),
-                    "task_recovery",
-                    &json!({
-                        "task": task.id,
-                        "action": tasks::action::CANCEL_TASK,
-                        "status": task.status,
-                        "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
-                    }),
-                )?;
-                self.cancel_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
-                self.maybe_continue_plan(&req.conversation, &req.plan)?;
+                return Err(Error::Invalid(
+                    "tasks cannot be discarded; pause the plan or retry the task".into(),
+                ));
             }
         }
 
@@ -1538,61 +1596,6 @@ impl Core {
             new_freshness_token,
             notice,
         })
-    }
-
-    fn cancel_dependent_tasks(
-        &self,
-        conversation: &str,
-        plan_id: &str,
-        cancelled_task_id: &str,
-    ) -> Result<()> {
-        let tasks = self.store.plan(plan_id)?;
-        let target_spec_id = tasks
-            .iter()
-            .find(|t| t.id == cancelled_task_id || t.spec["id"] == cancelled_task_id)
-            .map(|t| t.spec["id"].as_str().unwrap_or_default().to_owned())
-            .unwrap_or_default();
-
-        let mut cancelled_ids = std::collections::HashSet::new();
-        if !target_spec_id.is_empty() {
-            cancelled_ids.insert(target_spec_id);
-        }
-        cancelled_ids.insert(cancelled_task_id.to_string());
-
-        let mut changed = true;
-        while changed {
-            changed = false;
-            let current_tasks = self.store.plan(plan_id)?;
-            for mut t in current_tasks {
-                if t.status == status::APPROVED || t.status == status::CANCELLED {
-                    continue;
-                }
-                let depends: Vec<String> =
-                    serde_json::from_value(t.spec["depends_on"].clone()).unwrap_or_default();
-                if depends.iter().any(|d| cancelled_ids.contains(d)) {
-                    t.status = status::CANCELLED.to_string();
-                    let reason = "cancelled due to cancelled dependency";
-                    land(
-                        &mut t,
-                        Outcome::Cancelled,
-                        "recovery",
-                        reason,
-                        None,
-                        None,
-                        &[],
-                    );
-                    self.store.update_task(&t)?;
-                    self.announce_task(conversation, &t, Some(reason));
-                    let spec_id = t.spec["id"].as_str().unwrap_or_default().to_owned();
-                    if !spec_id.is_empty() {
-                        cancelled_ids.insert(spec_id);
-                    }
-                    cancelled_ids.insert(t.id.clone());
-                    changed = true;
-                }
-            }
-        }
-        Ok(())
     }
 
     fn unblock_dependent_tasks(
@@ -1611,7 +1614,7 @@ impl Core {
 
         let mut to_unblock = Vec::new();
         for task in &tasks {
-            if task.status != status::SKIPPED {
+            if !matches!(task.status.as_str(), status::SKIPPED | status::CANCELLED) {
                 continue;
             }
             let depends: Vec<String> =
@@ -1647,12 +1650,9 @@ impl Core {
     /// unblocked this way only a few times, then it waits for the user.
     fn unblock_by_orchestrator(self: &Arc<Self>, conversation: &str, steps: &[tasks::Unblocking]) {
         const AUTOMATIC_LIMIT: u32 = 3;
-        const ALLOWED: [RecoveryAction; 5] = [
+        const ALLOWED: [RecoveryAction; 2] = [
             RecoveryAction::RetryWithGuidance,
             RecoveryAction::ExtendRounds,
-            RecoveryAction::ForceApprove,
-            RecoveryAction::KeepOnBranch,
-            RecoveryAction::CancelTask,
         ];
         let autonomous = self.autonomous(conversation).unwrap_or(false);
         let Some(plan) = self
@@ -1685,15 +1685,22 @@ impl Core {
                     )?;
                     *count += 1;
                 }
-                let response = self.recover_task(TaskRecoveryRequest {
-                    conversation: conversation.to_owned(),
-                    plan: plan.clone(),
-                    task: task.id.clone(),
-                    action,
-                    consent_files: None,
-                    freshness_token: self.task_freshness_token(conversation, &plan, &task.id)?,
-                    message: step.message.clone(),
-                })?;
+                let response = self.recover_task_as(
+                    TaskRecoveryRequest {
+                        conversation: conversation.to_owned(),
+                        plan: plan.clone(),
+                        task: task.id.clone(),
+                        action,
+                        consent_files: None,
+                        freshness_token: self.task_freshness_token(
+                            conversation,
+                            &plan,
+                            &task.id,
+                        )?,
+                        message: step.message.clone(),
+                    },
+                    ORCHESTRATOR,
+                )?;
                 Ok(response.status)
             })();
             self.notice(
@@ -1779,6 +1786,13 @@ impl Core {
         std::thread::spawn(move || {
             core.warn_of_uncommitted(&conversation, tasks_write);
             core.run_plan(&conversation, &plan_id, &cancel);
+            if cancel.load(Ordering::SeqCst) {
+                core.plans
+                    .lock()
+                    .expect("plans mutex")
+                    .remove(&conversation);
+                return;
+            }
             // If any tasks are blocked waiting for user action or recovery,
             // do not run the premature audit or report; await recovery action.
             let tasks = core.store.plan(&plan_id).unwrap_or_default();
@@ -1857,8 +1871,8 @@ impl Core {
             None,
             "notice",
             &json!({"text": format!(
-                "uncommitted changes in {}{}: writers start from the last commit and do not see them; \
-                 a change to one of these files waits for you when it lands",
+                "uncommitted changes in {}{}: writers include these local changes in their starting snapshot; \
+                 later edits remain protected during integration",
                 shown.join(", "),
                 if more > 0 { format!(" and {more} more") } else { String::new() }
             )}),
@@ -2046,6 +2060,9 @@ impl Core {
             ORCHESTRATOR,
             &answer,
         )?;
+        if let Some(task) = latest.first() {
+            self.answer_in_background(conversation, &task.plan_id);
+        }
         // The comment agent says which comments its plan took care of.
         let (answer, addressed) = if is_comment {
             feedback::split(&answer)
@@ -2586,24 +2603,15 @@ impl Core {
                     {
                         continue;
                     }
+                    if task.status == status::SKIPPED {
+                        let _ = self.set_status(conversation, task, status::QUEUED);
+                        settled = true;
+                        continue;
+                    }
                     let depends: Vec<String> =
                         serde_json::from_value(task.spec["depends_on"].clone()).unwrap_or_default();
-                    let blocked = cancel.load(Ordering::SeqCst)
-                        || depends.iter().any(|dependency| {
-                            state.get(dependency).is_some_and(|status| {
-                                status::finished(status) && status != status::APPROVED
-                            })
-                        });
-                    if blocked {
-                        if task.status == status::QUEUED {
-                            let next = if cancel.load(Ordering::SeqCst) {
-                                status::CANCELLED
-                            } else {
-                                status::SKIPPED
-                            };
-                            let _ = self.set_status(conversation, task, next);
-                            settled = true;
-                        }
+                    if cancel.load(Ordering::SeqCst) {
+                        continue;
                     } else if depends.iter().all(|dependency| {
                         state.get(dependency).map(String::as_str) == Some(status::APPROVED)
                     }) {
@@ -2676,7 +2684,7 @@ impl Core {
     /// Worker and verifier take turns until the verifier approves or the
     /// rounds run out; the worker resumes its own session with the findings.
     fn run_task(&self, conversation: &str, task: &mut Task, cancel: &AtomicBool) -> Result<()> {
-        let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
+        let mut spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let in_place = spec.writes && self.config.workspace.mode == WorkspaceMode::InPlace;
         let autonomous = self.autonomous(conversation)?;
@@ -2700,7 +2708,7 @@ impl Core {
                     Err(std::sync::TryLockError::WouldBlock) => {}
                 }
                 if cancel.load(Ordering::SeqCst) {
-                    return self.set_status(conversation, task, status::CANCELLED);
+                    return self.set_status(conversation, task, status::QUEUED);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
@@ -2725,7 +2733,13 @@ impl Core {
             )?;
             let base = match &task.base {
                 Some(base) => base.clone(),
-                None => self.writer_base(&task.plan_id, &spec, &project)?,
+                None => match self.writer_base(&task.plan_id, &spec, &project) {
+                    Ok(base) => base,
+                    Err(error) if error.to_string().contains("could not combine the results") => {
+                        self.repair_writer_base(conversation, task, &mut spec, &project, &error)?
+                    }
+                    Err(error) => return Err(error),
+                },
             };
             let path = self.state.join("worktrees").join(&task.id);
             // A resumed writer whose worktree is gone continues from its work.
@@ -3130,7 +3144,7 @@ impl Core {
     }
 
     /// Queues a message for its recipients: the orchestrator, one task's
-    /// worker, or (`all`) the workers of every unfinished task but the
+    /// worker, or (`all`) the workers of every task but the
     /// sender's.
     fn deliver(
         &self,
@@ -3150,7 +3164,7 @@ impl Core {
             AUDITOR => vec![(AUDITOR.into(), AUDITOR.into())],
             "all" => plan
                 .iter()
-                .filter(|task| !status::finished(&task.status) && task.spec["id"] != own_task)
+                .filter(|task| task.spec["id"] != own_task)
                 .map(|task| {
                     (
                         task.spec["id"].as_str().unwrap_or_default().to_owned(),
@@ -3166,68 +3180,10 @@ impl Core {
                 } else {
                     (to, false)
                 };
-                let known = plan.iter().any(|task| task.spec["id"] == target_id);
-                // An approved task takes no more turns of its own, but its
-                // worker still answers messages (`answer_waiting`).
                 let live: Vec<_> = plan
                     .iter()
-                    .filter(|task| {
-                        task.spec["id"] == target_id
-                            && (!status::finished(&task.status)
-                                || (!is_verifier && task.status == status::APPROVED))
-                    })
+                    .filter(|task| task.spec["id"] == target_id || task.id == target_id)
                     .collect();
-                if known && live.is_empty() {
-                    self.store.append_event(
-                        conversation,
-                        None,
-                        plan_id,
-                        "mail_rejected",
-                        &json!({"sender": sender, "recipient": message.to, "text": message.text,
-                                "reason": "the recipient's task has already finished"}),
-                    )?;
-                    self.store.add_mail(
-                        conversation,
-                        ORCHESTRATOR,
-                        &Mail {
-                            id: 0,
-                            sender: sender.into(),
-                            recipient: ORCHESTRATOR.into(),
-                            kind: message.kind.clone(),
-                            text: format!(
-                                "(for {}, whose task has finished) {}",
-                                message.to, message.text
-                            ),
-                            created_ms: 0,
-                            delivered_turn: None,
-                            delivered_ms: None,
-                            state: "queued".into(),
-                        },
-                    )?;
-                    // The sender learns that nobody will read it.
-                    if let Some(sender_task) = plan.iter().find(|task| task.spec["id"] == own_task)
-                    {
-                        let role = format!("worker:{}", sender_task.id);
-                        self.store.add_mail(
-                            conversation,
-                            &role,
-                            &Mail {
-                                id: 0,
-                                sender: RUNTIME.into(),
-                                recipient: role.clone(),
-                                kind: "status".into(),
-                                text: format!(
-                                    "Your message to {} was not delivered: its task has finished and takes no more turns.",
-                                    message.to
-                                ),
-                                created_ms: 0,
-                                delivered_turn: None,
-                                delivered_ms: None,
-                                state: "queued".into(),
-                            },
-                        )?;
-                    }
-                }
                 live.into_iter()
                     .map(|task| {
                         let role = if is_verifier {
@@ -3270,7 +3226,7 @@ impl Core {
         Ok(())
     }
 
-    /// Answers waiting messages of approved tasks in the background, for mail
+    /// Answers waiting messages of stopped tasks in the background, for mail
     /// that arrives when no task of the plan is about to read it: the user's,
     /// or any left over when a task was approved by hand. It joins a running
     /// plan's cancellation, or holds the conversation busy and cancellable
@@ -3278,11 +3234,12 @@ impl Core {
     fn answer_in_background(self: &Arc<Self>, conversation: &str, plan_id: &str) {
         let waiting = self.store.plan(plan_id).is_ok_and(|tasks| {
             tasks.iter().any(|task| {
-                task.status == status::APPROVED
-                    && self
-                        .store
-                        .pending_mail(conversation, &format!("worker:{}", task.id))
-                        .is_ok_and(|mail| !mail.is_empty())
+                status::finished(&task.status)
+                    && ["worker", "verifier"].iter().any(|role| {
+                        self.store
+                            .pending_mail(conversation, &format!("{role}:{}", task.id))
+                            .is_ok_and(|mail| !mail.is_empty())
+                    })
             })
         });
         if !waiting {
@@ -3308,7 +3265,7 @@ impl Core {
                     &conversation,
                     None,
                     Some(&plan_id),
-                    "mail_rejected",
+                    "mail_delivery_failed",
                     &json!({"sender": RUNTIME, "recipient": "?", "text": "",
                             "reason": format!("answering waiting messages failed: {error}")}),
                 );
@@ -3322,45 +3279,58 @@ impl Core {
         });
     }
 
-    /// Gives each approved task of the plan whose worker has waiting
+    /// Gives each stopped task of the plan whose agents have waiting
     /// messages a read-only turn to answer them. An approved task runs no
     /// round of its own, so without this its mail would never be read.
     fn answer_waiting(&self, conversation: &str, plan_id: &str, cancel: &AtomicBool) -> Result<()> {
         let _answering = self.answering.lock().unwrap_or_else(|e| e.into_inner());
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         for task in self.store.plan(plan_id)? {
-            if task.status != status::APPROVED {
+            if !status::finished(&task.status) {
                 continue;
             }
-            let worker = format!("worker:{}", task.id);
             let Ok(spec) = serde_json::from_value::<TaskSpec>(task.spec.clone()) else {
                 continue;
             };
-            for _ in 0..MAIL_TURNS {
-                if cancel.load(Ordering::SeqCst)
-                    || self.store.pending_mail(conversation, &worker)?.is_empty()
-                {
-                    break;
+            for (role, kind, sender) in [
+                (
+                    format!("worker:{}", task.id),
+                    RoleKind::Executor,
+                    spec.id.clone(),
+                ),
+                (
+                    format!("verifier:{}", task.id),
+                    RoleKind::Verifier,
+                    format!("{}/verifier", spec.id),
+                ),
+            ] {
+                for _ in 0..MAIL_TURNS {
+                    if cancel.load(Ordering::SeqCst)
+                        || self.store.pending_mail(conversation, &role)?.is_empty()
+                    {
+                        break;
+                    }
+                    let setup = TurnSetup {
+                        conversation,
+                        plan_id: Some(task.plan_id.clone()),
+                        role: role.clone(),
+                        profile: self.config.resolve(spec.kind, kind),
+                        cwd: project.clone(),
+                        add_dirs: vec![],
+                        access: agent::Access::ReadOnly,
+                        upto_message: 0,
+                    };
+                    let title = spec.title.clone();
+                    let Some(answer) =
+                        self.turn(setup, cancel, |first| tasks::answer_prompt(&title, first))?
+                    else {
+                        break;
+                    };
+                    self.post(conversation, Some(&task.plan_id), &sender, &answer)?;
                 }
-                let setup = TurnSetup {
-                    conversation,
-                    plan_id: Some(task.plan_id.clone()),
-                    role: worker.clone(),
-                    profile: self.config.resolve(spec.kind, RoleKind::Executor),
-                    cwd: project.clone(),
-                    add_dirs: vec![],
-                    access: agent::Access::ReadOnly,
-                    upto_message: 0,
-                };
-                let title = spec.title.clone();
-                let Some(answer) =
-                    self.turn(setup, cancel, |first| tasks::answer_prompt(&title, first))?
-                else {
-                    break;
-                };
-                self.post(conversation, Some(&task.plan_id), &spec.id, &answer)?;
             }
         }
+
         Ok(())
     }
 
@@ -3386,35 +3356,126 @@ impl Core {
     /// Where a writer starts: from the result of the one task it depends on,
     /// from the user's HEAD when none of them wrote, and from HEAD with all
     /// their results laid on it when several did.
+    fn dependency_tasks(&self, plan_id: &str, spec: &TaskSpec) -> Result<Vec<Task>> {
+        let plan = self.store.plan(plan_id)?;
+        fn collect(
+            id: &str,
+            plan: &[Task],
+            seen: &mut std::collections::HashSet<String>,
+            ordered: &mut Vec<Task>,
+        ) -> Result<()> {
+            if !seen.insert(id.to_owned()) {
+                return Ok(());
+            }
+            let task = plan
+                .iter()
+                .find(|task| task.spec["id"] == id)
+                .ok_or_else(|| Error::Invalid(format!("missing dependency {id}")))?;
+            let deps: Vec<String> = serde_json::from_value(task.spec["depends_on"].clone())?;
+            for dep in deps {
+                collect(&dep, plan, seen, ordered)?;
+            }
+            ordered.push(task.clone());
+            Ok(())
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut ordered = Vec::new();
+        for dep in &spec.depends_on {
+            collect(dep, &plan, &mut seen, &mut ordered)?;
+        }
+        Ok(ordered)
+    }
+
     fn writer_base(&self, plan_id: &str, spec: &TaskSpec, project: &Path) -> Result<String> {
-        let changes: Vec<(String, String)> = self
-            .store
-            .plan(plan_id)?
+        let _integration = self.integrating.lock().expect("integration mutex");
+        let changes: Vec<_> = self
+            .dependency_tasks(plan_id, spec)?
             .into_iter()
-            .filter(|task| {
-                spec.depends_on
-                    .iter()
-                    .any(|dependency| task.spec["id"] == dependency.as_str())
-            })
             .filter_map(|task| Some((task.base?, task.result?)))
             .collect();
-        match changes.as_slice() {
-            [] => git::head(project),
-            [(_, single)] => Ok(single.clone()),
-            _ => {
-                let scratch = self
-                    .state
-                    .join("worktrees")
-                    .join(format!("base-{plan_id}-{}", spec.id));
-                git::combine(project, &scratch, &git::head(project)?, &changes).map_err(|error| {
-                    crate::Error::Invalid(format!(
-                        "could not combine the results of {} for {}: {error}",
-                        spec.depends_on.join(", "),
-                        spec.id
-                    ))
-                })
+        let onto = if git::uncommitted(project)?.is_empty() {
+            git::head(project)?
+        } else {
+            git::snapshot(project, "User working tree before task")?
+        };
+        if changes.is_empty() {
+            return Ok(onto);
+        }
+        let scratch = self
+            .state
+            .join("worktrees")
+            .join(format!("base-{plan_id}-{}", spec.id));
+        git::combine(project, &scratch, &onto, &changes).map_err(|error| {
+            Error::Invalid(format!(
+                "could not combine the results of {} for {}: {error}",
+                spec.depends_on.join(", "),
+                spec.id
+            ))
+        })
+    }
+
+    /// A real merge conflict is work for the writer, not a failure before its
+    /// first turn. Preserve the original error and exact input commits in mail.
+    fn repair_writer_base(
+        &self,
+        conversation: &str,
+        task: &mut Task,
+        spec: &mut TaskSpec,
+        project: &Path,
+        error: &Error,
+    ) -> Result<String> {
+        let upstream = self.dependency_tasks(&task.plan_id, spec)?;
+        let mut inputs = Vec::new();
+        for dependency in upstream {
+            if let (Some(base), Some(result)) = (&dependency.base, &dependency.result) {
+                inputs.push(format!(
+                    "{}: git diff {base} {result}",
+                    dependency.spec["id"]
+                ));
+                let scope: Vec<String> =
+                    serde_json::from_value(dependency.spec["scope"].clone()).unwrap_or_default();
+                for path in scope {
+                    if !spec.scope.contains(&path) {
+                        spec.scope.push(path);
+                    }
+                }
             }
         }
+        let guidance = format!(
+            "Automatic composition failed: {error}\nResolve the upstream changes below in your allocated worktree first, preserving every dependency's behavior and local user edits, then complete your original goal. These upstream paths are included in your scope for this repair. Use Git's stored commits, never alter another task's worktree or the primary working tree.\n{}",
+            inputs.join("\n")
+        );
+        spec.goal = format!(
+            "Integrate the required upstream results as described in the runtime guidance before this goal: {}",
+            spec.goal
+        );
+        task.spec = serde_json::to_value(&spec)?;
+        self.store.update_task(task)?;
+        let role = format!("worker:{}", task.id);
+        self.store.add_mail(
+            conversation,
+            &role,
+            &Mail {
+                id: 0,
+                sender: RUNTIME.into(),
+                recipient: role.clone(),
+                kind: "guidance".into(),
+                text: guidance,
+                created_ms: 0,
+                delivered_turn: None,
+                delivered_ms: None,
+                state: "queued".into(),
+            },
+        )?;
+        self.store.append_event(
+            conversation,
+            None,
+            Some(&task.plan_id),
+            "base_repair",
+            &json!({"task": task.id, "error": error.to_string(), "inputs": inputs}),
+        )?;
+        let _integration = self.integrating.lock().expect("integration mutex");
+        git::snapshot(project, "User working tree before task")
     }
 
     /// Lands an approved writer's work on the user's branch as one change.
@@ -3464,13 +3525,24 @@ impl Core {
                 Some(&branch(task)),
                 &[],
             );
-            return self.set_status(conversation, task, status::APPROVED);
+            return self.stop(conversation, task, status::NEEDS_USER, Some(&text));
         }
         let change = git::squash(worktree, &base, &spec.title)?;
         task.result = Some(change.clone());
         let outcome = {
             let _one_at_a_time = self.integrating.lock().expect("integration mutex");
-            git::integrate(project, &base, &change, policy.local_commits)?
+            let changed = git::changed_files(project, &base, &change)?;
+            let dirty = git::uncommitted(project)?;
+            let protected: Vec<String> = self
+                .in_place_user_edits(project, &base)?
+                .into_iter()
+                .filter(|path| changed.contains(path) && dirty.contains(path))
+                .collect();
+            if protected.is_empty() {
+                git::integrate(project, &base, &change, policy.local_commits)?
+            } else {
+                git::Integration::UserEdits(protected)
+            }
         };
         let landed = git::changed_files(project, &base, &change).unwrap_or_default();
         let (status, text) = match outcome {
@@ -3558,7 +3630,8 @@ impl Core {
     /// last approved writer's output for that path. Only paths that writer
     /// changed count: an approved snapshot also contains unrelated user edits.
     fn in_place_user_edits(&self, project: &Path, base: &str) -> Result<Vec<String>> {
-        let mut protected = git::changed_files(project, &format!("{base}^"), base)?;
+        let committed_base = git::common_base(project, base, "HEAD")?;
+        let mut protected = git::changed_files(project, &committed_base, base)?;
         if protected.is_empty() {
             return Ok(protected);
         }
@@ -3660,7 +3733,7 @@ impl Core {
             .and_then(|turn| turn.error)
             .unwrap_or_else(|| "no reason recorded".into());
         let next = if cancel.load(Ordering::SeqCst) {
-            status::CANCELLED
+            status::QUEUED
         } else if tasks::needs_user_action(&error) {
             status::WAITING
         } else {
@@ -4005,19 +4078,19 @@ fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
     }
     let skipped: Vec<&str> = tasks
         .iter()
-        .filter(|task| task.status == status::SKIPPED)
+        .filter(|task| matches!(task.status.as_str(), status::SKIPPED | status::QUEUED))
         .filter_map(|task| task.spec["id"].as_str())
         .collect();
     if !skipped.is_empty() {
         text.push_str(&format!(
-            "\nSkipped because they depend on a blocked step: {}.",
+            "\nWaiting for dependencies; these tasks remain pending: {}.",
             skipped.join(", ")
         ));
     }
     text.push_str(
         "\nWays out: `retry_with_guidance` (the message is the hint for the worker; it \
-         resumes its own session), `extend_rounds`, `force_approve` (accept the result as it \
-         is), `keep_on_branch` (keep a writer's change on a branch and go on), `cancel_task`. \
+         resumes its own session), `extend_rounds`. Never cancel, skip or approve an \
+         unperformed task to bypass a blocker. Preserve every remaining obligation. \
          The user can also use /unblock <task>. To unblock steps, end your answer with:\n\
          ```recover\n{\"actions\":[{\"task\":\"t2\",\"action\":\"retry_with_guidance\",\
          \"message\":\"what to do differently\"}]}\n```",
@@ -4074,4 +4147,129 @@ fn orchestrator_prompt(
         }
     }
     prompt
+}
+
+#[cfg(test)]
+mod reliability_tests {
+    use super::*;
+
+    #[test]
+    fn writer_base_includes_both_dependency_chains_and_local_user_changes() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet", "-b", "main"])
+            .current_dir(root)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        std::fs::write(root.join("user.txt"), "committed\n").unwrap();
+        let head = git::commit_all(root, "initial").unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&root.join(".antislop"), config).unwrap();
+        let conversation = core.start(root).unwrap();
+        let specs: Vec<_> = [
+            ("t1", vec![]),
+            ("t2", vec!["t1"]),
+            ("t3", vec![]),
+            ("t4", vec!["t3"]),
+            ("t5", vec!["t2", "t4"]),
+        ]
+        .into_iter()
+        .map(|(id, deps)| {
+            json!({
+                "id": id, "title": id, "goal": "test", "kind": "implementation",
+                "writes": true, "depends_on": deps, "verifier": {"focus": "inspect diff"}
+            })
+        })
+        .collect();
+        let mut tasks = core.store.add_plan(&conversation.id, &specs).unwrap();
+        for index in 0..4 {
+            let base = if index % 2 == 0 {
+                head.clone()
+            } else {
+                tasks[index - 1].result.clone().unwrap()
+            };
+            let path = root
+                .join(".antislop/worktrees")
+                .join(format!("input-{index}"));
+            let branch = format!("test/input-{index}");
+            git::add_worktree(root, &path, &branch, &base).unwrap();
+            let name = if index < 2 { "config.txt" } else { "ui.txt" };
+            std::fs::write(path.join(name), format!("revision {index}\n")).unwrap();
+            tasks[index].base = Some(base);
+            tasks[index].result = Some(git::commit_all(&path, name).unwrap());
+            tasks[index].status = status::APPROVED.into();
+            tasks[index].round = 1;
+            core.store.update_task(&tasks[index]).unwrap();
+            git::remove_worktree(root, &path, &branch).unwrap();
+        }
+        std::fs::write(root.join("user.txt"), "local edit\n").unwrap();
+        std::fs::write(root.join("draft.txt"), "untracked\n").unwrap();
+        let spec: TaskSpec = serde_json::from_value(tasks[4].spec.clone()).unwrap();
+        let base = core.writer_base(&tasks[4].plan_id, &spec, root).unwrap();
+        let output = std::process::Command::new("git")
+            .args(["show", &format!("{base}:config.txt")])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"revision 1\n");
+        for (file, expected) in [
+            ("ui.txt", "revision 3\n"),
+            ("user.txt", "local edit\n"),
+            ("draft.txt", "untracked\n"),
+        ] {
+            let output = std::process::Command::new("git")
+                .args(["show", &format!("{base}:{file}")])
+                .current_dir(root)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(output.stdout, expected.as_bytes());
+        }
+        assert_eq!(git::head(root).unwrap(), head);
+        assert_eq!(
+            std::fs::read_to_string(root.join("user.txt")).unwrap(),
+            "local edit\n"
+        );
+        assert!(!root.join("config.txt").exists());
+        let scratch = root
+            .join(".antislop/worktrees")
+            .join(format!("base-{}-t5", tasks[4].plan_id));
+        assert!(!scratch.exists());
+        assert!(!scratch.with_extension("patch").exists());
+
+        // A genuine conflict must still let the writer start with exact inputs
+        // and actionable guidance, without exposing a broken primary tree.
+        std::fs::write(root.join("config.txt"), "user conflict\n").unwrap();
+        let error = core
+            .writer_base(&tasks[4].plan_id, &spec, root)
+            .unwrap_err();
+        assert!(error.to_string().contains("git apply"));
+        let mut task = tasks[4].clone();
+        let mut repair_spec = spec;
+        let fallback = core
+            .repair_writer_base(&conversation.id, &mut task, &mut repair_spec, root, &error)
+            .unwrap();
+        let mail = core
+            .store
+            .pending_mail(&conversation.id, &format!("worker:{}", task.id))
+            .unwrap();
+        assert_eq!(mail.len(), 1);
+        assert!(mail[0].text.contains("Resolve the upstream changes"));
+        for dependency in &tasks[..4] {
+            assert!(mail[0].text.contains(dependency.result.as_deref().unwrap()));
+        }
+        let allocated = root.join(".antislop/worktrees/repair");
+        git::add_worktree(root, &allocated, "test/repair", &fallback).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(allocated.join("config.txt")).unwrap(),
+            "user conflict\n"
+        );
+        git::remove_worktree(root, &allocated, "test/repair").unwrap();
+        assert!(!scratch.exists());
+        assert!(!scratch.with_extension("patch").exists());
+        assert_eq!(git::head(root).unwrap(), head);
+    }
 }

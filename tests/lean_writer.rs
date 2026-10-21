@@ -169,7 +169,8 @@ fn config_with(codex: &Path, agy: &Path, change: impl Fn(String) -> String) -> C
         "binary = \"agy\"",
         &format!("binary = {:?}", agy.to_string_lossy()),
     )
-    .replace("required_gates = true", "required_gates = false");
+    .replace("required_gates = true", "required_gates = false")
+    .replace("local_commits = true", "local_commits = false");
     Config::from_toml(&change(text)).unwrap()
 }
 
@@ -969,7 +970,7 @@ fn without_write_permission_the_card_says_the_branch_and_keeps_the_project_clean
     let conversation = run_plan(&core, &project);
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert_eq!(task.status, "needs_user", "{:?}", task.report);
     let (feedback, _) = card(&core, &conversation, "t1");
     assert_eq!(feedback["integration"]["outcome"], "left_on_branch");
     assert_eq!(
@@ -1053,6 +1054,7 @@ fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
 
     // The user commits their own version of the line the change also writes:
     // the approved change no longer applies cleanly.
+    std::fs::write(project.join("hello.txt"), "another user version\n").unwrap();
     git(&project, &["add", "hello.txt"]);
     git(&project, &["commit", "--quiet", "-m", "user version"]);
     core.resume_plan(&conversation, &task.plan_id).unwrap();
@@ -1075,7 +1077,7 @@ fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
     );
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
-        "user draft\n",
+        "another user version\n",
         "the user's committed content is not overwritten by a conflict"
     );
 }
@@ -1401,38 +1403,21 @@ fn a_force_approval_puts_the_users_word_on_the_card() {
     let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
     assert_eq!(task.status, "needs_user");
 
-    core.recover_task(antislop::lean::TaskRecoveryRequest {
-        conversation: conversation.clone(),
-        plan: task.plan_id.clone(),
-        task: "t1".into(),
-        action: antislop::lean::RecoveryAction::ForceApprove,
-        consent_files: None,
-        freshness_token: core
-            .task_freshness_token(&conversation, &task.plan_id, &task.id)
-            .unwrap(),
-        message: Some("the draft is fine".into()),
-    })
-    .unwrap();
-
-    let task = core.task(&task.plan_id, "t1").unwrap();
-    assert_eq!(task.status, "approved");
-    let (feedback, from_event) = card(&core, &conversation, "t1");
-    assert_eq!(
-        from_event, feedback,
-        "the card is announced, not only stored"
-    );
-    assert_eq!(feedback["round"], task.round);
-    assert_eq!(feedback["integration"]["outcome"], "force_approved");
-    assert_eq!(feedback["integration"]["source"], "recovery");
-    assert!(
-        feedback["integration"]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("the draft is fine"),
-        "{}",
-        feedback["integration"]["detail"]
-    );
-    // The user's own file still holds their version; nothing was forced in.
+    let error = core
+        .recover_task(antislop::lean::TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: task.plan_id.clone(),
+            task: "t1".into(),
+            action: antislop::lean::RecoveryAction::ForceApprove,
+            consent_files: None,
+            freshness_token: core
+                .task_freshness_token(&conversation, &task.plan_id, &task.id)
+                .unwrap(),
+            message: Some("the draft is fine".into()),
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("not integrated"));
+    assert_eq!(core.task(&task.plan_id, "t1").unwrap().status, "needs_user");
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "user draft\n"
@@ -1440,7 +1425,7 @@ fn a_force_approval_puts_the_users_word_on_the_card() {
 }
 
 #[test]
-fn cancelling_a_dependency_cancels_the_dependent_card() {
+fn cancelling_a_dependency_cannot_discard_the_dependent_task() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
     std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
@@ -1459,44 +1444,24 @@ fn cancelling_a_dependency_cancels_the_dependent_card() {
     let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
     assert_eq!(task.status, "needs_user");
     // t2 waited on t1, never ran, and the scheduler skipped it once t1 blocked.
-    assert_eq!(core.task(&task.plan_id, "t2").unwrap().status, "skipped");
+    assert_eq!(core.task(&task.plan_id, "t2").unwrap().status, "queued");
 
-    core.recover_task(antislop::lean::TaskRecoveryRequest {
-        conversation: conversation.clone(),
-        plan: task.plan_id.clone(),
-        task: "t1".into(),
-        action: antislop::lean::RecoveryAction::CancelTask,
-        consent_files: None,
-        freshness_token: core
-            .task_freshness_token(&conversation, &task.plan_id, &task.id)
-            .unwrap(),
-        message: None,
-    })
-    .unwrap();
-
-    let cancelled = core.task(&task.plan_id, "t1").unwrap();
-    assert_eq!(cancelled.status, "cancelled");
-    let (feedback, _) = card(&core, &conversation, "t1");
-    assert_eq!(feedback["integration"]["outcome"], "cancelled");
-    assert_eq!(feedback["integration"]["source"], "recovery");
-
-    let dependent = core.task(&task.plan_id, "t2").unwrap();
-    assert_eq!(dependent.status, "cancelled");
-    let (feedback, from_event) = card(&core, &conversation, "t2");
-    assert_eq!(
-        from_event, feedback,
-        "the card is announced, not only stored"
-    );
-    assert_eq!(feedback["round"], dependent.round);
-    assert_eq!(feedback["integration"]["outcome"], "cancelled");
-    assert!(
-        feedback["integration"]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("cancelled due to cancelled dependency"),
-        "{}",
-        feedback["integration"]["detail"]
-    );
+    let error = core
+        .recover_task(antislop::lean::TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: task.plan_id.clone(),
+            task: "t1".into(),
+            action: antislop::lean::RecoveryAction::CancelTask,
+            consent_files: None,
+            freshness_token: core
+                .task_freshness_token(&conversation, &task.plan_id, &task.id)
+                .unwrap(),
+            message: None,
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("cannot be discarded"));
+    assert_eq!(core.task(&task.plan_id, "t1").unwrap().status, "needs_user");
+    assert_eq!(core.task(&task.plan_id, "t2").unwrap().status, "queued");
 }
 
 /// A worker effect longer than the card's byte budget is cut on whole

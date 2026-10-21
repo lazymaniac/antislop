@@ -159,7 +159,7 @@ fn statuses(core: &Core, plan: &str) -> Vec<String> {
 }
 
 #[test]
-fn a_failure_skips_every_task_that_depends_on_it_and_says_why() {
+fn a_failure_keeps_every_dependent_task_pending_and_says_why() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
@@ -168,7 +168,7 @@ fn a_failure_skips_every_task_that_depends_on_it_and_says_why() {
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
-    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+    assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
     let waiting = &core.store.plan(&plan).unwrap()[0];
     let report = waiting.report.as_deref().unwrap();
     assert!(report.contains("not logged in"), "{report}");
@@ -183,7 +183,7 @@ fn after_a_login_resuming_finishes_the_plan_in_the_same_sessions() {
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+    assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
 
     std::fs::write(dir.path().join("logged-in"), "").unwrap();
     core.resume_plan(&conversation, &plan).unwrap();
@@ -225,17 +225,17 @@ fn accepting_runs_the_plan_the_user_saw_not_a_newer_one() {
 }
 
 #[test]
-fn tasks_cut_off_by_a_daemon_restart_end_cancelled() {
+fn supervised_tasks_cut_off_by_a_restart_continue_automatically() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
     let conversation = core.start(&dir.path().join("project")).unwrap().id;
     let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
                       "verifier": {"focus": "f"}});
-    let tasks = core
-        .store
-        .add_plan(&conversation, &[spec.clone(), spec])
-        .unwrap();
+    let mut second = spec.clone();
+    second["id"] = json!("t2");
+    second["depends_on"] = json!(["t1"]);
+    let tasks = core.store.add_plan(&conversation, &[spec, second]).unwrap();
     core.store
         .queue_plan(&conversation, &tasks[0].plan_id)
         .unwrap();
@@ -245,18 +245,10 @@ fn tasks_cut_off_by_a_daemon_restart_end_cancelled() {
     drop(core);
 
     let core = open(dir.path());
+    wait_idle(&core, &conversation);
     let after = core.store.plan(&tasks[0].plan_id).unwrap();
-    assert_eq!(
-        statuses(&core, &tasks[0].plan_id),
-        ["cancelled", "cancelled"]
-    );
-    assert!(
-        after[0]
-            .report
-            .as_deref()
-            .unwrap()
-            .contains("[interrupted]")
-    );
+    assert_eq!(statuses(&core, &tasks[0].plan_id), ["approved", "approved"]);
+    assert!(after.iter().all(|task| task.round > 0));
 }
 
 #[test]
@@ -353,7 +345,7 @@ fn test_blocked_task_prevents_premature_audit() {
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
-    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+    assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
 
     // Verify no audit event was emitted
     let events = core.store.events_since(&conversation, 0, 1000).unwrap();
@@ -379,7 +371,7 @@ fn test_blocked_task_prevents_premature_audit() {
     assert_eq!(reports.len(), 1, "{messages:?}");
     let text = &reports[0].text;
     assert!(text.contains("is waiting after"), "{text}");
-    assert!(text.contains("Skipped because they depend on a blocked step"));
+    assert!(text.contains("Waiting for dependencies; these tasks remain pending"));
     assert!(text.contains("/unblock"));
 }
 
@@ -397,7 +389,7 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
     wait_idle(&core, &conversation);
 
     // w1 stopped because of user edit, w2 was skipped
-    assert_eq!(statuses(&core, &plan), ["needs_user", "skipped"]);
+    assert_eq!(statuses(&core, &plan), ["needs_user", "queued"]);
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "user edit\n"
@@ -434,7 +426,7 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
 }
 
 #[test]
-fn test_recover_task_keep_on_branch_unblocks_dag() {
+fn preserving_a_branch_keeps_integration_and_dependents_pending() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     std::fs::write(project.join("hello.txt"), "user edit\n").unwrap();
@@ -445,7 +437,7 @@ fn test_recover_task_keep_on_branch_unblocks_dag() {
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
-    assert_eq!(statuses(&core, &plan), ["needs_user", "skipped"]);
+    assert_eq!(statuses(&core, &plan), ["needs_user", "queued"]);
     let tasks = core.store.plan(&plan).unwrap();
     let w1_id = &tasks[0].id;
     let branch = format!("antislop/{}", &w1_id[..8]);
@@ -466,7 +458,7 @@ fn test_recover_task_keep_on_branch_unblocks_dag() {
         })
         .unwrap();
 
-    assert_eq!(resp.status, "approved");
+    assert_eq!(resp.status, "needs_user");
     // Project file must NOT be overwritten
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
@@ -480,7 +472,7 @@ fn test_recover_task_keep_on_branch_unblocks_dag() {
 
     // DAG cascades and w2 completes
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["approved", "approved"]);
+    assert_eq!(statuses(&core, &plan), ["needs_user", "queued"]);
 }
 
 #[test]
@@ -521,9 +513,13 @@ fn test_recover_task_verify_manual_snapshot() {
     let updated = core.task_unscoped(&plan, &tasks[0].id).unwrap();
     assert_eq!(updated.status, "approved");
 
-    // Verify head was NOT moved
+    // Commit policy applies to manually verified work, too.
     let head_after = git(&project, &["rev-parse", "HEAD"]);
-    assert_eq!(head_before, head_after);
+    assert_ne!(head_before, head_after);
+    assert_eq!(
+        git(&project, &["show", "HEAD:hello.txt"]),
+        "manual user fix"
+    );
 
     // Verify task result points to the snapshot commit
     assert!(updated.result.is_some());
@@ -544,7 +540,7 @@ fn test_recover_task_retry_with_guidance() {
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+    assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
 
     let tasks = core.store.plan(&plan).unwrap();
     let t1_id = &tasks[0].id;
@@ -573,72 +569,32 @@ fn test_recover_task_retry_with_guidance() {
 }
 
 #[test]
-fn test_recover_task_force_approve_and_cancel_task() {
+fn an_unperformed_task_cannot_be_approved_or_discarded() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
-    std::fs::write(dir.path().join("logged-in"), "").unwrap();
     let core = open(dir.path());
     let conversation = core.start(&project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
-    // Remove logged-in temporarily so t1 fails into waiting
-    let _ = std::fs::remove_file(dir.path().join("logged-in"));
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
-
-    let tasks = core.store.plan(&plan).unwrap();
-    let t1_id = &tasks[0].id;
-    let token = core
-        .task_freshness_token(&conversation, &plan, t1_id)
-        .unwrap();
-
-    // Force approve t1
-    let resp = core
-        .recover_task(TaskRecoveryRequest {
-            conversation: conversation.clone(),
-            plan: plan.clone(),
-            task: t1_id.clone(),
-            action: RecoveryAction::ForceApprove,
-            consent_files: None,
-            freshness_token: token,
-            message: None,
-        })
-        .unwrap();
-    assert_eq!(resp.status, "approved");
-
-    wait_idle(&core, &conversation);
-    // t2 and t3 should unblock and run to completion
-    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
-
-    // Now test CancelTask on a fresh chain
-    let plan2 = propose(&core, &conversation, "chain");
-    core.accept_plan(&conversation, &plan2).unwrap();
-    wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan2), ["waiting", "skipped", "skipped"]);
-
-    let tasks2 = core.store.plan(&plan2).unwrap();
-    let token2 = core
-        .task_freshness_token(&conversation, &plan2, &tasks2[0].id)
-        .unwrap();
-
-    let resp2 = core
-        .recover_task(TaskRecoveryRequest {
-            conversation: conversation.clone(),
-            plan: plan2.clone(),
-            task: tasks2[0].id.clone(),
-            action: RecoveryAction::CancelTask,
-            consent_files: None,
-            freshness_token: token2,
-            message: None,
-        })
-        .unwrap();
-    assert_eq!(resp2.status, "cancelled");
-
-    // Downstream tasks should also be cancelled
-    assert_eq!(
-        statuses(&core, &plan2),
-        ["cancelled", "cancelled", "cancelled"]
-    );
+    for action in [RecoveryAction::ForceApprove, RecoveryAction::CancelTask] {
+        let task = core.store.plan(&plan).unwrap()[0].clone();
+        let error = core
+            .recover_task(TaskRecoveryRequest {
+                conversation: conversation.clone(),
+                plan: plan.clone(),
+                task: task.id.clone(),
+                action,
+                consent_files: None,
+                freshness_token: core
+                    .task_freshness_token(&conversation, &plan, &task.id)
+                    .unwrap(),
+                message: None,
+            })
+            .unwrap_err();
+        assert!(!error.to_string().is_empty());
+        assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
+    }
 }
 
 #[test]
@@ -697,7 +653,7 @@ fn supervised_orchestrator_unblocks_only_after_the_user_decides() {
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+    assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
 
     core.send(&conversation, "retry t1").unwrap();
     wait_idle(&core, &conversation);
@@ -739,7 +695,7 @@ fn recovery_events_carry_bounded_details_and_keep_the_whole_reason() {
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["waiting", "skipped", "skipped"]);
+    assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
 
     let t1_id = core.store.plan(&plan).unwrap()[0].id.clone();
     let token = core
@@ -787,6 +743,22 @@ fn recovery_events_carry_bounded_details_and_keep_the_whole_reason() {
         .task_freshness_token(&conversation, &plan2, &tasks2[0].id)
         .unwrap();
     let note = "f".repeat(4 * limit);
+    let mut completed = tasks2[0].clone();
+    completed.report = Some("completed read-only analysis".into());
+    core.store.update_task(&completed).unwrap();
+    let turn = core
+        .store
+        .start_turn(
+            &conversation,
+            &format!("worker:{}", completed.id),
+            "agy",
+            0,
+            Some(&plan2),
+        )
+        .unwrap();
+    core.store
+        .finish_turn(&turn.id, antislop::lean::store::TurnStatus::Done, None)
+        .unwrap();
     core.recover_task(TaskRecoveryRequest {
         conversation: conversation.clone(),
         plan: plan2.clone(),
@@ -806,6 +778,7 @@ fn recovery_events_carry_bounded_details_and_keep_the_whole_reason() {
                 && event.payload["action"] == antislop::lean::tasks::action::FORCE_APPROVE
         })
         .expect("a force approve recovery event");
+    assert_eq!(force.payload["actor"], "user");
     let detail = force.payload["detail"].as_str().expect("the detail");
     assert!(detail.len() <= limit, "{} bytes", detail.len());
     let forced = core.store.task_by_id(&tasks2[0].id).unwrap().expect("task");

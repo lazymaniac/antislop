@@ -252,7 +252,91 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"))
 }
 
 #[test]
-fn a_message_to_a_task_that_failed_tells_the_sender() {
+fn user_mail_reaches_workers_and_verifiers_in_every_stopped_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        "    answer = 'noted' if 'Messages for you' in prompt else 'audit report'",
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("finished", || core.is_idle(&conversation));
+    for status in [
+        "failed",
+        "needs_user",
+        "waiting",
+        "cancelled",
+        "skipped",
+        "approved",
+    ] {
+        let mut task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+        task.status = status.into();
+        core.store.update_task(&task).unwrap();
+        for role in ["worker", "verifier"] {
+            let body = format!("message for {role} in {status}");
+            core.submit(&conversation, &format!("@{role}:t1 {body}"))
+                .unwrap();
+            wait_until("recipient acknowledged", || {
+                core.is_idle(&conversation)
+                    && core
+                        .store
+                        .mail(&conversation)
+                        .unwrap()
+                        .iter()
+                        .any(|mail| mail.text == body && mail.delivered_turn.is_some())
+            });
+        }
+        assert_eq!(
+            core.store.latest_plan(&conversation).unwrap()[0].status,
+            status
+        );
+    }
+    assert!(events(&core, &conversation, "mail_rejected").is_empty());
+}
+
+#[test]
+fn pending_task_mail_is_delivered_after_a_daemon_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let orchestrator = "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))";
+    let agent = "    answer = 'noted' if 'Messages for you' in prompt else 'audit report'";
+    let core = open(dir.path(), orchestrator, agent);
+    let conversation = run(&core, dir.path());
+    wait_until("finished", || core.is_idle(&conversation));
+    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let role = format!("verifier:{}", task.id);
+    let mail = core
+        .store
+        .add_mail(
+            &conversation,
+            &role,
+            &antislop::lean::store::Mail {
+                id: 0,
+                sender: "user".into(),
+                recipient: role.clone(),
+                kind: "question".into(),
+                text: "survive restart".into(),
+                created_ms: 0,
+                delivered_turn: None,
+                delivered_ms: None,
+                state: "queued".into(),
+            },
+        )
+        .unwrap();
+    drop(core);
+    let core = open(dir.path(), orchestrator, agent);
+    wait_until("pending mail redelivered", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .mail(&conversation)
+                .unwrap()
+                .iter()
+                .any(|item| item.id == mail.id && item.delivered_turn.is_some())
+    });
+}
+
+#[test]
+fn a_failed_task_still_receives_and_answers_its_mail() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -272,9 +356,14 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2
 
     let tasks = core.store.latest_plan(&conversation).unwrap();
     assert_ne!(tasks[0].status, "approved");
-    assert_eq!(tasks[1].report.as_deref(), Some("gate saw the notice"));
-    let rejected = events(&core, &conversation, "mail_rejected");
-    assert_eq!(rejected[0]["recipient"], "t1");
+    assert_eq!(tasks[1].report.as_deref(), Some("gate waits"));
+    assert!(events(&core, &conversation, "mail_rejected").is_empty());
+    let mail = core.store.mail(&conversation).unwrap();
+    assert!(
+        mail.iter()
+            .any(|m| m.sender == "t2" && m.delivered_turn.is_some()),
+        "{mail:?}"
+    );
 }
 
 #[test]

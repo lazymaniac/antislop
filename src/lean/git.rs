@@ -145,6 +145,10 @@ pub fn head(dir: &Path) -> Result<String> {
     ok(dir, &["rev-parse", "HEAD"])
 }
 
+pub fn common_base(dir: &Path, left: &str, right: &str) -> Result<String> {
+    ok(dir, &["merge-base", left, right])
+}
+
 /// A worktree on a new branch `branch` at `base`; reused if it exists.
 pub fn add_worktree(project: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
     if path.exists() {
@@ -254,28 +258,42 @@ pub fn combine(
         let _ = remove_worktree(project, scratch, &branch);
     }
     add_worktree(project, scratch, &branch, onto)?;
+    let file = scratch.with_extension("patch");
     let result = (|| {
-        let file = scratch.with_extension("patch");
         for (base, change) in changes {
+            if git(scratch, &["merge-base", "--is-ancestor", change, "HEAD"])?
+                .status
+                .success()
+            {
+                continue;
+            }
             let patch = patch(project, base, Some(change))?;
             if patch.trim().is_empty() {
                 continue;
             }
             std::fs::write(&file, format!("{patch}\n"))?;
             let path = file.to_string_lossy();
-            if ok(scratch, &["apply", "--3way", "--index", &path]).is_err() {
-                // Already there if it undoes cleanly.
-                ok(scratch, &["apply", "--check", "-R", &path]).map_err(|_| {
-                    Error::Invalid(format!(
-                        "the change {base}..{change} does not apply to {onto}"
-                    ))
-                })?;
+            // Check first: a failed three-way apply can leave a conflicted index.
+            if git(scratch, &["apply", "--check", "-R", &path])?
+                .status
+                .success()
+            {
+                continue;
             }
+            ok(scratch, &["apply", "--3way", "--index", &path]).map_err(|error| {
+                Error::Invalid(format!(
+                    "the change {base}..{change} does not apply to {onto}: {error}"
+                ))
+            })?;
         }
-        let _ = std::fs::remove_file(&file);
         commit_all(scratch, "Results of the tasks this one depends on")
     })();
-    let _ = remove_worktree(project, scratch, &branch);
+    let _ = std::fs::remove_file(&file);
+    let cleanup = remove_worktree(project, scratch, &branch);
+    if result.is_ok() {
+        cleanup?;
+    }
+
     result
 }
 
@@ -451,7 +469,10 @@ pub fn integrate_scoped(
         return Ok(Integration::UserEdits(dirty));
     }
 
-    let merge_base = format!("--merge-base={base}");
+    // A writer may start from a snapshot of uncommitted user changes. Merge
+    // against its committed ancestor; restore only paths the worker changed.
+    let committed_base = common_base(project, base, "HEAD")?;
+    let merge_base = format!("--merge-base={committed_base}");
     let check = git(
         project,
         &[
@@ -482,7 +503,7 @@ pub fn integrate_scoped(
         )));
     }
 
-    if allowed_files.is_none() && target_files.len() == files.len() {
+    if allowed_files.is_none() && target_files.len() == files.len() && committed_base == base {
         if commit {
             ok(
                 project,
@@ -507,7 +528,12 @@ pub fn integrate_scoped(
             Ok(Integration::Applied)
         }
     } else {
-        write_files(project, change, &target_files)?;
+        let merged_tree = std::str::from_utf8(&check.stdout)
+            .map_err(|error| Error::Invalid(format!("git merge-tree: {error}")))?
+            .lines()
+            .next()
+            .ok_or_else(|| Error::Invalid("git merge-tree returned no tree".into()))?;
+        write_files(project, merged_tree, &target_files)?;
         if commit {
             let msg = ok(project, &["log", "-1", "--format=%B", change])?;
             let committed = commit_paths(project, &target_files, msg.trim())?;

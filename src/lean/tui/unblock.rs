@@ -55,7 +55,7 @@ pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
         ));
         choices.push(choice(
             RecoveryAction::KeepOnBranch,
-            "Keep its change on a branch and go on",
+            "Preserve its change while integration is pending",
             false,
         ));
         choices.push(choice(
@@ -68,11 +68,6 @@ pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
         RecoveryAction::ForceApprove,
         "Approve it as it is (skips verification)",
         true,
-    ));
-    choices.push(choice(
-        RecoveryAction::CancelTask,
-        "Cancel this step",
-        false,
     ));
     choices
 }
@@ -258,17 +253,16 @@ mod tests {
                 IntegrateWithConsent,
                 KeepOnBranch,
                 VerifyManualSnapshot,
-                ForceApprove,
-                CancelTask
+                ForceApprove
             ]
         );
         assert_eq!(
             actions(&row("needs_user", false)),
-            [RetryWithGuidance, ExtendRounds, ForceApprove, CancelTask]
+            [RetryWithGuidance, ExtendRounds, ForceApprove]
         );
         assert_eq!(
             actions(&row("waiting", true)),
-            [RetryWithGuidance, ForceApprove, CancelTask]
+            [RetryWithGuidance, ForceApprove]
         );
         assert!(is_blocked("skipped") && !is_blocked("working") && !is_blocked("approved"));
     }

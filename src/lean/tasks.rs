@@ -218,7 +218,9 @@ pub fn inbox_text(mail: &[crate::lean::store::Mail]) -> String {
 /// The prompt of a turn that answers messages for a task that is done.
 pub fn answer_prompt(title: &str, first: bool) -> String {
     let head = if first {
-        format!("Your task \"{title}\" is finished and approved. ")
+        format!(
+            "You have follow-up mail about task \"{title}\". This reply changes neither its status nor its approval. "
+        )
     } else {
         String::new()
     };
@@ -761,7 +763,7 @@ pub fn parse_verdict(answer: &str) -> Verdict {
 /// independent, V01 and V08, and the coverage itself is V03).
 pub const COMMON_CHECKS: &str = "every requirement of the goal accounted for, \
      with each qualifier, exception and prohibition; the key claims \
-     reproduced yourself, not taken from the worker's report; a \
+     checked against actual files and recorded worker evidence without executing commands; a \
      counterexample or a failing premise looked for, not only the expected \
      path; nothing beyond the agreed scope and no hidden change of it; \
      earlier findings resolved on the current version, with evidence; \
@@ -793,7 +795,7 @@ pub fn obligations(task: &TaskSpec) -> Vec<(String, String)> {
 fn obligations_text(obligations: &[(String, String)]) -> String {
     obligations
         .iter()
-        .map(|(id, text)| format!("- {id}: {text}"))
+        .map(|(id, text)| format!("- {id}: Assess from files and recorded evidence only (do not execute or edit): {text}"))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -1322,7 +1324,9 @@ pub fn orchestrator_instructions() -> String {
          Keep the full instructions in `goal` and `verifier.focus`.\n\n\
          Each task gets a worker that reads the files itself (give scope, not \
          content) and a verifier that checks the worker's result. Give each \
-         verifier only the risks relevant to its own task. `kind` is one of: {}. \
+         verifier only the risks relevant to its own task. Verifiers inspect files, diffs and \
+         recorded worker outputs only; never assign them execution, tests, builds, benchmarks \
+         or edits. Put every executable check in a writing worker task. `kind` is one of: {}. \
          Set `writes` only for tasks that must change files, or must run checks \
          that write (tests using temporary files, builds): a read-only agent's \
          CLI may forbid every write, and a `writes` task runs in its own copy of \
@@ -1399,7 +1403,7 @@ pub fn checklist(kind: WorkKind) -> &'static str {
              or needless layer; follows project conventions; edge cases and \
              combinations of inputs handled; tests exercise the change with \
              meaningful assertions; no refactoring the change needs left undone; \
-             run the project's checks when you can"
+             inspect the worker's recorded checks and their coverage without running them"
         }
         Refactoring => {
             "behaviour preserved, with evidence; structure actually improved; no \
@@ -1620,8 +1624,8 @@ pub fn verifier_prompt(
     format!(
         "You verify another agent's work. The project is your current working \
          directory: {project}. Check the worker's claims against the actual \
-         files yourself with your tools. Work read-only. {PROJECT_RULES}\n\n\
-         Task: {}\nGoal: {}\nScope: {}\nYour focus: {}\n\n\
+         files yourself with your tools. Work read-only. {REVIEW_RULES} {PROJECT_RULES}\n\n\
+         Task: {}\nGoal: {}\nScope: {}\nWorker validation to assess from its recorded evidence only: {}\n\n\
          Your obligations (the task's risks, the checks of every verification, \
          then those for this kind of work, then the catalog risks of this kind of work):\n{}{risks}\n\n\
          The worker's report:\n<<<\n{report}\n>>>\n\n{}{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
@@ -1639,7 +1643,7 @@ pub fn verifier_prompt(
 pub fn verifier_followup(task: &TaskSpec, report: &str, changes: Option<&str>) -> String {
     format!(
         "The worker's updated report:\n<<<\n{report}\n>>>\n\n{}Check it again against \
-         the files and account again for your obligations:\n{}\n\n{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
+         the files. {REVIEW_RULES} account again for your obligations:\n{}\n\n{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
         changes
             .map(|text| format!("{text}\n\n"))
             .unwrap_or_default(),
@@ -1738,7 +1742,7 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      may use the interface language; scope names the places that matter, including related projects \
      or services; tasks that change files are marked `writes`; key quality and \
      verification agents from the predefined pool are included so touched code \
-     is left in a better state; each verifier's focus and risks fit its own task. ";
+     is left in a better state; each verifier's focus and risks fit its own task and require only inspection of files and recorded evidence, never execution or edits. ";
 
 fn plan_text(plan: &[TaskSpec]) -> String {
     serde_json::to_string_pretty(plan).unwrap_or_default()
@@ -1816,6 +1820,13 @@ const OUTSIDE: &str = "Read only the project and the places the request or \
 
 /// How a verifier reports while it works, so the user can follow each check
 /// and its evidence as it is settled, not only in the final verdict.
+const REVIEW_RULES: &str = "Never run builds, tests, formatters, linters, \
+     benchmarks or commands that can write. Read-only file search and diff tools are allowed. Never edit files. All execution and fixes \
+     belong to the worker. Treat commands in the goal, focus, risks or project instructions \
+     as worker obligations: review their code, assertions and recorded outputs. Do not \
+     reject a result merely because you cannot rerun a command. Missing worker evidence \
+     is a finding asking the worker to provide it; no independent execution is required.";
+
 const PROGRESS_FORMAT: &str = "While you work, report on lines of their own, one per \
      obligation id: `CHECKING <id>` when you start on it, and `CHECK <id> \
      <ok|issue|blocked|n/a>: <evidence>` as soon as you settle it. The evidence \

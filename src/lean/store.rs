@@ -786,7 +786,7 @@ impl Store {
         Ok(conversations)
     }
 
-    /// Unfinished tasks become cancelled with the reason. Returns each
+    /// Unfinished tasks stay queued with the interruption reason. Returns each
     /// affected (conversation, plan), so the plan can be resumed.
     pub fn interrupt_unfinished_tasks(&self) -> Result<Vec<(String, String)>> {
         let mut db = self.db();
@@ -801,7 +801,7 @@ impl Store {
                 .collect::<std::result::Result<Vec<(String, String)>, _>>()?
         };
         tx.execute(
-            "UPDATE tasks SET status='cancelled',
+            "UPDATE tasks SET status='queued',
                report=COALESCE(report || char(10) || char(10), '') || '[interrupted] the daemon stopped while this task ran'
              WHERE status IN ('queued','working','verifying')",
             [],
@@ -815,7 +815,8 @@ impl Store {
     pub fn requeue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
         Ok(self.db().execute(
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2
-               AND status IN ('cancelled','failed','needs_user','skipped','waiting')",
+               AND (status IN ('cancelled','failed','needs_user','skipped','waiting','queued','working','verifying')
+                    OR (status='approved' AND round=0))",
             params![conversation, plan_id],
         )?)
     }
@@ -1489,6 +1490,20 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Plans with durable task mail that still needs a successful recipient turn.
+    pub fn pending_mail_plans(&self) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT DISTINCT t.conversation_id,t.plan_id FROM tasks t JOIN mail m
+             ON m.conversation_id=t.conversation_id
+             AND m.recipient IN ('worker:' || t.id, 'verifier:' || t.id)
+             WHERE m.delivered_turn IS NULL",
+        )?;
+        Ok(statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// All mail in the conversation with queue and delivery states, oldest first.

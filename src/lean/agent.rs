@@ -280,10 +280,11 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
             if let Some(session) = &spec.resume {
                 // `exec resume` takes no -C/-s/--add-dir; cwd is the process's.
                 command.arg("resume");
+                command.arg("-c").arg("approval_policy=\"never\"");
                 let sandbox = if read_only {
                     "read-only"
                 } else {
-                    "workspace-write"
+                    "danger-full-access"
                 };
                 command.arg("-c").arg(format!("sandbox_mode=\"{sandbox}\""));
                 command.arg("-c").arg(NO_CODEX_SUBAGENTS);
@@ -294,6 +295,8 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
             }
             command
                 .arg("-c")
+                .arg("approval_policy=\"never\"")
+                .arg("-c")
                 .arg(NO_CODEX_SUBAGENTS)
                 .args(["--json", "--skip-git-repo-check", "-C"])
                 .arg(&spec.cwd)
@@ -301,7 +304,7 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
                 .arg(if read_only {
                     "read-only"
                 } else {
-                    "workspace-write"
+                    "danger-full-access"
                 });
             for dir in &spec.add_dirs {
                 command.arg("--add-dir").arg(dir);
@@ -1008,6 +1011,43 @@ impl Parser {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn codex_writer_permissions_are_explicit_on_start_and_resume() {
+        for resume in [None, Some("session".to_owned())] {
+            for access in [Access::Write, Access::ReadOnly] {
+                let spec = Spec {
+                    provider: ProviderKind::Codex,
+                    binary: "codex".into(),
+                    args: vec![],
+                    model: None,
+                    effort: None,
+                    cwd: ".".into(),
+                    add_dirs: vec![],
+                    access,
+                    resume: resume.clone(),
+                };
+                let args: Vec<String> = command(&spec, "inspect")
+                    .unwrap()
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect();
+                let expected = if access == Access::Write {
+                    "danger-full-access"
+                } else {
+                    "read-only"
+                };
+                assert!(
+                    args.iter().any(
+                        |arg| arg == expected || arg == &format!("sandbox_mode=\"{expected}\"")
+                    ),
+                    "{args:?}"
+                );
+                assert!(args.iter().any(|arg| arg == "approval_policy=\"never\""));
+                assert!(!args.iter().any(|arg| arg.contains("workspace-write")));
+            }
+        }
+    }
 
     fn feed(provider: ProviderKind, lines: &[Value]) -> (Vec<Event>, Parser) {
         let mut parser = Parser::new(provider);
