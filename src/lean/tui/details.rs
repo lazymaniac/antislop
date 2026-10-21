@@ -275,30 +275,14 @@ impl Details {
         if next_tab == self.tab {
             return;
         }
-        self.scroll_memory
-            .insert((self.key.clone(), self.tab), self.scroll);
-        self.query_memory
-            .insert((self.key.clone(), self.tab), self.query.clone());
+        self.save_current_tab();
         self.tab = next_tab;
-        self.scroll = *self
-            .scroll_memory
-            .get(&(self.key.clone(), self.tab))
-            .unwrap_or(&0);
-        self.follow = self.tab == 0 && !self.show_info;
-        self.pending_g = false;
-        self.query = self
-            .query_memory
-            .get(&(self.key.clone(), self.tab))
-            .cloned()
-            .unwrap_or_default();
+        self.restore_current_tab();
         self.searching = false;
     }
 
     pub fn switch_key(&mut self, new_key: String) {
-        self.scroll_memory
-            .insert((self.key.clone(), self.tab), self.scroll);
-        self.query_memory
-            .insert((self.key.clone(), self.tab), self.query.clone());
+        self.save_current_tab();
         self.key = new_key;
         self.show_info = false;
         self.session_cache.clear();
@@ -310,17 +294,7 @@ impl Details {
         self.fetch_failures = 0;
         self.fetch_retry_after = None;
         self.fetch_error = None;
-        self.scroll = *self
-            .scroll_memory
-            .get(&(self.key.clone(), self.tab))
-            .unwrap_or(&0);
-        self.follow = self.tab == 0 && !self.show_info;
-        self.pending_g = false;
-        self.query = self
-            .query_memory
-            .get(&(self.key.clone(), self.tab))
-            .cloned()
-            .unwrap_or_default();
+        self.restore_current_tab();
         self.searching = false;
     }
 
