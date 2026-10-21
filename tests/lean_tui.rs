@@ -189,6 +189,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
                 assert!(text.contains("zapisu."), "{text}");
             }
             let mut details = Details::new(key.into());
+            details.show_info = true;
             let full = details
                 .lines(&view)
                 .into_iter()
@@ -3357,8 +3358,8 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     assert_eq!(details.tab, 0);
     assert_eq!(details.scroll, 15);
     assert!(
-        !details.follow,
-        "restored Overview keeps its scroll position"
+        details.follow,
+        "returning to Overview resumes the live session"
     );
     assert_eq!(details.query, "analiza");
 
@@ -3597,7 +3598,10 @@ fn overview_includes_the_terminal_transcript_without_database_mirrors() {
         .map(|(_, line)| line)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Shared task overview"));
+    assert!(
+        !text.contains("Shared task overview"),
+        "metadata stays outside the transcript"
+    );
     assert!(text.contains("Session · worker"));
     assert!(text.contains("Session · verifier"));
     assert!(text.contains("Verifier evidence"));
@@ -3608,7 +3612,7 @@ fn overview_includes_the_terminal_transcript_without_database_mirrors() {
         .map(|(_, line)| line)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(verifier_text.contains("Shared task overview"));
+    assert!(!verifier_text.contains("Shared task overview"));
     assert!(verifier_text.contains("• Ran exec cargo check"));
     assert!(verifier_text.contains("Verifier evidence"));
     details.query = "Verifier evidence".into();
@@ -5176,6 +5180,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         }
     }
     let mut details = Details::new("worker:t1".into());
+    details.show_info = true;
     let full: String = details
         .lines(&view)
         .into_iter()
@@ -5209,6 +5214,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     assert!(api.contains("D:t1"), "dependency id on the card: {api}");
     assert!(!api.contains("limit") && !api.contains("conflict"), "{api}");
     let mut queued_details = Details::new("worker:t2".into());
+    queued_details.show_info = true;
     let queued_full: String = queued_details
         .lines(&view)
         .into_iter()
@@ -5225,6 +5231,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         "state alone, cause on its own line: {failed}"
     );
     let mut failed_details = Details::new("worker:t1".into());
+    failed_details.show_info = true;
     let cause: String = failed_details
         .lines(&view)
         .into_iter()
@@ -5247,6 +5254,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         "an unexplained stop says so on its own line: {quiet}"
     );
     let mut quiet_details = Details::new("worker:t2".into());
+    quiet_details.show_info = true;
     let quiet_full: String = quiet_details
         .lines(&view)
         .into_iter()
@@ -6592,9 +6600,18 @@ mod text_selection_acceptance {
                 1 => {
                     app.view.tasks.push(TaskRow {
                         id: "t1".into(),
-                        title: "sample café 👩‍👩‍👧‍👦".into(),
+                        title: "Selection in the session card".into(),
                         ..Default::default()
                     });
+                    app.view.agents.insert(
+                        "worker:t1".into(),
+                        antislop::lean::tui::view::Agent {
+                            feed: vec![antislop::lean::tui::session::Block::Text(
+                                "sample café 👩‍👩‍👧‍👦".into(),
+                            )],
+                            ..Default::default()
+                        },
+                    );
                     app.details = Some(Details::new("worker:t1".into()));
                 }
                 _ => {
@@ -6709,4 +6726,160 @@ mod text_selection_acceptance {
         );
         assert!(selection.text().is_none());
     }
+}
+
+#[test]
+fn session_card_keeps_summary_fixed_and_follows_until_manually_scrolled() {
+    use antislop::lean::tui::session::Block;
+    use antislop::lean::tui::view::{Agent, TaskRow};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut app = App::test_app();
+    app.view.tasks.push(TaskRow {
+        id: "t1".into(),
+        title: "Compact summary".into(),
+        status: "working".into(),
+        round: 1,
+        goal: "Full goal available on demand".into(),
+        ..Default::default()
+    });
+    app.view.agents.insert(
+        "worker:t1".into(),
+        Agent {
+            provider: "codex".into(),
+            running: true,
+            feed: (0..100)
+                .map(|i| Block::Text(format!("message {i:03}")))
+                .collect(),
+            ..Default::default()
+        },
+    );
+    app.details = Some(Details::new("worker:t1".into()));
+    let mut terminal = Terminal::new(TestBackend::new(90, 18)).unwrap();
+    let screen = |terminal: &Terminal<TestBackend>| -> Vec<String> {
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(90)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+            .collect()
+    };
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let first = screen(&terminal);
+    assert!(first[1].contains("Compact summary"));
+    assert!(first[2].contains("working"));
+    assert!(first.iter().any(|line| line.contains("message 099")));
+    assert!(
+        first
+            .iter()
+            .any(|line| line.contains("Session") && line.contains("LIVE"))
+    );
+    assert!(app.details.as_ref().unwrap().text_area.y >= 5);
+    let area = app.details.as_ref().unwrap().text_area;
+    let thumb = antislop::lean::tui::theme::Theme::from_env().glyphs().thumb;
+    assert_eq!(
+        terminal.backend().buffer()[(area.right(), area.bottom() - 1)].symbol(),
+        thumb,
+        "the live scrollbar reaches the bottom"
+    );
+
+    for _ in 0..2 {
+        app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    }
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let top = screen(&terminal);
+    assert_eq!(
+        &first[1..4],
+        &top[1..4],
+        "the summary never scrolls with the transcript"
+    );
+    assert!(top.iter().any(|line| line.contains("message 000")));
+    app.view
+        .agents
+        .get_mut("worker:t1")
+        .unwrap()
+        .feed
+        .push(Block::Text("newest message".into()));
+    terminal.draw(|f| app.draw(f)).unwrap();
+    assert_eq!(app.details.as_ref().unwrap().scroll, 0);
+    assert!(
+        !screen(&terminal)
+            .iter()
+            .any(|line| line.contains("newest message"))
+    );
+
+    app.key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
+    terminal.draw(|f| app.draw(f)).unwrap();
+    assert!(
+        screen(&terminal)
+            .iter()
+            .any(|line| line.contains("newest message"))
+    );
+    app.view
+        .agents
+        .get_mut("worker:t1")
+        .unwrap()
+        .feed
+        .push(Block::Text("live appended".into()));
+    terminal.draw(|f| app.draw(f)).unwrap();
+    assert!(
+        screen(&terminal)
+            .iter()
+            .any(|line| line.contains("live appended"))
+    );
+    app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    assert!(!app.details.as_ref().unwrap().follow);
+    app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    terminal.draw(|f| app.draw(f)).unwrap();
+    assert!(
+        screen(&terminal)
+            .iter()
+            .any(|line| line.contains("Full goal available on demand"))
+    );
+    app.key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    terminal.draw(|f| app.draw(f)).unwrap();
+    assert!(
+        screen(&terminal)
+            .iter()
+            .any(|line| line.contains("live appended"))
+    );
+}
+
+#[test]
+fn vim_details_navigation_isolated_from_search_and_other_commands() {
+    let mut app = App::test_app();
+    app.details = Some(Details::new("worker:t1".into()));
+    app.details.as_mut().unwrap().scroll = 50;
+    app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    assert_eq!(app.details.as_ref().unwrap().scroll, 50);
+    app.key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    assert_eq!(
+        app.details.as_ref().unwrap().scroll,
+        50,
+        "gg must be consecutive"
+    );
+    app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+    for c in ['g', 'g', 'G'] {
+        app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(app.details.as_ref().unwrap().query, "ggG");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    assert!(app.details.as_ref().unwrap().scroll == 0);
+    app.details.as_mut().unwrap().scroll = 50;
+    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    app.details.as_mut().unwrap().scroll = 20;
+    app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    assert_eq!(
+        app.details.as_ref().unwrap().scroll,
+        20,
+        "tab change clears the prefix"
+    );
+    app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    assert_eq!(app.details.as_ref().unwrap().scroll, 0);
+    app.key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
+    assert_eq!(app.details.as_ref().unwrap().scroll, usize::MAX);
+    app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)); // no overflow before redraw
 }

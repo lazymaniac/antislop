@@ -402,6 +402,8 @@ impl Help {
             Help::Details => &[
                 "1–5, ←/→, Tab    tabs (task: Overview, Messages, Result, Checks, Comments)",
                 "↑/↓ PgUp/PgDn    scroll; on Comments select",
+                "gg / G           first / last entry; G follows live session",
+                "i                task info / session (Overview)",
                 "Ctrl+D / Ctrl+U  half page down / up",
                 "c                comment on agent",
                 SELECTION_HELP,
