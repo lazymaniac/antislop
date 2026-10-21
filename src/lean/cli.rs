@@ -14,7 +14,7 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-/// Select and validate the configuration without creating files or directories.
+/// Select the configuration without creating files or directories.
 /// An explicit path or an existing project file never falls back on error.
 pub fn resolve_config(project: &Path, explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
@@ -41,9 +41,9 @@ pub fn resolve_config(project: &Path, explicit: Option<&Path>) -> Result<PathBuf
 }
 
 fn checked_config(path: &Path) -> Result<PathBuf> {
-    let path = path.canonicalize()?;
-    crate::config::Config::load(&path)?;
-    Ok(path)
+    path.canonicalize().map_err(|error| {
+        crate::Error::Invalid(format!("configuration {}: {error}", path.display()))
+    })
 }
 
 pub struct Options {
@@ -216,6 +216,7 @@ pub fn chat(args: &[String]) -> Result<()> {
         std::io::stdin().lock(),
         std::io::stderr(),
     )?;
+    crate::config::Config::load(&options.config)?;
     options.prepare()?;
     let client = Client::connect(&options.project, &options.config, &options.state)?;
     if options.message.is_none() && std::io::stdin().is_terminal() {
