@@ -39,6 +39,14 @@ pub struct Turn {
     pub plan_id: Option<String>,
 }
 
+/// One normalized mailbox address with pending mail and its owning task, if any.
+pub struct MailTarget {
+    pub role: String,
+    pub newest: u64,
+    pub task_id: Option<String>,
+    pub plan_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnStatus {
@@ -1504,13 +1512,40 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    pub fn pending_mail_conversations(&self) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut statement = db.prepare("SELECT DISTINCT conversation_id FROM mail WHERE delivered_turn IS NULL AND kind!='copy'")?;
+        Ok(statement
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn pending_mail_targets(&self, conversation: &str) -> Result<Vec<MailTarget>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT m.recipient,MAX(m.id),t.id,t.plan_id FROM mail m LEFT JOIN tasks t
+             ON t.conversation_id=m.conversation_id AND m.recipient IN ('worker:' || t.id,'verifier:' || t.id,'code-review:' || t.id)
+             WHERE m.conversation_id=?1 AND m.delivered_turn IS NULL AND m.kind!='copy'
+             GROUP BY m.recipient ORDER BY MIN(m.id)")?;
+        Ok(statement
+            .query_map([conversation], |row| {
+                Ok(MailTarget {
+                    role: row.get(0)?,
+                    newest: row.get::<_, i64>(1)? as u64,
+                    task_id: row.get(2)?,
+                    plan_id: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// Plans with durable task mail that still needs a successful recipient turn.
     pub fn pending_mail_plans(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();
         let mut statement = db.prepare(
             "SELECT DISTINCT t.conversation_id,t.plan_id FROM tasks t JOIN mail m
              ON m.conversation_id=t.conversation_id
-             AND m.recipient IN ('worker:' || t.id, 'verifier:' || t.id)
+             AND m.recipient IN ('worker:' || t.id, 'verifier:' || t.id, 'code-review:' || t.id)
              WHERE m.delivered_turn IS NULL",
         )?;
         Ok(statement

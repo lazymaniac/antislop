@@ -6793,13 +6793,13 @@ fn checks_refresh_requests_compact_authorized_projection_and_preserves_report() 
                 .unwrap();
             let request: serde_json::Value = serde_json::from_str(&line).unwrap();
             if index == 1 {
-                assert_eq!(request["op"], "task_checks", "{request}");
+                assert_eq!(request["op"], "task_check_projection", "{request}");
                 assert_eq!(request["conversation"], "test-conv");
                 assert_eq!(request["plan"], "p1");
             }
             if index == 2 {
                 assert_eq!(
-                    request["op"], "task",
+                    request["op"], "task_checks",
                     "verdict must refresh its full record"
                 );
             }

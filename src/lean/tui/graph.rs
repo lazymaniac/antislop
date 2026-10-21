@@ -186,6 +186,68 @@ pub struct Graph {
     pub grouping: GroupingMode,
 }
 
+#[derive(Default)]
+pub struct LayoutCache {
+    entry: Option<CachedGraph>,
+}
+
+struct CachedGraph {
+    generation: u64,
+    revision: u64,
+    counts: (usize, usize, usize),
+    idle: bool,
+    viewport: Option<(u16, u16)>,
+    expires: Option<std::time::Instant>,
+    graph: std::rc::Rc<Graph>,
+}
+
+impl LayoutCache {
+    pub fn get(
+        &mut self,
+        view: &View,
+        generation: u64,
+        query: Option<&str>,
+        collapsed: &std::collections::HashSet<String>,
+        grouping: GroupingMode,
+        viewport: Option<(u16, u16)>,
+    ) -> std::rc::Rc<Graph> {
+        let now = std::time::Instant::now();
+        let counts = (view.tasks.len(), view.agents.len(), view.links.len());
+        if let Some(entry) = &self.entry
+            && entry.generation == generation
+            && entry.revision == view.layout_revision
+            && entry.counts == counts
+            && entry.idle == view.idle
+            && entry.viewport == viewport
+            && entry.graph.filter_query.as_deref() == query
+            && &entry.graph.collapsed == collapsed
+            && entry.graph.grouping == grouping
+            && entry.expires.is_none_or(|expiry| now < expiry)
+        {
+            return std::rc::Rc::clone(&entry.graph);
+        }
+        let graph = std::rc::Rc::new(Graph::new_with_viewport(
+            view, query, collapsed, grouping, viewport,
+        ));
+        let expires = view
+            .links
+            .values()
+            .filter_map(|link| link.last.checked_add(RECENT))
+            .filter(|expiry| *expiry > now)
+            .min();
+        self.entry = Some(CachedGraph {
+            generation,
+            revision: view.layout_revision,
+            counts,
+            idle: view.idle,
+            viewport,
+            expires,
+            graph: std::rc::Rc::clone(&graph),
+        });
+        graph
+    }
+}
+
 /// Canonical UI identity; role addresses in events and storage stay intact.
 pub fn task_node_key(key: &str) -> String {
     match crate::lean::task_role(key) {
@@ -731,22 +793,21 @@ impl Graph {
 
     /// Checks whether any segment of a route penetrates the interior or border of a node card.
     pub fn route_intersects_card(path: &[(u16, u16)], node: &Node) -> bool {
+        if node.height == 0 {
+            return false;
+        }
         for pair in path.windows(2) {
             let (p1, p2) = (pair[0], pair[1]);
             let x_min = p1.0.min(p2.0);
             let x_max = p1.0.max(p2.0);
             let y_min = p1.1.min(p2.1);
             let y_max = p1.1.max(p2.1);
-            for x in x_min..=x_max {
-                for y in y_min..=y_max {
-                    if x >= node.x
-                        && x < node.x + WIDTH
-                        && y >= node.y
-                        && y < node.y.saturating_add(node.height)
-                    {
-                        return true;
-                    }
-                }
+            if x_max >= node.x
+                && x_min < node.x.saturating_add(WIDTH)
+                && y_max >= node.y
+                && y_min < node.y.saturating_add(node.height)
+            {
+                return true;
             }
         }
         false
@@ -1332,25 +1393,37 @@ impl Canvas {
 
     /// Joins line segments so crossings and corners get box-drawing joints.
     fn path(&mut self, points: &[(u16, u16)], style: Style) {
+        if self.width == 0 || self.height == 0 {
+            return;
+        }
         for pair in points.windows(2) {
-            let ((mut x, mut y), (tx, ty)) = (pair[0], pair[1]);
-            while (x, y) != (tx, ty) {
-                let (nx, ny, out, back) = if x < tx {
-                    (x + 1, y, RIGHT, LEFT)
-                } else if x > tx {
-                    (x - 1, y, LEFT, RIGHT)
-                } else if y < ty {
-                    (x, y + 1, DOWN, UP)
-                } else {
-                    (x, y - 1, UP, DOWN)
-                };
-                for (cx, cy, bit) in [(x, y, out), (nx, ny, back)] {
-                    if let Some(cell) = self.cell(cx, cy) {
-                        cell.lines |= bit;
+            let ((x, y), (tx, ty)) = (pair[0], pair[1]);
+            // Routes are orthogonal. Keep x-then-y semantics for any diagonal
+            // input while visiting only cells inside the viewport.
+            if x != tx && y >= self.origin_y && y < self.origin_y.saturating_add(self.height) {
+                let lo = x.min(tx);
+                let hi = x.max(tx);
+                let start = lo.max(self.origin_x);
+                let end = hi.min(self.origin_x.saturating_add(self.width).saturating_sub(1));
+                for cx in start..=end {
+                    if let Some(cell) = self.cell(cx, y) {
+                        cell.lines |=
+                            if cx > lo { LEFT } else { 0 } | if cx < hi { RIGHT } else { 0 };
                         cell.style = style;
                     }
                 }
-                (x, y) = (nx, ny);
+            }
+            if y != ty && tx >= self.origin_x && tx < self.origin_x.saturating_add(self.width) {
+                let lo = y.min(ty);
+                let hi = y.max(ty);
+                let start = lo.max(self.origin_y);
+                let end = hi.min(self.origin_y.saturating_add(self.height).saturating_sub(1));
+                for cy in start..=end {
+                    if let Some(cell) = self.cell(tx, cy) {
+                        cell.lines |= if cy > lo { UP } else { 0 } | if cy < hi { DOWN } else { 0 };
+                        cell.style = style;
+                    }
+                }
             }
         }
     }
@@ -1496,6 +1569,122 @@ pub fn compute_progress_overlay_with_nodes(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
+        let mut view = super::View::default();
+        let mut cache = super::LayoutCache::default();
+        let mut collapsed = std::collections::HashSet::new();
+        let first = cache.get(
+            &view,
+            1,
+            None,
+            &collapsed,
+            super::GroupingMode::Dependency,
+            Some((80, 24)),
+        );
+        let idle = cache.get(
+            &view,
+            1,
+            None,
+            &collapsed,
+            super::GroupingMode::Dependency,
+            Some((80, 24)),
+        );
+        assert!(std::rc::Rc::ptr_eq(&first, &idle));
+        view.apply(
+            &serde_json::json!({"seq": 1, "kind": "plan_proposed", "payload": {
+            "plan": "p1", "tasks": [{"id": "t1", "title": "first", "depends_on": []}]}}),
+        );
+        let updated = cache.get(
+            &view,
+            1,
+            None,
+            &collapsed,
+            super::GroupingMode::Dependency,
+            Some((80, 24)),
+        );
+        assert!(!std::rc::Rc::ptr_eq(&first, &updated));
+        let resized = cache.get(
+            &view,
+            1,
+            None,
+            &collapsed,
+            super::GroupingMode::Dependency,
+            Some((40, 12)),
+        );
+        assert!(!std::rc::Rc::ptr_eq(&updated, &resized));
+        collapsed.insert("t1".into());
+        let folded = cache.get(
+            &view,
+            1,
+            None,
+            &collapsed,
+            super::GroupingMode::Status,
+            Some((40, 12)),
+        );
+        assert!(!std::rc::Rc::ptr_eq(&resized, &folded));
+        let searched = cache.get(
+            &view,
+            1,
+            Some("first"),
+            &collapsed,
+            super::GroupingMode::Status,
+            Some((40, 12)),
+        );
+        assert!(!std::rc::Rc::ptr_eq(&folded, &searched));
+        let switched = cache.get(
+            &view,
+            2,
+            Some("first"),
+            &collapsed,
+            super::GroupingMode::Status,
+            Some((40, 12)),
+        );
+        assert!(!std::rc::Rc::ptr_eq(&searched, &switched));
+        // Expiring mail highlights must invalidate an otherwise idle graph.
+        cache.entry.as_mut().unwrap().expires = Some(std::time::Instant::now());
+        let expired = cache.get(
+            &view,
+            2,
+            Some("first"),
+            &collapsed,
+            super::GroupingMode::Status,
+            Some((40, 12)),
+        );
+        assert!(!std::rc::Rc::ptr_eq(&switched, &expired));
+    }
+
+    #[test]
+    fn clipped_paths_match_full_rendering_at_joints_and_viewport_edges() {
+        let routes = [
+            vec![(0, 18), (70, 18)],
+            vec![(25, 0), (25, 50)],
+            vec![(31, 14), (20, 14), (20, 22), (33, 22)],
+            vec![(36, 25), (22, 16)],
+            vec![(29, 21), (29, 16), (22, 16)],
+        ];
+        let style = ratatui::style::Style::default().fg(ratatui::style::Color::Cyan);
+        let mut full = super::Canvas::new_window(0, 0, 80, 60);
+        let mut clipped = super::Canvas::new_window(20, 15, 12, 7);
+        for route in &routes {
+            full.path(route, style);
+            clipped.path(route, style);
+        }
+        for y in 15..22 {
+            for x in 20..32 {
+                let expected = full.cell(x, y).unwrap();
+                let actual = clipped.cell(x, y).unwrap();
+                assert_eq!(super::Canvas::glyph(expected), super::Canvas::glyph(actual));
+                assert_eq!(expected.style, actual.style);
+            }
+        }
+        let mut far = super::Canvas::new_window(20, 15, 12, 7);
+        far.path(&[(0, 18), (u16::MAX, 18)], style);
+        far.path(&[(25, 0), (25, u16::MAX)], style);
+        assert_eq!(far.cells.len(), 12 * 7);
+        assert_eq!(super::Canvas::glyph(far.cell(25, 18).unwrap()), "┼");
+    }
+
     use super::*;
     use crate::lean::tui::view::TaskRow;
 

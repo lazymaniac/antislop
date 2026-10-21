@@ -244,6 +244,8 @@ pub struct CommentProgress {
 
 #[derive(Debug, Default)]
 pub struct View {
+    /// Local projection revision; repeated frames do not rebuild graph layout.
+    pub layout_revision: u64,
     /// How many check events arrived: an open Checks tab refetches on change.
     pub check_events: u64,
     /// Latest check event for each plan-local task id; unrelated tasks do not
@@ -612,6 +614,7 @@ impl View {
     }
 
     pub fn apply(&mut self, event: &Value) {
+        self.layout_revision = self.layout_revision.wrapping_add(1);
         self.after = event["seq"].as_u64().unwrap_or(self.after);
         let payload = &event["payload"];
         let text = |key: &str| payload[key].as_str().unwrap_or_default().to_owned();

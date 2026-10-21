@@ -193,6 +193,7 @@ pub struct ConversationState {
 }
 
 pub struct App {
+    graph_layout_cache: graph::LayoutCache,
     pub text_selection: selection::TextSelection,
     text_area: Option<Rect>,
     text_origin: usize,
@@ -289,6 +290,7 @@ impl App {
 
     pub fn test_app_with_client_and_updates(client: Client, updates: mpsc::Sender<Update>) -> App {
         App {
+            graph_layout_cache: graph::LayoutCache::default(),
             text_selection: Default::default(),
             text_area: None,
             text_origin: 0,
@@ -699,8 +701,18 @@ impl App {
                     == Some(round)
         });
         let request = if checks_only {
-            Request::TaskChecks {
+            Request::TaskCheckProjection {
                 conversation: self.conversation.clone(),
+                plan: plan.clone(),
+                id,
+            }
+        } else if self
+            .details
+            .as_ref()
+            .is_some_and(|details| details.tab == CHECKS)
+        {
+            Request::TaskChecks {
+                conversation: Some(self.conversation.clone()),
                 plan: plan.clone(),
                 id,
             }
@@ -3886,8 +3898,9 @@ impl App {
 
         self.graph_viewport = Some((inner.width, inner.height));
         self.graph_area = Some(inner);
-        let graph = Graph::new_with_viewport(
+        let graph = self.graph_layout_cache.get(
             &self.view,
+            self.generation,
             self.graph_filter.as_deref(),
             &self.graph_collapsed,
             self.graph_grouping,
@@ -4338,6 +4351,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     let conversation = options.conversation(&client)?;
     let (updates, received) = mpsc::channel();
     let mut app = App {
+        graph_layout_cache: graph::LayoutCache::default(),
         text_selection: Default::default(),
         text_area: None,
         text_origin: 0,
