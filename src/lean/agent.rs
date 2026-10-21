@@ -535,6 +535,37 @@ fn tail(text: &str, max: usize) -> String {
 /// Longest tool output or reasoning kept in an event.
 pub const OUTPUT: usize = 2000;
 
+/// Bound persisted failure diagnostics and remove known credentials inherited
+/// by the CLI. This is best effort: arbitrary secrets in CLI output cannot be
+/// inferred from their content alone.
+pub(crate) fn persisted_error(text: &str) -> String {
+    redact_error(
+        text,
+        std::env::vars_os().filter_map(|(name, value)| {
+            let name = name.to_string_lossy().to_ascii_uppercase();
+            (name.contains("TOKEN")
+                || name.contains("SECRET")
+                || name.contains("PASSWORD")
+                || name.contains("API_KEY")
+                || name.contains("PRIVATE_KEY"))
+            .then(|| value.into_string().ok())
+            .flatten()
+        }),
+    )
+}
+
+fn redact_error(text: &str, secrets: impl Iterator<Item = String>) -> String {
+    let mut secrets: Vec<_> = secrets.filter(|value| !value.is_empty()).collect();
+    // Replace longer values first so overlapping credentials cannot leave a
+    // suffix visible. Redact before clipping to avoid leaking a cut prefix.
+    secrets.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    let mut text = text.to_owned();
+    for secret in secrets {
+        text = text.replace(&secret, "[REDACTED]");
+    }
+    clip(&text, OUTPUT)
+}
+
 /// The start of `text`, at most `limit` characters, marked when cut.
 pub fn clip(text: &str, limit: usize) -> String {
     let text = text.trim_end();
@@ -1011,6 +1042,21 @@ impl Parser {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn persisted_diagnostics_redact_before_clipping() {
+        let secret = "credential".repeat(300);
+        let text = format!("login failed: {secret}; retry login");
+        assert_eq!(
+            redact_error(&text, [secret].into_iter()),
+            "login failed: [REDACTED]; retry login"
+        );
+        assert!(redact_error(&"x".repeat(5000), std::iter::empty()).len() < 2100);
+        assert_eq!(
+            redact_error("abcdefgh", ["abc".into(), "abcdefgh".into()].into_iter()),
+            "[REDACTED]"
+        );
+    }
 
     #[test]
     fn codex_writer_permissions_are_explicit_on_start_and_resume() {

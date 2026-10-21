@@ -33,6 +33,18 @@ per directory in `~/.config/antislop/trusted.json` (`$XDG_CONFIG_HOME` or
 created or started in the directory before you answer. Without a terminal, pass
 `--trust` to answer yes.
 
+The internal daemon entrypoint checks the same user-owned trust registry before
+opening project state. Trust stored in a project database does not grant access.
+Registry updates use an exclusively created temporary file and an atomic rename.
+
+Configuration currently requires the project's `antislop.toml` or `--config FILE`;
+there is no global configuration fallback or live configuration editor yet.
+Workers and verifiers still have separate graph nodes, and Overview and Session
+remain separate tabs. Checks refresh on round changes and incoming check events.
+Mouse navigation is supported; dragging to select and copy transcript text is not
+implemented. See [the integration status](docs/lean-core.md#integration-status)
+for the remaining work.
+
 `antislop stop` does not require a configuration file and succeeds if the daemon
 is already stopped. It refuses to stop while agents are working unless `--force`
 is passed. Forced shutdown cancels running agents and preserves conversation history.

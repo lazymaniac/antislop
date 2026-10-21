@@ -93,3 +93,12 @@ Pozostałe:
 
 - [ ] zunifikowac workera z weryfikatorem w jednym nodzie na grafie
 - [ ] zunifikowac zakladke overview z session
+- [ ] Globalny fallback konfiguracji, gdy brak projektowego antislop.toml (t2: brak implementacji w drzewie bramki t14).
+- [ ] Edytor dowolnej opcji konfiguracji w TUI i zastosowanie na zywo w daemonie (t3/t7: brak implementacji w drzewie t14).
+- [ ] Zaznaczanie i kopiowanie tekstu sesji myszka (t8: brak implementacji w drzewie t14).
+- [x] Odswiezanie otwartych Checks po zmianie rundy i zdarzeniach check.
+- [x] T14: sprawdzenie globalnego zaufania przed otwarciem stanu daemona; brak migracji zaufania z bazy projektu; bezpieczny plik tymczasowy rejestru.
+- [x] T14: ograniczenie utrwalanych bledow tur i redakcja znanych sekretow ze srodowiska (nie obejmuje calego transkryptu).
+- [ ] T13: lokalne uniewaznianie Checks, lekki odczyt Checks, cache transkryptu i layoutu grafu; ponowny audyt po integracji brakujacych zmian.
+- [ ] T14: zamkniecie bramki po integracji brakujacych wynikow t2-t8 i pelnej weryfikacji.
+- [ ] T14: rozstrzygnac rozbieznosc lokalnego antislop.toml z testem local_workers_use_opencode_and_verifiers_use_claude; ponowic testy daemon/socket i reaping w srodowisku pozwalajacym na te operacje (obecnie EPERM).

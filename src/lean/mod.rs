@@ -2494,7 +2494,7 @@ impl Core {
                 } else {
                     TurnStatus::Failed
                 };
-                let error = error.to_string();
+                let error = agent::persisted_error(&error.to_string());
                 self.store.finish_turn(&turn.id, status, Some(&error))?;
                 announce(
                     "turn_finished",

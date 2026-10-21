@@ -858,8 +858,6 @@ fn nothing_is_created_or_started_in_a_directory_that_is_not_trusted() {
 
     // A daemon will not start for it either.
     let state = dir_path.join("state");
-    std::fs::create_dir_all(&state).unwrap();
-    std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
     let daemon = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
         .env("ANTISLOP_CONFIG_DIR", &list)
         .arg("__core")
@@ -871,6 +869,31 @@ fn nothing_is_created_or_started_in_a_directory_that_is_not_trusted() {
         .unwrap();
     assert!(!daemon.status.success());
     assert!(String::from_utf8_lossy(&daemon.stderr).contains("not a trusted directory"));
+    assert!(!state.exists(), "internal entrypoint must not create state");
+    assert!(!list.exists(), "internal entrypoint must not grant trust");
+
+    // A repository can supply a prepared database; its flag is not consent
+    // from the user who launches the daemon.
+    {
+        let core =
+            antislop::lean::Core::open(&state, antislop::config::Config::load(&config).unwrap())
+                .unwrap();
+        core.store
+            .trust_project(&project.to_string_lossy())
+            .unwrap();
+    }
+    let daemon = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+        .env("ANTISLOP_CONFIG_DIR", &list)
+        .arg("__core")
+        .arg(&project)
+        .arg(&config)
+        .arg(&state)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!daemon.status.success());
+    assert!(String::from_utf8_lossy(&daemon.stderr).contains("not a trusted directory"));
+    assert!(!list.exists(), "project database cannot grant global trust");
 }
 
 /// The reply budget counts payload bytes, but the first event of a page

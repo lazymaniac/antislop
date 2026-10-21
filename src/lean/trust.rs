@@ -84,20 +84,22 @@ impl Registry {
         let dir = self.file.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir)?;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        let temporary = self.file.with_extension("json.tmp");
-        {
+        let temporary = dir.join(format!("trusted.{}.tmp", crate::id()));
+        let result = (|| -> Result<()> {
             use std::io::Write;
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
-                .create(true)
-                .truncate(true)
+                .create_new(true)
                 .mode(0o600)
                 .open(&temporary)?;
             file.write_all(serde_json::to_string_pretty(stored)?.as_bytes())?;
             file.sync_all()?;
-        }
-        std::fs::rename(&temporary, &self.file)?;
-        Ok(())
+            std::fs::rename(&temporary, &self.file)?;
+            std::fs::File::open(dir)?.sync_all()?;
+            Ok(())
+        })();
+        let _ = std::fs::remove_file(&temporary);
+        result
     }
 
     pub fn trust(&self, project: &Path) -> Result<()> {
@@ -125,6 +127,19 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn predictable_temporary_symlink_is_never_followed() {
+        let config = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let victim = config.path().join("victim");
+        std::fs::write(&victim, "keep").unwrap();
+        std::os::unix::fs::symlink(&victim, config.path().join("trusted.json.tmp")).unwrap();
+        let registry = Registry::at(config.path());
+        registry.trust(project.path()).unwrap();
+        assert!(registry.is_trusted(project.path()));
+        assert_eq!(std::fs::read_to_string(victim).unwrap(), "keep");
+    }
 
     #[test]
     fn trust_is_remembered_per_directory_and_private() {

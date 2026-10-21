@@ -933,14 +933,10 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
     // The version of the configuration this daemon runs with, taken before
     // reading it so an edit made meanwhile still counts as newer.
     let loaded = modified(config_path);
-    let core = Core::open(state, Config::load(config_path)?)?;
     let project = project.canonicalize()?;
-    // Work starts only in a directory the user trusted. A project trusted
-    // before the list was the user's own is carried over.
+    // Check the user-owned registry before opening any project state. A
+    // project database cannot grant trust, even for the internal entrypoint.
     let registry = super::trust::Registry::from_env()?;
-    if !registry.is_trusted(&project) && core.store.is_trusted(&project.to_string_lossy())? {
-        registry.trust(&project)?;
-    }
     require(
         registry.is_trusted(&project),
         &format!(
@@ -948,6 +944,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
             project.display()
         ),
     )?;
+    let core = Core::open(state, Config::load(config_path)?)?;
     let config_path = config_path.canonicalize()?;
     let socket = socket(state);
     if let Some(parent) = socket.parent() {
