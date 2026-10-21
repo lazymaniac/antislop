@@ -907,3 +907,18 @@ na dowolne przeciążenie hosta ani poprawności każdego możliwego scenariusza
 Nie wykonano ręcznych testów prawdziwego terminala wymienionych powyżej;
 pozostają one kontrolą integracji z terminalem użytkownika, szczególnie OSC 52.
 Nie pozostała blokada wykonania automatycznej bramki.
+
+### Configuration editor structural actions
+
+In `/config`, Ctrl+N adds an entry to the selected providers, profiles, or routing
+section (other sections add a profile). Provider and route additions offer only
+unconfigured kinds: Tab/Up/Down choose, Enter confirms, Esc cancels. New providers
+use their CLI name as binary; routes use an existing profile for both roles,
+with the orchestrator profile as executor for orchestration. Ctrl+D removes the
+selected entry. Ctrl+S validates and applies the draft; invalid deletions leave
+all draft edits intact and show field errors. Providers referenced by profiles,
+required gate routes, and orchestration cannot be removed successfully. The
+orchestration deletion check belongs to the editor; Config::validate is unchanged.
+
+When a structural section is empty, Ctrl+N restores access: an empty provider
+section takes priority; an empty routing section is offered outside providers.

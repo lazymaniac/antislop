@@ -109,7 +109,12 @@ consume no provider usage.
 Open `/config` (also in Ctrl+P) to edit the active project or global configuration.
 Tab/Shift+Tab select fields; Enter cycles enum and boolean values. Arrays use JSON
 string-array syntax, including command tokens. Empty optional fields remove overrides.
-Ctrl+N adds a profile with a generated name; Ctrl+D removes the selected profile.
+Ctrl+N adds an entry in the selected providers, profiles, or routing section (else a profile).
+Profiles get generated names. For providers and routes, Tab/Up/Down choose an
+unconfigured kind, Enter adds it, and Esc cancels. Providers default to their CLI
+binary; routes default to existing profiles (orchestrator profile for orchestration).
+Ctrl+D removes the selected provider, profile, or route. Invalid deletions show
+field errors on save and retain the draft, including removal of orchestration.
 Ctrl+S validates, saves, and applies the configuration live. Running turns finish
 with their old profile. Errors retain the draft; Esc closes it and `/config` reopens it.
 
@@ -118,3 +123,6 @@ preserved and saving is blocked. Ctrl+R explicitly reloads and discards edits.
 The daemon compares the loaded revision under its configuration-write lock, so a
 second client cannot overwrite a newer daemon-mediated edit. Unrelated TOML
 comments and formatting are preserved.
+
+When a structural section is empty, Ctrl+N restores access: an empty provider
+section takes priority; an empty routing section is offered outside providers.

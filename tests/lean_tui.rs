@@ -6201,6 +6201,12 @@ mod config_editor_acceptance {
                 && p.binary.is_none()
                 && p.model.is_none()));
             // Add and remove a profile through actual SetConfig writes.
+            let editor = app.config_editor.as_mut().unwrap();
+            editor.selected = editor
+                .fields
+                .iter()
+                .position(|f| f.path[0] == "profiles")
+                .unwrap();
             app.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
             let name = app
                 .config_editor
@@ -6396,7 +6402,7 @@ mod config_editor_acceptance {
         );
         editor.fields.retain(|f| f.path[0] != "providers");
         editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
-        assert!(editor.status.contains("no provider"));
+        assert!(editor.status.starts_with("Add providers: agy"));
     }
 
     #[test]
@@ -7228,4 +7234,225 @@ fn vim_details_navigation_isolated_from_search_and_other_commands() {
     app.key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
     assert_eq!(app.details.as_ref().unwrap().scroll, usize::MAX);
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)); // no overflow before redraw
+}
+
+#[test]
+fn configuration_provider_and_route_structural_edits_round_trip() {
+    use antislop::lean::tui::config::ConfigEditor;
+    for (section, name) in [("providers", "claude"), ("routing", "research")] {
+        let mut config = include_str!("../examples/antislop.toml")
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        if section == "routing" {
+            config["routing"]
+                .as_table_like_mut()
+                .unwrap()
+                .remove("research");
+        }
+        let source = config.to_string();
+        let mut editor = ConfigEditor::new(&source, "antislop.toml".into()).unwrap();
+        editor.selected = editor
+            .fields
+            .iter()
+            .position(|f| f.path[0] == section)
+            .unwrap();
+        editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert!(editor.status.contains(name));
+        editor.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(editor.fields[editor.selected].path[1], name);
+        let saved = editor.source().unwrap();
+        let config = antislop::config::Config::from_toml(&saved).unwrap();
+        if section == "providers" {
+            let provider = &config.providers[&antislop::config::ProviderKind::Claude];
+            assert_eq!(provider.binary, std::path::PathBuf::from("claude"));
+            assert!(provider.args.is_empty());
+            assert!(provider.command.is_none());
+        } else {
+            let route = &config.routing[&antislop::config::WorkKind::Research];
+            let first_profile = editor
+                .fields
+                .iter()
+                .find(|f| f.path[0] == "profiles")
+                .unwrap()
+                .path[1]
+                .clone();
+            assert_eq!(route.executor, first_profile);
+            assert_eq!(route.verifier, first_profile);
+        }
+        let mut loaded = ConfigEditor::new(&saved, "antislop.toml".into()).unwrap();
+        loaded.selected = loaded
+            .fields
+            .iter()
+            .position(|f| f.path[0] == section && f.path[1] == name)
+            .unwrap();
+        loaded.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        let saved = loaded.source().unwrap();
+        let loaded = ConfigEditor::new(&saved, "antislop.toml".into()).unwrap();
+        assert!(
+            !loaded
+                .fields
+                .iter()
+                .any(|f| f.path[0] == section && f.path[1] == name)
+        );
+    }
+}
+
+#[test]
+fn configuration_invalid_structural_deletion_preserves_draft_and_marks_field() {
+    use antislop::lean::tui::config::ConfigEditor;
+    for (section, name) in [
+        ("providers", "agy"),
+        ("routing", "testing"),
+        ("routing", "orchestration"),
+    ] {
+        let mut editor = ConfigEditor::new(
+            include_str!("../examples/antislop.toml"),
+            "antislop.toml".into(),
+        )
+        .unwrap();
+        editor.selected = editor
+            .fields
+            .iter()
+            .position(|f| f.path[0] == section && f.path[1] == name)
+            .unwrap();
+        editor.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        let draft: Vec<_> = editor
+            .fields
+            .iter()
+            .map(|f| (f.path.clone(), f.input.text.clone()))
+            .collect();
+        assert!(editor.source().is_none());
+        let error = editor.fields[editor.selected].error.as_deref().unwrap();
+        match (section, name) {
+            ("providers", _) => assert!(
+                error.contains("profile refers to an unconfigured provider"),
+                "{error}"
+            ),
+            ("routing", "testing") => assert!(
+                error.contains("policy.required_gates adds Testing tasks")
+                    && error.contains("no route for that work"),
+                "{error}"
+            ),
+            ("routing", "orchestration") => {
+                assert_eq!(error, "Cannot remove routing.orchestration.")
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            editor.fields.iter().filter(|f| f.error.is_some()).count(),
+            1
+        );
+        assert!(editor.is_dirty());
+        assert_eq!(
+            draft,
+            editor
+                .fields
+                .iter()
+                .map(|f| (f.path.clone(), f.input.text.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !editor
+                .fields
+                .iter()
+                .any(|f| f.path[0] == section && f.path[1] == name)
+        );
+    }
+}
+
+#[test]
+fn configuration_empty_sections_can_be_restored() {
+    use antislop::lean::tui::config::ConfigEditor;
+    let mut doc = include_str!("../examples/antislop.toml")
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    doc["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
+    doc["policy"]["required_gates"] = toml_edit::value(false);
+    let mut editor = ConfigEditor::new(&doc.to_string(), "antislop.toml".into()).unwrap();
+    editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(editor.status.contains("orchestration"));
+    editor.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let restored = antislop::config::Config::from_toml(&editor.source().unwrap()).unwrap();
+    let route = &restored.routing[&antislop::config::WorkKind::Orchestration];
+    assert_eq!(route.executor, restored.orchestrator.profile);
+    assert!(restored.profiles.contains_key(&route.verifier));
+    editor.fields.retain(|f| f.path[0] != "providers");
+    editor.selected = 0;
+    editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(editor.status.contains("providers"));
+    editor.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(editor.fields.iter().any(|f| f.path[0] == "providers"));
+}
+
+#[test]
+fn configuration_kind_picker_includes_every_missing_kind() {
+    use antislop::config::{Config, ProviderKind};
+    use antislop::lean::tui::config::ConfigEditor;
+    use std::collections::BTreeSet;
+
+    let source = include_str!("../examples/antislop.toml");
+    // The example configures agy and codex. Each other supported provider must
+    // be offered, including the final declared variant, with usable defaults.
+    for (index, name) in ["claude", "gemini", "opencode"].into_iter().enumerate() {
+        let mut editor = ConfigEditor::new(source, "antislop.toml".into()).unwrap();
+        editor.selected = editor
+            .fields
+            .iter()
+            .position(|f| f.path[0] == "providers")
+            .unwrap();
+        editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        for _ in 0..index {
+            editor.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        }
+        assert!(
+            editor
+                .status
+                .starts_with(&format!("Add providers: {name}  "))
+        );
+        editor.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let config = Config::from_toml(&editor.source().unwrap()).unwrap();
+        let kind: ProviderKind = serde_json::from_value(json!(name)).unwrap();
+        let provider = &config.providers[&kind];
+        assert_eq!(provider.binary, std::path::PathBuf::from(name));
+        assert!(provider.args.is_empty());
+        assert!(provider.command.is_none());
+    }
+
+    // Clear the routes and compare the offered kinds with every route from the
+    // complete example. No route may be omitted, repeated, or offered twice.
+    let expected: BTreeSet<String> = serde_json::to_value(Config::from_toml(source).unwrap())
+        .unwrap()["routing"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    let mut doc = source.parse::<toml_edit::DocumentMut>().unwrap();
+    doc["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
+    doc["policy"]["required_gates"] = toml_edit::value(false);
+    let mut editor = ConfigEditor::new(&doc.to_string(), "antislop.toml".into()).unwrap();
+    editor.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    let initial_status = editor.status.clone();
+    let mut offered = BTreeSet::new();
+    for _ in 0..expected.len() {
+        let name = editor
+            .status
+            .strip_prefix("Add routing: ")
+            .unwrap()
+            .split("  ")
+            .next()
+            .unwrap();
+        assert!(offered.insert(name.to_owned()), "duplicate route: {name}");
+        editor.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    }
+    assert_eq!(offered, expected);
+    assert_eq!(
+        editor.status, initial_status,
+        "cycle must contain exactly all kinds"
+    );
+    editor.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !editor.is_dirty(),
+        "browsing and cancelling must preserve the draft"
+    );
 }

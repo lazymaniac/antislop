@@ -1,6 +1,6 @@
 //! Field-based configuration draft. Only a successful daemon reply marks it saved.
 use super::{InputBuffer, Theme, sanitize_single_line_paste};
-use crate::config::Config;
+use crate::config::{Config, ProviderKind, WorkKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
@@ -15,7 +15,7 @@ pub struct Field {
     pub path: Vec<String>,
     pub input: InputBuffer,
     pub error: Option<String>,
-    choices: Vec<&'static str>,
+    choices: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -30,6 +30,7 @@ pub struct ConfigEditor {
     pub reload_requested: bool,
     pub base_source: String,
     baseline: BTreeMap<Vec<String>, String>,
+    adding: Option<(String, Vec<String>, usize)>,
 }
 
 impl Field {
@@ -75,6 +76,36 @@ fn toml_value(value: &Value) -> Result<toml_edit::Value, String> {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum KindNameError {
+    #[error("unknown configuration kind")]
+    Unknown(&'static [&'static str]),
+    #[error("{0}")]
+    Other(String),
+}
+
+impl serde::de::Error for KindNameError {
+    fn custom<T: std::fmt::Display>(message: T) -> Self {
+        Self::Other(message.to_string())
+    }
+
+    fn unknown_variant(_variant: &str, expected: &'static [&'static str]) -> Self {
+        Self::Unknown(expected)
+    }
+}
+
+fn kind_names<T: serde::de::DeserializeOwned>() -> Result<Vec<String>, String> {
+    // An empty name is invalid for configuration kinds. Serde's documented
+    // unknown_variant error supplies the accepted names as structured data.
+    match T::deserialize(serde::de::value::StrDeserializer::<KindNameError>::new("")) {
+        Err(KindNameError::Unknown(names)) => Ok(names.iter().map(|name| (*name).into()).collect()),
+        Err(error) => Err(format!("Cannot list configuration kinds: {error}")),
+        Ok(_) => {
+            Err("Cannot list configuration kinds: empty variant names are unsupported.".into())
+        }
+    }
+}
+
 impl ConfigEditor {
     pub fn new(source: &str, path: String) -> crate::Result<Self> {
         let config = Config::from_toml(source)?;
@@ -98,28 +129,35 @@ impl ConfigEditor {
             reload_requested: false,
             base_source: source.into(),
             baseline: BTreeMap::new(),
+            adding: None,
         };
-        editor.flatten(vec![], &value);
+        editor
+            .flatten(vec![], &value)
+            .map_err(crate::Error::Invalid)?;
         editor.baseline = editor.inputs();
         Ok(editor)
     }
 
-    fn flatten(&mut self, path: Vec<String>, value: &Value) {
+    fn flatten(&mut self, path: Vec<String>, value: &Value) -> Result<(), String> {
         if let Some(table) = value.as_object() {
             for (key, value) in table {
                 let mut child = path.clone();
                 child.push(key.clone());
-                self.flatten(child, value);
+                self.flatten(child, value)?;
             }
         } else if path != ["schema_version"] {
             let key = path.last().unwrap().as_str();
             let choices = match key {
                 "mode" if path[0] == "workspace" => vec!["in-place", "task-worktrees"],
                 "mode" => vec!["supervised", "autonomous"],
-                "provider" => vec!["agy", "codex", "claude", "gemini", "opencode"],
                 "effort" => vec!["low", "medium", "high", "xhigh"],
                 _ if value.is_boolean() => vec!["false", "true"],
                 _ => vec![],
+            };
+            let choices = if key == "provider" {
+                kind_names::<ProviderKind>()?
+            } else {
+                choices.into_iter().map(str::to_owned).collect()
             };
             let text = match value {
                 Value::String(s) => s.clone(),
@@ -133,6 +171,7 @@ impl ConfigEditor {
                 choices,
             });
         }
+        Ok(())
     }
 
     fn inputs(&self) -> BTreeMap<Vec<String>, String> {
@@ -206,12 +245,27 @@ impl ConfigEditor {
     }
 
     fn validate_draft(&mut self, value: Value) -> bool {
+        let removed_orchestration = self
+            .baseline
+            .keys()
+            .any(|p| p[0] == "routing" && p[1] == "orchestration")
+            && !self
+                .fields
+                .iter()
+                .any(|f| f.path[0] == "routing" && f.path[1] == "orchestration");
         let result = serde_json::from_value::<Config>(value)
             .map_err(|e| e.to_string())
-            .and_then(|c| c.validate().map_err(|e| e.to_string()));
+            .and_then(|c| c.validate().map_err(|e| e.to_string()))
+            .and_then(|()| {
+                if removed_orchestration {
+                    Err("Cannot remove routing.orchestration.".into())
+                } else {
+                    Ok(())
+                }
+            });
         if let Err(error) = result {
-            // The Config validator owns semantic and cross-field rules. Show its
-            // error beside edited fields, including edits that interact.
+            // Show semantic and cross-field validation failures beside edited
+            // fields, including edits that interact.
             let mut marked = false;
             for field in &mut self.fields {
                 if self.baseline.get(&field.path) != Some(&field.input.text) {
@@ -251,19 +305,21 @@ impl ConfigEditor {
             .base_source
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| e.to_string())?;
-        if let Some(profiles) = doc.get_mut("profiles").and_then(|p| p.as_table_like_mut()) {
-            let removed: Vec<String> = profiles
-                .iter()
-                .map(|(name, _)| name.to_owned())
-                .filter(|name| {
-                    !self
-                        .fields
-                        .iter()
-                        .any(|f| f.path[0] == "profiles" && &f.path[1] == name)
-                })
-                .collect();
-            for name in removed {
-                profiles.remove(&name);
+        for section in ["profiles", "providers", "routing"] {
+            if let Some(profiles) = doc.get_mut(section).and_then(|p| p.as_table_like_mut()) {
+                let removed: Vec<String> = profiles
+                    .iter()
+                    .map(|(name, _)| name.to_owned())
+                    .filter(|name| {
+                        !self
+                            .fields
+                            .iter()
+                            .any(|f| f.path[0] == section && &f.path[1] == name)
+                    })
+                    .collect();
+                for name in removed {
+                    profiles.remove(&name);
+                }
             }
         }
         for field in &self.fields {
@@ -295,7 +351,7 @@ impl ConfigEditor {
     }
 
     pub fn paste(&mut self, text: &str) {
-        if self.pending {
+        if self.pending || self.adding.is_some() {
             return;
         }
         self.fields[self.selected]
@@ -305,39 +361,153 @@ impl ConfigEditor {
         self.status = "Unsaved changes".into();
     }
 
+    fn show_addition(&mut self, section: String, choices: Vec<String>, index: usize) {
+        self.status = format!(
+            "Add {}: {}  Tab/Up/Down: choose  Enter: add  Esc: cancel",
+            section, choices[index]
+        );
+        self.adding = Some((section, choices, index));
+    }
+
+    fn addition_key(&mut self, key: KeyEvent) -> bool {
+        let Some((section, choices, mut index)) = self.adding.take() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => self.status = "Addition cancelled".into(),
+            KeyCode::Enter => self.add_kind(section, &choices[index]),
+            _ => {
+                match key.code {
+                    KeyCode::Up | KeyCode::BackTab => {
+                        index = (index + choices.len() - 1) % choices.len()
+                    }
+                    KeyCode::Down | KeyCode::Tab => index = (index + 1) % choices.len(),
+                    _ => {}
+                }
+                self.show_addition(section, choices, index);
+            }
+        }
+        true
+    }
+
+    fn add_kind(&mut self, section: String, name: &str) {
+        let value = if section == "providers" {
+            serde_json::json!({"binary": name, "args": [], "command": null})
+        } else {
+            let Some(profile) = self
+                .fields
+                .iter()
+                .find(|f| f.path[0] == "profiles")
+                .map(|f| f.path[1].clone())
+            else {
+                self.status = "Cannot add a route: no profile is configured.".into();
+                return;
+            };
+            let executor = if name == "orchestration" {
+                self.fields
+                    .iter()
+                    .find(|f| f.path == ["orchestrator", "profile"])
+                    .map(|f| f.input.text.clone())
+                    .unwrap_or_else(|| profile.clone())
+            } else {
+                profile.clone()
+            };
+            serde_json::json!({"executor": executor, "verifier": profile})
+        };
+        self.append_entry(vec![section, name.into()], &value);
+    }
+
+    fn begin_addition(&mut self) {
+        let mut section = self.fields[self.selected].path[0].clone();
+        // Empty sections have no selectable field. Keep structural recovery
+        // reachable after deleting their last entry.
+        if !self.fields.iter().any(|f| f.path[0] == "providers") {
+            section = "providers".into();
+        } else if !self.fields.iter().any(|f| f.path[0] == "routing") && section != "providers" {
+            section = "routing".into();
+        }
+        let candidates = match section.as_str() {
+            "providers" => kind_names::<ProviderKind>(),
+            "routing" => kind_names::<WorkKind>(),
+            _ => Ok(vec![]),
+        };
+        let candidates = match candidates {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        if !candidates.is_empty() {
+            let choices: Vec<String> = candidates
+                .iter()
+                .filter(|name| {
+                    !self
+                        .fields
+                        .iter()
+                        .any(|f| f.path[0] == section && f.path[1] == **name)
+                })
+                .cloned()
+                .collect();
+            if choices.is_empty() {
+                self.status = format!("Cannot add to {section}: all kinds are configured.");
+            } else {
+                self.show_addition(section, choices, 0);
+            }
+            return;
+        }
+        self.add_profile();
+    }
+
+    fn add_profile(&mut self) {
+        let mut index = 1;
+        while self
+            .fields
+            .iter()
+            .any(|f| f.path.get(1) == Some(&format!("new-profile-{index}")))
+        {
+            index += 1;
+        }
+        let name = format!("new-profile-{index}");
+        let Some(provider) = self
+            .fields
+            .iter()
+            .find(|f| f.path.first().is_some_and(|p| p == "providers"))
+            .and_then(|f| f.path.get(1))
+            .cloned()
+        else {
+            self.status = "Cannot add a profile: no provider is configured.".into();
+            return;
+        };
+        self.append_entry(vec!["profiles".into(), name], &serde_json::json!({"provider":provider,"model":null,"effort":"high","binary":null,"args":[],"command":null}));
+    }
+
+    fn append_entry(&mut self, path: Vec<String>, value: &Value) {
+        let previous_len = self.fields.len();
+        match self.flatten(path, value) {
+            Ok(()) => {
+                self.selected = previous_len;
+                self.status = "Unsaved changes".into();
+            }
+            Err(error) => {
+                self.fields.truncate(previous_len);
+                self.status = error;
+            }
+        }
+    }
+
     pub fn key(&mut self, key: KeyEvent) {
-        if self.pending {
+        if self.pending || self.addition_key(key) {
             return;
         }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         if control && key.code == KeyCode::Char('n') {
-            let mut index = 1;
-            while self
-                .fields
-                .iter()
-                .any(|f| f.path.get(1) == Some(&format!("new-profile-{index}")))
-            {
-                index += 1;
-            }
-            let name = format!("new-profile-{index}");
-            let Some(provider) = self
-                .fields
-                .iter()
-                .find(|f| f.path.first().is_some_and(|p| p == "providers"))
-                .and_then(|f| f.path.get(1))
-                .cloned()
-            else {
-                self.status = "Cannot add a profile: no provider is configured.".into();
-                return;
-            };
-            self.selected = self.fields.len();
-            self.flatten(vec!["profiles".into(), name], &serde_json::json!({"provider":provider,"model":null,"effort":"high","binary":null,"args":[],"command":null}));
-            self.status = "Unsaved changes".into();
+            self.begin_addition();
             return;
         }
         if control && key.code == KeyCode::Char('d') {
             let path = self.fields[self.selected].path.clone();
-            if path[0] == "profiles" {
+            if matches!(path[0].as_str(), "profiles" | "providers" | "routing") {
                 self.fields.retain(|f| f.path[..2] != path[..2]);
                 self.selected = self.selected.min(self.fields.len() - 1);
                 self.status = "Unsaved changes".into();
@@ -366,7 +536,7 @@ impl ConfigEditor {
                         .iter()
                         .position(|v| *v == field.input.text)
                         .map_or(0, |i| (i + 1) % field.choices.len());
-                    field.input = InputBuffer::with_text(field.choices[next]);
+                    field.input = InputBuffer::with_text(&field.choices[next]);
                 } else {
                     match code {
                         KeyCode::Char(c) if !control => field.input.insert_char(c),
@@ -453,11 +623,13 @@ impl ConfigEditor {
             theme.selected(),
         ));
         lines.push(Line::raw(
-            "Tab: field  Enter: cycle  Ctrl+N/D: add/delete profile  Ctrl+S: apply  Ctrl+R: reload  Esc: close",
+            "Tab: field  Enter: cycle  Ctrl+N/D: add/delete profile/provider/route  Ctrl+S: apply  Ctrl+R: reload  Esc: close",
         ));
-        lines.push(Line::raw(super::sanitize_line(
-            selected.error.as_deref().unwrap_or(&self.status),
-        )));
+        lines.push(Line::raw(super::sanitize_line(if self.adding.is_some() {
+            &self.status
+        } else {
+            selected.error.as_deref().unwrap_or(&self.status)
+        })));
         frame.render_widget(Paragraph::new(lines), area);
         frame.set_cursor_position((
             area.x + col.min(area.width.saturating_sub(1)),
@@ -469,6 +641,26 @@ impl ConfigEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn kind_names_rejects_an_empty_variant_without_panicking() {
+        #[derive(serde::Deserialize)]
+        enum EmptyKind {
+            #[serde(rename = "")]
+            Empty,
+        }
+        assert_eq!(
+            kind_names::<EmptyKind>().unwrap_err(),
+            "Cannot list configuration kinds: empty variant names are unsupported."
+        );
+    }
+
+    #[test]
+    fn kind_names_reports_other_deserialization_errors() {
+        let error = kind_names::<u64>().unwrap_err();
+        assert!(error.starts_with("Cannot list configuration kinds: "));
+        assert!(error.contains("invalid type"), "{error}");
+    }
+
     #[test]
     fn all_fields_round_trip_and_invalid_values_stay_in_draft() {
         let source = include_str!("../../../examples/antislop.toml");
