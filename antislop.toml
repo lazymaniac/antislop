@@ -24,18 +24,16 @@ command = ["omlx", "launch", "opencode", "--model", "Qwen3.8-Flash-Next-Uncensor
 # Profiles select the provider, optional model and reasoning effort.
 # Effort: low, medium, high, xhigh (availability depends on the selected model).
 [profiles.orchestrator]
-provider = "codex"
+provider = "claude"
 effort = "high"
 
 [profiles.reasoning]
-provider = "opencode"
-model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
-effort = "high"
+provider = "codex"
+effort = "low"
 
 [profiles.execution]
-provider = "opencode"
-model = "omlx/Qwen3.8-Flash-Next-Uncensored-oQ5e-mtp"
-effort = "high"
+provider = "codex"
+effort = "low"
 
 [profiles.review]
 provider = "claude"

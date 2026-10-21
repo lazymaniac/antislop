@@ -19,19 +19,20 @@ TODO list:
 - [x] funkcjonalnosc eksportu powinna zostac usunieta.
 - [x] UI musi wspierac myszke / touchpad.
 - [x] Dodac mozliwosc pracy nad kilkoma projektami na raz.
-- [ ] okno z planem projektu nie zawija wierszy i nie da sie przeczytac dlugich linii tekstu. Trzeba dodac word wrap.
-- [ ] Agent ktory ma problem powinien zostac oznaczone kolorem czerwonym
-- [ ] Aplikacja powinna udostepnic mechanizm odblokowywania krokow miedzy agentami kiedy jest jakis problem ktory bolkuje ppstep prac.
-- [ ] W widoku sesji w szczegolach agenta nie widac wszystkich wiadomosci wyslanych do i od agenta. Brak np wpisow reasoning. Terminal takze nie wyglada jak originalna aplikacja.
-- [ ] W widoku szczegolow agenta powinny wyswietalc sie zakladki ktore maja sens dla danego agenta.
-- [ ] Agenci w widoku grafu powinni miec zaimplementowany color coding tak zeby mozna bylo ich latwo rozroznic.
-- [ ] Brakuje uzycia ikonek, loaderow tak zeby uzytkownik mogl wizualnie odroznic rodzaje agentow i czy aktualnie pracuje, czekaja, maja problem itp. Tak samo stan orkiestratora powinien byc aktualizowany w oknie czatu bo teraz po wyslaniu wiadomosci brakuj jakiegokolwiek feedbacku do uzytkownika czy aplikacja cos robi.
-- [ ] W widoku grafu nie chce uzywac ramek wokol kart agentow, samo tlo karty powinno ich odroznic od tla canvasa
-- [ ] orkiestrator powinien reagowac na zmiany stanow w grafie i informowac uzytkownika o pistepach zakonczonych rund w pustaci krtokich komunikatow. problemy ktore boluja pistep rowniez powinny byc raportowane do orliestratora. 
+- [x] okno z planem projektu nie zawija wierszy i nie da sie przeczytac dlugich linii tekstu. Trzeba dodac word wrap.
+- [x] Agent ktory ma problem powinien zostac oznaczone kolorem czerwonym
+- [x] Aplikacja powinna udostepnic mechanizm odblokowywania krokow miedzy agentami kiedy jest jakis problem ktory bolkuje ppstep prac.
+- [x] W widoku sesji w szczegolach agenta nie widac wszystkich wiadomosci wyslanych do i od agenta. Brak np wpisow reasoning. Terminal takze nie wyglada jak originalna aplikacja.
+- [x] W widoku szczegolow agenta powinny wyswietalc sie zakladki ktore maja sens dla danego agenta.
+- [x] Agenci w widoku grafu powinni miec zaimplementowany color coding tak zeby mozna bylo ich latwo rozroznic.
+- [x] Brakuje uzycia ikonek, loaderow tak zeby uzytkownik mogl wizualnie odroznic rodzaje agentow i czy aktualnie pracuje, czekaja, maja problem itp. Tak samo stan orkiestratora powinien byc aktualizowany w oknie czatu bo teraz po wyslaniu wiadomosci brakuj jakiegokolwiek feedbacku do uzytkownika czy aplikacja cos robi.
+- [x] W widoku grafu nie chce uzywac ramek wokol kart agentow, samo tlo karty powinno ich odroznic od tla canvasa
+- [x] orkiestrator powinien reagowac na zmiany stanow w grafie i informowac uzytkownika o pistepach zakonczonych rund w pustaci krtokich komunikatow. problemy ktore boluja pistep rowniez powinny byc raportowane do orliestratora.
 
 Niedokończone względem design.md:
 
 Ledgery i bramki jakości (§3, §6.4-6.7, §7.6, §10.1, M2Q):
+
 - [ ] RequirementLedger i PlanItemLedger w runtime: atomowe wymagania, statusy (identified..verified/stale/superseded_by_user), dowody, rodzic/dzieci (§6.6).
 - [ ] spec_revision na runie oraz unieważnianie zależnych zadań, raportów, modelu i dowodów po zmianie wymagań, modelu lub checklisty (§6.3, scenariusz 31).
 - [ ] ContextModel, rejestr Unknown, SolutionModel, SimulationCase, TraceabilityMap jako rekordy z bramkami context_ready, plan_ready, solution_selected, requirements_complete egzekwowanymi przez runtime (§6.4-6.5).
@@ -45,6 +46,7 @@ Ledgery i bramki jakości (§3, §6.4-6.7, §7.6, §10.1, M2Q):
 - [ ] Graf unieważniania dowodów i QualityGate (required_check_ids, input_hashes, invalidation_dependencies) (§10.1).
 
 TUI (§8):
+
 - [ ] Zakładki szczegółów agenta: Overview, Session, Artifacts, Findings, Messages, Evidence, Checks. Brakuje Artifacts, Findings i Evidence jako osobnych zakładek (§8.4).
 - [ ] Widoki runu z czatu/palety: Requirements, Options, Risks, Quality gates (pokrycie, dowody, pominięcia, różnice rewizji) (§6.6, §8.4).
 - [ ] Filtry relacji w grafie (supervises, depends_on, verifies, communicates_with) oraz podświetlenie krawędzi komunikacji z czasem i licznikiem (§8.3).
@@ -56,6 +58,7 @@ TUI (§8):
 - [ ] Komenda `antislop ui` ustalona w §8.2 (obecnie jest `antislop chat` i uruchomienie bez argumentów).
 
 Runtime, daemon, adaptery (§7, §9, §10, §13, §14):
+
 - [ ] request_id i klucz idempotencji dla zmian stanu w protokole daemona (§9.3).
 - [ ] Jeden aktywny klient sterujący i klienci podglądu; konflikt sterowania nie może być last-write-wins (§9.3).
 - [ ] Kontrakt adaptera: probe z capabilities, send z delivery_mode i receipt, interrupt z receipt rozróżniającym żądanie od potwierdzonego zatrzymania (§9.4).
@@ -73,16 +76,20 @@ Runtime, daemon, adaptery (§7, §9, §10, §13, §14):
 - [ ] Walidacja wszystkich potrzebnych profili przed startem zespołu; brak CLI daje jawną propozycję zamiany lub blokadę (§7.4).
 
 Workspace (§11):
+
 - [ ] Projekt bez gita: utworzenie inicjalnego snapshotu/repozytorium przez runtime (design §11.1; obecnie writer prosi o git init).
 - [ ] Lease plików i osobne zasoby (porty, bazy, cache) dla równoległych worktree (§11.1).
 - [ ] Research, dokumenty i analizy bez gita: wersjonowane katalogi wejść/wyjść i artefakty z hashami (§11.2).
-- [ ] In-place: zadania read-only nie powinny widzieć częściowych zmian writera, a zmiany użytkownika w trakcie nie powinny być przypisywane writerowi (§11.1).
 
 Zgody i tryby (§6.2):
+
 - [ ] Supervised: pytanie o zgodę przy każdej rundzie poprawek (obecnie pierwsze 3 rundy bez pytania).
 - [ ] Żadnego automatycznego otwierania rundy poprawek po odrzuceniu wyniku w trybie supervised, zgoda per etap i per runda (§6.2).
 
 Pozostałe:
-- [ ] Eksport diagnostyczny lokalny i kontrolowany przez użytkownika (§15; został usunięty w todo wyżej, design go przewiduje).
+
 - [ ] Historia runu mierząca czas do zaakceptowanego wyniku, czas pracy użytkownika, liczbę rund, blokad, konfliktów i zmian zakresu (§15).
 - [ ] Decyzja o licencji i dystrybucji Architect (§20, pkt 4).
+
+- [ ] zunifikowac workera z weryfikatorem w jednym nodzie na grafie
+- [ ] zunifikowac zakladke overview z session
