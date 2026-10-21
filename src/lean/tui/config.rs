@@ -34,6 +34,10 @@ pub struct ConfigEditor {
 }
 
 impl Field {
+    fn belongs_to_entry(&self, section: &str, name: &str) -> bool {
+        self.path[0] == section && self.path[1] == name
+    }
+
     fn value(&self) -> Result<Value, String> {
         let text = &self.input.text;
         let key = self.path.last().ok_or("Missing field path")?.as_str();
@@ -306,19 +310,22 @@ impl ConfigEditor {
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| e.to_string())?;
         for section in ["profiles", "providers", "routing"] {
-            if let Some(profiles) = doc.get_mut(section).and_then(|p| p.as_table_like_mut()) {
-                let removed: Vec<String> = profiles
+            if let Some(entries) = doc
+                .get_mut(section)
+                .and_then(|item| item.as_table_like_mut())
+            {
+                let removed: Vec<String> = entries
                     .iter()
                     .map(|(name, _)| name.to_owned())
                     .filter(|name| {
                         !self
                             .fields
                             .iter()
-                            .any(|f| f.path[0] == section && &f.path[1] == name)
+                            .any(|field| field.belongs_to_entry(section, name))
                     })
                     .collect();
                 for name in removed {
-                    profiles.remove(&name);
+                    entries.remove(&name);
                 }
             }
         }
@@ -390,16 +397,18 @@ impl ConfigEditor {
         true
     }
 
+    fn first_entry_name(&self, section: &str) -> Option<String> {
+        self.fields
+            .iter()
+            .find(|field| field.path[0] == section)
+            .map(|field| field.path[1].clone())
+    }
+
     fn add_kind(&mut self, section: String, name: &str) {
         let value = if section == "providers" {
             serde_json::json!({"binary": name, "args": [], "command": null})
         } else {
-            let Some(profile) = self
-                .fields
-                .iter()
-                .find(|f| f.path[0] == "profiles")
-                .map(|f| f.path[1].clone())
-            else {
+            let Some(profile) = self.first_entry_name("profiles") else {
                 self.status = "Cannot add a route: no profile is configured.".into();
                 return;
             };
@@ -440,14 +449,13 @@ impl ConfigEditor {
         };
         if !candidates.is_empty() {
             let choices: Vec<String> = candidates
-                .iter()
+                .into_iter()
                 .filter(|name| {
                     !self
                         .fields
                         .iter()
-                        .any(|f| f.path[0] == section && f.path[1] == **name)
+                        .any(|field| field.belongs_to_entry(&section, name))
                 })
-                .cloned()
                 .collect();
             if choices.is_empty() {
                 self.status = format!("Cannot add to {section}: all kinds are configured.");
@@ -469,13 +477,7 @@ impl ConfigEditor {
             index += 1;
         }
         let name = format!("new-profile-{index}");
-        let Some(provider) = self
-            .fields
-            .iter()
-            .find(|f| f.path.first().is_some_and(|p| p == "providers"))
-            .and_then(|f| f.path.get(1))
-            .cloned()
-        else {
+        let Some(provider) = self.first_entry_name("providers") else {
             self.status = "Cannot add a profile: no provider is configured.".into();
             return;
         };
@@ -508,7 +510,8 @@ impl ConfigEditor {
         if control && key.code == KeyCode::Char('d') {
             let path = self.fields[self.selected].path.clone();
             if matches!(path[0].as_str(), "profiles" | "providers" | "routing") {
-                self.fields.retain(|f| f.path[..2] != path[..2]);
+                self.fields
+                    .retain(|field| !field.belongs_to_entry(&path[0], &path[1]));
                 self.selected = self.selected.min(self.fields.len() - 1);
                 self.status = "Unsaved changes".into();
             }
