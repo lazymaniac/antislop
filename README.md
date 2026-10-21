@@ -71,37 +71,6 @@ opens another by path (`/project PATH`); each keeps its own configuration,
    delivered; the orchestrator receives the results and the audit and
    answers you, or proposes a plan for what is missing.
 
-## Task cards and plan state
-
-Every worker and verifier card is exactly 26 columns wide and 10 rows tall,
-whatever it has to say, and every card keeps its fixed slots: title, state,
-one activity line, up to four summary lines, two effect lines and the meta
-line. All cards share that height, so with the plan, viewport, filters and
-grouping unchanged no activity, effect, verdict, retry or late event ever
-moves one card or changes one height. The card carries the same honest
-reading of the task, built from what the runtime actually reported: the
-round (`r1`, `r2`, …) once one has started and never before; a separate
-activity line per role — what the agent is doing (`doing: …`), the concrete
-dependencies a queued task waits for (`waits for t1`, `D:t1`) instead of a
-guessed reason, or the raw cause when a task stops (`cause not reported`
-when none was) — on its own line, independent of the state word and the
-provider; the worker's effect once its round ends, with `[fragment]` shown
-front-first when the text was cut; the verifier's obligation counters
-(`2/3`, never `0` when nothing was reported); and one landing label for the
-integration (`committed`, `applied in place`, `conflict`, `on branch`, …).
-A worker may add the effect its card shows as a fenced ```effect block to
-the very report it gives — one line, no backticks, closing fence on its own
-line; the last such block wins, the runtime bounds it (never a full report
-in events), and an empty or damaged block stays in the report while the
-card falls back to the diff's summary (writers) or the report's first text
-line (read-only), exactly as it does for reports without the block. The
-carousel and details read state, activity, effect, coverage and integration
-through the same single interpretation as the cards, and the carousel adds
-the full effect, obligation and integration lines, the next step naming
-only keys that really work, and plan-state counters over every task.
-Details keep the whole cause and diff. Cards degrade to the same words in
-fewer columns, and stay readable with `NO_COLOR=1` and `ANTISLOP_ASCII=1`.
-
 ## Build and test
 
 Rust 1.98.1 is pinned. `scripts/cargo.sh` prefers rustup when an asdf shim

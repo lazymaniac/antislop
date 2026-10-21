@@ -5,7 +5,6 @@ pub mod agent;
 pub mod cli;
 pub mod daemon;
 pub mod diff;
-pub mod eval;
 pub mod feedback;
 pub mod git;
 pub mod projects;

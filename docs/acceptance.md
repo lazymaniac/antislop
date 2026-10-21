@@ -7,13 +7,7 @@ evidence differs, and the difference matters:
   (`tests/`, unit tests in `src/lean`).
 - **prompt**: an agent's instructions or its verifier's numbered
   obligations ask for it (`src/lean/tasks.rs`). The runtime makes sure the
-  verifier accounts for each obligation (scenario 30). Whether a real
-  model judges correctly was measured on claude, codex and agy with seeded
-  cases (design M5, [calibration.md](calibration.md)): every verifier
-  rejected and named each seeded defect of scenarios 3, 4, 11, 12, 15, 19
-  and 21–24, and defects buried in changes of up to 600 lines, and
-  approved the clean controls. Injected project instructions, secrets and
-  recovery after kills were measured in whole runs.
+  verifier accounts for each obligation (scenario 30).
 
 Where the lean core departs from the design on purpose (the user's
 principles: risks only to paired verifiers, no copies of sources, state that
@@ -37,8 +31,8 @@ verification against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8` is in
 | 12 | Analysis with a wrong unit or denominator is corrected after recomputation | Analysis obligations (independent recomputation, units, denominators); an obligation marked `issue` returns to the worker | runtime: `lean_review::an_obligation_marked_issue_sends_its_note_to_the_worker`; prompt |
 | 13 | A fix after a positive review is verified again | Every worker round is followed by its verifier; an approved task is not changed afterwards; later changes are new tasks with their own verifiers; the audit checks the end state | runtime: `lean_plan::a_plan_runs_worker_verifier_pairs_and_reports_back` (rejected → fixed → verified again) |
 | 14 | A CLI needs a login or hits a limit → explicit waiting | The task becomes `waiting` with the CLI's message; resume continues in the same sessions | runtime: `lean_recovery::after_a_login_resuming_finishes_the_plan_in_the_same_sessions`, `tasks::login_and_limit_errors_wait_for_the_user` |
-| 15 | Text from the repo, a page or an agent cannot widen permissions | Access comes from the task's `writes` and the policy, never from messages; a plan's scope outside the project reaches only read-only CLIs; writers work in a worktree (or, in place, one at a time with detection of the user's edits) | runtime: `lean_writer::an_approved_writer_lands_in_the_project_without_a_commit` (scope `../shared` withheld from the writer); prompt: project rules; measured: injected `AGENTS.md` setup with real CLIs ([calibration](calibration.md#security-against-one-agent)) |
-| 16 | After a reboot the right sessions resume by id, with pending approvals and roles | Sessions, plans, approvals and roles live in `core.db`; a session is resumed only by the CLI that created it | runtime: `lean_recovery::an_autonomous_plan_cut_off_by_a_restart_resumes_by_itself`, `lean_core::a_question_cut_off_by_a_restart_is_answered_after_it`; measured: daemon and every agent killed mid-turn with real CLIs, reopened by `--conversation` ([calibration](calibration.md#recovery-with-real-clis)) |
+| 15 | Text from the repo, a page or an agent cannot widen permissions | Access comes from the task's `writes` and the policy, never from messages; a plan's scope outside the project reaches only read-only CLIs; writers work in a worktree (or, in place, one at a time with detection of the user's edits) | runtime: `lean_writer::an_approved_writer_lands_in_the_project_without_a_commit` (scope `../shared` withheld from the writer); prompt: project rules |
+| 16 | After a reboot the right sessions resume by id, with pending approvals and roles | Sessions, plans, approvals and roles live in `core.db`; a session is resumed only by the CLI that created it | runtime: `lean_recovery::an_autonomous_plan_cut_off_by_a_restart_resumes_by_itself`, `lean_core::a_question_cut_off_by_a_restart_is_answered_after_it` |
 | 17 | A TOML change does not silently change a running run | The daemon keeps the configuration it loaded; an idle one restarts on a change, a busy one keeps its work and the frontend says the change waits | runtime: `lean_core::a_changed_configuration_waits_for_running_work_and_says_so` |
 | 18 | In-place keeps the user's changes; a conflict is reported, not overwritten | Snapshot commits before and after each worker turn; touching the user's files ends `needs_user` with the user's version recoverable. Uncommitted paths still matching their latest approved output remain available to subsequent writers; later user edits, unrelated files and rejected results remain protected | runtime: `lean_writer::in_place_a_writer_that_touches_the_users_edits_stops_and_keeps_their_version`, `…_edits_the_project_itself_and_reviewers_see_a_snapshot`, `…_chained_writers_can_extend_approved_uncommitted_results`, `…_ownership_survives_restart_but_later_user_edits_stay_protected`, `…_approval_does_not_claim_unrelated_user_files_in_its_snapshot`, `…_rejected_changes_do_not_become_approved_outputs` |
 | 19 | A plan that assumes an intermediate state or order is blocked | Plan verifier: no intermediate state or ordering the system does not guarantee | prompt (`plan_review_prompt`, checklist `planning`) |

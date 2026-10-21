@@ -12,7 +12,6 @@ This document specifies the rules, design constraints, and engineering practices
   - `src/lean/`: The lean core runtime, SQLite event store, task DAG manager, daemon, and Git worktree coordinator.
   - `src/lean/tui/`: TUI implemented with `ratatui` and `crossterm`.
   - `src/lean/agent.rs` & `src/lean/cli.rs`: Process wrappers and event streaming for agent CLIs (`codex`, `agy`, `claude`, `gemini`).
-  - `evals/`: Benchmarks and evaluation fixtures comparing verifiers with plain code reviews.
 
 ---
 

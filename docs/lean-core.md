@@ -529,15 +529,10 @@ kept per conversation, so switching back finds them as they were.
 - Resume works per plan, not per task, and `waiting` tasks are not retried
   on a timer.
 - Read-only modes are prompts and CLI modes, not OS confinement; `scope`
-  guides agents but does not limit what they read. In a real run an agy
-  plan verifier read files outside the project until told not to
-  ([calibration](calibration.md)).
+  guides agents but does not limit what they read.
 - Hostile instructions in the project's files are held by the agents'
   instructions and by review, not by OS confinement: codex's
-  `workspace-write` sandbox leaves temporary directories writable, and a
-  worker ran an injected setup script there until agents were told not to
-  follow project instructions that reach beyond the project
-  ([calibration](calibration.md)).
+  `workspace-write` sandbox leaves temporary directories writable.
 - An interrupted verification is requeued with its task, so the worker
   gets a turn before the verifier resumes its session.
 - A read-only codex agent cannot run checks that write (tests that create
@@ -603,26 +598,16 @@ kept per conversation, so switching back finds them as they were.
    a warning about uncommitted changes writers do not see, a versioned
    `core.db` (design §6.2, §7.6, §8, §9.5, §10.3, §11.1, §13–§15).
 
-15. ✅ Calibration (design M5): `antislop eval` runs verifiers on seeded
-   cases (`evals/`) on real CLIs against a plain one-agent review; a whole
-   run was compared with one agent on hidden acceptance checks, large
-   changes (600 lines, 40 files) were reviewed, hostile project content
-   was run against the team and one agent, and the daemon (or everything)
-   was killed mid-run in three places with real CLIs. Results, measured
-   limits and the faults they found (fixed):
-   [calibration.md](calibration.md).
-
 ## Design §16 build stages
 
 | Design stage | Exit criterion | Where it is met |
 | --- | --- | --- |
-| M0: integration spike | Versions and limits documented; a transport chosen per CLI | [Agents](#agents) (one stream-JSON or `exec --json` transport per CLI, resume by the CLI's own session id); runs measured on codex-cli 0.163.0, Claude Code 2.1.301 and agy 1.4.0 ([calibration](calibration.md)). gemini is implemented from its documentation and has not run against a real binary. [m0/](m0/README.md) keeps the old runtime's first probes. |
+| M0: integration spike | Versions and limits documented; a transport chosen per CLI | [Agents](#agents) (one stream-JSON or `exec --json` transport per CLI, resume by the CLI's own session id). gemini is implemented from its documentation and has not run against a real binary. [m0/](m0/README.md) keeps the old runtime's first probes. |
 | M1: local runtime | State recovered without losing approvals or doubling actions | Stages 1, 4 and 7; [acceptance](acceptance.md) scenarios 9, 10 and 16 |
 | M2: vertical slice | A task finished on evidence; a weak result rejected | Stages 2 and 3; scenarios 1 and 3 |
 | M2Q: quality contracts | A fake provider cannot close a task that skips a requirement, risk or gate | Stages 6 and 13 (verdict coverage of every obligation, final audit); scenarios 27–31 |
 | M3: team and TUI | Real events, navigation, honest delivery states, comments answered | Stages 8–11; scenario 6 |
 | M4: full MVP | Every role verified; acceptance scenarios pass | Stages 12–14; all 40 scenarios in [acceptance](acceptance.md) |
-| M5: calibration | Measured limits and a report against the baseline | Stage 15; [calibration](calibration.md) |
 
 Design §20's open decisions stand as follows. Isolation and the supported
 CLI versions (1) and session resume per CLI (2) are settled above and in

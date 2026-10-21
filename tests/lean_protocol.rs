@@ -813,7 +813,7 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
 }
 
 #[test]
-fn removed_commands_and_options_are_refused_with_a_reason() {
+fn removed_options_are_refused_with_a_reason() {
     let dir = tempfile::tempdir().unwrap();
     let run = |args: &[&str]| {
         std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
@@ -822,14 +822,11 @@ fn removed_commands_and_options_are_refused_with_a_reason() {
             .output()
             .unwrap()
     };
-    let export = run(&["export"]);
-    assert!(!export.status.success());
-    assert!(String::from_utf8_lossy(&export.stderr).contains("export was removed"));
     // The working directory is the project: there is no --project.
     let project = run(&["--project", "."]);
     assert!(!project.status.success());
     assert!(String::from_utf8_lossy(&project.stderr).contains("unknown option --project"));
-    // Neither is advertised any more.
+    // Removed options and commands are not advertised.
     let help = String::from_utf8_lossy(&run(&["--help"]).stdout).into_owned();
     assert!(!help.contains("--project") && !help.contains("export"));
 }

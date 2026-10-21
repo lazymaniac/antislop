@@ -981,8 +981,6 @@ Mierzymy:
 - Regresje, jakość testów, security/performance adekwatne do zadania.
 - Zużycie zasobów i narzut koordynacji, jeśli dane są dostępne.
 
-Zestaw ewaluacyjny zawiera małą poprawkę, funkcję przekrojową, refaktor, lukę security, problem wydajności, nowe repo, research ze sprzecznymi źródłami, dokument i analizę z błędnymi danymi. Porównujemy pojedyncze CLI, wykonawcę z recenzentem i pełny proces Architect na tych samych wejściach. Powtarzamy próby ze względu na niedeterministyczność; podajemy rozrzut i wersje. Nie obiecujemy „najlepszego możliwego” wyniku na podstawie jednej udanej demonstracji.
-
 ## 16. Zakres MVP i kolejne etapy budowy
 
 Wymagania produktowe obejmują wszystkich trzech dostawców i wszystkie ustalone rodzaje zadań. Pierwszy pionowy wycinek jest etapem implementacji, nie zmianą tego zakresu.
@@ -995,7 +993,6 @@ Wymagania produktowe obejmują wszystkich trzech dostawców i wszystkie ustalone
 | M2Q: kontrakty jakości | Ledger wymagań i kroków planu, ContextModel, model/symulacje, porównanie wariantów, checklisty i RiskCoverage, graf ważności dowodów. | Fake provider nie może zamknąć zadania z pominięciem wymagania, ryzyka lub bramki. To część MVP, nie rozszerzenie po premierze. |
 | M3: zespół i TUI | Dwa panele, przestrzenny graf węzłów i krawędzi, nakładka bieżącego kroku, szczegóły, sesje, bezpośrednie wiadomości i komentarze do elementów. | Rzeczywiste zdarzenia, poprawna nawigacja, uczciwe statusy dostarczenia i niezależnie sprawdzone reakcje orkiestratora na komentarze. |
 | M4: pełny zestaw MVP | Trzy adaptery, profile effort/TOML, dwa tryby, worktree/in-place, integracja, resume po restarcie, szablony software/research/document/analysis. | Każda uruchomiona rola ma dedykowaną weryfikację; przechodzą scenariusze akceptacyjne. |
-| M5: kalibracja | Evals, duże zadania, recovery/bezpieczeństwo i tuning routingu. | Zmierzone ograniczenia oraz raport porównania z baseline. |
 
 Poza pierwszym MVP, jako propozycja: współpraca wielu użytkowników, zdalne farmy wykonawcze, synchronizacja chmurowa i marketplace pluginów. Rozszerzenia nie powinny wymuszać przebudowy modelu domenowego.
 
@@ -1007,7 +1004,6 @@ Najpierw fake provider i deterministyczne fixtures protokołów; prawdziwe CLI s
 | --- | --- |
 | Domain/runtime | Legalne przejścia, dedykowane pary, rewizje, unieważnianie zgód, brak cykli i poprawna obsługa błędów/retry. |
 | Quality/compliance | Pełne źródło vs ledger, kompletne checklisty, uzasadnienia N/A, wszystkie ryzyka, aktualność dowodów, brak kompensacji niespełnionych wymagań rankingiem. |
-| Verifier evals | Zasiane pominięcia wymagań, błędy modelu, smells, złe asercje, findings statyczne, niezgodne zależności i tendencyjne porównania wariantów; zgodność ocen z eksperckim rozstrzygnięciem. |
 | Adaptery | Częściowe JSONL, nieznane zdarzenia, błędne UTF-8/payloady, resume, disconnect, cancel, ograniczenia dostawców i brak capabilities. |
 | Storage/IPC | Transakcje, migracje, restart, deduplikacja, reconnect ze snapshotem i ochrona socketu. |
 | Workspace | Brudny checkout, pliki nieśledzone, konflikt, zmiany użytkownika w trakcie, integracja i ważność dowodów. |

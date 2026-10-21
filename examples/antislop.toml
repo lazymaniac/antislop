@@ -101,9 +101,6 @@ effort = "high"
 # session, separate from the worker, even if both profiles use the same model.
 # This example routes every work kind to review, including plan verification
 # through [routing.orchestration].verifier.
-# Measured (docs/calibration.md): verifiers at low and at high gave the same
-# verdicts on every case, high at about three times low's time on agy.
-# medium keeps a margin for code harder than the measured cases.
 # To use Claude for review, enable [providers.claude] above and replace this
 # profile's provider/model with either pair:
 # provider = "claude"
