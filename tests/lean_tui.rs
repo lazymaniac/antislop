@@ -265,7 +265,7 @@ fn graph_scrolls_through_many_short_cards() {
 
 #[test]
 fn escape_never_quits_and_q_quits_views_while_editors_keep_text() {
-    for focus in [Focus::Chat, Focus::Graph, Focus::Tasks] {
+    for focus in [Focus::Chat, Focus::Graph] {
         let mut app = App::test_app();
         app.focus = focus;
         assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
@@ -3101,249 +3101,6 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
 }
 
 #[test]
-fn test_tasks_carousel_third_focus_and_transitions() {
-    use antislop::lean::tui::view::{Agent, Comment, PanelFocus, TaskRow, View};
-
-    let mut app = App::test_app();
-    let mut view = View::default();
-    view.tasks = vec![
-        TaskRow {
-            id: "t1".into(),
-            title: "Przygotowanie danych".into(),
-            depends_on: vec![],
-            scope: vec!["src/data.rs".into()],
-            round: 1,
-            status: "approved".into(),
-            writes: false,
-            goal: "Zbudować strukturę danych".into(),
-            focus: "Sprawdzić brak alokacji".into(),
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "t2".into(),
-            title: "Implementacja logiki".into(),
-            depends_on: vec!["t1".into()],
-            scope: vec!["src/logic.rs".into(), "src/engine.rs".into()],
-            round: 2,
-            status: "working".into(),
-            writes: true,
-            goal: "Zaimplementować algorytm".into(),
-            focus: "Sprawdzić złożoność obliczeniową".into(),
-            ..TaskRow::default()
-        },
-    ];
-    view.comments.insert(
-        1,
-        Comment {
-            id: 1,
-            plan_id: None,
-            target: "worker:t2".into(),
-            text: "Uwaga na wyciek pamięci".into(),
-            status: "open".into(),
-        },
-    );
-    view.agents.insert(
-        "worker:t2".into(),
-        Agent {
-            running: true,
-            activity: "kompilowanie modułu".into(),
-            provider: "claude".into(),
-            ..Agent::default()
-        },
-    );
-
-    app.view = view;
-
-    // 1. Navigation to Focus::Tasks
-    assert_eq!(app.focus, Focus::Chat);
-    app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Tasks);
-
-    // Header rendering shows [Tasks]
-    let header = render_header("arch", "conv-1", Some(true), "idle", PanelFocus::Tasks, 80);
-    let mut header_buf = Buffer::empty(Rect::new(0, 0, 100, 1));
-    header_buf.set_line(0, 0, &header, 100);
-    let header_str: String = header_buf.content.iter().map(|c| c.symbol()).collect();
-    assert!(header_str.contains("[Tasks]"));
-
-    // 2. Carousel rendering with real counters
-    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let text: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-
-    assert!(text.contains("Task carousel"));
-    assert!(text.contains("Task t1"));
-    assert!(text.contains("Round: r1"));
-    assert!(text.contains("none (graph root)"));
-    assert!(text.contains("Plan summary: 2 tasks total"));
-
-    // 3. Carousel navigation
-    assert_eq!(app.carousel.selected, 0);
-    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-    assert_eq!(app.carousel.selected, 1);
-    assert_eq!(app.selected, "worker:t2");
-
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let text2: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    let norm2 = text2.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(norm2.contains("Task t2"));
-    assert!(norm2.contains("Round: r2"));
-    assert!(norm2.contains("Dependencies [D]: t1 (count: 1)"));
-    assert!(norm2.contains("File scope: 2 paths"));
-    assert!(norm2.contains("modifies"));
-    assert!(norm2.contains("Comments: ✎1"));
-    assert!(norm2.contains("Worker: ● working"));
-
-    // Wrap around to 0
-    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-    assert_eq!(app.carousel.selected, 0);
-
-    // Move prev with Left arrow wraps to 1
-    app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-    assert_eq!(app.carousel.selected, 1);
-
-    // 4. Transitions to worker ('w') and verifier ('v') on graph
-    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
-    assert_eq!(app.selected, "worker:t2");
-
-    app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Tasks);
-
-    app.key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
-    assert_eq!(app.selected, "verifier:t2");
-
-    // Transitioning to verifier for a COLLAPSED task must automatically uncollapse it
-    // and keep verifier:t2 selected without resetting to plan-verifier in draw_graph!
-    app.graph_collapsed.insert("t2".into());
-    app.focus = Focus::Tasks;
-    app.key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Graph);
-    assert_eq!(app.selected, "verifier:t2");
-    assert!(
-        !app.graph_collapsed.contains("t2"),
-        "Collapsed task must be uncollapsed when jumping to verifier"
-    );
-    terminal.draw(|f| app.draw(f)).unwrap();
-    assert_eq!(
-        app.selected, "verifier:t2",
-        "draw_graph must maintain verifier selection rather than resetting to plan-verifier"
-    );
-
-    // 5. Actions from carousel: Enter (Details), 'd' (Diff), 'c' (Comment), Esc (Chat)
-    app.focus = Focus::Tasks;
-    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(app.details.is_some());
-    assert_eq!(app.details.as_ref().unwrap().key, "worker:t2");
-    app.details = None;
-
-    app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-    assert!(app.diff.is_some());
-    assert_eq!(app.diff.as_ref().unwrap().task, "t2");
-    app.diff = None;
-
-    app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
-    assert!(app.editor.is_some());
-    assert_eq!(app.editor.as_ref().unwrap().target, "worker:t2");
-    app.editor = None;
-
-    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.focus, Focus::Chat);
-
-    // 6. Plan metrics with cancelled and skipped tasks correctly counted in problems
-    let mut metric_view = View::default();
-    metric_view.tasks = vec![
-        TaskRow {
-            id: "m1".into(),
-            status: "approved".into(),
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "m2".into(),
-            status: "working".into(),
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "m3".into(),
-            status: "queued".into(),
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "m4".into(),
-            status: "cancelled".into(),
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "m5".into(),
-            status: "skipped".into(),
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "m6".into(),
-            status: "failed".into(),
-            ..TaskRow::default()
-        },
-    ];
-    app.view = metric_view;
-    app.focus = Focus::Tasks;
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let metric_text: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(metric_text.contains("6 tasks total"));
-    assert!(metric_text.contains("1 approved"));
-    assert!(metric_text.contains("1 in progress"));
-    assert!(metric_text.contains("1 waiting"));
-    assert!(metric_text.contains("3 issues"));
-
-    // 7. Compact header hints for each focus
-    for (f, expected) in [
-        (PanelFocus::Chat, "(Tab: switch) · (t: tasks)"),
-        (PanelFocus::Tasks, "(Tab: switch) · (Esc: chat)"),
-        (PanelFocus::Graph, "(Tab: switch) · (t: tasks)"),
-    ] {
-        let h = render_header("arch", "conv-1", Some(true), "idle", f, 80);
-        let mut b = Buffer::empty(Rect::new(0, 0, 80, 1));
-        b.set_line(0, 0, &h, 80);
-        let s: String = b.content.iter().map(|c| c.symbol()).collect();
-        assert!(
-            s.contains(expected),
-            "Expected {expected} in header string: {s}"
-        );
-    }
-
-    // 8. Empty state rendering
-    app.view.tasks.clear();
-    app.focus = Focus::Tasks;
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let empty_text: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    assert!(empty_text.contains("No tasks in the current plan"));
-}
-
-#[test]
 fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retention() {
     let dir = tempfile::tempdir().unwrap();
     let sock = socket(dir.path());
@@ -3530,7 +3287,7 @@ fn test_refresh_updates_and_overlay_collision_avoidance() {
     );
     assert_eq!(pos_hidden, Some(default_overlay));
 
-    // 2. Refresh updates preserving carousel selection and graph state
+    // 2. Refresh updates preserving graph selection and state
     let mut app = App::test_app();
     app.view.apply(&json!({
         "seq": 1,
@@ -3545,8 +3302,7 @@ fn test_refresh_updates_and_overlay_collision_avoidance() {
         }
     }));
 
-    app.focus = Focus::Tasks;
-    app.carousel.selected = 1;
+    app.focus = Focus::Graph;
     app.selected = "worker:t2".into();
 
     app.view.apply(&json!({
@@ -3559,8 +3315,8 @@ fn test_refresh_updates_and_overlay_collision_avoidance() {
         }
     }));
 
-    assert_eq!(app.carousel.selected, 1);
-    let cur_task = app.carousel.current_task(&app.view).unwrap();
+    assert_eq!(app.selected, "worker:t2");
+    let cur_task = app.view.tasks.iter().find(|task| task.id == "t2").unwrap();
     assert_eq!(cur_task.id, "t2");
     assert_eq!(cur_task.status, "working");
     assert_eq!(cur_task.round, 2);
@@ -5556,190 +5312,6 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
 }
 
 #[test]
-fn carousel_keeps_roles_apart_and_shares_the_open_dependency_reading() {
-    use antislop::lean::tui::view::TaskRow;
-    let mut app = App::test_app();
-    app.view.plan = Some("p7".into());
-    app.view.tasks = vec![
-        TaskRow {
-            id: "t1".into(),
-            title: "Store".into(),
-            status: "approved".into(),
-            round: 1,
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "t3".into(),
-            title: "Index".into(),
-            status: "queued".into(),
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "t2".into(),
-            title: "API".into(),
-            status: "working".into(),
-            round: 1,
-            depends_on: vec!["t1".into(), "t3".into()],
-            ..TaskRow::default()
-        },
-    ];
-    app.focus = Focus::Tasks;
-    app.carousel.selected = 2;
-    let mut terminal = Terminal::new(TestBackend::new(110, 40)).unwrap();
-    let rows = |terminal: &mut Terminal<TestBackend>, app: &mut App| -> Vec<String> {
-        terminal.draw(|f| app.draw(f)).unwrap();
-        let buf = terminal.backend().buffer();
-        let w = usize::from(buf.area.width);
-        (0..usize::from(buf.area.height))
-            .map(|y| {
-                (0..w)
-                    .map(|x| buf.content[y * w + x].symbol())
-                    .collect::<String>()
-            })
-            .collect()
-    };
-    let shown = rows(&mut terminal, &mut app);
-    let norm = |row: &str| row.split_whitespace().collect::<Vec<_>>().join(" ");
-    let worker = shown
-        .iter()
-        .map(|r| norm(r))
-        .find(|r| r.contains("Worker: "))
-        .expect("a worker line");
-    let verifier = shown
-        .iter()
-        .map(|r| norm(r))
-        .find(|r| r.contains("Verifier [V]: "))
-        .expect("a verifier line");
-    // Each role stands on its own line, like its own card on the graph.
-    assert!(worker.contains("Worker: working r1"), "{worker}");
-    assert!(
-        !worker.contains("Verifier"),
-        "roles share no line: {worker}"
-    );
-    assert!(
-        verifier.contains("Verifier [V]: waits for worker r1"),
-        "{verifier}"
-    );
-    assert!(
-        !verifier.contains("Worker: "),
-        "roles share no line: {verifier}"
-    );
-    // Dependencies show the declared list and the shared open reading:
-    // the approved parent is never presented as still pending.
-    let deps = shown
-        .iter()
-        .map(|r| norm(r))
-        .find(|r| r.contains("Dependencies [D]:"))
-        .expect("a dependencies line");
-    assert!(
-        deps.contains("Dependencies [D]: t1, t3 (count: 2) · Still open: t3"),
-        "{deps}"
-    );
-    // A round that reported nothing gets the one shared wording.
-    let effect = shown
-        .iter()
-        .map(|r| norm(r))
-        .find(|r| r.contains("Effect:"))
-        .expect("an effect line");
-    assert!(effect.contains("no effect reported yet"), "{effect}");
-    // Once the last parent is approved, the shared reading says so.
-    app.view.tasks[1].status = "approved".into();
-    let shown = rows(&mut terminal, &mut app);
-    let deps = shown
-        .iter()
-        .map(|r| norm(r))
-        .find(|r| r.contains("Dependencies [D]:"))
-        .expect("a dependencies line");
-    assert!(deps.contains("Still open: all approved"), "{deps}");
-}
-
-#[test]
-fn carousel_shows_rounds_effect_obligations_integration_and_state_counters() {
-    use antislop::lean::tui::{Focus, view::TaskRow};
-    let mut app = App::test_app();
-    app.view.plan = Some("p9".into());
-    app.view.tasks = vec![
-        TaskRow {
-            id: "t1".into(),
-            title: "Store".into(),
-            status: "queued".into(),
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "t2".into(),
-            title: "API".into(),
-            status: "approved".into(),
-            round: 2,
-            depends_on: vec!["t1".into()],
-            effect: Some("3 files changed — src/x.rs".into()),
-            obligations: Some(json!({"total": 4, "ok": 3, "issue": 0, "blocked": 0,
-                                     "na": 1, "missing": 0, "unknown": []})),
-            integration: Some(json!({"outcome": "in_place_committed",
-                                     "detail": "committed in place as deadbee"})),
-            ..TaskRow::default()
-        },
-        TaskRow {
-            id: "t3".into(),
-            title: "Docs".into(),
-            status: "failed".into(),
-            round: 1,
-            reason: Some("the login expired".into()),
-            ..TaskRow::default()
-        },
-    ];
-    app.focus = Focus::Tasks;
-    let mut terminal = Terminal::new(TestBackend::new(110, 34)).unwrap();
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let text: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    let norm = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    // The first task never ran: no invented r0.
-    assert!(norm.contains("Round: not started"), "{norm}");
-    assert!(!norm.contains("Round: r0"), "{norm}");
-    // Move to the approved task: round, effect, obligations, integration.
-    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let text2: String = terminal
-        .backend()
-        .buffer()
-        .content
-        .iter()
-        .map(|c| c.symbol())
-        .collect();
-    let norm2 = text2.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(norm2.contains("Round: r2"), "{norm2}");
-    assert!(
-        norm2.contains("effect: 3 files changed — src/x.rs"),
-        "{norm2}"
-    );
-    assert!(
-        norm2.contains("Obligations: 4 of 4 accounted"),
-        "n/a counts as settled: {norm2}"
-    );
-    assert!(
-        norm2.contains("Integration: committed in place · committed in place as deadbee"),
-        "{norm2}"
-    );
-    assert!(norm2.contains("Dependencies [D]: t1"), "{norm2}");
-    assert!(norm2.contains("Next:"), "{norm2}");
-    // The worker and verifier lines carry the shared taskinfo reading —
-    // the same words the graph cards put on their state lines — not a
-    // second, drifting interpretation of the same state.
-    assert!(norm2.contains("Worker: approved r2"), "{norm2}");
-    assert!(norm2.contains("Verifier [V]: approved r2"), "{norm2}");
-    // Plan state counters name every state that is occupied.
-    assert!(norm2.contains("Plan states:"), "{norm2}");
-    for part in ["queued 1", "approved 1", "failed 1"] {
-        assert!(norm2.contains(part), "{part} missing from: {norm2}");
-    }
-}
-
-#[test]
 fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round() {
     use antislop::lean::tui::Update;
     let mut app = App::test_app();
@@ -5906,39 +5478,4 @@ fn an_unblock_announcement_invalidates_the_card_like_a_retry() {
     assert!(view.tasks[0].effect.is_none());
     assert!(view.tasks[0].obligations.is_none());
     assert!(view.tasks[0].integration.is_none());
-}
-
-#[test]
-fn the_carousel_ribbon_shows_a_window_around_the_selection_not_every_task() {
-    use antislop::lean::tui::view::{TaskRow, View};
-
-    let mut app = App::test_app();
-    let mut view = View::default();
-    view.tasks = (0..2000)
-        .map(|i| TaskRow {
-            id: format!("t{i}"),
-            title: format!("Task {i}"),
-            status: "queued".into(),
-            ..TaskRow::default()
-        })
-        .collect();
-    app.view = view;
-    app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
-    app.carousel.selected = 1000;
-
-    let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let buffer = terminal.backend().buffer();
-    let rows: Vec<String> = (0..20)
-        .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect())
-        .collect();
-    let title = rows
-        .iter()
-        .position(|row| row.contains("Task carousel"))
-        .expect("carousel drawn");
-    let ribbon = &rows[title + 1];
-
-    assert!(ribbon.contains("[1001/2000]"), "{ribbon}");
-    assert!(ribbon.contains('…'), "{ribbon}");
-    assert!(!ribbon.contains("[1/2000]") && !ribbon.contains("[2000/2000]"));
 }

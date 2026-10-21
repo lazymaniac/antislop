@@ -21,7 +21,6 @@ pub const SIDE_BY_SIDE_BREAKPOINT: u16 = 85;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelFocus {
     Chat,
-    Tasks,
     Graph,
 }
 
@@ -875,8 +874,8 @@ impl View {
                     .map(str::to_owned)
                     .unwrap_or_default();
                 // Plan text is orchestrator prose: every field a view may
-                // draw arrives sanitized once here, so the carousel, the
-                // graph and the details screen all read printable rows
+                // draw arrives sanitized once here, so the graph and the
+                // details screen both read printable rows
                 // from the same row, and ids stay stable mirrors of what
                 // later events will carry back through the same fold.
                 let line = |value: &Value| clean_line(value.as_str().unwrap_or_default());
@@ -1781,42 +1780,15 @@ pub fn render_header_with(
     )];
 
     if width < SIDE_BY_SIDE_BREAKPOINT {
-        let (chat_style, tasks_style, graph_style) = match focus {
-            PanelFocus::Chat => (
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-                dim(),
-                dim(),
-            ),
-            PanelFocus::Tasks => (
-                dim(),
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-                dim(),
-            ),
-            PanelFocus::Graph => (
-                dim(),
-                dim(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
+        let active = |color| Style::default().fg(color).add_modifier(Modifier::BOLD);
+        let (chat_style, graph_style) = match focus {
+            PanelFocus::Chat => (active(Color::Yellow), dim()),
+            PanelFocus::Graph => (dim(), active(Color::Cyan)),
         };
         // Every panel is a button; the focused one is lit.
-        let (chat_label, tasks_label, graph_label) = ("[Chat]", "[Tasks]", "[Team]");
-        spans.push(Span::styled(format!(" {chat_label} "), chat_style));
-        spans.push(Span::styled(format!("{tasks_label} "), tasks_style));
-        spans.push(Span::styled(format!("{graph_label} "), graph_style));
-        let switch_hint = match focus {
-            PanelFocus::Chat => "(Tab: switch) · (t: tasks) · ",
-            PanelFocus::Tasks => "(Tab: switch) · (Esc: chat) · ",
-            PanelFocus::Graph => "(Tab: switch) · (t: tasks) · ",
-        };
-        if width >= 75 {
-            spans.push(Span::styled(switch_hint, dim()));
-        } else if width >= 65 {
+        spans.push(Span::styled(" [Chat] ", chat_style));
+        spans.push(Span::styled("[Team] ", graph_style));
+        if width >= 65 {
             spans.push(Span::styled("(Tab: switch) · ", dim()));
         } else if width >= 40 {
             spans.push(Span::styled("· ", dim()));
@@ -1914,19 +1886,6 @@ pub fn main_footer_hint(
                 format!("Enter send · {plan}Tab team · Esc")
             } else {
                 "Enter · Esc".into()
-            }
-        }
-        PanelFocus::Tasks => {
-            if width >= 115 {
-                format!(
-                    "←/→ task · w worker · v verifier · Enter details · d diff · c comment · {plan}Tab team · Esc chat"
-                )
-            } else if width >= 75 {
-                "←/→ task · w worker · v ver. · Enter details · d diff · Tab team · Esc".into()
-            } else if width >= 50 {
-                "←/→ task · w worker · v ver. · Tab team".into()
-            } else {
-                "←/→ task · w · v".into()
             }
         }
         PanelFocus::Graph => {

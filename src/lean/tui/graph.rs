@@ -915,7 +915,7 @@ fn describe(view: &View, key: &str) -> String {
 
 /// The card's activity line: what this role is doing, the dependencies it
 /// waits for, or the cause it stopped with — one line of its own, shared
-/// with the carousel and details through taskinfo, and independent of the
+/// with details through taskinfo, and independent of the
 /// state word and the provider.
 fn activity_line(view: &View, key: &str) -> Option<String> {
     let (role, task) = key.split_once(':').and_then(|(role, id)| {

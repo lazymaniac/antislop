@@ -1,7 +1,7 @@
-//! One interpretation of a task row, shared by the graph cards, the task
-//! carousel and the details screen. Round, activity, cause, next step,
+//! One interpretation of a task row, shared by the graph cards and the
+//! details screen. Round, activity, cause, next step,
 //! effect, obligation coverage and integration are read here and only here,
-//! so the three views can never tell different stories about the same task.
+//! so both views can never tell different stories about the same task.
 
 use super::super::tasks::{Outcome, UNKNOWN_ID_BYTES, UNKNOWN_ID_LIMIT, bound, status};
 use super::view::{TaskRow, View, clean, status_label};
@@ -109,7 +109,7 @@ pub fn verifier_state(row: &TaskRow) -> String {
 }
 
 /// The provider beside a state, in the one shape every view shows it:
-/// cards, the carousel and details read the same state and add the same
+/// cards and details read the same state and add the same
 /// provider, so no two views can drift apart.
 pub fn with_provider(state: &str, provider: Option<&str>) -> String {
     match provider
@@ -171,10 +171,6 @@ pub fn verifier_activity(view: &View, row: &TaskRow) -> Option<String> {
     }
 }
 
-/// The one wording a full-width list shows while the round has reported
-/// no effect at all. Views with a fixed slot (card, details) leave it
-/// empty instead; both take these words from here, never from view code.
-pub const NO_EFFECT_YET: &str = "no effect reported yet";
 /// The one wording for a finished round that stated no effect.
 const NO_EFFECT_STATED: &str = "effect: not reported by worker";
 
@@ -237,12 +233,6 @@ pub fn effect_line(row: &TaskRow) -> Option<String> {
 /// fragment marker in front of the text.
 pub fn effect_front(row: &TaskRow) -> Option<String> {
     effect_shape(row, true)
-}
-
-/// The effect line a view that always shows one (the carousel) gets:
-/// the shared reading, naming the wait when the round reported nothing.
-pub fn effect_shown(row: &TaskRow) -> String {
-    effect_line(row).unwrap_or_else(|| NO_EFFECT_YET.to_owned())
 }
 
 /// Obligations the verdict settled over the task's real obligations.
@@ -414,63 +404,6 @@ pub fn next_step(view: &View, row: &TaskRow) -> String {
         status::APPROVED => format!("done: {}", integration_label(row)),
         _ => "next: Ctrl+R resumes".to_owned(),
     }
-}
-
-/// Sums the plan's task states so a list can show every state's count;
-/// states the plan does not know land in `other` and are never lost.
-pub fn state_counts(view: &View) -> Vec<(&'static str, usize)> {
-    let named = [
-        status::PROPOSED,
-        status::QUEUED,
-        status::WORKING,
-        status::VERIFYING,
-        status::APPROVED,
-        status::WAITING,
-        status::NEEDS_USER,
-        status::FAILED,
-        status::SKIPPED,
-        status::CANCELLED,
-        status::REVISED,
-    ];
-    let mut counts: Vec<(&'static str, usize)> = named
-        .iter()
-        .map(|state| {
-            (
-                *state,
-                view.tasks
-                    .iter()
-                    .filter(|task| task.status == *state)
-                    .count(),
-            )
-        })
-        .collect();
-    let other = view
-        .tasks
-        .iter()
-        .filter(|task| !named.contains(&task.status.as_str()))
-        .count();
-    if other > 0 {
-        counts.push(("other", other));
-    }
-    counts
-}
-
-/// The coarse plan reading (approved, in progress, waiting, problems) built
-/// from the same per-state counts the state line shows, so the summary and
-/// the state line can never disagree about where a task stands. Every state
-/// belongs to exactly one group: unknown states count as problems, never as
-/// silently waiting.
-pub fn plan_rollup(view: &View) -> (usize, usize, usize, usize) {
-    let (mut approved, mut working, mut waiting, mut problems) = (0, 0, 0, 0);
-    for (state, count) in state_counts(view) {
-        match state {
-            status::APPROVED => approved += count,
-            status::WORKING | status::VERIFYING => working += count,
-            status::PROPOSED | status::QUEUED | status::WAITING => waiting += count,
-            _ => problems += count,
-        }
-    }
-    (approved, working, waiting, problems)
 }
 
 #[cfg(test)]
@@ -682,7 +615,6 @@ mod tests {
     fn effects_mark_fragments_and_say_when_none_came() {
         assert_eq!(effect_line(&row("working", 1)), None);
         assert_eq!(effect_front(&row("working", 1)), None);
-        assert_eq!(effect_shown(&row("working", 1)), NO_EFFECT_YET);
         let mut running = row("working", 1);
         running.integration = Some(json!({"outcome": "applied"}));
         assert_eq!(
@@ -878,59 +810,5 @@ mod tests {
         );
         let narrow = card_meta("worker", &view, &t1, 12);
         assert_eq!(narrow, "not reported", "deps give way, the label stays");
-    }
-
-    #[test]
-    fn state_counts_cover_every_state() {
-        let mut view = View::default();
-        view.tasks = vec![
-            row("approved", 1),
-            row("working", 1),
-            row("needs_user", 2),
-            TaskRow {
-                id: "t1".into(),
-                status: "some-new-state".into(),
-                ..TaskRow::default()
-            },
-        ];
-        let counts = state_counts(&view);
-        let total: usize = counts.iter().map(|(_, count)| count).sum();
-        assert_eq!(total, view.tasks.len());
-        assert!(
-            counts
-                .iter()
-                .any(|(state, c)| *state == "needs_user" && *c == 1)
-        );
-        assert!(counts.iter().any(|(state, c)| *state == "other" && *c == 1));
-    }
-
-    #[test]
-    fn the_plan_rollup_groups_the_same_counts_it_is_given() {
-        let mut view = View::default();
-        view.tasks = vec![
-            row("approved", 1),
-            row("working", 1),
-            row("verifying", 1),
-            row("proposed", 0),
-            row("queued", 0),
-            row("waiting", 1),
-            row("failed", 1),
-            row("needs_user", 1),
-            row("skipped", 1),
-            row("cancelled", 1),
-            row("revised", 1),
-            TaskRow {
-                id: "t9".into(),
-                status: "some-new-state".into(),
-                ..TaskRow::default()
-            },
-        ];
-        let (approved, working, waiting, problems) = plan_rollup(&view);
-        assert_eq!((approved, working, waiting, problems), (1, 2, 3, 6));
-        assert_eq!(
-            approved + working + waiting + problems,
-            view.tasks.len(),
-            "no task disappears from the summary"
-        );
     }
 }

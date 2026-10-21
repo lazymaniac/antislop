@@ -3,7 +3,6 @@
 //! poller thread long-polls events and every action runs on its own thread,
 //! so typing, scrolling and sending stay instant.
 
-pub mod carousel;
 pub mod details;
 pub mod diffview;
 pub mod editor;
@@ -18,7 +17,6 @@ pub mod unblock;
 pub mod view;
 pub mod workspace;
 
-pub use carousel::Carousel;
 pub use details::Details;
 pub use diffview::DiffView;
 pub use editor::{InputBuffer, sanitize_paste, sanitize_single_line_paste, visual_text_lines};
@@ -131,7 +129,6 @@ pub struct Editor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Chat,
-    Tasks,
     Graph,
 }
 
@@ -160,7 +157,6 @@ pub struct ConversationState {
     pub task_request_id: u64,
     pub diff_request_id: u64,
     pub focus: Focus,
-    pub task_index: usize,
     pub graph_filter: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
@@ -224,7 +220,6 @@ pub struct App {
     pub comment_drafts: std::collections::HashMap<String, String>,
     pub comment_draft_cursors: std::collections::HashMap<String, (usize, Option<u16>)>,
     pub conversation_states: std::collections::HashMap<String, ConversationState>,
-    pub carousel: Carousel,
     pub graph_filter: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
@@ -306,7 +301,6 @@ impl App {
             comment_drafts: std::collections::HashMap::new(),
             comment_draft_cursors: std::collections::HashMap::new(),
             conversation_states: std::collections::HashMap::new(),
-            carousel: Carousel::new(),
             graph_filter: None,
             graph_collapsed: std::collections::HashSet::new(),
             graph_grouping: graph::GroupingMode::default(),
@@ -434,7 +428,6 @@ impl App {
                     task_request_id: self.task_request_id,
                     diff_request_id: self.diff_request_id,
                     focus: self.focus,
-                    task_index: self.carousel.selected,
                     graph_filter: self.graph_filter.clone(),
                     graph_collapsed: self.graph_collapsed.clone(),
                     graph_grouping: self.graph_grouping,
@@ -472,7 +465,6 @@ impl App {
             self.task_request_id = state.task_request_id;
             self.diff_request_id = state.diff_request_id;
             self.focus = state.focus;
-            self.carousel.selected = state.task_index;
             self.graph_filter = state.graph_filter;
             self.graph_collapsed = state.graph_collapsed;
             self.graph_grouping = state.graph_grouping;
@@ -507,7 +499,6 @@ impl App {
             self.task_request_id = 0;
             self.diff_request_id = 0;
             self.focus = Focus::Chat;
-            self.carousel.selected = 0;
             self.graph_filter = None;
             self.graph_collapsed.clear();
             self.graph_grouping = graph::GroupingMode::default();
@@ -1829,7 +1820,6 @@ impl App {
             Command::Supervised => self.command("/mode supervised"),
             Command::NewConversation => self.new_conversation(),
             Command::SwitchConversation => self.open_conversation_picker(),
-            Command::Tasks => self.focus = Focus::Tasks,
             Command::Find => self.picker = Some(Picker::new(Kind::Agents)),
             Command::Search => self.picker = Some(Picker::new(Kind::History)),
             Command::Details => {
@@ -1925,7 +1915,6 @@ impl App {
     pub fn header_line(&self, width: u16) -> Line<'static> {
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
-            Focus::Tasks => PanelFocus::Tasks,
             Focus::Graph => PanelFocus::Graph,
         };
         let label = match workspace::others_summary(&self.projects, self.active_project) {
@@ -2149,27 +2138,14 @@ impl App {
                 self.open_projects_picker();
                 return true;
             }
-            KeyCode::BackTab => {
-                self.focus = match self.focus {
-                    Focus::Chat => Focus::Tasks,
-                    Focus::Tasks => Focus::Graph,
-                    Focus::Graph => Focus::Chat,
-                };
-                return true;
-            }
-            KeyCode::Tab => {
+            KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = match self.focus {
                     Focus::Chat => Focus::Graph,
                     Focus::Graph => Focus::Chat,
-                    Focus::Tasks => Focus::Graph,
                 };
                 return true;
             }
             _ => {}
-        }
-
-        if self.focus == Focus::Tasks {
-            return self.tasks_key(key);
         }
 
         if self.focus == Focus::Graph {
@@ -2372,9 +2348,6 @@ impl App {
             KeyCode::Char('/') => self.picker = Some(Picker::new(Kind::Agents)),
             KeyCode::Char('p') => self.command("/plan"),
             KeyCode::Char('u') => self.open_unblock(None),
-            KeyCode::Char('t') => {
-                self.focus = Focus::Tasks;
-            }
             KeyCode::Char('z') | KeyCode::Char(' ') => self.toggle_selected_collapse(),
             KeyCode::Char('g') => self.graph_grouping = self.graph_grouping.next(),
             KeyCode::Char('f') => self.filter = self.filter.next(),
@@ -2410,69 +2383,6 @@ impl App {
                 self.offset.1.saturating_sub(amount).clamp(node.y, max)
             };
         }
-    }
-
-    fn tasks_key(&mut self, key: event::KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Left | KeyCode::Up | KeyCode::Char('h') | KeyCode::Char('k') => {
-                self.carousel.prev(self.view.tasks.len());
-                if let Some(task) = self.carousel.current_task(&self.view) {
-                    self.selected = format!("worker:{}", task.id);
-                }
-            }
-            KeyCode::Right | KeyCode::Down | KeyCode::Char('l') | KeyCode::Char('j') => {
-                self.carousel.next(self.view.tasks.len());
-                if let Some(task) = self.carousel.current_task(&self.view) {
-                    self.selected = format!("worker:{}", task.id);
-                }
-            }
-            KeyCode::Char('p') => self.command("/plan"),
-            KeyCode::Char('u') => {
-                let id = self.carousel.current_task(&self.view).map(|t| t.id.clone());
-                self.open_unblock(id);
-            }
-            KeyCode::Char('w') | KeyCode::Char('W') => {
-                if let Some(task) = self.carousel.current_task(&self.view) {
-                    self.select_node(format!("worker:{}", task.id));
-                    self.focus = Focus::Graph;
-                }
-            }
-            KeyCode::Char('v') | KeyCode::Char('V') => {
-                if let Some(task) = self.carousel.current_task(&self.view) {
-                    self.select_node(format!("verifier:{}", task.id));
-                    self.focus = Focus::Graph;
-                }
-            }
-            KeyCode::Enter => {
-                if let Some(task) = self.carousel.current_task(&self.view) {
-                    let key = format!("worker:{}", task.id);
-                    self.selected = key.clone();
-                    self.details = Some(Details::new(key));
-                    self.fetch_task();
-                }
-            }
-            KeyCode::Char('d') => {
-                if let Some(task) = self.carousel.current_task(&self.view) {
-                    let key = format!("worker:{}", task.id);
-                    self.selected = key.clone();
-                    self.open_diff(&key);
-                }
-            }
-            KeyCode::Char('c') => {
-                if let Some(task) = self.carousel.current_task(&self.view) {
-                    let target = format!("worker:{}", task.id);
-                    let input = self.get_comment_draft(&target);
-                    self.editor = Some(Editor { target, input });
-                }
-            }
-            KeyCode::Esc => self.focus = Focus::Chat,
-            KeyCode::Tab => self.focus = Focus::Graph,
-            KeyCode::BackTab => self.focus = Focus::Chat,
-            KeyCode::Char('?') => self.show_help(Help::Tasks),
-            KeyCode::Char('q') => return false,
-            _ => {}
-        }
-        true
     }
 
     pub fn select_node(&mut self, key: String) {
@@ -3112,7 +3022,6 @@ impl App {
         frame.render_widget(Paragraph::new(self.header_line(header.width)), header);
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
-            Focus::Tasks => PanelFocus::Tasks,
             Focus::Graph => PanelFocus::Graph,
         };
 
@@ -3170,15 +3079,9 @@ impl App {
                     .set_symbol(separator)
                     .set_style(theme.separator(false));
             }
-            if self.focus == Focus::Tasks {
-                self.draw_carousel(frame, team, &theme);
-            } else {
-                self.draw_graph(frame, team);
-            }
+            self.draw_graph(frame, team);
         } else if self.focus == Focus::Chat {
             self.draw_chat(frame, body, &theme);
-        } else if self.focus == Focus::Tasks {
-            self.draw_carousel(frame, body, &theme);
         } else {
             self.draw_graph(frame, body);
         }
@@ -3582,10 +3485,6 @@ impl App {
         scrollbar(buf, theme, scroll_area, cards.len(), start, height);
     }
 
-    fn draw_carousel(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        self.carousel.draw(frame, padded(area), &self.view, theme);
-    }
-
     fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
         if let Some((role, id)) = self.selected.split_once(':')
             && role == "verifier"
@@ -3763,8 +3662,6 @@ impl App {
                     diff.key(KeyCode::Up);
                 } else if let Some(details) = &mut self.details {
                     details.scroll = details.scroll.saturating_sub(3);
-                } else if self.focus == Focus::Tasks {
-                    self.carousel.prev(self.view.tasks.len());
                 } else if self.focus == Focus::Graph {
                     let graph = Graph::new_with_viewport(
                         &self.view,
@@ -3790,8 +3687,6 @@ impl App {
                     diff.key(KeyCode::Down);
                 } else if let Some(details) = &mut self.details {
                     details.scroll += 3;
-                } else if self.focus == Focus::Tasks {
-                    self.carousel.next(self.view.tasks.len());
                 } else if self.focus == Focus::Graph {
                     let graph = Graph::new_with_viewport(
                         &self.view,
@@ -3867,7 +3762,6 @@ impl App {
                                     "[Plan]" => self.command("/plan"),
                                     "[Unblock]" => self.command("/unblock"),
                                     "[Chat]" => self.focus = Focus::Chat,
-                                    "[Tasks]" => self.focus = Focus::Tasks,
                                     "[Team]" => self.focus = Focus::Graph,
                                     _ => {}
                                 }
@@ -4094,7 +3988,6 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         comment_drafts: std::collections::HashMap::new(),
         comment_draft_cursors: std::collections::HashMap::new(),
         conversation_states: std::collections::HashMap::new(),
-        carousel: Carousel::new(),
         graph_filter: None,
         graph_collapsed: std::collections::HashSet::new(),
         graph_grouping: graph::GroupingMode::default(),
@@ -5118,8 +5011,6 @@ pub mod tests {
         // Every panel is a button, not only the focused one.
         click_header(&mut app, 80, "[Team]");
         assert_eq!(app.focus, Focus::Graph);
-        click_header(&mut app, 80, "[Tasks]");
-        assert_eq!(app.focus, Focus::Tasks);
         click_header(&mut app, 80, "[Chat]");
         assert_eq!(app.focus, Focus::Chat);
         // The mode does not flip until the daemon says so.

@@ -290,7 +290,7 @@ directory to run both. The socket is `<state>/core.sock`, or
   events arrive. A "now" overlay in a corner lists the steps actually running,
   or says that the plan waits for the user, or that nothing runs; it moves to
   the other corner rather than cover the selected node.  Tab moves focus between
-  the panels (`[Chat]`, `[Tasks]`, `[Team]`; on terminals narrower than 85 columns it switches
+  the panels (`[Chat]`, `[Team]`; on terminals narrower than 85 columns it switches
   the single visible panel in compact mode); in the graph, arrows select the nearest node in that
   direction and Enter opens its details full screen. The tabs depend on the agent
   (`tabs_for` in `details.rs`): Overview (task, scope, goal, the verifier's focus and,
@@ -486,9 +486,6 @@ directory to run both. The socket is `<state>/core.sock`, or
 - Canvas memory is strictly bounded: `Canvas::new_window` allocates only
   `O(inner.width * inner.height)` viewport memory, remaining independent of
   graph size and preventing OOM crashes on large graphs (tested on 500+ tasks).
-- Tasks Carousel (`Focus::Tasks`, `t` key) provides a dedicated browsing view
-  for cycling through tasks with `←`/`→`, jumping to worker (`w`) or verifier
-  (`v`), and initiating diff (`d`), details (`Enter`) or comment (`c`) actions.
 - Pinned confirmation cards (`ConfirmationCard`) with frozen `scope_hash` for
   `AcceptPlan`, `ResumePlan`, `ReviewDiff`, and `CancelWork`; background updates
   mark pending cards `Stale` (`[nieaktualne: stale_scope]`), and the daemon verifies
@@ -576,7 +573,7 @@ kept per conversation, so switching back finds them as they were.
    `tests/lean_core.rs`).
 8. ✅ Messages between agents and from the user to one agent
    (`tests/lean_messages.rs`).
-9. ✅ TUI team graph, adaptive viewport layout, tasks carousel, progress
+9. ✅ TUI team graph, adaptive viewport layout, progress
    overlay and agent details (design §8.1–8.4; comprehensive App and rendering
    tests in `tests/lean_tui.rs` and `src/lean/tui`).
 10. ✅ Persistent comments on agents and diffs (design §8.5;

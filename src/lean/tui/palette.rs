@@ -26,7 +26,6 @@ pub enum Command {
     Supervised,
     NewConversation,
     SwitchConversation,
-    Tasks,
     Find,
     Search,
     Details,
@@ -40,7 +39,7 @@ pub enum Command {
     Projects,
 }
 
-const COMMANDS: [(Command, &str); 23] = [
+const COMMANDS: [(Command, &str); 22] = [
     (Command::Accept, "Accept proposed plan · Ctrl+A"),
     (Command::Reject, "Reject proposed plan · /reject"),
     (Command::Plan, "Open plan document viewer · Ctrl+L / /plan"),
@@ -65,7 +64,6 @@ const COMMANDS: [(Command, &str); 23] = [
         Command::Projects,
         "Open or switch project · Ctrl+G / /project",
     ),
-    (Command::Tasks, "Tasks (carousel) · t"),
     (Command::Find, "Find agent · /"),
     (Command::Search, "Search conversation · Ctrl+F"),
     (Command::Details, "Selected agent details · Enter"),
@@ -346,7 +344,6 @@ impl Picker {
 pub enum Help {
     Chat,
     Graph,
-    Tasks,
     Details,
     Diff,
     Comment,
@@ -382,7 +379,6 @@ impl Help {
                 "arrows           nearest node in that direction",
                 "Enter            agent details",
                 "/                find agent",
-                "t                task carousel",
                 "d                task diff",
                 "u                unblock the selected stopped step (or the first one)",
                 "c                comment on selected element",
@@ -393,19 +389,6 @@ impl Help {
                 "Ctrl+D / Ctrl+U  half page down / up",
                 "Ctrl+P           command palette",
                 "Tab, Esc         chat",
-                "q                quit (work continues in daemon)",
-            ],
-            Help::Tasks => &[
-                "←/→, ↑/↓        previous / next task in carousel",
-                "w                jump to worker on graph",
-                "v                jump to verifier on graph",
-                "Enter            selected task details",
-                "d                task diff",
-                "u                unblock the stopped task",
-                "c                comment on task",
-                "Ctrl+P           command palette",
-                "Tab              switch to team",
-                "Esc              switch to chat",
                 "q                quit (work continues in daemon)",
             ],
             Help::Details => &[
