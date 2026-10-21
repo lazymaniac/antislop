@@ -6512,3 +6512,175 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         }
     }
 }
+
+#[test]
+fn text_selection_copies_rendered_graphemes_and_clears_on_content_change() {
+    use antislop::lean::tui::sanitize::{TextSelection, clipboard_sequence};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let area = Rect::new(2, 3, 14, 2);
+    let mut selection = TextSelection::default();
+    let render = || {
+        let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 20, 8));
+        buffer.set_string(2, 3, "á 👩‍👩‍👧‍👦 test", Style::default());
+        buffer
+    };
+    let mut buffer = render();
+    selection.draw(&mut buffer, Some(area), "details:0".into());
+    let mouse = |kind, column| MouseEvent {
+        kind,
+        column,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    };
+    selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2));
+    selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 5));
+    selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5));
+    assert_eq!(selection.text().as_deref(), Some("á 👩‍👩‍👧‍👦"));
+    let mut buffer = render();
+    selection.draw(&mut buffer, Some(area), "details:0".into());
+    assert!(buffer[(5, 3)].modifier.contains(Modifier::REVERSED));
+    selection.draw(&mut render(), Some(area), "details:1".into());
+    assert_eq!(selection.text(), None);
+    assert_eq!(
+        clipboard_sequence("\x1b[31mfoo\x1b[0m"),
+        "\x1b]52;c;Zm9v\x07"
+    );
+}
+
+#[test]
+fn text_selection_integrates_chat_agent_details_plan_and_modal_isolation() {
+    use antislop::lean::tui::{
+        PlanView,
+        view::{Entry, TaskRow},
+    };
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    for mode in 0..3 {
+        let mut app = App::test_app();
+        app.input = InputBuffer::with_text("retained draft");
+        app.view.idle = true;
+        match mode {
+            0 => app.view.transcript.push(Entry {
+                style: Style::default(),
+                text: "sample café 👩‍👩‍👧‍👦".into(),
+            }),
+            1 => {
+                app.view.tasks.push(TaskRow {
+                    id: "t1".into(),
+                    title: "sample café 👩‍👩‍👧‍👦".into(),
+                    ..Default::default()
+                });
+                app.details = Some(Details::new("worker:t1".into()));
+            }
+            _ => {
+                app.view.plan_doc = "sample café 👩‍👩‍👧‍👦".into();
+                app.plan_view = Some(PlanView::new("p1".into()));
+            }
+        }
+        let mut terminal = Terminal::new(TestBackend::new(60, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut hit = None;
+        for y in 0..24 {
+            for x in 0..54 {
+                let text: String = (x..x + 6).map(|col| buffer[(col, y)].symbol()).collect();
+                if text == "sample" {
+                    hit = Some((x, y));
+                }
+            }
+        }
+        let (x, y) = hit
+            .unwrap_or_else(|| panic!("selection text must be visible in mode {mode}: {buffer:?}"));
+        let mouse = |kind| MouseEvent {
+            kind,
+            column: x + 2,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+        app.mouse(mouse(MouseEventKind::Up(MouseButton::Left)));
+        app.mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+        app.mouse(mouse(MouseEventKind::Up(MouseButton::Left)));
+        assert_eq!(
+            app.text_selection.text().as_deref(),
+            Some("sample"),
+            "mode {mode}"
+        );
+        terminal
+            .draw(|frame| {
+                app.draw(frame);
+                without_color(frame.buffer_mut());
+                in_ascii(frame.buffer_mut());
+            })
+            .unwrap();
+        assert!(
+            terminal.backend().buffer()[(x + 2, y)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert_eq!(app.text_selection.text().as_deref(), Some("sample"));
+        assert_eq!(app.input.text, "retained draft");
+        if mode == 1 {
+            app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            assert!(
+                app.text_selection.text().is_none(),
+                "tab changes invalidate immediately"
+            );
+        } else {
+            app.apply_update(Update::Events {
+                conversation: app.conversation.clone(),
+                generation: app.generation,
+                events: vec![json!({"seq": 1, "kind": "conversation_state", "payload": {"state": "waiting"}})],
+                idle: true,
+                autonomous: false,
+            });
+            assert!(
+                app.text_selection.text().is_none(),
+                "content updates invalidate immediately"
+            );
+        }
+        app.help = Some(Help::Chat);
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        app.mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+        app.mouse(mouse(MouseEventKind::Drag(MouseButton::Left)));
+        assert!(app.text_selection.text().is_none());
+        assert_eq!(app.input.text, "retained draft");
+    }
+}
+
+#[test]
+fn text_selection_survives_scrolling_without_copying_unseen_rows() {
+    use antislop::lean::tui::sanitize::TextSelection;
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let area = Rect::new(0, 0, 8, 2);
+    let mut selection = TextSelection::default();
+    let render = |first: &str, second: &str| {
+        let mut buffer = Buffer::empty(area);
+        buffer.set_string(0, 0, first, Style::default());
+        buffer.set_string(0, 1, second, Style::default());
+        buffer
+    };
+    selection.draw_scrolled(&mut render("one", "café"), Some(area), "chat".into(), 10);
+    let mouse = |kind, column| MouseEvent {
+        kind,
+        column,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 0));
+    selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 3));
+    selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 3));
+    let mut scrolled = render("café", "three");
+    selection.draw_scrolled(&mut scrolled, Some(area), "chat".into(), 11);
+    assert_eq!(selection.text().as_deref(), Some("café"));
+    assert!(scrolled[(3, 0)].modifier.contains(Modifier::REVERSED));
+    assert!(!scrolled[(0, 1)].modifier.contains(Modifier::REVERSED));
+    selection.draw_scrolled(&mut render("three", "four"), Some(area), "chat".into(), 12);
+    assert_eq!(selection.text().as_deref(), Some("café"));
+    selection.draw_scrolled(
+        &mut render("three", "four"),
+        Some(area),
+        "new content".into(),
+        12,
+    );
+    assert!(selection.text().is_none());
+}

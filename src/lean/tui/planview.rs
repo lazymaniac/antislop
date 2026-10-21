@@ -106,7 +106,7 @@ pub struct PlanView {
 }
 
 /// Columns taken by the line number and its separator.
-const GUTTER: usize = 7;
+pub(super) const GUTTER: usize = 7;
 
 struct VisualRow {
     /// The document line the row shows or comments on.
@@ -523,6 +523,8 @@ impl PlanView {
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, view: &View, theme: &Theme) {
+        self.doc_area = Rect::default();
+        self.row_docs.clear();
         frame.render_widget(Clear, area);
         let title = format!(" Plan Document ({}) ", self.plan_id);
         let block = Block::default()
@@ -863,6 +865,22 @@ mod wrap_tests {
         let mut view = View::default();
         view.plan_doc = doc.into();
         view
+    }
+
+    #[test]
+    fn tiny_redraw_discards_old_document_hit_boxes() {
+        let view = view_of("a plan line");
+        let theme = Theme::new(true, false);
+        let mut plan = PlanView::new("p1".into());
+        let mut wide = Terminal::new(TestBackend::new(60, 20)).unwrap();
+        wide.draw(|frame| plan.draw(frame, frame.area(), &view, &theme))
+            .unwrap();
+        assert!(plan.doc_area.width > 0);
+        let mut tiny = Terminal::new(TestBackend::new(12, 5)).unwrap();
+        tiny.draw(|frame| plan.draw(frame, frame.area(), &view, &theme))
+            .unwrap();
+        assert_eq!(plan.doc_area, Rect::default());
+        assert!(plan.row_docs.is_empty());
     }
 
     #[test]

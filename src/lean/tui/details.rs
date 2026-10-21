@@ -7,7 +7,7 @@ use super::view::{View, agent_name, dim, duration, status_label, wrap};
 use crate::lean::store::SessionInfo;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -147,6 +147,8 @@ impl LayoutCache {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Details {
+    /// Last rendered document viewport, excluding the scrollbar.
+    pub text_area: Rect,
     pub key: String,
     pub tab: usize,
     /// Lines scrolled down from the top.
@@ -189,6 +191,7 @@ pub struct Details {
 impl Details {
     pub fn new(key: String) -> Self {
         Details {
+            text_area: Default::default(),
             key,
             tab: 0,
             scroll: 0,
@@ -1058,6 +1061,12 @@ impl Details {
         let block = Block::default().borders(Borders::TOP);
         let inner = block.inner(body);
         frame.render_widget(block, body);
+        self.text_area = Rect::new(
+            inner.x,
+            inner.y,
+            inner.width.saturating_sub(1),
+            inner.height,
+        );
         let width = usize::from(inner.width.saturating_sub(1));
         let records = self.records(view);
         let lines = self

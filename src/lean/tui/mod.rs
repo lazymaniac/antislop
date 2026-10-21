@@ -174,6 +174,9 @@ pub struct ConversationState {
 }
 
 pub struct App {
+    pub text_selection: sanitize::TextSelection,
+    text_area: Option<Rect>,
+    text_origin: usize,
     pub config_editor: Option<config::ConfigEditor>,
     config_drafts: std::collections::HashMap<String, config::ConfigEditor>,
     pub client: Client,
@@ -266,6 +269,9 @@ impl App {
 
     pub fn test_app_with_client_and_updates(client: Client, updates: mpsc::Sender<Update>) -> App {
         App {
+            text_selection: Default::default(),
+            text_area: None,
+            text_origin: 0,
             config_editor: None,
             config_drafts: Default::default(),
             client,
@@ -1137,6 +1143,12 @@ impl App {
     }
 
     pub fn apply_update(&mut self, update: Update) {
+        self.apply_update_inner(update);
+        self.text_selection
+            .invalidate_context(&self.selection_context());
+    }
+
+    fn apply_update_inner(&mut self, update: Update) {
         match update {
             Update::Config {
                 project,
@@ -2121,6 +2133,32 @@ impl App {
     }
 
     pub fn key(&mut self, key: event::KeyEvent) -> bool {
+        let keep_running = self.key_inner(key);
+        self.text_selection
+            .invalidate_context(&self.selection_context());
+        if self.selection_blocked() {
+            self.text_selection = Default::default();
+        }
+        keep_running
+    }
+
+    fn key_inner(&mut self, key: event::KeyEvent) -> bool {
+        self.text_selection
+            .invalidate_context(&self.selection_context());
+        if key.code == KeyCode::Char('y')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && !self.selection_blocked()
+        {
+            if let Some(text) = self.text_selection.text() {
+                let updates = self.updates.clone();
+                std::thread::spawn(move || {
+                    if let Err(error) = sanitize::copy_text(&text) {
+                        let _ = updates.send(Update::Notice(error.to_string()));
+                    }
+                });
+            }
+            return true;
+        }
         if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
                 if !editor.pending {
@@ -2946,23 +2984,47 @@ impl App {
         self.settle_focus();
         self.terminal_area = frame.area();
         self.graph_area = None;
+        self.text_area = None;
         if draw_min_term_guard(frame, frame.area()) {
+            self.text_selection = Default::default();
             return;
         }
         if let Some(editor) = self.config_editor.as_ref().filter(|e| e.visible) {
+            self.text_selection = Default::default();
             editor.draw(frame);
             return;
         }
         if let Some(pv) = &mut self.plan_view {
             let theme = Theme::from_env();
             pv.draw(frame, frame.area(), &self.view, &theme);
+            self.text_area = Some(Rect::new(
+                pv.doc_area.x.saturating_add(planview::GUTTER as u16),
+                pv.doc_area.y,
+                pv.doc_area.width.saturating_sub(planview::GUTTER as u16),
+                pv.doc_area.height,
+            ));
+            self.text_origin = pv.scroll;
         } else if let Some(diff) = &mut self.diff {
             diff.draw(frame, &self.view);
         } else if let Some(details) = &mut self.details {
             details.draw(frame, &self.view);
+            self.text_area = Some(details.text_area);
+            self.text_origin = details.scroll;
         } else {
             self.draw_main(frame);
         }
+        let selection_area = if self.selection_blocked() {
+            None
+        } else {
+            self.text_area
+        };
+        let context = self.selection_context();
+        self.text_selection.draw_scrolled(
+            frame.buffer_mut(),
+            selection_area,
+            context,
+            self.text_origin,
+        );
         if let Some(editor) = &self.editor {
             let area = frame.area();
             // Leave a column for the insertion cursor after a full line.
@@ -3043,6 +3105,11 @@ impl App {
             let max_scroll = help.max_scroll(frame.area());
             self.help_scroll = self.help_scroll.min(max_scroll);
             help.draw_scroll(frame, self.help_scroll);
+            let a = frame.area();
+            frame.render_widget(
+                Paragraph::new("Ctrl+Y copy selection · drag / double click select"),
+                Rect::new(a.x, a.bottom().saturating_sub(1), a.width, 1),
+            );
         }
         if let Some(conf) = &self.confirmation
             && conf.status == ConfirmationStatus::Pending
@@ -3201,6 +3268,38 @@ impl App {
                 box_area,
             );
         }
+    }
+
+    fn selection_context(&self) -> String {
+        use std::hash::{Hash, Hasher};
+        let details = self.details.as_ref().map(|details| {
+            let mut query = std::collections::hash_map::DefaultHasher::new();
+            details.query.hash(&mut query);
+            (&details.key, details.tab, details.raw, query.finish())
+        });
+        format!(
+            "{}:{}:{}:{:?}:{:?}",
+            self.conversation,
+            self.generation,
+            self.view.after,
+            details,
+            self.plan_view.as_ref().map(|p| &p.plan_id)
+        )
+    }
+
+    fn selection_blocked(&self) -> bool {
+        self.help.is_some()
+            || self.picker.is_some()
+            || self.editor.is_some()
+            || self.diff.is_some()
+            || self.unblock.is_some()
+            || self.trust_prompt.is_some()
+            || self.project_trust.is_some()
+            || self
+                .confirmation
+                .as_ref()
+                .is_some_and(|c| c.status == ConfirmationStatus::Pending)
+            || self.config_editor.as_ref().is_some_and(|e| e.visible)
     }
 
     fn draw_main(&mut self, frame: &mut Frame) {
@@ -3673,6 +3772,8 @@ impl App {
         let buf = frame.buffer_mut();
         let body_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
         draw_rows(buf, body_area, &cards[start..end]);
+        self.text_area = Some(body_area);
+        self.text_origin = start;
 
         let scroll_area = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
         scrollbar(buf, theme, scroll_area, cards.len(), start, height);
@@ -3822,6 +3923,11 @@ impl App {
     }
 
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        if self.selection_blocked() {
+            self.text_selection = Default::default();
+        }
+        self.text_selection
+            .invalidate_context(&self.selection_context());
         if self.config_editor.as_ref().is_some_and(|e| e.visible) {
             return true;
         }
@@ -3841,6 +3947,9 @@ impl App {
                 }
             }
             return true;
+        }
+        if !self.selection_blocked() {
+            self.text_selection.mouse(mouse);
         }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
@@ -4155,6 +4264,9 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     let conversation = options.conversation(&client)?;
     let (updates, received) = mpsc::channel();
     let mut app = App {
+        text_selection: Default::default(),
+        text_area: None,
+        text_origin: 0,
         config_editor: None,
         config_drafts: Default::default(),
         client: client.clone(),
