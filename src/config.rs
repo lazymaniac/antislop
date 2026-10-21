@@ -1,10 +1,8 @@
-//! Explicit, versioned routing and autonomy policy. Parsing never authorizes an
-//! external effect. A caller must separately authenticate user grants before
-//! presenting them to `authorize_external`.
+//! Explicit routing and workspace policy for the lean runtime.
 use crate::{Error, Result, require};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     path::{Path, PathBuf},
 };
 
@@ -21,11 +19,8 @@ pub enum ProviderKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Effort {
-    #[serde(alias = "light")]
     Low,
-    #[serde(alias = "standard")]
     Medium,
-    #[serde(alias = "deep")]
     High,
     Xhigh,
 }
@@ -72,23 +67,10 @@ pub enum Mode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkspaceMode {
-    Worktree,
     InPlace,
     /// Each writing task works in a private Git worktree stacked on its
     /// dependencies' results; verified results are merged into the project.
     TaskWorktrees,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum IsolationProfile {
-    #[default]
-    ToolFree,
-    PinnedContext,
-    ReadOnly,
-    WorkspaceWrite,
-    RestrictedExecution,
-    ExtendedAccess,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,11 +137,6 @@ pub struct ProviderConfig {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<CommandLine>,
-    /// Path to a CLI-owned isolated home; credentials are never config values.
-    #[serde(default)]
-    pub managed_home: Option<PathBuf>,
-    #[serde(default)]
-    pub isolation: IsolationProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,8 +151,6 @@ pub struct Profile {
     pub command: Option<CommandLine>,
     pub model: Option<String>,
     pub effort: Effort,
-    pub work_kinds: BTreeSet<WorkKind>,
-    pub roles: BTreeSet<RoleKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,28 +164,13 @@ pub struct RoleRouting {
 #[serde(deny_unknown_fields)]
 pub struct OrchestratorConfig {
     pub profile: String,
-    /// Reply pagination, never a limit on the complete set of checks. Zero
-    /// retains the legacy single-report transport for compatibility/probes.
-    #[serde(
-        default = "default_review_checks",
-        skip_serializing_if = "default_review_page"
-    )]
-    pub review_checks_per_part: usize,
-}
-pub fn default_review_checks() -> usize {
-    24
-}
-fn default_review_page(value: &usize) -> bool {
-    *value == default_review_checks()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub mode: Mode,
-    pub revision: u64,
     pub local_write: bool,
-    pub local_checks: bool,
     pub local_commits: bool,
     /// Every plan that changes code gets the required quality gates from the
     /// predefined agent pool (refactoring, static analysis, testing, security and
@@ -238,10 +198,6 @@ pub struct Config {
     pub workspace: WorkspaceConfig,
     pub providers: BTreeMap<ProviderKind, ProviderConfig>,
     pub profiles: BTreeMap<String, Profile>,
-    /// Explicit user limits retained when the orchestrator proposes new profiles.
-    /// An absent role is unrestricted; a present role needs a nonempty set.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub role_providers: BTreeMap<RoleKind, BTreeSet<ProviderKind>>,
     pub orchestrator: OrchestratorConfig,
     pub routing: BTreeMap<WorkKind, RoleRouting>,
     pub policy: Policy,
@@ -255,15 +211,12 @@ pub struct ResolvedProfile {
     pub binary: PathBuf,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
-    pub managed_home: Option<PathBuf>,
-    pub isolation: IsolationProfile,
     pub model: Option<String>,
     pub effort: Effort,
     /// None explicitly means the configured CLI has no native effort control.
     pub native_effort: Option<String>,
     pub work_kind: WorkKind,
     pub role: RoleKind,
-    pub requires_independent_session: bool,
 }
 
 fn identifier(value: &str) -> bool {
@@ -314,13 +267,6 @@ impl Config {
     pub fn from_toml(source: &str) -> Result<Self> {
         // TOML errors can render the input and expose accidental credentials.
         let config: Self = toml::from_str(source).map_err(|error: toml::de::Error| {
-            if source.contains("effort_map") || source.contains("native_effort") {
-                return Error::Invalid(
-                    "effort_map and native_effort were removed from the configuration: \
-                     each CLI's reasoning ladder (low, medium, high, xhigh) is built in"
-                        .into(),
-                );
-            }
             let location = error
                 .span()
                 .map(|span| format!(" at bytes {}..{}", span.start, span.end))
@@ -338,7 +284,6 @@ impl Config {
             self.schema_version == 1,
             "unsupported configuration schema version",
         )?;
-        require(self.policy.revision > 0, "policy revision must be positive")?;
         require(
             self.policy.max_parallel > 0,
             "policy max_parallel must be at least 1",
@@ -367,27 +312,11 @@ impl Config {
                 provider.args.iter().all(|arg| nonempty_text(arg)),
                 "provider args must be nonempty and contain no control characters",
             )?;
-            require(
-                provider.managed_home.as_ref().is_none_or(|path| {
-                    path.is_absolute() && path.to_str().is_some_and(nonempty_text)
-                }),
-                "managed provider home must be an absolute Unicode path without control characters",
-            )?;
-        }
-        for providers in self.role_providers.values() {
-            require(
-                !providers.is_empty() && providers.iter().all(|p| self.providers.contains_key(p)),
-                "role provider limits require nonempty configured provider choices",
-            )?;
         }
         for (name, profile) in &self.profiles {
             require(
                 identifier(name),
                 "profile name must contain only letters, digits, underscores or hyphens",
-            )?;
-            require(
-                !profile.work_kinds.is_empty() && !profile.roles.is_empty(),
-                "profile requires explicit work kinds and roles",
             )?;
             require(
                 profile
@@ -412,14 +341,6 @@ impl Config {
                 profile.args.iter().all(|arg| nonempty_text(arg)),
                 "profile args must be nonempty and contain no control characters",
             )?;
-            require(
-                profile.roles.iter().all(|role| {
-                    self.role_providers
-                        .get(role)
-                        .is_none_or(|allowed| allowed.contains(&profile.provider))
-                }),
-                "profile provider violates the user-configured role provider limit",
-            )?;
             let provider = self.providers.get(&profile.provider).ok_or_else(|| {
                 Error::Invalid("profile refers to an unconfigured provider".into())
             })?;
@@ -428,29 +349,17 @@ impl Config {
                 binary.to_str().is_some_and(nonempty_text),
                 "resolved profile binary must be a nonempty Unicode path without control characters",
             )?;
-            if profile.roles.contains(&RoleKind::Orchestrator) {
-                require(
-                    profile.work_kinds.contains(&WorkKind::Orchestration),
-                    "orchestrator profile must permit orchestration",
-                )?;
-            }
         }
-        self.profile(
-            &self.orchestrator.profile,
-            WorkKind::Orchestration,
-            RoleKind::Orchestrator,
-        )?;
+        self.profile(&self.orchestrator.profile)?;
         for (kind, route) in &self.routing {
             if *kind == WorkKind::Orchestration {
                 require(
                     route.executor == self.orchestrator.profile,
                     "orchestration routing must match the explicit orchestrator profile",
                 )?;
-                self.profile(&route.executor, *kind, RoleKind::Orchestrator)?;
-            } else {
-                self.profile(&route.executor, *kind, RoleKind::Executor)?;
             }
-            self.profile(&route.verifier, *kind, RoleKind::Verifier)?;
+            self.profile(&route.executor)?;
+            self.profile(&route.verifier)?;
         }
         // The gates added to plans that change code need their routes now,
         // not when a plan reaches them.
@@ -468,19 +377,10 @@ impl Config {
         Ok(())
     }
 
-    fn profile(&self, name: &str, work_kind: WorkKind, role: RoleKind) -> Result<&Profile> {
-        let profile = self.profiles.get(name).ok_or_else(|| {
+    fn profile(&self, name: &str) -> Result<&Profile> {
+        self.profiles.get(name).ok_or_else(|| {
             Error::Invalid("routing refers to a missing profile; no default is selected".into())
-        })?;
-        require(
-            profile.work_kinds.contains(&work_kind),
-            "profile does not allow the requested work kind",
-        )?;
-        require(
-            profile.roles.contains(&role),
-            "profile does not allow the requested role",
-        )?;
-        Ok(profile)
+        })
     }
 
     /// Resolve exact role/work assignments. A verifier always requires its own
@@ -512,7 +412,7 @@ impl Config {
             !(work_kind == WorkKind::Orchestration && role == RoleKind::Executor),
             "orchestration execution uses the explicit Orchestrator role",
         )?;
-        let profile = self.profile(name, work_kind, role)?;
+        let profile = self.profile(name)?;
         let provider = self
             .providers
             .get(&profile.provider)
@@ -523,8 +423,6 @@ impl Config {
             provider: profile.provider,
             binary,
             args,
-            managed_home: provider.managed_home.clone(),
-            isolation: provider.isolation,
             model: profile.model.clone(),
             effort: profile.effort,
             native_effort: profile
@@ -533,7 +431,6 @@ impl Config {
                 .map(str::to_owned),
             work_kind,
             role,
-            requires_independent_session: role == RoleKind::Verifier,
         })
     }
 }
@@ -550,16 +447,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn effort_levels_reach_the_cli_and_legacy_names_remain_readable() {
+    fn effort_levels_reach_the_cli() {
         let example = include_str!("../examples/antislop.toml");
         for (name, expected) in [
             ("low", "low"),
             ("medium", "medium"),
             ("high", "high"),
             ("xhigh", "xhigh"),
-            ("light", "low"),
-            ("standard", "medium"),
-            ("deep", "high"),
         ] {
             let config = Config::from_toml(
                 &example.replace("effort = \"high\"", &format!("effort = \"{name}\"")),
@@ -592,18 +486,6 @@ mod tests {
     }
 
     #[test]
-    fn role_provider_limits_are_optional_but_still_enforced_when_present() {
-        let example = include_str!("../examples/antislop.toml");
-        let config = Config::from_toml(example).unwrap();
-        assert!(config.role_providers.is_empty());
-        let allowed = format!("{example}\n[role_providers]\nexecutor = [\"agy\"]\n");
-        assert!(Config::from_toml(&allowed).is_ok());
-        let forbidden = format!("{example}\n[role_providers]\nexecutor = [\"codex\"]\n");
-        let error = Config::from_toml(&forbidden).unwrap_err().to_string();
-        assert!(error.contains("role provider limit"), "{error}");
-    }
-
-    #[test]
     fn the_example_routes_every_kind_to_a_worker_and_a_verifier() {
         let text = include_str!("../examples/antislop.toml");
         let config = Config::from_toml(text).unwrap();
@@ -617,7 +499,7 @@ mod tests {
                 *kind
             );
             let verifier = config.resolve(*kind, RoleKind::Verifier).unwrap();
-            assert!(verifier.requires_independent_session);
+            assert_eq!(verifier.role, RoleKind::Verifier);
         }
         let orchestrator = config
             .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
@@ -663,12 +545,81 @@ mod tests {
 
     #[test]
     fn a_route_to_a_missing_profile_is_rejected() {
-        let text = include_str!("../examples/antislop.toml").replacen(
-            "executor = \"reasoning\"",
-            "executor = \"nobody\"",
-            1,
+        let mut config = Config::from_toml(include_str!("../examples/antislop.toml")).unwrap();
+        config.routing.get_mut(&WorkKind::Context).unwrap().executor = "nobody".into();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn routing_assigns_a_shared_profile_to_different_work_kinds_and_roles() {
+        let mut config = Config::from_toml(include_str!("../examples/antislop.toml")).unwrap();
+        let shared = config.profiles["execution"].clone();
+        config.profiles = BTreeMap::from([("shared".into(), shared)]);
+        config.orchestrator.profile = "shared".into();
+        for route in config.routing.values_mut() {
+            route.executor = "shared".into();
+            route.verifier = "shared".into();
+        }
+        config.validate().unwrap();
+        for kind in config.routing.keys().copied() {
+            let worker_role = if kind == WorkKind::Orchestration {
+                RoleKind::Orchestrator
+            } else {
+                RoleKind::Executor
+            };
+            for role in [worker_role, RoleKind::Verifier] {
+                let resolved = config.resolve(kind, role).unwrap();
+                assert_eq!(resolved.profile, "shared");
+                assert_eq!(resolved.work_kind, kind);
+                assert_eq!(resolved.role, role);
+            }
+        }
+        // Profile reuse must not introduce implicit routes or invalid roles.
+        assert!(
+            config
+                .resolve(WorkKind::Implementation, RoleKind::Orchestrator)
+                .is_err()
         );
-        assert!(Config::from_toml(&text).is_err());
+        assert!(
+            config
+                .resolve(WorkKind::Orchestration, RoleKind::Executor)
+                .is_err()
+        );
+        config.routing.remove(&WorkKind::Context);
+        assert!(
+            config
+                .resolve(WorkKind::Context, RoleKind::Executor)
+                .is_err()
+        );
+        assert!(
+            config
+                .resolve(WorkKind::Context, RoleKind::Verifier)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn assignments_still_require_existing_profiles_and_consistent_orchestration() {
+        let original = Config::from_toml(include_str!("../examples/antislop.toml")).unwrap();
+        let mut config = original.clone();
+        config.orchestrator.profile = "missing".into();
+        assert!(config.validate().is_err());
+
+        let mut config = original.clone();
+        config.routing.get_mut(&WorkKind::Context).unwrap().verifier = "missing".into();
+        assert!(config.validate().is_err());
+
+        let mut config = original;
+        config
+            .routing
+            .get_mut(&WorkKind::Orchestration)
+            .unwrap()
+            .executor = "execution".into();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("orchestration routing must match"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -722,19 +673,48 @@ mod tests {
     }
 
     #[test]
-    fn an_old_effort_map_gets_a_message_that_says_what_changed() {
-        let text = include_str!("../examples/antislop.toml");
-        let old = format!("{text}\n[providers.codex.effort_map]\nlight = \"low\"\n");
-        let error = Config::from_toml(&old).unwrap_err().to_string();
+    fn obsolete_configuration_is_rejected_without_echoing_values() {
+        let example = include_str!("../examples/antislop.toml");
+        for (header, field) in [
+            ("[providers.codex]", "isolation = \"read_only\""),
+            ("[providers.codex]", "isolation_levels = [\"read_only\"]"),
+            ("[providers.codex]", "managed_home = \"/secret/home\""),
+            ("[providers.codex]", "effort_map = { high = \"secret\" }"),
+            ("[profiles.orchestrator]", "native_effort = \"secret\""),
+            (
+                "[profiles.orchestrator]",
+                "work_kinds = [\"orchestration\"]",
+            ),
+            ("[profiles.orchestrator]", "roles = [\"orchestrator\"]"),
+            ("[policy]", "revision = 1"),
+            ("[policy]", "local_checks = true"),
+            ("[orchestrator]", "review_checks_per_part = 24"),
+            ("", "role_providers = { executor = [\"agy\"] }"),
+        ] {
+            let source = if header.is_empty() {
+                format!("{field}\n{example}")
+            } else {
+                example.replace(header, &format!("{header}\n{field}"))
+            };
+            let error = Config::from_toml(&source).unwrap_err().to_string();
+            assert!(
+                error.contains("invalid TOML configuration"),
+                "{field}: {error}"
+            );
+            assert!(!error.contains("secret"), "{error}");
+        }
+        for effort in ["light", "standard", "deep"] {
+            assert!(
+                Config::from_toml(
+                    &example.replace("effort = \"high\"", &format!("effort = \"{effort}\""))
+                )
+                .is_err()
+            );
+        }
         assert!(
-            error.contains("effort_map") && error.contains("built in"),
-            "{error}"
+            Config::from_toml(&example.replace("mode = \"task-worktrees\"", "mode = \"worktree\""))
+                .is_err()
         );
-        // Other mistakes keep the generic message that never echoes the input.
-        let other = Config::from_toml(&text.replace("schema_version = 1", "oops = 1"))
-            .unwrap_err()
-            .to_string();
-        assert!(other.contains("invalid TOML configuration"), "{other}");
     }
 
     #[test]

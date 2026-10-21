@@ -31,16 +31,29 @@ projektu" end to end.
 ## Agents
 
 Profiles in `antislop.toml` select a provider, model and effort; routing assigns
-these profiles to work kinds and roles. There is no need to repeat providers
-in a separate `[role_providers]` section. That optional legacy section only
-restricts which providers a role may use; it does not choose a profile or act
-as a fallback. If present, its restrictions are still enforced.
+these profiles to work kinds and roles. Profiles contain only CLI/model/effort
+settings; they do not repeat `work_kinds` or `roles`. `[routing.KIND].executor`
+and `.verifier` select the worker and reviewer for that work kind, while
+`[orchestrator].profile` selects the conversation orchestrator. A profile may
+be reused across work kinds and roles; each verifier still has its own session.
+All assignments must name existing profiles.
 
 Effort values are `low`, `medium`, `high` and `xhigh`, passed directly to the
 CLI. Support depends on the selected model; an unsupported level produces the
-CLI's error rather than silently lowering the effort. Legacy names `light`,
-`standard` and `deep` are accepted as aliases for `low`, `medium` and `high`.
+CLI's error rather than silently lowering the effort.
 Gemini has no native effort flag, so no effort argument is sent to it.
+
+Configuration only exposes settings used by the runtime. Obsolete fields
+(`isolation`, `managed_home`, `role_providers`, `policy.revision`,
+`policy.local_checks`, `orchestrator.review_checks_per_part`, `effort_map` and
+`native_effort`, profile `work_kinds` and `roles`) are rejected: remove them from
+older configuration files.
+Replace the old effort names `light`, `standard` and `deep` with `low`, `medium`
+and `high`, and workspace mode `worktree` with `task-worktrees`.
+
+The runtime determines CLI access for each turn from its role and whether the
+task writes files, as shown below; `workspace.mode` determines where writers
+work.
 
 `lean::agent::run(spec, prompt, cancel, on_event)` starts one CLI turn and
 streams normalized events: `Session(id)`, `Text(delta)`, `Tool{name, detail}`,

@@ -577,40 +577,11 @@ Natywne subagenty CLI muszą być wyłączone albo zarejestrowane jako zarządza
 
 Ustalony format konfiguracji to TOML. Konfiguracja użytkownika zawiera ścieżki CLI i przypisania profili/modeli/effort. Konfiguracja run utrwala wybrany tryb, workspace i rewizję przypisań. Ustawienia istniejącego run nie zmieniają się niejawnie po edycji konfiguracji globalnej.
 
-Proponowana struktura (schemat do ustalenia przy implementacji, poniżej przykład koncepcyjny):
-
-```toml
-schema_version = 1
-
-[workspace]
-mode = "worktree"
-
-[providers.codex]
-binary = "codex"
-
-[providers.claude]
-binary = "claude"
-
-[providers.gemini]
-binary = "gemini"
-
-[profiles.deep]
-provider = "codex"
-effort = "deep"
-
-[profiles.coding]
-provider = "gemini"
-effort = "standard"
-
-[profiles.review]
-provider = "claude"
-effort = "deep"
-
-[orchestrator]
-# profile = "..."  # wymagany jawny wybór, brak wartości domyślnej
-```
-
-Przykład pokazuje możliwe przypisania, nie domyślny wybór CLI. `effort` jest poziomem Architect, mapowanym na możliwości skonfigurowanego CLI/modelu. Role i szablony MVP są wbudowane i wersjonowane. Przy starcie utrwalamy ich wersje, aby aktualizacja aplikacji nie zmieniła w połowie kontraktów działającego zespołu.
+Aktualny, kompletny przykład konfiguracji znajduje się w
+[examples/antislop.toml](examples/antislop.toml). Profile wskazują provider,
+model i effort (`low`, `medium`, `high`, `xhigh`), a routing przypisuje profile
+do rodzajów zadań i ról. Dostępne poziomy effort zależą od CLI i modelu.
+Tryby workspace to `task-worktrees` i `in-place`.
 
 Stan daemona i run trafia do lokalnego katalogu danych użytkownika zgodnego z platformą. Każdy workspace ma stabilny ID niezależny od nazwy katalogu. SQLite przechowuje stan i indeks, katalog artefaktów przechowuje większe wyniki. Projekt nie musi zawierać transkryptów ani sekretów. Dokładne ścieżki są szczegółem implementacji.
 
