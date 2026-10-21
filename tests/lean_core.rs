@@ -1026,3 +1026,25 @@ fn new_card_feedback_payloads_survive_storage_and_events() {
     );
     assert!(!tasks::feedback_is_current(&restored.feedback.unwrap(), 2));
 }
+
+#[test]
+fn missing_configuration_reports_project_and_global_candidates() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let global = root.path().join("user-config");
+    std::fs::create_dir(&project).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
+        .current_dir(&project)
+        .env("ANTISLOP_CONFIG_DIR", &global)
+        .args(["chat", "hello"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("no configuration at"), "{error}");
+    for candidate in [project.join("antislop.toml"), global.join("antislop.toml")] {
+        assert!(error.contains(candidate.to_str().unwrap()), "{error}");
+    }
+    assert!(!global.exists());
+    assert!(!project.join(".antislop").exists());
+}

@@ -1534,6 +1534,8 @@ impl Client {
     /// and configuration path, a busy daemon keeps the build and configuration
     /// its work started with; the frontend reconnects and explains the delay.
     pub fn connect(project: &Path, config: &Path, state: &Path) -> Result<Self> {
+        let canonical_config = config.canonicalize()?;
+        let config = canonical_config.as_path();
         private_directory(state)?;
         let mut client = Self::at(state);
         client.origin = Some((project.into(), config.into(), state.into()));

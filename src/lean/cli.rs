@@ -11,8 +11,40 @@ use super::tui::view::clean;
 use crate::{Result, require};
 use serde_json::Value;
 use std::io::{BufRead, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+
+/// Select and validate the configuration without creating files or directories.
+/// An explicit path or an existing project file never falls back on error.
+pub fn resolve_config(project: &Path, explicit: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return checked_config(&project.join(path));
+    }
+    let local = project.join("antislop.toml");
+    match std::fs::symlink_metadata(&local) {
+        Ok(_) => return checked_config(&local),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let global = super::trust::config_dir()?.join("antislop.toml");
+    match std::fs::symlink_metadata(&global) {
+        Ok(_) => checked_config(&global),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(crate::Error::Invalid(format!(
+                "no configuration at {} or {} (use --config FILE to select another file)",
+                local.display(),
+                global.display()
+            )))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn checked_config(path: &Path) -> Result<PathBuf> {
+    let path = path.canonicalize()?;
+    crate::config::Config::load(&path)?;
+    Ok(path)
+}
 
 pub struct Options {
     pub project: PathBuf,
@@ -52,11 +84,7 @@ impl Options {
                 _ => words.push(arg.clone()),
             }
         }
-        let config = config.unwrap_or_else(|| project.join("antislop.toml"));
-        require(
-            config.is_file(),
-            &format!("no configuration at {}", config.display()),
-        )?;
+        let config = resolve_config(&project, config.as_deref())?;
         // Nothing is created yet: the directory may not be trusted.
         let state = state.unwrap_or_else(|| project.join(".antislop"));
         let state = if state.is_absolute() {
@@ -66,7 +94,7 @@ impl Options {
         };
         Ok(Self {
             project,
-            config: config.canonicalize()?,
+            config,
             state,
             conversation,
             new,

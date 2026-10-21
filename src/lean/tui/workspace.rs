@@ -75,18 +75,11 @@ pub fn connect(path: &Path, registry: &Registry) -> Result<ProjectConn, ConnectE
     if !registry.is_trusted(&path) {
         return Err(ConnectError::NotTrusted(path));
     }
-    let config = path.join("antislop.toml");
-    if !config.is_file() {
-        return Err(fail(&format!(
-            "no configuration at {}: a project needs its own antislop.toml",
-            config.display()
-        )));
-    }
+    let config = super::super::cli::resolve_config(&path, None).map_err(|e| fail(&e))?;
     let state = path.join(".antislop");
     super::super::daemon::private_directory(&state).map_err(|e| fail(&e))?;
     let state = state.canonicalize().map_err(|e| fail(&e))?;
-    let client = Client::connect(&path, &config.canonicalize().map_err(|e| fail(&e))?, &state)
-        .map_err(|e| fail(&e))?;
+    let client = Client::connect(&path, &config, &state).map_err(|e| fail(&e))?;
     Ok(ProjectConn::new(path, client))
 }
 

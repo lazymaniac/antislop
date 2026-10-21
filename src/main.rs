@@ -12,12 +12,15 @@ With no message in a terminal it opens the TUI; with a message, or when
 input is not a terminal, it prints the conversation line by line.
 
 options:
-  --config FILE        configuration (default: ./antislop.toml)
+  --config FILE        configuration (else ./antislop.toml, then ~/.config/antislop/antislop.toml)
   --state DIR          private state directory (default: ./.antislop)
   --conversation ID    continue this conversation
   --new                start a new conversation
   --trust              trust the current working directory without prompting
   --version            print the version
+
+The user config directory follows ANTISLOP_CONFIG_DIR, then XDG_CONFIG_HOME/antislop,
+then ~/.config/antislop, just like the list of trusted directories.
 ";
 
 fn main() {
