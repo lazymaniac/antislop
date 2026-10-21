@@ -101,8 +101,11 @@ Pozostałe:
 - [x] T14: ograniczenie utrwalanych bledow tur i redakcja znanych sekretow ze srodowiska (nie obejmuje calego transkryptu).
 - [x] T13: lokalne uniewaznianie Checks; odczyt jednego zadania bez dekodowania calego planu i ponownego odczytu dla freshness token.
 - [x] T13: cache rekordow i zawijania transkryptu; przeglad zintegrowanego kodu.
-- [ ] T13: lekki endpoint Checks bez fingerprintu Git i cache layoutu grafu.
+- [x] T13: lekki endpoint task_checks bez fingerprintu Git; cache layoutu grafu i przycinanie tras do viewportu.
 - [x] T14: integracja lancucha b6356f1 z baza main d050f2c, przeglad nowego kodu i pelna bramka: check, fmt, clippy -D warnings oraz 473 testow (bez pominiec).
 - [x] T14: usuniety lokalny test routingu zgodnie ze zmiana uzytkownika; antislop.toml bez zmian.
 - [x] T14: SetConfig porownuje rewizje pod blokada; clipboard ma limit 64 KiB; test przerwania procesu przed i po publikacji konfiguracji.
 - [x] T14: przeglad kontraktow i schematu 5→6; regresja profilu nowego verifiera w tej samej rundzie; surowy protokol odrzuca brakujaca i stara rewizje.
+
+- [x] Dostarczanie wiadomosci do wszystkich rol, ograniczone ponowienia, ochrona przed petlami odpowiedzi; poczta nie blokuje schedulerow planu.
+- [x] Bezpieczne sprzatanie osieroconych plikow konfiguracji z ochrona aktywnych zapisow.

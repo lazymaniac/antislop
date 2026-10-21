@@ -197,6 +197,12 @@ pub enum Request {
         plan: String,
         id: String,
     },
+    /// Inspector snapshot and checks without a Git freshness fingerprint.
+    TaskChecks {
+        conversation: Option<String>,
+        plan: String,
+        id: String,
+    },
     TaskScoped {
         conversation: Option<String>,
         plan: String,
@@ -345,6 +351,12 @@ enum WireRequest {
         id: String,
         #[serde(default)]
         scope_hash: Option<String>,
+    },
+    TaskChecks {
+        #[serde(default)]
+        conversation: Option<String>,
+        plan: String,
+        id: String,
     },
     Task {
         #[serde(default)]
@@ -576,6 +588,15 @@ impl From<Request> for WireRequest {
                 plan,
                 id,
                 scope_hash,
+            },
+            Request::TaskChecks {
+                conversation,
+                plan,
+                id,
+            } => WireRequest::TaskChecks {
+                conversation,
+                plan,
+                id,
             },
             Request::Task { plan, id } => WireRequest::Task {
                 conversation: None,
@@ -840,6 +861,15 @@ impl From<WireRequest> for Request {
                     }
                 }
             }
+            WireRequest::TaskChecks {
+                conversation,
+                plan,
+                id,
+            } => Request::TaskChecks {
+                conversation,
+                plan,
+                id,
+            },
             WireRequest::Task {
                 conversation,
                 plan,
@@ -971,6 +1001,9 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
             project.display()
         ),
     )?;
+    if let Err(error) = cleanup_config_temporaries(config_path) {
+        eprintln!("could not clean abandoned configuration writes: {error}");
+    }
     let core = Core::open(state, Config::load(config_path)?)?;
     core.config_modified.store(loaded, Ordering::SeqCst);
     let config_path = config_path.canonicalize()?;
@@ -1370,6 +1403,21 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
             validate_plan_task(core, &plan, &id)?;
             json!(core.task(&plan, &id)?)
         }
+        Request::TaskChecks {
+            conversation,
+            plan,
+            id,
+        } => {
+            if let Some(conv) = &conversation {
+                validate_project_conversation(core, project, conv)?;
+                validate_conversation_plan(core, conv, &plan)?;
+            } else {
+                let conv = core.store.plan_conversation(&plan)?;
+                validate_project_conversation(core, project, &conv)?;
+            }
+            validate_plan_task(core, &plan, &id)?;
+            json!(core.task_checks(&plan, &id)?)
+        }
         Request::Diff {
             conversation,
             plan,
@@ -1562,29 +1610,125 @@ struct PreparedConfigWrite {
     target: PathBuf,
     temporary: PathBuf,
     directory: std::fs::File,
+    // Keep the advisory lock until publication or cleanup has completed.
+    lease: std::fs::File,
+}
+
+/// Serialize creation/locking with orphan scanning, including the small gap
+/// between create_new and locking the new descriptor.
+struct ConfigDirectoryLease(std::fs::File);
+
+impl ConfigDirectoryLease {
+    fn acquire(directory: &std::fs::File) -> Result<Self> {
+        use std::os::fd::AsRawFd;
+        let lease = Self(directory.try_clone()?);
+        // SAFETY: this owned directory descriptor remains open until Drop.
+        if unsafe { libc::flock(lease.0.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(lease)
+    }
+}
+
+impl Drop for ConfigDirectoryLease {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: the owned descriptor is still open while the lock releases.
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+fn config_temporary_prefix(target: &Path) -> String {
+    format!(
+        ".antislop-config-{}-",
+        &crate::hash(target.as_os_str().as_encoded_bytes())[..16]
+    )
+}
+
+/// Reap only this target's unlocked, user-owned temporary files. Active
+/// writers, other configurations and symbolic links are never removed.
+fn cleanup_config_temporaries(path: &Path) -> Result<usize> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let target = path.canonicalize()?;
+    let directory = target
+        .parent()
+        .ok_or_else(|| Error::Invalid("configuration has no parent directory".into()))?;
+    let directory_handle = std::fs::File::open(directory)?;
+    let _lease = ConfigDirectoryLease::acquire(&directory_handle)?;
+    let prefix = config_temporary_prefix(&target);
+    let mut removed = 0;
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(&prefix) || !name.ends_with(".tmp") {
+            continue;
+        }
+        let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(entry.path())
+        else {
+            continue;
+        };
+        let metadata = file.metadata()?;
+        // SAFETY: geteuid has no arguments and flock receives an owned fd.
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0
+        {
+            continue;
+        }
+        let current = std::fs::symlink_metadata(entry.path())?;
+        if current.dev() == metadata.dev() && current.ino() == metadata.ino() {
+            std::fs::remove_file(entry.path())?;
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        std::fs::File::open(directory)?.sync_all()?;
+    }
+    Ok(removed)
 }
 
 impl PreparedConfigWrite {
     fn prepare(path: &Path, text: &str) -> Result<Self> {
         let target = path.canonicalize()?;
-        let temporary =
-            target.with_file_name(format!(".antislop-config-{}.tmp", uuid::Uuid::new_v4()));
+        let temporary = target.with_file_name(format!(
+            "{}{}.tmp",
+            config_temporary_prefix(&target),
+            uuid::Uuid::new_v4()
+        ));
         let directory = std::fs::File::open(
             target
                 .parent()
                 .ok_or_else(|| Error::Invalid("configuration has no parent directory".into()))?,
         )?;
-        let prepared = Self {
-            target,
-            temporary,
-            directory,
-        };
+        let directory_lease = ConfigDirectoryLease::acquire(&directory)?;
         use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
+        let lease = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(&prepared.temporary)?;
+            .open(&temporary)?;
+        let mut prepared = Self {
+            target,
+            temporary,
+            directory,
+            lease,
+        };
+        use std::os::fd::AsRawFd;
+        // SAFETY: the owned file descriptor remains open for the prepared write.
+        require(
+            unsafe { libc::flock(prepared.lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
+            "could not lock prepared configuration write",
+        )?;
+        drop(directory_lease);
+        let file = &mut prepared.lease;
         file.set_permissions(std::fs::metadata(&prepared.target)?.permissions())?;
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
@@ -1991,6 +2135,39 @@ mod live_config_tests {
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         assert_eq!(core.config_snapshot().policy.max_parallel, 4);
+    }
+
+    #[test]
+    fn orphan_cleanup_preserves_active_writes_other_targets_and_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("config.toml");
+        let other = dir.path().join("other.toml");
+        std::fs::write(&target, "original").unwrap();
+        std::fs::write(&other, "other").unwrap();
+        let mut active = PreparedConfigWrite::prepare(&target, "active").unwrap();
+        let other_active = PreparedConfigWrite::prepare(&other, "other active").unwrap();
+        let prefix = config_temporary_prefix(&target.canonicalize().unwrap());
+        let abandoned = dir.path().join(format!("{prefix}abandoned.tmp"));
+        let symlink = dir.path().join(format!("{prefix}symlink.tmp"));
+        std::fs::write(&abandoned, "abandoned").unwrap();
+        std::os::unix::fs::symlink(&target, &symlink).unwrap();
+        assert_eq!(cleanup_config_temporaries(&target).unwrap(), 1);
+        assert!(!abandoned.exists());
+        assert!(active.temporary.exists());
+        assert!(other_active.temporary.exists());
+        assert!(
+            std::fs::symlink_metadata(&symlink)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "original");
+        // Simulate a crashed writer: its descriptor closes without Drop cleanup.
+        let temporary = active.temporary.clone();
+        let lease = std::mem::replace(&mut active.lease, std::fs::File::open(&target).unwrap());
+        drop(lease);
+        assert_eq!(cleanup_config_temporaries(&target).unwrap(), 1);
+        assert!(!temporary.exists());
     }
 
     #[test]

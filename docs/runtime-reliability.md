@@ -62,6 +62,18 @@ A receipt is recorded only after a successful recipient turn. Failed delivery
 leaves the original message queued and reports the raw error. A retry can repeat
 an interrupted delivery, so receipt semantics are at least once, not exactly once.
 
+Mail jobs do not own a plan scheduler slot. Per-role locks serialize receipt and
+normal turns, including the orchestrator, plan verifier and auditor. Transient
+failures get three attempts with cancellable backoff; login failures wait for a
+new message or restart. Bounded reply chains retain excess mail rather than
+spending tokens indefinitely. Initial review instructions are preserved even if
+the role answered mail before its first review.
+
+Prepared configuration writes retain an advisory lock. Trusted daemon startup
+removes abandoned writes for the exact target, skipping active writes, other
+targets and symbolic links. Graph layout is cached between input changes and
+highlight expirations, and path rasterization visits viewport cells only.
+
 ## Validation
 
 Regression coverage includes two converging dependency chains with local edits,

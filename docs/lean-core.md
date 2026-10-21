@@ -62,7 +62,7 @@ streams normalized events: `Session(id)`, `Text(delta)`, `Tool{name, detail}`,
 | | read-only (orchestrator, verifier, analysis) | write (worker) |
 |---|---|---|
 | cwd | project (or the worktree being reviewed) | task worktree |
-| codex | `exec --json -s read-only -C <dir>` | `-s workspace-write` |
+| codex | `exec --json -s read-only -C <dir>` | `-s danger-full-access` |
 | agy | `-p --output-format stream-json --mode plan` | `--mode accept-edits --sandbox` |
 | claude | `-p --output-format stream-json --permission-mode plan` | `acceptEdits` |
 | gemini | `-p --output-format stream-json --approval-mode plan` | `auto_edit` (no shell, no sandbox) |
@@ -368,7 +368,7 @@ directory to run both. The socket is `<state>/core.sock`, or
 - `accept` names the plan the user saw (`plan_id`); the scheduler and the
   report to the orchestrator stay pinned to it even if another plan is
   proposed meanwhile. Queuing a plan is one transaction.
-- A failed or skipped task skips everything that depends on it, transitively.
+- A failed prerequisite leaves its dependents queued. Recovery never discards their obligations.
   A failed task's report keeps the agent's error.
 - A verdict that approves while listing high or medium findings is a
   rejection. A task verifier's obligations are the task's risks (`R1`…),
@@ -390,16 +390,15 @@ directory to run both. The socket is `<state>/core.sock`, or
   beside its resumed turn. A group is ended only while its number still
   belongs to that CLI (a group leader running the provider, started when
   the turn did). Then turns left running become `interrupted` and
-  unfinished tasks become `cancelled` with the reason; nothing waits for a reconciliation.
-  The orchestrator then answers what it was answering, and an autonomous
-  conversation resumes its cut-off plan.
+  unfinished tasks remain queued with the reason. The orchestrator answers
+  what it was answering, and both supervised and autonomous conversations
+  resume previously accepted, unfinished plans. Explicit pauses remain effective.
 - A task that stops short of approval (`needs_user`, `waiting`, `failed`,
   `cancelled`) says why in its event; the chat, the line mode and the task's
   Overview show the reason (design §8.4).
 - Before writers start in worktrees, the user is told which files have
-  uncommitted changes: writers start from the last commit and do not see
-  them, and a change landing on one of them waits for the user (design
-  §11.1).
+  uncommitted changes: writers include tracked and untracked local changes
+  in their starting snapshot. Integration protects edits in the primary tree.
 - Every worker and verifier is told to keep to the project's own
   instructions (AGENTS.md, CLAUDE.md, GEMINI.md…) whichever CLI it is, to
   name contradictions, and never to change its own permissions; a worker
@@ -412,9 +411,9 @@ directory to run both. The socket is `<state>/core.sock`, or
   happened; a writer continues in its worktree (or from its last result); a
   change that was approved but could not be integrated is integrated again
   without another worker turn.
-- Every task whose dependencies are approved runs at once (no concurrency
-  limit, design §14); writers land one at a time, and in place they work one
-  at a time.
+- Tasks whose dependencies are approved run up to `policy.max_parallel` at
+  a time, subject to write-scope isolation. Writers land one at a time; in-place
+  writers also execute one at a time.
 - No plan is shown to the user, or run, without passing through the plan
   verifier; an autonomous conversation never runs a plan the verifier did not
   approve, and stops for the user when a plan repeats the work of the last
@@ -520,10 +519,9 @@ kept per conversation, so switching back finds them as they were.
 
 ## Known limits
 
-- A writer that depends on exactly one writer starts from that writer's
-  result; one that depends on several starts from `HEAD` with all their
-  results laid on it (`git::combine`), and a result that does not apply is
-  an error naming it.
+- Writers start from a snapshot of local user changes with all transitive
+  dependency results composed in dependency order. Genuine conflicts are handed
+  to the writer in an isolated worktree with the exact input commits and error.
 - Tasks start as soon as their own dependencies are approved, at most
   `policy.max_parallel` at a time.
 - `View::apply(plan_proposed)` replaces the active task cards of the view
@@ -539,7 +537,7 @@ kept per conversation, so switching back finds them as they were.
   guides agents but does not limit what they read.
 - Hostile instructions in the project's files are held by the agents'
   instructions and by review, not by OS confinement: codex's
-  `workspace-write` sandbox leaves temporary directories writable.
+  `danger-full-access` writer mode does not impose OS filesystem confinement.
 - An interrupted verification is requeued with its task, so the worker
   gets a turn before the verifier resumes its session.
 - A read-only codex agent cannot run checks that write (tests that create
@@ -667,7 +665,9 @@ Validation, stale-revision and pre-publication event failures leave old state
 intact. A post-publication event-commit failure returns applied-with-warnings;
 the on-disk configuration is authoritative on restart. Abrupt-exit tests before
 and after rename verify that a complete old or new file remains and retry works.
-An interruption may leave an unused temporary file; this test is process-exit
+Prepared writes hold an advisory lock. After trust is checked, startup removes
+unlocked, user-owned abandoned files for that exact configuration target,
+without following symlinks or removing another daemon's active write. This test is process-exit
 coverage, not a simulation of storage-device power loss.
 
 The earlier t12 trust-order, database-trust migration, diagnostic and registry
@@ -747,3 +747,28 @@ versus new turns. Selection tests cover graphemes, scrolling, content changes
 and modal isolation. These are concrete contract and counterexample checks;
 a fresh worker run is recorded, not a claim that an independent read-only
 verifier executed commands.
+
+
+## Mail delivery and rendering costs
+
+Receipt turns have their own cancellable jobs and never occupy the plan
+scheduler's ownership slot. A role's normal turns and receipt turns are
+serialized. Stopped workers/verifiers, the orchestrator, plan verifier and
+auditor can acknowledge durable mail without approving tasks or proposing work.
+A queued worker consumes its instructions in its next task turn.
+
+Transient delivery errors receive up to three attempts with cancellable backoff.
+Authentication failures retain the original message without a retry loop; a new
+message or restart wakes the recipient again. Reply chains have a bounded budget
+and leave remaining messages queued. Receipts are at least once, recorded only
+after a successful turn. User copies for the orchestrator remain passive context.
+
+Idle redraws reuse graph layout until an event, viewport, filter, grouping,
+collapsed state, conversation generation or mail-highlight expiry changes it.
+Line rasterization clips paths to the viewport; route/card intersection uses
+interval bounds. The canvas remains O(viewport area). Session text/layout caches
+and per-task Checks invalidation avoid unrelated repeated work. Recovery freshness
+tokens still check Git state for recovery actions. The Checks tab uses the
+conversation-scoped `task_checks` snapshot, which performs no Git fingerprint.
+The ordinary `task` response retains a fresh recovery token. No claim of constant
+total frame cost or host-overload resilience is made.

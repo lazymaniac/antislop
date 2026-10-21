@@ -782,3 +782,265 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2
         .unwrap();
     assert!(!docs.contains("audit found"), "only dependents get it");
 }
+
+#[test]
+fn reviewers_receive_mail_before_a_plan_and_keep_their_review_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        "    answer = 'noted'",
+    );
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    for role in ["plan-verifier", "auditor"] {
+        let body = format!("mail before a plan for {role}");
+        core.submit(&conversation, &format!("@{role} {body}"))
+            .unwrap();
+        wait_until("reviewer receipt", || {
+            core.is_idle(&conversation)
+                && core
+                    .store
+                    .mail(&conversation)
+                    .unwrap()
+                    .iter()
+                    .any(|mail| mail.text == body && mail.delivered_turn.is_some())
+        });
+    }
+    core.send(&conversation, "make a plan").unwrap();
+    wait_until("plan reviewed", || core.is_idle(&conversation));
+    assert!(!core.store.latest_plan(&conversation).unwrap().is_empty());
+    assert!(
+        prompts(dir.path())
+            .iter()
+            .any(|(_, prompt)| prompt.contains("You review a plan before any of it runs"))
+    );
+}
+
+#[test]
+fn transient_mail_delivery_failure_retries_without_losing_the_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("first-attempt");
+    let agent = format!(
+        r#"    import os
+    if "Mailbox recipient: auditor" in prompt and not os.path.exists({marker:?}):
+        open({marker:?}, "w").close()
+        print("temporary failure: connection reset", file=sys.stderr)
+        sys.exit(1)
+    answer = "acknowledged""#,
+        marker = marker.to_string_lossy()
+    );
+    let core = open(dir.path(), "answer = 'done'", &agent);
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    core.submit(&conversation, "@auditor retry this message")
+        .unwrap();
+    wait_until("mail retried and acknowledged", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .mail(&conversation)
+                .unwrap()
+                .iter()
+                .any(|mail| mail.recipient == "auditor" && mail.delivered_turn.is_some())
+    });
+    let retries = events(&core, &conversation, "mail_retry");
+    assert_eq!(retries.len(), 1);
+    assert_eq!(retries[0]["recipient"], "auditor");
+    assert!(events(&core, &conversation, "mail_delivery_failed").is_empty());
+}
+
+#[test]
+fn authentication_failure_keeps_mail_pending_until_a_new_wakeup() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("logged-in");
+    let agent = format!(
+        r#"    import os
+    if not os.path.exists({marker:?}):
+        print("not logged in: run agy login", file=sys.stderr)
+        sys.exit(1)
+    answer = "acknowledged""#,
+        marker = marker.to_string_lossy()
+    );
+    let core = open(dir.path(), "answer = 'done'", &agent);
+    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    core.submit(&conversation, "@auditor original question")
+        .unwrap();
+    wait_until("login failure recorded", || core.is_idle(&conversation));
+    assert_eq!(
+        events(&core, &conversation, "mail_delivery_failed").len(),
+        1
+    );
+    assert!(events(&core, &conversation, "mail_retry").is_empty());
+    assert!(
+        core.store
+            .mail(&conversation)
+            .unwrap()
+            .iter()
+            .any(|mail| mail.text == "original question" && mail.delivered_turn.is_none())
+    );
+    std::fs::write(marker, "ready").unwrap();
+    core.submit(&conversation, "@auditor login is fixed")
+        .unwrap();
+    wait_until("both messages delivered", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .mail(&conversation)
+                .unwrap()
+                .iter()
+                .filter(|mail| mail.recipient == "auditor")
+                .all(|mail| mail.delivered_turn.is_some())
+    });
+}
+
+#[test]
+fn agent_mail_reaches_the_orchestrator_without_replanning() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        "answer = 'mail noted' if 'Mailbox recipient:' in prompt or '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        "    answer = 'report' + message('orchestrator', 'status', 'agent handoff') if 'Task id: t1' in prompt else 'noted'",
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("orchestrator acknowledged", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .mail(&conversation)
+                .unwrap()
+                .iter()
+                .any(|mail| mail.text == "agent handoff" && mail.delivered_turn.is_some())
+    });
+    assert_eq!(
+        core.store.plans_page(&conversation, 0, 20).unwrap().total,
+        1
+    );
+    assert_eq!(
+        core.store.latest_plan(&conversation).unwrap()[0].status,
+        "approved"
+    );
+}
+
+#[test]
+fn a_mail_reply_loop_has_a_bounded_budget_and_preserves_the_remaining_mail() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        "    answer = 'report' if 'Task id:' in prompt else 'reply' + message('t1', 'question', 'repeat')",
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("plan done", || core.is_idle(&conversation));
+    core.submit(&conversation, "@t1 start a reply loop")
+        .unwrap();
+    wait_until("reply budget reached", || core.is_idle(&conversation));
+    let mail = core.store.mail(&conversation).unwrap();
+    assert!(
+        mail.iter()
+            .any(|item| item.text == "start a reply loop" && item.delivered_turn.is_some())
+    );
+    assert!(
+        mail.iter()
+            .any(|item| item.text == "repeat" && item.delivered_turn.is_none())
+    );
+    assert!(mail.iter().filter(|item| item.text == "repeat").count() <= 8);
+    assert_eq!(
+        core.store.latest_plan(&conversation).unwrap()[0].status,
+        "approved"
+    );
+}
+
+#[test]
+fn a_receipt_turn_does_not_occupy_the_plan_scheduler_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let entered = dir.path().join("mail-entered");
+    let release = dir.path().join("mail-release");
+    let agent = format!(
+        r#"    import os
+    if 'Mailbox recipient:' in prompt:
+        open({entered:?}, 'w').close()
+        while not os.path.exists({release:?}): time.sleep(0.01)
+    answer = 'noted'"#,
+        entered = entered.to_string_lossy(),
+        release = release.to_string_lossy()
+    );
+    let core = open(
+        dir.path(),
+        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        &agent,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("first plan finished", || core.is_idle(&conversation));
+    core.submit(&conversation, "@t1 slow receipt").unwrap();
+    wait_until("receipt in flight", || entered.exists());
+    let tasks = core
+        .store
+        .add_plan(
+            &conversation,
+            &[serde_json::json!({
+                "id": "t2", "title": "Second task", "goal": "read", "kind": "analysis",
+                "verifier": {"focus": "inspect"}
+            })],
+        )
+        .unwrap();
+    let accepted = core.accept_plan(&conversation, &tasks[0].plan_id);
+    // Always release the fixture, including when an assertion would fail.
+    std::fs::write(release, "continue").unwrap();
+    assert!(
+        accepted.is_ok(),
+        "mail must not masquerade as a running plan: {accepted:?}"
+    );
+    wait_until("second plan completed", || core.is_idle(&conversation));
+    assert_eq!(
+        core.store.plan(&tasks[0].plan_id).unwrap()[0].status,
+        "approved"
+    );
+}
+
+#[test]
+fn explicit_task_uuids_keep_mail_with_historical_agents_and_their_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
+        "    answer = 'noted'",
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("old plan finished", || core.is_idle(&conversation));
+    let original = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let newer = core.store.add_plan(&conversation, &[serde_json::json!({
+        "id": "t1", "title": "New task with the same label", "goal": "read", "kind": "analysis",
+        "verifier": {"focus": "inspect"}
+    })]).unwrap();
+    for role in ["worker", "verifier", "code-review"] {
+        let body = format!("historical receipt for {role}");
+        let recipient = format!("{role}:{}", original.id);
+        core.submit_addressed(&conversation, &body, Some(&recipient))
+            .unwrap();
+        wait_until("historical recipient acknowledged", || {
+            core.is_idle(&conversation)
+                && core
+                    .store
+                    .mail(&conversation)
+                    .unwrap()
+                    .iter()
+                    .any(|mail| mail.text == body && mail.delivered_turn.is_some())
+        });
+    }
+    let other = core.start(&dir.path().join("project")).unwrap().id;
+    assert!(
+        core.submit_addressed(
+            &other,
+            "wrong conversation",
+            Some(&format!("worker:{}", original.id))
+        )
+        .is_err()
+    );
+    assert_eq!(
+        core.store.plan(&newer[0].plan_id).unwrap()[0].status,
+        "proposed"
+    );
+    assert_eq!(
+        core.store.plan(&original.plan_id).unwrap()[0].status,
+        "approved"
+    );
+}

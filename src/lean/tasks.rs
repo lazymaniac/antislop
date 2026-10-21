@@ -228,7 +228,8 @@ pub fn answer_prompt(title: &str, first: bool) -> String {
         "{head}Messages arrived for you (above). Answer them read-only: change no \
          files. Reply to each sender with a message block addressed to them \
          (`{{\"to\": \"<sender>\", \"kind\": \"answer\", \"text\": \"...\"}}`); \
-         say plainly when you have nothing to add."
+         Do not reply to acknowledgements or answers unless they contain a new \
+         question or request. Say plainly when you have nothing to add."
     )
 }
 

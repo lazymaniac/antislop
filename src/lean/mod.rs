@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod diff;
 pub mod feedback;
 pub mod git;
+mod mail;
 pub mod projects;
 pub mod risks;
 pub mod store;
@@ -184,8 +185,10 @@ pub struct Core {
     integrating: Mutex<()>,
     /// In-place writers work in the user's directory one at a time.
     in_place: Mutex<()>,
-    /// Serializes the turns that answer messages for approved tasks.
-    answering: Mutex<()>,
+    /// Mail work must not occupy the plan scheduler's ownership slot.
+    mail_jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    mail_failures: Mutex<HashMap<(String, String), u64>>,
+    turn_locks: Mutex<mail::TurnLocks>,
     /// Conversations with an orchestrator loop running, and its cancel flag.
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Conversations with a plan running, and its cancel flag.
@@ -273,7 +276,9 @@ impl Core {
             state: state.canonicalize()?,
             integrating: Mutex::new(()),
             in_place: Mutex::new(()),
-            answering: Mutex::new(()),
+            mail_jobs: Mutex::new(HashMap::new()),
+            mail_failures: Mutex::new(HashMap::new()),
+            turn_locks: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
             plans: Mutex::new(HashMap::new()),
             reviews: Mutex::new(HashMap::new()),
@@ -294,8 +299,8 @@ impl Core {
                 );
             }
         }
-        for (conversation, plan) in core.store.pending_mail_plans()? {
-            core.answer_in_background(&conversation, &plan);
+        for conversation in core.store.pending_mail_conversations()? {
+            core.answer_in_background(&conversation, "");
         }
         Ok(core)
     }
@@ -346,7 +351,7 @@ impl Core {
             return Ok(json!(self.send(conversation, body)?.seq));
         }
 
-        if to == PLAN_VERIFIER || to == AUDITOR {
+        if matches!(to, PLAN_VERIFIER | AUDITOR | COMMENT_ORCHESTRATOR) {
             let mail = self.store.add_mail(
                 conversation,
                 to,
@@ -377,6 +382,7 @@ impl Core {
                     state: "queued".into(),
                 },
             )?;
+            self.answer_in_background(conversation, "");
             return Ok(json!({
                 "mail": mail.id,
                 "state": "queued",
@@ -452,14 +458,7 @@ impl Core {
         }
 
         let plan = self.store.latest_plan(conversation)?;
-        let (task_id_str, is_verifier) = task_role(to).unwrap_or((to, false));
-
-        if let Some(task) = plan.iter().find(|t| t.spec["id"] == task_id_str) {
-            let target_role = if is_verifier {
-                format!("verifier:{}", task.id)
-            } else {
-                format!("worker:{}", task.id)
-            };
+        if let Some((task, target_role)) = self.mail_address_task(conversation, &plan, to)? {
             let mail = self.store.add_mail(
                 conversation,
                 &target_role,
@@ -736,7 +735,7 @@ impl Core {
     }
 
     pub fn cancel(&self, conversation: &str) {
-        for flags in [&self.running, &self.plans, &self.reviews] {
+        for flags in [&self.running, &self.plans, &self.reviews, &self.mail_jobs] {
             if let Some(flag) = flags.lock().expect("flags mutex").get(conversation) {
                 flag.store(true, Ordering::SeqCst);
             }
@@ -768,6 +767,11 @@ impl Core {
                 .lock()
                 .expect("reviews mutex")
                 .contains_key(conversation)
+            && !self
+                .mail_jobs
+                .lock()
+                .expect("mail jobs mutex")
+                .contains_key(conversation)
     }
 
     /// Whether any conversation has an agent or a plan running.
@@ -775,6 +779,7 @@ impl Core {
         !self.running.lock().expect("running mutex").is_empty()
             || !self.plans.lock().expect("plans mutex").is_empty()
             || !self.reviews.lock().expect("reviews mutex").is_empty()
+            || !self.mail_jobs.lock().expect("mail jobs mutex").is_empty()
     }
 
     pub fn task_freshness_token(
@@ -833,6 +838,15 @@ impl Core {
             .checks(&task.id, task.round)
             .ok()
             .map(serde_json::Value::from);
+        Ok(task)
+    }
+
+    /// Read-only inspector data needs no filesystem or Git freshness work.
+    pub fn task_checks(&self, plan: &str, id: &str) -> Result<Task> {
+        let mut task = self.task_unscoped(plan, id)?;
+        task.checks = Some(serde_json::to_value(
+            self.store.checks(&task.id, task.round)?,
+        )?);
         Ok(task)
     }
 
@@ -2075,7 +2089,7 @@ impl Core {
             }
         }
         let Some(answer) = self.turn(setup, cancel, |first| {
-            let mut prompt = orchestrator_prompt(&project, first, &asked, &open);
+            let mut prompt = orchestrator_prompt(&project, first || answered == 0, &asked, &open);
             prompt.push_str(&comment_context);
             prompt
         })?
@@ -2290,7 +2304,7 @@ impl Core {
     /// session per role), or why there is none. `prompt` gets whether this is
     /// the session's first turn and the user's messages it has not seen.
     fn review(
-        &self,
+        self: &Arc<Self>,
         conversation: &str,
         role: &str,
         plan_id: Option<&str>,
@@ -2320,10 +2334,14 @@ impl Core {
             upto_message: upto,
         };
         let answer = self.turn(setup, cancel, |first| {
-            prompt(first, &request(if first { 0 } else { answered }))
+            let initial = first || answered == 0;
+            prompt(initial, &request(if initial { 0 } else { answered }))
         })?;
         Ok(match answer {
-            Some(answer) => Ok(tasks::parse_verdict(&answer)),
+            Some(answer) => {
+                let answer = self.post(conversation, plan_id, role, &answer)?;
+                Ok(tasks::parse_verdict(&answer))
+            }
             None => Err(self
                 .store
                 .last_turn(conversation, role)?
@@ -2340,6 +2358,20 @@ impl Core {
         cancel: &AtomicBool,
         prompt: impl FnOnce(bool) -> String,
     ) -> Result<Option<String>> {
+        self.turn_inner(setup, cancel, prompt, false)
+    }
+
+    fn turn_inner(
+        &self,
+        setup: TurnSetup<'_>,
+        cancel: &AtomicBool,
+        prompt: impl FnOnce(bool) -> String,
+        mail_only: bool,
+    ) -> Result<Option<String>> {
+        let lock = self.turn_lock(setup.conversation, &setup.role);
+        let Some(_turn_guard) = mail::lock_cancellable(&lock, cancel) else {
+            return Ok(None);
+        };
         let TurnSetup {
             conversation,
             plan_id,
@@ -2348,8 +2380,17 @@ impl Core {
             cwd,
             add_dirs,
             access,
-            upto_message,
+            mut upto_message,
         } = setup;
+        if mail_only {
+            if self.store.pending_mail(conversation, &role)?.is_empty() {
+                return Ok(None);
+            }
+            upto_message = self.store.last_answered(conversation, &role)?;
+            if matches!(role.as_str(), ORCHESTRATOR | COMMENT_ORCHESTRATOR) {
+                upto_message = self.store.last_orchestration_answered(conversation)?;
+            }
+        }
         if role != ORCHESTRATOR && role != COMMENT_ORCHESTRATOR && role != PLAN_VERIFIER {
             // Cancelling a paused conversation ends what waits, too.
             while !cancel.load(Ordering::SeqCst) && self.store.paused(conversation)? {
@@ -2604,7 +2645,7 @@ impl Core {
     /// and whose write scope does not conflict with currently running writers.
     /// Tasks start immediately as soon as their dependencies finish rather than
     /// waiting for unrelated slow tasks in the same wave.
-    fn run_plan(&self, conversation: &str, plan_id: &str, cancel: &AtomicBool) {
+    fn run_plan(self: &Arc<Self>, conversation: &str, plan_id: &str, cancel: &AtomicBool) {
         std::thread::scope(|scope| {
             let (done_tx, done_rx) = std::sync::mpsc::channel::<String>();
             let mut in_flight_ids: std::collections::HashSet<String> =
@@ -2713,7 +2754,12 @@ impl Core {
 
     /// Worker and verifier take turns until the verifier approves or the
     /// rounds run out; the worker resumes its own session with the findings.
-    fn run_task(&self, conversation: &str, task: &mut Task, cancel: &AtomicBool) -> Result<()> {
+    fn run_task(
+        self: &Arc<Self>,
+        conversation: &str,
+        task: &mut Task,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
         let config = self.config_snapshot();
         let mut spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
@@ -2865,7 +2911,7 @@ impl Core {
                 upto_message: 0,
             };
             let report = self.turn(worker_setup(), cancel, |first| {
-                if first {
+                if first || round == 1 {
                     tasks::worker_prompt(&project_text, &spec, &team, autonomous)
                         + &upstream
                         + &tasks::user_edits_note(&user_edits)
@@ -2975,7 +3021,7 @@ impl Core {
             };
             let user_checks = self.check_comments(conversation, &task.plan_id, &spec.id);
             let answer = self.turn(setup, cancel, |first| {
-                let prompt = if first {
+                let prompt = if first || round == 1 {
                     tasks::verifier_prompt(&project_text, &spec, &report, changes.as_deref())
                         + &upstream
                 } else {
@@ -3162,7 +3208,7 @@ impl Core {
     /// Sends the ```message blocks of `answer` and returns the answer
     /// without them.
     fn post(
-        &self,
+        self: &Arc<Self>,
         conversation: &str,
         plan_id: Option<&str>,
         sender: &str,
@@ -3189,7 +3235,7 @@ impl Core {
     /// worker, or (`all`) the workers of every task but the
     /// sender's.
     fn deliver(
-        &self,
+        self: &Arc<Self>,
         conversation: &str,
         plan_id: Option<&str>,
         sender: &str,
@@ -3201,7 +3247,7 @@ impl Core {
         };
         let own_task = sender.split('/').next().unwrap_or(sender);
         let targets: Vec<(String, String)> = match message.to.as_str() {
-            ORCHESTRATOR => vec![(ORCHESTRATOR.into(), ORCHESTRATOR.into())],
+            ORCHESTRATOR | COMMENT_ORCHESTRATOR => vec![(message.to.clone(), message.to.clone())],
             PLAN_VERIFIER => vec![(PLAN_VERIFIER.into(), PLAN_VERIFIER.into())],
             AUDITOR => vec![(AUDITOR.into(), AUDITOR.into())],
             "all" => plan
@@ -3214,23 +3260,10 @@ impl Core {
                     )
                 })
                 .collect(),
-            to => {
-                let (target_id, is_verifier) = task_role(to).unwrap_or((to, false));
-                let live: Vec<_> = plan
-                    .iter()
-                    .filter(|task| task.spec["id"] == target_id || task.id == target_id)
-                    .collect();
-                live.into_iter()
-                    .map(|task| {
-                        let role = if is_verifier {
-                            format!("verifier:{}", task.id)
-                        } else {
-                            format!("worker:{}", task.id)
-                        };
-                        (to.to_owned(), role)
-                    })
-                    .collect()
-            }
+            to => self
+                .mail_address_task(conversation, &plan, to)?
+                .map(|(_, role)| vec![(to.to_owned(), role)])
+                .unwrap_or_default(),
         };
         if targets.is_empty() {
             self.store.append_event(
@@ -3243,12 +3276,33 @@ impl Core {
             )?;
         }
         for (label, role) in targets {
+            let mut origin = sender.to_owned();
+            if let Some(source) = plan.iter().find(|task| task.spec["id"] == own_task) {
+                if sender.ends_with("/verifier") {
+                    origin = format!("verifier:{}", source.id);
+                } else if sender.ends_with("/review") {
+                    origin = format!("code-review:{}", source.id);
+                }
+            }
+            if let Some((target, _)) = self.mail_address_task(conversation, &plan, &role)?
+                && Some(target.plan_id.as_str()) != plan_id
+                && let Some(source) = plan.iter().find(|task| task.spec["id"] == own_task)
+            {
+                let prefix = if sender.ends_with("/verifier") {
+                    "verifier"
+                } else if sender.ends_with("/review") {
+                    "code-review"
+                } else {
+                    "worker"
+                };
+                origin = format!("{prefix}:{}", source.id);
+            }
             self.store.add_mail(
                 conversation,
                 &role,
                 &Mail {
                     id: 0,
-                    sender: sender.into(),
+                    sender: origin,
                     recipient: label,
                     kind: message.kind.clone(),
                     text: message.text.clone(),
@@ -3259,114 +3313,7 @@ impl Core {
                 },
             )?;
         }
-        Ok(())
-    }
-
-    /// Answers waiting messages of stopped tasks in the background, for mail
-    /// that arrives when no task of the plan is about to read it: the user's,
-    /// or any left over when a task was approved by hand. It joins a running
-    /// plan's cancellation, or holds the conversation busy and cancellable
-    /// while it works.
-    fn answer_in_background(self: &Arc<Self>, conversation: &str, plan_id: &str) {
-        let waiting = self.store.plan(plan_id).is_ok_and(|tasks| {
-            tasks.iter().any(|task| {
-                status::finished(&task.status)
-                    && ["worker", "verifier"].iter().any(|role| {
-                        self.store
-                            .pending_mail(conversation, &format!("{role}:{}", task.id))
-                            .is_ok_and(|mail| !mail.is_empty())
-                    })
-            })
-        });
-        if !waiting {
-            return;
-        }
-        let (cancel, own) = {
-            let mut plans = self.plans.lock().expect("plans mutex");
-            match plans.get(conversation) {
-                Some(cancel) => (cancel.clone(), false),
-                None => {
-                    let cancel = Arc::new(AtomicBool::new(false));
-                    plans.insert(conversation.to_owned(), cancel.clone());
-                    (cancel, true)
-                }
-            }
-        };
-        let core = self.clone();
-        let conversation = conversation.to_owned();
-        let plan_id = plan_id.to_owned();
-        std::thread::spawn(move || {
-            if let Err(error) = core.answer_waiting(&conversation, &plan_id, &cancel) {
-                let _ = core.store.append_event(
-                    &conversation,
-                    None,
-                    Some(&plan_id),
-                    "mail_delivery_failed",
-                    &json!({"sender": RUNTIME, "recipient": "?", "text": "",
-                            "reason": format!("answering waiting messages failed: {error}")}),
-                );
-            }
-            if own {
-                core.plans
-                    .lock()
-                    .expect("plans mutex")
-                    .remove(&conversation);
-            }
-        });
-    }
-
-    /// Gives each stopped task of the plan whose agents have waiting
-    /// messages a read-only turn to answer them. An approved task runs no
-    /// round of its own, so without this its mail would never be read.
-    fn answer_waiting(&self, conversation: &str, plan_id: &str, cancel: &AtomicBool) -> Result<()> {
-        let _answering = self.answering.lock().unwrap_or_else(|e| e.into_inner());
-        let project = PathBuf::from(self.store.conversation(conversation)?.project);
-        for task in self.store.plan(plan_id)? {
-            if !status::finished(&task.status) {
-                continue;
-            }
-            let Ok(spec) = serde_json::from_value::<TaskSpec>(task.spec.clone()) else {
-                continue;
-            };
-            for (role, kind, sender) in [
-                (
-                    format!("worker:{}", task.id),
-                    RoleKind::Executor,
-                    spec.id.clone(),
-                ),
-                (
-                    format!("verifier:{}", task.id),
-                    RoleKind::Verifier,
-                    format!("{}/verifier", spec.id),
-                ),
-            ] {
-                for _ in 0..MAIL_TURNS {
-                    if cancel.load(Ordering::SeqCst)
-                        || self.store.pending_mail(conversation, &role)?.is_empty()
-                    {
-                        break;
-                    }
-                    let setup = TurnSetup {
-                        conversation,
-                        plan_id: Some(task.plan_id.clone()),
-                        role: role.clone(),
-                        profile: self.config_snapshot().resolve(spec.kind, kind),
-                        cwd: project.clone(),
-                        add_dirs: vec![],
-                        access: agent::Access::ReadOnly,
-                        upto_message: 0,
-                    };
-                    let title = spec.title.clone();
-                    let Some(answer) =
-                        self.turn(setup, cancel, |first| tasks::answer_prompt(&title, first))?
-                    else {
-                        break;
-                    };
-                    self.post(conversation, Some(&task.plan_id), &sender, &answer)?;
-                }
-            }
-        }
-
+        self.answer_in_background(conversation, plan_id.unwrap_or(""));
         Ok(())
     }
 
@@ -3795,7 +3742,7 @@ impl Core {
     /// The finished plan's results, and an independent audit of whether they
     /// deliver the user's request, for the orchestrator to answer the user.
     pub fn plan_report(
-        &self,
+        self: &Arc<Self>,
         conversation: &str,
         plan_id: &str,
         cancel: &AtomicBool,

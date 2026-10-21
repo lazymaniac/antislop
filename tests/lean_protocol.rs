@@ -787,6 +787,21 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
     let task = daemon
         .call_raw(&json!({"op": "task", "plan": plan, "id": "t1"}))
         .unwrap();
+    let inspector = daemon
+        .call_raw(&json!({"op": "task_checks", "conversation": conv, "plan": plan, "id": "t1"}))
+        .unwrap();
+    assert_eq!(inspector["id"], task["id"]);
+    assert_eq!(inspector["round"], task["round"]);
+    assert_eq!(inspector["checks"], task["checks"]);
+    assert!(inspector.get("freshness_token").is_none_or(Value::is_null));
+    let other = daemon.call_raw(&json!({"op": "start"})).unwrap();
+    assert!(
+        daemon
+            .call_raw(
+                &json!({"op": "task_checks", "conversation": other["id"], "plan": plan, "id": "t1"})
+            )
+            .is_err()
+    );
     let token = task["freshness_token"]
         .as_str()
         .expect("a token")
