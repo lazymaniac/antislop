@@ -251,7 +251,6 @@ pub struct View {
     /// Latest check event for each plan-local task id; unrelated tasks do not
     /// invalidate an open inspector. Entries are bounded by task count.
     pub task_check_events: HashMap<String, u64>,
-    pub task_detail_events: HashMap<String, u64>,
     pub transcript: Vec<Entry>,
     pub tasks: Vec<TaskRow>,
     /// The plan the task rows show.
@@ -965,7 +964,6 @@ impl View {
                 }
                 self.task_rows.clear();
                 self.task_check_events.clear();
-                self.task_detail_events.clear();
                 self.agents
                     .retain(|key, _| !key.starts_with("worker:") && !key.starts_with("verifier:"));
                 self.links.clear();
@@ -1038,7 +1036,6 @@ impl View {
                     // A verdict can change Checks without emitting a check event.
                     self.check_events += 1;
                     self.task_check_events.insert(id.clone(), self.check_events);
-                    *self.task_detail_events.entry(id.clone()).or_default() += 1;
                     self.task_rows.insert(text("task"), index);
                     let row = &mut self.tasks[index];
                     let (was, was_round) = (row.status.clone(), row.round);

@@ -757,20 +757,6 @@ fn test_task_scoped_query_includes_freshness_token() {
         }))
         .unwrap();
     assert_eq!(task_resp2["freshness_token"].as_str().unwrap(), token);
-    let checks = daemon
-        .call_raw(
-            &json!({"op":"task_check_projection","conversation":conv_id,"plan":plan_id,"id":"t1"}),
-        )
-        .unwrap();
-    assert_eq!(checks["id"], task_resp["id"]);
-    assert_eq!(checks["round"], task_resp["round"]);
-    assert!(checks["checks"].is_array());
-    assert_eq!(checks.as_object().unwrap().len(), 3);
-    let other = daemon.call_raw(&json!({"op":"start"})).unwrap();
-    let error = daemon
-        .call_raw(&json!({"op":"task_check_projection","conversation":other["id"],"plan":plan_id,"id":"t1"}))
-        .unwrap_err();
-    assert!(error.contains("does not belong"), "{error}");
 }
 
 #[test]
@@ -1080,58 +1066,6 @@ fn checks_falls_back_only_when_old_daemon_rejects_operation() {
                     .to_string()
                     .contains("conversation does not own plan")
             );
-        }
-        server.join().unwrap();
-    }
-}
-
-#[test]
-fn check_projection_preserves_snapshot_and_legacy_fallback_without_masking_scope_errors() {
-    use std::os::unix::net::UnixListener;
-    for mode in 0..3 {
-        let dir = tempfile::tempdir().unwrap();
-        let listener = UnixListener::bind(antislop::lean::daemon::socket(dir.path())).unwrap();
-        let server = std::thread::spawn(move || {
-            let ops: &[&str] = match mode {
-                0 => &["task_check_projection", "task_checks"],
-                1 => &["task_check_projection", "task_checks", "task"],
-                _ => &["task_check_projection"],
-            };
-            for (index, op) in ops.iter().enumerate() {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut line = String::new();
-                BufReader::new(&stream).read_line(&mut line).unwrap();
-                let request: Value = serde_json::from_str(&line).unwrap();
-                assert_eq!(
-                    request,
-                    json!({"op":op,"conversation":"c","plan":"p","id":"t"})
-                );
-                let response = if mode == 2 {
-                    json!({"error":"conversation does not own plan"})
-                } else if index + 1 == ops.len() {
-                    json!({"data":{"id":"t","round":3,"report":"snapshot","checks":[{"id":"V01"}]}})
-                } else {
-                    json!({"error":format!("unknown variant `{op}`")})
-                };
-                writeln!(stream, "{response}").unwrap();
-            }
-        });
-        let result = Client::at(dir.path()).call(&Request::TaskCheckProjection {
-            conversation: "c".into(),
-            plan: "p".into(),
-            id: "t".into(),
-        });
-        if mode == 2 {
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("conversation does not own plan")
-            );
-        } else {
-            let reply = result.unwrap();
-            assert_eq!(reply["checks"][0]["id"], "V01");
-            assert_eq!(reply["round"], 3);
         }
         server.join().unwrap();
     }

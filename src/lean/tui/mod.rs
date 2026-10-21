@@ -111,15 +111,6 @@ pub enum Update {
         round: u64,
         task: Value,
     },
-    TaskChecks {
-        conversation: String,
-        plan: Option<String>,
-        generation: u64,
-        request_id: u64,
-        key: String,
-        round: u64,
-        task: Value,
-    },
     TaskFailed {
         conversation: String,
         generation: u64,
@@ -673,11 +664,6 @@ impl App {
             return;
         };
         let round = self.task_row_round(&key).unwrap_or(0);
-        let task_events = self.view.task_detail_events.get(&id).copied().unwrap_or(0);
-        let task_changed = self
-            .details
-            .as_ref()
-            .is_some_and(|details| details.fetched_task_events != task_events);
         self.task_request_id += 1;
         let request_id = self.task_request_id;
         if let Some(details) = self
@@ -689,24 +675,8 @@ impl App {
             details.fetched_generation = Some(self.generation);
             details.fetched_plan = Some(plan.clone());
             details.fetched_checks = self.view.task_check_events.get(&id).copied().unwrap_or(0);
-            details.fetched_task_events = task_events;
         }
-        let checks_only = self.details.as_ref().is_some_and(|details| {
-            !task_changed
-                && details.tab == CHECKS
-                && details
-                    .task
-                    .as_ref()
-                    .and_then(|task| task["round"].as_u64())
-                    == Some(round)
-        });
-        let request = if checks_only {
-            Request::TaskCheckProjection {
-                conversation: self.conversation.clone(),
-                plan: plan.clone(),
-                id,
-            }
-        } else if self
+        let request = if self
             .details
             .as_ref()
             .is_some_and(|details| details.tab == CHECKS)
@@ -729,29 +699,15 @@ impl App {
         let updates = self.updates.clone();
         std::thread::spawn(move || {
             let _ = updates.send(match client.call(&request) {
-                Ok(task) => {
-                    if checks_only {
-                        Update::TaskChecks {
-                            conversation,
-                            plan: Some(plan_id),
-                            generation,
-                            request_id,
-                            key,
-                            round,
-                            task,
-                        }
-                    } else {
-                        Update::Task {
-                            conversation,
-                            plan: Some(plan_id),
-                            generation,
-                            request_id,
-                            key,
-                            round,
-                            task,
-                        }
-                    }
-                }
+                Ok(task) => Update::Task {
+                    conversation,
+                    plan: Some(plan_id),
+                    generation,
+                    request_id,
+                    key,
+                    round,
+                    task,
+                },
                 Err(error) => Update::TaskFailed {
                     conversation,
                     generation,
@@ -1239,7 +1195,6 @@ impl App {
     }
 
     fn apply_update_inner(&mut self, update: Update) {
-        let checks_only = matches!(&update, Update::TaskChecks { .. });
         match update {
             Update::Config {
                 project,
@@ -1437,15 +1392,6 @@ impl App {
                 key,
                 round,
                 task,
-            }
-            | Update::TaskChecks {
-                conversation,
-                plan,
-                generation,
-                request_id,
-                key,
-                round,
-                task,
             } => {
                 if task["round"].as_u64().is_some_and(|actual| actual != round) {
                     return;
@@ -1471,7 +1417,7 @@ impl App {
                                 .is_none_or(|issued| Some(issued) == plan.as_ref())
                     })
                 {
-                    details.load_task(task, checks_only);
+                    details.load_task(task);
                 } else if conversation != self.conversation
                     && let Some(state) = self.conversation_states.get_mut(&conversation)
                     && state.task_request_id == request_id
@@ -1487,7 +1433,7 @@ impl App {
                                 .is_none_or(|issued| Some(issued) == plan.as_ref())
                     })
                 {
-                    details.load_task(task, checks_only);
+                    details.load_task(task);
                 }
             }
             Update::Diff {

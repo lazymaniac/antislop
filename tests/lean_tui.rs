@@ -6779,7 +6779,7 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
 }
 
 #[test]
-fn checks_refresh_requests_compact_authorized_projection_and_preserves_report() {
+fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
     use antislop::lean::tui::details::CHECKS;
     let dir = tempfile::tempdir().unwrap();
     let listener = UnixListener::bind(socket(dir.path())).unwrap();
@@ -6793,7 +6793,7 @@ fn checks_refresh_requests_compact_authorized_projection_and_preserves_report() 
                 .unwrap();
             let request: serde_json::Value = serde_json::from_str(&line).unwrap();
             if index == 1 {
-                assert_eq!(request["op"], "task_check_projection", "{request}");
+                assert_eq!(request["op"], "task_checks", "{request}");
                 assert_eq!(request["conversation"], "test-conv");
                 assert_eq!(request["plan"], "p1");
             }
@@ -6808,7 +6808,7 @@ fn checks_refresh_requests_compact_authorized_projection_and_preserves_report() 
             } else if index == 0 {
                 json!({"id":"u1","round":1,"report":"keep this report","checks":[]})
             } else {
-                json!({"id":"u1","round":1,"checks":[{"id":"V01","status":"passed"}]})
+                json!({"id":"u1","round":1,"report":"check refreshed report","checks":[{"id":"V01","status":"passed"}]})
             };
             writeln!(stream, "{}", json!({"data":data,"error":null})).unwrap();
         }
@@ -6830,7 +6830,7 @@ fn checks_refresh_requests_compact_authorized_projection_and_preserves_report() 
     });
     app.apply_update(updates.recv_timeout(Duration::from_secs(3)).unwrap());
     let task = app.details.as_ref().unwrap().task.as_ref().unwrap();
-    assert_eq!(task["report"], "keep this report");
+    assert_eq!(task["report"], "check refreshed report");
     assert_eq!(task["checks"][0]["status"], "passed");
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,

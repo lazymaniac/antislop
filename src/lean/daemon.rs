@@ -197,12 +197,6 @@ pub enum Request {
         plan: String,
         id: String,
     },
-    /// Current-round check rows without reports or Git IO.
-    TaskCheckProjection {
-        conversation: String,
-        plan: String,
-        id: String,
-    },
     /// Inspector snapshot and checks without a Git freshness fingerprint.
     TaskChecks {
         conversation: Option<String>,
@@ -357,11 +351,6 @@ enum WireRequest {
         id: String,
         #[serde(default)]
         scope_hash: Option<String>,
-    },
-    TaskCheckProjection {
-        conversation: String,
-        plan: String,
-        id: String,
     },
     TaskChecks {
         #[serde(default)]
@@ -599,15 +588,6 @@ impl From<Request> for WireRequest {
                 plan,
                 id,
                 scope_hash,
-            },
-            Request::TaskCheckProjection {
-                conversation,
-                plan,
-                id,
-            } => WireRequest::TaskCheckProjection {
-                conversation,
-                plan,
-                id,
             },
             Request::TaskChecks {
                 conversation,
@@ -881,15 +861,6 @@ impl From<WireRequest> for Request {
                     }
                 }
             }
-            WireRequest::TaskCheckProjection {
-                conversation,
-                plan,
-                id,
-            } => Request::TaskCheckProjection {
-                conversation,
-                plan,
-                id,
-            },
             WireRequest::TaskChecks {
                 conversation,
                 plan,
@@ -1410,15 +1381,6 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         } => {
             validate_project_conversation(core, project, &conversation)?;
             json!(core.set_comment(&conversation, id, &status)?)
-        }
-        Request::TaskCheckProjection {
-            conversation,
-            plan,
-            id,
-        } => {
-            validate_project_conversation(core, project, &conversation)?;
-            validate_conversation_plan(core, &conversation, &plan)?;
-            core.store.task_checks_in_plan(&plan, &id)?
         }
         Request::Task { plan, id } => {
             let conv = core.store.plan_conversation(&plan)?;
@@ -1982,21 +1944,6 @@ impl Client {
         // frontend connects. Only an unsupported operation permits fallback;
         // scope and other validation errors must reach the caller unchanged.
         let result = match (&result, request) {
-            (
-                Err(Error::Invalid(message)),
-                Request::TaskCheckProjection {
-                    conversation,
-                    plan,
-                    id,
-                },
-            ) if message.contains("unknown variant `task_check_projection`") => {
-                self.call(&Request::TaskChecks {
-                    conversation: Some(conversation.clone()),
-                    plan: plan.clone(),
-                    id: id.clone(),
-                })
-            }
-
             (
                 Err(Error::Invalid(message)),
                 Request::TaskChecks {

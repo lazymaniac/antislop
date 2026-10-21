@@ -757,13 +757,12 @@ recognized reliably. The formatter is pure and does not write raw failures to
 stderr or `daemon.log`. The `process_exit` event also retains the numeric exit
 code or signal separately.
 
-Check-event refreshes in the same round use `task_check_projection` with conversation, plan and
-task authorization. The response contains only `id`, `round`, and `checks`;
-it does not read reports or calculate filesystem freshness. Initial task details, verdict/task events,
-and changes of round use the full `task_checks` snapshot without Git freshness work.
-An unsupported projection falls back to `task_checks`; an unsupported
-`task_checks` falls back to scoped `task`, preserving compatibility with older
-daemons. Authorization and other validation errors never trigger fallback.
+Checks uses the existing conversation-scoped `task_checks` operation for both
+check events and task verdicts. It returns a full task snapshot with checks and
+performs no Git freshness calculation. The TUI applies all task snapshots through
+one `Update::Task` path, including reports and verdicts. On older daemons, only an
+unsupported `task_checks` operation triggers the existing fallback to scoped
+`task`. Authorization and other validation errors never trigger fallback.
 A failed details request gets one immediate recovery attempt on the next event
 batch, including an empty batch. Further failures back off exponentially from
 one second to at most 30 seconds, and identical errors do not re-raise a dismissed

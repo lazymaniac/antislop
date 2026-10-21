@@ -168,7 +168,6 @@ pub struct Details {
     pub reveal_check: bool,
     /// How many check events the last task fetch had seen.
     pub fetched_checks: u64,
-    pub fetched_task_events: u64,
     pub fetch_failures: u32,
     pub fetch_retry_after: Option<std::time::Instant>,
     pub fetch_error: Option<String>,
@@ -197,7 +196,6 @@ pub struct Details {
 impl Details {
     pub(super) fn fetch_failed(&mut self, error: &str) -> bool {
         self.fetched_round = None;
-        self.fetched_task_events = u64::MAX;
         self.fetch_failures = self.fetch_failures.saturating_add(1);
         // One immediate recovery attempt, then exponential backoff capped at 30s.
         let seconds = if self.fetch_failures == 1 {
@@ -212,18 +210,11 @@ impl Details {
         changed
     }
 
-    pub(super) fn load_task(&mut self, mut task: Value, checks_only: bool) {
+    pub(super) fn load_task(&mut self, task: Value) {
         self.fetch_failures = 0;
         self.fetch_retry_after = None;
         self.fetch_error = None;
-        if checks_only {
-            if let Some(complete) = &mut self.task {
-                complete["checks"] = task["checks"].take();
-                complete["round"] = task["round"].take();
-            }
-        } else {
-            self.task = Some(task);
-        }
+        self.task = Some(task);
     }
 
     pub fn new(key: String) -> Self {
@@ -240,7 +231,6 @@ impl Details {
             check: 0,
             reveal_check: false,
             fetched_checks: 0,
-            fetched_task_events: 0,
             fetch_failures: 0,
             fetch_retry_after: None,
             fetch_error: None,
