@@ -249,6 +249,22 @@ Required process:
 
 A minimal option record includes `option_id`, mechanism description, sources, requirements coverage, criterion results with evidence, dependencies, risks, unknowns, and maintenance cost. The decision identifies the chosen option, criterion version, justification, rejection reasons for each competitor, sensitivity-check result, and reopening conditions. New requirements, experimental results, or discovered libraries may invalidate the choice; sunk implementation work is not a reason to retain it.
 
+In the lean runtime, the global pre-plan comparison (`ensure_options`) is distinct
+from task-level `WorkKind::Options`. Plan finalization adds a read-only options
+prerequisite to each `writes=true` task lacking a direct one, after optional quality
+gates and independently of `policy.required_gates`. Existing shared options are
+reused and must cover every dependent writer. Startup validation always requires
+`routing.options` with valid executor and verifier profiles. Task options compare
+2–4 realistic alternatives under common criteria and end their report with
+`Selected: <id>`; this textual selection is an agent/verifier contract, not a
+structured decision parsed by the runtime. Approved dependency reports go to the
+writer and its independent verifier. The writer implements the selected variant
+or explicitly reports a departure with evidence and justification, including any
+requirement violation or uncovered task. A better variant or broken premise is
+reported with evidence rather than silently reopening the choice. Reporting it
+does not automatically stop the plan; the verifier checks the actual implementation
+and departure evidence independently. See [the session model](docs/session-model.md#options-before-each-writing-task).
+
 “Best” means the best-supported choice in the investigated space for current requirements and evidence. The system does not claim proof of a global optimum without grounds. The process follows criteria definition, alternative comparison, and uncertainty-control principles in [NASA Decision Analysis — S28](https://www.nasa.gov/reference/6-8-decision-analysis/); the contract and gate above are Architect's design.
 
 ## 7. Automatic swarm construction
@@ -1054,7 +1070,7 @@ Runtime tests are critical: incorrect acceptance or repeated external effects ca
 37. A multi-licensed package has an acceptable option: the report records that option and checks obligations rather than rejecting the label alone.
 38. A high-ranked preferred option violates one obligation: eligibility filtering excludes it before comparison.
 39. Comparisons use superficial alternatives or different benchmark conditions: the Options verifier rejects the decision and completes the investigation.
-40. An experiment finds a better option or undermines a significant premise: reopen selection; existing code cannot justify the worse option.
+40. An experiment finds a better option or undermines a significant premise: report it explicitly with evidence; existing code cannot justify the worse option. For task-level options, the selection remains binding unless a departure is explicitly justified, and the independent verifier checks the actual implementation and departure evidence. No silent switch or automatic plan stop follows from the report.
 
 ## 19. Risk catalog and mitigation mechanisms
 

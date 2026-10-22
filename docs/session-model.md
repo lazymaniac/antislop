@@ -333,6 +333,40 @@ stopped at the old options gate are recovered with their review notes at startup
 This work kind remains mandatory even when optional worker gates are disabled.
 
 
+### Options before each writing task
+
+The global pre-plan comparison above (`ensure_options`) supplies planning input;
+it does not replace task-level `WorkKind::Options` dependencies. When finalizing a
+plan, the runtime first adds optional quality gates, then runs `with_options`.
+Every task with `writes=true`, including writing quality gates, must have a direct
+options dependency. If it lacks one, the runtime inserts a read-only options task
+before it, inheriting its scope, original dependencies, and requirement, criterion
+and plan-item links. The writer retains its original dependencies and gains the
+new one. An existing direct options dependency is reused; shared options must
+cover every dependent writer. Normalization is idempotent and applies even with
+`policy.required_gates=false`. Configuration validation at startup always requires
+`routing.options` with valid executor and verifier profiles, regardless of that
+policy setting.
+
+Each generated options task compares 2–4 distinct realistic variants under common
+explicit criteria, excludes variants violating requirements before ranking, and
+selects the best-supported available approach with evidence and a condition that
+would justify departure. It reads files without implementing changes, inventing
+measurements or copying repository contents into its report. Missing evidence and
+assumptions must be named. Its complete report must end with exactly one line
+`Selected: <id>`, identifying the chosen variant. This is an agent and verifier
+contract; the runtime does not parse this line into a structured task decision.
+
+The scheduler waits for approved dependencies. Approved direct dependency reports,
+including options, are supplied to the initial worker and verifier prompts. The
+selection binds the writer: implement it or explicitly report and justify a
+departure with evidence, including any discovered requirement violation. A shared
+report that does not cover the writer's task must be reported as a gap. A better
+variant or broken premise must be reported openly, without silently changing or
+reopening the choice. Such a report does not automatically stop the plan. The
+independent verifier compares the actual implementation with the selection and
+checks the evidence and justification for any departure or coverage gap; the
+worker's declaration alone is not proof.
 
 ### Interview question cards
 

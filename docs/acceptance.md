@@ -56,11 +56,33 @@ verification against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8` is in
 | 37 | A multi-licensed package with an acceptable option | Dependencies obligation: the chosen option and its obligations stated | prompt |
 | 38 | A high-ranked variant misses an obligation | Options obligation: excluded before ranking | prompt |
 | 39 | Sham alternatives or unequal benchmark conditions | Options and performance obligations: real alternatives under the same conditions | prompt |
-| 40 | An experiment shows a better variant | Options obligation: the choice is reopened whatever is already built | prompt |
+| 40 | An experiment shows a better variant | Report the better variant or broken premise explicitly with evidence; the options selection remains binding unless a departure is explicitly justified. The verifier checks the implementation and departure evidence independently. No silent switch or automatic plan stop | prompt: options checklist and writer/verifier binding instructions; runtime with scripted CLIs: `lean_options::only_verifier_verdict_can_approve_worker_claims_and_departures` |
 
 RequirementLedger, PlanItemLedger and the requirements completion gate are
 implemented as [versioned records](requirement-ledgers.md). The remaining
 models listed below still use the lean obligation approach.
+
+## Task-level options and evidence
+
+Task-level options are separate from the global pre-plan `ensure_options`
+comparison. Runtime normalization adds a read-only `WorkKind::Options` dependency
+before every `writes=true` task lacking a direct options dependency, after optional
+quality gates and even when `policy.required_gates=false`. Shared options are
+reused and must cover each dependent writer. Startup configuration validation
+always requires `routing.options` and valid executor/verifier profiles. Evidence:
+`tasks::options_inherit_writer_context_and_precede_it`,
+`tasks::options_reuse_existing_dependency_and_resolve_id_collisions`,
+`finalization_adds_options_with_and_without_required_gates`, and
+`lean_options::orchestrator_plan_is_completed_before_each_writer_runs`.
+
+The options prompt requires 2–4 realistic alternatives, common criteria, exclusion
+of requirement violations before ranking, an evidence-supported selection, and a
+final `Selected: <id>` line. Approved options reports reach both writer and
+verifier as direct dependency reports. These content and binding obligations are
+prompt contracts independently checked by agents, rather than a runtime parser
+of the selection line. The scripted integration tests in `tests/lean_options.rs`
+exercise ordering, report delivery, implementation agreement and departure
+verdicts; they do not prove the quality of an arbitrary real model's decision.
 
 ## Deliberate departures from the design
 
