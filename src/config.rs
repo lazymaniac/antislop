@@ -361,6 +361,11 @@ impl Config {
             self.profile(&route.executor)?;
             self.profile(&route.verifier)?;
         }
+        require(
+            self.routing.contains_key(&WorkKind::Options),
+            "routing.options is required even when policy.required_gates = false; \
+             add an options route with executor and verifier profiles",
+        )?;
         // The gates added to plans that change code need their routes now,
         // not when a plan reaches them.
         if self.policy.required_gates {
@@ -675,6 +680,23 @@ mod tests {
             Config::from_toml(&example.replace("mode = \"task-worktrees\"", "mode = \"worktree\""))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn options_route_is_required_even_without_required_gates() {
+        let text = include_str!("../examples/antislop.toml");
+        for required_gates in [true, false] {
+            let source = text.replace(
+                "required_gates = true",
+                &format!("required_gates = {required_gates}"),
+            );
+            let mut config = Config::from_toml(&source).unwrap();
+            let route = config.routing.remove(&WorkKind::Options).unwrap();
+            let error = config.validate().unwrap_err().to_string();
+            assert!(error.contains("routing.options is required"), "{error}");
+            config.routing.insert(WorkKind::Options, route);
+            assert!(config.validate().is_ok());
+        }
     }
 
     #[test]
