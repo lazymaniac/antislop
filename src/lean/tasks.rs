@@ -4,6 +4,7 @@
 use crate::{Error, Result, config::WorkKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -653,6 +654,17 @@ pub fn missing_quality_agents(tasks: &[TaskSpec]) -> Vec<&'static PredefinedAgen
         .collect()
 }
 
+/// Reserve a task ID, keeping the base when free and otherwise trying -2, -3, ….
+fn reserve_task_id(base: &str, ids: &mut BTreeSet<String>) -> String {
+    let mut id = base.to_owned();
+    let mut suffix = 2;
+    while !ids.insert(id.clone()) {
+        id = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    id
+}
+
 /// The plan with every missing required quality gate appended, so a plan that
 /// changes code is always statically checked, tested and checked against the
 /// user's requirements, and audited for structure, security and performance.
@@ -683,13 +695,9 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
     let mut ordered = missing;
     ordered.sort_by_key(|agent| GATE_KINDS.iter().position(|kind| *kind == agent.kind));
     let mut refactoring: Option<String> = None;
+    let mut ids = tasks.iter().map(|task| task.id.clone()).collect();
     for agent in ordered {
-        let mut id = agent.id.to_owned();
-        let mut n = 2;
-        while tasks.iter().any(|t| t.id == id) {
-            id = format!("{}-{n}", agent.id);
-            n += 1;
-        }
+        let id = reserve_task_id(agent.id, &mut ids);
         let mut depends_on = writers.clone();
         match agent.kind {
             WorkKind::Integration => depends_on.extend(gates.iter().cloned()),
@@ -783,7 +791,6 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
 /// Run after optional quality gates, including when required gates are disabled.
 /// Input order is preserved; valid plans remain topologically ordered.
 pub fn with_options(tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
-    use std::collections::BTreeSet;
     let options: BTreeSet<_> = tasks
         .iter()
         .filter(|task| task.kind == WorkKind::Options)
@@ -793,13 +800,7 @@ pub fn with_options(tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
     let mut result = Vec::with_capacity(tasks.len());
     for mut task in tasks {
         if task.writes && !task.depends_on.iter().any(|id| options.contains(id)) {
-            let base = format!("{}-options", task.id);
-            let mut id = base.clone();
-            let mut suffix = 2;
-            while !ids.insert(id.clone()) {
-                id = format!("{base}-{suffix}");
-                suffix += 1;
-            }
+            let id = reserve_task_id(&format!("{}-options", task.id), &mut ids);
             result.push(TaskSpec {
                 id: id.clone(),
                 requirement_ids: task.requirement_ids.clone(),
@@ -2205,6 +2206,31 @@ mod tests {
         assert_eq!(full[2].id, "writer-options-3");
         let read_only = vec![options_test_task("read", false)];
         assert_eq!(with_options(read_only.clone()), read_only);
+    }
+
+    #[test]
+    fn required_gates_resolve_id_collisions_and_remain_idempotent() {
+        let input = vec![
+            options_test_task("quality-refactoring", false),
+            options_test_task("quality-refactoring-2", false),
+            options_test_task("writer", true),
+        ];
+        let full = with_required_agents(input);
+        validate(&full).unwrap();
+        let refactoring = full
+            .iter()
+            .find(|task| task.kind == WorkKind::Refactoring)
+            .unwrap();
+        assert_eq!(refactoring.id, "quality-refactoring-3");
+        for task in full.iter().filter(|task| {
+            matches!(
+                task.kind,
+                WorkKind::StaticAnalysis | WorkKind::Testing | WorkKind::Integration
+            )
+        }) {
+            assert!(task.depends_on.contains(&refactoring.id));
+        }
+        assert_eq!(with_required_agents(full.clone()), full);
     }
 
     #[test]
