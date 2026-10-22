@@ -23,3 +23,19 @@ pub fn trust(project: &Path) {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     Registry::at(&dir).trust(project).unwrap();
 }
+
+pub fn install_probe_cli(path: &Path, source: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    // Reuse the canonical protocol without loading support/mod.rs twice in
+    // integration crates that already declare their own support module.
+    let source = source.replacen(
+        "prompt = sys.argv[-1]",
+        &format!(
+            "prompt = sys.argv[-1]\n{}",
+            include_str!("../support/ledger_cli.py")
+        ),
+        1,
+    );
+    std::fs::write(path, source).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
