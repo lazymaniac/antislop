@@ -1733,6 +1733,7 @@ impl Core {
                         &project,
                         &worktree,
                         &config,
+                        &AtomicBool::new(false),
                     )?;
                     require(
                         task.status == status::APPROVED,
@@ -2071,9 +2072,7 @@ impl Core {
         Ok(tasks)
     }
 
-    /// Writers in worktrees start from `HEAD`: the user's uncommitted
-    /// changes are not part of their work, and the user is told so before
-    /// they start (design §11.1).
+    /// Tell the user that worktree writers inherit their local changes.
     fn warn_of_uncommitted(&self, conversation: &str, writes: bool) {
         let config = self.config_snapshot();
         if !writes || config.workspace.mode == WorkspaceMode::InPlace {
@@ -3145,6 +3144,11 @@ impl Core {
         task: &mut Task,
         cancel: &AtomicBool,
     ) -> Result<()> {
+        let integration_repairs = task
+            .feedback
+            .as_ref()
+            .and_then(|feedback| feedback["integration_repairs"].as_u64())
+            .unwrap_or(0);
         let config = self.config_snapshot();
         self.store.assert_task_inputs(task)?;
         let mut spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
@@ -3256,7 +3260,7 @@ impl Core {
             && verdict.approved
         {
             if let Some(path) = &worktree {
-                return self.integrate(conversation, task, &spec, &project, path, &config);
+                return self.integrate(conversation, task, &spec, &project, path, &config, cancel);
             }
             if in_place {
                 return self.finish_in_place(conversation, task, &spec, &project, &config);
@@ -3370,6 +3374,11 @@ impl Core {
             // from the stored report; an empty or damaged block stays in
             // the report whole and the round falls back to the diffstat
             // (writers) or the report's first text line (read-only).
+            if let Some(question) = tasks::integration_question(&report) {
+                task.report = Some(report);
+                task.verdict = None;
+                return self.stop(conversation, task, status::NEEDS_USER, Some(&question));
+            }
             let (report, stated) = tasks::parse_effect(&report);
             task.report = Some(report.clone());
             let mut effect_text = stated;
@@ -3538,6 +3547,10 @@ impl Core {
                 "effect_cut": effect_cut,
                 "coverage": tasks::coverage(&verdict, &obligations),
             }));
+            if integration_repairs > 0 {
+                task.feedback.as_mut().expect("round feedback")["integration_repairs"] =
+                    json!(integration_repairs);
+            }
             if incomplete {
                 // The worker cannot fix a verifier that skips its checks.
                 return self.stop(
@@ -3565,7 +3578,7 @@ impl Core {
             if verdict.approved {
                 return match &worktree {
                     Some(path) => {
-                        self.integrate(conversation, task, &spec, &project, path, &config)
+                        self.integrate(conversation, task, &spec, &project, path, &config, cancel)
                     }
                     None if in_place => {
                         self.finish_in_place(conversation, task, &spec, &project, &config)
@@ -3943,16 +3956,18 @@ impl Core {
     }
 
     /// Lands an approved writer's work on the user's branch as one change.
-    /// Anything that would touch the user's own edits, or conflict, waits for
-    /// the user with the work kept on its branch.
+    /// Merge against the writer's starting snapshot, preserving concurrent
+    /// edits. Conflicts go back to the writer before asking the user.
+    #[allow(clippy::too_many_arguments)]
     fn integrate(
-        &self,
+        self: &Arc<Self>,
         conversation: &str,
         task: &mut Task,
         spec: &TaskSpec,
         project: &Path,
         worktree: &Path,
         config: &Config,
+        cancel: &AtomicBool,
     ) -> Result<()> {
         let _integration = self.integrating.lock().expect("integration mutex");
         if self.defer_agent_work(conversation, task)? {
@@ -4001,19 +4016,37 @@ impl Core {
         task.result = Some(change.clone());
         let outcome = {
             self.store.assert_task_inputs(task)?;
-            let changed = git::changed_files(project, &base, &change)?;
-            let dirty = git::uncommitted(project)?;
-            let protected: Vec<String> = self
-                .in_place_user_edits(project, &base)?
-                .into_iter()
-                .filter(|path| changed.contains(path) && dirty.contains(path))
-                .collect();
-            if protected.is_empty() {
-                git::integrate(project, &base, &change, policy.local_commits)?
-            } else {
-                git::Integration::UserEdits(protected)
-            }
+            git::integrate(project, &base, &change, policy.local_commits)?
         };
+        let conflict = match &outcome {
+            git::Integration::Conflict(files) => Some((Outcome::Conflict, files)),
+            git::Integration::UserEdits(files) => Some((Outcome::UserEdits, files)),
+            _ => None,
+        };
+        if let Some((kind, files)) = conflict
+            && task
+                .feedback
+                .as_ref()
+                .and_then(|feedback| feedback["integration_repairs"].as_u64())
+                .unwrap_or(0)
+                < u64::from(tasks::MAX_ROUNDS)
+        {
+            let onto = git::snapshot(project, "Current project for conflict resolution")?;
+            // No integration lock while the agent works. A later project edit
+            // is merged against this snapshot when the repaired result lands.
+            drop(_integration);
+            return self.repair_integration(
+                conversation,
+                task,
+                spec,
+                worktree,
+                &onto,
+                &change,
+                kind,
+                files,
+                cancel,
+            );
+        }
         let landed = git::changed_files(project, &base, &change).unwrap_or_default();
         let (status, text) = match outcome {
             git::Integration::Committed(commit) => {
@@ -4094,6 +4127,110 @@ impl Core {
             return self.set_status(conversation, task, status);
         }
         self.stop(conversation, task, status, Some(&text))
+    }
+
+    /// Resolve in the allocated worktree, then run the independent verifier
+    /// again. A semantic choice is the resolver's explicit user question.
+    #[allow(clippy::too_many_arguments)]
+    fn repair_integration(
+        self: &Arc<Self>,
+        conversation: &str,
+        task: &mut Task,
+        spec: &TaskSpec,
+        worktree: &Path,
+        onto: &str,
+        change: &str,
+        outcome: Outcome,
+        files: &[String],
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        let attempts = task
+            .feedback
+            .as_ref()
+            .and_then(|feedback| feedback["integration_repairs"].as_u64())
+            .unwrap_or(0)
+            + 1;
+        task.feedback
+            .get_or_insert_with(|| json!({"round": task.round}))["integration_repairs"] =
+            json!(attempts);
+        let base = task.base.as_deref().unwrap_or_default().to_owned();
+        let prompt = format!(
+            "Automatic integration conflict in {}. Resolve it in your allocated worktree. \
+             Original base: {base}; your result: {change}; current project snapshot: {onto}.\n\
+             Inspect git diff {base} {change} and git diff {base} {onto}, plus the relevant \
+             files and tests. Combine both intentions, preserving current local user edits \
+             and the task's behavior. Edit only task paths in this worktree; never modify \
+             the primary working tree or another worktree. The runtime will use {onto} \
+             as the new base and independently verify your repaired result before landing. \
+             Do not merge unrelated snapshot paths into your result.\n\
+             Resolve mechanical conflicts yourself. If the versions represent an unclear \
+             product or behavior choice, do not guess or silently pick ours/theirs. Return \
+             a fenced integration_question block describing the conflicting intentions, \
+             the concrete alternatives and a question asking the user which to accept. \
+             Otherwise resolve the files and report what you preserved and how you tested it.",
+            files.join(", "),
+        );
+        self.set_status(conversation, task, status::WORKING)?;
+        let worker = format!("worker:{}", task.id);
+        let setup = TurnSetup {
+            conversation,
+            plan_id: Some(task.plan_id.clone()),
+            role: worker.clone(),
+            profile: self
+                .config_snapshot()
+                .resolve(spec.kind, RoleKind::Executor),
+            cwd: worktree.to_path_buf(),
+            add_dirs: vec![],
+            access: agent::Access::Write,
+            upto_message: 0,
+        };
+        let Some(answer) = self.turn(setup, cancel, |_| prompt)? else {
+            return self.stop_task(conversation, task, &worker, cancel);
+        };
+        let report = self.post(conversation, Some(&task.plan_id), &spec.id, &answer)?;
+        if let Some(question) = tasks::integration_question(&report) {
+            task.verdict = None;
+            task.report = Some(report);
+            land(
+                task,
+                outcome,
+                "run",
+                &question,
+                None,
+                Some(&branch(task)),
+                files,
+            );
+            return self.stop(conversation, task, status::NEEDS_USER, Some(&question));
+        }
+        self.store.assert_task_inputs(task)?;
+        // Invalidate approval before rebuilding the private branch, including
+        // across interruption between the Git operations and the row update.
+        task.report = Some(report);
+        task.verdict = None;
+        task.feedback = Some(json!({"round": task.round, "integration_repairs": attempts}));
+        self.store.update_task(task)?;
+        let result = git::transplant_repair(
+            worktree,
+            &base,
+            onto,
+            &format!("{} (conflict resolution)", spec.title),
+        )?;
+        task.base = Some(onto.to_owned());
+        task.result = Some(result);
+        self.store.update_task(task)?;
+        let verifier = format!("verifier:{}", task.id);
+        self.store.add_mail(conversation, &verifier, &Mail {
+            id: 0,
+            sender: RUNTIME.into(),
+            recipient: verifier.clone(),
+            kind: "agent_work".into(),
+            text: format!("Verify the conflict resolution independently. Compare original task delta: git diff {base} {change}; concurrent project edits: git diff {base} {onto}. Confirm both intentions survive in {} and that no unrelated project edits are reverted. Reject silent ours/theirs choices and unresolved conflict markers. If a behavior choice needs the user, require an explicit integration_question from the worker.", files.join(", ")),
+            created_ms: 0,
+            delivered_turn: None,
+            delivered_ms: None,
+            state: "queued".into(),
+        })?;
+        self.set_status(conversation, task, status::QUEUED)
     }
 
     /// Protect dirty paths unless their starting version is exactly the

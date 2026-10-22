@@ -409,7 +409,7 @@ pub enum Integration {
     /// Applied to the working tree, left for the user to commit.
     Applied,
     Conflict(Vec<String>),
-    /// The user has uncommitted edits in files the result changes.
+    /// The result conflicts with uncommitted edits.
     UserEdits(Vec<String>),
 }
 
@@ -453,30 +453,17 @@ pub fn integrate_scoped(
         return Ok(Integration::Applied);
     }
 
-    // Not `ok()`: trimming would eat the leading space of " M path".
-    let status = git(project, &["status", "--porcelain=v1", "-z"])?;
-    let dirty: Vec<String> = String::from_utf8_lossy(&status.stdout)
-        .split('\0')
-        .filter(|entry| entry.len() > 3)
-        .map(|entry| entry[3..].to_owned())
-        .filter(|path| {
-            if let Some(allowed) = allowed_files {
-                // If allowed_files was given, the user explicitly consented to overwrite allowed_files.
-                // Any OTHER files touched by this task that are dirty in the worktree remain protected.
-                files.contains(path) && !allowed.contains(path)
-            } else {
-                target_files.contains(path)
-            }
-        })
-        .collect();
-    if !dirty.is_empty() {
-        return Ok(Integration::UserEdits(dirty));
-    }
-
-    // A writer may start from a snapshot of uncommitted user changes. Merge
-    // against its committed ancestor; restore only paths the worker changed.
+    // Merge the worker's delta from its actual starting snapshot, including
+    // local edits it inherited, into the current working tree. Dirty paths
+    // alone are not conflicts; disjoint edits in the same file can merge.
+    let dirty = uncommitted(project)?;
+    let onto = if dirty.is_empty() {
+        head(project)?
+    } else {
+        snapshot(project, "Working tree before integration")?
+    };
     let committed_base = common_base(project, base, "HEAD")?;
-    let merge_base = format!("--merge-base={committed_base}");
+    let merge_base = format!("--merge-base={base}");
     let check = git(
         project,
         &[
@@ -484,7 +471,7 @@ pub fn integrate_scoped(
             "--write-tree",
             "--name-only",
             &merge_base,
-            "HEAD",
+            &onto,
             change,
         ],
     )?;
@@ -497,6 +484,9 @@ pub fn integrate_scoped(
             .map(str::to_owned)
             .collect();
         if !conflicts.is_empty() {
+            if conflicts.iter().any(|path| dirty.contains(path)) {
+                return Ok(Integration::UserEdits(conflicts));
+            }
             return Ok(Integration::Conflict(conflicts));
         }
     }
@@ -507,7 +497,11 @@ pub fn integrate_scoped(
         )));
     }
 
-    if allowed_files.is_none() && target_files.len() == files.len() && committed_base == base {
+    if dirty.is_empty()
+        && allowed_files.is_none()
+        && target_files.len() == files.len()
+        && committed_base == base
+    {
         if commit {
             ok(
                 project,
@@ -546,6 +540,17 @@ pub fn integrate_scoped(
             Ok(Integration::Applied)
         }
     }
+}
+
+/// Rebuild a repaired result on the current project snapshot, carrying only
+/// the writer's changed paths. `worktree` must be the allocated task worktree;
+/// unrelated stale files in it must never revert concurrent project edits.
+pub fn transplant_repair(worktree: &Path, base: &str, onto: &str, message: &str) -> Result<String> {
+    let repaired = commit_all(worktree, message)?;
+    let files = changed_files(worktree, base, &repaired)?;
+    ok(worktree, &["reset", "--hard", onto])?;
+    write_files(worktree, &repaired, &files)?;
+    commit_all(worktree, message)
 }
 
 /// Applies the squashed commit `change` (made on `base`) to the project's
@@ -760,6 +765,59 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(project.path().join("a.txt")).unwrap(),
             "changed\n"
+        );
+    }
+
+    #[test]
+    fn inherited_local_edits_are_a_merge_base_in_both_commit_modes() {
+        for commit in [false, true] {
+            let project = repo();
+            std::fs::write(project.path().join("a.txt"), "user draft\n").unwrap();
+            std::fs::write(project.path().join("b.txt"), "unrelated draft\n").unwrap();
+            ok(project.path(), &["add", "b.txt"]).unwrap();
+            let index_before = ok(project.path(), &["ls-files", "--stage", "b.txt"]).unwrap();
+            let base = snapshot(project.path(), "starting edits").unwrap();
+            let trees = tempfile::tempdir().unwrap();
+            let worktree = trees.path().join("worker");
+            add_worktree(project.path(), &worktree, "antislop/local", &base).unwrap();
+            std::fs::write(worktree.join("a.txt"), "user draft\nworker addition\n").unwrap();
+            commit_all(&worktree, "work").unwrap();
+            let change = squash(&worktree, &base, "Task local").unwrap();
+            let outcome = integrate(project.path(), &base, &change, commit).unwrap();
+            assert!(matches!(
+                outcome,
+                Integration::Applied | Integration::Committed(_)
+            ));
+            assert_eq!(
+                std::fs::read_to_string(project.path().join("a.txt")).unwrap(),
+                "user draft\nworker addition\n"
+            );
+            assert_eq!(
+                std::fs::read_to_string(project.path().join("b.txt")).unwrap(),
+                "unrelated draft\n"
+            );
+            assert_eq!(
+                ok(project.path(), &["ls-files", "--stage", "b.txt"]).unwrap(),
+                index_before
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_disjoint_edits_in_one_dirty_file_merge() {
+        let project = repo();
+        std::fs::write(project.path().join("a.txt"), "first\n2\n3\n4\nlast\n").unwrap();
+        commit_all(project.path(), "multiline").unwrap();
+        let (_trees, base, change) =
+            worker_change(project.path(), "a.txt", "worker\n2\n3\n4\nlast\n");
+        std::fs::write(project.path().join("a.txt"), "first\n2\n3\n4\nuser\n").unwrap();
+        assert_eq!(
+            integrate(project.path(), &base, &change, false).unwrap(),
+            Integration::Applied
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("a.txt")).unwrap(),
+            "worker\n2\n3\n4\nuser\n"
         );
     }
 

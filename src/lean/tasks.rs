@@ -107,6 +107,12 @@ fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
     Some((remaining, rest[..end].trim()))
 }
 
+/// A conflict resolver's explicit request for a user decision.
+pub fn integration_question(answer: &str) -> Option<String> {
+    let (_, question) = fenced(answer, "integration_question")?;
+    (!question.trim().is_empty()).then(|| question.trim().to_owned())
+}
+
 /// A worker's optional own one-line effect: a ```effect block in the same
 /// answer it reports in, so no extra model call is spent asking for it.
 /// The last such block wins (same rule as [`fenced`]); its closing fence

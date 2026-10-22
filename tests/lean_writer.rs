@@ -76,6 +76,26 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
     (codex, agy)
 }
 
+/// Simulate a user editing the primary tree after the worker took its base.
+fn fake_clis_with_concurrent_edit(
+    dir: &Path,
+    project: &Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (codex, agy) = fake_clis(dir);
+    let script = std::fs::read_to_string(&agy).unwrap();
+    let injection = format!(
+        "session = \"worker\"\n    if not os.path.exists({marker:?}):\n        open({marker:?}, \"w\").close()\n        with open({file:?}, \"w\") as primary:\n            primary.write(\"user draft\\n\")",
+        marker = dir.join("edited-once"),
+        file = project.join("hello.txt"),
+    );
+    let script = script.replace("elif \"You verify\" in prompt:", "elif \"You verify\" in prompt or \"account again\" in prompt:").replace("session = \"worker\"", &injection).replace(
+        "answer = cover(answer)",
+        "if \"Automatic integration conflict\" in prompt:\n    answer = \"```integration_question\\nuncommitted edits in hello.txt: keep the user draft or accept the worker greeting?\\n```\"\nanswer = cover(answer)",
+    );
+    std::fs::write(&agy, script).unwrap();
+    (codex, agy)
+}
+
 fn config(codex: &Path, agy: &Path) -> Config {
     config_with(codex, agy, |text| text)
 }
@@ -326,7 +346,51 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
 }
 
 #[test]
-fn a_writer_never_touches_files_the_user_is_editing() {
+fn a_conflict_returns_to_the_writer_and_the_repair_is_verified_before_landing() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
+    let script = std::fs::read_to_string(&agy).unwrap().replace(
+        "answer = \"```integration_question\\nuncommitted edits in hello.txt: keep the user draft or accept the worker greeting?\\n```\"",
+        "with open(\"hello.txt\", \"w\") as repaired:\n        repaired.write(\"user draft\\nfrom worker\\n\")\n    answer = \"Preserved the user draft and added the worker greeting.\"",
+    ).replace("elif \"You verify\" in prompt:", "elif \"You verify\" in prompt or \"account again\" in prompt:");
+    let script = script.replace(
+        "primary.write(\"user draft\\n\")",
+        &format!("primary.write(\"user draft\\n\")\n        with open({:?}, \"w\") as unrelated:\n            unrelated.write(\"concurrent README\\n\")", project.join("README")),
+    ).replace(
+        "session = \"verifier\"",
+        &format!("session = \"verifier\"\n    assert open({:?}).read() == \"user draft\\n\", \"unverified repair touched primary tree\"", project.join("hello.txt")),
+    );
+    std::fs::write(&agy, script).unwrap();
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert_eq!(task.round, 2, "a fresh verifier round checks the repair");
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user draft\nfrom worker\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("README")).unwrap(),
+        "concurrent README\n"
+    );
+    assert_eq!(
+        core.diff(&conversation, &task.plan_id, "t1").unwrap()["files"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "stale unrelated worktree files are not part of the repaired delta"
+    );
+    let calls = std::fs::read_to_string(dir.path().join("calls.jsonl")).unwrap();
+    assert!(calls.contains("Automatic integration conflict"));
+    assert!(calls.contains("Verify the conflict resolution independently"));
+    assert!(calls.contains("integration_question"));
+}
+
+#[test]
+fn a_writer_integrates_over_the_local_changes_it_started_with() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
     std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
@@ -335,20 +399,20 @@ fn a_writer_never_touches_files_the_user_is_editing() {
     let conversation = run_plan(&core, &project);
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "needs_user");
-    let report = task.report.as_deref().unwrap();
-    assert!(
-        report.contains("uncommitted edits in hello.txt"),
-        "{report}"
-    );
+    assert_eq!(task.status, "approved", "{:?}", task.report);
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
-        "user draft\n"
+        "from worker\n"
     );
-    let branch = format!("antislop/{}", &task.id[..8]);
     assert_eq!(
-        git(&project, &["show", &format!("{branch}:hello.txt")]),
-        "from worker"
+        git(
+            &project,
+            &[
+                "show",
+                &format!("{}:hello.txt", task.base.as_ref().unwrap())
+            ]
+        ),
+        "user draft"
     );
     // The user was told before the writer started.
     let notices: Vec<_> = core
@@ -381,8 +445,7 @@ fn a_writer_never_touches_files_the_user_is_editing() {
 fn resuming_integrates_an_approved_change_once_the_user_is_done() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
-    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
-    let (codex, agy) = fake_clis(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
     let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
@@ -410,7 +473,10 @@ fn resuming_integrates_an_approved_change_once_the_user_is_done() {
         .lines()
         .filter(|line| line.contains("accept-edits"))
         .count();
-    assert_eq!(calls_after, calls_before, "no new worker turn");
+    assert!(
+        calls_after > calls_before,
+        "the worker resolves the choice and is verified again"
+    );
     assert!(core.resume_plan(&conversation, &task.plan_id).is_err());
 }
 
@@ -1016,8 +1082,7 @@ fn a_writer_that_changes_nothing_reports_no_changes() {
 fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
-    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
-    let (codex, agy) = fake_clis(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
 
@@ -1048,8 +1113,7 @@ fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
 fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
-    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
-    let (codex, agy) = fake_clis(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
     let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
@@ -1075,8 +1139,8 @@ fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
         feedback["integration"]["detail"]
             .as_str()
             .unwrap()
-            .contains("conflicts with the current branch in hello.txt"),
-        "the raw conflict reason is kept"
+            .contains("keep the user draft or accept the worker greeting?"),
+        "the resolver asks the user which behavior to accept"
     );
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
@@ -1244,8 +1308,7 @@ fn a_read_only_card_says_not_applicable_and_counts_only_real_obligations() {
 fn a_retry_invalidates_the_earlier_rounds_card_result() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
-    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
-    let (codex, agy) = fake_clis(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     // A retried round resumes the verifier's session, so its prompt is a
     // follow-up; the stub must answer those as a verifier, not a worker.
     let script = std::fs::read_to_string(&agy).unwrap().replace(
@@ -1310,8 +1373,7 @@ fn a_retry_invalidates_the_earlier_rounds_card_result() {
 fn a_recovery_integration_names_itself_on_the_card() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
-    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
-    let (codex, agy) = fake_clis(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
     let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
@@ -1361,8 +1423,7 @@ fn a_recovery_integration_names_itself_on_the_card() {
 fn keeping_the_branch_by_recovery_reports_the_branch_on_the_card() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
-    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
-    let (codex, agy) = fake_clis(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
     let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
@@ -1399,8 +1460,7 @@ fn keeping_the_branch_by_recovery_reports_the_branch_on_the_card() {
 fn a_force_approval_puts_the_users_word_on_the_card() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
-    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
-    let (codex, agy) = fake_clis(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
     let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
@@ -1431,8 +1491,7 @@ fn a_force_approval_puts_the_users_word_on_the_card() {
 fn cancelling_a_dependency_cannot_discard_the_dependent_task() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
-    std::fs::write(project.join("hello.txt"), "user draft\n").unwrap();
-    let (codex, agy) = fake_clis(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     // The plan now has a second task waiting on the first.
     let script = std::fs::read_to_string(&codex).unwrap().replace(
         r#""verifier": {"focus": "file content"}}]}"#,
