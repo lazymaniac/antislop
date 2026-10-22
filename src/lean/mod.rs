@@ -2364,24 +2364,17 @@ impl Core {
             }
         }
         match plan {
-            Some(Ok(specs)) => {
-                let specs = if config.policy.required_gates {
-                    tasks::with_required_agents(specs)
-                } else {
-                    specs
-                };
-                self.propose(
-                    conversation,
-                    &project,
-                    &text,
-                    PlanProposal {
-                        config: &config,
-                        specs: &specs,
-                    },
-                    addressed.as_deref(),
-                    cancel,
-                )?
-            }
+            Some(Ok(specs)) => self.propose(
+                conversation,
+                &project,
+                &text,
+                PlanProposal {
+                    config: &config,
+                    specs: &specs,
+                },
+                addressed.as_deref(),
+                cancel,
+            )?,
             Some(Err(error)) => {
                 let retrying =
                     if let Some(turn) = self.store.last_orchestration_turn(conversation)? {
@@ -2438,6 +2431,10 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<()> {
         let PlanProposal { config, specs } = proposal;
+        // Every proposal, including format repairs and comment revisions, is
+        // finalized before persistence, gap checks, review and graph rendering.
+        let finalized = finalize_plan(specs.to_vec(), config.policy.required_gates);
+        let specs = finalized.as_slice();
         let run = match self.ensure_requirements(conversation, cancel) {
             Ok(run) => run,
             Err(error) => {
@@ -4637,6 +4634,16 @@ pub fn comment_label(target: &str, plan: &[Task]) -> String {
     }
 }
 
+/// Add options after quality gates so every writer, including gates, is covered.
+fn finalize_plan(specs: Vec<TaskSpec>, required_gates: bool) -> Vec<TaskSpec> {
+    let specs = if required_gates {
+        tasks::with_required_agents(specs)
+    } else {
+        specs
+    };
+    tasks::with_options(specs)
+}
+
 /// What a plan that changes code lacks of the agents the pool makes required
 /// before the change (the gates after it are added by the runtime): told to
 /// the plan verifier, who rejects the plan for it.
@@ -4779,7 +4786,35 @@ mod reliability_tests {
     use super::*;
 
     #[test]
-    fn writer_base_includes_both_dependency_chains_and_local_user_changes() {
+    fn finalization_adds_options_with_and_without_required_gates() {
+        let writer: TaskSpec = serde_json::from_value(json!({
+            "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
+            "kind": "implementation", "writes": true, "scope": ["src/"],
+            "verifier": {"focus": "Check change"}
+        }))
+        .unwrap();
+        for required_gates in [false, true] {
+            let input = vec![writer.clone()];
+            let specs = finalize_plan(input.clone(), required_gates);
+            assert_eq!(specs, finalize_plan(input, required_gates));
+            assert_eq!(specs, finalize_plan(specs.clone(), required_gates));
+            if required_gates {
+                assert!(tasks::missing_quality_agents(&specs).is_empty());
+                assert!(specs.iter().filter(|spec| spec.writes).count() > 1);
+            } else {
+                assert_eq!(specs.len(), 2);
+                assert!(!tasks::missing_quality_agents(&specs).is_empty());
+            }
+            for writer in specs.iter().filter(|spec| spec.writes) {
+                assert!(writer.depends_on.iter().any(|id| specs.iter().any(|spec| {
+                    spec.id == *id && spec.kind == WorkKind::Options && !spec.writes
+                })));
+            }
+        }
+    }
+
+    #[test]
+    fn writer_base_through_options_includes_both_dependency_chains_and_local_user_changes() {
         let project = tempfile::tempdir().unwrap();
         let root = project.path();
         let init = std::process::Command::new("git")
@@ -4808,7 +4843,32 @@ mod reliability_tests {
             })
         })
         .collect();
-        let mut tasks = core.store.add_plan(&conversation.id, &specs).unwrap();
+        let specs = finalize_plan(
+            specs
+                .into_iter()
+                .map(|spec| serde_json::from_value(spec).unwrap())
+                .collect(),
+            false,
+        );
+        let values: Vec<_> = specs
+            .iter()
+            .map(|spec| serde_json::to_value(spec).unwrap())
+            .collect();
+        let stored = core.store.add_plan(&conversation.id, &values).unwrap();
+        for mut options in stored
+            .iter()
+            .filter(|task| task.spec["kind"] == "options")
+            .cloned()
+        {
+            assert_eq!(options.spec["writes"], false);
+            assert!(options.base.is_none() && options.result.is_none());
+            options.status = status::APPROVED.into();
+            core.store.update_task(&options).unwrap();
+        }
+        let mut tasks: Vec<_> = stored
+            .into_iter()
+            .filter(|task| task.spec["writes"] == true)
+            .collect();
         for index in 0..4 {
             let base = if index % 2 == 0 {
                 head.clone()
@@ -4832,6 +4892,15 @@ mod reliability_tests {
         std::fs::write(root.join("user.txt"), "local edit\n").unwrap();
         std::fs::write(root.join("draft.txt"), "untracked\n").unwrap();
         let spec: TaskSpec = serde_json::from_value(tasks[4].spec.clone()).unwrap();
+        let dependencies = core.dependency_tasks(&tasks[4].plan_id, &spec).unwrap();
+        assert!(
+            dependencies
+                .iter()
+                .any(|task| task.spec["kind"] == "options")
+        );
+        for writer in &tasks[..4] {
+            assert!(dependencies.iter().any(|task| task.id == writer.id));
+        }
         let base = core.writer_base(&tasks[4].plan_id, &spec, root).unwrap();
         let output = std::process::Command::new("git")
             .args(["show", &format!("{base}:config.txt")])
