@@ -779,6 +779,57 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
     tasks
 }
 
+/// Add a direct, read-only options prerequisite to every writer lacking one.
+/// Run after optional quality gates, including when required gates are disabled.
+/// Input order is preserved; valid plans remain topologically ordered.
+pub fn with_options(tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
+    use std::collections::BTreeSet;
+    let options: BTreeSet<_> = tasks
+        .iter()
+        .filter(|task| task.kind == WorkKind::Options)
+        .map(|task| task.id.clone())
+        .collect();
+    let mut ids: BTreeSet<_> = tasks.iter().map(|task| task.id.clone()).collect();
+    let mut result = Vec::with_capacity(tasks.len());
+    for mut task in tasks {
+        if task.writes && !task.depends_on.iter().any(|id| options.contains(id)) {
+            let base = format!("{}-options", task.id);
+            let mut id = base.clone();
+            let mut suffix = 2;
+            while !ids.insert(id.clone()) {
+                id = format!("{base}-{suffix}");
+                suffix += 1;
+            }
+            result.push(TaskSpec {
+                id: id.clone(),
+                requirement_ids: task.requirement_ids.clone(),
+                criterion_ids: task.criterion_ids.clone(),
+                plan_item_ids: task.plan_item_ids.clone(),
+                title: format!("Options for {}", task.title),
+                summary: Some("Compare feasible approaches and select the best supported variant.".into()),
+                section: Some("Options".into()),
+                goal: format!("Choose the best available approach for task {}: {}. Compare 2–4 genuinely different, realistic variants using the same explicit criteria. Exclude variants violating requirements before ranking. Support the selection with evidence and state the condition that would justify a departure. Do not implement anything, invent measurements, or copy repository contents into the report. Read files yourself; dependency reports do not guarantee that unmerged dependency changes are present in this read-only checkout. Name missing evidence and assumptions. End the complete report with exactly one line Selected: <id>, using the chosen variant's id.", task.id, task.goal),
+                scope: task.scope.clone(),
+                writes: false,
+                depends_on: task.depends_on.clone(),
+                kind: WorkKind::Options,
+                verifier: VerifierSpec {
+                    focus: "Check alternatives, common criteria, exclusions, evidence and selection.".into(),
+                    summary: Some("Verify the selection follows from feasible alternatives and evidence.".into()),
+                    risks: Vec::new(),
+                },
+            });
+            task.depends_on.push(id);
+        }
+        result.push(task);
+    }
+    result
+}
+
+const OPTIONS_BINDING: &str = "For a writing task with an options dependency, the options report is binding: implement the selected variant or explicitly report and justify a departure with evidence, including any discovered requirement violation. Never silently switch variants. If a shared options report does not cover this task, report that gap explicitly. A better variant or broken premise must be reported with evidence; this does not automatically stop the plan.";
+
+const OPTIONS_VERIFICATION: &str = "For a writing task with an options dependency, independently compare the actual implementation with the selected variant in the dependency report. Check the evidence and justification for any explicit departure or uncovered task; do not accept the worker's declaration as proof. Report a better variant or broken premise with evidence rather than silently reopening the choice; this does not automatically stop the plan.";
+
 /// A verifier's verdict. Without a readable verdict block the whole answer
 /// counts as one finding, so the worker sees what the verifier said.
 /// An approval that still lists high or medium findings contradicts itself
@@ -1345,7 +1396,7 @@ pub fn orchestrator_instructions() -> String {
         .map(|a| format!("`{}` ({}: {})", a.id, work_kind_name(a.kind), a.focus))
         .collect();
     format!(
-        "Follow the runtime session phase in a three-phase workflow:\n\
+        "The runtime adds read-only options before every writer lacking a direct options dependency, after adding optional quality gates and even when required gates are disabled. Existing shared options must cover each dependent writer. The selected variant binds implementation; departures require explicit evidence and independent verification.\n\nFollow the runtime session phase in a three-phase workflow:\n\
          1. **Interview**: When the user's request has any ambiguity, missing constraints, \
          or architectural trade-offs, conduct a concise clarifying interview with the user \
          first (do not emit a ```plan block during the interview). Answer simple questions \
@@ -1438,7 +1489,7 @@ pub fn checklist(kind: WorkKind) -> &'static str {
             "real alternatives considered under the same conditions; a variant \
              that misses an obligation is excluded before ranking; the choice \
              follows from the evidence; a result that shows a better variant \
-             or breaks a premise reopens the choice, whatever is already built"
+             or breaks a premise is reported explicitly with evidence instead of silently reopening the choice, without automatically stopping the plan; 2–4 genuinely different realistic variants and explicit common criteria; no implementation, invented measurements or copied repository contents; report ends with Selected: <id>"
         }
         Architecture => {
             "fits the project's existing structure and idioms; the simplest \
@@ -1551,6 +1602,7 @@ pub fn worker_prompt(
     team: &[TaskSpec],
     autonomous: bool,
 ) -> String {
+    let binding = if task.writes { OPTIONS_BINDING } else { "" };
     let others: Vec<String> = team
         .iter()
         .filter(|other| other.id != task.id)
@@ -1568,7 +1620,7 @@ pub fn worker_prompt(
         "You are a worker on a team of agents. The project is your current \
          working directory: {project}. Nothing is pasted for you: read the files \
          you need yourself with your tools.\n\n\
-         Task: {}\nTask id: {}\nGoal: {}\nScope: {}\n\n{}{PROJECT_RULES}\n\n\
+         Task: {}\nTask id: {}\nGoal: {}\nScope: {}\n\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          Stop and say so in your report when the goal cannot be reached without \
          something outside your task: a decision, access, or another task's \
          result.\n\n{team}{EFFECT_FORMAT}\n\n\
@@ -1661,6 +1713,11 @@ pub fn verifier_prompt(
     report: &str,
     changes: Option<&str>,
 ) -> String {
+    let binding = if task.writes {
+        OPTIONS_VERIFICATION
+    } else {
+        ""
+    };
     let risks = if task.verifier.risks.is_empty() {
         "\nNo risks were named for this task; use your judgement for its domain."
     } else {
@@ -1670,7 +1727,7 @@ pub fn verifier_prompt(
         "You verify another agent's work. The project is your current working \
          directory: {project}. Check the worker's claims against the actual \
          files yourself with your tools. Work read-only. {REVIEW_RULES} {PROJECT_RULES}\n\n\
-         Task: {}\nGoal: {}\nScope: {}\nWorker validation to assess from its recorded evidence only: {}\n\n\
+         Task: {}\nGoal: {}\nScope: {}\nWorker validation to assess from its recorded evidence only: {}\n\n{binding}\n\n\
          Your obligations (the task's risks, the checks of every verification, \
          then those for this kind of work, then the catalog risks of this kind of work):\n{}{risks}\n\n\
          The worker's report:\n<<<\n{report}\n>>>\n\n{}{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
@@ -2075,15 +2132,105 @@ mod tests {
         assert!(parse(&unknown).is_err());
     }
 
+    fn options_test_task(id: &str, writes: bool) -> TaskSpec {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "title": "Change storage", "goal": "Preserve storage behavior",
+            "kind": "implementation", "writes": writes, "scope": ["src/"],
+            "requirement_ids": ["req"], "criterion_ids": ["criterion"],
+            "plan_item_ids": ["item"], "verifier": {"focus": "Check storage"}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn options_inherit_writer_context_and_precede_it() {
+        let context = options_test_task("context", false);
+        let mut writer = options_test_task("writer", true);
+        writer.depends_on.push(context.id.clone());
+        let full = with_options(vec![context, writer.clone()]);
+        validate(&full).unwrap();
+        let options = &full[1];
+        assert_eq!(options.kind, WorkKind::Options);
+        assert!(!options.writes);
+        assert_eq!(options.section.as_deref(), Some("Options"));
+        assert_eq!(options.scope, writer.scope);
+        assert_eq!(options.depends_on, writer.depends_on);
+        assert_eq!(options.requirement_ids, writer.requirement_ids);
+        assert_eq!(options.criterion_ids, writer.criterion_ids);
+        assert_eq!(options.plan_item_ids, writer.plan_item_ids);
+        assert_eq!(full[2].depends_on, ["context", "writer-options"]);
+        assert!(options.goal.contains("2–4"));
+        assert!(options.goal.contains("Selected: <id>"));
+        assert!(options.goal.contains("Do not implement"));
+    }
+
+    #[test]
+    fn options_cover_all_writers_including_gates_deterministically() {
+        let mut second = options_test_task("second", true);
+        second.depends_on.push("first".into());
+        let input = with_required_agents(vec![options_test_task("first", true), second]);
+        let full = with_options(input.clone());
+        assert_eq!(full, with_options(input));
+        assert_eq!(full.len(), 14); // Eight original tasks, six writers/options.
+        validate(&full).unwrap(); // Also proves no cycles or forward references.
+        for (index, writer) in full.iter().enumerate().filter(|(_, task)| task.writes) {
+            let options = &full[index - 1];
+            assert_eq!(options.kind, WorkKind::Options);
+            assert!(writer.depends_on.contains(&options.id));
+            assert_eq!(
+                options.depends_on,
+                writer.depends_on[..writer.depends_on.len() - 1]
+            );
+        }
+        let restored: Vec<TaskSpec> =
+            serde_json::from_str(&serde_json::to_string(&full).unwrap()).unwrap();
+        assert_eq!(with_options(restored), full);
+    }
+
+    #[test]
+    fn options_reuse_existing_dependency_and_resolve_id_collisions() {
+        let mut existing = options_test_task("existing", false);
+        existing.kind = WorkKind::Options;
+        let mut writer = options_test_task("writer", true);
+        writer.depends_on.push(existing.id.clone());
+        let input = vec![existing, writer];
+        assert_eq!(with_options(input.clone()), input);
+        let input = vec![
+            options_test_task("writer-options", false),
+            options_test_task("writer-options-2", false),
+            options_test_task("writer", true),
+        ];
+        let full = with_options(input);
+        validate(&full).unwrap();
+        assert_eq!(full[2].id, "writer-options-3");
+        let read_only = vec![options_test_task("read", false)];
+        assert_eq!(with_options(read_only.clone()), read_only);
+    }
+
+    #[test]
+    fn options_choice_is_binding_in_prompts_without_silent_reopening() {
+        let tasks = with_options(vec![options_test_task("writer", true)]);
+        let worker = worker_prompt("project", &tasks[1], &tasks, false);
+        assert!(worker.contains("Never silently switch variants"));
+        assert!(worker.contains("does not cover this task"));
+        let verifier = verifier_prompt("project", &tasks[1], "report", None);
+        assert!(verifier.contains("independently compare the actual implementation"));
+        assert!(verifier.contains("do not accept the worker's declaration as proof"));
+        let checklist = checklist(WorkKind::Options);
+        assert!(checklist.contains("without automatically stopping the plan"));
+        assert!(!checklist.contains("reopens the choice"));
+        assert!(orchestrator_instructions().contains("even when required gates are disabled"));
+    }
+
     #[test]
     fn automatically_added_quality_gates_have_distinct_concise_summaries() {
         let task: TaskSpec = serde_json::from_value(serde_json::json!({
             "id": "t1", "title": "Change storage", "goal": "Implement and document the change.",
             "kind": "implementation", "writes": true, "verifier": {"focus": "Check the storage change."}
         })).unwrap();
-        let full = with_required_agents(vec![task]);
-        assert_eq!(full.len(), 7);
-        for task in &full[1..] {
+        let full = with_options(with_required_agents(vec![task]));
+        assert_eq!(full.len(), 12);
+        for task in full.iter().filter(|task| task.id != "t1") {
             let summary = task.summary.as_deref().unwrap();
             let verifier_summary = task.verifier.summary.as_deref().unwrap();
             assert!(!summary.is_empty() && summary.len() <= 80);
@@ -2168,30 +2315,32 @@ mod tests {
                 "integration-gate"
             ]
         );
-        let full = with_required_agents(tasks);
-        assert_eq!(full.len(), 7);
+        let full = with_options(with_required_agents(tasks));
+        assert_eq!(full.len(), 12);
         validate(&full).unwrap();
-        let refactor = &full[2];
-        assert_eq!(refactor.kind, WorkKind::Refactoring);
-        assert_eq!(refactor.depends_on, vec!["t1", "t2"]);
-        let lint = &full[3];
-        assert_eq!(lint.kind, WorkKind::StaticAnalysis);
-        assert_eq!(lint.depends_on, vec!["t1", "t2", "quality-refactoring"]);
-        assert_eq!(lint.scope, vec!["src/a.rs", "tests/"]);
-        let security = &full[4];
-        assert_eq!(security.kind, WorkKind::Security);
-        assert!(!security.writes);
-        let gate = &full[6];
-        assert_eq!(gate.kind, WorkKind::Integration);
+        let gate = |kind| full.iter().find(|task| task.kind == kind).unwrap();
+        let refactor = gate(WorkKind::Refactoring);
         assert_eq!(
-            gate.depends_on,
+            refactor.depends_on,
+            vec!["t1", "t2", "quality-refactoring-options"]
+        );
+        let lint = gate(WorkKind::StaticAnalysis);
+        assert_eq!(
+            lint.depends_on,
+            vec!["t1", "t2", "quality-refactoring", "static-analyzer-options"]
+        );
+        assert_eq!(lint.scope, vec!["src/a.rs", "tests/"]);
+        assert!(!gate(WorkKind::Security).writes);
+        assert_eq!(
+            gate(WorkKind::Integration).depends_on,
             vec![
                 "t1",
                 "t2",
                 "quality-refactoring",
                 "static-analyzer",
                 "security-auditor",
-                "performance-auditor"
+                "performance-auditor",
+                "integration-gate-options"
             ]
         );
         assert!(missing_quality_agents(&full).is_empty());
