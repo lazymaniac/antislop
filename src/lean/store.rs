@@ -1498,6 +1498,22 @@ impl Store {
         Ok(())
     }
 
+    /// A selective comment claim survives deferred options/requirements planning,
+    /// but never a published plan or a subsequent user message.
+    pub fn pending_plan_comment_ids(&self, conversation: &str) -> Result<Option<Vec<u64>>> {
+        let encoded: Option<String> = self.db().query_row(
+            "SELECT json_extract(e.payload,'$.ids') FROM events e
+             WHERE e.conversation_id=?1 AND e.kind='plan_comments_addressed'
+             AND NOT EXISTS(SELECT 1 FROM events p WHERE p.conversation_id=?1 AND p.kind='plan_proposed' AND p.seq>e.seq)
+             AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=?1 AND m.author='user' AND m.seq>json_extract(e.payload,'$.upto_message'))
+             ORDER BY e.seq DESC LIMIT 1",
+            params![conversation], |row| row.get(0),
+        ).optional()?;
+        encoded
+            .map(|text| serde_json::from_str(&text).map_err(Error::from))
+            .transpose()
+    }
+
     /// The rendered plan document is runtime context, never repository contents.
     pub fn plan_document(&self, conversation: &str, plan: &str) -> Result<Option<String>> {
         let document = self.db().query_row(
@@ -2406,6 +2422,47 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deferred_plan_comment_claims_expire_after_user_input_or_plan_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("core.db")).unwrap();
+        let conversation = store.create_conversation("/project").unwrap();
+        let id = &conversation.id;
+        let user = store
+            .add_message(id, "user", "revise only the first comment")
+            .unwrap();
+        assert_eq!(store.pending_plan_comment_ids(id).unwrap(), None);
+        store
+            .append_event(
+                id,
+                None,
+                None,
+                "plan_comments_addressed",
+                &serde_json::json!({"ids":[1],"upto_message":user.seq}),
+            )
+            .unwrap();
+        store
+            .add_message(id, "options-planner", "regenerate the plan")
+            .unwrap();
+        assert_eq!(store.pending_plan_comment_ids(id).unwrap(), Some(vec![1]));
+        let next = store.add_message(id, "user", "new scope").unwrap();
+        assert_eq!(store.pending_plan_comment_ids(id).unwrap(), None);
+        store
+            .append_event(
+                id,
+                None,
+                None,
+                "plan_comments_addressed",
+                &serde_json::json!({"ids":[],"upto_message":next.seq}),
+            )
+            .unwrap();
+        assert_eq!(store.pending_plan_comment_ids(id).unwrap(), Some(vec![]));
+        store
+            .append_event(id, None, None, "plan_proposed", &serde_json::json!({}))
+            .unwrap();
+        assert_eq!(store.pending_plan_comment_ids(id).unwrap(), None);
+    }
 
     #[test]
     fn schema_five_events_migrate_without_losing_history_or_plan_scope() {

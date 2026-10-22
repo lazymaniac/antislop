@@ -27,3 +27,28 @@ pub fn legacy_conversation(
     let project = project.canonicalize()?;
     core.store.create_conversation(&project.to_string_lossy())
 }
+
+/// Keep legacy file-writing fixtures from executing their writer branch during
+/// the newly inserted read-only options turns. Dedicated options integration
+/// tests supply their own comparison and verifier oracle instead.
+#[allow(dead_code)]
+pub fn install_task_options_protocol(path: &std::path::Path) {
+    let source = std::fs::read_to_string(path).unwrap();
+    let hook = r#"
+if _lr.search(r'^Task: Options for ', prompt, _lr.M):
+    if prompt.startswith('You are a worker'):
+        _ledger_emit('Variants: direct fixture change; unnecessary abstraction. Criteria: satisfy the fixture contract with minimal changes. Selected: direct fixture change. Implement only the requested file change.')
+    if prompt.startswith('You verify'):
+        ids = _lr.findall(r'^- ([RCV][0-9]+): ', prompt, _lr.M)
+        _ledger_emit(_ledger_block('verdict', {'approved': True, 'findings': [], 'coverage': {i: {'status': 'ok', 'note': 'fixture comparison checked'} for i in ids}}))
+"#;
+    assert!(source.contains("json.dumps = _ledger_dumps"));
+    std::fs::write(
+        path,
+        source.replace(
+            "json.dumps = _ledger_dumps",
+            &format!("json.dumps = _ledger_dumps\n{hook}"),
+        ),
+    )
+    .unwrap();
+}

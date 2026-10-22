@@ -806,13 +806,20 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
         .unwrap();
     daemon.wait_for_planning(conv);
     let deadline = Instant::now() + Duration::from_secs(20);
+    // Candidate task rows appear before review/replanning finishes. Wait for
+    // the completed planning turn, then select its final active plan and token.
     let plan = loop {
-        let list = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
-        if let Some(plan) = list[0]["active_plan"].as_str() {
-            break plan.to_owned();
+        let reply = daemon
+            .call_raw(&json!({"op":"events", "conversation":conv, "after":0, "wait_ms":0}))
+            .unwrap();
+        if reply["idle"] == true {
+            let list = daemon.call_raw(&json!({"op":"conversations"})).unwrap();
+            if let Some(plan) = list[0]["active_plan"].as_str() {
+                break plan.to_owned();
+            }
         }
-        assert!(Instant::now() < deadline, "no plan was proposed");
-        std::thread::sleep(Duration::from_millis(50));
+        assert!(Instant::now() < deadline, "planning did not finish");
+        std::thread::sleep(Duration::from_millis(20));
     };
     let task = daemon
         .call_raw(&json!({"op": "task", "plan": plan, "id": "t1"}))

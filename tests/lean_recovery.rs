@@ -59,6 +59,9 @@ if worker and "You verify" not in prompt and "You audit" not in prompt \
     print("Error: not logged in, run `agy login`", file=sys.stderr)
     sys.exit(1)
 if "Task: Write file" in prompt and "You verify" not in prompt and "You audit" not in prompt:
+    if os.path.exists(os.path.join(here, "concurrent-user-edit")):
+        with open(os.path.join(here, "project", "hello.txt"), "w") as primary:
+            primary.write("user edit\n")
     with open("hello.txt", "w") as f:
         f.write("from worker\n")
 if "Task: Manual fix" in prompt and "You verify" not in prompt and "You audit" not in prompt:
@@ -75,6 +78,8 @@ def cover(answer):
     return head + "```verdict\n" + json.dumps(data) + "\n```"
 REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:", "You verify")
 answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```" if any(m in prompt for m in REVIEW) else "report"
+if "Automatic integration conflict" in prompt:
+    answer = "```integration_question\nKeep the concurrent user edit or apply the worker change?\n```"
 answer = cover(answer)
 print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status": "SUCCESS", "response": answer, "usage": {}}}))
 "#,
@@ -82,6 +87,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status"
     .unwrap();
     for script in [&codex, &agy] {
         support::install_ledger_protocol(script);
+        support::install_task_options_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
     }
@@ -156,6 +162,7 @@ fn statuses(core: &Core, plan: &str) -> Vec<String> {
         .plan(plan)
         .unwrap()
         .into_iter()
+        .filter(|task| task.spec["kind"] != "options")
         .map(|task| task.status)
         .collect()
 }
@@ -403,8 +410,9 @@ fn test_blocked_task_prevents_premature_audit() {
 fn test_recover_task_integrate_with_consent_and_dag_cascade() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
-    // Create conflicting user edit in hello.txt
-    std::fs::write(project.join("hello.txt"), "user edit\n").unwrap();
+    // Edit the primary file after the writer takes its base. Starting edits
+    // are inherited by the writer; concurrent conflicting edits require consent.
+    std::fs::write(dir.path().join("concurrent-user-edit"), "").unwrap();
 
     let core = open(dir.path());
     let conversation = support::legacy_conversation(&core, &project).unwrap().id;
@@ -420,12 +428,40 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
     );
 
     let tasks = core.store.plan(&plan).unwrap();
-    let w1_id = &tasks[0].id;
+    let w1_id = &tasks
+        .iter()
+        .find(|task| task.spec["id"] == "w1")
+        .unwrap()
+        .id;
     let token = core
         .task_freshness_token(&conversation, &plan, w1_id)
         .unwrap();
 
-    // User recovers with IntegrateWithConsent allowing hello.txt
+    // Consent scopes integration; it does not silently overwrite an unresolved
+    // conflicting edit. Reconcile the chosen contents before retrying recovery.
+    let error = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: w1_id.clone(),
+            action: RecoveryAction::IntegrateWithConsent,
+            consent_files: Some(vec!["hello.txt".into()]),
+            freshness_token: token,
+            message: None,
+        })
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("uncommitted edits remain"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user edit\n"
+    );
+    std::fs::write(project.join("hello.txt"), "from worker\n").unwrap();
+    let token = core
+        .task_freshness_token(&conversation, &plan, w1_id)
+        .unwrap();
     let resp = core
         .recover_task(TaskRecoveryRequest {
             conversation: conversation.clone(),
@@ -453,7 +489,7 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
 fn preserving_a_branch_keeps_integration_and_dependents_pending() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
-    std::fs::write(project.join("hello.txt"), "user edit\n").unwrap();
+    std::fs::write(dir.path().join("concurrent-user-edit"), "").unwrap();
 
     let core = open(dir.path());
     let conversation = support::legacy_conversation(&core, &project).unwrap().id;
@@ -463,7 +499,11 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
 
     assert_eq!(statuses(&core, &plan), ["needs_user", "queued"]);
     let tasks = core.store.plan(&plan).unwrap();
-    let w1_id = &tasks[0].id;
+    let w1_id = &tasks
+        .iter()
+        .find(|task| task.spec["id"] == "w1")
+        .unwrap()
+        .id;
     let branch = format!("antislop/{}", &w1_id[..8]);
     let token = core
         .task_freshness_token(&conversation, &plan, w1_id)

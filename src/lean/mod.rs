@@ -2435,6 +2435,12 @@ impl Core {
         // finalized before persistence, gap checks, review and graph rendering.
         let finalized = finalize_plan(specs.to_vec(), config.policy.required_gates);
         let specs = finalized.as_slice();
+        if let Some(ids) = addressed {
+            self.store.append_event(
+                conversation, None, None, "plan_comments_addressed",
+                &json!({"ids": ids, "upto_message": self.store.last_orchestration_answered(conversation)?}),
+            )?;
+        }
         let run = match self.ensure_requirements(conversation, cancel) {
             Ok(run) => run,
             Err(error) => {
@@ -2571,9 +2577,14 @@ impl Core {
         }
         let checked = review.as_ref().is_ok_and(|verdict| verdict.approved);
         if checked {
-            // Only what the comment agent listed, else everything it was given.
-            self.store
-                .resolve_listed_plan_comments(conversation, answered, addressed)?;
+            // Options may have deferred this proposal and requested a fresh plan.
+            // Keep the comment agent's selective claim until that plan is checked.
+            let pending = self.store.pending_plan_comment_ids(conversation)?;
+            self.store.resolve_listed_plan_comments(
+                conversation,
+                answered,
+                addressed.or(pending.as_deref()),
+            )?;
         }
         let autonomous =
             self.autonomous(conversation)? && self.store.workflow(conversation)?.is_none();

@@ -14,6 +14,8 @@ else:
     if worker:
         if task.endswith('-options') or task == 'shared':
             answer = settings['report']
+        elif any(t['id'] == task and not t.get('writes', False) for t in settings['plan']['tasks']):
+            answer = 'Inspected files read-only.'
         else:
             open('result-'+task+'.txt','w').write(settings['implementation'])
             answer = 'APPROVED. I complied with the selected variant. '+settings['claim']

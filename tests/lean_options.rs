@@ -288,3 +288,52 @@ fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
         }
     }
 }
+
+#[test]
+fn read_only_plan_runs_without_generated_options_or_quality_writers() {
+    for gates in [false, true] {
+        let input = json!({"id":"inspect", "title":"Inspect files", "goal":"Read the repository contract", "kind":"analysis", "writes":false, "scope":["."], "verifier":{"focus":"read-only findings"}});
+        let (stored, calls, events) = run(json!({"tasks":[input.clone()]}), gates, REPORT, "A", "");
+        assert_eq!(
+            stored.len(),
+            1,
+            "read-only plans must not acquire options or writing gates"
+        );
+        let spec: TaskSpec = serde_json::from_value(stored[0].spec.clone()).unwrap();
+        assert_eq!(spec.id, "inspect");
+        assert!(!spec.writes);
+        assert!(spec.depends_on.is_empty());
+        assert_eq!(stored[0].status, "approved");
+        assert!(stored[0].base.is_none());
+        assert!(stored[0].result.is_none());
+        assert!(
+            stored[0]
+                .report
+                .as_deref()
+                .unwrap()
+                .contains("Inspected files read-only.")
+        );
+        let worker = calls.iter().find(|call| call["worker"] == true).unwrap();
+        assert_eq!(worker["task"], "inspect");
+        assert!(
+            worker["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Work read-only; do not modify anything.")
+        );
+        assert_eq!(
+            calls.iter().filter(|call| call["worker"] == true).count(),
+            1
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event["task"] == stored[0].id && event["status"] == "working")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event["task"] == stored[0].id && event["status"] == "approved")
+        );
+    }
+}

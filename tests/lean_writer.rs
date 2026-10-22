@@ -70,6 +70,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
     .unwrap();
     for script in [&codex, &agy] {
         support::install_ledger_protocol(script);
+        support::install_task_options_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
     }
@@ -169,6 +170,7 @@ print(json.dumps({{"event": "result", "result": {{"conversation_id": session, "s
     .unwrap();
     for script in [&codex, &agy] {
         support::install_ledger_protocol(script);
+        support::install_task_options_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
     }
@@ -233,6 +235,15 @@ fn run_plan(core: &std::sync::Arc<Core>, project: &Path) -> String {
     conversation.id
 }
 
+fn original_tasks(core: &Core, conversation: &str) -> Vec<antislop::lean::store::Task> {
+    core.store
+        .latest_plan(conversation)
+        .unwrap()
+        .into_iter()
+        .filter(|task| task.spec["kind"] != "options")
+        .collect()
+}
+
 fn wait_idle(core: &Core, conversation: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !core.is_idle(conversation) {
@@ -258,6 +269,17 @@ fn required_gates_join_plans_that_write() {
         .iter()
         .map(|task| task.spec["kind"].as_str().unwrap().to_owned())
         .collect();
+    for writer in plan.iter().filter(|task| task.spec["writes"] == true) {
+        let dependencies = writer.spec["depends_on"].as_array().unwrap();
+        assert!(plan.iter().any(|task| task.spec["kind"] == "options"
+            && task.spec["writes"] == false
+            && dependencies.contains(&task.spec["id"])));
+    }
+    let plan: Vec<_> = plan
+        .iter()
+        .filter(|task| task.spec["kind"] != "options")
+        .collect();
+    let kinds: Vec<_> = kinds.iter().filter(|kind| *kind != "options").collect();
     assert_eq!(plan.len(), 7, "{kinds:?}");
     let writer = plan[0].spec["id"].clone();
     for gate in &plan[1..] {
@@ -295,7 +317,7 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
 
-    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert!(task.report.as_deref().unwrap().contains("not committed"));
     // local_commits = false in the example configuration: applied, not committed.
@@ -364,7 +386,7 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_verified_before_landing() 
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert_eq!(task.round, 2, "a fresh verifier round checks the repair");
     assert_eq!(
@@ -398,7 +420,7 @@ fn a_writer_integrates_over_the_local_changes_it_started_with() {
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
 
-    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
@@ -448,7 +470,7 @@ fn resuming_integrates_an_approved_change_once_the_user_is_done() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "needs_user");
     let calls_before = std::fs::read_to_string(dir.path().join("calls.jsonl"))
         .unwrap()
@@ -462,7 +484,13 @@ fn resuming_integrates_an_approved_change_once_the_user_is_done() {
     core.resume_plan(&conversation, &task.plan_id).unwrap();
     wait_idle(&core, &conversation);
 
-    let task = &core.store.plan(&task.plan_id).unwrap()[0];
+    let task = &core
+        .store
+        .plan(&task.plan_id)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == task.id)
+        .unwrap();
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
@@ -487,7 +515,7 @@ fn the_user_reads_a_change_comments_a_line_and_asks_for_a_review() {
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = core.store.latest_plan(&conversation).unwrap().remove(0);
+    let task = original_tasks(&core, &conversation).remove(0);
     let plan = task.plan_id.clone();
 
     let diff = core.diff(&conversation, &plan, "t1").unwrap();
@@ -637,10 +665,7 @@ fn in_place_ownership_survives_restart_but_later_user_edits_stay_protected() {
     let state = project.join(".antislop");
     let core = Core::open(&state, config_with(&codex, &agy, in_place)).unwrap();
     let conversation = run_plan(&core, &project);
-    assert_eq!(
-        core.store.latest_plan(&conversation).unwrap()[0].status,
-        "approved"
-    );
+    assert_eq!(original_tasks(&core, &conversation)[0].status, "approved");
     drop(core);
 
     let script = std::fs::read_to_string(&agy)
@@ -649,10 +674,7 @@ fn in_place_ownership_survives_restart_but_later_user_edits_stay_protected() {
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&state, config_with(&codex, &agy, in_place)).unwrap();
     let conversation = run_plan(&core, &project);
-    assert_eq!(
-        core.store.latest_plan(&conversation).unwrap()[0].status,
-        "approved"
-    );
+    assert_eq!(original_tasks(&core, &conversation)[0].status, "approved");
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "updated by worker\n"
@@ -663,7 +685,7 @@ fn in_place_ownership_survives_restart_but_later_user_edits_stay_protected() {
     for text in ["new user draft\n", "from worker\n"] {
         std::fs::write(project.join("hello.txt"), text).unwrap();
         let conversation = run_plan(&core, &project);
-        let task = &core.store.latest_plan(&conversation).unwrap()[0];
+        let task = &original_tasks(&core, &conversation)[0];
         assert_eq!(task.status, "needs_user", "{:?}", task.report);
         assert!(
             task.report
@@ -696,17 +718,14 @@ fn in_place_approval_does_not_claim_unrelated_user_files_in_its_snapshot() {
     )
     .unwrap();
     let conversation = run_plan(&core, &project);
-    assert_eq!(
-        core.store.latest_plan(&conversation).unwrap()[0].status,
-        "approved"
-    );
+    assert_eq!(original_tasks(&core, &conversation)[0].status, "approved");
     let script = std::fs::read_to_string(&agy).unwrap().replace(
         "with open(\"hello.txt\", \"w\")",
         "with open(\"README\", \"w\")",
     );
     std::fs::write(&agy, script).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "needs_user", "{:?}", task.report);
     assert!(
         task.report
@@ -740,16 +759,13 @@ fn in_place_rejected_changes_do_not_become_approved_outputs() {
     )
     .unwrap();
     let first = run_plan(&core, &project);
-    assert_eq!(
-        core.store.latest_plan(&first).unwrap()[0].status,
-        "needs_user"
-    );
+    assert_eq!(original_tasks(&core, &first)[0].status, "needs_user");
     let script = std::fs::read_to_string(&agy)
         .unwrap()
         .replace("from worker\\n", "second attempt\\n");
     std::fs::write(&agy, script).unwrap();
     let second = run_plan(&core, &project);
-    let task = &core.store.latest_plan(&second).unwrap()[0];
+    let task = &original_tasks(&core, &second)[0];
     assert_eq!(task.status, "needs_user", "{:?}", task.report);
     assert!(
         task.report
@@ -772,7 +788,7 @@ fn in_place_a_writer_edits_the_project_itself_and_reviewers_see_a_snapshot() {
     .unwrap();
     let conversation = run_plan(&core, &project);
 
-    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "approved", "{:?}", task.report);
     assert!(task.report.as_deref().unwrap().contains("applied in place"));
     assert_eq!(
@@ -840,7 +856,7 @@ fn in_place_a_writer_that_touches_the_users_edits_stops_and_keeps_their_version(
     .unwrap();
     let conversation = run_plan(&core, &project);
 
-    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "needs_user");
     let report = task.report.as_deref().unwrap();
     assert!(
@@ -1038,7 +1054,7 @@ fn without_write_permission_the_card_says_the_branch_and_keeps_the_project_clean
     .unwrap();
     let conversation = run_plan(&core, &project);
 
-    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "needs_user", "{:?}", task.report);
     let (feedback, _) = card(&core, &conversation, "t1");
     assert_eq!(feedback["integration"]["outcome"], "left_on_branch");
@@ -1086,7 +1102,7 @@ fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
 
-    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "needs_user");
     let (feedback, _) = card(&core, &conversation, "t1");
     assert_eq!(feedback["round"], task.round);
@@ -1116,7 +1132,7 @@ fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "needs_user");
 
     // The user commits their own version of the line the change also writes:
@@ -1127,7 +1143,13 @@ fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
     core.resume_plan(&conversation, &task.plan_id).unwrap();
     wait_idle(&core, &conversation);
 
-    let task = &core.store.plan(&task.plan_id).unwrap()[0];
+    let task = &core
+        .store
+        .plan(&task.plan_id)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == task.id)
+        .unwrap();
     assert_eq!(task.status, "needs_user", "{:?}", task.report);
     let (feedback, _) = card(&core, &conversation, "t1");
     assert_eq!(feedback["integration"]["outcome"], "conflict");
@@ -1318,7 +1340,7 @@ fn a_retry_invalidates_the_earlier_rounds_card_result() {
     std::fs::write(&agy, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "needs_user");
     let (blocked, _) = card(&core, &conversation, "t1");
     assert_eq!(blocked["integration"]["outcome"], "user_edits");
@@ -1376,7 +1398,7 @@ fn a_recovery_integration_names_itself_on_the_card() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "needs_user");
 
     // The user consents away their edit and lets the runtime land the work.
@@ -1426,7 +1448,7 @@ fn keeping_the_branch_by_recovery_reports_the_branch_on_the_card() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let task = original_tasks(&core, &conversation)[0].clone();
     let branch = format!("antislop/{}", &task.id[..8]);
 
     core.recover_task(antislop::lean::TaskRecoveryRequest {
@@ -1463,7 +1485,7 @@ fn a_force_approval_puts_the_users_word_on_the_card() {
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "needs_user");
 
     let error = core
@@ -1503,7 +1525,7 @@ fn cancelling_a_dependency_cannot_discard_the_dependent_task() {
     std::fs::write(&codex, script).unwrap();
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
-    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
+    let task = original_tasks(&core, &conversation)[0].clone();
     assert_eq!(task.status, "needs_user");
     // t2 waited on t1, never ran, and the scheduler skipped it once t1 blocked.
     assert_eq!(core.task(&task.plan_id, "t2").unwrap().status, "queued");
