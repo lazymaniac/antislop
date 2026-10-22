@@ -196,3 +196,170 @@ fn successful_save_preserves_text_typed_while_the_mutation_was_in_flight() {
     assert_eq!(draft.revision, 3);
     assert_ne!(draft.operation_id, snapshot.operation_id);
 }
+
+fn screen(view: &mut LedgerView, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| view.draw(frame, frame.area()))
+        .unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .chunks(width as usize)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn requirements_workspace_separates_records_details_and_preserves_small_terminal_bounds() {
+    let mut view = browser();
+    let wide = screen(&mut view, 120, 30);
+    assert!(wide.contains("Records") && wide.contains("Details"));
+    assert!(wide.contains("Constraints & qualifiers") && wide.contains("Original wording"));
+    assert!(view.list_area.right() <= view.detail_area.x);
+    for size in [(12, 5), (24, 8), (60, 18), (80, 24), (120, 30)] {
+        screen(&mut view, size.0, size.1);
+        assert!(view.list_area.right() <= size.0 && view.detail_area.bottom() <= size.1);
+    }
+    let mut second = view.page.as_ref().unwrap().entries[0].clone();
+    second.spec.id = "r2".into();
+    second.spec.interpretation = "Second requirement".into();
+    view.page.as_mut().unwrap().entries.push(second);
+    screen(&mut view, 120, 30);
+    assert!(matches!(
+        view.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: view.list_area.x + 1,
+            row: view.list_area.y + 3,
+            modifiers: KeyModifiers::NONE
+        }),
+        Action::Detail
+    ));
+    assert_eq!(view.selected_entry().unwrap().spec.id, "r2");
+}
+
+#[test]
+fn semantic_review_shows_before_after_and_keeps_failed_approval_actionable() {
+    let mut view = browser();
+    let before = view.page.as_ref().unwrap().entries[0].clone();
+    let mut after = before.spec.clone();
+    after.interpretation = "Preserve every qualifier".into();
+    let change = LedgerChange {
+        conversation: "c1".into(),
+        run_id: "run1".into(),
+        expected_spec_revision: 2,
+        operation_id: "op1".into(),
+        reason: "Clarify the scope".into(),
+        entries: vec![after.clone()],
+    };
+    view.reply("preview",Ok(json!({"change":change,"proposal":{"proposal_id":"p1","diff_hash":"h1","diff":{"before":[before],"after":[after],"affected_tasks":[]}}})));
+    let rendered = screen(&mut view, 120, 30);
+    assert!(rendered.contains("Before: Keep the source"));
+    assert!(rendered.contains("After: Preserve every qualifier"));
+    assert!(rendered.contains("Approve changes & continue planning"));
+    assert!(!rendered.contains("\"interpretation\""));
+    view.reply("applied", Err("connection lost".into()));
+    assert!(screen(&mut view, 120, 30).contains("connection lost"));
+    assert!(matches!(
+        view.key(key(KeyCode::Enter), "c1"),
+        Action::Apply { .. }
+    ));
+    for size in [(12, 5), (24, 8), (80, 24)] {
+        screen(&mut view, size.0, size.1);
+    }
+}
+
+#[test]
+fn creating_an_empty_draft_requires_confirmation_and_keeps_the_run_visible() {
+    let mut view = browser();
+    assert!(matches!(
+        view.key(key(KeyCode::Char('N')), "c1"),
+        Action::None
+    ));
+    assert!(screen(&mut view, 80, 24).contains("does not replace"));
+    view.key(key(KeyCode::Esc), "c1");
+    assert_eq!(view.page.as_ref().unwrap().run.id, "run1");
+    view.key(key(KeyCode::Char('N')), "c1");
+    assert!(matches!(
+        view.key(key(KeyCode::Enter), "c1"),
+        Action::Create
+    ));
+    let mut run = view.page.as_ref().unwrap().run.clone();
+    run.id = "draft2".into();
+    view.reply("created", Ok(json!(run)));
+    assert_eq!(view.page.as_ref().unwrap().run.id, "draft2");
+    assert!(
+        view.notice
+            .as_ref()
+            .unwrap()
+            .contains("Current planning keeps")
+    );
+}
+
+#[test]
+fn mouse_tabs_and_review_action_match_the_rendered_controls() {
+    let mut view = browser();
+    screen(&mut view, 120, 30);
+    assert!(matches!(
+        view.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 20,
+            row: 1,
+            modifiers: KeyModifiers::NONE
+        }),
+        Action::Fetch
+    ));
+    assert_eq!(view.kind, LedgerKind::PlanItem);
+    assert!(matches!(
+        view.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 8,
+            row: 28,
+            modifiers: KeyModifiers::NONE
+        }),
+        Action::Proposal
+    ));
+}
+
+#[test]
+fn progress_and_failure_remain_visible_while_requirements_are_open() {
+    let mut app = App::test_app();
+    app.ledger_view = Some(browser());
+    app.input = InputBuffer::with_text("unsent background draft");
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    for (seq, kind, payload, expected) in [
+        (
+            1,
+            "planning_progress",
+            json!({"text":"Checking requirements independently"}),
+            "Checking requirements independently",
+        ),
+        (
+            2,
+            "requirements_failed",
+            json!({"error":"Source changed","retry":"Review the proposed changes"}),
+            "Source changed",
+        ),
+        (
+            3,
+            "plan_proposed",
+            json!({"plan":"plan1","tasks":[]}),
+            "Plan ready for review",
+        ),
+    ] {
+        app.view
+            .apply(&json!({"seq":seq,"kind":kind,"payload":payload}));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains(expected), "{text}");
+        assert_eq!(app.input.text, "unsent background draft");
+    }
+}

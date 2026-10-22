@@ -1,4 +1,5 @@
 mod common;
+mod support;
 use antislop::{
     config::Config,
     lean::{
@@ -112,7 +113,7 @@ fn multiple_plans_with_repeating_labels_have_distinct_identities_and_event_scopi
     let cfg = test_config(&codex, &agy);
     let state_dir = dir.path().join("state");
     let core = Core::open(&state_dir, cfg).unwrap();
-    let conv = core.start(&project).unwrap();
+    let conv = support::legacy_conversation(&core, &project).unwrap();
 
     // Plan 1: tasks t1 and t2
     let specs_plan1 = vec![
@@ -232,7 +233,7 @@ fn plan_pagination_and_active_plan_invariance() {
     let cfg = test_config(&codex, &agy);
     let state_dir = dir.path().join("state");
     let core = Core::open(&state_dir, cfg).unwrap();
-    let conv = core.start(&project).unwrap();
+    let conv = support::legacy_conversation(&core, &project).unwrap();
 
     // Create 3 successive plans
     let mut created_ids = Vec::new();

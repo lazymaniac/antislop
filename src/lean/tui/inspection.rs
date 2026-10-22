@@ -12,19 +12,28 @@ pub(super) fn task_snapshot(
     plan: &str,
     id: &str,
     round: Option<u64>,
-    _checks_only: bool,
+    checks_only: bool,
 ) -> Result<Snapshot> {
     if uuid::Uuid::parse_str(id).is_err() {
-        let task = client.call(&Request::TaskScoped {
-            conversation: Some(conversation.into()),
-            plan: plan.into(),
-            id: id.into(),
-        })?;
+        let request = if checks_only {
+            Request::TaskChecks {
+                conversation: Some(conversation.into()),
+                plan: plan.into(),
+                id: id.into(),
+            }
+        } else {
+            Request::TaskScoped {
+                conversation: Some(conversation.into()),
+                plan: plan.into(),
+                id: id.into(),
+            }
+        };
+        let task = client.call(&request)?;
         if let Some(uuid) = task["id"]
             .as_str()
             .filter(|id| uuid::Uuid::parse_str(id).is_ok())
         {
-            return task_snapshot(client, conversation, plan, uuid, round, _checks_only);
+            return task_snapshot(client, conversation, plan, uuid, round, checks_only);
         }
         return Ok(Snapshot {
             task,
@@ -92,6 +101,9 @@ pub(super) fn task_snapshot(
         .map(|(role, builder)| Ok((role, builder.finish()?)))
         .collect::<Result<std::collections::HashMap<_, _>>>()?;
     let mut result = document::Builder::new(client.state_dir())?;
+    if snapshot["history_unavailable"] == true && selected > 0 {
+        result.append("plain","History incomplete\n",|sink|sink("Historical results may be unavailable and earlier text may have been truncated. Previously clipped content cannot be recovered."))?;
+    }
     let summary = format!(
         "Status: {}\nBase: {}\nResult: {}\n",
         snapshot["status"].as_str().unwrap_or_default(),
@@ -207,7 +219,7 @@ fn message_document(
         after = next;
     }
     builder.append("plain", "", |_| Ok(()))?;
-    Ok(builder.finish()?)
+    builder.finish()
 }
 
 fn append_session(

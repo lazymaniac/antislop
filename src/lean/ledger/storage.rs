@@ -136,7 +136,10 @@ fn checked_graph(all: &[EntrySpec]) -> Result<()> {
         if let Some(parent) = &e.parent {
             require(
                 index.get(parent.as_str()).is_some_and(|p| p.kind == e.kind),
-                "unknown or incompatible parent",
+                &format!(
+                    "entry {} has unknown or incompatible parent {parent}; parent must exist and have the same kind; link plan items to requirements using requirement_ids",
+                    e.id
+                ),
             )?;
         }
         for id in e.depends_on.iter().chain(e.requirement_ids.iter()) {
@@ -345,6 +348,66 @@ impl Store {
     pub fn run(&self, conversation: &str, id: &str) -> Result<Run> {
         run(&self.db(), conversation, id)
     }
+    pub fn planning_run(&self, conversation: &str) -> Result<Option<Run>> {
+        let db = self.db();
+        let id: Option<String> = db
+            .query_row(
+                "SELECT run_id FROM planning_runs WHERE conversation_id=?1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let id = match id {
+            Some(id) => Some(id),
+            None => db.query_row(
+                "SELECT r.id FROM runs r WHERE r.conversation_id=?1 ORDER BY EXISTS(SELECT 1 FROM ledger_sources s WHERE s.run_id=r.id) DESC,r.created_ms DESC,r.rowid DESC LIMIT 1",
+                [conversation], |row| row.get(0)
+            ).optional()?,
+        };
+        id.map(|id| run(&db, conversation, &id)).transpose()
+    }
+
+    pub fn select_planning_run(&self, conversation: &str, run_id: &str) -> Result<()> {
+        let db = self.db();
+        run(&db, conversation, run_id)?;
+        db.execute("INSERT INTO planning_runs VALUES(?1,?2) ON CONFLICT(conversation_id) DO UPDATE SET run_id=excluded.run_id", params![conversation,run_id])?;
+        Ok(())
+    }
+
+    pub fn approved_requirements_producer(
+        &self,
+        conversation: &str,
+        run_id: &str,
+        revision: i64,
+    ) -> Result<Option<String>> {
+        self.run(conversation, run_id)?;
+        Ok(self.db().query_row(
+            "SELECT substr(p.author,6) FROM ledger_proposals p JOIN ledger_decisions d ON d.operation_id=json_extract(p.request,'$.operation_id') JOIN requirements_resumptions x ON x.operation_id=d.operation_id WHERE p.run_id=?1 AND d.spec_revision=?2 AND d.author='user' AND p.author LIKE 'turn:%' AND NOT EXISTS(SELECT 1 FROM ledger_reviews v WHERE v.run_id=p.run_id AND v.spec_revision=?2) ORDER BY d.created_ms DESC,d.rowid DESC LIMIT 1",
+            params![run_id,revision],|row|row.get(0)
+        ).optional()?)
+    }
+
+    pub fn has_pending_requirements_approval(&self, conversation: &str) -> Result<bool> {
+        Ok(self.db().query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND author IN ('requirements-approval','options-planner','options-plan-repair','plan-format-repair') AND seq>COALESCE((SELECT MAX(upto_message) FROM turns WHERE conversation_id=?1 AND role IN ('orchestrator','comment-orchestrator') AND status<>'interrupted'),0))",
+            [conversation], |row| row.get(0)
+        )?)
+    }
+
+    pub fn recover_approved_requirements(&self) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let changes = tx.prepare(
+            "SELECT p.request FROM ledger_proposals p JOIN ledger_decisions d ON d.operation_id=json_extract(p.request,'$.operation_id') JOIN runs r ON r.id=p.run_id JOIN session_workflow w ON w.conversation_id=r.conversation_id WHERE p.author LIKE 'turn:%' AND d.author='user' AND d.spec_revision=r.spec_revision AND w.phase='planning' AND NOT EXISTS(SELECT 1 FROM requirements_resumptions x WHERE x.operation_id=d.operation_id) AND NOT EXISTS(SELECT 1 FROM ledger_reviews v WHERE v.run_id=r.id AND v.spec_revision=r.spec_revision) AND NOT EXISTS(SELECT 1 FROM runs newer WHERE newer.conversation_id=r.conversation_id AND (newer.created_ms>r.created_ms OR (newer.created_ms=r.created_ms AND newer.rowid>r.rowid)) AND EXISTS(SELECT 1 FROM ledger_sources s WHERE s.run_id=newer.id))"
+        )?.query_map([], |row| row.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?;
+        for encoded in changes {
+            let change: LedgerChange = serde_json::from_str(&encoded)?;
+            enqueue_requirements_resume(&tx, &change)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn latest_run(&self, conversation: &str) -> Result<Option<Run>> {
         let id:Option<String>=self.db().query_row("SELECT id FROM runs WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1",[conversation],|r|r.get(0)).optional()?;
         id.map(|id| self.run(conversation, &id)).transpose()
@@ -701,6 +764,15 @@ impl Store {
             "ledger_changed",
             &serde_json::json!({"run":result.run_id,"revision":result.spec_revision,"entries":changed_versions,"affected_tasks":result.affected_tasks}),
         )?;
+        if user {
+            let analyst_proposal: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM ledger_proposals WHERE run_id=?1 AND json_extract(request,'$.operation_id')=?2 AND author LIKE 'turn:%')",
+                params![change.run_id,change.operation_id], |row| row.get(0)
+            )?;
+            if analyst_proposal {
+                enqueue_requirements_resume(&tx, change)?;
+            }
+        }
         tx.commit()?;
         Ok(result)
     }
@@ -938,7 +1010,7 @@ impl Store {
             "review refers to an old spec revision",
         )?;
         require(
-            matches!(kind, "extraction" | "audit"),
+            matches!(kind, "extraction" | "audit" | "options"),
             "unknown ledger review kind",
         )?;
         require(!note.trim().is_empty(), "review needs an assessment")?;
@@ -1518,4 +1590,39 @@ impl Store {
         run(&db, conversation, run_id)?;
         Ok(db.prepare("SELECT t.id,t.plan_id,json_extract(t.spec,'$.id'),json_extract(t.spec,'$.title'),t.status,i.generation,l.version FROM task_ledger_inputs l JOIN task_inputs i ON i.task_id=l.task_id JOIN tasks t ON t.id=i.task_id WHERE i.run_id=?1 AND l.entry_id=?2 ORDER BY t.created_ms DESC,t.rowid DESC")?.query_map(params![run_id,entry],|r|Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"plan":r.get::<_,String>(1)?,"task":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"status":r.get::<_,String>(4)?,"generation":r.get::<_,i64>(5)?,"entry_version":r.get::<_,i64>(6)?})))?.collect::<std::result::Result<_,_>>()?)
     }
+}
+
+fn enqueue_requirements_resume(db: &Connection, change: &LedgerChange) -> Result<()> {
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM requirements_resumptions WHERE operation_id=?1)",
+        [&change.operation_id],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Ok(());
+    }
+    db.execute("INSERT INTO planning_runs VALUES(?1,?2) ON CONFLICT(conversation_id) DO UPDATE SET run_id=excluded.run_id", params![change.conversation,change.run_id])?;
+    let text = format!(
+        "The user approved the exact requirements change for run {}. Continue independent requirements verification and prepare the plan for review using this run. This approves requirements only; implementation still requires separate plan approval.",
+        change.run_id
+    );
+    db.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'requirements-approval',?2,?3)", params![change.conversation,text,now_ms()])?;
+    let seq = db.last_insert_rowid();
+    db.execute(
+        "INSERT INTO requirements_resumptions VALUES(?1,?2)",
+        params![change.operation_id, seq],
+    )?;
+    event(
+        db,
+        &change.conversation,
+        "message",
+        &serde_json::json!({"seq":seq,"author":"requirements-approval","text":text}),
+    )?;
+    event(
+        db,
+        &change.conversation,
+        "planning_progress",
+        &serde_json::json!({"text":"Requirements approved. Resuming verification and planning."}),
+    )?;
+    Ok(())
 }

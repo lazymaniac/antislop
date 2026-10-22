@@ -128,7 +128,13 @@ impl Core {
                         mail.iter()
                             .all(|mail| mail.kind == "agent_work" || mail.kind == "copy")
                     });
+            let direct_task = target.task_id.is_some()
+                && self
+                    .store
+                    .pending_mail(conversation, &target.role)
+                    .is_ok_and(|mail| mail.iter().any(|mail| mail.kind == "agent_work"));
             supported
+                && !direct_task
                 && !direct_orchestrator
                 && failures
                     .get(&(conversation.to_owned(), target.role.clone()))
@@ -285,9 +291,52 @@ impl Core {
                         access: agent::Access::ReadOnly,
                         upto_message: 0,
                     };
+                    let direct = self
+                        .store
+                        .pending_mail(conversation, &target.role)?
+                        .iter()
+                        .any(|mail| mail.kind == "agent_work");
+                    let context = if direct
+                        && matches!(target.role.as_str(), AUDITOR | PLAN_VERIFIER)
+                    {
+                        let plan = self.store.latest_plan(conversation)?;
+                        if target.role == PLAN_VERIFIER {
+                            let specs = plan
+                                .iter()
+                                .map(|task| serde_json::from_value(task.spec.clone()))
+                                .collect::<std::result::Result<Vec<TaskSpec>, _>>()?;
+                            tasks::plan_review_prompt(
+                                &project.to_string_lossy(),
+                                "Review the current plan again, following the user's direct instructions.",
+                                &specs,
+                            )
+                        } else {
+                            let results = plan
+                                .iter()
+                                .map(|task| {
+                                    format!(
+                                        "{} · {}\n{}",
+                                        task.spec["id"],
+                                        task.status,
+                                        task.report.as_deref().unwrap_or("(no report)")
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n\n");
+                            tasks::audit_prompt(
+                                &project.to_string_lossy(),
+                                "Audit the current result again, following the user's direct instructions.",
+                                &results,
+                            )
+                        }
+                    } else {
+                        String::new()
+                    };
                     let answer = self.turn_inner(setup, cancel, |first| {
-                        format!("Mailbox recipient: {}. This is a receipt-only turn; do not execute work, approve tasks or propose plans.\n{}",
+                        if direct && !context.is_empty() { context.clone() } else {
+                            format!("Mailbox recipient: {}. This is a receipt-only turn; do not execute work, approve tasks or propose plans.\n{}",
                             target.role, tasks::answer_prompt(&title, first))
+                        }
                     }, true)?;
                     if let Some(answer) = answer {
                         self.post(conversation, target.plan_id.as_deref(), &sender, &answer)?;

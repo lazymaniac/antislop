@@ -58,6 +58,20 @@ impl Store {
                 status TEXT NOT NULL, content TEXT NOT NULL,
                 PRIMARY KEY(task_id,round));",
         )?;
+        // Only recover a legacy attribution when an explicit UUID task event
+        // established its working/verifying round immediately before the turn.
+        // Timestamps and current task.round alone are never enough evidence.
+        connection.execute_batch("INSERT OR IGNORE INTO turn_scopes(turn_id,task_id,round)
+            SELECT t.id,k.id,json_extract(e.payload,'$.round') FROM turns t JOIN tasks k
+              ON k.conversation_id=t.conversation_id AND k.plan_id=t.plan_id AND t.role IN ('worker:'||k.id,'verifier:'||k.id)
+            JOIN events e ON e.seq=(SELECT max(p.seq) FROM events p
+              WHERE p.conversation_id=t.conversation_id AND p.plan_id=t.plan_id AND p.kind='task'
+              AND json_extract(p.payload,'$.task')=k.id
+              AND p.seq<(SELECT min(s.seq) FROM events s WHERE s.turn_id=t.id))
+            WHERE NOT EXISTS(SELECT 1 FROM turn_scopes assigned WHERE assigned.turn_id=t.id)
+              AND json_type(e.payload,'$.round')='integer'
+              AND ((t.role='worker:'||k.id AND json_extract(e.payload,'$.status')='working')
+                OR (t.role='verifier:'||k.id AND json_extract(e.payload,'$.status')='verifying'));")?;
         Ok(())
     }
 
@@ -166,10 +180,10 @@ impl Store {
             // task is queued; its saved CLI session is retained.
             tx.execute(
                 "UPDATE tasks SET status='queued',verdict=NULL,feedback=NULL,
-                base=CASE WHEN status='approved' AND ?2 THEN NULL ELSE base END,
-                result=CASE WHEN status='approved' AND ?2 THEN NULL ELSE result END
+                base=CASE WHEN status='approved' THEN NULL ELSE base END,
+                result=CASE WHEN status='approved' THEN NULL ELSE result END
                 WHERE id=?1 AND status NOT IN ('working','verifying','queued','proposed','stale')",
-                params![task, request.recipient.starts_with("worker:")],
+                [task],
             )?;
         }
         tx.commit()?;
@@ -309,6 +323,22 @@ impl Store {
         Ok(serde_json::json!({"messages":messages,"next_after":next_after,"has_more":has_more}))
     }
 
+    /// Bind queued direct mail to the turn that actually consumes it, before
+    /// starting the CLI. Delivery is acknowledged separately after success.
+    pub fn attribute_mail(&self, conversation: &str, ids: &[u64], turn: &str) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        for id in ids {
+            tx.execute("INSERT INTO mail_scopes(mail_id,task_id,round,run)
+                SELECT m.id,s.task_id,s.round,t.id FROM mail m JOIN turns t ON t.id=?3 AND t.conversation_id=m.conversation_id AND t.role=m.recipient
+                LEFT JOIN turn_scopes s ON s.turn_id=t.id
+                WHERE m.id=?1 AND m.conversation_id=?2 AND m.kind='agent_work' AND m.delivered_turn IS NULL
+                ON CONFLICT(mail_id) DO UPDATE SET task_id=excluded.task_id,round=excluded.round,run=excluded.run",params![*id as i64,conversation,turn])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn assert_comment_run(
         &self,
         conversation: &str,
@@ -359,6 +389,17 @@ impl Store {
                 }))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut historical=db.prepare("SELECT DISTINCT round FROM turn_scopes WHERE task_id=?1 AND round IS NOT NULL ORDER BY round")?;
+        for round in historical.query_map([task], |r| r.get::<_, u32>(0))? {
+            let round = round?;
+            if !rounds
+                .iter()
+                .any(|value| value["round"].as_u64() == Some(u64::from(round)))
+            {
+                rounds.push(serde_json::json!({"round":round,"status":"history","history_unavailable":true}));
+            }
+        }
+        rounds.sort_by_key(|value| value["round"].as_u64());
         let current: Option<(u32, String)> = db
             .query_row(
                 "SELECT round,status FROM tasks WHERE id=?1",
@@ -389,23 +430,34 @@ impl Store {
         round: u32,
         references: bool,
     ) -> Result<Value> {
-        let encoded: Option<String> = self
+        let encoded: Option<(String, String)> = self
             .db()
             .query_row(
-                "SELECT content FROM task_rounds WHERE task_id=?1 AND round=?2",
+                "SELECT status,content FROM task_rounds WHERE task_id=?1 AND round=?2",
                 params![task, round],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        let mut result: Value = if let Some(encoded) = encoded {
+        let mut result: Value = if let Some((status, encoded)) = encoded {
             let reference = serde_json::from_str(&encoded)?;
-            serde_json::from_str(&self.content.read(&reference)?)?
+            let mut record: Value = serde_json::from_str(&self.content.read(&reference)?)?;
+            record["status"] = status.into();
+            record
         } else {
             let current = self
                 .task_by_id(task)?
                 .ok_or_else(|| Error::Invalid("task does not exist".into()))?;
-            crate::require(current.round == round, "round history is unavailable")?;
-            let mut value = serde_json::to_value(current)?;
+            let mut value = if current.round == round {
+                serde_json::to_value(current)?
+            } else {
+                let assigned: bool = self.db().query_row(
+                    "SELECT EXISTS(SELECT 1 FROM turn_scopes WHERE task_id=?1 AND round=?2)",
+                    params![task, round],
+                    |r| r.get(0),
+                )?;
+                crate::require(assigned, "round history is unavailable")?;
+                serde_json::json!({"id":current.id,"plan_id":current.plan_id,"round":round,"status":"history","spec":{"id":current.spec["id"],"title":current.spec["title"]}})
+            };
             value["history_unavailable"] = true.into();
             value
         };
@@ -699,6 +751,87 @@ mod round_tests {
             store.task_round(&task.id, 1).unwrap()["report"],
             "report one"
         );
+        let new_turn = store
+            .start_turn(
+                &conversation.id,
+                &request.recipient,
+                "codex",
+                0,
+                Some(&task.plan_id),
+            )
+            .unwrap();
+        store
+            .mark_delivered(
+                &conversation.id,
+                &[receipt["mail"].as_u64().unwrap()],
+                &new_turn.id,
+            )
+            .unwrap();
+        assert!(
+            store.task_round(&task.id, 1).unwrap()["messages"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store.task_round(&task.id, 2).unwrap()["messages"][0]["id"],
+            receipt["mail"]
+        );
+        let page = store
+            .history_messages(
+                &conversation.id,
+                &HistoryScope::Round {
+                    task: task.id.clone(),
+                    round: 2,
+                },
+                0,
+                1,
+            )
+            .unwrap();
+        assert_eq!(page["messages"][0]["id"], receipt["mail"]);
+        assert!(page["messages"][0]["content"]["session_content"].is_object());
+        let foreign = store.create_conversation("foreign").unwrap();
+        assert!(
+            store
+                .history_content(
+                    &foreign.id,
+                    &ContentOwner::Mail {
+                        id: receipt["mail"].as_u64().unwrap()
+                    },
+                    0
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .history_messages(
+                    &foreign.id,
+                    &HistoryScope::Round {
+                        task: task.id.clone(),
+                        round: 2
+                    },
+                    0,
+                    1
+                )
+                .is_err()
+        );
+        let refs = store.task_round_with_references(&task.id, 2, true).unwrap();
+        assert!(refs["report"]["session_content"].is_object());
+        assert_eq!(
+            store
+                .history_content(
+                    &conversation.id,
+                    &ContentOwner::Round {
+                        task: task.id.clone(),
+                        round: 2,
+                        field: "report".into()
+                    },
+                    0
+                )
+                .unwrap()
+                .text,
+            "report two"
+        );
         drop(store);
         let store = Store::open(&path).unwrap();
         assert_eq!(
@@ -709,5 +842,123 @@ mod round_tests {
             store.enqueue_agent_message(&request).unwrap()["mail"],
             receipt["mail"]
         );
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    #[test]
+    fn failed_round_attribution_rolls_back_the_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("core.db")).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        let task = store
+            .add_plan(
+                &conversation.id,
+                &[serde_json::json!({"id":"t1","title":"task"})],
+            )
+            .unwrap()
+            .remove(0);
+        store.db().execute_batch("CREATE TRIGGER reject_scope BEFORE INSERT ON turn_scopes BEGIN SELECT RAISE(ABORT,'scope failure'); END;").unwrap();
+        assert!(
+            store
+                .start_turn(
+                    &conversation.id,
+                    &format!("worker:{}", task.id),
+                    "codex",
+                    0,
+                    Some(&task.plan_id)
+                )
+                .is_err()
+        );
+        let count: i64 = store
+            .db()
+            .query_row("SELECT count(*) FROM turns", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn restart_recovers_only_explicit_unambiguous_legacy_rounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core.db");
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        let mut task = store
+            .add_plan(
+                &conversation.id,
+                &[serde_json::json!({"id":"t1","title":"task"})],
+            )
+            .unwrap()
+            .remove(0);
+        task.round = 7;
+        task.status = "working".into();
+        store.update_task(&task).unwrap();
+        store
+            .append_event(
+                &conversation.id,
+                None,
+                Some(&task.plan_id),
+                "task",
+                &serde_json::json!({"task":task.id,"round":7,"status":"working"}),
+            )
+            .unwrap();
+        let role = format!("worker:{}", task.id);
+        let known = store
+            .start_turn(&conversation.id, &role, "codex", 0, Some(&task.plan_id))
+            .unwrap();
+        store
+            .append_event(
+                &conversation.id,
+                Some(&known.id),
+                Some(&task.plan_id),
+                "turn_started",
+                &serde_json::json!({"role":role}),
+            )
+            .unwrap();
+        store
+            .append_event(
+                &conversation.id,
+                None,
+                Some(&task.plan_id),
+                "task",
+                &serde_json::json!({"task":task.id,"round":7,"status":"approved"}),
+            )
+            .unwrap();
+        let unknown = store
+            .start_turn(&conversation.id, &role, "codex", 0, Some(&task.plan_id))
+            .unwrap();
+        store
+            .append_event(
+                &conversation.id,
+                Some(&unknown.id),
+                Some(&task.plan_id),
+                "turn_started",
+                &serde_json::json!({"role":role}),
+            )
+            .unwrap();
+        task.round = 8;
+        store.update_task(&task).unwrap();
+        store
+            .db()
+            .execute_batch("DELETE FROM turn_scopes; DELETE FROM task_rounds WHERE round=7;")
+            .unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        let historical = store.task_round(&task.id, 7).unwrap();
+        assert_eq!(historical["history_unavailable"], true);
+        assert_eq!(historical["turns"].as_array().unwrap().len(), 1);
+        assert_eq!(historical["turns"][0]["turn_id"], known.id);
+        let assigned: bool = store
+            .db()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM turn_scopes WHERE turn_id=?1)",
+                [unknown.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!assigned);
     }
 }

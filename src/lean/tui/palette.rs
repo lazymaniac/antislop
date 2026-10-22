@@ -17,6 +17,8 @@ const SELECTION_HELP: &str = "Ctrl+Y           copy selection (drag / double cli
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    InterviewQuestion,
+    ApproveRequirements,
     Requirements,
     PlanItems,
     Config,
@@ -44,7 +46,15 @@ pub enum Command {
     Projects,
 }
 
-const COMMANDS: [(Command, &str); 25] = [
+const COMMANDS: [(Command, &str); 27] = [
+    (
+        Command::InterviewQuestion,
+        "Open pending interview question · /interview",
+    ),
+    (
+        Command::ApproveRequirements,
+        "Approve requirements and start planning · /planning",
+    ),
     (
         Command::Requirements,
         "Browse and edit requirements · /requirements",
@@ -66,7 +76,7 @@ const COMMANDS: [(Command, &str); 25] = [
     (Command::Continue, "Continue paused work · /continue"),
     (
         Command::Autonomous,
-        "Autonomous mode: plans and rounds start automatically · /mode autonomous",
+        "Autonomous mode: approved work progresses automatically · /mode autonomous",
     ),
     (
         Command::Supervised,
@@ -384,7 +394,7 @@ impl Help {
                 "Ctrl+E           move to end of line",
                 "Ctrl+X           cancel running work",
                 "/pause, /continue  pause new steps / continue",
-                "/mode autonomous   autonomous mode for next plans",
+                "/mode autonomous   automatic progress after plan approval",
                 "/mode supervised   supervised mode (Ctrl+T toggles)",
                 "Ctrl+N / O / G    new / switch conversation / project",
                 "Ctrl+F / Ctrl+L  search conversation / open plan",

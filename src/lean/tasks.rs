@@ -266,12 +266,16 @@ pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskSpec>>>) {
     struct Plan {
         #[serde(default)]
         run_id: Option<String>,
+        #[serde(default)]
+        option_id: Option<String>,
+        #[serde(default)]
+        options_revision: Option<i64>,
         tasks: Vec<TaskSpec>,
     }
     let plan = serde_json::from_str::<Plan>(body)
         .map_err(Error::from)
         .and_then(|plan| {
-            let _ = plan.run_id;
+            let _ = (plan.run_id, plan.option_id, plan.options_revision);
             validate(&plan.tasks)?;
             Ok(plan.tasks)
         });
@@ -1335,12 +1339,15 @@ pub fn orchestrator_instructions() -> String {
         .map(|a| format!("`{}` ({}: {})", a.id, work_kind_name(a.kind), a.focus))
         .collect();
     format!(
-        "Follow a two-step workflow when the user sends a task:\n\
+        "Follow the runtime session phase in a three-phase workflow:\n\
          1. **Interview**: When the user's request has any ambiguity, missing constraints, \
          or architectural trade-offs, conduct a concise clarifying interview with the user \
          first (do not emit a ```plan block during the interview). Answer simple questions \
-         directly. Once the requirements are clear (or when the request is already \
-         self-contained), proceed to Step 2.\n\
+         directly. In an interview session, summarize goal, scope, constraints, exclusions \
+         and observable acceptance criteria in a ```requirements Markdown block. The runtime \
+         then starts planning automatically; do not request requirements approval or /planning. \
+         Even self-contained requests need that summary. Existing sessions without a runtime phase can proceed when requirements \
+         are clear.\n\
          2. **Plan Document & Task List**: Write a structured Markdown plan document \
          divided into clear `#` / `##` / `###` sections, and end your answer with a ```plan \
          block mapping tasks to those sections:\n\
@@ -1352,6 +1359,9 @@ pub fn orchestrator_instructions() -> String {
          \"writes\":false,\"depends_on\":[],\"kind\":\"analysis\",\
          \"verifier\":{{\"summary\":\"one short sentence summarizing what to verify\",\"focus\":\"what the verifier must check\",\"risks\":[\"risks specific to this task's domain\"]}}}}]}}\n\
          ```\n\
+         3. **Implementation**: The runtime starts workers only after the user accepts \
+         the reviewed plan. Respond to plan comments with revisions before approval; \
+         during execution coordinate results and verification. You remain read-only.\n\n\
          For tasks you author, write both `summary` fields in the user's language. \
          Standard descriptions of built-in roles and automatically added quality gates \
          may use the interface language. Each summary is one concise semantic sentence \
@@ -1907,8 +1917,42 @@ pub fn findings_text(findings: &[Value]) -> String {
         .join("\n")
 }
 
+/// Read the explicit interview checkpoint, never a plan or incidental prose.
+pub fn requirements_summary(answer: &str) -> Option<String> {
+    let mut in_other_fence = false;
+    let mut lines = answer.lines();
+    while let Some(line) = lines.next() {
+        if !in_other_fence && line.trim() == "```requirements" {
+            let mut summary = Vec::new();
+            for line in lines.by_ref() {
+                if line.trim() == "```" {
+                    let summary = summary.join("\n");
+                    return (!summary.trim().is_empty()).then_some(summary);
+                }
+                summary.push(line);
+            }
+            return None;
+        }
+        if line.trim().starts_with("```") {
+            in_other_fence = !in_other_fence;
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn interview_checkpoint_requires_a_complete_requirements_fence() {
+        assert_eq!(super::requirements_summary("Question?"), None);
+        assert_eq!(super::requirements_summary("```requirements\nDraft"), None);
+        assert_eq!(super::requirements_summary("```requirements\n \n```"), None);
+        assert_eq!(
+            super::requirements_summary("```requirements\nGoal 👩‍💻\nAcceptance criteria\n```"),
+            Some("Goal 👩‍💻\nAcceptance criteria".into())
+        );
+    }
+
     #[test]
     fn upstream_note_carries_full_reports() {
         assert_eq!(upstream_note(&[]), "");

@@ -202,7 +202,7 @@ fn project(dir: &Path) -> std::path::PathBuf {
 }
 
 fn run_plan(core: &std::sync::Arc<Core>, project: &Path) -> String {
-    let conversation = core.start(project).unwrap();
+    let conversation = support::legacy_conversation(core, project).unwrap();
     core.send(&conversation.id, "dodaj powitanie").unwrap();
     wait_idle(core, &conversation.id);
     let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
@@ -230,7 +230,7 @@ fn required_gates_join_plans_that_write() {
         text.replace("required_gates = false", "required_gates = true")
     });
     let core = Core::open(&project.join(".antislop"), config).unwrap();
-    let conversation = core.start(&project).unwrap();
+    let conversation = support::legacy_conversation(&core, &project).unwrap();
     core.send(&conversation.id, "dodaj powitanie").unwrap();
     wait_idle(&core, &conversation.id);
     let plan = core.store.latest_plan(&conversation.id).unwrap();

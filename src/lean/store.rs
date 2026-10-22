@@ -3,7 +3,10 @@
 
 #[path = "history.rs"]
 mod history;
+#[path = "workflow.rs"]
+mod workflow;
 pub use history::{AgentMessage, ContentOwner, HistoryScope};
+pub use workflow::Workflow;
 
 use crate::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -261,7 +264,7 @@ impl TurnStatus {
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Tables only ever get added; a change to an existing one raises it and
 /// migrates from the version found.
-const SCHEMA: u32 = 8;
+const SCHEMA: u32 = 9;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -279,6 +282,9 @@ impl Store {
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
              CREATE TABLE IF NOT EXISTS conversations(
                id TEXT PRIMARY KEY, project TEXT NOT NULL, created_ms INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS session_workflow(
+               conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
+               phase TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', upto_message INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE IF NOT EXISTS messages(
                seq INTEGER PRIMARY KEY AUTOINCREMENT,
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -907,6 +913,10 @@ impl Store {
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2",
             params![conversation, plan_id],
         )?;
+        let changed = tx.execute("UPDATE session_workflow SET phase='implementation' WHERE conversation_id=?1 AND phase<>'interview'", [conversation])?;
+        if changed > 0 {
+            tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'workflow',?3,?4)", params![conversation,plan_id,serde_json::json!({"phase":"implementation"}).to_string(),now_ms()])?;
+        }
         tx.commit()?;
         Ok(all as usize)
     }
@@ -1146,6 +1156,7 @@ impl Store {
         let content = self.content.write(&serde_json::to_string(&snapshot)?)?;
         let mut db = self.db();
         let transaction = db.transaction()?;
+        transaction.execute("UPDATE task_rounds SET status='continued' WHERE task_id=?1 AND round=(SELECT round FROM tasks WHERE id=?1) AND round<?2 AND status IN ('working','verifying','queued')",params![task.id,task.round])?;
         let changed = transaction.execute(
             "UPDATE tasks SET status=?2,round=?3,report=?4,verdict=?5,base=?6,result=?7,feedback=?8 WHERE id=?1 AND coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)=?9",
             params![
@@ -1737,9 +1748,14 @@ impl Store {
                 params![*id as i64, turn, now],
             )?;
         }
+        let recipient: Option<String> = tx
+            .query_row("SELECT role FROM turns WHERE id=?1", [turn], |row| {
+                row.get(0)
+            })
+            .optional()?;
         tx.execute(
             "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,(SELECT plan_id FROM turns WHERE id=?2),'mail_delivered',?3,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, turn, serde_json::json!({"ids": ids, "delivered_ms": now, "state": "delivered"}).to_string()],
+            params![conversation, turn, serde_json::json!({"ids": ids, "delivered_ms": now, "state": "delivered","recipient":recipient}).to_string()],
         )?;
         tx.commit()?;
         Ok(())
@@ -1948,7 +1964,17 @@ impl Store {
         Ok(events)
     }
 
-    fn hydrate_event_payload(&self, kind: &str, encoded: &str) -> Result<Value> {
+    pub fn turn_final_answer(&self, conversation: &str, turn: &str) -> Result<Option<String>> {
+        let encoded:Option<String>=self.db().query_row("SELECT payload FROM events WHERE conversation_id=?1 AND turn_id=?2 AND kind='agent_final' ORDER BY seq DESC LIMIT 1",params![conversation,turn],|row|row.get(0)).optional()?;
+        encoded
+            .map(|encoded| {
+                self.hydrate_event_payload("agent_final", &encoded)
+                    .map(|payload| payload["text"].as_str().unwrap_or("").to_owned())
+            })
+            .transpose()
+    }
+
+    pub(super) fn hydrate_event_payload(&self, kind: &str, encoded: &str) -> Result<Value> {
         let mut payload: Value = serde_json::from_str(encoded)?;
         for field in ["text", "delta", "report"] {
             if let Some(text) = payload[field].as_str() {

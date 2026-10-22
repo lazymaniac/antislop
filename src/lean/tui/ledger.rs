@@ -5,8 +5,8 @@ use crate::lean::{daemon::Request, ledger::*};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
-    layout::Rect,
-    text::Line,
+    layout::{Constraint, Direction, Layout, Rect},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 use serde_json::Value;
@@ -31,7 +31,7 @@ const LABELS: [&str; 17] = [
     "Mandatory (yes/no)",
     "Position (0-based order)",
 ];
-const TABS: [&str; 5] = ["Source", "Criteria", "Tasks", "Evidence", "History"];
+const TABS: [&str; 5] = ["Overview", "Criteria", "Tasks", "Evidence", "History"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Form {
@@ -192,6 +192,12 @@ pub struct LedgerView {
     pub pending: bool,
     pub request_id: u64,
     pub area: Rect,
+    pub list_area: Rect,
+    pub detail_area: Rect,
+    pub list_start: usize,
+    pub confirm_new_run: bool,
+    pub notice: Option<String>,
+    pub workflow_notice: Option<(bool, String)>,
     pub runs: Vec<Run>,
     pub edit_scroll: usize,
     pub pending_kind: String,
@@ -254,6 +260,12 @@ impl LedgerView {
             pending: false,
             request_id: 0,
             area: Rect::default(),
+            list_area: Rect::default(),
+            detail_area: Rect::default(),
+            list_start: 0,
+            confirm_new_run: false,
+            notice: None,
+            workflow_notice: None,
             runs: vec![],
             edit_scroll: 0,
             pending_kind: String::new(),
@@ -388,6 +400,17 @@ impl LedgerView {
     }
     pub fn key(&mut self, key: KeyEvent, conversation: &str) -> Action {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if self.confirm_new_run {
+            match key.code {
+                KeyCode::Esc => self.confirm_new_run = false,
+                KeyCode::Enter if !self.pending => {
+                    self.confirm_new_run = false;
+                    return Action::Create;
+                }
+                _ => {}
+            }
+            return Action::None;
+        }
         if self.preview.is_some() {
             match key.code {
                 KeyCode::Esc => self.preview = None,
@@ -542,12 +565,14 @@ impl LedgerView {
             KeyCode::Right => {
                 self.invalidate_read();
                 self.tab = (self.tab + 1) % 5;
+                self.source = None;
                 self.scroll = 0;
                 return Action::Detail;
             }
             KeyCode::Left => {
                 self.invalidate_read();
                 self.tab = (self.tab + 4) % 5;
+                self.source = None;
                 self.scroll = 0;
                 return Action::Detail;
             }
@@ -556,7 +581,9 @@ impl LedgerView {
             KeyCode::Char('e') => self.edit(),
             KeyCode::Char('r') => return Action::Fetch,
             KeyCode::Char('g') => return Action::Runs,
-            KeyCode::Char('p') => return Action::Proposal,
+            KeyCode::Char('p' | 'P') => return Action::Proposal,
+            KeyCode::Char('j') => self.scroll = self.scroll.saturating_add(1),
+            KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::PageDown => {
                 if let Some(p) = &mut self.page
                     && p.has_more
@@ -573,7 +600,7 @@ impl LedgerView {
                     return Action::Fetch;
                 }
             }
-            KeyCode::Char('N') => return Action::Create,
+            KeyCode::Char('N') => self.confirm_new_run = true,
             KeyCode::Char('n') => {
                 let Some(page) = &self.page else {
                     return Action::Create;
@@ -665,22 +692,60 @@ impl LedgerView {
                 }
                 self.invalidate_read();
                 self.preserve_filter();
-                self.kind = if mouse.column < self.area.width / 2 {
+                let column = mouse.column.saturating_sub(self.area.x);
+                self.kind = if column < 16 {
                     LedgerKind::Requirement
-                } else {
+                } else if column < 30 {
                     LedgerKind::PlanItem
+                } else {
+                    return Action::None;
                 };
                 self.restore_filter();
                 return Action::Fetch;
             }
-            let row = mouse.row.saturating_sub(self.area.y + 3) as usize;
-            if row < self.filtered().len() {
-                self.invalidate_read();
-                self.selected = row;
-                self.detail = None;
-                self.source = None;
-                return Action::Detail;
+            if mouse.row == self.area.bottom().saturating_sub(2)
+                && mouse.column.saturating_sub(self.area.x) < 26
+            {
+                return Action::Proposal;
             }
+            if self.detail_area.width > 0
+                && mouse.row == self.detail_area.y.saturating_sub(1)
+                && mouse.column >= self.detail_area.x
+                && mouse.column < self.detail_area.right()
+            {
+                let column = mouse.column.saturating_sub(self.detail_area.x) as usize;
+                let mut end = 0;
+                for (index, label) in TABS.iter().enumerate() {
+                    end += unicode_width::UnicodeWidthStr::width(*label) + 2;
+                    if column < end {
+                        self.invalidate_read();
+                        self.tab = index;
+                        self.scroll = 0;
+                        self.source = None;
+                        return Action::Detail;
+                    }
+                }
+                return Action::None;
+            }
+            if self.list_area.contains((mouse.column, mouse.row).into()) {
+                let row = self.list_start + mouse.row.saturating_sub(self.list_area.y) as usize / 3;
+                if row < self.filtered().len() {
+                    self.invalidate_read();
+                    self.selected = row;
+                    self.scroll = 0;
+                    self.detail = None;
+                    self.source = None;
+                    return Action::Detail;
+                }
+            }
+        }
+        if self.detail_area.contains((mouse.column, mouse.row).into()) {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_add(3),
+                MouseEventKind::ScrollUp => self.scroll = self.scroll.saturating_sub(3),
+                _ => {}
+            }
+            return Action::None;
         }
         let code = match mouse.kind {
             MouseEventKind::ScrollDown => KeyCode::Down,
@@ -716,6 +781,10 @@ impl LedgerView {
                         self.scroll = 0;
                     }
                     "applied" => {
+                        self.scroll = 0;
+                        self.detail = None;
+                        self.source = None;
+                        self.notice = Some("Changes saved. Approved analyst proposals resume verification and planning automatically.".into());
                         self.preview = None;
                         if let Some((key, snapshot)) = self.prepared_draft.take() {
                             if self.drafts.get(&key) == Some(&snapshot) {
@@ -756,7 +825,16 @@ impl LedgerView {
                     }
                     "created" => {
                         self.preserve_filter();
-                        self.page = serde_json::from_value(value).ok();
+                        if let Ok(run) = serde_json::from_value::<Run>(value) {
+                            self.page = Some(LedgerPage {
+                                run,
+                                entries: vec![],
+                                total: 0,
+                                offset: 0,
+                                has_more: false,
+                            });
+                            self.notice = Some("Draft set created. Current planning keeps its existing requirements.".into());
+                        }
                         self.restore_filter();
                     }
                     _ => {}
@@ -854,6 +932,238 @@ impl LedgerView {
             Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
         );
     }
+    fn detail_lines(&self, theme: &Theme, width: usize) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let Some(entry) = self.selected_entry() else {
+            return vec![Line::from(
+                "Select a record to inspect its requirements and coverage.",
+            )];
+        };
+        let mut section = |title: &str, text: &str| {
+            lines.push(Line::from(Span::styled(title.to_owned(), theme.title())));
+            for line in text.lines() {
+                lines.extend(wrap(&sanitize(line), width).into_iter().map(Line::from));
+            }
+            lines.push(Line::from(""));
+        };
+        if let Some(source) = &self.source {
+            section("Original source", source);
+            return lines;
+        }
+        match self.tab {
+            0 => {
+                section("Intent", &entry.spec.interpretation);
+                section(
+                    "Constraints & qualifiers",
+                    &if entry.spec.qualifiers.is_empty() {
+                        "No additional qualifiers.".into()
+                    } else {
+                        entry
+                            .spec
+                            .qualifiers
+                            .iter()
+                            .map(|q| format!("- {q}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    },
+                );
+                if !entry.spec.requirement_ids.is_empty() {
+                    section(
+                        "Linked requirements",
+                        &entry.spec.requirement_ids.join(", "),
+                    );
+                }
+                if !entry.spec.depends_on.is_empty() {
+                    section("Dependencies", &entry.spec.depends_on.join(", "));
+                }
+                if let Some(goal) = &entry.spec.technical_goal {
+                    section("Technical goal", goal);
+                }
+                if let Some(check) = &entry.spec.check {
+                    section("Execution check", check);
+                }
+                section("Original wording", &entry.original);
+                section(
+                    "Source reference",
+                    &format!(
+                        "{} · bytes {}..{} · entry v{}",
+                        entry.spec.source.source_id,
+                        entry.spec.source.start,
+                        entry.spec.source.end,
+                        entry.version
+                    ),
+                );
+            }
+            1 => {
+                if entry.spec.criteria.is_empty() {
+                    section("Acceptance criteria", "No criteria have been recorded yet.");
+                }
+                for criterion in &entry.spec.criteria {
+                    section(
+                        &format!(
+                            "{} · {}{}",
+                            criterion.id,
+                            if criterion.mandatory {
+                                "Required"
+                            } else {
+                                "Optional"
+                            },
+                            if criterion.integration {
+                                " · Integration"
+                            } else {
+                                ""
+                            }
+                        ),
+                        &criterion.text,
+                    );
+                }
+            }
+            2 => {
+                section("Assigned task IDs", &entry.spec.task_ids.join(", "));
+                section(
+                    "Implementation owners",
+                    &entry.spec.implementation_owners.join(", "),
+                );
+                section(
+                    "Verification owners",
+                    &entry.spec.verification_owners.join(", "),
+                );
+                if let Some(tasks) = self.detail.as_ref().and_then(|v| v["tasks"].as_array()) {
+                    if tasks.is_empty() {
+                        section(
+                            "Linked tasks",
+                            "No task mapping yet. Tasks are connected when a verified plan is prepared.",
+                        );
+                    }
+                    for task in tasks {
+                        section(
+                            &format!(
+                                "{} · {}",
+                                task["title"].as_str().unwrap_or("Task"),
+                                task["status"].as_str().unwrap_or("pending")
+                            ),
+                            &format!(
+                                "{} · input v{} · generation {}",
+                                task["id"].as_str().unwrap_or(""),
+                                task["entry_version"],
+                                task["generation"]
+                            ),
+                        );
+                    }
+                } else {
+                    section("Linked tasks", "Press Enter to load task coverage.");
+                }
+            }
+            3 => {
+                if let Some(evidence) = self.detail.as_ref().and_then(|v| v["evidence"].as_array())
+                {
+                    if evidence.is_empty() {
+                        section(
+                            "Verification evidence",
+                            "No independent evidence yet. Approval of requirements does not verify implementation.",
+                        );
+                    }
+                    for item in evidence {
+                        section(
+                            if item["approved"].as_bool() == Some(true) {
+                                "Verified evidence"
+                            } else {
+                                "Evidence needs review"
+                            },
+                            &format!(
+                                "{}\n{}\n{}",
+                                item["proposal"]["criterion_id"].as_str().unwrap_or(""),
+                                item["proposal"]["result"].as_str().unwrap_or(""),
+                                item["assessment"].as_str().unwrap_or("")
+                            ),
+                        );
+                    }
+                } else {
+                    section(
+                        "Verification evidence",
+                        "Press Enter to load independent checks.",
+                    );
+                }
+            }
+            _ => {
+                if let Some(history) = self.detail.as_ref().and_then(|v| v["history"].as_array()) {
+                    for version in history {
+                        section(
+                            &format!(
+                                "Version {} · revision {}",
+                                version["version"], version["spec_revision"]
+                            ),
+                            version["spec"]["interpretation"].as_str().unwrap_or(""),
+                        );
+                    }
+                    if history.is_empty() {
+                        section("History", "No earlier versions.");
+                    }
+                } else {
+                    section("History", "Press Enter to load immutable versions.");
+                }
+            }
+        }
+        lines
+    }
+
+    fn preview_lines(&self, theme: &Theme, width: usize) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(Span::styled("Review requirements changes", theme.title())),
+            Line::from(""),
+        ];
+        let Some(change) = &self.proposed_change else {
+            return lines;
+        };
+        for part in wrap(&format!("Reason: {}", sanitize(&change.reason)), width) {
+            lines.push(Line::from(part));
+        }
+        lines.push(Line::from(""));
+        let before = self
+            .preview
+            .as_ref()
+            .and_then(|p| p["diff"]["before"].as_array());
+        for entry in &change.entries {
+            lines.push(Line::from(Span::styled(sanitize(&entry.id), theme.title())));
+            let old = before
+                .and_then(|entries| {
+                    entries
+                        .iter()
+                        .find(|e| e["spec"]["id"].as_str() == Some(&entry.id))
+                })
+                .map(|e| &e["spec"]);
+            let value = serde_json::to_value(entry).unwrap_or_default();
+            if let Some(fields) = value.as_object() {
+                for (field, value) in fields {
+                    if field == "id" || old.and_then(|o| o.get(field)) == Some(value) {
+                        continue;
+                    }
+                    lines.push(Line::from(Span::styled(
+                        field.replace('_', " "),
+                        theme.accent(),
+                    )));
+                    if let Some(previous) = old.and_then(|o| o.get(field)) {
+                        for part in wrap(&format!("Before: {}", readable(previous)), width) {
+                            lines.push(Line::from(Span::styled(part, theme.dim())));
+                        }
+                    }
+                    for part in wrap(&format!("After: {}", readable(value)), width) {
+                        lines.push(Line::from(part));
+                    }
+                    lines.push(Line::from(""));
+                }
+            }
+        }
+        let tasks = self
+            .preview
+            .as_ref()
+            .map(|p| readable(&p["diff"]["affected_tasks"]))
+            .unwrap_or_default();
+        lines.push(Line::from(Span::styled("Affected tasks", theme.title())));
+        lines.extend(wrap(&tasks, width).into_iter().map(Line::from));
+        lines
+    }
+
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
         self.area = area;
         if area.width < 12 || area.height < 5 {
@@ -865,155 +1175,306 @@ impl LedgerView {
             return;
         }
         let theme = Theme::from_env();
-        let mut lines = Vec::new();
-        let name = if self.kind == LedgerKind::Requirement {
-            "Requirements"
-        } else {
-            "Plan items"
-        };
-        lines.push(Line::from(format!(
-            "Requirements  |  Plan items   [{name}]"
-        )));
-        if let Some(page) = &self.page {
-            lines.push(Line::from(format!(
-                "Run {} · revision {} · {} records · filter: {} · search: {}",
-                page.run.id, page.run.spec_revision, page.total, self.status.text, self.query.text
-            )));
-        }
-        if self.task_filter_edit {
-            lines.push(Line::from(format!(
-                "Task ID / UUID: {}",
-                self.task_filter.text
-            )));
-        }
-        if let Some(task) = &self.task {
-            lines.push(Line::from(format!("Task filter: {task}")));
-        }
-        if let Some(error) = &self.error {
-            lines.push(Line::from(format!(
-                "Error: {} · draft preserved",
-                sanitize(error)
-            )));
-        }
-        if self.pending {
-            lines.push(Line::from("Waiting for daemon…"));
-        }
-        if let Some(preview) = &self.preview {
-            lines.push(Line::from("Review exact scope change and affected tasks. Enter applies · Esc returns to draft"));
-            if let Some(change) = &self.proposed_change {
-                lines.push(Line::from(format!("Reason: {}", change.reason)));
-            }
-            let text = serde_json::to_string_pretty(&preview["diff"]).unwrap_or_default();
-            for line in text.lines() {
-                for part in wrap(&sanitize(line), area.width.saturating_sub(2) as usize) {
-                    lines.push(Line::from(part));
-                }
-            }
-        } else {
-            for (i, e) in self
-                .filtered()
+        if self.confirm_new_run {
+            let text = "Create a new requirements draft?\n\nThis creates a separate empty set. It does not replace the requirements used by current planning.\n\nEnter creates the draft. Esc returns to your existing requirements.";
+            let lines = wrap(text, area.width.saturating_sub(4) as usize)
                 .into_iter()
-                .enumerate()
-                .skip(self.selected.saturating_sub(area.height as usize / 3))
-                .take(area.height as usize / 3)
-            {
-                let parent = e
-                    .spec
-                    .parent
-                    .as_deref()
-                    .map(|p| format!("{p} > "))
-                    .unwrap_or_default();
-                lines.push(Line::from(format!(
-                    "{} {}{} [{}] {}",
-                    if i == self.selected { ">" } else { " " },
-                    parent,
-                    e.spec.id,
-                    e.status,
-                    e.spec.interpretation
-                )));
-            }
-            lines.push(Line::from(format!(
-                "{}   ←/→ tab · Enter details · s source",
-                TABS[self.tab]
-            )));
-            if let Some(source) = &self.source {
-                for line in source.lines() {
-                    for part in wrap(&sanitize(line), area.width.saturating_sub(2) as usize) {
-                        lines.push(Line::from(part));
-                    }
-                }
-            } else if let Some(e) = self.selected_entry() {
-                let text = match self.tab {
-                    0 => format!(
-                        "{} bytes {}..{}\n{}",
-                        e.spec.source.source_id, e.spec.source.start, e.spec.source.end, e.original
-                    ),
-                    1 => e
-                        .spec
-                        .criteria
-                        .iter()
-                        .map(|c| {
-                            format!(
-                                "{} [{}{}] {}",
-                                c.id,
-                                if c.mandatory { "required" } else { "optional" },
-                                if c.integration { ", integration" } else { "" },
-                                c.text
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    2 => {
-                        let linked=self.detail.as_ref().and_then(|v|v["tasks"].as_array()).map(|tasks|tasks.iter().map(|t|format!("{}: {} [{}] · plan {} · input v{} · generation {} · {}",t["task"].as_str().unwrap_or_default(),t["title"].as_str().unwrap_or_default(),t["status"].as_str().unwrap_or_default(),t["plan"].as_str().unwrap_or_default(),t["entry_version"],t["generation"],t["id"].as_str().unwrap_or_default())).collect::<Vec<_>>().join("\n")).unwrap_or_else(||"Enter to load linked tasks".into());
-                        format!(
-                            "Declared task IDs: {}\nImplementation: {}\nVerification: {}\n{linked}",
-                            e.spec.task_ids.join(", "),
-                            e.spec.implementation_owners.join(", "),
-                            e.spec.verification_owners.join(", ")
-                        )
-                    }
-                    3 => self
-                        .detail
-                        .as_ref()
-                        .map(|v| serde_json::to_string_pretty(&v["evidence"]).unwrap_or_default())
-                        .unwrap_or_else(|| "Enter to load evidence".into()),
-                    _ => self
-                        .detail
-                        .as_ref()
-                        .map(|v| serde_json::to_string_pretty(&v["history"]).unwrap_or_default())
-                        .unwrap_or_else(|| "Enter to load history".into()),
-                };
-                for line in text.lines() {
-                    for part in wrap(&sanitize(line), area.width.saturating_sub(2) as usize) {
-                        lines.push(Line::from(part));
-                    }
-                }
-            }
-            lines.push(Line::from("n new · N new run · e edit · p proposal · g next run · / search · f status · t task · m gaps · Tab ledger · PgUp/PgDn page · r refresh · Esc close"));
+                .map(Line::from)
+                .collect::<Vec<_>>();
+            frame.render_widget(
+                Paragraph::new(lines)
+                    .style(theme.text())
+                    .block(panel(&theme, " New draft set ")),
+                area,
+            );
+            return;
         }
+        frame.render_widget(Block::default().style(theme.panel()), area);
+        let rows = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+        let selected = |label: &str, active: bool| {
+            Span::styled(
+                format!(" {label} "),
+                if active {
+                    theme.selected()
+                } else {
+                    theme.dim()
+                },
+            )
+        };
         frame.render_widget(
-            Paragraph::new(lines)
-                .scroll((self.scroll.min(u16::MAX as usize) as u16, 0))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_set(if theme.ascii {
-                            ratatui::symbols::border::Set {
-                                top_left: "+",
-                                top_right: "+",
-                                bottom_left: "+",
-                                bottom_right: "+",
-                                vertical_left: "|",
-                                vertical_right: "|",
-                                horizontal_top: "-",
-                                horizontal_bottom: "-",
-                            }
-                        } else {
-                            ratatui::symbols::border::PLAIN
-                        })
-                        .title(format!(" {name} ")),
-                ),
-            area,
+            Paragraph::new(Line::from(vec![
+                selected("Requirements", self.kind == LedgerKind::Requirement),
+                Span::raw("  "),
+                selected("Plan items", self.kind == LedgerKind::PlanItem),
+                Span::styled("   Tab switches view", theme.dim()),
+            ])),
+            rows[1],
         );
+        let heading = self
+            .page
+            .as_ref()
+            .map(|p| {
+                format!(
+                    " {}   /   revision {}",
+                    sanitize(&p.run.goal),
+                    p.run.spec_revision
+                )
+            })
+            .unwrap_or_else(|| " Requirements workspace".into());
+        frame.render_widget(Paragraph::new(heading).style(theme.title()), rows[0]);
+        let filter = if self.searching {
+            format!("Search: {}", self.query.text)
+        } else if self.status_edit {
+            format!("Status: {}", self.status.text)
+        } else if self.task_filter_edit {
+            format!("Task: {}", self.task_filter.text)
+        } else {
+            format!(
+                " {} records  |  {}  |  {}",
+                self.page.as_ref().map_or(0, |p| p.total),
+                if self.query.text.is_empty() {
+                    "/ Search".into()
+                } else {
+                    format!("Search: {}", self.query.text)
+                },
+                if self.missing_only {
+                    "Missing coverage"
+                } else {
+                    "All coverage"
+                }
+            )
+        };
+        frame.render_widget(
+            Paragraph::new(sanitize(&filter)).style(theme.dim()),
+            rows[2],
+        );
+        if let Some((failed, message)) = &self.workflow_notice {
+            frame.render_widget(
+                Paragraph::new(sanitize(message)).style(if *failed {
+                    theme.error()
+                } else {
+                    theme.accent()
+                }),
+                Rect::new(
+                    rows[2].x,
+                    rows[2].y.saturating_add(1),
+                    rows[2].width,
+                    rows[2].height.saturating_sub(1),
+                ),
+            );
+        }
+        let body = rows[3];
+        self.list_area = Rect::default();
+        self.detail_area = Rect::default();
+        if self.preview.is_some() {
+            let lines = self.preview_lines(&theme, body.width.saturating_sub(4) as usize);
+            self.scroll = self.scroll.min(
+                lines
+                    .len()
+                    .saturating_sub(body.height.saturating_sub(2) as usize),
+            );
+            frame.render_widget(
+                Paragraph::new(lines)
+                    .scroll((self.scroll.min(u16::MAX as usize) as u16, 0))
+                    .block(panel(&theme, " Exact changes ")),
+                body,
+            );
+            frame.render_widget(
+                Paragraph::new(
+                    " Enter  Approve changes & continue planning    Esc  Return without applying",
+                )
+                .style(theme.selected()),
+                rows[4],
+            );
+            let status = self.error.as_deref().unwrap_or(if self.pending {
+                "Applying changes... Your review is preserved."
+            } else {
+                "Requirements approval does not start implementation."
+            });
+            frame.render_widget(
+                Paragraph::new(sanitize(status)).style(if self.error.is_some() {
+                    theme.error()
+                } else {
+                    theme.dim()
+                }),
+                rows[5],
+            );
+            return;
+        }
+        let wide = body.width >= 96;
+        let panes = Layout::default()
+            .direction(if wide {
+                Direction::Horizontal
+            } else {
+                Direction::Vertical
+            })
+            .constraints(if wide {
+                vec![Constraint::Percentage(38), Constraint::Percentage(62)]
+            } else {
+                vec![
+                    Constraint::Length((body.height / 3).max(3).min(body.height)),
+                    Constraint::Min(0),
+                ]
+            })
+            .split(body);
+        let list_block = panel(&theme, " Records ");
+        self.list_area = list_block.inner(panes[0]);
+        frame.render_widget(list_block, panes[0]);
+        let visible = (self.list_area.height as usize / 3).max(1);
+        self.list_start = self.selected.saturating_sub(visible - 1);
+        let entries = self.filtered();
+        let mut records = Vec::new();
+        for (index, entry) in entries
+            .iter()
+            .enumerate()
+            .skip(self.list_start)
+            .take(visible)
+        {
+            let style = if index == self.selected {
+                theme.selected()
+            } else {
+                theme.text()
+            };
+            records.push(Line::from(Span::styled(
+                theme.fit(
+                    &format!(
+                        " {} {}",
+                        if index == self.selected {
+                            theme.glyphs().pointer
+                        } else {
+                            " "
+                        },
+                        entry.spec.interpretation
+                    ),
+                    self.list_area.width as usize,
+                ),
+                style,
+            )));
+            records.push(Line::from(vec![
+                Span::styled(
+                    theme.fit(
+                        &format!("   {}  ", entry.spec.id),
+                        self.list_area.width as usize / 2,
+                    ),
+                    theme.dim(),
+                ),
+                Span::styled(
+                    format!("{} {}", theme.status_glyph(&entry.status), entry.status),
+                    theme.status(&entry.status),
+                ),
+            ]));
+            records.push(Line::from(""));
+        }
+        if entries.is_empty() {
+            let message = if self.pending {
+                "Loading records..."
+            } else if !self.query.text.is_empty() {
+                "No matches. Change the search or filters."
+            } else if self.kind == LedgerKind::PlanItem {
+                "Plan items appear when a plan is mapped to verified requirements."
+            } else {
+                "No requirements yet. Continue the interview or add a requirement with n."
+            };
+            records.extend(
+                wrap(message, self.list_area.width as usize)
+                    .into_iter()
+                    .map(Line::from),
+            );
+        }
+        frame.render_widget(Paragraph::new(records), self.list_area);
+        let detail_block = panel(&theme, " Details ");
+        let detail = detail_block.inner(panes[1]);
+        frame.render_widget(detail_block, panes[1]);
+        let detail_rows =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(detail);
+        let tabs = TABS
+            .iter()
+            .enumerate()
+            .map(|(i, label)| selected(label, self.tab == i))
+            .collect::<Vec<_>>();
+        frame.render_widget(Paragraph::new(Line::from(tabs)), detail_rows[0]);
+        self.detail_area = detail_rows[1];
+        let lines = self.detail_lines(&theme, self.detail_area.width as usize);
+        self.scroll = self
+            .scroll
+            .min(lines.len().saturating_sub(self.detail_area.height as usize));
+        frame.render_widget(
+            Paragraph::new(lines).scroll((self.scroll.min(u16::MAX as usize) as u16, 0)),
+            self.detail_area,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" p  Review pending changes ", theme.accent()),
+                Span::styled(
+                    " Up/Down Select  |  Left/Right Details  |  e Edit  |  Esc Close",
+                    theme.dim(),
+                ),
+            ])),
+            rows[4],
+        );
+        let status=self.error.as_ref().map(|e|format!("Error: {}. Draft preserved.",sanitize(e))).unwrap_or_else(||if self.pending {"Loading... Your drafts are preserved.".into()} else {"n Add  |  N New draft set  |  g Browse sets  |  / Search  |  f Status  |  t Task  |  m Gaps  |  j/k Scroll  |  r Refresh".into()});
+        let status = if self.error.is_none() && !self.pending {
+            self.notice.clone().unwrap_or(status)
+        } else {
+            status
+        };
+        frame.render_widget(
+            Paragraph::new(status).style(if self.error.is_some() {
+                theme.error()
+            } else {
+                theme.dim()
+            }),
+            rows[5],
+        );
+    }
+}
+
+fn panel<'a>(theme: &Theme, title: &'a str) -> Block<'a> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.separator(false))
+        .border_set(if theme.ascii {
+            ratatui::symbols::border::Set {
+                top_left: "+",
+                top_right: "+",
+                bottom_left: "+",
+                bottom_right: "+",
+                vertical_left: "|",
+                vertical_right: "|",
+                horizontal_top: "-",
+                horizontal_bottom: "-",
+            }
+        } else {
+            ratatui::symbols::border::ROUNDED
+        })
+        .title(Span::styled(title, theme.title()))
+}
+
+fn readable(value: &Value) -> String {
+    match value {
+        Value::Null => "None".into(),
+        Value::String(text) => sanitize(text),
+        Value::Bool(value) => if *value { "Yes" } else { "No" }.into(),
+        Value::Array(values) => {
+            if values.is_empty() {
+                "None".into()
+            } else {
+                values.iter().map(readable).collect::<Vec<_>>().join("; ")
+            }
+        }
+        Value::Object(values) => values
+            .iter()
+            .map(|(key, value)| format!("{}: {}", key.replace('_', " "), readable(value)))
+            .collect::<Vec<_>>()
+            .join("; "),
+        Value::Number(value) => value.to_string(),
     }
 }

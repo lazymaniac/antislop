@@ -25,7 +25,7 @@ impl Core {
         if query.run_id.is_empty() {
             query.run_id = self
                 .store
-                .latest_run(&query.conversation)?
+                .planning_run(&query.conversation)?
                 .ok_or_else(|| {
                     Error::Invalid(
                         "no run; requirements are extracted when a plan is proposed".into(),
@@ -39,7 +39,7 @@ impl Core {
         self.store.list_ledger(&query, kind, &fp)
     }
     pub fn apply_user_ledger_change(
-        &self,
+        self: &Arc<Self>,
         proposal_id: &str,
         diff_hash: &str,
         change: &LedgerChange,
@@ -75,6 +75,13 @@ impl Core {
                 );
             }
         }
+        drop(_integration);
+        if self
+            .store
+            .has_pending_requirements_approval(&change.conversation)?
+        {
+            self.wake(&change.conversation);
+        }
         Ok(result)
     }
     pub(in crate::lean) fn ledger_context(
@@ -87,9 +94,9 @@ impl Core {
             serde_json::to_string(&self.store.run(conversation, run_id)?)?,
             serde_json::to_string(&self.store.ledger_sources(conversation, run_id)?)?,
             serde_json::to_string(&self.store.ledger_entries(conversation, run_id, None)?.iter().map(|e|json!({"id":e.spec.id,"version":e.version,"spec_revision":e.spec_revision,"spec":e.spec})).collect::<Vec<_>>())?
-        ))
+        ) + &self.store.solution_choice(conversation, run_id)?.map(|choice| format!("\nReviewed implementation options: {}\n", serde_json::to_string(&choice).unwrap_or_default())).unwrap_or_default())
     }
-    fn requirements_turn(
+    pub(super) fn requirements_turn(
         self: &Arc<Self>,
         conversation: &str,
         run_id: &str,
@@ -98,6 +105,23 @@ impl Core {
         prompt: String,
         cancel: &AtomicBool,
     ) -> Result<(String, String)> {
+        let progress = match (phase, verifier) {
+            ("extraction", false) => {
+                "Preparing requirements from the interview and source documents."
+            }
+            ("extraction", true) => "Checking requirements independently before planning.",
+            ("options", false) => "Comparing implementation alternatives.",
+            ("options", true) => "Checking the solution comparison independently.",
+            (_, false) => "Auditing the integrated implementation against requirements.",
+            (_, true) => "Verifying the implementation audit independently.",
+        };
+        self.store.append_event(
+            conversation,
+            None,
+            None,
+            "planning_progress",
+            &json!({"text":progress}),
+        )?;
         let role = format!(
             "requirements-{phase}-{}",
             if verifier { "verifier" } else { "analyst" }
@@ -107,7 +131,11 @@ impl Core {
             plan_id: None,
             role: role.clone(),
             profile: self.config_snapshot().resolve(
-                WorkKind::Requirements,
+                if phase == "options" {
+                    WorkKind::Options
+                } else {
+                    WorkKind::Requirements
+                },
                 if verifier {
                     RoleKind::Verifier
                 } else {
@@ -154,10 +182,23 @@ impl Core {
         )?;
         Ok((answer, turn.id))
     }
-    fn full_ledger_sources(&self, conversation: &str, run_id: &str) -> Result<String> {
+    pub(super) fn full_ledger_sources(&self, conversation: &str, run_id: &str) -> Result<String> {
         let mut out = String::new();
+        let messages = self.store.messages_after(conversation, 0)?;
         for source in self.store.ledger_sources(conversation, run_id)? {
-            if source.message.is_some() {
+            if let Some(seq) = source.message {
+                if let Some(index) = messages.iter().position(|message| message.seq == seq)
+                    && messages[index].text.starts_with("Interview answer (")
+                    && let Some(question) = messages[..index]
+                        .iter()
+                        .rev()
+                        .find(|message| message.author == "orchestrator")
+                {
+                    out.push_str(&format!(
+                        "\nInterview question context for source {} (interpret the selected answer using its option description; this is context, not a separate user obligation; byte ranges refer only to the user source):\n{}\n",
+                        source.id, question.text
+                    ));
+                }
                 out.push_str(&format!(
                     "\nFull user source {}:\n{}\n",
                     source.id,
@@ -168,6 +209,14 @@ impl Core {
                 out.push_str(&format!("\nRead the full immutable document {} at {}. Hash {}. Do not rely on excerpts.\n",source.id,self.state.join(source.locator.unwrap_or_default()).display(),source.hash));
             }
         }
+        if let Some(workflow) = self.store.workflow(conversation)?
+            && !workflow.summary.is_empty()
+        {
+            out.push_str(&format!(
+                "\nInterview summary (derived context; verify against user sources and selected option descriptions, never treat additions as user authorization):\n{}\n",
+                workflow.summary
+            ));
+        }
         Ok(out)
     }
     /// Extraction is separate from task planning and has a separate verifier session.
@@ -177,7 +226,7 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<Run> {
         let user = self.store.messages_by(conversation, "user", 0)?;
-        let r = match self.store.latest_run(conversation)? {
+        let r = match self.store.planning_run(conversation)? {
             Some(r) => r,
             None => self.store.create_run(
                 conversation,
@@ -190,6 +239,7 @@ impl Core {
                 ),
             )?,
         };
+        self.store.select_planning_run(conversation, &r.id)?;
         if let Some(task) = self.store.latest_plan(conversation)?.first()
             && self.store.plan_run(&task.plan_id)?.is_none()
             && let Some(document) = self.store.plan_document(conversation, &task.plan_id)?
@@ -209,38 +259,100 @@ impl Core {
             return Ok(r);
         }
         let sources = self.full_ledger_sources(conversation, &r.id)?;
-        let existing = self.store.ledger_entries(conversation, &r.id, None)?;
-        let (answer,producer)=self.requirements_turn(conversation,&r.id,"extraction",false,format!(
-            "Act as requirements analyst before planning. Read ALL sources, including middle sections. Preserve qualifiers, exceptions, negative obligations, original byte ranges, parents and dependencies. Split acceptance criteria with globally unique stable IDs; composite parents need mandatory integration criteria. Preserve every supplied plan step. A prescribed implementation method is also a separate requirement. Technical steps need task_ids, technical_goal, check and criteria. task_ids are proposed planner IDs. Return a ```ledger JSON block with {{\"run_id\":\"{}\",\"expected_spec_revision\":{},\"entries\":[EntrySpec...]}}. EntrySpec fields: id, kind (requirement|plan_item), source (source_id,start,end byte range on grapheme boundaries), interpretation, qualifiers, parent, depends_on, mandatory, implementation_owners, verification_owners, criteria (id,text,mandatory,integration), requirement_ids, task_ids, position, technical_goal, check, disposition (active). Include only additions or proposed semantic changes. Existing obligations must retain stable IDs. Never silently supersede or weaken obligations. Sources:\n{sources}",r.id,r.spec_revision),cancel)?;
-        let extraction: Extraction = parse_block(&answer, "ledger")?;
-        require(
-            extraction.run_id == r.id && extraction.expected_spec_revision == r.spec_revision,
-            "analyst returned wrong run or revision",
-        )?;
-        if !extraction.entries.is_empty() {
-            let change = LedgerChange {
-                conversation: conversation.into(),
-                run_id: r.id.clone(),
-                expected_spec_revision: r.spec_revision,
-                operation_id: crate::id(),
-                reason: "source extraction".into(),
-                entries: extraction.entries,
+        let producer = if let Some(producer) = self
+            .store
+            .approved_requirements_producer(conversation, &r.id, r.spec_revision)?
+            .filter(|_| !new_source)
+        {
+            producer
+        } else {
+            let existing = self.store.ledger_entries(conversation, &r.id, None)?;
+            let review_feedback =
+                self.store
+                    .messages_by(conversation, "requirements-reviewer", r.start_message)?;
+            let review_feedback = review_feedback
+                .last()
+                .map(|message| message.text.as_str())
+                .unwrap_or("");
+            let prompt = format!(
+                "Act as requirements analyst before planning. Read ALL sources, including middle sections. Preserve qualifiers, exceptions, negative obligations, original byte ranges, parents and dependencies. parent must reference an entry of the SAME kind, or be null. Link plan_item entries to requirements using requirement_ids, never parent. All references must exist in the combined existing and proposed ledger. Split acceptance criteria with globally unique stable IDs; composite parents need mandatory integration criteria. Preserve every supplied plan step. A prescribed implementation method is also a separate requirement. Technical steps need task_ids, technical_goal, check and criteria. task_ids are proposed planner IDs. Return a ```ledger JSON block with {{\"run_id\":\"{}\",\"expected_spec_revision\":{},\"entries\":[EntrySpec...]}}. EntrySpec fields: id, kind (requirement|plan_item), source (source_id,start,end byte range on grapheme boundaries), interpretation, qualifiers, parent, depends_on, mandatory, implementation_owners, verification_owners, criteria (id,text,mandatory,integration), requirement_ids, task_ids, position, technical_goal, check, disposition (active). Include only additions or proposed semantic changes. Existing obligations must retain stable IDs. Never silently supersede or weaken obligations. For a planning-only request, distinguish acceptance tests the plan must specify from results checked during later execution. Do not invent implementation tasks that have not been planned. Previous independent review feedback (correct omissions; semantic changes still require user approval): {review_feedback}. Sources:\n{sources}",
+                r.id, r.spec_revision
+            );
+            let mut feedback = String::new();
+            let (change, producer) = loop {
+                if cancel.load(Ordering::SeqCst) {
+                    return Err(Error::Invalid("requirements extraction cancelled".into()));
+                }
+                let (answer, producer) = self.requirements_turn(
+                    conversation,
+                    &r.id,
+                    "extraction",
+                    false,
+                    format!("{prompt}{feedback}"),
+                    cancel,
+                )?;
+                let validated = (|| -> Result<LedgerChange> {
+                    let mut extraction: Extraction = parse_block(&answer, "ledger")?;
+                    require(
+                        extraction.run_id == r.id
+                            && extraction.expected_spec_revision == r.spec_revision,
+                        "analyst returned wrong run or revision",
+                    )?;
+                    extraction
+                        .entries
+                        .retain(|entry| !existing.iter().any(|old| old.spec == *entry));
+                    require(
+                        !extraction.entries.is_empty() || !existing.is_empty(),
+                        "requirements extraction is empty",
+                    )?;
+                    let change = LedgerChange {
+                        conversation: conversation.into(),
+                        run_id: r.id.clone(),
+                        expected_spec_revision: r.spec_revision,
+                        operation_id: crate::id(),
+                        reason: "source extraction".into(),
+                        entries: extraction.entries,
+                    };
+                    if !change.entries.is_empty() {
+                        self.store.preview_ledger_change(&change, &self.state)?;
+                    }
+                    Ok(change)
+                })();
+                match validated {
+                    Ok(change) => break (change, producer),
+                    Err(error @ (Error::Invalid(_) | Error::Json(_))) if feedback.is_empty() => {
+                        self.store.append_event(
+                        conversation,
+                        None,
+                        None,
+                        "planning_progress",
+                        &json!({"text": format!("Correcting requirements extraction: {error}")}),
+                    )?;
+                        feedback = format!(
+                            "\nThe previous extraction was rejected: {error}. Correct the complete ledger JSON without dropping obligations or weakening criteria. Previous response:\n{answer}"
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
             };
-            if change
-                .entries
-                .iter()
-                .any(|e| existing.iter().any(|old| old.spec.id == e.id))
-            {
-                let (proposal, diff) =
-                    self.store
-                        .propose_agent_ledger_change(&change, &self.state, &producer)?;
-                self.store.append_event(conversation,None,None,"ledger_approval_required",&json!({"proposal":proposal,"run":r.id,"revision":r.spec_revision,"affected_tasks":diff.affected_tasks}))?;
-                return Err(Error::Invalid("requirements analyst proposed a semantic scope change; open /requirements and press p to review the exact diff before planning".into()));
+            if !change.entries.is_empty() {
+                if change
+                    .entries
+                    .iter()
+                    .any(|e| existing.iter().any(|old| old.spec.id == e.id))
+                {
+                    let (proposal, diff) =
+                        self.store
+                            .propose_agent_ledger_change(&change, &self.state, &producer)?;
+                    self.store.append_event(conversation,None,None,"ledger_approval_required",&json!({"proposal":proposal,"run":r.id,"revision":r.spec_revision,"affected_tasks":diff.affected_tasks}))?;
+                    return Err(Error::Invalid("requirements analyst proposed a semantic scope change; open /requirements and press p to review the exact diff before planning".into()));
+                }
+                let _integration = self.integrating.lock().expect("integration mutex");
+                self.store
+                    .apply_analyst_ledger_change(&change, &self.state, &producer)?;
             }
-            let _integration = self.integrating.lock().expect("integration mutex");
-            self.store
-                .apply_analyst_ledger_change(&change, &self.state, &producer)?;
-        }
+            producer
+        };
         let current = self.store.run(conversation, &r.id)?;
         require(
             !self
@@ -250,7 +362,7 @@ impl Core {
             "requirements extraction is empty",
         )?;
         let (answer,verifier)=self.requirements_turn(conversation,&r.id,"extraction",true,format!(
-            "Independently compare both ledgers to every full source. Find omitted obligations, lost qualifiers, ambiguous interpretation, missing plan steps, prescribed methods and missing composite integration criteria. Do not accept analyst assertions as evidence. Read full document artifacts. Return a ```verdict JSON block {{\"approved\":true|false,\"findings\":[{{\"issue\":\"...\"}}]}}. Full sources:\n{sources}"),cancel)?;
+            "Independently compare the requirement entries to every full source and the interview context. This is extraction before task planning: the task/plan-item ledger may legitimately be absent. Do not reject solely because a second ledger or execution evidence does not exist yet. Selected interview options include their descriptions; use that context before declaring ambiguity. For planning-only requests, completion criteria describe acceptance tests for later implementation, not a demand to implement now. Do not add obligations unsupported by user sources or project instructions. Find omitted obligations, lost qualifiers, ambiguous interpretation, missing plan steps, prescribed methods and missing composite integration criteria. Do not accept analyst assertions as evidence. Read full document artifacts. Return a ```verdict JSON block {{\"approved\":true|false,\"findings\":[{{\"issue\":\"...\"}}]}}. Full sources:\n{sources}"),cancel)?;
         let verdict = tasks::parse_verdict(&answer);
         self.store.record_ledger_review(
             conversation,
@@ -263,6 +375,18 @@ impl Core {
             verdict.approved,
             &answer,
         )?;
+        if !verdict.approved
+            && !cancel.load(Ordering::SeqCst)
+            && self
+                .store
+                .count_since_user(conversation, "requirements-reviewer")?
+                == 0
+        {
+            self.store.add_message(conversation, "requirements-reviewer", &format!(
+                "Independent requirements review rejected run {} revision {}. Revisit the extraction using this feedback and the full interview context, then regenerate the plan. Do not weaken obligations or bypass scope-change approval. Findings: {}",
+                r.id, current.spec_revision, tasks::findings_text(&verdict.findings)
+            ))?;
+        }
         require(
             verdict.approved,
             &format!(
@@ -403,5 +527,138 @@ impl Core {
             serde_json::to_string(&entries.iter().map(|e|json!({"id":e.spec.id,"version":e.version,"spec_revision":e.spec_revision,"spec":e.spec})).collect::<Vec<_>>())?,
             serde_json::to_string(&self.store.ledger_sources(conversation, &run_id)?)?
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn extraction_repairs_invalid_parent_once_and_preserves_atomicity() {
+        for (repairs, reject_review) in [(true, false), (false, false), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("analyst");
+            std::fs::write(&script, r#"#!/usr/bin/env python3
+import json,sys,uuid,os
+prompt=sys.argv[-1]
+lines=prompt.rsplit('Run and ledger inputs (stable identities; keep their versions):\n',1)[1].splitlines()
+run=json.loads(lines[0])
+assert 'selected option details' in prompt
+if prompt.startswith('Independently compare'):
+    assert 'may legitimately be absent' in prompt
+    answer='```verdict\n'+json.dumps({'approved':not os.path.exists('reject-review'),'findings':[{'issue':'missing qualifier'}] if os.path.exists('reject-review') else []})+'\n```'
+else:
+    assert 'SAME kind' in prompt
+    n=int(open('attempts').read()) if os.path.exists('attempts') else 0
+    open('attempts','w').write(str(n+1))
+    if n == 1:
+        assert 'entry p has unknown or incompatible parent r' in prompt, prompt
+        assert 'Previous response:' in prompt
+    source=json.loads(lines[1].removeprefix('Sources: '))[0]['id']
+    base={'source':{'source_id':source,'start':0,'end':4},'interpretation':'Keep scope','criteria':[{'id':'r.c','text':'Check scope','mandatory':True,'integration':True}]}
+    r=dict(base,id='r',kind='requirement')
+    p=dict(base,id='p',kind='plan_item',parent=None if n and os.path.exists('repair') else 'r',requirement_ids=['r'],task_ids=['t'],criteria=[{'id':'p.c','text':'Check task','mandatory':True}])
+    answer='```ledger\n'+json.dumps({'run_id':run['id'],'expected_spec_revision':run['spec_revision'],'entries':[r,p]})+'\n```'
+print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
+print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
+print(json.dumps({'type':'turn.completed','usage':{}}))
+"#).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            if repairs {
+                std::fs::write(dir.path().join("repair"), "").unwrap();
+            }
+            if reject_review {
+                std::fs::write(dir.path().join("reject-review"), "").unwrap();
+            }
+            let config = std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/examples/antislop.toml"
+            ))
+            .unwrap()
+            .replace(
+                "binary = \"codex\"",
+                &format!("binary = {:?}", script.to_str().unwrap()),
+            )
+            .replace("provider = \"agy\"", "provider = \"codex\"");
+            let core = Core::open(
+                &dir.path().join("state"),
+                Config::from_toml(&config).unwrap(),
+            )
+            .unwrap();
+            let conversation = core
+                .store
+                .create_conversation(dir.path().to_str().unwrap())
+                .unwrap()
+                .id;
+            core.store
+                .add_message(&conversation, "orchestrator", "selected option details")
+                .unwrap();
+            core.store
+                .add_message(&conversation, "user", "Interview answer (focus)\nKeep")
+                .unwrap();
+            let result = core.ensure_requirements(&conversation, &AtomicBool::new(false));
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
+                "2"
+            );
+            let run = core.store.latest_run(&conversation).unwrap().unwrap();
+            let entries = core
+                .store
+                .ledger_entries(&conversation, &run.id, None)
+                .unwrap();
+            if reject_review {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("missing qualifier")
+                );
+                assert_eq!(entries.len(), 2);
+                assert_eq!(
+                    core.store
+                        .count_since_user(&conversation, "requirements-reviewer")
+                        .unwrap(),
+                    1
+                );
+                let repeated = core
+                    .ensure_requirements(&conversation, &AtomicBool::new(false))
+                    .unwrap_err();
+                assert!(
+                    repeated.to_string().contains("missing qualifier"),
+                    "unchanged entries must not create a scope approval: {repeated}"
+                );
+                assert_eq!(
+                    core.store
+                        .count_since_user(&conversation, "requirements-reviewer")
+                        .unwrap(),
+                    1
+                );
+                assert_eq!(
+                    std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
+                    "3"
+                );
+            } else if repairs {
+                result.unwrap();
+                assert_eq!(entries.len(), 2);
+                assert_eq!(run.spec_revision, 1);
+                assert!(
+                    core.store
+                        .extraction_current(&conversation, &run.id)
+                        .unwrap()
+                );
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("entry p has unknown or incompatible parent r")
+                );
+                assert!(entries.is_empty());
+                assert_eq!(run.spec_revision, 0);
+            }
+        }
     }
 }

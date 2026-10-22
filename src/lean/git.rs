@@ -141,6 +141,10 @@ pub fn is_repository(dir: &Path) -> bool {
     git(dir, &["rev-parse", "--is-inside-work-tree"]).is_ok_and(|output| output.status.success())
 }
 
+pub fn session_branch(dir: &Path) -> Result<String> {
+    ok(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).or_else(|_| head(dir))
+}
+
 pub fn head(dir: &Path) -> Result<String> {
     ok(dir, &["rev-parse", "HEAD"])
 }

@@ -8,6 +8,7 @@ pub mod daemon;
 pub mod diff;
 pub mod feedback;
 pub mod git;
+pub mod interview;
 pub mod ledger;
 mod mail;
 pub mod projects;
@@ -208,6 +209,11 @@ pub struct Core {
 }
 
 /// Who runs a turn, where, and with what access.
+struct PlanProposal<'a> {
+    config: &'a Config,
+    specs: &'a [TaskSpec],
+}
+
 struct TurnSetup<'a> {
     conversation: &'a str,
     plan_id: Option<String>,
@@ -291,6 +297,41 @@ impl Core {
             blocked_seen: Mutex::new(HashMap::new()),
             unblocked: Mutex::new(HashMap::new()),
         });
+        core.store.recover_approved_requirements()?;
+        core.store.recover_options_comparisons()?;
+        // Complete checkpoints left by an older daemon or a crash between turns.
+        for conversation in core.store.conversations()? {
+            core.store.finish_interview(&conversation.id)?;
+            if core
+                .store
+                .workflow(&conversation.id)?
+                .is_none_or(|workflow| workflow.phase != "interview")
+                && let Some(turn) = core.store.last_orchestration_turn(&conversation.id)?
+                && turn.status == TurnStatus::Done
+                && let Ok(Some(answer)) = core.store.turn_final_answer(&conversation.id, &turn.id)
+                && let (_, Some(Err(error))) = tasks::parse_plan(&answer)
+            {
+                core.store.queue_plan_format_repair(
+                    &conversation.id,
+                    &turn.id,
+                    &error.to_string(),
+                )?;
+            }
+            if core
+                .store
+                .has_pending_requirements_approval(&conversation.id)?
+            {
+                core.wake(&conversation.id);
+            }
+            if core
+                .store
+                .workflow(&conversation.id)?
+                .is_some_and(|w| w.phase == "planning")
+                && core.unanswered(&conversation.id)?.is_some()
+            {
+                core.wake(&conversation.id);
+            }
+        }
         // Pick up where the previous process stopped: the orchestrator answers
         // what it was answering, and an autonomous conversation resumes its
         // plan through the agents' own sessions.
@@ -313,14 +354,33 @@ impl Core {
 
     pub fn start(&self, project: &Path) -> Result<Conversation> {
         let project = project.canonicalize()?;
-        self.store.create_conversation(&project.to_string_lossy())
+        let conversation = self.store.create_conversation(&project.to_string_lossy())?;
+        if let Ok(branch) = git::session_branch(&project) {
+            self.store.append_event(
+                &conversation.id,
+                None,
+                None,
+                "session_started",
+                &json!({"branch": branch}),
+            )?;
+        }
+        self.store.begin_interview(&conversation.id)?;
+        Ok(conversation)
     }
 
     /// Records the message and returns at once. The orchestrator answers in
     /// the background; messages sent meanwhile go into its next turn.
     pub fn send(self: &Arc<Self>, conversation: &str, text: &str) -> Result<Message> {
         self.store.conversation(conversation)?;
-        let message = self.store.add_message(conversation, "user", text)?;
+        let message = if text.trim() == "/planning" {
+            require(
+                self.is_idle(conversation),
+                "wait for the orchestrator to finish before approving requirements",
+            )?;
+            self.store.approve_requirements(conversation)?
+        } else {
+            self.store.add_message(conversation, "user", text)?
+        };
         self.wake(conversation);
         Ok(message)
     }
@@ -1918,6 +1978,12 @@ impl Core {
         plan_id: &str,
         queue: impl FnOnce(&Store) -> Result<()>,
     ) -> Result<Vec<Task>> {
+        require(
+            self.store
+                .workflow(conversation)?
+                .is_none_or(|w| w.phase != "interview"),
+            "finish the interview and accept the reviewed plan before starting implementation",
+        )?;
         let mut plans = self.plans.lock().expect("plans mutex");
         require(
             !plans.contains_key(conversation),
@@ -2207,12 +2273,28 @@ impl Core {
                 }
             }
         }
+        let workflow = self.store.workflow(conversation)?;
+        let interviewing = workflow.as_ref().is_some_and(|w| w.phase == "interview");
+        if workflow.as_ref().is_some_and(|w| w.phase == "planning") {
+            self.store.append_event(
+                conversation,
+                None,
+                None,
+                "planning_progress",
+                &json!({"text": "Working on the plan draft"}),
+            )?;
+        }
         let Some(answer) = self.turn(setup, cancel, |first| {
             let mut prompt = orchestrator_prompt(&project, first || answered == 0, &asked, &open);
             prompt.push_str(&comment_context);
-            if let Ok(Some(run)) = self.store.latest_run(conversation) {
+            if interviewing {
+                prompt.insert_str(0, "\nSESSION PHASE: INTERVIEW. This overrides any instruction to propose a plan. Ask concise concrete questions in the user's language to establish the goal, scope, constraints, exclusions and observable acceptance criteria. Use answers already given; do not repeat questions. Even a self-contained request needs a requirements checkpoint. Ask one question at a time using a fenced ```question JSON block: {\"id\":\"scope\",\"context\":\"Why this decision matters\",\"question\":\"What should we build?\",\"options\":[{\"label\":\"Option A\",\"description\":\"Tradeoff\"},{\"label\":\"Option B\",\"description\":\"Tradeoff\"}]}. Offer 2–6 concrete options, put the recommended option first, mark its label as recommended in the user's language and explain its tradeoff. Do not include an Other option: the UI always supplies a custom answer field. Do not combine a question with the requirements checkpoint in the same answer. When no more questions are needed, end with a fenced ```requirements Markdown summary containing those agreed requirements and any explicit assumptions. This completes the interview and automatically starts planning. Do not emit a plan block, schedule work or implement anything. Do not ask the user to approve the requirements or send /planning.\n");
+            } else if let Some(workflow) = &workflow {
+                prompt.insert_str(0, &format!("\nSESSION PHASE: {}. Collected requirements:\n{}\nPrepare or revise the complete plan for review and comments. Never start implementation yourself; separate user plan approval is required. During implementation, follow progress and respond to results or questions; propose revisions for approval if necessary.\n", workflow.phase, workflow.summary));
+            }
+            if let Ok(Some(run)) = self.store.planning_run(conversation) {
                 prompt.push_str(&self.ledger_context(conversation, &run.id).unwrap_or_default());
-                prompt.push_str("\nYour plan JSON must contain run_id and each task must include requirement_ids, criterion_ids and plan_item_ids. Cover every mandatory criterion and every plan item. Preserve the active run for corrections and continuations.\n");
+                prompt.push_str("\nThe runtime binds this plan to the active requirements run. Each task must include requirement_ids, criterion_ids and plan_item_ids. Cover every mandatory criterion and plan item. Use the reviewed implementation comparison and resolve its findings in the plan. Do not ask the user to copy run or option identifiers.\n");
             }
             prompt
         })?
@@ -2236,10 +2318,40 @@ impl Core {
             (answer, None)
         };
         let (answer, unblocking) = tasks::parse_recoveries(&answer);
-        let proposed_run = tasks::proposed_run(&answer);
-        let (text, plan) = tasks::parse_plan(&answer);
+        let (mut text, mut plan) = tasks::parse_plan(&answer);
+        if interviewing {
+            match interview::parse(&text) {
+                Some(Ok(question)) => {
+                    self.store.ask_interview_question(conversation, &question)?;
+                    text = question.transcript();
+                }
+                Some(Err(error)) => self.notice(
+                    conversation,
+                    &format!("invalid interview question: {error}"),
+                ),
+                None => {
+                    if let Some(summary) = tasks::requirements_summary(&text) {
+                        self.store.interview_summary(conversation, &summary, upto)?;
+                        text = summary;
+                    }
+                }
+            }
+            if plan.is_some() {
+                self.notice(
+                    conversation,
+                    "plan withheld during interview; planning starts after the requirements summary is complete",
+                );
+            }
+            plan = None;
+        }
+        if workflow.as_ref().is_some_and(|w| w.phase == "planning") {
+            self.store.append_event(conversation, None, None, "planning_progress", &json!({"text": if plan.as_ref().is_some_and(|p| p.is_ok()) { "Plan draft ready" } else { "Working on the plan draft" }}))?;
+        }
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
-        if !unblocking.is_empty() {
+        if interviewing && !cancel.load(Ordering::SeqCst) {
+            self.store.finish_interview(conversation)?;
+        }
+        if !interviewing && !unblocking.is_empty() {
             // Supervised: only an answer of the user lets the orchestrator
             // unblock; the runtime's own report does not.
             let decided = asked.last().is_some_and(|message| message.author == "user");
@@ -2263,18 +2375,31 @@ impl Core {
                     conversation,
                     &project,
                     &text,
-                    (&config, &specs, proposed_run.as_deref()),
+                    PlanProposal {
+                        config: &config,
+                        specs: &specs,
+                    },
                     addressed.as_deref(),
                     cancel,
                 )?
             }
             Some(Err(error)) => {
+                let retrying =
+                    if let Some(turn) = self.store.last_orchestration_turn(conversation)? {
+                        self.store.queue_plan_format_repair(
+                            conversation,
+                            &turn.id,
+                            &error.to_string(),
+                        )?
+                    } else {
+                        false
+                    };
                 self.store.append_event(
                     conversation,
                     None,
                     None,
                     "plan_invalid",
-                    &json!({"error": error.to_string()}),
+                    &json!({"error":error.to_string(),"retrying":retrying,"retry":if retrying {"Correcting the plan format automatically."} else {"The plan could not be decoded after two correction attempts. Send a message to retry; your requirements and options are preserved."}}),
                 )?;
             }
             None => {
@@ -2309,14 +2434,18 @@ impl Core {
         conversation: &str,
         project: &Path,
         text: &str,
-        proposal: (&Config, &[TaskSpec], Option<&str>),
+        proposal: PlanProposal<'_>,
         addressed: Option<&[u64]>,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        let (config, specs, proposed_run) = proposal;
+        let PlanProposal { config, specs } = proposal;
         let run = match self.ensure_requirements(conversation, cancel) {
             Ok(run) => run,
             Err(error) => {
+                self.store.append_event(
+                    conversation, None, None, "requirements_failed",
+                    &json!({"error": error.to_string(), "retry": "Send a message to retry planning. For a proposed scope change, open /requirements and press p to review it first."}),
+                )?;
                 self.notice(
                     conversation,
                     &format!("requirements preparation failed: {error}"),
@@ -2324,17 +2453,20 @@ impl Core {
                 return Ok(());
             }
         };
-        if proposed_run != Some(run.id.as_str()) {
-            self.store.append_event(conversation,None,None,"ledger_plan_rejected",&json!({"error":"planner must explicitly bind the verified run_id; regenerating plan"}))?;
-            if self
-                .store
-                .count_since_user(conversation, "requirements-planner")?
-                < tasks::MAX_ROUNDS as usize
-            {
-                self.store.add_message(conversation, "requirements-planner", &format!("Create a task plan from the verified ledger, with explicit run_id {} and task requirement_ids, criterion_ids, plan_item_ids. {}", run.id, self.ledger_context(conversation, &run.id)?))?;
+        match self.ensure_options(conversation, &run, cancel) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                self.store.append_event(conversation,None,None,"plan_invalid",&json!({"error":format!("Implementation options comparison failed: {error}. Send a message to retry planning.")}))?;
+                return Ok(());
             }
-            return Ok(());
         }
+        let choice = self
+            .store
+            .solution_choice(conversation, &run.id)?
+            .ok_or_else(|| {
+                Error::Invalid("reviewed implementation comparison is missing".into())
+            })?;
         let values = specs
             .iter()
             .map(serde_json::to_value)
@@ -2381,6 +2513,13 @@ impl Core {
                                  or integration check"}),
             );
         }
+        self.store.append_event(
+            conversation,
+            None,
+            Some(&plan_id),
+            "planning_progress",
+            &json!({"text": "Reviewing the plan"}),
+        )?;
         let review = self.review(
             conversation,
             PLAN_VERIFIER,
@@ -2393,10 +2532,11 @@ impl Core {
                 } else {
                     tasks::plan_review_followup(request, specs)
                 };
-                match &planning_gaps {
+                let prompt = match &planning_gaps {
                     Some(gaps) => format!("{prompt}\n\n{gaps}"),
                     None => prompt,
-                }
+                };
+                format!("{prompt}\n\nImplementation options and their independent review:\n{}\nCheck that this complete plan resolves every review finding. A diagnosis-first plan must name the measurement, decision criteria and dependent implementation task, without claiming future results. Reject unresolved correctness or scope issues. Proposed test tolerances need justification; they do not redefine user requirements.",serde_json::to_string(&choice).unwrap_or_default())
             },
         )?;
         if cancel.load(Ordering::SeqCst) {
@@ -2418,6 +2558,13 @@ impl Core {
                 "plan_review",
                 &json!({"plan": plan_id, "approved": false, "findings": verdict.findings}),
             )?;
+            self.store.append_event(
+                conversation,
+                None,
+                Some(&plan_id),
+                "planning_progress",
+                &json!({"text": "Revising the plan after review"}),
+            )?;
             // The orchestrator's loop answers this message next.
             self.store.add_message(
                 conversation,
@@ -2432,7 +2579,8 @@ impl Core {
             self.store
                 .resolve_listed_plan_comments(conversation, answered, addressed)?;
         }
-        let autonomous = self.autonomous(conversation)?;
+        let autonomous =
+            self.autonomous(conversation)? && self.store.workflow(conversation)?.is_none();
         let waiting = if !autonomous {
             None
         } else if !checked {
@@ -2594,6 +2742,11 @@ impl Core {
             provider,
             upto_message,
             plan_id.as_deref(),
+        )?;
+        self.store.attribute_mail(
+            conversation,
+            &inbox.iter().map(|mail| mail.id).collect::<Vec<_>>(),
+            &turn.id,
         )?;
         let persistence_error = std::cell::RefCell::new(None);
         let announce = |kind: &str, payload: serde_json::Value| {
@@ -2773,6 +2926,18 @@ impl Core {
                 };
                 let error = agent::persisted_error(&error.to_string());
                 self.store.finish_turn(&turn.id, status, Some(&error))?;
+                let direct = inbox
+                    .iter()
+                    .filter(|mail| mail.kind == "agent_work")
+                    .map(|mail| mail.id)
+                    .collect::<Vec<_>>();
+                if !direct.is_empty() {
+                    announce(
+                        "mail_delivery_failed",
+                        json!({"recipient":role,"ids":direct,"reason":error,"state":"queued"}),
+                    );
+                }
+
                 announce(
                     "turn_finished",
                     json!({"role": role, "status": status, "error": error}),

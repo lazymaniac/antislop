@@ -28,11 +28,14 @@ if _ledger_prompt.startswith('Act as requirements analyst before planning.'):
     if not _ledger_entries:
         source = _ledger_sources[0]
         marker = 'Full user source '+source['id']+':\n'
-        full = _ledger_prompt.split(marker,1)[1].split('\n\nRun and ledger inputs',1)[0].split('\nFull user source ',1)[0].rstrip('\n')
+        full = _lr.split(r'\n(?:Full user source |Interview question context |Interview summary |Run and ledger inputs)', _ledger_prompt.split(marker,1)[1], maxsplit=1)[0].rstrip('\n')
         entries = [{'id':'fixture-requirement','kind':'requirement','source':{'source_id':source['id'],'start':0,'end':len(full.encode())},'interpretation':'Deliver the fixture user request','criteria':[{'id':'fixture.accept','text':'Independently inspect the actual fixture result','mandatory':True}]}]
     _ledger_emit(_ledger_block('ledger',{'run_id':_ledger_run['id'],'expected_spec_revision':_ledger_run['spec_revision'],'entries':entries}))
-if _ledger_prompt.startswith('Independently compare both ledgers'):
-    _ledger_emit(_ledger_block('verdict',{'approved':True,'findings':[]}))
+if _ledger_prompt.startswith(('Independently compare both ledgers','Independently compare the requirement entries','Independently verify implementation options')):
+    _reject_options = _ledger_prompt.startswith('Independently verify implementation options') and _lo.path.exists(_lo.path.join(_lo.path.dirname(sys.argv[0]),'reject-options'))
+    _ledger_emit(_ledger_block('verdict',{'approved':not _reject_options,'findings':[{'issue':'Choice lacks adequate evidence'}] if _reject_options else []}))
+if _ledger_prompt.startswith('Compare implementation options before task planning.'):
+    _ledger_emit(_ledger_block('options',{'run_id':_ledger_run['id'],'spec_revision':_ledger_run['spec_revision'],'criteria':['Coverage','Complexity'],'alternatives':[{'id':'fixture-direct','approach':'Inspect the fixture source directly','evaluations':['Covers the fixture request','Uses the existing fixture tooling'],'risks':'May miss indirect dependencies','validation':'Check actual fixture output'},{'id':'fixture-index','approach':'Build an index before inspecting fixture source','evaluations':['Covers the fixture request through an index','Adds an indexing step'],'risks':'Index can become stale','validation':'Compare index with fixture source'}],'selected':'fixture-direct','rationale':'Direct inspection covers this small fixture without maintaining an extra index.'}))
 if _ledger_prompt.startswith('Audit the integrated project'):
     _ledger_emit(_ledger_block('compliance',{'approved':False,'findings':[{'issue':'No integrated evidence supplied by this worker-only fixture'}],'evidence':[]}))
 if _ledger_prompt.startswith('Verify this audit independently'):
@@ -46,7 +49,6 @@ def _ledger_answer(answer):
     if match:
         payload = json.loads(match.group(1))
         if _ledger_run:
-            payload['run_id']=_ledger_run['id']
             for task in payload['tasks']:
                 task['requirement_ids']=[e['spec']['id'] for e in _ledger_entries if e['spec']['kind']=='requirement']
                 task['criterion_ids']=[c['id'] for e in _ledger_entries for c in e['spec']['criteria']]

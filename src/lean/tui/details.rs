@@ -172,6 +172,8 @@ pub struct Composer {
     pub sent_text: Option<String>,
     pub mail: Option<u64>,
     pub delivery: Option<String>,
+    pub delivery_receipts: Vec<u64>,
+    pub delivery_failure: Option<(Vec<u64>, String)>,
     pub address: Option<String>,
 }
 
@@ -193,6 +195,7 @@ pub struct Details {
     panel_layout: [LayoutCache; 2],
     overview_cache: [Option<OverviewCache>; 2],
     pub fetched_events: u64,
+    pub fetch_in_flight: bool,
     pub task_uuid: Option<String>,
     pub conversation: String,
     pub drafts: Drafts,
@@ -248,6 +251,7 @@ pub struct Details {
 
 impl Details {
     pub(super) fn fetch_failed(&mut self, error: &str) -> bool {
+        self.fetch_in_flight = false;
         self.fetched_round = None;
         self.fetch_failures = self.fetch_failures.saturating_add(1);
         // One immediate recovery attempt, then exponential backoff capped at 30s.
@@ -264,10 +268,13 @@ impl Details {
     }
 
     pub(super) fn load_task(&mut self, task: Value) {
+        self.fetch_in_flight = false;
         self.fetch_failures = 0;
         self.fetch_retry_after = None;
         self.fetch_error = None;
         self.fetched_round = task["round"].as_u64().or(self.fetched_round);
+        self.history_unavailable = task["history_unavailable"] == true
+            && task["round"].as_u64().is_some_and(|round| round > 0);
         if let Some(id) = task["id"].as_str() {
             self.task_uuid = Some(id.into());
         }
@@ -316,6 +323,7 @@ impl Details {
             panel_layout: Default::default(),
             overview_cache: Default::default(),
             fetched_events: 0,
+            fetch_in_flight: false,
             task_uuid: None,
             conversation: String::new(),
             drafts: Default::default(),
@@ -378,6 +386,7 @@ impl Details {
     pub fn switch_key(&mut self, new_key: String) {
         self.save_current_tab();
         self.key = new_key;
+        self.fetch_in_flight = false;
         self.show_info = false;
         self.selected_round = None;
         self.task_uuid = None;
@@ -391,6 +400,7 @@ impl Details {
         self.session_cache.clear();
         // A different element is a different task: its old record is gone.
         self.task = None;
+        self.fetch_in_flight = false;
         self.fetched_round = None;
         self.fetched_generation = None;
         self.fetched_plan = None;
@@ -1420,12 +1430,14 @@ impl Details {
                 } else {
                     self.panel_scroll[panel]
                 };
-                match document.viewport(
+                match document.viewport_options(
                     usize::from(document_area.width),
                     usize::from(document_area.height),
                     requested,
                     active && self.follow && self.panel_expanded[panel],
-                    self.panel_expanded[panel],
+                    self.panel_expanded[panel] || !self.query.is_empty() || self.raw,
+                    &self.query,
+                    self.raw,
                 ) {
                     Ok(Some(page)) => {
                         self.panel_scroll[panel] = page.scroll;
@@ -1648,8 +1660,13 @@ impl Details {
                 );
             let selected = self.selected_round.unwrap_or(latest);
             let label = format!(
-                "Round {} · {} · Left/Right choose · Tab tabs",
+                "Round {} · {}{} · Left/Right choose · Tab tabs",
                 selected,
+                if self.history_unavailable {
+                    "incomplete history · "
+                } else {
+                    ""
+                },
                 if self.selected_round.is_none() {
                     "current"
                 } else {
@@ -1666,12 +1683,19 @@ impl Details {
         if self.tab == 0
             && !self.show_info
             && self.key != "conversation"
-            && self.query.is_empty()
-            && !self.raw
+            && ((self.query.is_empty() && !self.raw) || !self.documents.is_empty())
         {
             self.draw_overview(frame, view, body, &theme);
-            let hint = "i message · Ctrl+W panel · Enter trace · m metadata · Left/Right rounds · Esc back";
-            frame.render_widget(Paragraph::new(theme.clean(hint)).style(theme.dim()), footer);
+            let hint = if self.searching {
+                format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
+            } else {
+                "i message · Ctrl+W panel · Enter trace · m metadata · Left/Right rounds · Esc back"
+                    .into()
+            };
+            frame.render_widget(
+                Paragraph::new(theme.clean(&hint)).style(theme.dim()),
+                footer,
+            );
             return;
         }
 
@@ -1709,7 +1733,15 @@ impl Details {
             _ => None,
         };
         if let Some(document) = document_key.and_then(|key| self.documents.get(key)) {
-            match document.viewport(width, usize::from(inner.height), self.scroll, false, false) {
+            match document.viewport_options(
+                width,
+                usize::from(inner.height),
+                self.scroll,
+                false,
+                false,
+                &self.query,
+                self.raw,
+            ) {
                 Ok(Some(page)) => {
                     self.scroll = page.scroll;
                     frame.render_widget(
@@ -1837,19 +1869,19 @@ pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
         }
     } else if tab == CHECKS {
         if width >= 80 {
-            "←/→ tab · ↑/↓ select check · c comment on check · / search · v raw · d diff · ? help · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ select check · c comment on check · / search · v raw · d diff · ? help · Esc back"
         } else if width >= 45 {
-            "←/→ tab · ↑/↓ select · c comment · Esc"
+            "Tab tabs · ←/→ rounds · ↑/↓ select · c comment · Esc"
         } else {
             "c com · Esc back"
         }
     } else if tab == COMMENTS {
         if width >= 95 {
-            "←/→ tab · ↑/↓ select · / search · v raw · c comment · r resolve · o reopen · x delete · d diff · ? help · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ select · / search · v raw · c comment · r resolve · o reopen · x delete · d diff · ? help · Esc back"
         } else if width >= 65 {
             "Tab tabs · ←/→ rounds · ↑/↓ select · / search · v raw · c add · r/o/x status · d diff · Esc back"
         } else if width >= 45 {
-            "←/→ tab · ↑/↓ select · c add · r/o/x · Esc"
+            "Tab tabs · ←/→ rounds · ↑/↓ select · c add · r/o/x · Esc"
         } else {
             "c com · Esc back"
         }

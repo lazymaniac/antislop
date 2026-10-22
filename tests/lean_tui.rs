@@ -301,10 +301,10 @@ fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
 
     let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    assert_eq!(app.input_shown, MAX_PASTE_BYTES - 5);
+    assert_eq!(app.input_shown, MAX_PASTE_BYTES - 4);
     let cursor = terminal.get_cursor_position().unwrap();
-    assert_eq!(cursor.y, 9);
-    assert_eq!(terminal.backend().buffer()[(1, cursor.y)].symbol(), "k");
+    assert_eq!(cursor.y, 8);
+    assert_eq!(terminal.backend().buffer()[(2, cursor.y)].symbol(), "k");
 
     app.editor = Some(Editor {
         target: "worker:t1".into(),
@@ -325,7 +325,7 @@ fn full_width_drafts_show_the_cursor_after_the_last_character() {
         terminal.draw(|frame| app.draw(frame)).unwrap();
         let cursor = terminal.get_cursor_position().unwrap();
         let (col, _) = app.input.visual_cursor(app.input_width);
-        assert_eq!(usize::from(cursor.x), 1 + usize::from(col));
+        assert_eq!(usize::from(cursor.x), 2 + usize::from(col));
         assert_eq!(
             terminal.backend().buffer()[(cursor.x, cursor.y)].symbol(),
             " "
@@ -366,7 +366,7 @@ fn long_pasted_search_queries_keep_the_cursor_at_the_visible_end() {
 }
 
 #[test]
-fn long_activity_labels_fit_the_progress_overlay() {
+fn long_activity_labels_fit_the_status_above_chat_input() {
     let mut app = App::test_app();
     app.focus = Focus::Graph;
     app.view.activity = Some("a".repeat(MAX_PASTE_BYTES - 1));
@@ -379,8 +379,26 @@ fn long_activity_labels_fit_the_progress_overlay() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(rendered.contains(" now "));
+    assert!(!rendered.contains(" now "));
     assert!(rendered.contains(&"a".repeat(30)));
+    let header: String = terminal.backend().buffer().content[..120]
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(!header.contains("aaaa"));
+    let input_top = (0..30)
+        .rev()
+        .find(|&y| {
+            (0..120)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+                .contains(" message ")
+        })
+        .unwrap();
+    let status: String = (0..120)
+        .map(|x| terminal.backend().buffer()[(x, input_top - 1)].symbol())
+        .collect();
+    assert!(status.contains(&"a".repeat(30)));
 }
 
 #[test]
@@ -1316,7 +1334,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_overlay.contains("now"));
+    assert!(!text_overlay.contains(" now "));
     assert!(text_overlay.contains("trwa kompilacja testów"));
 
     // 5. ASCII conversion
@@ -2710,7 +2728,7 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
         .collect();
     assert!(!text_85.contains("[Czat]"));
     // The separator column contains vertical glyph
-    let sep_col = 34;
+    let sep_col = 35;
     assert_eq!(term_85.backend().buffer()[(sep_col, 5)].symbol(), "│");
 }
 
@@ -4376,7 +4394,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     term_small.draw(|f| app.draw(f)).unwrap();
 
     let initial_viewport = app.graph_viewport.expect("viewport set after draw");
-    assert_eq!(initial_viewport, (76, 18));
+    assert_eq!(initial_viewport, (74, 16));
 
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(
@@ -4416,7 +4434,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     let mut term_large = Terminal::new(TestBackend::new(160, 50)).unwrap();
     term_large.draw(|f| app.draw(f)).unwrap();
     let resized_viewport = app.graph_viewport.expect("viewport updated after resize");
-    assert_eq!(resized_viewport, (102, 44));
+    assert_eq!(resized_viewport, (101, 42));
 }
 
 #[test]
@@ -4722,10 +4740,10 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
     // 120x30 (split: 77x26)
     // 160x50 (split: 104x46)
     let terminal_configs = [
-        ("80x24", 80u16, 24u16, 78u16, 20u16),
-        ("85x24", 85u16, 24u16, 48u16, 20u16),
-        ("120x30", 120u16, 30u16, 77u16, 26u16),
-        ("160x50", 160u16, 50u16, 104u16, 46u16),
+        ("80x24", 80u16, 24u16, 76u16, 18u16),
+        ("85x24", 85u16, 24u16, 46u16, 18u16),
+        ("120x30", 120u16, 30u16, 76u16, 24u16),
+        ("160x50", 160u16, 50u16, 103u16, 44u16),
     ];
 
     for &(term_name, term_w, term_h, inner_w, inner_h) in &terminal_configs {
@@ -5813,6 +5831,16 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
     let request = app.task_request_id;
+    app.apply_update(Update::Task {
+        documents: Default::default(),
+        conversation: "test-conv".into(),
+        plan: Some("p1".into()),
+        generation: 1,
+        request_id: request,
+        key: "worker:t1".into(),
+        round: 1,
+        task: json!({"id":"u1","round":1,"checks":[]}),
+    });
     app.apply_update(Update::Events {
         conversation: "test-conv".into(),
         generation: 1,
@@ -6804,6 +6832,16 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
     app.open_details("worker:t1".into());
     app.details.as_mut().unwrap().tab = CHECKS;
     let issued = app.task_request_id;
+    app.apply_update(Update::Task {
+        documents: Default::default(),
+        conversation: "test-conv".into(),
+        plan: Some("p1".into()),
+        generation: 1,
+        request_id: issued,
+        key: "worker:t1".into(),
+        round: 1,
+        task: json!({"id":"u1","round":1,"checks":[]}),
+    });
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":3,"kind":"task","payload":{"id":"t1","task":"u1","status":"approved","round":1,"feedback":{"summary":"accepted"}}})],
@@ -7524,4 +7562,182 @@ fn inspector_round_navigation_and_role_drafts_survive_reopening() {
         details.drafts.borrow()[&verifier].input.text,
         "verifier draft"
     );
+}
+
+#[test]
+fn inspection_fetches_are_serialized_and_changes_during_a_fetch_are_not_lost() {
+    use antislop::lean::tui::details::CHECKS;
+    let mut app = App::test_app();
+    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}),json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],idle:false,autonomous:false});
+    app.open_details("worker:t1".into());
+    app.details.as_mut().unwrap().tab = CHECKS;
+    let issued = app.task_request_id;
+    for seq in 3..10 {
+        app.apply_update(Update::Events {
+            conversation: "test-conv".into(),
+            generation: 1,
+            events: vec![json!({"seq":seq,"kind":"check","payload":{"task":"u1","round":1}})],
+            idle: false,
+            autonomous: false,
+        });
+    }
+    assert_eq!(
+        app.task_request_id, issued,
+        "one transfer remains in flight"
+    );
+    app.apply_update(Update::Task {
+        documents: Default::default(),
+        conversation: "test-conv".into(),
+        plan: Some("p1".into()),
+        generation: 1,
+        request_id: issued,
+        key: "worker:t1".into(),
+        round: 1,
+        task: json!({"id":"u1","round":1,"checks":[]}),
+    });
+    assert_eq!(
+        app.task_request_id,
+        issued + 1,
+        "one follow-up fetch incorporates all arrivals"
+    );
+}
+
+#[test]
+fn inspector_delivery_failure_before_send_receipt_remains_visible_until_delivery() {
+    use antislop::lean::tui::details::Composer;
+    let mut app = App::test_app();
+    app.open_details("orchestrator".into());
+    let drafts = std::rc::Rc::clone(&app.details.as_ref().unwrap().drafts);
+    let recipient = "worker:task-uuid".to_owned();
+    let key = ("test-conv".to_owned(), recipient.clone());
+    let operation = uuid::Uuid::new_v4().to_string();
+    let text = "full draft 👩‍💻".to_owned();
+    drafts.borrow_mut().insert(
+        key.clone(),
+        Composer {
+            input: InputBuffer::with_text(text.clone()),
+            sending: true,
+            operation: Some(operation.clone()),
+            address: Some(recipient.clone()),
+            sent_text: Some(text.clone()),
+            ..Default::default()
+        },
+    );
+    app.apply_update(Update::Events {conversation:"test-conv".into(),generation:1,events:vec![json!({"seq":1,"kind":"mail_delivery_failed","payload":{"recipient":recipient,"ids":[7],"reason":"authentication required"}})],idle:true,autonomous:false});
+    app.apply_update(Update::AgentMessage {
+        conversation: "test-conv".into(),
+        recipient: recipient.clone(),
+        operation,
+        text: text.clone(),
+        result: Ok(json!({"mail":7,"state":"queued"})),
+    });
+    assert!(
+        drafts.borrow()[&key]
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("authentication required")
+    );
+    assert_eq!(drafts.borrow()[&key].sent_text.as_ref(), Some(&text));
+    app.apply_update(Update::Events {
+        conversation: "test-conv".into(),
+        generation: 1,
+        events: vec![json!({"seq":2,"kind":"mail_delivered","payload":{"ids":[7]}})],
+        idle: true,
+        autonomous: false,
+    });
+    assert!(drafts.borrow()[&key].error.is_none());
+    assert_eq!(drafts.borrow()[&key].delivery.as_deref(), Some("delivered"));
+}
+
+#[test]
+fn inspector_receipt_uses_delivery_state_from_its_own_conversation() {
+    use antislop::lean::tui::details::Composer;
+    let mut app = App::test_app();
+    app.open_details("orchestrator".into());
+    let drafts = std::rc::Rc::clone(&app.details.as_ref().unwrap().drafts);
+    let operation = uuid::Uuid::new_v4().to_string();
+    let key = ("another-conversation".to_owned(), "orchestrator".to_owned());
+    drafts.borrow_mut().insert(
+        key.clone(),
+        Composer {
+            operation: Some(operation.clone()),
+            sending: true,
+            ..Default::default()
+        },
+    );
+    app.view.messages.push(antislop::lean::tui::MessageEntry {
+        id: "7".into(),
+        sender: "user".into(),
+        target: "orchestrator".into(),
+        state: "delivered".into(),
+        text: "unrelated".into(),
+        kind: "agent_work".into(),
+    });
+    app.apply_update(Update::AgentMessage {
+        conversation: key.0.clone(),
+        recipient: key.1.clone(),
+        operation,
+        text: "sent".into(),
+        result: Ok(json!({"mail":7,"state":"queued"})),
+    });
+    assert_eq!(drafts.borrow()[&key].delivery.as_deref(), Some("queued"));
+    let operation = uuid::Uuid::new_v4().to_string();
+    {
+        let mut drafts = drafts.borrow_mut();
+        let composer = drafts.get_mut(&key).unwrap();
+        composer.operation = Some(operation.clone());
+        composer.sending = true;
+        composer.address = Some(key.1.clone());
+    }
+    app.apply_update(Update::Events {conversation:key.0.clone(),generation:1,events:vec![json!({"seq":9,"kind":"mail_delivered","payload":{"recipient":"orchestrator","ids":[9,10]}})],idle:true,autonomous:false});
+    app.apply_update(Update::AgentMessage {
+        conversation: key.0.clone(),
+        recipient: key.1.clone(),
+        operation,
+        text: "sent".into(),
+        result: Ok(json!({"mail":9,"state":"queued"})),
+    });
+    assert_eq!(drafts.borrow()[&key].delivery.as_deref(), Some("delivered"));
+}
+
+#[test]
+fn header_shows_repository_branch_for_old_sessions_and_has_no_empty_separators() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-b", "feature/repo-branch"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let mut app = App::test_app();
+    app.projects
+        .push(antislop::lean::tui::workspace::ProjectConn::new(
+            dir.path().to_path_buf(),
+            app.client.clone(),
+        ));
+    for mode in [None, Some(false), Some(true)] {
+        app.view.autonomous = mode;
+        let line = app.header_line(180);
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.contains("branch: feature/repo-branch"), "{text}");
+        let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(!normalized.contains("· ·"), "{text}");
+    }
+    app.view.session_branch = Some("feature/session-start".into());
+    let line = app.header_line(180);
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(text.contains("branch: feature/session-start"));
+    assert!(!text.contains("feature/repo-branch"));
 }

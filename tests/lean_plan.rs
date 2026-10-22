@@ -19,7 +19,7 @@ fn a_verifier_started_after_a_live_update_uses_the_new_profile_in_the_same_round
     std::fs::write(&agy, source).unwrap();
     let initial = config(&codex, &agy);
     let core = Core::open(&dir.path().join("state"), initial.clone()).unwrap();
-    let conversation = core.start(dir.path()).unwrap();
+    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
     wait_idle(&core, &conversation.id);
@@ -170,7 +170,7 @@ fn plan_summaries_survive_core_storage_and_event_replay() {
     let state = dir.path().join("state");
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&state, config(&codex, &agy)).unwrap();
-    let conversation = core.start(dir.path()).unwrap();
+    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Oceń zapis danych i interfejs.")
         .unwrap();
     wait_idle(&core, &conversation.id);
@@ -212,7 +212,7 @@ fn a_plan_comment_gets_an_independent_revision_and_verification() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-    let conversation = core.start(dir.path()).unwrap();
+    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
     wait_idle(&core, &conversation.id);
@@ -331,7 +331,7 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
     std::fs::create_dir_all(project.join("src")).unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-    let conversation = core.start(&project).unwrap();
+    let conversation = support::legacy_conversation(&core, &project).unwrap();
 
     core.send(&conversation.id, "przeanalizuj architekturę projektu")
         .unwrap();
@@ -398,7 +398,7 @@ fn one_review_sends_all_draft_comments_to_a_single_turn() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-    let conversation = core.start(dir.path()).unwrap();
+    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
     wait_idle(&core, &conversation.id);
@@ -446,4 +446,142 @@ fn one_review_sends_all_draft_comments_to_a_single_turn() {
     assert!(!prompt.contains("dropped remark"));
     // Nothing is left to send.
     assert!(core.review_comments(&conversation.id, &plan).is_err());
+}
+
+#[test]
+fn malformed_plan_json_is_corrected_automatically_with_a_finite_retry_limit() {
+    for persistent in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (codex, agy) = fake_clis(dir.path());
+        let source = std::fs::read_to_string(&codex).unwrap();
+        let marker = "print(json.dumps({\"type\": \"thread.started\", \"thread_id\": \"orch\"}))";
+        assert!(source.contains(marker));
+        let hook = format!(
+            r#"
+import os
+if not os.path.exists('format-error-sent') or {persistent}:
+    open('format-error-sent','w').close()
+    _ledger_emit('Draft ready.\n```plan\n{{"tasks":[{{"id":"t1","goal":"Text with an unescaped "quote""}}]}}\n```')
+"#,
+            persistent = if persistent { "True" } else { "False" }
+        );
+        std::fs::write(&codex, source.replace(marker, &format!("{hook}\n{marker}"))).unwrap();
+        let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
+        let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+        core.send(&conversation.id, "Assess storage and TUI")
+            .unwrap();
+        wait_idle(&core, &conversation.id);
+        let repairs = core
+            .store
+            .messages_by(&conversation.id, "plan-format-repair", 0)
+            .unwrap();
+        assert_eq!(repairs.len(), if persistent { 2 } else { 1 });
+        let plan = core.store.latest_plan(&conversation.id).unwrap();
+        if persistent {
+            assert!(plan.is_empty());
+        } else {
+            assert!(!plan.is_empty());
+            let turns = core.store.events_since(&conversation.id, 0, 2000).unwrap();
+            for role in [
+                "requirements-extraction-analyst",
+                "requirements-options-analyst",
+            ] {
+                assert_eq!(
+                    turns
+                        .iter()
+                        .filter(|e| e.kind == "turn_started" && e.payload["role"] == role)
+                        .count(),
+                    1
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn restart_recovers_a_previously_failed_plan_json_without_a_new_user_message() {
+    use antislop::lean::store::{Store, TurnStatus};
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let store = Store::open(&state.join("core.db")).unwrap();
+    let conversation = store
+        .create_conversation(dir.path().to_str().unwrap())
+        .unwrap();
+    let message = store
+        .add_message(&conversation.id, "user", "Assess storage and TUI")
+        .unwrap();
+    let turn = store
+        .start_turn(&conversation.id, "orchestrator", "codex", message.seq, None)
+        .unwrap();
+    store.set_session(&turn.id, "orch").unwrap();
+    store
+        .append_event(
+            &conversation.id,
+            Some(&turn.id),
+            None,
+            "agent_final",
+            &json!({"text":"```plan\n{broken JSON}\n```"}),
+        )
+        .unwrap();
+    store.finish_turn(&turn.id, TurnStatus::Done, None).unwrap();
+    drop(store);
+    let core = Core::open(&state, config(&codex, &agy)).unwrap();
+    wait_idle(&core, &conversation.id);
+    assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
+    assert_eq!(
+        core.store
+            .messages_by(&conversation.id, "plan-format-repair", 0)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn repairing_json_after_options_reuses_requirements_and_the_comparison() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let source = std::fs::read_to_string(&codex).unwrap();
+    let marker = "def _ledger_answer(answer):";
+    assert!(source.contains(marker));
+    let hook = r#"def _ledger_answer(answer):
+    if 'Reviewed implementation options: ' in _ledger_prompt and '```plan' in answer and not _lo.path.exists('post-options-format-error'):
+        open('post-options-format-error','w').close()
+        return '```plan\n{"tasks":[{unquoted: "bad"}]}\n```'
+"#;
+    std::fs::write(&codex, source.replace(marker, hook)).unwrap();
+    let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
+    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+    core.send(&conversation.id, "Assess storage and TUI")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    assert!(dir.path().join("post-options-format-error").exists());
+    assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
+    assert_eq!(
+        core.store
+            .messages_by(&conversation.id, "plan-format-repair", 0)
+            .unwrap()
+            .len(),
+        1
+    );
+    let events = core.store.events_since(&conversation.id, 0, 2000).unwrap();
+    for role in [
+        "requirements-extraction-analyst",
+        "requirements-extraction-verifier",
+        "requirements-options-analyst",
+        "requirements-options-verifier",
+    ] {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.kind == "turn_started" && e.payload["role"] == role)
+                .count(),
+            1,
+            "{role} must not repeat during JSON repair"
+        );
+    }
 }

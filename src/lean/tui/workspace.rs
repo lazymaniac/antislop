@@ -13,6 +13,8 @@ pub struct ProjectConn {
     pub path: PathBuf,
     pub name: String,
     pub client: Client,
+    /// Repository branch when this connection was opened, for sessions without start metadata.
+    pub branch: Option<String>,
     /// The conversations as the daemon last listed them.
     pub conversations: Vec<Value>,
 }
@@ -21,6 +23,7 @@ impl ProjectConn {
     pub fn new(path: PathBuf, client: Client) -> Self {
         Self {
             name: name_of(&path),
+            branch: super::super::git::session_branch(&path).ok(),
             path,
             client,
             conversations: Vec::new(),

@@ -1,6 +1,9 @@
 /target/
 /.antislop/
-/.antislop/
+.env
+.env.*
+!.env.example
+.DS_Store
 __pycache__/
 *.db-wal
 *.db-shm

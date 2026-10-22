@@ -126,3 +126,7 @@ comments and formatting are preserved.
 
 When a structural section is empty, Ctrl+N restores access: an empty provider
 section takes priority; an empty routing section is offered outside providers.
+
+## License
+
+[MIT](LICENSE). Copyright (c) 2026 lazymaniac.

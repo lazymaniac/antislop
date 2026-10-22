@@ -1,3 +1,4 @@
+mod support;
 use antislop::lean::{
     ledger::*,
     store::{Store, TurnStatus},
@@ -974,4 +975,328 @@ fn source_line_ranges_respect_exclusive_end_and_graphemes() {
     assert_eq!(span(second, source.len()).lines(source).unwrap(), (2, 3));
     assert_eq!(span(last - 1, last).lines(source).unwrap(), (2, 2));
     assert!(span(second + 4, last).lines(source).is_err());
+}
+
+#[test]
+fn approving_requirements_wakes_planning_uses_the_approved_set_and_compares_options() {
+    use antislop::{config::Config, lean::Core};
+    use std::{
+        os::unix::fs::PermissionsExt,
+        time::{Duration, Instant},
+    };
+    for (reject_options, reject_plan) in [(false, false), (true, false), (true, true)] {
+        let f = Fixture::new();
+        f.apply(&f.change(0, vec![f.entry("r1")]));
+        let analyst = f.turn("extraction", false);
+        let mut entry = f.entry("r1");
+        entry.interpretation = "Approved wording with preserved qualifiers".into();
+        let change = f.change(1, vec![entry]);
+        let (proposal, diff) = f
+            .store
+            .propose_agent_ledger_change(&change, f.dir.path(), &analyst)
+            .unwrap();
+        let empty = f
+            .store
+            .create_run(&f.conversation, "Manually maintained requirements")
+            .unwrap();
+        assert_eq!(
+            f.store.planning_run(&f.conversation).unwrap().unwrap().id,
+            f.run.id
+        );
+        let script = f.dir.path().join("codex");
+        std::fs::write(&script,r#"#!/usr/bin/env python3
+import sys,json,uuid
+prompt = sys.argv[-1]
+assert not prompt.startswith('Act as requirements analyst'), 'approved requirements must go directly to verification'
+answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'verifier':{'focus':'Check the observations'}}]})+'\n```'
+if 'You review a plan' in prompt or 'new plan:' in prompt:
+    import os
+    if os.path.exists('reject-options'):
+        assert 'Choice lacks adequate evidence' in prompt
+        assert 'resolves every review finding' in prompt
+    answer='```verdict\n'+json.dumps({'approved':not os.path.exists('reject-final-plan'),'findings':[{'issue':'Plan does not resolve the options review'}] if os.path.exists('reject-final-plan') else []})+'\n```'
+print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
+print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
+print(json.dumps({'type':'turn.completed','usage':{}}))
+"#).unwrap();
+        support::install_ledger_protocol(&script);
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = include_str!("../examples/antislop.toml")
+            .replace("binary = \"codex\"", &format!("binary = {:?}", script))
+            .replace("provider = \"agy\"", "provider = \"codex\"")
+            .replace("required_gates = true", "required_gates = false");
+        std::fs::set_permissions(f.dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = config.replace(
+            "[routing.options]\nexecutor = \"reasoning\"",
+            "[routing.options]\nexecutor = \"options_test\"",
+        ) + "\n[profiles.options_test]\nprovider = \"codex\"\nmodel = \"fixture-options\"\neffort = \"low\"\n";
+        if reject_options {
+            std::fs::write(f.dir.path().join("reject-options"), "").unwrap();
+        }
+        if reject_plan {
+            std::fs::write(f.dir.path().join("reject-final-plan"), "").unwrap();
+        }
+        let core = Core::open(f.dir.path(), Config::from_toml(&config).unwrap()).unwrap();
+        let result = core
+            .apply_user_ledger_change(&proposal, &diff_hash(&diff).unwrap(), &change)
+            .unwrap();
+        assert_eq!(result.spec_revision, 2);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !core.is_idle(&f.conversation) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let plan = core.store.latest_plan(&f.conversation).unwrap();
+        let option_turns = core
+            .store
+            .events_since(&f.conversation, 0, 1000)
+            .unwrap()
+            .into_iter()
+            .filter(|e| {
+                e.kind == "turn_started" && e.payload["role"] == "requirements-options-analyst"
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            option_turns
+                .iter()
+                .all(|event| event.payload["model"] == "fixture-options")
+        );
+        if reject_options {
+            let reviewed = core
+                .store
+                .solution_choice(&f.conversation, &f.run.id)
+                .unwrap()
+                .unwrap();
+            assert!(
+                reviewed
+                    .review_findings
+                    .iter()
+                    .any(|finding| finding.contains("Choice lacks adequate evidence"))
+            );
+        }
+        assert_eq!(option_turns.len(), 1);
+        if reject_plan {
+            let events = core.store.events_since(&f.conversation, 0, 2000).unwrap();
+            let visible = events
+                .iter()
+                .rev()
+                .find(|event| event.kind == "plan_proposed")
+                .expect("a reviewed plan remains visible to the user");
+            assert_eq!(visible.payload["review"]["approved"], false);
+            assert_eq!(visible.payload["automatic"], false);
+            assert!(plan.iter().all(|task| task.round == 0));
+        }
+        assert_eq!(
+            core.store
+                .count_since_user(&f.conversation, "options-plan-repair")
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            core.store
+                .count_since_user(&f.conversation, "requirements-planner")
+                .unwrap(),
+            0
+        );
+
+        assert!(
+            !plan.is_empty(),
+            "{:?}",
+            core.store
+                .events_since(&f.conversation, 0, 500)
+                .unwrap()
+                .iter()
+                .filter(|e| matches!(
+                    e.kind.as_str(),
+                    "notice" | "plan_invalid" | "requirements_failed" | "ledger_plan_rejected"
+                ))
+                .map(|e| &e.payload)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            core.store.plan_run(&plan[0].plan_id).unwrap(),
+            Some(f.run.id.clone())
+        );
+        assert_eq!(
+            core.store
+                .run(&f.conversation, &empty.id)
+                .unwrap()
+                .spec_revision,
+            0
+        );
+        assert_eq!(
+            core.store
+                .last_turn(&f.conversation, "requirements-extraction-analyst")
+                .unwrap()
+                .unwrap()
+                .id,
+            analyst
+        );
+        let choice = core
+            .store
+            .solution_choice(&f.conversation, &f.run.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(choice.spec_revision, 2);
+        assert_eq!(choice.alternatives.len(), 2);
+        assert!(
+            core.store
+                .last_turn(&f.conversation, "requirements-options-analyst")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            core.store
+                .last_turn(&f.conversation, "requirements-options-verifier")
+                .unwrap()
+                .is_some()
+        );
+        let approval_count = core
+            .store
+            .messages_by(&f.conversation, "requirements-approval", 0)
+            .unwrap()
+            .len();
+        core.apply_user_ledger_change(&proposal, &diff_hash(&diff).unwrap(), &change)
+            .unwrap();
+        assert_eq!(
+            core.store
+                .messages_by(&f.conversation, "requirements-approval", 0)
+                .unwrap()
+                .len(),
+            approval_count
+        );
+        let mut amended = f.entry("r1");
+        amended.interpretation.push_str(" updated");
+        core.store
+            .apply_ledger_change(&f.change(2, vec![amended]), f.dir.path(), true)
+            .unwrap();
+        assert!(
+            core.store
+                .solution_choice(&f.conversation, &f.run.id)
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn accepted_requirements_resume_durably_after_restart_and_ignore_empty_manual_sets() {
+    let f = Fixture::new();
+    f.store.begin_interview(&f.conversation).unwrap();
+    let user = f.store.messages_by(&f.conversation, "user", 0).unwrap()[0].seq;
+    f.store
+        .interview_summary(&f.conversation, "Keep scope", user)
+        .unwrap();
+    f.store.finish_interview(&f.conversation).unwrap();
+    f.apply(&f.change(0, vec![f.entry("r1")]));
+    let analyst = f.turn("extraction", false);
+    let mut edited = f.entry("r1");
+    edited.interpretation.push_str(" clarified");
+    let change = f.change(1, vec![edited]);
+    f.store
+        .propose_agent_ledger_change(&change, f.dir.path(), &analyst)
+        .unwrap();
+    f.store
+        .apply_ledger_change(&change, f.dir.path(), true)
+        .unwrap();
+    // Reproduce an approval saved by the old release, before it had a durable wake-up.
+    let db = rusqlite::Connection::open(f.dir.path().join("core.db")).unwrap();
+    db.execute("DELETE FROM requirements_resumptions", [])
+        .unwrap();
+    db.execute(
+        "DELETE FROM messages WHERE author='requirements-approval'",
+        [],
+    )
+    .unwrap();
+    f.store
+        .create_run(&f.conversation, "Manually maintained requirements")
+        .unwrap();
+    f.store.recover_approved_requirements().unwrap();
+    f.store.recover_approved_requirements().unwrap();
+    assert!(
+        f.store
+            .has_pending_requirements_approval(&f.conversation)
+            .unwrap()
+    );
+    assert_eq!(
+        f.store
+            .messages_by(&f.conversation, "requirements-approval", 0)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        f.store.planning_run(&f.conversation).unwrap().unwrap().id,
+        f.run.id
+    );
+    let reopened = Store::open(&f.dir.path().join("core.db")).unwrap();
+    assert!(
+        reopened
+            .has_pending_requirements_approval(&f.conversation)
+            .unwrap()
+    );
+}
+
+#[test]
+fn old_options_rejection_recovers_as_plan_feedback_without_repeating_agents() {
+    let f = Fixture::new();
+    f.store.begin_interview(&f.conversation).unwrap();
+    let user = f.store.messages_by(&f.conversation, "user", 0).unwrap()[0].seq;
+    f.store
+        .interview_summary(&f.conversation, "Keep scope", user)
+        .unwrap();
+    f.store.finish_interview(&f.conversation).unwrap();
+    f.store
+        .select_planning_run(&f.conversation, &f.run.id)
+        .unwrap();
+    f.apply(&f.change(0, vec![f.entry("r1")]));
+    f.review("extraction", "", true);
+    let producer = f.turn("options", false);
+    let verifier = f.turn("options", true);
+    let comparison = json!({"run_id":f.run.id,"spec_revision":1,"criteria":["Evidence"],"alternatives":[{"id":"diagnose","approach":"Measure before selecting an optimization","evaluations":["Establishes evidence"],"risks":"Measurement may be inconclusive","validation":"Check a reproducible baseline"},{"id":"rewrite","approach":"Rewrite based on old measurements","evaluations":["Uses stale evidence"],"risks":"May optimize the wrong path","validation":"Compare against a baseline"}],"selected":"diagnose","rationale":{"why":"Fresh evidence is needed","tradeoffs":["Defers optimization until after measurement"],"reopen":{"when":"The baseline identifies another bottleneck"}}});
+    f.store
+        .append_event(
+            &f.conversation,
+            Some(&producer),
+            None,
+            "agent_final",
+            &json!({"text":format!("```options\n{}\n```",comparison)}),
+        )
+        .unwrap();
+    f.store
+        .record_ledger_review(
+            &f.conversation,
+            &f.run.id,
+            1,
+            "options",
+            &producer,
+            &verifier,
+            "",
+            false,
+            "The complete plan must specify the decision criteria and independent oracle.",
+        )
+        .unwrap();
+    f.store.recover_options_comparisons().unwrap();
+    f.store.recover_options_comparisons().unwrap();
+    let choice = f
+        .store
+        .solution_choice(&f.conversation, &f.run.id)
+        .unwrap()
+        .unwrap();
+    assert!(choice.rationale.contains("Fresh evidence is needed"));
+    assert!(choice.rationale.contains("Defers optimization"));
+    assert!(choice.rationale.contains("another bottleneck"));
+    assert!(choice.review_findings[0].contains("independent oracle"));
+    assert_eq!(
+        f.store
+            .messages_by(&f.conversation, "options-planner", 0)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        f.store
+            .has_pending_requirements_approval(&f.conversation)
+            .unwrap()
+    );
 }

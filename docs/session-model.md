@@ -240,3 +240,110 @@ following; selecting the latest restores following. Worker and verifier panels a
 side by side at 80 columns or wider; Ctrl+W chooses the full-width panel below that.
 Prompt and final answer are outside the collapsible session trace. Each recipient's
 composer keeps its own draft across closing the inspector and conversation changes.
+
+Inspection uses `task_round` with `references: true`, `session_events` with
+`include_messages: false`, paged `history_messages`, and `history_content` for
+round reports, verdicts and mail. Omitting the new optional flags preserves the
+existing full-content responses. Content access validates the owning conversation;
+round selection also validates the project and plan. Message and event cursors are
+independent, so the first event page never needs to load the entire mailbox.
+
+The TUI spools inspection text into private `<state>/inspection-cache/` artifacts.
+Small SQLite rows index blocks; source and raw presentation text stay in files.
+Background jobs build disk indexes for wrapping and searching. The drawing thread
+reads only viewport rows, and at most four layouts per document are cached.
+Closing/replacing a document removes its temporary artifacts. Cache sizes do not
+limit accessible content. Escape parsing and grapheme wrapping carry state across
+chunks, including Unicode clusters and terminal escape sequences.
+
+A direct message is attributed to the consuming turn before its CLI starts and
+acknowledged after successful completion. Failed direct task messages remain
+queued for work, never for receipt-only dispatch. A successful verifier-only
+recheck preserves dependent results; a rejected recheck invalidates the dependent
+chain before worker corrections begin. Starting a turn and recording its round
+are atomic. Legacy attribution is recovered only from an explicit preceding UUID
+task event in the corresponding working/verifying stage; other legacy turns remain
+unassigned and missing historical results are labeled unavailable.
+
+
+## Guided session workflow
+
+New conversations start in **interview**, including self-contained requests. The
+orchestrator clarifies the goal, scope, constraints, exclusions and observable
+acceptance criteria, then emits a fenced `requirements` Markdown summary. The
+chat displays the requirements summary and automatically starts **planning**.
+Pending answers must finish first; newer user input invalidates an older summary.
+The transition and its runtime wake-up message are committed together so restart
+can resume planning. No requirements approval command is needed.
+
+In **planning**, the orchestrator writes the plan and
+an independent verifier checks it. **Ctrl+L** opens the plan document for review
+and comments. Submit Review to request revisions and resolve outstanding plan
+comments before accepting. **Ctrl+A / `/accept`** approves that plan and moves
+the session to **implementation**, where the task graph shows execution and
+verification. Draft text is preserved when using shortcuts.
+
+Plan approval is required for new sessions even in autonomous mode. Autonomous
+worker progression after plan acceptance continues as configured. Existing
+conversations without a workflow row retain their earlier behavior.
+
+The small `session_workflow` row stores the phase, requirements summary and its
+message boundary. Transitions append `workflow` events in the same transaction;
+replaying events restores the UI after restart or conversation switching.
+
+
+### Requirements review and solution selection
+
+`/requirements` and `/plan-items` open a shared workspace with a record list,
+separate details, search and coverage filters. Wide terminals use two columns;
+narrow terminals stack the list and details. Live progress and failures remain
+visible while the workspace is open. Arrow keys select records and detail tabs;
+`j`/`k` or the mouse wheel scroll details. Drafts survive view changes and errors.
+
+`p` opens a semantic before/after review of a proposed scope change. **Enter**
+approves that exact diff and resumes verification and planning; **Esc** returns
+without applying it. Approving requirements does not approve implementation.
+Approval, the active planning run and its continuation message are committed
+atomically. Retrying an approval does not enqueue duplicate work. Startup also
+recovers accepted analyst changes saved by older releases without a continuation.
+The next stage verifies the approved revision rather than asking an analyst to
+rewrite it again. `N` asks before creating an empty draft set; a draft does not
+replace the requirements used by current planning. `g` browses sets independently.
+
+Before publishing a plan, the runtime always runs `routing.options`: its executor
+compares two to four real implementation alternatives under the same criteria.
+Its verifier supplies independent review notes. These notes go to the planner and
+the final plan reviewer; they do not create another standalone approval gate.
+A measurement-first strategy is valid when evidence needed to choose a concrete
+optimization must be collected during execution. The complete plan must resolve
+the review notes, including measurement protocols, decision criteria and task
+dependencies. The final plan review remains the blocking review before execution.
+
+Comparison-format issues get one correction attempt independently of substantive
+plan review. Malformed task-plan JSON is sent back automatically for at most two
+serialization corrections, preserving requirements and the cached comparison.
+The correction request and its progress event are committed together. Startup
+recovers an unfinished format correction, including plans rejected by older
+releases; a newer user message takes precedence and repeated failures stop with
+the raw error and retry guidance. Both plain-text and structured textual rationales are accepted. The
+runtime binds the plan to its active requirements and comparison; agents do not
+have to echo run or choice identifiers to advance. Changed requirements or source
+coverage invalidate the cached comparison. Previously completed comparisons that
+stopped at the old options gate are recovered with their review notes at startup.
+This work kind remains mandatory even when optional worker gates are disabled.
+
+
+
+### Interview question cards
+
+During discovery, the orchestrator emits one fenced `question` JSON block at a
+time with `id`, `context`, `question`, and 2–6 `options` (`label`, `description`).
+The first option is the recommendation. The TUI displays context above the
+question, selectable options with tradeoffs, and an always-available custom
+answer field. Agent protocol JSON stays out of the ordinary chat transcript.
+
+Use **Up/Down/Tab** to choose, **Enter** to submit, or type/paste a custom answer.
+**Alt+Enter** inserts a newline. **Esc** returns to chat; `/interview` reopens the
+pending question. Selection alone sends nothing. Interview answers have their
+own drafts per conversation and retain the raw failure reason on send errors.
+The question event is durable and restores unanswered cards after a restart.

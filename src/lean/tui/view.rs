@@ -244,6 +244,12 @@ pub struct CommentProgress {
 
 #[derive(Debug, Default)]
 pub struct View {
+    pub workflow_phase: Option<String>,
+    pub session_branch: Option<String>,
+    pub interview_question: Option<(u64, crate::lean::interview::Question)>,
+    pub requirements_summary: String,
+    pub requirements_progress: Option<(bool, String)>,
+    latest_user_message: u64,
     pub retain_session_history: bool,
     pub comment_scopes: HashMap<u64, (Option<u64>, Option<String>)>,
     /// Local projection revision; repeated frames do not rebuild graph layout.
@@ -381,6 +387,16 @@ impl View {
 
     /// Where the conversation is: the graph only makes sense once work runs.
     pub fn stage(&self) -> Stage {
+        match self.workflow_phase.as_deref() {
+            Some("interview") => return Stage::Interview,
+            Some("planning")
+                if self.tasks.is_empty()
+                    || self.tasks.iter().all(|task| task.status == "cancelled") =>
+            {
+                return Stage::Planning;
+            }
+            _ => {}
+        }
         let started = self.activity.is_some()
             || !self.transcript.is_empty()
             || !self.messages.is_empty()
@@ -631,11 +647,102 @@ impl View {
         let turn = event["turn_id"].as_str().unwrap_or_default();
         let key = self.roles.get(turn).cloned().unwrap_or_default();
         match event["kind"].as_str().unwrap_or_default() {
+            "interview_question" => {
+                if let Ok(question) =
+                    serde_json::from_value::<crate::lean::interview::Question>(payload.clone())
+                    && (2..=6).contains(&question.options.len())
+                {
+                    self.interview_question = Some((self.after, question));
+                    self.requirements_summary.clear();
+                }
+            }
+            "session_started" => {
+                self.session_branch = payload["branch"].as_str().map(clean_line);
+            }
+            "options_selected" => {
+                self.requirements_progress = Some((
+                    false,
+                    format!(
+                        "Options compared; recommendation: {}. Preparing the plan.",
+                        text("selected")
+                    ),
+                ));
+                let mut summary = format!(
+                    "Recommendation: {}\n{}",
+                    text("selected"),
+                    text("rationale")
+                );
+                let review_findings = payload["review_findings"]
+                    .as_array()
+                    .filter(|findings| !findings.is_empty());
+                if let Some(findings) = review_findings {
+                    summary.push_str("\n\nTo resolve in the plan:");
+                    for finding in findings {
+                        if let Some(text) = finding.as_str() {
+                            summary.push_str(&format!("\n- {text}"));
+                        }
+                    }
+                }
+                if let Some(alternatives) = payload["alternatives"].as_array() {
+                    for alternative in alternatives {
+                        summary.push_str(&format!(
+                            "\n\n{}: {}\nRisks: {}\nValidation: {}",
+                            alternative["id"].as_str().unwrap_or(""),
+                            alternative["approach"].as_str().unwrap_or(""),
+                            alternative["risks"].as_str().unwrap_or(""),
+                            alternative["validation"].as_str().unwrap_or("")
+                        ));
+                    }
+                }
+                self.cards.push(TranscriptCard::System {
+                    title: "Implementation options reviewed".into(),
+                    meta: String::new(),
+                    tone: if review_findings.is_some() {
+                        super::theme::Tone::Waiting
+                    } else {
+                        super::theme::Tone::Done
+                    },
+                    text: summary.clone(),
+                });
+                self.push(dim(), summary);
+            }
+            "planning_progress" => {
+                self.requirements_progress = Some((false, text("text")));
+                self.cards.push(TranscriptCard::System {
+                    title: "Planning".into(),
+                    meta: String::new(),
+                    tone: super::theme::Tone::Active,
+                    text: text("text"),
+                });
+                self.push(dim(), text("text"));
+            }
+            "workflow" => {
+                self.workflow_phase = Some(text("phase"));
+                if self.workflow_phase.as_deref() != Some("interview") {
+                    self.interview_question = None;
+                }
+                if payload["summary"].is_string() {
+                    self.requirements_summary = if payload["upto_message"]
+                        .as_u64()
+                        .is_some_and(|upto| upto < self.latest_user_message)
+                    {
+                        String::new()
+                    } else {
+                        text("summary")
+                    };
+                }
+            }
+            "message" if payload["internal"] == true => {}
             "message" => match payload["author"].as_str().unwrap_or_default() {
                 // Shown by their `comment` and `code_review` events.
                 "user" if text("text").starts_with(super::super::COMMENT_PREFIX) => {}
                 "code-review" => {}
                 "user" => {
+                    self.latest_user_message =
+                        payload["seq"].as_u64().unwrap_or(self.latest_user_message);
+                    if self.workflow_phase.as_deref() == Some("interview") {
+                        self.requirements_summary.clear();
+                    }
                     let msg = MessageEntry {
                         id: format!("m{}", self.after),
                         sender: "You".to_owned(),
@@ -666,6 +773,8 @@ impl View {
                     self.push(dim(), "· task results handed to orchestrator");
                     self.push(Style::default(), "");
                 }
+                ORCHESTRATOR | PLAN_VERIFIER | "requirements-planner"
+                    if self.workflow_phase.as_deref() == Some("planning") => {}
                 author => {
                     let display_author = match author {
                         ORCHESTRATOR => "orchestrator".to_owned(),
@@ -904,6 +1013,11 @@ impl View {
                 }
             }
             "plan_proposed" => {
+                self.requirements_progress = Some((
+                    false,
+                    "Plan ready for review. Esc closes requirements so you can review the plan."
+                        .into(),
+                ));
                 self.plan = payload["plan"].as_str().map(str::to_owned);
                 self.plan_doc = payload["document"]
                     .as_str()
@@ -1037,8 +1151,31 @@ impl View {
                 );
             }
             "plan_review" => self.review(PLAN_VERIFIER, payload),
+            "requirements_failed" => {
+                self.requirements_progress =
+                    Some((true, format!("{} — {}", text("error"), text("retry"))));
+                let message = format!("{}\n{}", text("error"), text("retry"));
+                self.cards.push(TranscriptCard::System {
+                    title: "Requirements preparation failed".into(),
+                    meta: String::new(),
+                    text: message.clone(),
+                    tone: super::theme::Tone::Failed,
+                });
+                self.push(Style::default().fg(Color::Red), message);
+            }
             "plan_invalid" => {
                 let err = text("error");
+                if payload["retrying"] == true {
+                    self.requirements_progress =
+                        Some((false, "Correcting the plan format automatically.".into()));
+                    return;
+                }
+                let err = if payload["retry"].as_str().is_some() {
+                    format!("{err}\n{}", text("retry"))
+                } else {
+                    err
+                };
+                self.requirements_progress = Some((true, err.clone()));
                 self.cards.push(TranscriptCard::System {
                     title: "Plan rejected".into(),
                     meta: String::new(),
@@ -1828,51 +1965,63 @@ pub fn render_header_with(
 ) -> Line<'static> {
     if width < 25 {
         return Line::from(vec![Span::styled(
-            " antislop ",
+            format!(" {} ", clean_line(project)),
             Style::default().add_modifier(Modifier::BOLD),
         )]);
     }
 
     let short = conversation.get(..8).unwrap_or(conversation);
     let mode_str = match mode {
-        Some(true) => "[Mode: autonomous] · ",
-        Some(false) => "[Mode: supervised] · ",
+        Some(true) => "[Mode: autonomous]",
+        Some(false) => "[Mode: supervised]",
         None => "",
     };
 
     let mut spans = vec![Span::styled(
-        " antislop ",
+        format!(" {} ", clean_line(project)),
         Style::default().add_modifier(Modifier::BOLD),
     )];
 
     if width < SIDE_BY_SIDE_BREAKPOINT {
-        let active = |color| Style::default().fg(color).add_modifier(Modifier::BOLD);
+        let active = |color| {
+            super::theme::Theme::from_env()
+                .raised()
+                .fg(color)
+                .add_modifier(Modifier::BOLD)
+        };
         let (chat_style, graph_style) = match focus {
-            PanelFocus::Chat => (active(Color::Yellow), dim()),
-            PanelFocus::Graph => (dim(), active(Color::Cyan)),
+            PanelFocus::Chat => (
+                active(Color::Yellow),
+                super::theme::Theme::from_env().panel().patch(dim()),
+            ),
+            PanelFocus::Graph => (
+                super::theme::Theme::from_env().panel().patch(dim()),
+                active(Color::Cyan),
+            ),
         };
         // Every panel is a button; the focused one is lit.
         spans.push(Span::styled(" [Chat] ", chat_style));
         spans.push(Span::styled("[Team] ", graph_style));
         if width >= 65 {
-            spans.push(Span::styled("(Tab: switch) · ", dim()));
-        } else if width >= 40 {
-            spans.push(Span::styled("· ", dim()));
+            spans.push(Span::styled("(Tab: switch) ", dim()));
         }
     }
 
-    if width >= SIDE_BY_SIDE_BREAKPOINT {
-        spans.push(Span::styled(
-            format!("{project} · {short} · {mode_str}"),
-            dim(),
-        ));
-    } else if width >= 50 {
-        spans.push(Span::styled(format!("{short} · {mode_str}"), dim()));
+    if width >= 50 {
+        let mode = if mode_str.is_empty() {
+            String::new()
+        } else {
+            format!(" · {mode_str}")
+        };
+        spans.push(Span::styled(format!(" · {short}{mode} "), dim()));
     }
 
     if (50..95).contains(&width) {
         // The wide header lists it with the other buttons.
-        spans.push(Span::styled("[Plan] ", Style::default().fg(Color::Cyan)));
+        spans.push(Span::styled(
+            "[Plan] ",
+            super::theme::Theme::from_env().raised().fg(Color::Cyan),
+        ));
     }
     if (35..50).contains(&width) {
         match mode {
@@ -1881,9 +2030,9 @@ pub fn render_header_with(
             None => {}
         }
     }
-    if width >= 40 {
+    if width >= 40 && !status.trim().is_empty() {
         spans.push(Span::styled(
-            clean(status),
+            format!(" · {} ", clean_line(status)),
             Style::default().fg(Color::Yellow),
         ));
     }
@@ -1891,9 +2040,11 @@ pub fn render_header_with(
         Span::styled(
             label.to_owned(),
             if enabled {
-                Style::default().fg(Color::Cyan)
+                super::theme::Theme::from_env()
+                    .raised()
+                    .patch(Style::default().fg(Color::Cyan))
             } else {
-                dim()
+                super::theme::Theme::from_env().panel().patch(dim())
             },
         )
     };
@@ -1906,7 +2057,10 @@ pub fn render_header_with(
         spans.push(button("[/resume]", controls.resume_plan));
         spans.push(Span::raw(" "));
         spans.push(button("[/cancel]", controls.cancel));
-        spans.push(Span::styled(" [Plan]", Style::default().fg(Color::Cyan)));
+        spans.push(Span::styled(
+            " [Plan]",
+            super::theme::Theme::from_env().raised().fg(Color::Cyan),
+        ));
     } else if width >= 45 {
         // One button for pause or continue, whichever applies.
         let (label, enabled) = if controls.resume_paused {
@@ -1992,6 +2146,114 @@ mod tests {
 
     fn event(seq: u64, turn: Option<&str>, kind: &str, payload: Value) -> Value {
         json!({"seq": seq, "turn_id": turn, "kind": kind, "payload": payload})
+    }
+
+    #[test]
+    fn requirements_failure_shows_raw_reason_and_retry_guidance() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "requirements_failed",
+            json!({
+                "error": "entry p has unknown or incompatible parent r",
+                "retry": "Send a message to retry planning."
+            }),
+        ));
+        assert!(view.cards.iter().any(|card| matches!(card,
+            TranscriptCard::System { title, text, tone: super::super::theme::Tone::Failed, .. }
+                if title == "Requirements preparation failed"
+                    && text.contains("incompatible parent r")
+                    && text.contains("Send a message to retry planning.")
+        )));
+    }
+
+    #[test]
+    fn planning_chat_shows_progress_instead_of_agent_plan_prose() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "session_started",
+            json!({"branch":"feature/start"}),
+        ));
+        view.apply(&event(2, None, "workflow", json!({"phase":"planning"})));
+        view.apply(&event(
+            3,
+            None,
+            "message",
+            json!({"author":"orchestrator","text":"Internal plan prose"}),
+        ));
+        view.apply(&event(
+            4,
+            None,
+            "planning_progress",
+            json!({"text":"Reviewing the plan"}),
+        ));
+        assert_eq!(view.session_branch.as_deref(), Some("feature/start"));
+        assert!(view.messages.is_empty());
+        assert!(
+            !view
+                .transcript
+                .iter()
+                .any(|entry| entry.text.contains("Internal plan prose"))
+        );
+        assert!(view.cards.iter().any(|card| matches!(card, TranscriptCard::System { text, .. } if text == "Reviewing the plan")));
+        view.apply(&event(
+            5,
+            None,
+            "workflow",
+            json!({"phase":"implementation"}),
+        ));
+        view.apply(&event(
+            6,
+            None,
+            "message",
+            json!({"author":"orchestrator","text":"Implementation result"}),
+        ));
+        view.apply(&event(
+            7,
+            None,
+            "message",
+            json!({"author":"runtime","text":"Internal planning handoff","internal":true}),
+        ));
+        assert!(
+            !view
+                .transcript
+                .iter()
+                .any(|entry| entry.text.contains("Internal planning handoff"))
+        );
+        assert_eq!(view.messages.len(), 1);
+    }
+
+    #[test]
+    fn workflow_replay_guides_interview_then_planning_without_task_rows() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "workflow",
+            json!({"phase":"interview","summary":""}),
+        ));
+        assert_eq!(view.stage(), Stage::Interview);
+        assert!(view.graph_hidden());
+        view.apply(&event(
+            2,
+            None,
+            "workflow",
+            json!({"phase":"interview","summary":"Goal and criteria"}),
+        ));
+        assert!(!view.requirements_summary.is_empty());
+        view.apply(&event(
+            3,
+            None,
+            "message",
+            json!({"author":"user","text":"Change scope"}),
+        ));
+        assert!(view.requirements_summary.is_empty());
+        view.apply(&event(4, None, "workflow", json!({"phase":"planning"})));
+        assert_eq!(view.stage(), Stage::Planning);
+        assert!(view.graph_hidden());
     }
 
     fn staged(statuses: &[&str], activity: bool) -> View {
@@ -2890,7 +3152,8 @@ mod tests {
             120,
         );
         let text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(text.contains("antislop"));
+        assert!(text.contains("test-proj"));
+        assert!(!text.contains("antislop"));
         assert!(text.contains("supervised"));
         assert!(text.contains("ready"));
 

@@ -165,7 +165,9 @@ fn a_failure_keeps_every_dependent_task_pending_and_says_why() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
-    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+        .unwrap()
+        .id;
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -181,7 +183,9 @@ fn after_a_login_resuming_finishes_the_plan_in_the_same_sessions() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
-    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+        .unwrap()
+        .id;
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -206,7 +210,9 @@ fn accepting_runs_the_plan_the_user_saw_not_a_newer_one() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
-    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+        .unwrap()
+        .id;
     let first = propose(&core, &conversation, "first");
     let second = propose(&core, &conversation, "second");
     assert_ne!(first, second);
@@ -231,7 +237,9 @@ fn legacy_supervised_tasks_require_ledger_extraction_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
-    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+        .unwrap()
+        .id;
     let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
                       "verifier": {"focus": "f"}});
     let mut second = spec.clone();
@@ -265,7 +273,9 @@ fn legacy_autonomous_plan_cannot_resume_without_ledger_extraction() {
     std::fs::create_dir(dir.path().join("project")).unwrap();
     std::fs::write(dir.path().join("logged-in"), "").unwrap();
     let core = open_in_mode(dir.path(), "autonomous");
-    let conversation = core.start(&dir.path().join("project")).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+        .unwrap()
+        .id;
     let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
                       "verifier": {"focus": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
@@ -294,7 +304,7 @@ fn test_freshness_token_staleness_and_rejection() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let spec = json!({
         "id": "t1",
         "title": "T1",
@@ -354,7 +364,7 @@ fn test_blocked_task_prevents_premature_audit() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -397,7 +407,7 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
     std::fs::write(project.join("hello.txt"), "user edit\n").unwrap();
 
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "write_chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -446,7 +456,7 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
     std::fs::write(project.join("hello.txt"), "user edit\n").unwrap();
 
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "write_chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -494,7 +504,7 @@ fn test_recover_task_verify_manual_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "manual_fix");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -550,7 +560,7 @@ fn test_recover_task_retry_with_guidance() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -587,7 +597,7 @@ fn an_unperformed_task_cannot_be_approved_or_discarded() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -616,7 +626,7 @@ fn test_mechanical_audit_gate_prevents_false_success() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let spec1 = json!({"id": "t1", "title": "Done", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}});
     let spec2 = json!({"id": "t2", "title": "Blocked", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec1, spec2]).unwrap();
@@ -666,7 +676,7 @@ fn supervised_orchestrator_unblocks_only_after_the_user_decides() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -689,7 +699,7 @@ fn autonomous_orchestrator_unblocks_a_blocked_task_by_itself() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open_in_mode(dir.path(), "autonomous");
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     core.send(&conversation, "chain").unwrap();
     wait_idle(&core, &conversation);
     let plan = core.store.latest_plan(&conversation).unwrap()[0]
@@ -708,7 +718,7 @@ fn recovery_events_carry_bounded_details_and_keep_the_whole_reason() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = core.start(&project).unwrap().id;
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);

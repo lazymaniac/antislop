@@ -96,7 +96,9 @@ fn events(core: &Core, conversation: &str, kind: &str) -> Vec<Value> {
 }
 
 fn ask(core: &Arc<Core>, dir: &Path, text: &str) -> String {
-    let conversation = core.start(&dir.join("project")).unwrap().id;
+    let conversation = support::legacy_conversation(core, &dir.join("project"))
+        .unwrap()
+        .id;
     core.send(&conversation, text).unwrap();
     wait_idle(core, &conversation);
     conversation

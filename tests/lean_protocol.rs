@@ -14,7 +14,9 @@ fn fake_codex(dir: &Path) -> PathBuf {
         r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
-if "propose" in prompt:
+if "SESSION PHASE: INTERVIEW." in prompt:
+    answer = "```requirements\nGoal, scope and acceptance: inspect the requested fixture.\n```"
+elif "propose" in prompt:
     answer = "Plan:\n```plan\n{\"tasks\": [{\"id\": \"t1\", \"title\": \"T1\", \"goal\": \"g\", \"kind\": \"analysis\", \"verifier\": {\"focus\": \"f\"}}]}\n```"
 else:
     answer = "answer: " + prompt.splitlines()[-1] if prompt else "answer: ok"
@@ -102,6 +104,28 @@ impl DaemonGuard {
         let _ = child.kill();
         let _ = child.wait();
         panic!("daemon did not start within 10 seconds");
+    }
+
+    fn wait_for_planning(&self, conversation: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let reply = self
+                .call_raw(&json!({"op":"events","conversation":conversation,"after":0,"wait_ms":0}))
+                .unwrap();
+            if reply["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["kind"] == "workflow" && event["payload"]["phase"] == "planning")
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "interview did not start planning automatically"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn call_raw(&self, json_payload: &Value) -> std::result::Result<Value, String> {
@@ -604,7 +628,7 @@ fn test_stale_scope_forced_change_between_read_and_execution_has_no_side_effects
     let mut scope_after_change = scope_at_read.clone();
     while Instant::now() < deadline {
         let updated = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
-        if updated[0]["status"] == "idle"
+        if matches!(updated[0]["status"].as_str(), Some("idle" | "proposed"))
             && updated[0]["scope_hash"].as_str().unwrap() != scope_at_read
         {
             scope_after_change = updated[0]["scope_hash"].as_str().unwrap().to_string();
@@ -722,6 +746,7 @@ fn test_task_scoped_query_includes_freshness_token() {
         }))
         .unwrap();
 
+    daemon.wait_for_planning(conv_id);
     let mut plan_id = String::new();
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -779,6 +804,7 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
     daemon
         .call_raw(&json!({"op": "send", "conversation": conv, "text": "please propose"}))
         .unwrap();
+    daemon.wait_for_planning(conv);
     let deadline = Instant::now() + Duration::from_secs(20);
     let plan = loop {
         let list = daemon.call_raw(&json!({"op": "conversations"})).unwrap();
@@ -1185,4 +1211,155 @@ fn chunked_transport_round_trips_sources_larger_than_four_megabytes() {
         })
         .unwrap();
     assert_eq!(restored["text"], text);
+}
+
+#[test]
+fn history_reference_pages_stream_large_rounds_and_mail_without_hydrating_them() {
+    use antislop::lean::store::{ContentOwner, HistoryScope, Mail, Store, TurnStatus};
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    let state = dir.path().join("state");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&state).unwrap();
+    let project = project.canonicalize().unwrap();
+    let store = Store::open(&state.join("core.db")).unwrap();
+    let conversation = store
+        .create_conversation(&project.to_string_lossy())
+        .unwrap()
+        .id;
+    let foreign = store
+        .create_conversation(&project.to_string_lossy())
+        .unwrap()
+        .id;
+    let text = "👩‍💻e\u{301}\n\"\\".repeat(300_000);
+    assert!(text.len() > antislop::transport::MAX_FRAME);
+    let mut task = store
+        .add_plan(
+            &conversation,
+            &[json!({"id":"t1","title":"Historical result","kind":"analysis","writes":false})],
+        )
+        .unwrap()
+        .remove(0);
+    task.round = 1;
+    task.status = "approved".into();
+    task.report = Some(text.clone());
+    task.verdict = Some(json!({"approved":true}));
+    store.update_task(&task).unwrap();
+    let role = format!("worker:{}", task.id);
+    let turn = store
+        .start_turn(&conversation, &role, "codex", 0, Some(&task.plan_id))
+        .unwrap();
+    let event = store
+        .append_event(
+            &conversation,
+            Some(&turn.id),
+            Some(&task.plan_id),
+            "agent",
+            &json!({"type":"prompt","text":text}),
+        )
+        .unwrap();
+    let mail = store
+        .add_mail(
+            &conversation,
+            &role,
+            &Mail {
+                id: 0,
+                sender: "user".into(),
+                recipient: role.clone(),
+                kind: "copy".into(),
+                text: text.clone(),
+                created_ms: 0,
+                delivered_turn: None,
+                delivered_ms: None,
+                state: "queued".into(),
+            },
+        )
+        .unwrap();
+    store
+        .mark_delivered(&conversation, &[mail.id], &turn.id)
+        .unwrap();
+    store.finish_turn(&turn.id, TurnStatus::Done, None).unwrap();
+    drop(store);
+    let config = write_config(dir.path(), &fake_codex(dir.path()), &fake_agy(dir.path()));
+    let daemon = DaemonGuard::start(&project, &config, &state);
+    let snapshot = daemon
+        .client
+        .call(&Request::TaskRound {
+            conversation: conversation.clone(),
+            plan: task.plan_id.clone(),
+            id: task.id.clone(),
+            round: 1,
+            references: Some(true),
+        })
+        .unwrap();
+    assert!(snapshot.to_string().len() < 4096);
+    assert!(snapshot["report"]["session_content"].is_object());
+    let events = daemon
+        .client
+        .call(&Request::SessionEvents {
+            conversation: conversation.clone(),
+            turn: turn.id.clone(),
+            after: 0,
+            limit: Some(100),
+            include_messages: Some(false),
+        })
+        .unwrap();
+    assert!(events.to_string().len() < 4096);
+    assert!(events["messages"].as_array().unwrap().is_empty());
+    assert_eq!(events["events"][0]["seq"], event);
+    let page = daemon
+        .client
+        .call(&Request::HistoryMessages {
+            conversation: conversation.clone(),
+            scope: HistoryScope::Round {
+                task: task.id.clone(),
+                round: 1,
+            },
+            after: 0,
+            limit: Some(1),
+        })
+        .unwrap();
+    assert!(page.to_string().len() < 1024);
+    assert_eq!(page["messages"][0]["id"], mail.id);
+    for owner in [
+        ContentOwner::Round {
+            task: task.id.clone(),
+            round: 1,
+            field: "report".into(),
+        },
+        ContentOwner::Mail { id: mail.id },
+    ] {
+        assert!(
+            daemon
+                .client
+                .call(&Request::HistoryContent {
+                    conversation: foreign.clone(),
+                    owner: owner.clone(),
+                    offset: 0
+                })
+                .is_err()
+        );
+        let mut offset = 0;
+        let mut restored = String::new();
+        loop {
+            let chunk = daemon
+                .client
+                .call(&Request::HistoryContent {
+                    conversation: conversation.clone(),
+                    owner: owner.clone(),
+                    offset,
+                })
+                .unwrap();
+            let part = chunk["text"].as_str().unwrap();
+            assert!(part.len() <= 64 * 1024);
+            restored.push_str(part);
+            if chunk["done"] == true {
+                break;
+            }
+            let next = chunk["next_offset"].as_u64().unwrap();
+            assert!(next > offset);
+            offset = next;
+        }
+        assert_eq!(restored, text);
+    }
 }

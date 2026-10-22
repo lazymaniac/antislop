@@ -1,6 +1,8 @@
 //! Versioned obligations. Sources and history are immutable; completion is derived
 //! from independent evidence about the integrated result, never task approval.
+mod options;
 mod runtime;
+pub use options::SolutionChoice;
 mod storage;
 
 use crate::{Result, require};

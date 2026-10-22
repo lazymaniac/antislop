@@ -12,6 +12,7 @@ pub mod editor;
 pub mod graph;
 mod history;
 mod inspection;
+pub mod interview;
 pub mod ledger;
 pub mod palette;
 pub mod planview;
@@ -67,6 +68,11 @@ use view::{
 };
 
 pub enum Update {
+    InterviewResult {
+        conversation: String,
+        question: u64,
+        result: std::result::Result<(), String>,
+    },
     AgentMessage {
         conversation: String,
         recipient: String,
@@ -218,6 +224,7 @@ pub struct App {
     /// Frames drawn so far: advances spinners; tests set it directly.
     pub tick: u64,
     pub view: View,
+    pub interview_forms: std::collections::HashMap<String, interview::Form>,
     pub input: InputBuffer,
     pub input_shown: usize,
     pub input_width: usize,
@@ -316,6 +323,7 @@ impl App {
             stop_poller: Arc::new(AtomicBool::new(false)),
             tick: 0,
             view: View::default(),
+            interview_forms: Default::default(),
             input: InputBuffer::new(),
             input_shown: 0,
             input_width: 80,
@@ -647,6 +655,9 @@ impl App {
             .details
             .as_ref()
             .map(|details| {
+                if details.fetch_in_flight {
+                    return false;
+                }
                 if details
                     .fetch_retry_after
                     .is_some_and(|deadline| std::time::Instant::now() < deadline)
@@ -724,6 +735,7 @@ impl App {
             .as_mut()
             .filter(|details| details.task_id() == Some(id.as_str()))
         {
+            details.fetch_in_flight = true;
             details.latest_observed = latest_observed;
             details.fetched_events = self.view.after;
             details.fetched_round = Some(round);
@@ -791,6 +803,7 @@ impl App {
         let key = details.key.clone();
         let selected = details.selected_round;
         let plan = self.view.plan.clone();
+        details.fetch_in_flight = true;
         details.fetched_generation = Some(self.generation);
         details.fetched_plan = plan.clone();
         details.latest_observed = self.view.agents.get(&key).map_or(0, |agent| {
@@ -1263,6 +1276,7 @@ impl App {
             .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
             .clone();
         composer.sending = true;
+        composer.delivery_receipts.clear();
         composer.error = None;
         composer.address = Some(addressed.clone());
         let client = self.client.clone();
@@ -1549,6 +1563,7 @@ impl App {
                 text,
                 result,
             } => {
+                let receipt_view = (conversation == self.conversation).then_some(&self.view);
                 let mut drafts = self.agent_drafts.borrow_mut();
                 let composer = drafts.entry((conversation, recipient)).or_default();
                 if composer.operation.as_ref() != Some(&operation) {
@@ -1560,9 +1575,17 @@ impl App {
                         composer.mail = receipt["mail"].as_u64();
                         composer.delivery =
                             Some(receipt["state"].as_str().unwrap_or("queued").to_owned());
-                        if self.view.messages.iter().any(|message| {
-                            composer.mail.is_some_and(|id| message.id == id.to_string())
-                                && message.state == "delivered"
+                        if composer
+                            .mail
+                            .is_some_and(|id| composer.delivery_receipts.contains(&id))
+                        {
+                            composer.delivery = Some("delivered".into());
+                        }
+                        if receipt_view.is_some_and(|view| {
+                            view.messages.iter().any(|message| {
+                                composer.mail.is_some_and(|id| message.id == id.to_string())
+                                    && message.state == "delivered"
+                            })
                         }) {
                             composer.delivery = Some("delivered".into());
                         }
@@ -1570,7 +1593,15 @@ impl App {
                             composer.input.clear();
                         }
                         composer.operation = None;
-                        composer.error = None;
+                        composer.error = composer
+                            .delivery_failure
+                            .as_ref()
+                            .filter(|(id, _)| {
+                                composer.mail.is_some_and(|mail| id.contains(&mail))
+                                    && composer.delivery.as_deref() != Some("delivered")
+                            })
+                            .map(|(_, error)| error.clone());
+                        composer.delivery_receipts.clear();
                     }
                     Err(error) => {
                         composer.error = Some(error);
@@ -1679,13 +1710,25 @@ impl App {
                     if event["kind"] == "mail_delivered" {
                         for ((owner, _), composer) in self.agent_drafts.borrow_mut().iter_mut() {
                             if owner == &conversation
-                                && event["payload"]["ids"].as_array().is_some_and(|ids| {
+                                && (event["payload"]["ids"].as_array().is_some_and(|ids| {
                                     ids.iter().any(|id| {
                                         id.as_u64() == composer.mail && composer.mail.is_some()
                                     })
-                                })
+                                }) || (composer.sending
+                                    && composer.address.is_some()
+                                    && composer.address.as_deref()
+                                        == event["payload"]["recipient"].as_str()))
                             {
                                 composer.delivery = Some("delivered".into());
+                                composer.error = None;
+                                composer.delivery_failure = None;
+                                composer.delivery_receipts.extend(
+                                    event["payload"]["ids"]
+                                        .as_array()
+                                        .into_iter()
+                                        .flatten()
+                                        .filter_map(Value::as_u64),
+                                );
                             }
                         }
                     } else if event["kind"] == "mail_delivery_failed" {
@@ -1693,6 +1736,11 @@ impl App {
                             if owner == &conversation
                                 && composer.address.as_deref()
                                     == event["payload"]["recipient"].as_str()
+                                && event["payload"]["ids"].as_array().is_none_or(|ids| {
+                                    composer.mail.is_none()
+                                        || composer.sending
+                                        || ids.iter().any(|id| id.as_u64() == composer.mail)
+                                })
                             {
                                 composer.error = Some(format!(
                                     "Delivery failed; queued: {}",
@@ -1700,6 +1748,12 @@ impl App {
                                         .as_str()
                                         .unwrap_or("unknown error")
                                 ));
+                                if let Some(ids) = event["payload"]["ids"].as_array() {
+                                    composer.delivery_failure = Some((
+                                        ids.iter().filter_map(Value::as_u64).collect(),
+                                        composer.error.clone().expect("delivery error"),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -1847,7 +1901,31 @@ impl App {
                 task,
                 documents,
             } => {
+                if conversation == self.conversation
+                    && request_id == self.task_request_id
+                    && let Some(details) =
+                        self.details.as_mut().filter(|details| details.key == key)
+                {
+                    details.fetch_in_flight = false;
+                } else if let Some(state) = self.conversation_states.get_mut(&conversation)
+                    && state.task_request_id == request_id
+                    && let Some(details) =
+                        state.details.as_mut().filter(|details| details.key == key)
+                {
+                    details.fetch_in_flight = false;
+                }
                 if task["round"].as_u64().is_some_and(|actual| actual != round) {
+                    if conversation == self.conversation
+                        && request_id == self.task_request_id
+                        && self.task_row_round(&key).is_some_and(|current| {
+                            current != round && task["round"].as_u64() == Some(current)
+                        })
+                    {
+                        if let Some(details) = self.details.as_mut() {
+                            details.fetched_round = None;
+                        }
+                        self.refetch_stale_details();
+                    }
                     return;
                 }
                 // A task that moved on while its record was in flight must
@@ -1897,6 +1975,7 @@ impl App {
                     details.load_task(task);
                     details.documents = documents;
                 }
+                self.refetch_stale_details();
             }
             Update::Diff {
                 conversation,
@@ -1917,6 +1996,29 @@ impl App {
                     && let Some(diff) = state.diff.as_mut().filter(|diff| diff.task == task)
                 {
                     diff.load(reply);
+                }
+            }
+            Update::InterviewResult {
+                conversation,
+                question,
+                result,
+            } => {
+                if let Some(form) = self
+                    .interview_forms
+                    .get_mut(&conversation)
+                    .filter(|form| form.event == question)
+                {
+                    form.sending = false;
+                    match result {
+                        Ok(()) => {
+                            form.sent = true;
+                            form.error = None;
+                        }
+                        Err(error) => {
+                            form.error = Some(error);
+                            form.visible = true;
+                        }
+                    }
                 }
             }
             Update::SendResult {
@@ -2044,6 +2146,18 @@ impl App {
         match text.as_str() {
             "" => {}
             "/requirements" => self.open_ledger(super::ledger::LedgerKind::Requirement),
+            "/interview" => {
+                self.sync_interview();
+                if let Some(form) = self
+                    .interview_forms
+                    .get_mut(&self.conversation)
+                    .filter(|form| !form.sent)
+                {
+                    form.visible = true;
+                } else {
+                    self.notice = Some("No interview question is waiting for an answer.".into());
+                }
+            }
             "/plan-items" => self.open_ledger(super::ledger::LedgerKind::PlanItem),
             "/plan" => {
                 if self.view.plan.is_some()
@@ -2054,6 +2168,26 @@ impl App {
                     self.plan_view = Some(PlanView::new(pid));
                 } else {
                     self.notice = Some("✗ there is no plan to view".into());
+                }
+            }
+            "/accept" if self.view.workflow_phase.as_deref() == Some("interview") => {
+                self.dispatch("/planning");
+            }
+            "/planning" => {
+                if self.view.workflow_phase.as_deref() != Some("interview") {
+                    self.notice = Some("✗ this session is not in interview".into());
+                } else if self.view.requirements_summary.is_empty()
+                    || self.sending
+                    || !self.input.text.is_empty()
+                {
+                    self.notice = Some(
+                        "✗ send your answers and wait for the requirements summary first".into(),
+                    );
+                } else {
+                    self.request(
+                        Request::Send { conversation, text },
+                        Some("requirements approved; planning started"),
+                    );
                 }
             }
             "/accept" => match self.view.plan.clone().filter(|_| self.view.plan_proposed()) {
@@ -2509,6 +2643,8 @@ impl App {
     fn run(&mut self, command: Command) -> bool {
         let selected = self.selected.clone();
         match command {
+            Command::InterviewQuestion => self.command("/interview"),
+            Command::ApproveRequirements => self.command("/planning"),
             Command::Accept => self.command("/accept"),
             Command::Reject => self.command("/reject"),
             Command::Plan => self.command("/plan"),
@@ -2624,11 +2760,20 @@ impl App {
             Some(others) => format!("{} ({others})", self.project),
             None => self.project.clone(),
         };
+        let branch = self.view.session_branch.as_ref().or_else(|| {
+            self.projects
+                .get(self.active_project)
+                .and_then(|project| project.branch.as_ref())
+        });
+        let label = match branch {
+            Some(branch) => format!("{label} · branch: {branch}"),
+            None => label,
+        };
         view::render_header_with(
             &label,
             &self.conversation,
             self.view.autonomous,
-            &self.header_status(),
+            "",
             panel_focus,
             width,
             self.view.controls(),
@@ -2637,15 +2782,14 @@ impl App {
 
     /// The header's status text: the stage, then what is going on.
     fn header_status(&self) -> String {
-        let status = match (self.view.orchestrator_activity(), self.view.idle) {
-            (Some(activity), _) => activity,
-            (None, _) if self.view.paused => "paused".into(),
-            (None, true) => "ready".into(),
-            (None, false) => "tasks in progress…".into(),
-        };
+        let status = if self.view.paused { "paused" } else { "" };
         let stage = self.view.stage();
         match stage {
-            view::Stage::Fresh => status,
+            view::Stage::Fresh => format!("1/3 interview · {status}"),
+            view::Stage::Interview => format!("1/3 interview · {status}"),
+            view::Stage::Planning => format!("2/3 planning · {status}"),
+            view::Stage::Review => format!("2/3 plan review · {status}"),
+            view::Stage::Executing => format!("3/3 implementation · {status}"),
             // The way out is one click away whenever something is stuck.
             view::Stage::Blocked => format!("{} · {status} [Unblock]", stage.label()),
             _ => format!("{} · {status}", stage.label()),
@@ -2706,7 +2850,65 @@ impl App {
         keep_running
     }
 
+    fn sync_interview(&mut self) {
+        if let Some((event, question)) = &self.view.interview_question {
+            let same = self
+                .interview_forms
+                .get(&self.conversation)
+                .is_some_and(|form| form.event == *event);
+            if !same {
+                self.interview_forms.insert(
+                    self.conversation.clone(),
+                    interview::Form::new(*event, question.clone()),
+                );
+            }
+        }
+    }
+
+    fn interview_visible(&self) -> bool {
+        self.view.workflow_phase.as_deref() == Some("interview")
+            && self
+                .view
+                .interview_question
+                .as_ref()
+                .is_some_and(|(event, _)| {
+                    self.interview_forms
+                        .get(&self.conversation)
+                        .is_some_and(|form| form.event == *event && form.visible && !form.sent)
+                })
+    }
+
+    fn send_interview_answer(&mut self, text: String) {
+        let Some(form) = self.interview_forms.get_mut(&self.conversation) else {
+            return;
+        };
+        if form.sending || form.sent {
+            return;
+        }
+        form.sending = true;
+        form.error = None;
+        let question = form.event;
+        let client = self.client.clone();
+        let updates = self.updates.clone();
+        let conversation = self.conversation.clone();
+        std::thread::spawn(move || {
+            let result = client
+                .call(&Request::Send {
+                    conversation: conversation.clone(),
+                    text,
+                })
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            let _ = updates.send(Update::InterviewResult {
+                conversation,
+                question,
+                result,
+            });
+        });
+    }
+
     fn key_inner(&mut self, key: event::KeyEvent) -> bool {
+        self.sync_interview();
         if self.ledger_view.as_ref().is_some_and(|v| v.visible) {
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
                 self.open_conversation_picker();
@@ -2777,7 +2979,8 @@ impl App {
         if key.code == KeyCode::Char('c') && control {
             return false;
         }
-        let editing = self.editor.is_some()
+        let editing = self.interview_visible()
+            || self.editor.is_some()
             || self.picker.is_some()
             || self
                 .details
@@ -2884,6 +3087,24 @@ impl App {
         }
         if self.editor.is_some() {
             self.editor_key(key);
+            return true;
+        }
+        if self.interview_visible() {
+            if control && key.code == KeyCode::Char('o') {
+                self.open_conversation_picker();
+                return true;
+            }
+            if control && key.code == KeyCode::Char('p') {
+                self.picker = Some(Picker::new(Kind::Commands));
+                return true;
+            }
+            if let Some(answer) = self
+                .interview_forms
+                .get_mut(&self.conversation)
+                .and_then(|form| form.key(key))
+            {
+                self.send_interview_answer(answer);
+            }
             return true;
         }
         if let Some(pv) = &mut self.plan_view {
@@ -2993,7 +3214,10 @@ impl App {
                 }
             }
             KeyCode::Char('a') if control => {
-                if self.input.is_empty() && self.view.plan_proposed() {
+                if self.input.is_empty()
+                    && (self.view.plan_proposed()
+                        || self.view.workflow_phase.as_deref() == Some("interview"))
+                {
                     self.command("/accept");
                 } else {
                     self.input.move_home();
@@ -3589,6 +3813,13 @@ impl App {
         if self.help.is_some() || self.trust_prompt.is_some() {
             return;
         }
+        self.sync_interview();
+        if self.picker.is_none() && self.editor.is_none() && self.interview_visible() {
+            if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
+                form.paste(text);
+            }
+            return;
+        }
         if let Some(details) = &mut self.details {
             if details.editing && details.selected_round.is_none() {
                 let key = details.composer_key();
@@ -3620,6 +3851,7 @@ impl App {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
+        self.sync_interview();
         self.settle_focus();
         self.terminal_area = frame.area();
         self.graph_area = None;
@@ -3629,6 +3861,7 @@ impl App {
             return;
         }
         if let Some(ledger) = self.ledger_view.as_mut().filter(|v| v.visible) {
+            ledger.workflow_notice = self.view.requirements_progress.clone();
             ledger.draw(frame, frame.area());
             if let Some(picker) = &mut self.picker {
                 picker.draw(frame, &self.view);
@@ -3739,6 +3972,17 @@ impl App {
                 let cursor_y = (box_area.y + 1 + visible_row as u16).clamp(min_y, max_y);
                 frame.set_cursor_position((cursor_x, cursor_y));
             }
+        }
+        if self.editor.is_none()
+            && self.help.is_none()
+            && self.picker.is_none()
+            && self.trust_prompt.is_none()
+            && self.project_trust.is_none()
+            && self.confirmation.is_none()
+            && self.interview_visible()
+            && let Some(form) = self.interview_forms.get_mut(&self.conversation)
+        {
+            form.draw(frame, &Theme::from_env());
         }
         if let Some(picker) = &mut self.picker {
             picker.draw_with_cursor(
@@ -3929,6 +4173,9 @@ impl App {
     }
 
     fn selection_blocked(&self) -> bool {
+        if self.interview_visible() {
+            return true;
+        }
         if self.ledger_view.as_ref().is_some_and(|v| v.visible) {
             return true;
         }
@@ -3955,51 +4202,48 @@ impl App {
         ])
         .areas(area);
 
-        frame.render_widget(Paragraph::new(self.header_line(header.width)), header);
+        let theme = Theme::from_env();
+        frame.render_widget(
+            Paragraph::new(self.header_line(header.width)).style(theme.bar()),
+            header,
+        );
+        let phase = Block::default()
+            .borders(Borders::ALL)
+            .border_set(if theme.ascii {
+                ratatui::symbols::border::Set {
+                    top_left: "+",
+                    top_right: "+",
+                    bottom_left: "+",
+                    bottom_right: "+",
+                    horizontal_top: "-",
+                    horizontal_bottom: "-",
+                    vertical_left: "|",
+                    vertical_right: "|",
+                }
+            } else {
+                ratatui::symbols::border::ROUNDED
+            })
+            .border_style(theme.separator(true))
+            .style(theme.card())
+            .title(format!(
+                " {} ",
+                self.header_status().trim_end_matches(" · ")
+            ));
+        let body = if body.height >= 5 {
+            let inner = phase.inner(body);
+            frame.render_widget(phase, body);
+            inner
+        } else {
+            body
+        };
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
             Focus::Graph => PanelFocus::Graph,
         };
 
-        let theme = Theme::from_env();
         if self.view.graph_hidden() && self.focus == Focus::Chat {
             self.draw_chat(frame, body, &theme);
-            if self.view.activity.is_some() {
-                let progress = self.view.progress();
-                let width = progress
-                    .iter()
-                    .map(|line| line.width().saturating_add(4))
-                    .max()
-                    .unwrap_or(0)
-                    .clamp(16, 48) as u16;
-                let width = width.min(body.width);
-                let height = progress.len().min(6) as u16 + 2;
-                if body.width >= width + 2 && body.height >= height + 2 {
-                    let overlay = Rect::new(
-                        body.right().saturating_sub(width + 1),
-                        body.y + 1,
-                        width,
-                        height,
-                    );
-                    let lines: Vec<Line> = progress
-                        .iter()
-                        .take(6)
-                        .map(|line| Line::raw(truncate(line, usize::from(width.saturating_sub(4)))))
-                        .collect();
-                    frame.render_widget(Clear, overlay);
-                    frame.render_widget(
-                        Paragraph::new(lines).block(
-                            Block::default()
-                                .borders(Borders::ALL)
-                                .border_style(Style::default().fg(Color::Yellow))
-                                .title(" now ")
-                                .padding(ratatui::widgets::Padding::horizontal(1)),
-                        ),
-                        overlay,
-                    );
-                }
-            }
-        } else if body.width >= SIDE_BY_SIDE_BREAKPOINT {
+        } else if area.width >= SIDE_BY_SIDE_BREAKPOINT {
             let chat_width = (body.width / 3).max(34);
             let [chat, sep_col, team] = Layout::horizontal([
                 Constraint::Length(chat_width),
@@ -4022,11 +4266,23 @@ impl App {
             self.draw_graph(frame, body);
         }
 
+        let workflow_hint =
+            if self.notice.is_none() && self.view.workflow_phase.as_deref() == Some("interview") {
+                Some(if self.view.interview_question.is_some() {
+                    "/interview open question · Ctrl+P commands"
+                } else if self.view.requirements_summary.is_empty() {
+                    "Enter answer interview · Ctrl+P commands"
+                } else {
+                    "Preparing the plan from collected requirements · Ctrl+P commands"
+                })
+            } else {
+                None
+            };
         let hint = main_footer_hint(
             panel_focus,
             self.view.plan_proposed(),
             self.view.plan_resumable(),
-            self.notice.as_deref(),
+            self.notice.as_deref().or(workflow_hint),
             usize::from(footer.width),
         );
         frame.render_widget(Paragraph::new(Span::styled(hint, dim())), footer);
@@ -4042,8 +4298,38 @@ impl App {
         let input_lines = visual_text_lines(&self.input.text, self.input_width);
         let max_input_height = area.height.saturating_sub(1).max(1);
         let input_height = (input_lines.len().clamp(1, 6) as u16 + 2).min(max_input_height);
-        let [transcript, input] =
-            Layout::vertical([Constraint::Min(1), Constraint::Length(input_height)]).areas(area);
+        let activity = self.view.orchestrator_activity().or_else(|| {
+            (!self.view.idle).then(|| {
+                if self.view.graph_hidden() {
+                    "waiting for the orchestrator to start".to_owned()
+                } else {
+                    "tasks in progress…".to_owned()
+                }
+            })
+        });
+        let status_height = u16::from(self.sending || activity.is_some());
+        let [transcript, status, input] = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(status_height),
+            Constraint::Length(input_height),
+        ])
+        .areas(area);
+        if status_height > 0 {
+            let text = if self.sending {
+                "orchestrator sending…".to_owned()
+            } else {
+                activity.unwrap_or_default()
+            };
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{} {}",
+                    theme.spinner(self.tick),
+                    view::clean_line(&text)
+                ))
+                .style(theme.bar()),
+                status,
+            );
+        }
         self.draw_transcript(frame, transcript, theme);
 
         let visible_box_lines = (input.height.saturating_sub(2) as usize).max(1);
@@ -4317,54 +4603,42 @@ impl App {
             }
         }
 
-        // The orchestrator's state, at the end of the conversation: sending,
-        // then thinking, with what it does and for how long.
-        let waiting_for_turn = !self.view.idle
-            && matches!(
-                self.view.stage(),
-                view::Stage::Interview | view::Stage::Planning
-            );
-        if self.sending || self.view.orchestrator_activity().is_some() || waiting_for_turn {
-            let (what, doing) = if self.sending {
-                ("sending…", String::new())
-            } else {
-                (
-                    "thinking…",
-                    self.view
-                        .orchestrator_activity()
-                        .unwrap_or_else(|| "waiting for the orchestrator to start".into()),
-                )
+        if self.view.workflow_phase.is_some() {
+            let (title, body) = match self.view.stage() {
+                view::Stage::Interview if self.view.interview_question.is_some() => (
+                    "1/3 · Answer the interview question",
+                    "The orchestrator is waiting for your decision. /interview opens the question, suggested options and your own answer field.".to_owned(),
+                ),
+                view::Stage::Interview if self.view.requirements_summary.is_empty() => (
+                    "1/3 · Interview and requirements",
+                    "Describe your goal and answer the orchestrator's questions. Agree on scope, constraints and acceptance criteria. A requirements summary will appear here for approval.".to_owned(),
+                ),
+                view::Stage::Interview => (
+                    "1/3 · Review requirements",
+                    format!("{}\n\nPlanning starts automatically after the interview.", self.view.requirements_summary),
+                ),
+                view::Stage::Planning => (
+                    "2/3 · Planning",
+                    "The orchestrator is preparing the plan from approved requirements. The next step is your review and comments.".to_owned(),
+                ),
+                view::Stage::Review => (
+                    "2/3 · Review and comment on the plan",
+                    "Ctrl+L opens the plan. Add comments, submit Review and resolve outstanding feedback. Ctrl+A accepts the plan and starts implementation.".to_owned(),
+                ),
+                _ => (
+                    "3/3 · Implementation",
+                    "Follow task progress and verification in the graph. Open task details to inspect results, diffs or add comments.".to_owned(),
+                ),
             };
-            let elapsed = self
-                .view
-                .agents
-                .get(view::ORCHESTRATOR)
-                .and_then(|agent| agent.started_ms.filter(|_| agent.running))
-                .map(|started| {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_millis() as i64);
-                    view::duration(now.saturating_sub(started).max(0) as u64)
-                })
-                .unwrap_or_default();
             cards.extend(card(
                 theme,
                 CardProps {
                     fill: theme.card(),
-                    accent: theme.person("orchestrator"),
-                    head: vec![
-                        Span::styled(
-                            format!("{} ", theme.spinner(self.tick)),
-                            theme.status("working"),
-                        ),
-                        Span::styled(
-                            format!("orchestrator {what}"),
-                            theme.person("orchestrator").patch(theme.title()),
-                        ),
-                    ],
-                    right: elapsed,
-                    body: &doing,
-                    max_body: 2,
+                    accent: theme.accent(),
+                    head: vec![Span::styled(title, theme.title())],
+                    right: String::new(),
+                    body: &body,
+                    max_body: usize::MAX,
                     width,
                 },
             ));
@@ -4608,6 +4882,7 @@ impl App {
     }
 
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        self.sync_interview();
         if let Some(view) = self.ledger_view.as_mut().filter(|v| v.visible) {
             let action = view.mouse(mouse);
             self.ledger_action(action);
@@ -4636,6 +4911,9 @@ impl App {
                     unblock::Outcome::Close | unblock::Outcome::None => {}
                 }
             }
+            return true;
+        }
+        if self.interview_visible() {
             return true;
         }
         if !self.selection_blocked() {
@@ -4925,6 +5203,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         stop_poller: Arc::new(AtomicBool::new(false)),
         tick: 0,
         view: View::default(),
+        interview_forms: Default::default(),
         input: InputBuffer::with_text(options.message.clone().unwrap_or_default()),
         input_shown: 0,
         input_width: 80,
@@ -5228,6 +5507,82 @@ pub mod tests {
     }
 
     #[test]
+    fn interview_draft_survives_background_failure_and_conversation_switches() {
+        let mut app = test_app();
+        app.conversation = "interview-a".into();
+        app.input = InputBuffer::with_text("Unsent chat draft");
+        let question = serde_json::from_value(serde_json::json!({"id":"scope","context":"Scope affects timing.","question":"Which scope?","options":[{"label":"Small"},{"label":"Full"}]})).unwrap();
+        app.view.workflow_phase = Some("interview".into());
+        app.view.interview_question = Some((42, question));
+        app.sync_interview();
+        app.interview_forms
+            .get_mut("interview-a")
+            .unwrap()
+            .paste("My own answer 👩‍💻");
+        app.help = Some(Help::Chat);
+        app.key(event::KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        app.paste("must stay out of every draft");
+        assert_eq!(
+            app.interview_forms["interview-a"].input.text,
+            "My own answer 👩‍💻"
+        );
+        app.help = None;
+        app.interview_forms.get_mut("interview-a").unwrap().sending = true;
+        app.open("interview-b".into());
+        app.stop_poller.store(true, Ordering::SeqCst);
+        app.apply_update(Update::InterviewResult {
+            conversation: "interview-a".into(),
+            question: 42,
+            result: Err("socket closed".into()),
+        });
+        assert_eq!(
+            app.interview_forms["interview-a"].error.as_deref(),
+            Some("socket closed")
+        );
+        assert!(!app.interview_forms["interview-a"].sending);
+        app.open("interview-a".into());
+        app.stop_poller.store(true, Ordering::SeqCst);
+        assert_eq!(app.input.text, "Unsent chat draft");
+        assert_eq!(
+            app.interview_forms["interview-a"].input.text,
+            "My own answer 👩‍💻"
+        );
+        app.apply_update(Update::InterviewResult {
+            conversation: "interview-a".into(),
+            question: 41,
+            result: Ok(()),
+        });
+        assert!(!app.interview_forms["interview-a"].sent);
+    }
+
+    #[test]
+    fn interview_shortcut_guides_approval_and_preserves_unsent_answers() {
+        let mut app = test_app();
+        app.view.workflow_phase = Some("interview".into());
+        app.key(event::KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+        ));
+        assert!(
+            app.notice
+                .as_deref()
+                .unwrap()
+                .contains("requirements summary")
+        );
+        app.view.requirements_summary = "Goal and criteria".into();
+        app.input = InputBuffer::with_text("Correction 👩‍💻");
+        app.key(event::KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(app.input.text, "Correction 👩‍💻");
+        assert_eq!(app.input.cursor, 0);
+        app.command("/planning");
+        assert!(app.notice.as_deref().unwrap().contains("send your answers"));
+        assert_eq!(app.input.text, "Correction 👩‍💻");
+    }
+
+    #[test]
     fn chat_ctrl_a_plan_accept_vs_readline_home() {
         let mut app = test_app();
         app.view.apply(&serde_json::json!({
@@ -5345,8 +5700,9 @@ pub mod tests {
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
         assert!(!text.contains("[Chat]"));
         assert!(!text.contains("(Tab: switch)"));
-        assert!(text.contains("antislop"));
-        assert!(text.contains("ready"));
+        assert!(text.contains("test"));
+        assert!(!text.contains("antislop"));
+        assert!(text.contains("1/3 interview"));
     }
 
     #[test]
@@ -5872,7 +6228,7 @@ pub mod tests {
         app.sending = false;
         app.view.activity = Some("orchestrator: exec ls".into());
         let thinking = screen(&mut app, &mut term);
-        assert!(thinking.contains("orchestrator thinking…"));
+        assert!(thinking.contains("orchestrator: exec ls"));
         assert!(thinking.contains("exec ls"));
         // The spinner moves with the tick.
         app.tick = 1;
