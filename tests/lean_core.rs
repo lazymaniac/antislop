@@ -366,7 +366,7 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
     let conversation = core.start(&project).unwrap();
 
     let started = Instant::now();
-    core.send(&conversation.id, "slow: przeanalizuj architekturę projektu")
+    core.send(&conversation.id, "slow: analyze the project architecture")
         .unwrap();
     // Send the second message while the first turn is running.
     while core
@@ -377,7 +377,7 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
     {
         std::thread::sleep(Duration::from_millis(5));
     }
-    core.send(&conversation.id, "druga wiadomość").unwrap();
+    core.send(&conversation.id, "second message").unwrap();
     assert!(
         started.elapsed() < Duration::from_millis(500),
         "sending must not wait for the agent"
@@ -395,8 +395,8 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
     assert_eq!(
         replies,
         [
-            "answer: slow: przeanalizuj architekturę projektu",
-            "answer: druga wiadomość"
+            "answer: slow: analyze the project architecture",
+            "answer: second message"
         ]
     );
     let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
@@ -411,7 +411,7 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
     );
     assert!(!calls[1].contains("Nothing from it is pasted here"));
     assert!(
-        !calls[1].contains("przeanalizuj"),
+        !calls[1].contains("analyze"),
         "answered text is not re-sent"
     );
 }
@@ -489,8 +489,8 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     )
     .unwrap();
 
-    let first = chat(&dir, &project, "pierwsza");
-    assert!(first.contains("answer: pierwsza"), "{first}");
+    let first = chat(&dir, &project, "first");
+    assert!(first.contains("answer: first"), "{first}");
     let pid = |state: &std::path::Path| {
         antislop::lean::daemon::Client::at(state)
             .call(&antislop::lean::daemon::Request::Identity)
@@ -499,15 +499,15 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     };
     let daemon = pid(&dir.join("state"));
     // The second frontend continues the same conversation on the same daemon.
-    let second = chat(&dir, &project, "druga");
+    let second = chat(&dir, &project, "second");
     assert!(
-        second.contains("answer: druga") && !second.contains("pierwsza"),
+        second.contains("answer: second") && !second.contains("first"),
         "{second}"
     );
     assert_eq!(pid(&dir.join("state")), daemon);
     let calls = std::fs::read_to_string(dir.join("calls.log")).unwrap();
     assert!(
-        calls.contains("exec resume") && calls.contains("T1 ") && calls.contains("[user]\ndruga"),
+        calls.contains("exec resume") && calls.contains("T1 ") && calls.contains("[user]\nsecond"),
         "{calls}"
     );
 
@@ -626,7 +626,7 @@ fn a_question_cut_off_by_a_restart_is_answered_after_it() {
     // As if the daemon died while the orchestrator worked on this message.
     let message = core
         .store
-        .add_message(&conversation.id, "user", "co dalej?")
+        .add_message(&conversation.id, "user", "what next?")
         .unwrap();
     core.store
         .start_turn(&conversation.id, "orchestrator", "codex", message.seq, None)
@@ -643,7 +643,7 @@ fn a_question_cut_off_by_a_restart_is_answered_after_it() {
         .unwrap();
     assert_eq!(
         (last.author.as_str(), last.text.as_str()),
-        ("orchestrator", "answer: co dalej?")
+        ("orchestrator", "answer: what next?")
     );
 }
 
@@ -710,7 +710,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     common::trust(&project);
     let mut first = run(
         if rebuilt { &old_build } else { current_build },
-        "sleepy: pierwsza",
+        "sleepy: first",
     );
     let deadline = Instant::now() + Duration::from_secs(10);
     let daemon = loop {
@@ -745,7 +745,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(dir.join("antislop.toml"), format!("{text}\n# edited\n")).unwrap();
     }
-    let second = run(current_build, "druga").wait_with_output().unwrap();
+    let second = run(current_build, "second").wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(second.status.success(), "{stderr}");
     assert!(
@@ -757,7 +757,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
         "{stderr}"
     );
     let stdout = String::from_utf8_lossy(&second.stdout);
-    assert!(stdout.contains("answer: druga"), "{stdout}");
+    assert!(stdout.contains("answer: second"), "{stdout}");
     assert_eq!(
         identity().unwrap()["pid"],
         daemon,
@@ -766,8 +766,8 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     assert!(first.wait_with_output().unwrap().status.success());
 
     // Once the work is done, the next frontend gets the new build/configuration.
-    let third = chat(&dir, &project, "trzecia");
-    assert!(third.contains("answer: trzecia"), "{third}");
+    let third = chat(&dir, &project, "third");
+    assert!(third.contains("answer: third"), "{third}");
     assert_ne!(identity().unwrap()["pid"], daemon);
     antislop::lean::daemon::Client::at(&state)
         .call(&antislop::lean::daemon::Request::Shutdown)
@@ -794,7 +794,7 @@ fn a_daemon_whose_state_is_deleted_leaves() {
         ),
     )
     .unwrap();
-    chat(&dir, &project, "pierwsza");
+    chat(&dir, &project, "first");
     let pid = antislop::lean::daemon::Client::at(&dir.join("state"))
         .call(&antislop::lean::daemon::Request::Identity)
         .unwrap()["pid"]
@@ -878,7 +878,7 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
         .arg(dir.join("antislop.toml"))
         .arg("--state")
         .arg(dir.join("state"))
-        .arg("sleepy pytanie")
+        .arg("sleepy question")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -887,7 +887,7 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !std::fs::read_to_string(dir.join("calls.log"))
         .unwrap_or_default()
-        .contains("sleepy pytanie")
+        .contains("sleepy question")
     {
         assert!(Instant::now() < deadline, "the orchestrator never started");
         std::thread::sleep(Duration::from_millis(20));
@@ -903,9 +903,9 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
     let output = frontend.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{output:?}");
-    assert!(stdout.contains("answer: sleepy pytanie"), "{stdout}");
+    assert!(stdout.contains("answer: sleepy question"), "{stdout}");
     let calls = std::fs::read_to_string(dir.join("calls.log")).unwrap();
-    assert_eq!(calls.matches("sleepy pytanie").count(), 2, "{calls}");
+    assert_eq!(calls.matches("sleepy question").count(), 2, "{calls}");
 }
 
 /// The runtime's new card-feedback shape — bounded effect text plus the

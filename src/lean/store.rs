@@ -2690,7 +2690,7 @@ mod tests {
         let store = Store::open(&dir.path().join("core.db")).unwrap();
         let conversation = store.create_conversation("/p").unwrap();
         let first = store
-            .add_message(&conversation.id, "user", "cześć")
+            .add_message(&conversation.id, "user", "hello")
             .unwrap();
         let turn = store
             .start_turn(&conversation.id, "orchestrator", "codex", first.seq, None)
@@ -2721,7 +2721,7 @@ mod tests {
         );
         let events = store.events_since(&conversation.id, 0, 10).unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].payload["text"], "cześć");
+        assert_eq!(events[0].payload["text"], "hello");
         assert!(
             store
                 .events_since(&conversation.id, events[0].seq, 10)

@@ -80,14 +80,14 @@ with open({log:?}, "a") as f:
         common.clone()
             + r#"
 plan = {"tasks": [
-  {"id": "t1", "title": "Storage", "summary": "Oceń sposób zapisu danych.", "goal": "Assess storage", "scope": ["src"],
-   "kind": "architecture", "verifier": {"summary": "Sprawdź wnioski o zapisie danych.", "focus": "claims", "risks": ["r-storage"]}},
+  {"id": "t1", "title": "Storage", "summary": "Assess the storage approach.", "goal": "Assess storage", "scope": ["src"],
+   "kind": "architecture", "verifier": {"summary": "Verify the storage findings.", "focus": "claims", "risks": ["r-storage"]}},
   {"id": "t2", "title": "TUI", "goal": "Assess TUI", "depends_on": ["t1"],
    "kind": "analysis", "verifier": {"focus": "claims", "risks": ["r-tui"]}}]}
 if "[runtime]" in prompt:
     answer = "summary: " + ("fixed report" if "fixed report" in prompt else "missing")
 else:
-    answer = "Dwa zadania.\n```plan\n" + json.dumps(plan) + "\n```"
+    answer = "Two tasks.\n```plan\n" + json.dumps(plan) + "\n```"
 print(json.dumps({"type": "thread.started", "thread_id": "orch"}))
 print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": answer}}))
 print(json.dumps({"type": "turn.completed", "usage": {}}))
@@ -171,14 +171,14 @@ fn plan_summaries_survive_core_storage_and_event_replay() {
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&state, config(&codex, &agy)).unwrap();
     let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
-    core.send(&conversation.id, "Oceń zapis danych i interfejs.")
+    core.send(&conversation.id, "Assess storage and the interface.")
         .unwrap();
     wait_idle(&core, &conversation.id);
     let original = core.store.latest_plan(&conversation.id).unwrap();
-    assert_eq!(original[0].spec["summary"], "Oceń sposób zapisu danych.");
+    assert_eq!(original[0].spec["summary"], "Assess the storage approach.");
     assert_eq!(
         original[0].spec["verifier"]["summary"],
-        "Sprawdź wnioski o zapisie danych."
+        "Verify the storage findings."
     );
     assert!(
         original[1].spec.get("summary").is_none(),
@@ -194,11 +194,11 @@ fn plan_summaries_survive_core_storage_and_event_replay() {
     }
     assert_eq!(
         replay.tasks[0].summary.as_deref(),
-        Some("Oceń sposób zapisu danych.")
+        Some("Assess the storage approach.")
     );
     assert_eq!(
         replay.tasks[0].verifier_summary.as_deref(),
-        Some("Sprawdź wnioski o zapisie danych.")
+        Some("Verify the storage findings.")
     );
     assert!(replay.tasks[1].summary.is_none());
     assert!(replay.tasks[1].verifier_summary.is_none());
@@ -333,11 +333,11 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
     let conversation = support::legacy_conversation(&core, &project).unwrap();
 
-    core.send(&conversation.id, "przeanalizuj architekturę projektu")
+    core.send(&conversation.id, "analyze the project architecture")
         .unwrap();
     wait_idle(&core, &conversation.id);
     let messages = core.store.messages_after(&conversation.id, 0).unwrap();
-    assert_eq!(messages[1].text, "Dwa zadania.", "plan block is not shown");
+    assert_eq!(messages[1].text, "Two tasks.", "plan block is not shown");
     let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
         .plan_id
         .clone();

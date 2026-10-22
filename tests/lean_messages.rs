@@ -236,8 +236,7 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"))
     let conversation = run(&core, dir.path());
     wait_until("plan finished", || core.is_idle(&conversation));
 
-    core.submit(&conversation, "@t1 dodaj przypadek UTF-8")
-        .unwrap();
+    core.submit(&conversation, "@t1 add a UTF-8 case").unwrap();
     wait_until("answered", || {
         core.is_idle(&conversation)
             && core
@@ -248,7 +247,7 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"))
                 .any(|mail| mail.sender == "user" && mail.delivered_turn.is_some())
     });
     assert!(prompts(dir.path()).iter().any(|(bin, prompt)| bin == "agy"
-        && prompt.starts_with("Messages for you:\n- from user (user_instruction): dodaj")));
+        && prompt.starts_with("Messages for you:\n- from user (user_instruction): add")));
     // The answering turn changes neither the task nor its report.
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
     assert_eq!(task.status, "approved");
@@ -389,9 +388,7 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Parser"))
         std::fs::read_to_string(dir.path().join("prompts.jsonl"))
             .is_ok_and(|log| log.contains("Task id: t1"))
     });
-    let sent = core
-        .submit(&conversation, "@t1 dodaj przypadek UTF-8")
-        .unwrap();
+    let sent = core.submit(&conversation, "@t1 add a UTF-8 case").unwrap();
     assert_eq!(sent["recipient_finished"], false);
     wait_until("plan finished", || core.is_idle(&conversation));
 
@@ -401,17 +398,17 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Parser"))
     let extra = all
         .iter()
         .find(|(_, prompt)| {
-            prompt.contains("dodaj przypadek UTF-8") && prompt.contains("arrived while you worked")
+            prompt.contains("add a UTF-8 case") && prompt.contains("arrived while you worked")
         })
         .expect("the worker got a turn for the message");
     assert!(
         extra
             .1
-            .contains("- from user (user_instruction): dodaj przypadek UTF-8")
+            .contains("- from user (user_instruction): add a UTF-8 case")
     );
     let summary = &all.iter().rfind(|(bin, _)| bin == "codex").unwrap().1;
     assert!(
-        summary.contains("(the user wrote to t1) dodaj przypadek UTF-8"),
+        summary.contains("(the user wrote to t1) add a UTF-8 case"),
         "{summary}"
     );
     // Not a message to the orchestrator: no turn of its own was started.
@@ -419,7 +416,7 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Parser"))
     assert!(
         messages
             .iter()
-            .all(|message| !message.text.contains("dodaj przypadek"))
+            .all(|message| !message.text.contains("add a case"))
     );
 }
 
@@ -429,7 +426,7 @@ fn a_comment_reaches_the_orchestrator_and_stays_until_the_user_resolves_it() {
     let core = open(
         dir.path(),
         r#"
-answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "dalej" in prompt else plan(task("t1", "Parser"))
+answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "continue" in prompt else plan(task("t1", "Parser"))
 "#,
         r#"    answer = "report""#,
     );
@@ -457,7 +454,7 @@ answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "dalej
     );
 
     // Unresolved, it is in the next turn's prompt too.
-    core.send(&conversation, "dalej").unwrap();
+    core.send(&conversation, "continue").unwrap();
     wait_until("answered", || core.is_idle(&conversation));
     let next = orchestrator(prompts(dir.path())).pop().unwrap();
     assert!(
@@ -469,7 +466,7 @@ answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "dalej
         .set_comment(&conversation, comment.id, "resolved")
         .unwrap();
     assert_eq!(resolved.status, "resolved");
-    core.send(&conversation, "dalej").unwrap();
+    core.send(&conversation, "continue").unwrap();
     wait_until("answered", || core.is_idle(&conversation));
     let last = orchestrator(prompts(dir.path())).pop().unwrap();
     assert!(!last.contains("UTF-8"), "{last}");

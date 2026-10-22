@@ -2013,13 +2013,13 @@ mod tests {
 
     #[test]
     fn plan_block_is_split_from_the_answer() {
-        let answer = "Rozbiję to na dwa zadania.\n\n```plan\n{\"tasks\":[\
+        let answer = "I will split this into two tasks.\n\n```plan\n{\"tasks\":[\
             {\"id\":\"t1\",\"title\":\"Storage\",\"goal\":\"Assess storage\",\"scope\":[\"src/storage.rs\"],\
              \"kind\":\"architecture\",\"verifier\":{\"focus\":\"claims\",\"risks\":[\"data loss\"]}},\
             {\"id\":\"t2\",\"title\":\"TUI\",\"goal\":\"Assess TUI\",\"depends_on\":[\"t1\"],\
              \"kind\":\"analysis\",\"verifier\":{\"focus\":\"claims\"}}]}\n```\n";
         let (text, plan) = parse_plan(answer);
-        assert_eq!(text, "Rozbiję to na dwa zadania.");
+        assert_eq!(text, "I will split this into two tasks.");
         let plan = plan.unwrap().unwrap();
         assert_eq!(plan.len(), 2);
         assert_eq!(plan[1].depends_on, ["t1"]);
@@ -2049,7 +2049,7 @@ mod tests {
         for summary in [
             Value::Null,
             Value::String(" \n\t ".into()),
-            Value::String("Oceń zapis danych.".into()),
+            Value::String("Assess storage.".into()),
         ] {
             let mut spec = base.clone();
             spec["summary"] = summary.clone();
@@ -2411,9 +2411,9 @@ mod tests {
         // first whole cluster stands for the cut instead of splitting one.
         assert_eq!(bound("abcd", 3), "a");
         // A cut never splits a multi-byte character.
-        let text = "zażółć gęślą jaźń";
+        let text = "abąćęł cńódź efżó";
         let cut = bound(text, 5);
-        assert_eq!(cut, "za…");
+        assert_eq!(cut, "ab…");
         assert!(cut.len() <= 5 && cut.is_char_boundary(cut.len()));
     }
 
@@ -2704,12 +2704,12 @@ mod tests {
 
     #[test]
     fn the_last_effect_block_wins_and_unicode_survives_the_cut() {
-        let answer = "```effect\nfirst\n```\ntext\n```effect\n👩‍💻e\u{301} naprawione — żółć\n```";
+        let answer = "```effect\nfirst\n```\ntext\n```effect\n👩‍💻e\u{301} fixed — bile\n```";
         let (_, effect) = parse_effect(answer);
         let (stated, cut) = effect.expect("stated effect");
-        assert_eq!(stated, "👩‍💻e\u{301} naprawione — żółć");
+        assert_eq!(stated, "👩‍💻e\u{301} fixed — bile");
         assert!(!cut, "a short cluster-rich line is not cut");
-        let long = "długi-效果".repeat(EFFECT_LIMIT);
+        let long = "long-效果".repeat(EFFECT_LIMIT);
         let answer = format!("report\n```effect\n{long}\n```");
         let (report, effect) = parse_effect(&answer);
         let (effect, cut) = effect.expect("stated effect");

@@ -1087,7 +1087,7 @@ impl Store {
         require(
             !matches!(
                 p.result.trim().to_ascii_lowercase().as_str(),
-                "done" | "zrobione" | "ok"
+                "done" | "completed" | "ok"
             ),
             "completion assertion is not evidence",
         )?;

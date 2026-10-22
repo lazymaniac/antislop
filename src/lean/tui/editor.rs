@@ -634,14 +634,14 @@ mod tests {
 
     #[test]
     fn ac_edit_06_polish_diacritic_character_editing() {
-        let mut buf = InputBuffer::with_text("zółw");
-        // 'z' is 1 byte (idx 0)
-        // 'ó' is 2 bytes (idx 1..3)
-        // 'ł' is 2 bytes (idx 3..5)
-        // 'w' is 1 byte (idx 5..6)
-        buf.cursor = 3; // between 'ó' and 'ł'
+        let mut buf = InputBuffer::with_text("aąćb");
+        // 'a' is 1 byte (idx 0)
+        // 'ą' is 2 bytes (idx 1..3)
+        // 'ć' is 2 bytes (idx 3..5)
+        // 'b' is 1 byte (idx 5..6)
+        buf.cursor = 3; // between 'ą' and 'ć'
         assert!(buf.backspace());
-        assert_eq!(buf.text, "złw");
+        assert_eq!(buf.text, "aćb");
         assert_eq!(buf.cursor, 1);
     }
 
@@ -845,10 +845,10 @@ mod tests {
 
     #[test]
     fn preferred_column_with_graphemes_and_double_width() {
-        // Line 0: "zażółć 12345" -> col 8 is '2'
+        // Line 0: "abąćęł 12345" -> col 8 is '2'
         // Line 1: "漢" (width 2)
-        // Line 2: "zażółć 12345"
-        let text = "zażółć 12345\n漢\nzażółć 12345";
+        // Line 2: "abąćęł 12345"
+        let text = "abąćęł 12345\n漢\nabąćęł 12345";
         let mut buf = InputBuffer::with_text(text);
         // Find byte offset corresponding to visual col 8 in line 0
         buf.cursor = 0;

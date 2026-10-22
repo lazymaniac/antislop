@@ -5347,10 +5347,10 @@ pub mod tests {
     #[test]
     fn ascii_replaces_box_drawing_marks_and_letters() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 12, 1));
-        buffer.set_string(0, 0, "╭─✓ łódź 漢", Style::default());
+        buffer.set_string(0, 0, "╭─✓ ąębć 漢", Style::default());
         in_ascii(&mut buffer);
         let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-        assert_eq!(text, "+-+ lodz ?  ");
+        assert_eq!(text, "+-+ aebc ?  ");
     }
 
     #[test]

@@ -203,7 +203,7 @@ fn project(dir: &Path) -> std::path::PathBuf {
 
 fn run_plan(core: &std::sync::Arc<Core>, project: &Path) -> String {
     let conversation = support::legacy_conversation(core, project).unwrap();
-    core.send(&conversation.id, "dodaj powitanie").unwrap();
+    core.send(&conversation.id, "add a greeting").unwrap();
     wait_idle(core, &conversation.id);
     let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
         .plan_id
@@ -231,7 +231,7 @@ fn required_gates_join_plans_that_write() {
     });
     let core = Core::open(&project.join(".antislop"), config).unwrap();
     let conversation = support::legacy_conversation(&core, &project).unwrap();
-    core.send(&conversation.id, "dodaj powitanie").unwrap();
+    core.send(&conversation.id, "add a greeting").unwrap();
     wait_idle(&core, &conversation.id);
     let plan = core.store.latest_plan(&conversation.id).unwrap();
     let kinds: Vec<String> = plan
@@ -444,7 +444,7 @@ fn the_user_reads_a_change_comments_a_line_and_asks_for_a_review() {
     assert_eq!(file["lines"][1]["new"], 1);
     assert_eq!(diff["head"], task.result.clone().unwrap().as_str());
 
-    core.comment(&conversation, "diff:t1:hello.txt:1", "dodaj imię")
+    core.comment(&conversation, "diff:t1:hello.txt:1", "add a name")
         .unwrap();
     wait_idle(&core, &conversation);
     core.review_change(&conversation, &plan, "t1").unwrap();
@@ -479,7 +479,7 @@ fn the_user_reads_a_change_comments_a_line_and_asks_for_a_review() {
         })
         .unwrap();
     let prompt = review["args"].to_string();
-    assert!(prompt.contains("dodaj imię") && prompt.contains("line 1 of hello.txt"));
+    assert!(prompt.contains("add a name") && prompt.contains("line 1 of hello.txt"));
     assert!(prompt.contains(&format!(
         "git diff {} {}",
         task.base.unwrap(),

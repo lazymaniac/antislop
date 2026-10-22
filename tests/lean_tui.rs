@@ -134,8 +134,8 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
         id: "t1".into(),
         title: "Full task title".into(),
         status: "working".into(),
-        summary: Some("Popraw  zapis\n danych 👩‍💻 e\u{301}.".into()),
-        verifier_summary: Some("Sprawdź poprawność zapisu.".into()),
+        summary: Some("Improve  storage\n behavior 👩‍💻 e\u{301}.".into()),
+        verifier_summary: Some("Verify storage correctness.".into()),
         goal: format!("{} TASK_END", "Long task description ".repeat(35)),
         scope: vec!["src/file.rs".into()],
         focus: format!("{} VERIFY_END", "Verify all required behavior ".repeat(12)),
@@ -182,11 +182,11 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
             assert!(!text.contains("exec cargo check"));
             assert!(text.contains("doing: exec cargo"), "{text}");
             if key == "worker:t1" {
-                assert!(text.contains("Popraw zapis"), "{text}");
+                assert!(text.contains("Improve storage"), "{text}");
                 assert!(text.contains("👩‍💻") && text.contains("e\u{301}"), "{text}");
             } else {
-                assert!(text.contains("Sprawdź poprawność"), "{text}");
-                assert!(text.contains("zapisu."), "{text}");
+                assert!(text.contains("Verify storage"), "{text}");
+                assert!(text.contains("correctness."), "{text}");
             }
             let mut details = Details::new(key.into());
             details.show_info = true;
@@ -288,7 +288,7 @@ fn escape_never_quits_and_q_quits_views_while_editors_keep_text() {
 fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
     let mut app = App::test_app();
     app.paste(&"\n".repeat(MAX_PASTE_BYTES));
-    app.paste("koniec");
+    app.paste("finish");
     let (col, row) = app.input.visual_cursor(58);
     assert_eq!(col, 6);
     assert_eq!(row, MAX_PASTE_BYTES);
@@ -304,7 +304,7 @@ fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
     assert_eq!(app.input_shown, MAX_PASTE_BYTES - 4);
     let cursor = terminal.get_cursor_position().unwrap();
     assert_eq!(cursor.y, 8);
-    assert_eq!(terminal.backend().buffer()[(2, cursor.y)].symbol(), "k");
+    assert_eq!(terminal.backend().buffer()[(2, cursor.y)].symbol(), "f");
 
     app.editor = Some(Editor {
         target: "worker:t1".into(),
@@ -313,7 +313,7 @@ fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let cursor = terminal.get_cursor_position().unwrap();
     assert_eq!(cursor.y, 9);
-    assert_eq!(terminal.backend().buffer()[(1, cursor.y)].symbol(), "k");
+    assert_eq!(terminal.backend().buffer()[(1, cursor.y)].symbol(), "f");
 }
 
 #[test]
@@ -408,27 +408,27 @@ fn tui_input_buffer_unicode_character_boundary_safety() {
     assert_eq!(buf.len(), 0);
 
     // Polish diacritics (multi-byte UTF-8: 2 bytes each)
-    buf.insert_str("zażółć");
-    assert_eq!(buf.text, "zażółć");
-    assert_eq!(buf.cursor, "zażółć".len());
+    buf.insert_str("abąćęł");
+    assert_eq!(buf.text, "abąćęł");
+    assert_eq!(buf.cursor, "abąćęł".len());
 
     // Backspace on multi-byte char removes exact code point
     assert!(buf.backspace());
-    assert_eq!(buf.text, "zażół");
-    assert_eq!(buf.cursor, "zażół".len());
+    assert_eq!(buf.text, "abąćę");
+    assert_eq!(buf.cursor, "abąćę".len());
 
     // Insert 4-byte emoji
     buf.insert_char('🦀');
-    assert_eq!(buf.text, "zażół🦀");
-    assert_eq!(buf.cursor, "zażół🦀".len());
+    assert_eq!(buf.text, "abąćę🦀");
+    assert_eq!(buf.cursor, "abąćę🦀".len());
 
     // Move left past emoji (4 bytes)
     buf.move_left();
-    assert_eq!(buf.cursor, "zażół".len());
+    assert_eq!(buf.cursor, "abąćę".len());
 
     // Delete forward deletes emoji
     assert!(buf.delete());
-    assert_eq!(buf.text, "zażół");
+    assert_eq!(buf.text, "abąćę");
 
     // Home / End
     buf.move_home();
@@ -438,15 +438,15 @@ fn tui_input_buffer_unicode_character_boundary_safety() {
 
     // Word navigation and deletion
     buf.clear();
-    buf.insert_str("pierwsze drugie trzecie");
+    buf.insert_str("first second third");
     buf.move_word_left();
-    assert_eq!(buf.cursor, "pierwsze drugie ".len());
+    assert_eq!(buf.cursor, "first second ".len());
     buf.delete_word_back();
-    assert_eq!(buf.text, "pierwsze trzecie");
-    assert_eq!(buf.cursor, "pierwsze ".len());
+    assert_eq!(buf.text, "first third");
+    assert_eq!(buf.cursor, "first ".len());
 
     buf.delete_to_start();
-    assert_eq!(buf.text, "trzecie");
+    assert_eq!(buf.text, "third");
     assert_eq!(buf.cursor, 0);
 
     buf.move_end();
@@ -466,7 +466,7 @@ fn tui_visual_lines_and_cjk_double_width() {
     assert_eq!(lines[0].width, 4); // 1 + 2 + 1 = 4 visual columns
 
     // Wrapping on width limit
-    let long_text = "pierwsza linia tekstu która powinna zostać zawinięta do następnego wiersza";
+    let long_text = "the first line of text that should wrap onto the next line";
     let wrapped = compute_visual_lines(long_text, 20);
     assert!(wrapped.len() > 1);
     for line in &wrapped {
@@ -477,16 +477,16 @@ fn tui_visual_lines_and_cjk_double_width() {
 #[test]
 fn tui_paste_sanitization_preserves_full_unicode_text() {
     // Normalization of CRLF and CR
-    let raw = "linia 1\r\nlinia 2\rlinia 3";
+    let raw = "line 1\r\nline 2\rline 3";
     let sanitized = sanitize_paste(raw);
-    assert_eq!(sanitized, "linia 1\nlinia 2\nlinia 3");
+    assert_eq!(sanitized, "line 1\nline 2\nline 3");
 
     // Single-line paste flattens newlines to space and trims
-    let single = sanitize_single_line_paste("  polecenie\r\n parametr  \n");
-    assert_eq!(single, "polecenie  parametr");
+    let single = sanitize_single_line_paste("  command\r\n argument  \n");
+    assert_eq!(single, "command  argument");
 
     // Large Unicode pastes remain intact.
-    let unit = "zażółć gęślą jaźń ";
+    let unit = "abąćęł cńódź efżó ";
     let repeat_count = (MAX_PASTE_BYTES / unit.len()) + 10;
     let huge = unit.repeat(repeat_count);
     assert!(huge.len() > MAX_PASTE_BYTES);
@@ -588,38 +588,38 @@ fn app_interaction_sequences_editing_and_paste() {
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
 
-    // 1. Synthetic character entry with Polish diacritics
-    for ch in "zażółć gęślą jaźń".chars() {
+    // 1. Synthetic character entry with Unicode letter test vectors
+    for ch in "abąćęł cńódź efżó".chars() {
         app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
-    assert_eq!(app.input.text, "zażółć gęślą jaźń");
-    assert_eq!(app.input.cursor, "zażółć gęślą jaźń".len());
+    assert_eq!(app.input.text, "abąćęł cńódź efżó");
+    assert_eq!(app.input.cursor, "abąćęł cńódź efżó".len());
 
     // 2. Word jump and deletion
     app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
-    assert_eq!(app.input.cursor, "zażółć gęślą ".len());
+    assert_eq!(app.input.cursor, "abąćęł cńódź ".len());
 
     app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
-    assert_eq!(app.input.text, "zażółć jaźń");
+    assert_eq!(app.input.text, "abąćęł efżó");
 
     // 3. Clear line to start and end
     app.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
-    assert_eq!(app.input.text, "jaźń");
+    assert_eq!(app.input.text, "efżó");
     assert_eq!(app.input.cursor, 0);
 
     app.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
-    assert_eq!(app.input.cursor, "jaźń".len());
+    assert_eq!(app.input.cursor, "efżó".len());
 
     // 4. Multiline editing via Alt+Enter and Ctrl+J
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
-    for ch in "druga linia".chars() {
+    for ch in "second line".chars() {
         app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
     app.key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
-    for ch in "trzecia linia".chars() {
+    for ch in "third line".chars() {
         app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
     }
-    assert_eq!(app.input.text, "jaźń\ndruga linia\ntrzecia linia");
+    assert_eq!(app.input.text, "efżó\nsecond line\nthird line");
 
     // Multiline vertical cursor navigation
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
@@ -671,7 +671,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
         Help::Picker,
     ] {
         let mut app = App::test_app();
-        app.input = InputBuffer::with_text("szkic czatu?");
+        app.input = InputBuffer::with_text("chat draft?");
         if help != Help::Chat {
             app.focus = Focus::Graph;
             app.selected = "worker:t1".into();
@@ -691,7 +691,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
         if matches!(help, Help::Comment | Help::Picker) {
             app.editor = Some(Editor {
                 target: "diff:t1:src/main.rs:3".into(),
-                input: InputBuffer::with_text("szkic komentarza?"),
+                input: InputBuffer::with_text("comment draft?"),
             });
         }
         if help == Help::Picker {
@@ -711,7 +711,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
         assert!(!terminal.backend().cursor_visible());
         assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         assert!(app.help.is_none());
-        assert_eq!(app.input.text, "szkic czatu?");
+        assert_eq!(app.input.text, "chat draft?");
         assert_eq!(
             app.diff.is_some(),
             matches!(help, Help::Diff | Help::Comment | Help::Picker)
@@ -723,7 +723,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
         assert_eq!(app.diff.as_ref().and_then(DiffView::target), diff_target);
         if let Some(editor) = &app.editor {
             assert_eq!(editor.target, "diff:t1:src/main.rs:3");
-            assert_eq!(editor.input.text, "szkic komentarza?");
+            assert_eq!(editor.input.text, "comment draft?");
         }
         if let Some(picker) = &app.picker {
             assert_eq!(picker.query, "mode");
@@ -735,10 +735,10 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
 #[test]
 fn help_blocks_typing_and_action_shortcuts_until_explicitly_dismissed() {
     let mut app = App::test_app();
-    app.input = InputBuffer::with_text("szkic");
+    app.input = InputBuffer::with_text("draft");
     for dismiss in [KeyCode::Esc, KeyCode::F(1), KeyCode::Char('?')] {
         app.key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
-        for ch in "przypadkowo wpisany tekst".chars() {
+        for ch in "accidentally typed text".chars() {
             app.key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
         }
         for ch in ['a', 'r', 'x', 'n', 'p', 'f', 'u'] {
@@ -747,9 +747,9 @@ fn help_blocks_typing_and_action_shortcuts_until_explicitly_dismissed() {
         for code in [KeyCode::Enter, KeyCode::Tab, KeyCode::Backspace] {
             app.key(KeyEvent::new(code, KeyModifiers::NONE));
         }
-        app.paste("wklejony tekst");
+        app.paste("pasted text");
         assert_eq!(app.help, Some(Help::Chat));
-        assert_eq!(app.input.text, "szkic");
+        assert_eq!(app.input.text, "draft");
         assert_eq!(app.focus, Focus::Chat);
         assert!(app.picker.is_none());
 
@@ -757,7 +757,7 @@ fn help_blocks_typing_and_action_shortcuts_until_explicitly_dismissed() {
         assert!(app.help.is_none());
         assert_eq!(app.help_scroll, 0);
         app.key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
-        assert_eq!(app.input.text, "szkic!");
+        assert_eq!(app.input.text, "draft!");
         app.input.backspace();
     }
 }
@@ -787,7 +787,7 @@ fn question_marks_remain_text_in_chat_comments_and_search() {
 fn help_hides_the_picker_cursor_until_dismissed() {
     let mut app = App::test_app();
     let mut picker = Picker::new(Kind::History);
-    picker.query = "zapisane zapytanie?".into();
+    picker.query = "saved query?".into();
     app.picker = Some(picker);
     let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -800,7 +800,7 @@ fn help_hides_the_picker_cursor_until_dismissed() {
     assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(terminal.backend().cursor_visible());
-    assert_eq!(app.picker.as_ref().unwrap().query, "zapisane zapytanie?");
+    assert_eq!(app.picker.as_ref().unwrap().query, "saved query?");
 }
 
 #[test]
@@ -925,12 +925,12 @@ fn app_fake_request_capture_through_app() {
     };
 
     // 1. Chat Send request via Enter key
-    app.input = InputBuffer::with_text("wiadomość do orkiestratora");
+    app.input = InputBuffer::with_text("message to the orchestrator");
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "send");
     assert_eq!(req["conversation"], "test-conv");
-    assert_eq!(req["text"], "wiadomość do orkiestratora");
+    assert_eq!(req["text"], "message to the orchestrator");
     assert!(app.input.is_empty(), "Send must clear chat draft");
     pump_until(&mut app, |u| {
         matches!(u, antislop::lean::tui::Update::SendResult { .. })
@@ -1009,13 +1009,13 @@ fn app_fake_request_capture_through_app() {
         .as_mut()
         .unwrap()
         .input
-        .insert_str("Komentarz do t1");
+        .insert_str("Comment on t1");
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "comment");
     assert_eq!(req["conversation"], "test-conv");
     assert_eq!(req["target"], "worker:t1");
-    assert_eq!(req["text"], "Komentarz do t1");
+    assert_eq!(req["text"], "Comment on t1");
     assert!(app.editor.is_none());
     pump_until(&mut app, |u| {
         matches!(u, antislop::lean::tui::Update::CommentResult { .. })
@@ -1031,13 +1031,13 @@ fn app_fake_request_capture_through_app() {
         .as_mut()
         .unwrap()
         .input
-        .insert_str("Komentarz w detalach t2");
+        .insert_str("Comment in t2 details");
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "comment");
     assert_eq!(req["conversation"], "test-conv");
     assert_eq!(req["target"], "worker:t2");
-    assert_eq!(req["text"], "Komentarz w detalach t2");
+    assert_eq!(req["text"], "Comment in t2 details");
     assert!(app.editor.is_none());
     pump_until(&mut app, |u| {
         matches!(u, antislop::lean::tui::Update::CommentResult { .. })
@@ -1056,7 +1056,7 @@ fn app_graph_details_diff_navigation_and_search() {
         "payload": {
             "id": "p1",
             "status": "in_progress",
-            "title": "Budowa",
+            "title": "Build",
             "tasks": [
                 {"id": "t1", "title": "Backend", "status": "done", "dependencies": []},
                 {"id": "t2", "title": "Frontend", "status": "in_progress", "dependencies": ["t1"]}
@@ -1173,10 +1173,10 @@ fn app_incoming_updates_and_rendering() {
         "kind": "message",
         "payload": {
             "author": "orchestrator",
-            "text": "Witaj w projekcie testowym"
+            "text": "Welcome to the test project"
         }
     }));
-    app.notice = Some("Krok 1 zakończony sukcesem".into());
+    app.notice = Some("Step 1 completed successfully".into());
 
     terminal
         .draw(|f| {
@@ -1190,8 +1190,8 @@ fn app_incoming_updates_and_rendering() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text2.contains("Witaj w projekcie testowym"));
-    assert!(text2.contains("Krok 1 zakończony sukcesem"));
+    assert!(text2.contains("Welcome to the test project"));
+    assert!(text2.contains("Step 1 completed successfully"));
 }
 
 #[test]
@@ -1320,7 +1320,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
     app.picker = None;
 
     // 4. Progress overlay collision avoidance
-    app.view.activity = Some("trwa kompilacja testów".into());
+    app.view.activity = Some("compiling tests".into());
     let mut term_overlay = Terminal::new(TestBackend::new(100, 30)).unwrap();
     term_overlay
         .draw(|f| {
@@ -1335,14 +1335,14 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .map(|c| c.symbol())
         .collect();
     assert!(!text_overlay.contains(" now "));
-    assert!(text_overlay.contains("trwa kompilacja testów"));
+    assert!(text_overlay.contains("compiling tests"));
 
     // 5. ASCII conversion
     let mut buffer = Buffer::empty(Rect::new(0, 0, 15, 1));
-    buffer.set_string(0, 0, "╭─✓ łódź 漢", Style::default());
+    buffer.set_string(0, 0, "╭─✓ ąębć 漢", Style::default());
     in_ascii(&mut buffer);
     let text_ascii: String = buffer.content.iter().map(|c| c.symbol()).collect();
-    assert_eq!(text_ascii, "+-+ lodz ?     ");
+    assert_eq!(text_ascii, "+-+ aebc ?     ");
 
     // 6. NO_COLOR preservation of DIM and REVERSED
     let mut buffer_nc = Buffer::empty(Rect::new(0, 0, 3, 1));
@@ -1389,25 +1389,25 @@ fn tui_isolated_fake_request_capture() {
     // 1. Send
     let res = client.call(&Request::Send {
         conversation: "conv-1".into(),
-        text: "powitanie orkiestratorze".into(),
+        text: "hello orchestrator".into(),
     });
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "send");
     assert_eq!(req["conversation"], "conv-1");
-    assert_eq!(req["text"], "powitanie orkiestratorze");
+    assert_eq!(req["text"], "hello orchestrator");
 
     // 2. Comment
     let res = client.call(&Request::Comment {
         conversation: "conv-1".into(),
         target: "worker:t1".into(),
-        text: "uwaga do kodu".into(),
+        text: "code feedback".into(),
     });
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "comment");
     assert_eq!(req["target"], "worker:t1");
-    assert_eq!(req["text"], "uwaga do kodu");
+    assert_eq!(req["text"], "code feedback");
 
     // 3. Accept plan
     let res = client.call(&Request::Accept {
@@ -1535,80 +1535,80 @@ fn tui_sent_message_history_ring_and_draft_stashing() {
     assert!(app.history.is_empty());
 
     // Record 3 distinct messages into history
-    app.record_history("pierwsza wiadomość");
-    app.record_history("druga wiadomość");
-    app.record_history("druga wiadomość"); // duplicate ignored
-    app.record_history("trzecia wiadomość");
+    app.record_history("first message");
+    app.record_history("second message");
+    app.record_history("second message"); // duplicate ignored
+    app.record_history("third message");
 
     assert_eq!(app.history.len(), 3);
-    assert_eq!(app.history[0], "pierwsza wiadomość");
-    assert_eq!(app.history[1], "druga wiadomość");
-    assert_eq!(app.history[2], "trzecia wiadomość");
+    assert_eq!(app.history[0], "first message");
+    assert_eq!(app.history[1], "second message");
+    assert_eq!(app.history[2], "third message");
 
     // Start editing a fresh draft
-    app.input = InputBuffer::with_text("mój szkic w trakcie pisania");
+    app.input = InputBuffer::with_text("my draft in progress");
     assert_eq!(app.history_index, None);
 
     // Press Up on first row -> stashes draft and recalls newest message (index 2)
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(2));
-    assert_eq!(app.input.text, "trzecia wiadomość");
-    assert_eq!(app.history_draft, "mój szkic w trakcie pisania");
+    assert_eq!(app.input.text, "third message");
+    assert_eq!(app.history_draft, "my draft in progress");
 
     // Press Up -> recalls index 1
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(1));
-    assert_eq!(app.input.text, "druga wiadomość");
+    assert_eq!(app.input.text, "second message");
 
     // Press Up -> recalls index 0
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(0));
-    assert_eq!(app.input.text, "pierwsza wiadomość");
+    assert_eq!(app.input.text, "first message");
 
     // Press Up at oldest -> stays at index 0 without overflow
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(0));
-    assert_eq!(app.input.text, "pierwsza wiadomość");
+    assert_eq!(app.input.text, "first message");
 
     // Press Down -> recalls index 1
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(1));
-    assert_eq!(app.input.text, "druga wiadomość");
+    assert_eq!(app.input.text, "second message");
 
     // Press Down -> recalls index 2
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(2));
-    assert_eq!(app.input.text, "trzecia wiadomość");
+    assert_eq!(app.input.text, "third message");
 
     // Press Down past newest entry -> restores stashed draft!
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.history_index, None);
-    assert_eq!(app.input.text, "mój szkic w trakcie pisania");
+    assert_eq!(app.input.text, "my draft in progress");
 
     // Now test Esc while browsing history
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(2));
-    assert_eq!(app.input.text, "trzecia wiadomość");
+    assert_eq!(app.input.text, "third message");
 
     // Esc immediately cancels history recall and restores draft
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.history_index, None);
-    assert_eq!(app.input.text, "mój szkic w trakcie pisania");
+    assert_eq!(app.input.text, "my draft in progress");
 }
 
 #[test]
 fn test_esc_behavior_and_cleared_draft_counterexample() {
     let mut app = App::test_app();
-    app.history = vec!["poprzednia wiadomość".into()];
+    app.history = vec!["previous message".into()];
 
     // 1. Esc during history recall cancels history and restores draft
-    app.input = InputBuffer::with_text("pisany szkic");
+    app.input = InputBuffer::with_text("draft in progress");
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(0));
-    assert_eq!(app.input.text, "poprzednia wiadomość");
+    assert_eq!(app.input.text, "previous message");
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.history_index, None);
-    assert_eq!(app.input.text, "pisany szkic");
+    assert_eq!(app.input.text, "draft in progress");
 
     // 2. Esc on non-empty draft clears input
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -1637,13 +1637,13 @@ fn tui_send_reliability_draft_retention_on_error_and_in_flight_typing() {
     app.conversation = "conv-abc".into();
 
     // 1. Send chat message
-    app.input = InputBuffer::with_text("oryginalna treść wiadomości");
+    app.input = InputBuffer::with_text("original message content");
     app.submit();
 
     assert!(app.sending);
     assert_eq!(
         app.pending_send.as_deref(),
-        Some("oryginalna treść wiadomości")
+        Some("original message content")
     );
     assert!(
         app.input.is_empty(),
@@ -1651,7 +1651,7 @@ fn tui_send_reliability_draft_retention_on_error_and_in_flight_typing() {
     );
 
     // 2. User adds new typing while waiting for the daemon response
-    app.input.insert_str("nowy dopisek podczas oczekiwania");
+    app.input.insert_str("new addition while waiting");
 
     // 3. Daemon fails with network error
     let req_id = app.send_request_id;
@@ -1659,29 +1659,26 @@ fn tui_send_reliability_draft_retention_on_error_and_in_flight_typing() {
         conversation: app.conversation.clone(),
         generation: app.generation,
         request_id: req_id,
-        sent_text: "oryginalna treść wiadomości".into(),
-        result: Err("połączenie zerwane".into()),
+        sent_text: "original message content".into(),
+        result: Err("connection lost".into()),
     });
 
     assert!(!app.sending);
     assert_eq!(app.pending_send, None);
     // Crucial requirement: DO NOT automatically glue old message with new draft!
     // Active typing remains pristine:
-    assert_eq!(app.input.text, "nowy dopisek podczas oczekiwania");
+    assert_eq!(app.input.text, "new addition while waiting");
     // Failed message is preserved in failed_send without concatenating:
-    assert_eq!(
-        app.failed_send.as_deref(),
-        Some("oryginalna treść wiadomości")
-    );
+    assert_eq!(app.failed_send.as_deref(), Some("original message content"));
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ połączenie zerwane (unsent message preserved)")
+        Some("✗ connection lost (unsent message preserved)")
     );
 
     // 4. When input was empty upon error, draft is restored directly to input
     app.input.clear();
     app.failed_send = None;
-    app.input = InputBuffer::with_text("inna wiadomość");
+    app.input = InputBuffer::with_text("another message");
     app.submit();
     let req_id_2 = app.send_request_id;
     assert!(app.input.is_empty());
@@ -1689,12 +1686,15 @@ fn tui_send_reliability_draft_retention_on_error_and_in_flight_typing() {
         conversation: app.conversation.clone(),
         generation: app.generation,
         request_id: req_id_2,
-        sent_text: "inna wiadomość".into(),
-        result: Err("błąd sieci".into()),
+        sent_text: "another message".into(),
+        result: Err("network error".into()),
     });
     assert!(!app.sending);
-    assert_eq!(app.input.text, "inna wiadomość");
-    assert_eq!(app.notice.as_deref(), Some("✗ błąd sieci (draft restored)"));
+    assert_eq!(app.input.text, "another message");
+    assert_eq!(
+        app.notice.as_deref(),
+        Some("✗ network error (draft restored)")
+    );
 }
 
 #[test]
@@ -1705,7 +1705,7 @@ fn tui_comment_send_retention_and_protection_on_error() {
     // Open comment editor for task t1
     app.editor = Some(Editor {
         target: "worker:t1".into(),
-        input: InputBuffer::with_text("szkic ważnego komentarza"),
+        input: InputBuffer::with_text("important comment draft"),
     });
 
     // Submit comment
@@ -1726,7 +1726,7 @@ fn tui_comment_send_retention_and_protection_on_error() {
         generation: app.generation,
         request_id: req_id,
         editor,
-        result: Err("baza zablokowana".into()),
+        result: Err("database locked".into()),
     });
 
     assert!(!app.sending_comment);
@@ -1735,10 +1735,10 @@ fn tui_comment_send_retention_and_protection_on_error() {
     assert!(app.editor.is_some());
     let restored = app.editor.as_ref().unwrap();
     assert_eq!(restored.target, "worker:t1");
-    assert_eq!(restored.input.text, "szkic ważnego komentarza");
+    assert_eq!(restored.input.text, "important comment draft");
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ baza zablokowana (comment draft preserved)")
+        Some("✗ database locked (comment draft preserved)")
     );
 
     // User submits comment, but then opens a new editor while send is in flight
@@ -1755,7 +1755,7 @@ fn tui_comment_send_retention_and_protection_on_error() {
         generation: app.generation,
         request_id: req_id_2,
         editor: editor_2,
-        result: Err("błąd zapisu".into()),
+        result: Err("write error".into()),
     });
     assert!(!app.sending_comment);
     // Active editor is NOT replaced or glued
@@ -1766,7 +1766,7 @@ fn tui_comment_send_retention_and_protection_on_error() {
     );
     // Failed comment was preserved in drafts
     let saved = app.get_comment_draft("worker:t1");
-    assert_eq!(saved.text, "szkic ważnego komentarza");
+    assert_eq!(saved.text, "important comment draft");
     assert_eq!(
         app.failed_comment.as_ref().map(|e| e.target.as_str()),
         Some("worker:t1")
@@ -1779,18 +1779,18 @@ fn tui_duplicate_send_blocking_for_chat_and_comments() {
     app.conversation = "conv-dup".into();
 
     // 1. Chat duplicate send
-    app.input = InputBuffer::with_text("pierwsza wysyłka");
+    app.input = InputBuffer::with_text("first send");
     app.submit();
     assert!(app.sending);
 
     // User types more and presses Enter again while sending is in flight
-    app.input.insert_str("druga próba");
+    app.input.insert_str("second attempt");
     app.submit(); // Should be blocked!
     assert_eq!(
         app.notice.as_deref(),
         Some("Sending in progress; draft preserved.")
     );
-    assert_eq!(app.input.text, "druga próba");
+    assert_eq!(app.input.text, "second attempt");
 
     // Also verify Ctrl+S is blocked
     app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
@@ -1803,7 +1803,7 @@ fn tui_duplicate_send_blocking_for_chat_and_comments() {
     app.sending = false;
     app.editor = Some(Editor {
         target: "task:t1".into(),
-        input: InputBuffer::with_text("komentarz raz"),
+        input: InputBuffer::with_text("comment one"),
     });
     app.submit_comment();
     assert!(app.sending_comment);
@@ -1811,7 +1811,7 @@ fn tui_duplicate_send_blocking_for_chat_and_comments() {
     // Reopen editor and attempt duplicate submit
     app.editor = Some(Editor {
         target: "task:t1".into(),
-        input: InputBuffer::with_text("komentarz dwa"),
+        input: InputBuffer::with_text("comment two"),
     });
     app.submit_comment();
     assert_eq!(
@@ -1830,7 +1830,7 @@ fn tui_conversation_switching_preserves_isolated_drafts() {
     app.open("conv-1".into());
 
     // Type a draft in conv-1
-    app.input = InputBuffer::with_text("szkic w rozmowie 1");
+    app.input = InputBuffer::with_text("draft in conversation 1");
 
     // Switch to conv-2
     app.open("conv-2".into());
@@ -1838,13 +1838,13 @@ fn tui_conversation_switching_preserves_isolated_drafts() {
     assert!(app.input.is_empty(), "Fresh conversation has empty draft");
 
     // Type a draft in conv-2
-    app.input = InputBuffer::with_text("szkic w rozmowie 2");
+    app.input = InputBuffer::with_text("draft in conversation 2");
 
     // Switch back to conv-1
     app.open("conv-1".into());
     assert_eq!(app.conversation, "conv-1");
     assert_eq!(
-        app.input.text, "szkic w rozmowie 1",
+        app.input.text, "draft in conversation 1",
         "Draft in conv-1 was restored!"
     );
 
@@ -1852,7 +1852,7 @@ fn tui_conversation_switching_preserves_isolated_drafts() {
     app.open("conv-2".into());
     assert_eq!(app.conversation, "conv-2");
     assert_eq!(
-        app.input.text, "szkic w rozmowie 2",
+        app.input.text, "draft in conversation 2",
         "Draft in conv-2 was restored!"
     );
 }
@@ -1862,40 +1862,40 @@ fn tui_established_keymap_ctrl_s_and_newlines() {
     let mut app = App::test_app();
 
     // 1. Chat: Alt+Enter and Ctrl+J insert newlines
-    app.input = InputBuffer::with_text("linia1");
+    app.input = InputBuffer::with_text("line1");
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
-    app.input.insert_str("linia2");
+    app.input.insert_str("line2");
     app.key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
-    app.input.insert_str("linia3");
-    assert_eq!(app.input.text, "linia1\nlinia2\nlinia3");
+    app.input.insert_str("line3");
+    assert_eq!(app.input.text, "line1\nline2\nline3");
 
     // 2. Chat: Ctrl+S triggers submit
     app.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
     assert!(app.sending);
-    assert_eq!(app.pending_send.as_deref(), Some("linia1\nlinia2\nlinia3"));
+    assert_eq!(app.pending_send.as_deref(), Some("line1\nline2\nline3"));
     assert!(app.input.is_empty());
 
     // 3. Comment: Alt+Enter and Ctrl+J insert newlines
     app.sending = false;
     app.editor = Some(Editor {
         target: "worker:t1".into(),
-        input: InputBuffer::with_text("komentarz linia1"),
+        input: InputBuffer::with_text("comment line1"),
     });
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
     app.editor
         .as_mut()
         .unwrap()
         .input
-        .insert_str("komentarz linia2");
+        .insert_str("comment line2");
     app.key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
     app.editor
         .as_mut()
         .unwrap()
         .input
-        .insert_str("komentarz linia3");
+        .insert_str("comment line3");
     assert_eq!(
         app.editor.as_ref().unwrap().input.text,
-        "komentarz linia1\nkomentarz linia2\nkomentarz linia3"
+        "comment line1\ncomment line2\ncomment line3"
     );
 
     // 4. Comment: Ctrl+S triggers submit_comment
@@ -1903,7 +1903,7 @@ fn tui_established_keymap_ctrl_s_and_newlines() {
     assert!(app.sending_comment);
     assert_eq!(
         app.pending_comment.as_ref().unwrap().input.text,
-        "komentarz linia1\nkomentarz linia2\nkomentarz linia3"
+        "comment line1\ncomment line2\ncomment line3"
     );
 }
 
@@ -1913,14 +1913,14 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
 
     // 1. In Conv-A: send message and comment, open details and diff
     app.conversation = "conv-A".into();
-    app.input = InputBuffer::with_text("wiadomość z A");
+    app.input = InputBuffer::with_text("message from A");
     app.submit();
     let conv_a_send_id = app.send_request_id;
     assert!(app.sending);
 
     app.editor = Some(Editor {
         target: "worker:t1".into(),
-        input: InputBuffer::with_text("komentarz z A"),
+        input: InputBuffer::with_text("comment from A"),
     });
     app.submit_comment();
     let conv_a_comment_id = app.comment_request_id;
@@ -1938,10 +1938,10 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
     assert!(!app.sending_comment);
 
     // Active state in Conv-B
-    app.input = InputBuffer::with_text("szkic aktywny w B");
+    app.input = InputBuffer::with_text("active draft in B");
     app.editor = Some(Editor {
         target: "worker:t9".into(),
-        input: InputBuffer::with_text("komentarz aktywny w B"),
+        input: InputBuffer::with_text("active comment in B"),
     });
     app.details = Some(Details::new("worker:t9".into()));
     app.diff = Some(DiffView::new("t9".into()));
@@ -1952,11 +1952,11 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
         conversation: "conv-A".into(),
         generation: 1,
         request_id: conv_a_send_id,
-        sent_text: "wiadomość z A".into(),
-        result: Err("błąd wysyłki w starej rozmowie".into()),
+        sent_text: "message from A".into(),
+        result: Err("send error in the old conversation".into()),
     });
     // Active Conv-B state remains pristine:
-    assert_eq!(app.input.text, "szkic aktywny w B");
+    assert_eq!(app.input.text, "active draft in B");
     assert!(!app.sending);
     assert_eq!(app.pending_send, None);
     assert_eq!(app.failed_send, None);
@@ -1964,7 +1964,7 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
     let state_a = app.conversation_states.get("conv-A").unwrap();
     assert!(!state_a.sending);
     assert_eq!(state_a.pending_send, None);
-    assert_eq!(state_a.input.text, "wiadomość z A");
+    assert_eq!(state_a.input.text, "message from A");
     assert_eq!(state_a.failed_send, None);
 
     // 3b. CommentResult for Conv-A
@@ -1975,15 +1975,15 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
         request_id: conv_a_comment_id,
         editor: Editor {
             target: "worker:t1".into(),
-            input: InputBuffer::with_text("komentarz z A"),
+            input: InputBuffer::with_text("comment from A"),
         },
-        result: Err("błąd komentarza w starej rozmowie".into()),
+        result: Err("comment error in the old conversation".into()),
     });
     // Active Conv-B comment editor remains pristine:
     assert_eq!(app.editor.as_ref().unwrap().target, "worker:t9");
     assert_eq!(
         app.editor.as_ref().unwrap().input.text,
-        "komentarz aktywny w B"
+        "active comment in B"
     );
     assert!(!app.sending_comment);
 
@@ -1996,7 +1996,7 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
         request_id: conv_a_task_id,
         key: "worker:t1".into(),
         round: 0,
-        task: json!({"id": "t1", "title": "stare zadanie"}),
+        task: json!({"id": "t1", "title": "old task"}),
     });
     // Active Conv-B details remains pristine (for worker:t9):
     assert_eq!(app.details.as_ref().unwrap().key, "worker:t9");
@@ -2016,7 +2016,7 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
 
     // 4. Within the same conversation (Conv-B), older request IDs are ignored:
     app.input.clear();
-    app.input = InputBuffer::with_text("żądanie 1 w B");
+    app.input = InputBuffer::with_text("request 1 in B");
     app.submit();
     let b_req1 = app.send_request_id;
     // Request 1 succeeds
@@ -2024,34 +2024,34 @@ fn tui_delayed_responses_from_old_conversations_and_older_requests_do_not_alter_
         conversation: "conv-B".into(),
         generation: app.generation,
         request_id: b_req1,
-        sent_text: "żądanie 1 w B".into(),
+        sent_text: "request 1 in B".into(),
         result: Ok(()),
     });
     assert!(!app.sending);
 
     // Start request 2
-    app.input = InputBuffer::with_text("żądanie 2 w B");
+    app.input = InputBuffer::with_text("request 2 in B");
     app.submit();
     let b_req2 = app.send_request_id;
     assert!(b_req2 > b_req1);
     assert!(app.sending);
-    assert_eq!(app.pending_send.as_deref(), Some("żądanie 2 w B"));
+    assert_eq!(app.pending_send.as_deref(), Some("request 2 in B"));
 
     // User types new draft while waiting for request 2
-    app.input.insert_str("nowy dopisek w toku żądania 2");
+    app.input.insert_str("new addition during request 2");
 
     // Stale/delayed response for request 1 arrives late:
     app.apply_update(Update::SendResult {
         conversation: "conv-B".into(),
         generation: app.generation,
         request_id: b_req1,
-        sent_text: "żądanie 1 w B".into(),
-        result: Err("opóźniony błąd starego żądania".into()),
+        sent_text: "request 1 in B".into(),
+        result: Err("delayed error from an old request".into()),
     });
     // Must NOT alter request 2 in flight or overwrite draft:
     assert!(app.sending);
-    assert_eq!(app.pending_send.as_deref(), Some("żądanie 2 w B"));
-    assert_eq!(app.input.text, "nowy dopisek w toku żądania 2");
+    assert_eq!(app.pending_send.as_deref(), Some("request 2 in B"));
+    assert_eq!(app.input.text, "new addition during request 2");
 }
 
 #[test]
@@ -2060,67 +2060,67 @@ fn tui_identical_sends_correlation() {
     app.conversation = "conv-idem".into();
 
     // 1. Send identical text first time
-    app.input = InputBuffer::with_text("identyczna treść");
+    app.input = InputBuffer::with_text("identical content");
     app.submit();
     let req1 = app.send_request_id;
     assert!(app.sending);
-    assert_eq!(app.pending_send.as_deref(), Some("identyczna treść"));
+    assert_eq!(app.pending_send.as_deref(), Some("identical content"));
 
     // In-flight typing during send 1
-    app.input.insert_str("wpis podczas oczekiwania 1");
+    app.input.insert_str("entry while waiting 1");
 
     // Out-of-order older response with wrong ID arrives:
     app.apply_update(Update::SendResult {
         conversation: "conv-idem".into(),
         generation: app.generation,
         request_id: req1 - 1,
-        sent_text: "identyczna treść".into(),
-        result: Err("stary błąd".into()),
+        sent_text: "identical content".into(),
+        result: Err("old error".into()),
     });
     assert!(app.sending);
-    assert_eq!(app.pending_send.as_deref(), Some("identyczna treść"));
-    assert_eq!(app.input.text, "wpis podczas oczekiwania 1");
+    assert_eq!(app.pending_send.as_deref(), Some("identical content"));
+    assert_eq!(app.input.text, "entry while waiting 1");
 
     // Send 1 fails with network error
     app.apply_update(Update::SendResult {
         conversation: "conv-idem".into(),
         generation: app.generation,
         request_id: req1,
-        sent_text: "identyczna treść".into(),
+        sent_text: "identical content".into(),
         result: Err("przekroczono limit czasu".into()),
     });
     assert!(!app.sending);
     assert_eq!(app.pending_send, None);
     // Crucial: not glued, active draft kept intact, failed preserved in failed_send
-    assert_eq!(app.input.text, "wpis podczas oczekiwania 1");
-    assert_eq!(app.failed_send.as_deref(), Some("identyczna treść"));
+    assert_eq!(app.input.text, "entry while waiting 1");
+    assert_eq!(app.failed_send.as_deref(), Some("identical content"));
 
     // 2. User submits identical text second time
-    app.input = InputBuffer::with_text("identyczna treść");
+    app.input = InputBuffer::with_text("identical content");
     app.submit();
     let req2 = app.send_request_id;
     assert!(req2 > req1);
     assert!(app.sending);
-    assert_eq!(app.pending_send.as_deref(), Some("identyczna treść"));
+    assert_eq!(app.pending_send.as_deref(), Some("identical content"));
 
     // A delayed duplicate response for req1 arrives:
     app.apply_update(Update::SendResult {
         conversation: "conv-idem".into(),
         generation: app.generation,
         request_id: req1,
-        sent_text: "identyczna treść".into(),
+        sent_text: "identical content".into(),
         result: Ok(()),
     });
     // Request 2 must still be in flight!
     assert!(app.sending);
-    assert_eq!(app.pending_send.as_deref(), Some("identyczna treść"));
+    assert_eq!(app.pending_send.as_deref(), Some("identical content"));
 
     // When the real response for req2 arrives:
     app.apply_update(Update::SendResult {
         conversation: "conv-idem".into(),
         generation: app.generation,
         request_id: req2,
-        sent_text: "identyczna treść".into(),
+        sent_text: "identical content".into(),
         result: Ok(()),
     });
     assert!(!app.sending);
@@ -2133,27 +2133,27 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
 
     // 1. Set up rich state in Conv-A
     app.open("conv-a".into());
-    app.input = InputBuffer::with_text("wiersz 1\nwiersz 2 ze szkicem");
+    app.input = InputBuffer::with_text("line 1\nline 2 with a draft");
     app.input.cursor = 12;
     app.input.preferred_col = Some(15);
 
     app.editor = Some(Editor {
         target: "worker:t1".into(),
-        input: InputBuffer::with_text("komentarz roboczy"),
+        input: InputBuffer::with_text("working comment"),
     });
     app.editor.as_mut().unwrap().input.cursor = 5;
     app.editor.as_mut().unwrap().input.preferred_col = Some(5);
 
-    app.save_comment_draft("worker:t2", InputBuffer::with_text("inny szkic t2"));
+    app.save_comment_draft("worker:t2", InputBuffer::with_text("another draft t2"));
 
     app.sending = true;
-    app.pending_send = Some("wysyłana treść A".into());
+    app.pending_send = Some("content A being sent".into());
     app.send_request_id = 101;
 
     app.sending_comment = true;
     app.pending_comment = Some(Editor {
         target: "worker:t3".into(),
-        input: InputBuffer::with_text("wysyłany komentarz t3"),
+        input: InputBuffer::with_text("comment t3 being sent"),
     });
     app.comment_request_id = 102;
 
@@ -2171,13 +2171,13 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
     assert!(app.diff.is_none());
 
     // In Conv-B: user starts a different draft
-    app.input = InputBuffer::with_text("szkic rozmowy B");
+    app.input = InputBuffer::with_text("conversation B draft");
 
     // 3. Switch back to Conv-A (B -> A)
     app.open("conv-a".into());
     assert_eq!(app.conversation, "conv-a");
     // Full input buffer state preserved:
-    assert_eq!(app.input.text, "wiersz 1\nwiersz 2 ze szkicem");
+    assert_eq!(app.input.text, "line 1\nline 2 with a draft");
     assert_eq!(app.input.cursor, 12);
     assert_eq!(app.input.preferred_col, Some(15));
 
@@ -2185,16 +2185,16 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
     assert!(app.editor.is_some());
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.target, "worker:t1");
-    assert_eq!(ed.input.text, "komentarz roboczy");
+    assert_eq!(ed.input.text, "working comment");
     assert_eq!(ed.input.cursor, 5);
     assert_eq!(ed.input.preferred_col, Some(5));
 
     // Comment drafts preserved:
-    assert_eq!(app.get_comment_draft("worker:t2").text, "inny szkic t2");
+    assert_eq!(app.get_comment_draft("worker:t2").text, "another draft t2");
 
     // In-flight sending state preserved:
     assert!(app.sending);
-    assert_eq!(app.pending_send.as_deref(), Some("wysyłana treść A"));
+    assert_eq!(app.pending_send.as_deref(), Some("content A being sent"));
     assert_eq!(app.send_request_id, 101);
 
     // In-flight comment state preserved:
@@ -2218,18 +2218,18 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
         conversation: "conv-a".into(),
         generation: 1, // original generation before switch
         request_id: 101,
-        sent_text: "wysyłana treść A".into(),
-        result: Err("błąd sieci po A->B->A".into()),
+        sent_text: "content A being sent".into(),
+        result: Err("network error after A->B->A".into()),
     });
     // Flight flag cleared - no permanent lock!
     assert!(!app.sending);
     assert_eq!(app.pending_send, None);
     // Draft retained without automatic gluing:
-    assert_eq!(app.input.text, "wiersz 1\nwiersz 2 ze szkicem");
-    assert_eq!(app.failed_send.as_deref(), Some("wysyłana treść A"));
+    assert_eq!(app.input.text, "line 1\nline 2 with a draft");
+    assert_eq!(app.failed_send.as_deref(), Some("content A being sent"));
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ błąd sieci po A->B->A (unsent message preserved)")
+        Some("✗ network error after A->B->A (unsent message preserved)")
     );
 
     // 4b. CommentResult arrives for request 102 with error
@@ -2240,20 +2240,20 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
         request_id: 102,
         editor: Editor {
             target: "worker:t3".into(),
-            input: InputBuffer::with_text("wysyłany komentarz t3"),
+            input: InputBuffer::with_text("comment t3 being sent"),
         },
-        result: Err("błąd bazy po A->B->A".into()),
+        result: Err("database error after A->B->A".into()),
     });
     // Comment flight flag cleared:
     assert!(!app.sending_comment);
     assert_eq!(app.pending_comment, None);
     // Active editor for worker:t1 not overwritten or glued:
     assert_eq!(app.editor.as_ref().unwrap().target, "worker:t1");
-    assert_eq!(app.editor.as_ref().unwrap().input.text, "komentarz roboczy");
+    assert_eq!(app.editor.as_ref().unwrap().input.text, "working comment");
     // Failed comment for worker:t3 preserved in drafts and failed_comment:
     assert_eq!(
         app.get_comment_draft("worker:t3").text,
-        "wysyłany komentarz t3"
+        "comment t3 being sent"
     );
     assert_eq!(
         app.failed_comment.as_ref().map(|e| e.target.as_str()),
@@ -2269,11 +2269,11 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
         request_id: app.task_request_id,
         key: "worker:t1".into(),
         round: 0,
-        task: json!({"id": "t1", "title": "zadanie po A->B->A"}),
+        task: json!({"id": "t1", "title": "task after A->B->A"}),
     });
     assert_eq!(
         app.details.as_ref().unwrap().task.as_ref().unwrap()["title"],
-        "zadanie po A->B->A"
+        "task after A->B->A"
     );
 
     app.apply_update(Update::Diff {
@@ -2289,7 +2289,7 @@ fn tui_conversation_switching_preserves_full_editor_and_flight_state() {
     // 5. Switch back to Conv-B: its draft is preserved:
     app.open("conv-b".into());
     assert_eq!(app.conversation, "conv-b");
-    assert_eq!(app.input.text, "szkic rozmowy B");
+    assert_eq!(app.input.text, "conversation B draft");
 }
 
 #[test]
@@ -2298,7 +2298,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
     app.open("conv-flight-a".into());
 
     // 1. Send message: input is cleared and message is in flight
-    app.input = InputBuffer::with_text("pierwotna treść wiadomości");
+    app.input = InputBuffer::with_text("initial message content");
     app.submit();
     let send_req = app.send_request_id;
     assert!(app.sending);
@@ -2319,14 +2319,14 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
         conversation: "conv-flight-a".into(),
         generation: gen_before_switch,
         request_id: send_req,
-        sent_text: "pierwotna treść wiadomości".into(),
+        sent_text: "initial message content".into(),
         result: Err("awaria sieci".into()),
     });
 
     // Verification: sending flag is cleared, draft is restored to input!
     assert!(!app.sending, "sending must be cleared after A->B->A error");
     assert_eq!(app.pending_send, None);
-    assert_eq!(app.input.text, "pierwotna treść wiadomości");
+    assert_eq!(app.input.text, "initial message content");
     assert_eq!(
         app.notice.as_deref(),
         Some("✗ awaria sieci (draft restored)")
@@ -2335,7 +2335,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
     // 4. Send comment: editor is cleared and comment is in flight
     app.editor = Some(Editor {
         target: "task:t5".into(),
-        input: InputBuffer::with_text("ważna uwaga do zadania"),
+        input: InputBuffer::with_text("important task feedback"),
     });
     app.submit_comment();
     let comment_req = app.comment_request_id;
@@ -2358,7 +2358,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
         generation: gen_comment_start,
         request_id: comment_req,
         editor: pending_editor,
-        result: Err("odrzucono komentarz".into()),
+        result: Err("comment rejected".into()),
     });
 
     // Verification: sending_comment flag is cleared, comment editor is restored!
@@ -2370,14 +2370,14 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
     assert!(app.editor.is_some());
     let ed = app.editor.as_ref().unwrap();
     assert_eq!(ed.target, "task:t5");
-    assert_eq!(ed.input.text, "ważna uwaga do zadania");
+    assert_eq!(ed.input.text, "important task feedback");
     assert_eq!(
         app.notice.as_deref(),
-        Some("✗ odrzucono komentarz (comment draft preserved)")
+        Some("✗ comment rejected (comment draft preserved)")
     );
 
     // 7. Verify response arriving while user is in B (A -> B), then returns to A (B -> A)
-    app.input = InputBuffer::with_text("wiadomość rozstrzygana w tle");
+    app.input = InputBuffer::with_text("message processed in the background");
     app.submit();
     let send_req_bg = app.send_request_id;
     assert!(app.sending);
@@ -2391,7 +2391,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
         conversation: "conv-flight-a".into(),
         generation: 999,
         request_id: send_req_bg,
-        sent_text: "wiadomość rozstrzygana w tle".into(),
+        sent_text: "message processed in the background".into(),
         result: Err("timeout serwera".into()),
     });
 
@@ -2399,7 +2399,7 @@ fn tui_in_flight_operations_complete_and_restore_drafts_after_a_b_a_switch() {
     app.open("conv-flight-a".into());
     assert_eq!(app.conversation, "conv-flight-a");
     assert!(!app.sending);
-    assert_eq!(app.input.text, "wiadomość rozstrzygana w tle");
+    assert_eq!(app.input.text, "message processed in the background");
 }
 
 #[test]
@@ -2409,31 +2409,34 @@ fn tui_comments_with_same_target_in_different_conversations_and_plans() {
     // 1. (conv1, None, "worker:t1")
     app.open("conv1".into());
     app.view.plan = None;
-    app.save_comment_draft("worker:t1", InputBuffer::with_text("szkic conv1 bez planu"));
+    app.save_comment_draft(
+        "worker:t1",
+        InputBuffer::with_text("conv1 draft without a plan"),
+    );
 
     // 2. (conv1, Some("plan-alpha"), "worker:t1")
     app.view.plan = Some("plan-alpha".into());
     app.save_comment_draft(
         "worker:t1",
-        InputBuffer::with_text("szkic conv1 plan alpha"),
+        InputBuffer::with_text("conv1 plan alpha draft"),
     );
 
     // 3. (conv1, Some("plan-beta"), "worker:t1")
     app.view.plan = Some("plan-beta".into());
-    app.save_comment_draft("worker:t1", InputBuffer::with_text("szkic conv1 plan beta"));
+    app.save_comment_draft("worker:t1", InputBuffer::with_text("conv1 plan beta draft"));
 
     // 4. (conv2, Some("plan-alpha"), "worker:t1")
     app.open("conv2".into());
     app.view.plan = Some("plan-alpha".into());
     app.save_comment_draft(
         "worker:t1",
-        InputBuffer::with_text("szkic conv2 plan alpha"),
+        InputBuffer::with_text("conv2 plan alpha draft"),
     );
 
     // Verify all 4 are isolated and accessible without collision:
     assert_eq!(
         app.get_comment_draft("worker:t1").text,
-        "szkic conv2 plan alpha"
+        "conv2 plan alpha draft"
     );
 
     // Switch back to conv1
@@ -2442,21 +2445,21 @@ fn tui_comments_with_same_target_in_different_conversations_and_plans() {
     app.view.plan = Some("plan-beta".into());
     assert_eq!(
         app.get_comment_draft("worker:t1").text,
-        "szkic conv1 plan beta"
+        "conv1 plan beta draft"
     );
 
     // Under plan-alpha:
     app.view.plan = Some("plan-alpha".into());
     assert_eq!(
         app.get_comment_draft("worker:t1").text,
-        "szkic conv1 plan alpha"
+        "conv1 plan alpha draft"
     );
 
     // Under None:
     app.view.plan = None;
     assert_eq!(
         app.get_comment_draft("worker:t1").text,
-        "szkic conv1 bez planu"
+        "conv1 draft without a plan"
     );
 }
 
@@ -2464,33 +2467,33 @@ fn tui_comments_with_same_target_in_different_conversations_and_plans() {
 fn tui_history_recall_with_cursor_restoration() {
     let mut app = App::test_app();
 
-    app.record_history("pierwsze polecenie");
-    app.record_history("drugie polecenie");
+    app.record_history("first command");
+    app.record_history("second command");
 
     // Draft in progress with specific cursor position and preferred_col
-    app.input = InputBuffer::with_text("szkic z kursorem w środku");
+    app.input = InputBuffer::with_text("draft with the cursor in the middle");
     app.input.cursor = 7;
     app.input.preferred_col = Some(7);
 
     // Up arrow navigates into history
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(1));
-    assert_eq!(app.input.text, "drugie polecenie");
+    assert_eq!(app.input.text, "second command");
 
     // Up arrow again to older history
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(0));
-    assert_eq!(app.input.text, "pierwsze polecenie");
+    assert_eq!(app.input.text, "first command");
 
     // Down arrow navigates back down
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.history_index, Some(1));
-    assert_eq!(app.input.text, "drugie polecenie");
+    assert_eq!(app.input.text, "second command");
 
     // Down arrow returns to draft with exact cursor and preferred_col restored!
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.history_index, None);
-    assert_eq!(app.input.text, "szkic z kursorem w środku");
+    assert_eq!(app.input.text, "draft with the cursor in the middle");
     assert_eq!(app.input.cursor, 7);
     assert_eq!(app.input.preferred_col, Some(7));
 
@@ -2499,7 +2502,7 @@ fn tui_history_recall_with_cursor_restoration() {
     assert_eq!(app.history_index, Some(1));
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.history_index, None);
-    assert_eq!(app.input.text, "szkic z kursorem w środku");
+    assert_eq!(app.input.text, "draft with the cursor in the middle");
     assert_eq!(app.input.cursor, 7);
     assert_eq!(app.input.preferred_col, Some(7));
 }
@@ -2507,8 +2510,7 @@ fn tui_history_recall_with_cursor_restoration() {
 #[test]
 fn tui_preferred_column_memory_and_grapheme_editing() {
     // 1. Preferred column memory across lines of differing lengths
-    let text =
-        "linia pierwsza ma dwadzieścia znaków\nkrótka\ntrzecia linia jest znowu bardzo długa";
+    let text = "the first line has twenty characters\nshort!\nthe third line is very long again";
     let mut buf = InputBuffer::with_text(text);
     // Position cursor at col 20 on line 0
     buf.cursor = 20;
@@ -2546,43 +2548,43 @@ fn tui_preferred_column_memory_and_grapheme_editing() {
     buf.move_left();
     assert_eq!(buf.preferred_col, None);
 
-    // 2. Grapheme cluster editing: Polish diacritics & composite emojis
-    let mut gbuf = InputBuffer::with_text("Zażółć 🚀 👨‍👩‍👧‍👦 koniec");
+    // 2. Grapheme cluster editing: Unicode letters and composite emojis
+    let mut gbuf = InputBuffer::with_text("Abąćęł 🚀 👨‍👩‍👧‍👦 end");
     // Position cursor right after the family emoji
     let family_idx = gbuf.text.find(" 👨‍👩‍👧‍👦").unwrap() + " 👨‍👩‍👧‍👦".len();
     gbuf.cursor = family_idx;
 
     // Backspace must remove the entire 18-byte ZWJ sequence atomically:
     assert!(gbuf.backspace());
-    assert_eq!(gbuf.text, "Zażółć 🚀  koniec");
+    assert_eq!(gbuf.text, "Abąćęł 🚀  end");
 
     // Position cursor right before 🚀
     let rocket_idx = gbuf.text.find('🚀').unwrap();
     gbuf.cursor = rocket_idx;
     // Delete must remove the 4-byte rocket emoji atomically:
     assert!(gbuf.delete());
-    assert_eq!(gbuf.text, "Zażółć   koniec");
+    assert_eq!(gbuf.text, "Abąćęł   end");
 
-    // Stepping left/right across multi-byte Polish characters:
-    let mut pol = InputBuffer::with_text("zażółć");
+    // Stepping left/right across multi-byte Unicode test characters:
+    let mut pol = InputBuffer::with_text("abąćęł");
     pol.move_buffer_start();
     assert_eq!(pol.cursor, 0);
-    pol.move_right(); // 'z'
-    assert_eq!(pol.cursor, 1);
     pol.move_right(); // 'a'
+    assert_eq!(pol.cursor, 1);
+    pol.move_right(); // 'b'
     assert_eq!(pol.cursor, 2);
-    pol.move_right(); // 'ż' (2 bytes)
+    pol.move_right(); // 'ą' (2 bytes)
     assert_eq!(pol.cursor, 4);
-    pol.move_right(); // 'ó' (2 bytes)
-    assert_eq!(pol.cursor, 6);
-    pol.move_right(); // 'ł' (2 bytes)
-    assert_eq!(pol.cursor, 8);
     pol.move_right(); // 'ć' (2 bytes)
-    assert_eq!(pol.cursor, 10);
-    pol.move_left(); // back over 'ć'
+    assert_eq!(pol.cursor, 6);
+    pol.move_right(); // 'ę' (2 bytes)
     assert_eq!(pol.cursor, 8);
-    assert!(pol.backspace()); // backspace 'ł'
-    assert_eq!(pol.text, "zażóć");
+    pol.move_right(); // 'ł' (2 bytes)
+    assert_eq!(pol.cursor, 10);
+    pol.move_left(); // back over 'ł'
+    assert_eq!(pol.cursor, 8);
+    assert!(pol.backspace()); // backspace 'ę'
+    assert_eq!(pol.text, "abąćł");
     assert_eq!(pol.cursor, 6);
 }
 
@@ -2595,7 +2597,7 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
         "payload": {
             "sender": "user",
             "recipient": "orchestrator",
-            "text": "Pierwsza prośba użytkownika",
+            "text": "First user request",
             "kind": "request",
             "id": 101,
         }
@@ -2625,7 +2627,7 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
         "payload": {
             "sender": "orchestrator",
             "recipient": "worker:t9",
-            "text": "Zadanie t9 do wykonania",
+            "text": "Task t9 to perform",
             "kind": "task",
             "id": 102,
         }
@@ -2636,7 +2638,7 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
         "payload": {
             "sender": "orchestrator",
             "recipient": "worker:t9",
-            "reason": "agent niedostępny",
+            "reason": "agent unavailable",
         }
     }));
     assert_eq!(app.view.messages[1].state, "rejected");
@@ -2655,13 +2657,13 @@ fn tui_cards_structural_entries_and_actual_delivery_states() {
     assert!(text.contains("orchestrator"));
     assert!(text.contains("delivered"));
     assert!(text.contains("rejected"));
-    assert!(text.contains("Pierwsza prośba użytkownika"));
+    assert!(text.contains("First user request"));
 }
 
 #[test]
 fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
     let mut app = App::test_app();
-    app.input = InputBuffer::with_text("komenda testowa");
+    app.input = InputBuffer::with_text("test command");
 
     // 11x4: Below floor triggers guard
     let mut term_11x4 = Terminal::new(TestBackend::new(11, 4)).unwrap();
@@ -2740,11 +2742,11 @@ fn tui_ascii_mode_and_theme_glyphs() {
     assert_eq!(t_ascii.glyphs().to, ">");
     assert_eq!(t_ascii.glyphs().done, "x");
 
-    // Polish diacritics stand-ins in ASCII mode
-    assert_eq!(t_ascii.clean("Zażółć gęślą jaźń"), "Zazolc gesla jazn");
+    // Unicode letter transliteration in ASCII mode
+    assert_eq!(t_ascii.clean("Abąćęł cńódź efżó"), "Abacel cnodz efzo");
     assert_eq!(
-        t_ascii.clean("Krok 1: ✓ zatwierdzono → gotowe…"),
-        "Krok 1: + zatwierdzono > gotowe."
+        t_ascii.clean("Step 1: ✓ approved → done…"),
+        "Step 1: + approved > done."
     );
 
     // Rendering in ASCII mode
@@ -2754,9 +2756,13 @@ fn tui_ascii_mode_and_theme_glyphs() {
         CardProps {
             fill: t_ascii.card(),
             accent: t_ascii.accent(),
-            head: vec![Span::raw("Ty"), Span::raw(" > "), Span::raw("orkiestrator")],
-            right: "dostarczono".into(),
-            body: "Zażółć gęślą jaźń",
+            head: vec![
+                Span::raw("You"),
+                Span::raw(" > "),
+                Span::raw("orchestrator"),
+            ],
+            right: "delivered".into(),
+            body: "Abąćęł cńódź efżó",
             max_body: usize::MAX,
             width: 40,
         },
@@ -2764,7 +2770,7 @@ fn tui_ascii_mode_and_theme_glyphs() {
     draw_rows(&mut buffer, Rect::new(0, 0, 40, 5), &rows);
     let rendered: String = buffer.content.iter().map(|c| c.symbol()).collect();
     assert!(rendered.contains("|"));
-    assert!(rendered.contains("Zazolc gesla jazn"));
+    assert!(rendered.contains("Abacel cnodz efzo"));
     assert!(!rendered.contains("▌"));
 }
 
@@ -2784,9 +2790,9 @@ fn tui_no_color_mode_preserves_modifiers_and_clears_colors() {
         CardProps {
             fill: t_nc.card(),
             accent: t_nc.accent(),
-            head: vec![Span::raw("Nagłówek")],
+            head: vec![Span::raw("Heading")],
             right: "meta".into(),
-            body: "Treść karty",
+            body: "Card content",
             max_body: usize::MAX,
             width: 30,
         },
@@ -2801,12 +2807,12 @@ fn tui_no_color_mode_preserves_modifiers_and_clears_colors() {
 
 #[test]
 fn tui_malicious_output_sanitization_on_buffer() {
-    let malicious = "Normalny \x1b]52;c;c3RlYWw=\x07tekst \x1bPpayload\x1b\\z \u{202e}bidi\u{202c} i \u{9b}31mkolor\u{9c}";
+    let malicious = "Normal \x1b]52;c;c3RlYWw=\x07text \x1bPpayload\x1b\\with \u{202e}bidi\u{202c} and \u{9b}31mcolor\u{9c}";
     let cleaned = sanitize(malicious);
     assert!(!cleaned.contains('\x1b'));
     assert!(!cleaned.contains("c3RlYWw="));
     assert!(!cleaned.contains('\u{202e}'));
-    assert_eq!(cleaned, "Normalny tekst z bidi i kolor");
+    assert_eq!(cleaned, "Normal text with bidi and color");
 
     let mut app = App::test_app();
     app.view.apply(&serde_json::json!({
@@ -2833,7 +2839,7 @@ fn tui_malicious_output_sanitization_on_buffer() {
     assert!(!text.contains('\x1b'));
     assert!(!text.contains("c3RlYWw="));
     assert!(!text.contains('\u{202e}'));
-    assert!(text.contains("Normalny tekst"));
+    assert!(text.contains("Normal text"));
 }
 
 #[test]
@@ -3023,14 +3029,14 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
     view.tasks = vec![
         TaskRow {
             id: "t1".into(),
-            title: "Pierwsze zadanie".into(),
+            title: "First task".into(),
             depends_on: vec![],
             status: "working".into(),
             ..TaskRow::default()
         },
         TaskRow {
             id: "t2".into(),
-            title: "Drugie zadanie".into(),
+            title: "Second task".into(),
             depends_on: vec!["t1".into()],
             status: "proposed".into(),
             ..TaskRow::default()
@@ -3077,14 +3083,14 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
     app.view.tasks = vec![
         TaskRow {
             id: "t1".into(),
-            title: "Pierwsze zadanie".into(),
+            title: "First task".into(),
             depends_on: vec![],
             status: "working".into(),
             ..TaskRow::default()
         },
         TaskRow {
             id: "t2".into(),
-            title: "Drugie zadanie".into(),
+            title: "Second task".into(),
             depends_on: vec!["t1".into()],
             status: "proposed".into(),
             ..TaskRow::default()
@@ -3093,13 +3099,13 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
     app.focus = Focus::Graph;
     app.selected = "worker:t1".into();
 
-    app.set_graph_filter(Some("drugie".into()));
+    app.set_graph_filter(Some("second".into()));
     assert_ne!(app.selected, "worker:t1");
     assert!(app.selected.contains("t2"));
 
     let filtered_graph = Graph::new_with_options(
         &view,
-        Some("drugie"),
+        Some("second"),
         &std::collections::HashSet::new(),
         GroupingMode::Dependency,
     );
@@ -3177,7 +3183,7 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
     app.conversation = "c-initial".into();
 
     // 1. Enter chat draft in current conversation
-    app.input.insert_str("Szkic w c-initial");
+    app.input.insert_str("Draft in c-initial");
     app.input.cursor = 5;
 
     // 2. Open switcher via Ctrl+O
@@ -3213,7 +3219,7 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
 
     // In c-beta, input is fresh
     assert!(app.input.is_empty());
-    app.input.insert_str("Szkic w c-beta");
+    app.input.insert_str("Draft in c-beta");
     app.input.cursor = 10;
 
     // 5. Open switcher again and switch back to c-initial
@@ -3227,13 +3233,13 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
     assert_eq!(app.conversation, "c-initial");
 
     // Draft and cursor in c-initial are fully preserved
-    assert_eq!(app.input.text, "Szkic w c-initial");
+    assert_eq!(app.input.text, "Draft in c-initial");
     assert_eq!(app.input.cursor, 5);
 
     // Switch again to c-beta: draft in c-beta preserved as well
     app.open("c-beta".into());
     assert_eq!(app.conversation, "c-beta");
-    assert_eq!(app.input.text, "Szkic w c-beta");
+    assert_eq!(app.input.text, "Draft in c-beta");
     assert_eq!(app.input.cursor, 10);
 }
 
@@ -3317,9 +3323,9 @@ fn test_refresh_updates_and_overlay_collision_avoidance() {
         "payload": {
             "plan": "plan-1",
             "tasks": [
-                {"id": "t1", "title": "Krok 1", "round": 1, "status": "proposed"},
-                {"id": "t2", "title": "Krok 2", "round": 1, "status": "proposed"},
-                {"id": "t3", "title": "Krok 3", "round": 1, "status": "proposed"}
+                {"id": "t1", "title": "Step 1", "round": 1, "status": "proposed"},
+                {"id": "t2", "title": "Step 2", "round": 1, "status": "proposed"},
+                {"id": "t3", "title": "Step 3", "round": 1, "status": "proposed"}
             ]
         }
     }));
@@ -3354,7 +3360,7 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     // Agent worker:t1, Tab 0
     assert_eq!(details.tab, 0);
     details.scroll = 15;
-    details.query = "analiza".into();
+    details.query = "analysis".into();
 
     // Switch to Tab 1
     details.switch_tab(1);
@@ -3378,7 +3384,7 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     assert_eq!(details.scroll, 8);
     assert_eq!(details.query, "logi");
 
-    // Switch back to Tab 0: restores scroll 15 and query "analiza"
+    // Switch back to Tab 0: restores scroll 15 and query "analysis"
     details.switch_tab(0);
     assert_eq!(details.tab, 0);
     assert_eq!(details.scroll, 15);
@@ -3386,7 +3392,7 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
         details.follow,
         "returning to Overview resumes the live session"
     );
-    assert_eq!(details.query, "analiza");
+    assert_eq!(details.query, "analysis");
 
     // Switch back to verifier:t1: active tab is 0 (never scrolled for verifier:t1)
     details.switch_key("verifier:t1".into());
@@ -3428,14 +3434,14 @@ fn test_inspector_whole_record_search_and_raw_view() {
     details.task = Some(json!({
         "id": "t1",
         "spec": {
-            "title": "Zadanie z raportem i ustaleniami",
+            "title": "Task with a report and findings",
             "writes": true
         },
-        "report": "Szczegółowy raport końcowy z unikalnym_kluczem_12345",
-        "findings": ["Ustalenie A: klucz_analityczny_xyz"],
+        "report": "Detailed final report with unique_key_12345",
+        "findings": ["Finding A: analysis_key_xyz"],
         "artifacts": ["src/main.rs", "target/report.json"]
     }));
-    details.tab = antislop::lean::tui::details::RESULT; // WYNIK tab
+    details.tab = antislop::lean::tui::details::RESULT; // RESULT tab
 
     let mut view = antislop::lean::tui::view::View::default();
     view.tasks.push(antislop::lean::tui::view::TaskRow {
@@ -3448,11 +3454,11 @@ fn test_inspector_whole_record_search_and_raw_view() {
     assert!(
         all_lines
             .iter()
-            .any(|(_, text)| text.contains("Szczegółowy raport"))
+            .any(|(_, text)| text.contains("Detailed final report"))
     );
 
-    // 2. Querying for "unikalnym_kluczem_12345" returns the ENTIRE record (header + content)
-    details.query = "unikalnym_kluczem_12345".into();
+    // 2. Querying for "unique_key_12345" returns the ENTIRE record (header + content)
+    details.query = "unique_key_12345".into();
     let filtered_lines = details.lines(&view);
     assert!(
         filtered_lines
@@ -3463,7 +3469,7 @@ fn test_inspector_whole_record_search_and_raw_view() {
     assert!(
         filtered_lines
             .iter()
-            .any(|(_, text)| text.contains("unikalnym_kluczem_12345")),
+            .any(|(_, text)| text.contains("unique_key_12345")),
         "content must be included"
     );
 
@@ -3486,12 +3492,12 @@ fn test_inspector_explicit_missing_data_notices() {
         "id": "t1",
         "spec": {
             "id": "t1",
-            "title": "Puste zadanie",
-            "goal": "Testowanie kontroli",
+            "title": "Empty task",
+            "goal": "Testing checks",
             "kind": "implementation",
             "verifier": {
-                "focus": "poprawność",
-                "risks": ["ryzyko regresji"]
+                "focus": "correctness",
+                "risks": ["regression risk"]
             }
         },
         "verdict": null
@@ -3713,7 +3719,7 @@ fn test_recipient_selection_and_broadcast() {
     let mut view = antislop::lean::tui::view::View::default();
     view.tasks.push(antislop::lean::tui::view::TaskRow {
         id: "t1".into(),
-        title: "Budowanie jądra".into(),
+        title: "Building the kernel".into(),
         writes: true,
         ..Default::default()
     });
@@ -3817,7 +3823,7 @@ fn test_confirmation_card_action_lifecycle() {
         candidate: None,
         scope_hash: "hash-p100".into(),
         status: ConfirmationStatus::Pending,
-        detail: "5 zadań w planie".into(),
+        detail: "5 tasks in the plan".into(),
     };
 
     app.request_confirmation(card.clone());
@@ -3870,7 +3876,7 @@ fn test_stale_confirmation_handling_and_rendering() {
         candidate: None,
         scope_hash: "scope-old".into(),
         status: ConfirmationStatus::Pending,
-        detail: "5 zadań".into(),
+        detail: "5 tasks".into(),
     };
     app.request_confirmation(stale_card);
     assert!(app.confirmation.is_some());
@@ -3893,7 +3899,7 @@ fn test_stale_confirmation_handling_and_rendering() {
         candidate: None,
         scope_hash: "scope-current".into(),
         status: ConfirmationStatus::Pending,
-        detail: "5 zadań".into(),
+        detail: "5 tasks".into(),
     };
     app.request_confirmation(pending_card);
     assert!(app.confirmation.is_some());
@@ -4409,7 +4415,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
 
     // 2. Selection changes and activity updates do NOT shift nodes
     app.selected = "worker:t2".into();
-    app.view.activity = Some("Przetwarzanie danych w toku...".into());
+    app.view.activity = Some("Processing data...".into());
     term_small.draw(|f| app.draw(f)).unwrap();
 
     let g2 = Graph::new_with_viewport(
@@ -4934,7 +4940,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
             .map(|n| (n.key.clone(), n.x, n.y))
             .collect();
         app.selected = "worker:cy2".into();
-        app.view.activity = Some("Praca w toku".into());
+        app.view.activity = Some("Work in progress".into());
         term.draw(|f| app.draw(f)).unwrap();
         let after_coords: Vec<_> = Graph::new_with_viewport(
             &app.view,
@@ -5308,7 +5314,7 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
              "verifier": {"summary": "Check storage."}},
             {"id": "t2", "title": "API", "depends_on": ["t1"],
              "summary": "Expose the corrected storage behind a small HTTP surface a verifier can read in one pass, with careful unicode 👩‍💻 everywhere.",
-             "verifier": {"summary": "Verify the 👩‍💻 surface wrapped past every card edge twice over żółwie e\u{301} until only an ellipsis ends the last visible line."}},
+             "verifier": {"summary": "Verify the 👩‍💻 surface wrapped past every card edge twice over turtles e\u{301} until only an ellipsis ends the last visible line."}},
         ]}),
     ));
     let geometry = |view: &View, grouping: GroupingMode| -> Vec<(String, u16, u16, u16, bool)> {
@@ -5366,7 +5372,7 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
     assert!(status_now.iter().all(|(_, _, _, h, _)| *h == HEIGHT));
 
     // Effect + verdict: a cut (fragment) effect of the bounded kind.
-    let long_effect = format!("{}…", "naprawione 👩‍💻 — src/store.rs ".repeat(12));
+    let long_effect = format!("{}…", "fixed 👩‍💻 — src/store.rs ".repeat(12));
     view.apply(&ev(
         4,
         "task",
@@ -5389,7 +5395,7 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
         text.contains("effect: [fragment]"),
         "a cut effect says it is a fragment, front-first: {text}"
     );
-    assert!(text.contains("naprawione"));
+    assert!(text.contains("fixed"));
 
     // Retry: the recovery clears the round's card data; geometry holds.
     view.apply(&ev(
@@ -5657,8 +5663,8 @@ fn an_unblock_announcement_invalidates_the_card_like_a_retry() {
 #[test]
 fn sent_history_survives_restart_and_recall_restores_the_draft() {
     let state = tempfile::tempdir().unwrap();
-    let first = "pierwsza wiadomość";
-    let last = "zażółć 👩‍💻\ne\u{301} druga linia";
+    let first = "first message";
+    let last = "abąćęł 👩‍💻\ne\u{301} second line";
     {
         let mut app = App::test_app();
         app.load_history(state.path());
@@ -5671,7 +5677,7 @@ fn sent_history_survives_restart_and_recall_restores_the_draft() {
     app.load_history(state.path());
     assert_eq!(app.history, [first, last]);
     app.record_history(last); // Consecutive duplicates stay suppressed after restart.
-    app.input = InputBuffer::with_text("mój szkic 👩‍💻");
+    app.input = InputBuffer::with_text("my draft 👩‍💻");
     let draft = app.input.clone();
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(app.input.text, last);

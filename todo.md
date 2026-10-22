@@ -1,118 +1,118 @@
 TODO list:
 
-- [x] Pierwszy krok pracy z antislop po wyslaniu zadania jest wywiad z uzytkownikiem. Nastepnym krokiem jest napisanie planu. Widok grafu agentow na tym etapie powinien byc ukryty.
-- [x] Plan stwozony dla danego zadania wyslanego przez uzytkownika powinien zostac pokazany na calym ekranie jak dokument w ktorym uzytkownik porusza kursorem miedzy liniami tekstu i jest w stanie skomentowac dowolna linie planu. Pod tekstem na stalej belce dolnej dostepne przyciski. Accept / Reject / Comment whole plan.
-- [x] Komentarze dodane do planu powinny zostac rozwiazane lub odpowiednio zaadresowane.
-- [x] Plan po rozwiazaniu wszystktkich komentarzy uzytkownika powinien zostac zamieniony na liste zadan do wykonania, zadania powinny miec okreslone zaleznosci i informacje o mozliwosci wykonania rownolegle z innymi zadaniami.
-- [x] Uzytkownik w kazdej chwili powinien miec mozliwosc wgladu w plan.
-- [x] Mozna sie zastanowic nad mozliwoscia przypisywania zadan do konkretnych sekcji planu i nastepnie fragment planu ktory zostal wykonany moze zostac podkreslony w odpowiedni sposob.
-- [x] Agenci powinni miec mozliwosc pracy rownleglem tam gdzie ma to sens.
-- [x] Argument aplikacji --project nie jest potrzebny. Zadne ze znanych narzedzi nie obsluguje takich paramterow. Katalogiem roboczym jest katalog w ktorym zostal uruchomiony antislop czyli najczesciej katalog glowny projektu. Nie trzeba sprawdzac czy jest to katalog glowny projektu. Katalog w ktorym zostal uruchomiony antislop jest katalogiem dostarczonym przez uzytkownika.
-- [x] Trzeba dodac mechanizm akceptacji i zaufania danego katalogu roboczego przy pierwszym uruchomieniu w danym katalogu tak jak to dziala w innych narzedziach jak np codex.
-- [x] UI powinien wyswietlac toggle dla trybu autonomous albo supervised
-- [x] Komendy /pause /resume /continue /cancel takze powinny zostac obsluzone jak przyciski UI.
-- [x] Podglad sesji w szczegolach agenta powien emulowac terminal procesu w ktorym jest uruchominy dany agent, tak zeby uzytkownik mial wglad we wszystkie operacje i komunikaty jakie przetwarza dany agent.
-- [x] dodac obsluge uruchamiania aplikacji agentow za pomoca komend udostepnionych przez inne platformy. Przyklad: chcialbym moc skonfigurowac apliakcje tak ze orkiestrator jest dziala jako domyslny codex, a workerzy i werfikatorzy sa startowani przy pomocy komendy np omlx launch codex, albo ollama launch codex.
-- [x] Kazdy tekst wyswietlony w UI powinien zostac przetlumaczony na Angielski.
-- [x] Trzymanie effort map w konfiguracji nie ma sensu. Apliakcje maja jedna drabine skalowania dla myslenian i trzeba je zahardkodac.
-- [x] Czesc agentow z dostepnej puli predefiniowanych agentow powinna byc wymagana, tak aby zawsze zapewnic najlepsza jakosc i pozostawic kod w lepszym stanie niz byl, oraz zapewnic ze wszystkie wymagania zostaly spelnione.
-- [x] funkcjonalnosc eksportu powinna zostac usunieta.
-- [x] UI musi wspierac myszke / touchpad.
-- [x] Dodac mozliwosc pracy nad kilkoma projektami na raz.
-- [x] okno z planem projektu nie zawija wierszy i nie da sie przeczytac dlugich linii tekstu. Trzeba dodac word wrap.
-- [x] Agent ktory ma problem powinien zostac oznaczone kolorem czerwonym
-- [x] Aplikacja powinna udostepnic mechanizm odblokowywania krokow miedzy agentami kiedy jest jakis problem ktory bolkuje ppstep prac.
-- [x] W widoku sesji w szczegolach agenta nie widac wszystkich wiadomosci wyslanych do i od agenta. Brak np wpisow reasoning. Terminal takze nie wyglada jak originalna aplikacja.
-- [x] W widoku szczegolow agenta powinny wyswietalc sie zakladki ktore maja sens dla danego agenta.
-- [x] Agenci w widoku grafu powinni miec zaimplementowany color coding tak zeby mozna bylo ich latwo rozroznic.
-- [x] Brakuje uzycia ikonek, loaderow tak zeby uzytkownik mogl wizualnie odroznic rodzaje agentow i czy aktualnie pracuje, czekaja, maja problem itp. Tak samo stan orkiestratora powinien byc aktualizowany w oknie czatu bo teraz po wyslaniu wiadomosci brakuj jakiegokolwiek feedbacku do uzytkownika czy aplikacja cos robi.
-- [x] W widoku grafu nie chce uzywac ramek wokol kart agentow, samo tlo karty powinno ich odroznic od tla canvasa
-- [x] orkiestrator powinien reagowac na zmiany stanow w grafie i informowac uzytkownika o pistepach zakonczonych rund w pustaci krtokich komunikatow. problemy ktore boluja pistep rowniez powinny byc raportowane do orliestratora.
+- [x] After submitting a task to antislop, the first step is a user interview, followed by writing a plan. Hide the agent graph at this stage.
+- [x] Show the user's task plan as a full-screen document, with a cursor moving between lines and comments on any line. A fixed bottom bar provides Accept / Reject / Comment whole plan buttons.
+- [x] Resolve or appropriately address comments added to the plan.
+- [x] After addressing every user comment, turn the plan into tasks with dependencies and information about possible parallel execution.
+- [x] Let the user inspect the plan at any time.
+- [x] Consider linking tasks to specific plan sections and highlighting completed sections appropriately.
+- [x] Agents should work in parallel where sensible.
+- [x] The --project argument is unnecessary; familiar tools do not use it. The working directory is where antislop starts, usually the project root. No project-root detection is needed: the launch directory is supplied by the user.
+- [x] Add first-use working-directory approval and trust, as in tools such as Codex.
+- [x] Display an autonomous/supervised mode toggle in the UI.
+- [x] Handle /pause /resume /continue /cancel like UI buttons.
+- [x] The agent-details session view should emulate the agent process's terminal so users can inspect every operation and message it processes.
+- [x] Support agent applications launched through commands supplied by other platforms. For example, use default Codex as orchestrator while launching workers/verifiers through commands such as omlx launch codex or ollama launch codex.
+- [x] Translate every UI text into English.
+- [x] Keeping effort maps in configuration is unnecessary. Applications have one reasoning-effort scale that should be hardcoded.
+- [x] Require some predefined agent roles to ensure the best quality, leave code better than before, and fulfill every requirement.
+- [x] Remove export functionality.
+- [x] Support mouse/touchpad input in the UI.
+- [x] Allow working on several projects at once.
+- [x] Add word wrapping to the project-plan window so long lines are readable.
+- [x] Mark agents with problems in red.
+- [x] Provide a mechanism for unblocking inter-agent steps when a problem prevents progress.
+- [x] The agent-details session view omits some sent/received messages, such as reasoning entries, and its terminal does not resemble the original application.
+- [x] Show detail tabs appropriate to each agent.
+- [x] Color-code agents in the graph so they are easy to distinguish.
+- [x] Add icons/loaders to distinguish agent kinds and working, waiting, or problem states. Update orchestrator status in chat too; submitting a message currently gives no feedback that work is happening.
+- [x] Avoid frames around agent cards in the graph; distinguish cards from the canvas using background color alone.
+- [x] The orchestrator should react to graph-state changes and briefly report progress/completed rounds. Report progress-blocking problems to it too.
 
-Niedokończone względem design.md:
+Incomplete relative to design.md:
 
-Ledgery i bramki jakości (§3, §6.4-6.7, §7.6, §10.1, M2Q):
+Ledgers and quality gates (§3, §6.4-6.7, §7.6, §10.1, M2Q):
 
-- [x] RequirementLedger i PlanItemLedger w runtime: atomowe wymagania, statusy (identified..verified/stale/superseded_by_user), dowody, rodzic/dzieci (§6.6).
-- [x] spec_revision na runie; wersjonowanie wymagań/kroków, unieważnianie zależnych zadań i dowodów, anulowanie procesów oraz odrzucanie starych wyników po zmianie zakresu (§6.3, scenariusz 31).
-- [ ] Unieważnianie przyszłych modeli ContextModel/SolutionModel i ChecklistDefinition po ich zmianie (§6.3).
-- [ ] ContextModel, rejestr Unknown, SolutionModel, SimulationCase, TraceabilityMap jako rekordy z bramkami context_ready, plan_ready, solution_selected, requirements_complete egzekwowanymi przez runtime (§6.4-6.5).
-- [ ] OptionsAnalysis i SolutionDecision jako ustrukturyzowane rekordy (warianty, kryteria, odrzucenia, wrażliwość, warunki ponownego otwarcia) (§6.7).
-- [ ] RiskCoverage: obowiązkowa pozycja RISK-Rxxx dla każdego wpisu katalogu ryzyk z §19, z wykonawcą, weryfikatorem i uzasadnieniem wyłączeń (§7.6).
-- [ ] ChecklistDefinition jako wersjonowany katalog z content_hash: wspólne V01-V08 i rozszerzenia każdej roli weryfikującej (§7.6).
-- [ ] Runtime odrzuca raport z pustą pozycją checklisty, brakującym ryzykiem, nieaktualnym dowodem lub niedozwolonym autorem (scenariusz 30).
-- [ ] Rekordy InputDomainMatrix, ChangeRisk, DependencyDecision, LicenseAssessment, RefactorReport zamiast samych obligacji w promptach (§10.1, §12.2).
-- [x] ComplianceAudit: pełne źródła, oba rejestry i wynik zintegrowany; niezależna weryfikacja audytu i bramka requirements_complete (§6.6, scenariusze 27-29).
-- [ ] Testy runtime zamiast samego promptu dla scenariuszy akceptacyjnych 11, 19-23, 34-40 (§18).
-- [ ] Graf unieważniania dowodów i QualityGate (required_check_ids, input_hashes, invalidation_dependencies) (§10.1).
+- [x] Runtime RequirementLedger and PlanItemLedger: atomic requirements, statuses (identified..verified/stale/superseded_by_user), evidence, parents/children (§6.6).
+- [x] Run spec_revision; versioned requirements/steps, dependent-task/evidence invalidation, process cancellation, and rejection of old results after scope changes (§6.3, scenario 31).
+- [ ] Invalidate future ContextModel/SolutionModel and ChecklistDefinition records when changed (§6.3).
+- [ ] ContextModel, Unknown register, SolutionModel, SimulationCase, TraceabilityMap records with runtime-enforced context_ready, plan_ready, solution_selected, requirements_complete gates (§6.4-6.5).
+- [ ] Structured OptionsAnalysis and SolutionDecision records (options, criteria, rejections, sensitivity, reopening conditions) (§6.7).
+- [ ] RiskCoverage: mandatory RISK-Rxxx for every §19 catalog entry, with executor, verifier, and exclusion justification (§7.6).
+- [ ] ChecklistDefinition as a versioned catalog with content_hash: shared V01-V08 and extensions for every verifier role (§7.6).
+- [ ] Runtime rejection of reports with empty checklist items, missing risks, stale evidence, or unauthorized authors (scenario 30).
+- [ ] InputDomainMatrix, ChangeRisk, DependencyDecision, LicenseAssessment, RefactorReport records rather than prompt-only obligations (§10.1, §12.2).
+- [x] ComplianceAudit: full sources, both ledgers, and integrated result; independent audit verification and requirements_complete gate (§6.6, scenarios 27-29).
+- [ ] Runtime tests rather than prompts alone for acceptance scenarios 11, 19-23, 34-40 (§18).
+- [ ] Evidence invalidation graph and QualityGate (required_check_ids, input_hashes, invalidation_dependencies) (§10.1).
 
 TUI (§8):
 
-- [ ] Zakładki szczegółów agenta: Overview (ze scalona Session), Artifacts, Findings, Messages, Evidence, Checks. Brakuje Artifacts, Findings i Evidence jako osobnych zakładek (§8.4).
-- [x] Requirements i Plan items z czatu/palety; źródła, kryteria, zadania, dowody i historia; ręczne formularze, podgląd wpływu, akceptacja diffu i zachowanie draftów (§6.6, §8.4).
-- [ ] Pozostałe widoki runu: Options, Risks, Quality gates (§8.4).
-- [ ] Filtry relacji w grafie (supervises, depends_on, verifies, communicates_with) oraz podświetlenie krawędzi komunikacji z czasem i licznikiem (§8.3).
-- [ ] Pełny zestaw 12 statusów węzła (queued, starting, running, waiting_agent, waiting_user, verifying, changes_requested, paused, blocked, failed, completed, cancelled) z tekstem/symbolem i opcjonalnym kolorem (§8.3).
-- [ ] Grupowanie po etapach/modułach i zwijanie zakończonych gałęzi w dużych zespołach (§8.3).
-- [ ] Komentarze do każdego elementu panelu agentów: relacja, sesja, tura, wiadomość, dowód, pozycja checklisty, bramka (§8.5).
-- [ ] Nagłówek z run i stage oraz pojęcie etapów (Intake..Delivery) w stanie runu (§6.1, §8.1).
-- [ ] Wybór sposobu dostarczenia wiadomości do aktywnego agenta: natywne sterowanie, kolejka na następną turę, przerwanie i wznowienie; UI pokazuje dostępny wariant (§8.4).
-- [ ] Komenda `antislop ui` ustalona w §8.2 (obecnie jest `antislop chat` i uruchomienie bez argumentów).
+- [ ] Agent detail tabs: Overview (merged with Session), Artifacts, Findings, Messages, Evidence, Checks. Artifacts, Findings, Evidence are missing as separate tabs (§8.4).
+- [x] Requirements and Plan items from chat/palette; sources, criteria, tasks, evidence, history; manual forms, impact preview, diff approval, draft preservation (§6.6, §8.4).
+- [ ] Remaining run views: Options, Risks, Quality gates (§8.4).
+- [ ] Graph relationship filters (supervises, depends_on, verifies, communicates_with) and communication-edge highlights with time/count (§8.3).
+- [ ] All 12 node statuses (queued, starting, running, waiting_agent, waiting_user, verifying, changes_requested, paused, blocked, failed, completed, cancelled), with text/symbols and optional color (§8.3).
+- [ ] Stage/module grouping and collapsed completed branches for large teams (§8.3).
+- [ ] Comments on every agent-panel element: relationship, session, turn, message, evidence, checklist item, gate (§8.5).
+- [ ] Run/stage header and stages (Intake..Delivery) in run state (§6.1, §8.1).
+- [ ] Active-agent message delivery choice: native steering, next-turn queue, interrupt/resume; show available options in the UI (§8.4).
+- [ ] The `antislop ui` command settled in §8.2 (currently `antislop chat` and launching without arguments).
 
-Runtime, daemon, adaptery (§7, §9, §10, §13, §14):
+Runtime, daemon, adapters (§7, §9, §10, §13, §14):
 
-- [x] Idempotencja operacji rejestru, expected_spec_revision oraz zatwierdzanie konkretnego diffu w API daemona (§9.3).
-- [ ] request_id i klucz idempotencji dla pozostałych zmian stanu w protokole daemona (§9.3).
-- [ ] Jeden aktywny klient sterujący i klienci podglądu; konflikt sterowania nie może być last-write-wins (§9.3).
-- [ ] Kontrakt adaptera: probe z capabilities, send z delivery_mode i receipt, interrupt z receipt rozróżniającym żądanie od potwierdzonego zatrzymania (§9.4).
-- [ ] Codex przez app-server (JSON-RPC, steering) zamiast exec --json (§9.5).
-- [ ] Uruchomienie i weryfikacja adaptera gemini na prawdziwym binarium, domknięcie macierzy wersji M0 (§16).
-- [ ] Profile uprawnień read-only, workspace-write, restricted-execution, extended-access; blokada startu sesji, gdy ograniczenia nie da się wymusić (§13).
-- [ ] Redakcja sekretów w logach i artefaktach, prawa plików, polityka retencji (§13).
-- [ ] Zużycie tokenów oznaczone reported / estimated / unavailable (obecnie tylko reported lub brak) (§14).
-- [ ] Natywne subagenty CLI wyłączone albo zarejestrowane jako zarządzane węzły; agy i gemini nie mają przełącznika (§9.5).
-- [ ] Szablony zespołów (small-change, feature, refactoring, security-fix, greenfield, research, document, analysis) jako wersjonowana definicja w kodzie, nie tylko opis w instrukcjach orkiestratora (§7.3).
-- [ ] Wersjonowane wbudowane role i szablony utrwalane przy starcie runu (§9.6).
-- [ ] Resume na poziomie zadania oraz ponawianie zadań w stanie waiting (§14).
-- [ ] Stan delivery_unknown i uzgadnianie z sesją przy niepewnym dostarczeniu wiadomości (§10.4).
-- [ ] Zdarzenie i uzasadnienie przy każdej zmianie składu zespołu (§7.3).
-- [ ] Walidacja wszystkich potrzebnych profili przed startem zespołu; brak CLI daje jawną propozycję zamiany lub blokadę (§7.4).
+- [x] Ledger-operation idempotency, expected_spec_revision, and exact-diff approval in daemon API (§9.3).
+- [ ] request_id and idempotency keys for remaining state changes in daemon protocol (§9.3).
+- [ ] One active controlling client plus observer clients; control conflicts cannot use last-write-wins (§9.3).
+- [ ] Adapter contract: probe with capabilities, send with delivery_mode/receipt, interrupt with receipts distinguishing requests from confirmed termination (§9.4).
+- [ ] Codex app-server (JSON-RPC, steering) instead of exec --json (§9.5).
+- [ ] Run/verify the gemini adapter against a real binary and complete the M0 version matrix (§16).
+- [ ] Permission profiles read-only, workspace-write, restricted-execution, extended-access; block sessions when restrictions cannot be enforced (§13).
+- [ ] Secret redaction in logs/artifacts, file permissions, retention policy (§13).
+- [ ] Token usage marked reported / estimated / unavailable (currently reported or absent only) (§14).
+- [ ] Native CLI subagents disabled or registered as managed nodes; agy/gemini have no switch (§9.5).
+- [ ] Team templates (small-change, feature, refactoring, security-fix, greenfield, research, document, analysis) as versioned code definitions, not just orchestrator instructions (§7.3).
+- [ ] Versioned built-in roles/templates persisted at run start (§9.6).
+- [ ] Task-level resume and retries for waiting tasks (§14).
+- [ ] delivery_unknown state and session reconciliation for uncertain message delivery (§10.4).
+- [ ] Events/justification for every team-composition change (§7.3).
+- [ ] Validate every necessary profile before team launch; missing CLIs produce explicit replacement proposals or blockage (§7.4).
 
 Workspace (§11):
 
-- [ ] Projekt bez gita: utworzenie inicjalnego snapshotu/repozytorium przez runtime (design §11.1; obecnie writer prosi o git init).
-- [ ] Lease plików i osobne zasoby (porty, bazy, cache) dla równoległych worktree (§11.1).
-- [ ] Research, dokumenty i analizy bez gita: wersjonowane katalogi wejść/wyjść i artefakty z hashami (§11.2).
+- [ ] Projects without Git: runtime-created initial snapshot/repository (design §11.1; writers currently request git init).
+- [ ] File leases and separate resources (ports, databases, caches) for parallel worktrees (§11.1).
+- [ ] Research/documents/analyses without Git: versioned input/output directories and hashed artifacts (§11.2).
 
-Zgody i tryby (§6.2):
+Approvals and modes (§6.2):
 
-- [ ] Supervised: pytanie o zgodę przy każdej rundzie poprawek (obecnie pierwsze 3 rundy bez pytania).
-- [ ] Żadnego automatycznego otwierania rundy poprawek po odrzuceniu wyniku w trybie supervised, zgoda per etap i per runda (§6.2).
+- [ ] Supervised: request approval for every revision round (currently the first 3 rounds proceed without asking).
+- [ ] No automatic revision rounds after rejection in supervised mode; approval per stage and round (§6.2).
 
-Pozostałe:
+Other:
 
-- [ ] Historia runu mierząca czas do zaakceptowanego wyniku, czas pracy użytkownika, liczbę rund, blokad, konfliktów i zmian zakresu (§15).
-- [ ] Decyzja o licencji i dystrybucji Architect (§20, pkt 4).
+- [ ] Run history measuring time to accepted results, user effort, round/blockage/conflict counts, and scope changes (§15).
+- [ ] Architect licensing/distribution decision (§20, item 4).
 
-- [x] zunifikowac workera z weryfikatorem w jednym nodzie na grafie
-- [x] zunifikowac zakladke overview z session
-- [x] Globalny fallback konfiguracji, gdy brak projektowego antislop.toml (t2).
-- [x] Edytor dowolnej opcji konfiguracji w TUI i zastosowanie na zywo w daemonie (t3/t7).
-- [x] Zaznaczanie i kopiowanie tekstu sesji myszka (t8).
-- [x] Odswiezanie otwartych Checks po zmianie rundy i zdarzeniach check.
-- [x] T14: sprawdzenie globalnego zaufania przed otwarciem stanu daemona; brak migracji zaufania z bazy projektu; bezpieczny plik tymczasowy rejestru.
-- [x] T14: ograniczenie utrwalanych bledow tur i redakcja znanych sekretow ze srodowiska (nie obejmuje calego transkryptu).
-- [x] T13: lokalne uniewaznianie Checks; odczyt jednego zadania bez dekodowania calego planu i ponownego odczytu dla freshness token.
-- [x] T13: cache rekordow i zawijania transkryptu; przeglad zintegrowanego kodu.
-- [x] T13: lekki endpoint task_checks bez fingerprintu Git; cache layoutu grafu i przycinanie tras do viewportu.
-- [x] T14: integracja lancucha b6356f1 z baza main d050f2c, przeglad nowego kodu i pelna bramka: check, fmt, clippy -D warnings oraz 473 testow (bez pominiec).
-- [x] T14: usuniety lokalny test routingu zgodnie ze zmiana uzytkownika; antislop.toml bez zmian.
-- [x] T14: SetConfig porownuje rewizje pod blokada; clipboard ma limit 64 KiB; test przerwania procesu przed i po publikacji konfiguracji.
-- [x] T14: przeglad kontraktow i schematu 5→6; regresja profilu nowego verifiera w tej samej rundzie; surowy protokol odrzuca brakujaca i stara rewizje.
+- [x] Merge worker and verifier into one graph node.
+- [x] Merge Overview and Session tabs.
+- [x] Global configuration fallback when project antislop.toml is absent (t2).
+- [x] TUI editor for every configuration option, applied live in the daemon (t3/t7).
+- [x] Mouse selection/copying of session text (t8).
+- [x] Refresh open Checks after round changes and check events.
+- [x] T14: global trust check before opening daemon state; no trust migration from project databases; safe registry temporary files.
+- [x] T14: bounded persisted turn errors and known-environment-secret redaction (not the entire transcript).
+- [x] T13: local Checks invalidation; single-task reads without decoding whole plans or rereading for freshness tokens.
+- [x] T13: transcript record/wrapping caches; integrated-code review.
+- [x] T13: lightweight task_checks endpoint without Git fingerprinting; graph-layout caching and viewport route clipping.
+- [x] T14: integrate chain b6356f1 with main base d050f2c, review new code, and full gate: check, fmt, clippy -D warnings, 473 tests (none skipped).
+- [x] T14: local routing test removed following the user's change; antislop.toml unchanged.
+- [x] T14: SetConfig compares revisions under a lock; 64 KiB clipboard limit; process-interruption tests before/after configuration publication.
+- [x] T14: contract/schema 5→6 review; new-verifier-profile regression in the same round; raw protocol rejects missing/stale revisions.
 
-- [x] Dostarczanie wiadomosci do wszystkich rol, ograniczone ponowienia, ochrona przed petlami odpowiedzi; poczta nie blokuje schedulerow planu.
-- [x] Bezpieczne sprzatanie osieroconych plikow konfiguracji z ochrona aktywnych zapisow.
+- [x] Mail delivery to every role, bounded retries, reply-loop protection; mail does not block plan schedulers.
+- [x] Safe orphaned-configuration-file cleanup protecting active writes.
 
-- [x] t8: porównano zapisane wyniki t4/t5/t6/t7; konflikt details.rs rozstrzygnięty z zachowaniem helperów i obu zachowań, bez końcowych zmian src/tests. Macierz sześciu wymagań i ręczne kontrole terminala: docs/lean-core.md, sekcja „Bramka integracyjna t8”.
-- [x] t8: powtórzona końcowa bramka: fmt, clippy -D warnings, check i pełny cargo test --no-fail-fast — exit 0; 496/496, 0 pominiętych. Wszystkie 31 wcześniejszych awarii teraz OK; log /tmp/antislop-t8-final-verification.log. Dowody wykonania sześciu wymagań w docs/lean-core.md.
-- [ ] t8: ręczna kontrola w prawdziwym terminalu: zaznaczanie/kopiowanie OSC 52, /config z zapisem na żywo, pojedynczy węzeł zadania i Overview, Checks przez kilka rund.
+- [x] t8: compared saved t4/t5/t6/t7 results; resolved details.rs conflict preserving helpers and both behaviors, without final src/tests changes. Six-requirement matrix and manual terminal checks: docs/lean-core.md, “t8 integration gate” section.
+- [x] t8: repeated final gate: fmt, clippy -D warnings, check, full cargo test --no-fail-fast — exit 0; 496/496, none skipped. All 31 earlier failures now pass; log /tmp/antislop-t8-final-verification.log. Evidence for six requirements in docs/lean-core.md.
+- [ ] t8: manual real-terminal checks: OSC 52 selection/copy, /config live saving, single task node and Overview, Checks across several rounds.

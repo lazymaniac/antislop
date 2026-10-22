@@ -122,7 +122,7 @@ if "You review a plan" in prompt or "new plan:" in prompt:
     say("plan", verdict(ok, [] if ok else [{"severity": "high", "issue": "t2 needs t1's result", "where": "t2"}]))
 "#,
     );
-    let conversation = ask(&core, dir.path(), "zbuduj model i użyj go");
+    let conversation = ask(&core, dir.path(), "build a model and use it");
 
     let reviews = events(&core, &conversation, "plan_review");
     assert_eq!(reviews.len(), 1);
@@ -177,7 +177,7 @@ else:
     say("worker", "analysis report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "przeanalizuj i opisz w README");
+    let conversation = ask(&core, dir.path(), "analyze and describe in README");
 
     let tasks = core.store.latest_plan(&conversation).unwrap();
     assert_eq!(tasks[0].status, "approved", "ran without /accept");
@@ -212,7 +212,7 @@ else:
     say("worker", "report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "rób dalej");
+    let conversation = ask(&core, dir.path(), "keep going");
 
     let proposed = events(&core, &conversation, "plan_proposed");
     let automatic: Vec<_> = proposed
@@ -248,7 +248,7 @@ else:
     say("worker", "report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "napraw");
+    let conversation = ask(&core, dir.path(), "fix");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
     assert_eq!(task.status, "approved", "{:?}", task.report);
@@ -273,7 +273,7 @@ else:
     say("worker", "report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "napraw");
+    let conversation = ask(&core, dir.path(), "fix");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
     assert_eq!(task.status, "needs_user");
@@ -307,7 +307,7 @@ print("login required", file=sys.stderr)
 sys.exit(1)
 "#,
     );
-    let conversation = ask(&core, dir.path(), "analiza");
+    let conversation = ask(&core, dir.path(), "analysis");
 
     let proposed = events(&core, &conversation, "plan_proposed");
     assert_eq!(proposed.len(), 1);
@@ -345,7 +345,7 @@ else:
     say("worker", "report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "policz przychód");
+    let conversation = ask(&core, dir.path(), "calculate revenue");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
     assert_eq!(task.status, "needs_user");
@@ -395,7 +395,7 @@ else:
     say("worker", "report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "policz przychód");
+    let conversation = ask(&core, dir.path(), "calculate revenue");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
     assert_eq!(task.status, "approved", "{:?}", task.verdict);
@@ -409,8 +409,8 @@ fn a_paused_conversation_starts_no_new_work_but_still_talks() {
         dir.path(),
         false,
         r#"
-if "[runtime]" in prompt or "pytanie" in prompt:
-    answer = "odpowiedź"
+if "[runtime]" in prompt or "user question marker" in prompt:
+    answer = "answer"
 else:
     answer = plan(task("t1", "Analyse"))
 "#,
@@ -421,21 +421,21 @@ else:
     say("worker", "report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "analiza");
+    let conversation = ask(&core, dir.path(), "analysis");
     let plan = core.store.latest_plan(&conversation).unwrap()[0]
         .plan_id
         .clone();
 
     core.pause(&conversation, true).unwrap();
     core.accept_plan(&conversation, &plan).unwrap();
-    core.send(&conversation, "pytanie").unwrap();
+    core.send(&conversation, "user question marker").unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while core
         .store
         .messages_after(&conversation, 0)
         .unwrap()
         .last()
-        .is_none_or(|message| message.text != "odpowiedź")
+        .is_none_or(|message| message.text != "answer")
     {
         assert!(
             Instant::now() < deadline,
@@ -492,14 +492,14 @@ else:
     say("worker", "report")
 "#,
     );
-    let conversation = ask(&core, dir.path(), "krok");
+    let conversation = ask(&core, dir.path(), "step");
     assert!(!core.autonomous(&conversation).unwrap());
 
     core.set_mode(&conversation, true).unwrap();
-    core.send(&conversation, "następny krok").unwrap();
+    core.send(&conversation, "next step").unwrap();
     wait_idle(&core, &conversation);
     core.set_mode(&conversation, false).unwrap();
-    core.send(&conversation, "i jeszcze jeden").unwrap();
+    core.send(&conversation, "and one more").unwrap();
     wait_idle(&core, &conversation);
 
     let automatic: Vec<_> = events(&core, &conversation, "plan_proposed")

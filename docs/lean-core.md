@@ -6,8 +6,8 @@ A 15 MB repository produced a 112 MB run document that was rewritten on every
 progress step, prompts over provider limits, and runs that blocked on the first
 message. The lean core (`src/lean/`, its own `core.db`) replaced that model;
 the old runtime, its context reader, recovery/proof machinery and requirement
-audits were deleted once the lean core handled "przeanalizuj architekturę
-projektu" end to end.
+audits were deleted once the lean core handled "analyze the project
+architecture" end to end.
 
 Schema 7 adds [versioned requirement and plan-item ledgers](requirement-ledgers.md),
 run revisions, independent integrated-result evidence and TUI scope editing.
@@ -322,8 +322,8 @@ directory to run both. The socket is `<state>/core.sock`, or
   Ctrl+P opens a palette of every command; `?` (F1 anywhere) shows the keys of the active view. `c` comments
   on the selected agent or sub-element with precise targets (`plan:`, `task:`, `check:`, `finding:`,
   `report:`, `artifact:`, `diff:`, `worker:`, `verifier:`, `conversation`); a box shows how many comments
-  on it are open. On Komentarze, `r` resolves, `o` reopens and `d` deletes the selected one; a comment
-  made on an earlier plan is marked so (`[dotyczy poprzedniego planu]`).
+  on it are open. On Comments, `r` resolves, `o` reopens and `d` deletes the selected one; a comment
+  made on an earlier plan is marked so (`[applies to previous plan]`).
   `d` on a task's agent opens its change full screen: changed files with their status and +/− counts
   beside the unified diff with old and new line numbers and reviewer profile in the header; `c` comments
   on the selected line (or file), comments show under their lines, `R` asks for a code review and `r` reloads.
@@ -564,7 +564,7 @@ kept per conversation, so switching back finds them as they were.
    documented stream-json, both field spellings accepted, not yet run against
    a real gemini binary), conversation with the
    orchestrator, `antislop chat` CLI. Accepted on a real run: the orchestrator
-   answered "przeanalizuj architekturę projektu" by reading the project itself;
+   answered "analyze the project architecture" by reading the project itself;
    a second message sent while the first ran was accepted at once and answered
    in the resumed session.
 2. ✅ Plans and read-only worker/verifier pairs with domain risks.
@@ -805,89 +805,88 @@ conversation-scoped `task_checks` snapshot, which performs no Git fingerprint.
 The ordinary `task` response retains a fresh recovery token. No claim of constant
 total frame cost or host-overload resilience is made.
 
-## Bramka integracyjna t8 (2026-10-21)
 
-Scalenie sprawdzono na podstawie zapisanych commitów, bez dostępu do innych
-worktree. Powtarzalny dowód porównania kodu:
+## t8 integration gate (2026-10-21)
+
+The merge was checked against saved commits, without access to other worktrees.
+Reproducible code-comparison evidence:
 
 - `git diff aa13f6e0782289cca44a1d762486bd201dfd7cd6 5c32b3d -- src tests`
-  pokazuje wyłącznie `src/lean/tui/details.rs` (4 dodane i 30 usuniętych linii):
-  `switch_tab` i `switch_key` używają istniejących helperów `save_current_tab`
-  oraz `restore_current_tab`, zachowujących scroll, query, follow i reset pending_g.
+  shows only `src/lean/tui/details.rs` (4 additions, 30 deletions): `switch_tab`
+  and `switch_key` use existing `save_current_tab`/`restore_current_tab` helpers,
+  preserving scroll, query, follow, and pending_g reset.
 - `git diff 58cfacbb1884b351aa4c595656459fa809c7f868 5c32b3d -- src tests`
-  jest pusty: końcowy kod i testy odpowiadają t7.
-- `git show --stat 5c32b3d` potwierdza istniejący commit poprzedniej rundy
-  „Bramka integracyjna z listą wymagań (round 1)”, obejmujący tylko dokumentację
-  i todo.md. Poprzednie zdanie „Nie wykonano commita” było nieprecyzyjne:
-  agent nie uruchamiał commitowania, ale wynik rundy został zapisany w Git.
+  is empty: final code/tests match t7.
+- `git show --stat 5c32b3d` confirms the previous round's existing commit,
+  “Integration gate with requirements list (round 1),” touching only documentation
+  and todo.md. The earlier statement “No commit was made” was imprecise: the agent
+  did not invoke committing, but the round's outcome was recorded in Git.
 
-Konflikt rozwiązano przez zachowanie helperów t5 i zachowania t4.
-W bieżącej poprawce zmieniono tylko dokumentację i todo.md; src/tests bez zmian.
+The conflict was resolved by preserving t5 helpers and t4 behavior.
+This revision changed only documentation/todo.md; src/tests were unchanged.
 
-Sześć wymagań — dowody w kodzie i testach (nazwy testów pozwalają odszukać
-odpowiedni wynik w logu):
+Six requirements — code/test evidence (test names locate results in the log):
 
-| Wymaganie | Dowód |
+| Requirement | Evidence |
 | --- | --- |
-| Globalna konfiguracja przy braku projektowej | `src/lean/cli.rs::resolve_config`; `tests/lean_projects.rs::configuration_precedence_and_errors_without_creating_state` sprawdza pierwszeństwo, błędy i brak utworzonego stanu. |
-| Edycja dowolnej opcji konfiguracji w TUI | `tests/lean_tui.rs::every_config_field_is_edited_and_written_to_the_selected_file` porównuje pola z serializowanym schematem i zapisuje zmiany dla pliku lokalnego oraz globalnego. |
-| Zastosowanie konfiguracji na żywo | `tests/lean_protocol.rs::live_config_updates_are_validated_and_preserve_daemon_identity` oraz `tests/lean_core.rs::next_turn_uses_live_profile_while_running_turn_keeps_its_profile`: nowa tura dostaje nowy profil, trwająca zachowuje stary. |
-| Zaznaczanie i kopiowanie tekstu | `tests/lean_tui.rs::text_selection_copies_rendered_graphemes_and_clears_on_content_change`, `text_selection_integrates_chat_agent_details_plan_and_modal_isolation`; `src/lean/tui/clipboard.rs` testuje limit 64 KiB i fallback po błędzie zapisu/flush. |
-| Jeden węzeł worker/verifier i Overview razem z Session | `src/lean/tui/graph.rs::task_node_key`, test `tasks_sit_in_columns_by_dependency_depth_with_one_card_per_task`; `task_card_mouse_selection_uses_one_identity_for_both_phases`, `overview_includes_the_terminal_transcript_without_database_mirrors` i `overview_opens_at_latest_session_for_all_agent_roles`. |
-| Aktualne Checks po kolejnych rundach | `tests/lean_tui.rs::checks_three_rounds_ignore_reverse_ordered_old_replies`, `checks_refetch_on_task_verdict_in_the_same_round`, `checks_retry_failed_fetch_on_next_empty_event_batch` i `persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice`. |
+| Global configuration when project configuration is absent | `src/lean/cli.rs::resolve_config`; `tests/lean_projects.rs::configuration_precedence_and_errors_without_creating_state` checks precedence, errors, and no created state. |
+| Editing every configuration option in the TUI | `tests/lean_tui.rs::every_config_field_is_edited_and_written_to_the_selected_file` compares fields with the serialized schema and saves changes to local/global files. |
+| Applying configuration live | `tests/lean_protocol.rs::live_config_updates_are_validated_and_preserve_daemon_identity` and `tests/lean_core.rs::next_turn_uses_live_profile_while_running_turn_keeps_its_profile`: new turns get the new profile, active turns retain the old one. |
+| Text selection and copying | `tests/lean_tui.rs::text_selection_copies_rendered_graphemes_and_clears_on_content_change`, `text_selection_integrates_chat_agent_details_plan_and_modal_isolation`; `src/lean/tui/clipboard.rs` tests the 64 KiB limit and fallback after write/flush failure. |
+| One worker/verifier node and Overview merged with Session | `src/lean/tui/graph.rs::task_node_key`, `tasks_sit_in_columns_by_dependency_depth_with_one_card_per_task`; `task_card_mouse_selection_uses_one_identity_for_both_phases`, `overview_includes_the_terminal_transcript_without_database_mirrors`, `overview_opens_at_latest_session_for_all_agent_roles`. |
+| Current Checks across rounds | `tests/lean_tui.rs::checks_three_rounds_ignore_reverse_ordered_old_replies`, `checks_refetch_on_task_verdict_in_the_same_round`, `checks_retry_failed_fetch_on_next_empty_event_batch`, `persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice`. |
 
-Przeczytano implementację i wskazane asercje oraz porównano README, ten dokument
-i todo.md. Ich opisy konfiguracji, pojedynczego węzła, Overview, kopiowania i
-Checks odpowiadają kodowi. Zaznaczone pozycje todo oznaczają implementację;
-nie zastępują ręcznej walidacji terminala ani pełnej realizacji design.md.
+Implementation/assertions were read and compared with README, this document,
+and todo.md. Descriptions of configuration, single nodes, Overview, copying, and
+Checks match code. Checked TODO items mean implementation; they do not replace
+manual terminal validation or full design.md fulfillment.
 
-Do sprawdzenia ręcznie w prawdziwym terminalu:
+Manual checks in a real terminal:
 
-- Zaznaczanie przez przeciąganie i dwuklik, Unicode oraz Ctrl+Y i wklejenie do
-  innej aplikacji. OSC 52 zależy od terminala; cichego odrzucenia nie da się wykryć.
-- `/config`, edycja, Ctrl+S i ponowne otwarcie w działającej sesji; nowa tura ma
-  użyć zmiany bez restartowania już pracującego agenta.
-- Jeden węzeł zadania podczas pracy workera i verifiera; oba transkrypty w Overview.
-- Otwarty Checks przez kilka rund, zmianę verdictu w tej samej rundzie i ponowienie
-  odczytu po błędzie; brak cofania widoku po nadejściu starej odpowiedzi.
+- Drag/double-click selection, Unicode, Ctrl+Y, and pasting into another app.
+  OSC 52 depends on the terminal; silent rejection cannot be detected.
+- `/config`, editing, Ctrl+S, and reopening during an active session; new turns
+  use changes without restarting the already working agent.
+- One task node during worker/verifier phases; both transcripts in Overview.
+- Open Checks across rounds, same-round verdict changes, retry after read errors;
+  old responses must not roll the view backward.
 
-Ograniczenia instrukcji: AGENTS.md wymaga fmt, clippy, check i testów; wykonano
-standardowe polecenia Cargo. Nie znaleziono dodatkowych instrukcji CLAUDE,
-GEMINI ani CONTRIBUTING. Nie zmieniano konfiguracji narzędzi ani uprawnień.
-W pierwszej rundzie zapis indeksu Git był niedozwolony w sandboxie (`index.lock: Operation not
-permitted`), więc użyto porównania commitów i plikowego merge, bez zmiany indeksu.
+Instruction constraints: AGENTS.md requires fmt, clippy, check, and tests;
+standard Cargo commands were run. No additional CLAUDE, GEMINI, or CONTRIBUTING
+instructions were found. Tool configuration/permissions were not changed.
+During the first round, sandbox Git-index writes were denied (`index.lock:
+Operation not permitted`), so commit comparison and a file-based merge were used
+without changing the index.
 
+First-round history: `/tmp/antislop-t8-verification.log` records 465/496 and exit
+101, with 31 failures under socket/daemon/process-cleanup restrictions. This was
+not a green result. The current run below supersedes the earlier conclusion that
+a complete local gate was unavailable: the environment was provided without
+those restrictions. The agent did not change environment permissions.
 
-Historia pierwszej rundy: `/tmp/antislop-t8-verification.log` zawiera wynik
-465/496 i exit 101, z 31 awariami przy ograniczeniach socketów/daemonów oraz
-sprzątania procesów. Nie był to zielony wynik. Obecny przebieg poniżej zastępuje
-wniosek o braku możliwości uzyskania pełnej lokalnej bramki: środowisko zostało
-udostępnione bez tych ograniczeń. Agent nie zmieniał uprawnień środowiska.
+Current t8 result after verifier feedback — run and passed on `5c32b3d`
+(only documentation/todo.md changed afterward):
 
-
-Aktualny wynik t8 po uwagach weryfikatora — uruchomiono i przeszło na kodzie
-`5c32b3d` (po uruchomieniu zmieniano tylko dokumentację i todo.md):
-
-| Polecenie | Exit |
+| Command | Exit |
 | --- | --- |
 | `cargo fmt --check` | 0 |
 | `cargo clippy --all-targets -- -D warnings` | 0 |
 | `cargo check` | 0 |
 | `cargo test --no-fail-fast` | 0 |
 
-Pełny log tego przebiegu: `/tmp/antislop-t8-final-verification.log`.
-**496/496 testów przeszło, 0 awarii, 0 pominiętych.** Wyniki zestawów:
+Complete run log: `/tmp/antislop-t8-final-verification.log`.
+**496/496 tests passed, 0 failures, 0 skipped.** Suite results:
 lib 271/271, lean_core 20/20, lean_messages 22/22, lean_plan 5/5,
 lean_plan_history 4/4, lean_projects 3/3, lean_protocol 14/14,
 lean_recovery 16/16, lean_review 10/10, lean_tui 101/101, lean_writer 30/30.
-Main i doctesty: 0 testów, exit 0. Pełny przebieg obejmuje wymagane lean_core
-oraz lean_tui. Automatyczne porównanie nazw wszystkich 31 wcześniejszych awarii
-z nowym logiem potwierdziło dla każdej wynik `ok`.
+Main/doctests: 0 tests, exit 0. The complete run includes required lean_core and
+lean_tui suites. Automatic comparison of all 31 earlier failure names against
+the new log confirmed `ok` for each.
 
-Poniżej dowód wykonania testów z macierzy sześciu wymagań oraz testów przerwania
-zapisu i sprzątania procesów. Numery wskazują linie nowego pełnego logu.
+Below is execution evidence for the six-requirement matrix and write-interruption/
+process-cleanup tests. Numbers identify lines in the new complete log.
 
-| Test | Linia logu | Wynik |
+| Test | Log line | Result |
 | --- | ---: | --- |
 | `configuration_precedence_and_errors_without_creating_state` | 383 | OK |
 | `every_config_field_is_edited_and_written_to_the_selected_file` | 563 | OK |
@@ -907,14 +906,13 @@ zapisu i sprzątania procesów. Numery wskazują linie nowego pełnego logu.
 | `only_the_turns_own_process_group_is_reaped` | 56 | OK |
 | `a_dead_daemons_agent_is_ended_before_its_turn_resumes` | 307 | OK |
 
-Uwagi R1/V1/V5/C1/C3/R030/R046 mają teraz dowód z bieżącego zielonego
-przebiegu, obejmującego przepływy między modułami. R078: zielone lean_recovery
-16/16 oraz test przerwania przed/po publikacji konfiguracji. R098: zielone testy
-sprzątania grupy procesów i osieroconego CLI. Wyniki nie dowodzą ogólnej odporności
-na dowolne przeciążenie hosta ani poprawności każdego możliwego scenariusza.
-Nie wykonano ręcznych testów prawdziwego terminala wymienionych powyżej;
-pozostają one kontrolą integracji z terminalem użytkownika, szczególnie OSC 52.
-Nie pozostała blokada wykonania automatycznej bramki.
+Findings R1/V1/V5/C1/C3/R030/R046 now have evidence from the current green run,
+including intermodule flows. R078: green lean_recovery 16/16 and interruption
+checks before/after configuration publication. R098: green process-group and
+orphaned-CLI cleanup tests. These results do not establish general resilience
+against arbitrary host overload or correctness of every possible scenario.
+The manual real-terminal checks above were not performed; they remain user-terminal
+integration checks, especially OSC 52. No automated-gate execution blocker remains.
 
 ### Configuration editor structural actions
 

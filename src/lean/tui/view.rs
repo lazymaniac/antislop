@@ -2588,7 +2588,7 @@ mod tests {
             Value::Null,
             json!(" \n\t "),
             json!("\x1b[31m\x1b[0m"),
-            json!("Popraw zapis danych."),
+            json!("Improve storage."),
         ] {
             let mut view = View::default();
             view.apply(&event(
@@ -2628,7 +2628,7 @@ mod tests {
                 1,
                 None,
                 "message",
-                json!({"author": "user", "text": "analiza"}),
+                json!({"author": "user", "text": "analysis"}),
             ),
             event(
                 2,
@@ -2724,7 +2724,7 @@ mod tests {
             1,
             None,
             "mail",
-            json!({"id": 7, "sender": "user", "recipient": "t2", "kind": "user_instruction", "text": "użyj UTF-8"}),
+            json!({"id": 7, "sender": "user", "recipient": "t2", "kind": "user_instruction", "text": "use UTF-8"}),
         ));
         view.apply(&event(
             2,
@@ -2746,7 +2746,7 @@ mod tests {
         assert_eq!(
             text,
             [
-                "✉ You → t2 (user_instruction): użyj UTF-8 · waiting for recipient's next turn",
+                "✉ You → t2 (user_instruction): use UTF-8 · waiting for recipient's next turn",
                 "✓ t2 received message"
             ]
         );
@@ -2754,7 +2754,7 @@ mod tests {
 
     #[test]
     fn wrapping_breaks_words_and_long_runs() {
-        assert_eq!(wrap("ala ma kota", 7), ["ala ma ", "kota"]);
+        assert_eq!(wrap("cat on mat", 7), ["cat on ", "mat"]);
         assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
         assert_eq!(wrap("a\n\nb", 10), ["a", "", "b"]);
         assert_eq!(clean("a\u{1b}[31mb\tc"), "ab    c");

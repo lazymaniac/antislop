@@ -81,3 +81,20 @@ Before publication, decide whether the Polish design document, runtime risk
 catalog and recorded local path should be public. Removing a file from the latest
 revision does not remove it from history. Do not treat this review as assurance
 that remote-only content or every possible secret has been checked.
+
+## Subsequent translation
+
+After this review, Polish documentation, the runtime risk catalog, and ordinary
+test prose were translated into English. The findings above describe the reviewed
+pre-translation snapshot. Unicode character vectors and transliteration mappings
+still include Polish letters intentionally; they are technical coverage rather
+than product prose. Earlier Polish content remains in Git history.
+
+Translation validation: `cargo fmt --check`, `cargo check --locked`, and
+`cargo clippy --locked --all-targets -- -D warnings` passed. The complete
+`cargo test --locked --all-targets --no-fail-fast` run finished with 579 passing
+and the same two previously recorded failures in `lean_messages` and
+`lean_protocol`. All 300 unit tests, 20 `lean_core` tests, and 110 `lean_tui`
+tests passed. No additional failures remain after translating test fixtures.
+Document structure checks preserved numbered design sections, all source links,
+240 risk IDs/order/kinds, parity scenario IDs, and TODO checkbox states.

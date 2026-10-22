@@ -1430,7 +1430,7 @@ args = sys.argv[1:]
 assert args[:3] == ['launch', 'codex', '--'], args
 assert args[3] == 'exec', args
 assert '--json' in args and '-s' in args and 'read-only' in args, args
-assert args[-1] == '--leading dash and unicode: żółw', args
+assert args[-1] == '--leading dash and unicode: turtle 🐢', args
 print(json.dumps({'type': 'thread.started', 'thread_id': 'th1'}))
 print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'via launcher'}}))
 print(json.dumps({'type': 'turn.completed', 'usage': {}}))
@@ -1452,7 +1452,7 @@ print(json.dumps({'type': 'turn.completed', 'usage': {}}))
             };
             let outcome = run(
                 &spec,
-                "--leading dash and unicode: żółw",
+                "--leading dash and unicode: turtle 🐢",
                 &AtomicBool::new(false),
                 &mut |_| {},
             )
@@ -1473,7 +1473,7 @@ import json, os, sys
 args = sys.argv[1:]
 assert args[:6] == ['launch', 'opencode', '--model', 'local-model', '--', 'run'], args
 assert args[6:10] == ['--format', 'json', '--agent', 'antislop'], args
-assert args[-2:] == ['--', '--prompt with flags and unicode: żółw 👩‍💻'], args
+assert args[-2:] == ['--', '--prompt with flags and unicode: turtle 🐢 👩‍💻'], args
 assert args[args.index('--model', 6) + 1] == 'omlx/local-model', args
 assert args[args.index('--variant') + 1] == 'high', args
 permission = json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])['agent']['antislop']['permission']
@@ -1507,7 +1507,7 @@ print(json.dumps({'type':'step_finish', 'part':{'reason':'stop'}}))
             access: Access::Write,
             resume: None,
         };
-        let prompt = "--prompt with flags and unicode: żółw 👩‍💻";
+        let prompt = "--prompt with flags and unicode: turtle 🐢 👩‍💻";
         let outcome = run(&spec, prompt, &AtomicBool::new(false), &mut |_| {}).unwrap();
         assert_eq!(outcome.text, "done");
         assert_eq!(outcome.session.as_deref(), Some("ses_test"));

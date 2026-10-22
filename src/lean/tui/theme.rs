@@ -645,10 +645,10 @@ mod tests {
     #[test]
     fn theme_grapheme_wrapping_and_fit() {
         let t = Theme::new(true, false);
-        let wrapped = wrap("ala ma kota", 7);
-        assert_eq!(wrapped, ["ala ma ", "kota"]);
+        let wrapped = wrap("cat on mat", 7);
+        assert_eq!(wrapped, ["cat on ", "mat"]);
 
-        let fit_res = t.fit("bardzodlugitekst", 10);
+        let fit_res = t.fit("verylongsampletext", 10);
         assert!(fit_res.ends_with('…'));
         assert_eq!(fit_res.width(), 10);
     }
