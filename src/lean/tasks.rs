@@ -1595,7 +1595,12 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         }
         Delivery => {
             "the report matches what was actually done; limitations and open \
-             risks stated; instructions work"
+             risks stated; instructions work; delivered artifacts clearly \
+             identified and accessible at the stated locations; prerequisites \
+             and required user actions explicit; material behavior changes and \
+             transition steps explained; verification scope and omitted checks \
+             accurately reported; open issues have consequences and actionable \
+             next steps; side effects of usage commands disclosed before execution"
         }
     }
 }

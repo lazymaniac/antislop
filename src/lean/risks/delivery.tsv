@@ -9,3 +9,9 @@ R195	delivery	A completion percentage hides a critical omission.	Compare the fin
 R198	delivery	Not applicable conveniently excludes a difficult risk.	Check how the justification relates to actual scope.
 R199	delivery	Changing the checklist removes a finding during work.	Compare pinned versions and history.
 R200	delivery	An agent claims a check without performing it.	Compare the report with evidence and tool history.
+R259	delivery	The delivered result has no clear location or artifact identity.	Open the referenced locations and confirm that they identify the result described for this task.
+R260	delivery	Usage instructions omit prerequisites or required user actions.	Walk through the instructions from the recipient's perspective and check that configuration, working directory, and activation steps are explicit where required.
+R261	delivery	The report omits material behavior changes or obligations imposed on the user.	Compare delivered changes with the explanation of user impact and required configuration, invocation, or data transition steps.
+R262	delivery	The verification summary hides the scope or limitations of the checks performed.	Compare the summary with recorded commands, configurations, results, and omitted or disabled checks.
+R263	delivery	Open issues are listed without consequences or actionable next steps.	For each material issue, check its impact, next action, and any decision or missing information needed to proceed.
+R264	delivery	Usage instructions have undisclosed side effects.	Compare commands' actual effects with their descriptions and check that recipients are told about data overwrites, configuration changes, and publication before execution.
