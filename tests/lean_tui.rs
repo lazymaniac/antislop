@@ -231,7 +231,7 @@ fn graph_scrolls_through_many_short_cards() {
         .collect();
     app.focus = Focus::Graph;
     app.selected = "worker:t0".into();
-    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 21)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let start = app.offset.1;
     assert!(app.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)));
@@ -301,10 +301,10 @@ fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
 
     let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    assert_eq!(app.input_shown, MAX_PASTE_BYTES - 4);
+    assert_eq!(app.input_shown, MAX_PASTE_BYTES - 5);
     let cursor = terminal.get_cursor_position().unwrap();
-    assert_eq!(cursor.y, 8);
-    assert_eq!(terminal.backend().buffer()[(2, cursor.y)].symbol(), "f");
+    assert_eq!(cursor.y, 9);
+    assert_eq!(terminal.backend().buffer()[(1, cursor.y)].symbol(), "f");
 
     app.editor = Some(Editor {
         target: "worker:t1".into(),
@@ -325,7 +325,7 @@ fn full_width_drafts_show_the_cursor_after_the_last_character() {
         terminal.draw(|frame| app.draw(frame)).unwrap();
         let cursor = terminal.get_cursor_position().unwrap();
         let (col, _) = app.input.visual_cursor(app.input_width);
-        assert_eq!(usize::from(cursor.x), 2 + usize::from(col));
+        assert_eq!(usize::from(cursor.x), 1 + usize::from(col));
         assert_eq!(
             terminal.backend().buffer()[(cursor.x, cursor.y)].symbol(),
             " "
@@ -4400,7 +4400,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     term_small.draw(|f| app.draw(f)).unwrap();
 
     let initial_viewport = app.graph_viewport.expect("viewport set after draw");
-    assert_eq!(initial_viewport, (74, 16));
+    assert_eq!(initial_viewport, (76, 18));
 
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(
@@ -4440,7 +4440,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     let mut term_large = Terminal::new(TestBackend::new(160, 50)).unwrap();
     term_large.draw(|f| app.draw(f)).unwrap();
     let resized_viewport = app.graph_viewport.expect("viewport updated after resize");
-    assert_eq!(resized_viewport, (101, 42));
+    assert_eq!(resized_viewport, (102, 44));
 }
 
 #[test]
@@ -4748,8 +4748,8 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
     let terminal_configs = [
         ("80x24", 80u16, 24u16, 76u16, 18u16),
         ("85x24", 85u16, 24u16, 46u16, 18u16),
-        ("120x30", 120u16, 30u16, 76u16, 24u16),
-        ("160x50", 160u16, 50u16, 103u16, 44u16),
+        ("120x30", 120u16, 30u16, 75u16, 24u16),
+        ("160x50", 160u16, 50u16, 102u16, 44u16),
     ];
 
     for &(term_name, term_w, term_h, inner_w, inner_h) in &terminal_configs {
@@ -4791,7 +4791,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
 
         assert_eq!(
             app.graph_viewport,
-            Some((inner_w - 2, inner_h - 2)),
+            Some((inner_w, inner_h)),
             "Viewport matches terminal {term_name}"
         );
 

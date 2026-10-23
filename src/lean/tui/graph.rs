@@ -17,13 +17,13 @@ pub const WIDTH: u16 = 26;
 const MAX_SUMMARY_LINES: usize = 4;
 const MAX_EFFECT_LINES: usize = 2;
 /// Fixed slots inside a card, counted from its top, each starting right
-/// where the previous block can end: title, phase, verifier state, one activity
+/// where the previous block can end: title, work kind, phase, verifier state, one activity
 /// line, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
 /// effect lines and the meta line at the bottom. The height is that same
 /// arithmetic's end, so frame and slots are one rule that cannot drift
 /// apart: heights and positions depend only on the plan's shape, filters
 /// and grouping — never on activity, an effect, a verdict or a retry.
-const ACTIVITY_ROW: u16 = 3;
+const ACTIVITY_ROW: u16 = 4;
 const BODY_ROW: u16 = ACTIVITY_ROW + 1;
 const EFFECT_ROW: u16 = BODY_ROW + MAX_SUMMARY_LINES as u16;
 pub const HEIGHT: u16 = EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1;
@@ -1147,10 +1147,10 @@ fn draw_node(
         canvas.put(x, cy, bar, fill.patch(accent));
     }
     let inner = usize::from(WIDTH - 4);
-    let name = node
-        .key
-        .strip_prefix("worker:")
-        .map_or_else(|| agent_name(&node.key), |id| format!("{id} task"));
+    let name = task
+        .map(|task| clean(&task.title))
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| agent_name(&node.key));
     let title = if node.collapsed {
         format!("{} [+]", truncate(&name, inner.saturating_sub(7)))
     } else {
@@ -1176,10 +1176,23 @@ fn draw_node(
             fill.patch(theme.accent()),
         );
     }
-    canvas.text(x + 2, y + 1, icon, fill.patch(tone));
+    let kind = task.map_or("orchestration", |task| {
+        if task.kind.is_empty() {
+            "unknown"
+        } else {
+            task.kind.as_str()
+        }
+    });
+    canvas.text(
+        x + 2,
+        y + 1,
+        &truncate(&format!("kind: {kind}"), inner),
+        fill.patch(accent),
+    );
+    canvas.text(x + 2, y + 2, icon, fill.patch(tone));
     canvas.text(
         x + 4,
-        y + 1,
+        y + 2,
         &truncate(&describe(view, &node.key), inner.saturating_sub(2)),
         fill.patch(if health == Health::Idle {
             theme.dim()
@@ -1190,7 +1203,7 @@ fn draw_node(
     if let Some(task) = task {
         canvas.text(
             x + 2,
-            y + 2,
+            y + 3,
             &truncate(
                 &format!(
                     "V: {}{}",
@@ -1800,6 +1813,31 @@ mod tests {
     }
 
     #[test]
+    fn names_and_work_kinds_remain_visible_on_collapsed_cards() {
+        let mut task = task("t1", &[]);
+        task.title = "Repair storage".into();
+        task.kind = "implementation".into();
+        let view = view(vec![task]);
+        for collapsed in [
+            Default::default(),
+            std::collections::HashSet::from(["t1".into()]),
+        ] {
+            let graph = Graph::new_with_options(&view, None, &collapsed, GroupingMode::Dependency);
+            for node in graph.nodes.iter().filter(|node| node.visible) {
+                let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+                graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+                let rows = canvas.lines();
+                if node.key == "worker:t1" {
+                    assert!(rows[0].contains("Repair storage"), "{rows:?}");
+                    assert!(rows[1].contains("kind: implementation"), "{rows:?}");
+                } else {
+                    assert!(rows[1].contains("kind: orchestration"), "{rows:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn summaries_are_bounded_and_truncated_at_grapheme_boundaries() {
         let mut row = task("t1", &[]);
         row.summary = Some("👩‍💻e\u{301}".repeat(100));
@@ -2008,17 +2046,17 @@ mod tests {
         let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
         graph.render(&view, &mut canvas, Filter::All, "worker:t1");
         let rows = canvas.lines();
-        assert!(rows[1].contains("working r1"), "{}", rows[1]);
-        assert!(!rows[1].contains("cargo check"), "state alone: {}", rows[1]);
+        assert!(rows[2].contains("working r1"), "{}", rows[2]);
+        assert!(!rows[2].contains("cargo check"), "state alone: {}", rows[2]);
         assert!(
-            !rows[2].contains("codex"),
+            !rows[3].contains("codex"),
             "the activity line is independent of the provider: {}",
-            rows[2]
+            rows[3]
         );
         assert!(
             rows[usize::from(ACTIVITY_ROW)].contains("doing: cargo check"),
             "{}",
-            rows[2]
+            rows[3]
         );
 
         // Effect and verdict: the round's card data changes no geometry and
@@ -2097,8 +2135,8 @@ mod tests {
         );
         let rows = render(&view);
         assert_eq!(rows.len(), usize::from(HEIGHT));
-        assert!(rows[1].contains("working r1"), "{rows:?}");
-        assert!(!rows[1].contains("cargo"), "state alone: {}", rows[1]);
+        assert!(rows[2].contains("working r1"), "{rows:?}");
+        assert!(!rows[2].contains("cargo"), "state alone: {}", rows[2]);
         assert!(
             rows[usize::from(ACTIVITY_ROW)].contains("doing: cargo check"),
             "{rows:?}"
@@ -2170,10 +2208,10 @@ mod tests {
         assert_eq!(chars[usize::from(next.x - 1)], '▶', "{row}");
         assert_eq!(chars[usize::from(worker.right())], '─', "{row}");
         assert_eq!(chars[usize::from(next.x)], '█', "the selected card's bar");
-        assert!(lines[usize::from(worker.y)].contains("t1 task"));
+        assert!(lines[usize::from(worker.y)].contains("Task t1"));
         // A message between them is counted beside the source.
         assert!(lines[usize::from(worker.mid_y() - 1)].contains("✉2"));
-        assert!(lines[usize::from(worker.y + 1)].contains("proposed"));
+        assert!(lines[usize::from(worker.y + 2)].contains("proposed"));
     }
 
     #[test]

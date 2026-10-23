@@ -2773,7 +2773,7 @@ impl App {
             &label,
             &self.conversation,
             self.view.autonomous,
-            "",
+            self.header_status().trim_end_matches(" · "),
             panel_focus,
             width,
             self.view.controls(),
@@ -4207,35 +4207,6 @@ impl App {
             Paragraph::new(self.header_line(header.width)).style(theme.bar()),
             header,
         );
-        let phase = Block::default()
-            .borders(Borders::ALL)
-            .border_set(if theme.ascii {
-                ratatui::symbols::border::Set {
-                    top_left: "+",
-                    top_right: "+",
-                    bottom_left: "+",
-                    bottom_right: "+",
-                    horizontal_top: "-",
-                    horizontal_bottom: "-",
-                    vertical_left: "|",
-                    vertical_right: "|",
-                }
-            } else {
-                ratatui::symbols::border::ROUNDED
-            })
-            .border_style(theme.separator(true))
-            .style(theme.card())
-            .title(format!(
-                " {} ",
-                self.header_status().trim_end_matches(" · ")
-            ));
-        let body = if body.height >= 5 {
-            let inner = phase.inner(body);
-            frame.render_widget(phase, body);
-            inner
-        } else {
-            body
-        };
         let panel_focus = match self.focus {
             Focus::Chat => PanelFocus::Chat,
             Focus::Graph => PanelFocus::Graph,
