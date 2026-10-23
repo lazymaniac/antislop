@@ -145,6 +145,18 @@ pub fn session_branch(dir: &Path) -> Result<String> {
     ok(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).or_else(|_| head(dir))
 }
 
+/// Read only a symbolic branch from an actual worktree, never a detached SHA
+/// or the branch inherited by Git discovery from a parent directory.
+pub fn worktree_branch(path: &Path) -> Result<String> {
+    if !path.join(".git").is_file() {
+        return Err(Error::Invalid(format!(
+            "not a linked worktree: {}",
+            path.display()
+        )));
+    }
+    ok(path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+}
+
 pub fn head(dir: &Path) -> Result<String> {
     ok(dir, &["rev-parse", "HEAD"])
 }
@@ -156,16 +168,32 @@ pub fn common_base(dir: &Path, left: &str, right: &str) -> Result<String> {
 /// A worktree on a new branch `branch` at `base`; reused if it exists.
 pub fn add_worktree(project: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
     if path.exists() {
+        worktree_branch(path)?;
         return Ok(());
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let target = path.to_string_lossy();
-    ok(
-        project,
-        &["worktree", "add", "--quiet", "-B", branch, &target, base],
-    )?;
+    let reference = format!("refs/heads/{branch}");
+    if git(project, &["show-ref", "--verify", "--quiet", &reference])?
+        .status
+        .success()
+    {
+        // A missing worktree can be reattached only at the requested result.
+        // Never reset a preserved branch, even when its name matches.
+        if ok(project, &["rev-parse", &reference])? != ok(project, &["rev-parse", base])? {
+            return Err(Error::Invalid(format!(
+                "existing branch {branch} differs from requested worktree base {base}"
+            )));
+        }
+        ok(project, &["worktree", "add", "--quiet", &target, branch])?;
+    } else {
+        ok(
+            project,
+            &["worktree", "add", "--quiet", "-b", branch, &target, base],
+        )?;
+    }
     Ok(())
 }
 

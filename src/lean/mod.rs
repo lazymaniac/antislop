@@ -1434,7 +1434,11 @@ impl Core {
                         .join("worktrees")
                         .join(task_path_component(&task.id)?);
                     if worktree.exists() {
-                        git::remove_worktree(&project, &worktree, &branch(&task)?)?;
+                        git::remove_worktree(
+                            &project,
+                            &worktree,
+                            &worktree_branch(&self.state, &task)?,
+                        )?;
                     }
                 }
                 land(
@@ -1470,7 +1474,7 @@ impl Core {
                 self.maybe_continue_plan(&req.conversation, &req.plan)?;
             }
             RecoveryAction::KeepOnBranch => {
-                let b = branch(&task)?;
+                let b = worktree_branch(&self.state, &task)?;
                 preserved_branch = Some(b.clone());
                 notice = format!("change preserved on branch {b}; working tree untouched");
                 task.status = status::NEEDS_USER.to_string();
@@ -1599,7 +1603,11 @@ impl Core {
                         .join("worktrees")
                         .join(task_path_component(&task.id)?);
                     if worktree.exists() {
-                        git::remove_worktree(&project, &worktree, &branch(&task)?)?;
+                        git::remove_worktree(
+                            &project,
+                            &worktree,
+                            &worktree_branch(&self.state, &task)?,
+                        )?;
                     }
                     self.store.update_task(&task)?;
                     self.announce_task(&req.conversation, &task, None);
@@ -1740,7 +1748,7 @@ impl Core {
                     git::add_worktree(
                         &project,
                         &worktree,
-                        &branch(&task)?,
+                        &worktree_branch(&self.state, &task)?,
                         task.result.as_deref().unwrap(),
                     )?;
                     // integrate takes the same mutex; the recovery guard already serializes it.
@@ -3238,7 +3246,12 @@ impl Core {
                 .join(task_path_component(&task.id)?);
             // A resumed writer whose worktree is gone continues from its work.
             let start = task.result.clone().unwrap_or_else(|| base.clone());
-            git::add_worktree(&project, &path, &branch(task)?, &start)?;
+            git::add_worktree(
+                &project,
+                &path,
+                &worktree_branch(&self.state, task)?,
+                &start,
+            )?;
             task.base = Some(base);
             Some(path)
         } else {
@@ -4021,7 +4034,7 @@ impl Core {
         if result == base {
             self.store.assert_task_inputs(task)?;
             note(task, "no file changes".into());
-            git::remove_worktree(project, worktree, &branch(task)?)?;
+            git::remove_worktree(project, worktree, &worktree_branch(&self.state, task)?)?;
             land(
                 task,
                 Outcome::NoChanges,
@@ -4037,7 +4050,7 @@ impl Core {
         if !policy.local_write {
             let text = format!(
                 "local writes are not allowed; the change is on branch {}",
-                branch(task)?
+                worktree_branch(&self.state, task)?
             );
             note(task, text.clone());
             land(
@@ -4046,7 +4059,7 @@ impl Core {
                 "run",
                 &text,
                 None,
-                Some(&branch(task)?),
+                Some(&worktree_branch(&self.state, task)?),
                 &[],
             );
             return self.stop(conversation, task, status::NEEDS_USER, Some(&text));
@@ -4119,7 +4132,7 @@ impl Core {
                 let text = format!(
                     "conflicts with the current branch in {}; the change is on branch {}",
                     files.join(", "),
-                    branch(task)?
+                    worktree_branch(&self.state, task)?
                 );
                 land(
                     task,
@@ -4127,7 +4140,7 @@ impl Core {
                     "run",
                     &text,
                     None,
-                    Some(&branch(task)?),
+                    Some(&worktree_branch(&self.state, task)?),
                     &files,
                 );
                 (status::NEEDS_USER, text)
@@ -4136,7 +4149,7 @@ impl Core {
                 let text = format!(
                     "you have uncommitted edits in {}; the change is on branch {}",
                     files.join(", "),
-                    branch(task)?
+                    worktree_branch(&self.state, task)?
                 );
                 land(
                     task,
@@ -4144,7 +4157,7 @@ impl Core {
                     "run",
                     &text,
                     None,
-                    Some(&branch(task)?),
+                    Some(&worktree_branch(&self.state, task)?),
                     &files,
                 );
                 (status::NEEDS_USER, text)
@@ -4162,7 +4175,7 @@ impl Core {
         );
         note(task, text.clone());
         if status == status::APPROVED {
-            git::remove_worktree(project, worktree, &branch(task)?)?;
+            git::remove_worktree(project, worktree, &worktree_branch(&self.state, task)?)?;
             return self.set_status(conversation, task, status);
         }
         self.stop(conversation, task, status, Some(&text))
@@ -4249,7 +4262,7 @@ impl Core {
                 "run",
                 &question,
                 None,
-                Some(&branch(task)?),
+                Some(&worktree_branch(&self.state, task)?),
                 files,
             );
             return self.stop(conversation, task, status::NEEDS_USER, Some(&question));
@@ -4612,22 +4625,32 @@ fn land(
 /// Validate database task IDs before using them as path or branch components.
 /// Keep the original spelling so existing worktrees can be resumed.
 fn task_path_component(id: &str) -> Result<&str> {
-    require(
-        id.len() >= 8
-            && id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
-        &format!(
-            "invalid task ID {id:?}: expected at least 8 ASCII letters, digits, hyphens or underscores"
-        ),
-    )?;
+    if id.len() < 8
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(Error::Invalid(format!(
+            "invalid task ID {:?}: expected at least 8 ASCII letters, digits, hyphens or underscores",
+            id.chars().take(32).collect::<String>()
+        )));
+    }
     Ok(id)
 }
 
-/// The branch a writer's worktree is on, preserving legacy resume names.
+/// New writers use the complete validated ID, so shared prefixes cannot collide.
 fn branch(task: &Task) -> Result<String> {
-    let id = task_path_component(&task.id)?;
-    Ok(format!("antislop/{}", &id[..8]))
+    Ok(format!("antislop/{}", task_path_component(&task.id)?))
+}
+
+/// Existing worktrees retain their actual branch, including legacy short names.
+fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
+    let path = state.join("worktrees").join(task_path_component(&task.id)?);
+    if path.exists() {
+        git::worktree_branch(&path)
+    } else {
+        branch(task)
+    }
 }
 
 /// What a comment's target is, in the orchestrator's words.
@@ -4887,7 +4910,7 @@ mod reliability_tests {
     }
 
     #[test]
-    fn task_branches_validate_before_slicing_and_preserve_resume_names() {
+    fn task_branches_validate_ids_and_distinguish_shared_prefixes() {
         let mut task: Task = serde_json::from_value(json!({
             "id": "", "plan_id": "plan", "spec": {}, "status": "pending",
             "round": 0, "report": null, "verdict": null, "base": null,
@@ -4904,7 +4927,69 @@ mod reliability_tests {
             );
         }
         task.id = "12345678-1234-4234-8234-123456789abc".to_owned();
-        assert_eq!(branch(&task).unwrap(), "antislop/12345678");
+        assert_eq!(branch(&task).unwrap(), format!("antislop/{}", task.id));
+        let first = branch(&task).unwrap();
+        task.id = "12345678-2222-4222-8222-222222222222".into();
+        assert_ne!(first, branch(&task).unwrap());
+    }
+
+    #[test]
+    fn resumed_worktrees_keep_legacy_branches_and_cleanup_the_actual_branch() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet", "-b", "main"])
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(root.join("initial"), "initial").unwrap();
+        let base = git::commit_all(root, "initial").unwrap();
+        let mut task: Task = serde_json::from_value(json!({
+            "id": "12345678-1111-4111-8111-111111111111", "plan_id": "plan",
+            "spec": {}, "status": "pending", "round": 0, "report": null,
+            "verdict": null, "base": null, "result": null
+        }))
+        .unwrap();
+        let state = root.join(".antislop");
+        let path = state.join("worktrees").join(&task.id);
+        let legacy = "antislop/12345678";
+        git::add_worktree(root, &path, legacy, &base).unwrap();
+        let actual = worktree_branch(&state, &task).unwrap();
+        assert_eq!(actual, legacy);
+        git::add_worktree(root, &path, &branch(&task).unwrap(), &base).unwrap();
+        assert_eq!(git::worktree_branch(&path).unwrap(), legacy);
+        // A second task sharing the prefix gets its own branch and worktree.
+        task.id = "12345678-2222-4222-8222-222222222222".into();
+        let other = state.join("worktrees").join(&task.id);
+        let unique = worktree_branch(&state, &task).unwrap();
+        git::add_worktree(root, &other, &unique, &base).unwrap();
+        git::remove_worktree(root, &path, &actual).unwrap();
+        assert_eq!(git::worktree_branch(&other).unwrap(), unique);
+        assert!(git::add_worktree(root, &path, &unique, &base).is_err());
+        assert_eq!(git::head(&other).unwrap(), base);
+        git::remove_worktree_keep_branch(root, &other).unwrap();
+        git::add_worktree(root, &other, &unique, &base).unwrap();
+        assert_eq!(git::worktree_branch(&other).unwrap(), unique);
+        std::fs::write(other.join("initial"), "changed").unwrap();
+        let changed = git::commit_all(&other, "changed").unwrap();
+        git::remove_worktree_keep_branch(root, &other).unwrap();
+        assert!(git::add_worktree(root, &other, &unique, &base).is_err());
+        git::add_worktree(root, &other, &unique, &changed).unwrap();
+        assert_eq!(git::head(&other).unwrap(), changed);
+        assert!(
+            std::process::Command::new("git")
+                .args(["checkout", "--quiet", "--detach"])
+                .current_dir(&other)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(worktree_branch(&state, &task).is_err());
+        std::fs::create_dir(&path).unwrap();
+        assert!(git::worktree_branch(&path).is_err());
     }
 
     #[test]

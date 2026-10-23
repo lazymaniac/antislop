@@ -504,7 +504,7 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
         .find(|task| task.spec["id"] == "w1")
         .unwrap()
         .id;
-    let branch = format!("antislop/{}", &w1_id[..8]);
+    let branch = format!("antislop/{}", w1_id);
     let token = core
         .task_freshness_token(&conversation, &plan, w1_id)
         .unwrap();
