@@ -76,7 +76,7 @@ def cover(answer):
     data = json.loads(body.split("```")[0])
     data["coverage"] = {i: {"status": "ok", "note": "checked"} for i in ids}
     return head + "```verdict\n" + json.dumps(data) + "\n```"
-REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:", "You verify")
+REVIEW = ("You review a plan", "new plan:", "You audit", "next plan:", "You verify", "account again for your obligations")
 answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```" if any(m in prompt for m in REVIEW) else "report"
 if "Automatic integration conflict" in prompt:
     answer = "```integration_question\nKeep the concurrent user edit or apply the worker change?\n```"
@@ -856,4 +856,72 @@ fn recovery_events_carry_bounded_details_and_keep_the_whole_reason() {
             .is_some_and(|report| report.contains(&note)),
         "the report keeps the whole force-approve reason"
     );
+}
+
+#[test]
+fn manual_snapshot_delivers_options_and_rejects_a_silent_variant_switch() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let plan = propose(&core, &conversation, "manual_fix");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+    let mut task = core
+        .store
+        .plan(&plan)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "m1")
+        .unwrap();
+    task.status = "needs_user".into();
+    core.store.update_task(&task).unwrap();
+    std::fs::write(
+        project.join("hello.txt"),
+        "unjustified alternative variant\n",
+    )
+    .unwrap();
+
+    // The oracle rejects a departure only when it receives both the selected
+    // variant and the independent comparison obligation. No new report claims
+    // that the user supplied evidence or justification for the alternative.
+    let agy = dir.path().join("agy");
+    let script = std::fs::read_to_string(&agy).unwrap().replace(
+        "answer = cover(answer)",
+        r#"if "Selected: direct fixture change" in prompt and "independently compare the actual implementation" in prompt and open("hello.txt").read() == "unjustified alternative variant\n":
+    answer = "```verdict\n" + json.dumps({"approved": False, "findings": [{"severity": "high", "issue": "Silent variant switch: alternative lacks evidence and justification"}]}) + "\n```"
+answer = cover(answer)"#,
+    );
+    std::fs::write(&agy, script).unwrap();
+    let token = core
+        .task_freshness_token(&conversation, &plan, &task.id)
+        .unwrap();
+    let response = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: task.id.clone(),
+            action: RecoveryAction::VerifyManualSnapshot,
+            consent_files: None,
+            freshness_token: token,
+            message: None,
+        })
+        .unwrap();
+    assert_eq!(response.status, "needs_user");
+    let updated = core.task_unscoped(&plan, &task.id).unwrap();
+    assert!(
+        updated
+            .verdict
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("Silent variant switch")
+    );
+    let log = std::fs::read_to_string(dir.path().join("agy.log")).unwrap();
+    let args: Vec<String> = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+    let prompt = args.last().unwrap();
+    assert!(prompt.contains("Selected: direct fixture change"));
+    assert!(prompt.contains("independently compare the actual implementation"));
+    assert!(prompt.contains("Check the evidence and justification for any explicit departure"));
+    assert!(prompt.contains("git diff"));
 }

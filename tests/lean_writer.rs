@@ -1617,3 +1617,63 @@ fn an_honest_ellipsis_is_not_reported_as_a_cut() {
     assert_eq!(feedback["effect_cut"], serde_json::json!(false));
     assert_eq!(from_event, feedback);
 }
+
+#[test]
+fn integration_repair_delivers_options_and_refuses_a_silent_variant_switch() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
+    // Without the binding and dependency data the simulated repair silently
+    // chooses an unrelated alternative. With them it reports the conflict as
+    // an explicit question instead of silently changing the selected variant.
+    let script = std::fs::read_to_string(&agy).unwrap().replace(
+        "answer = \"```integration_question\\nuncommitted edits in hello.txt: keep the user draft or accept the worker greeting?\\n```\"",
+        r#"if "Selected: direct fixture change" in prompt and "Never silently switch variants" in prompt:
+        answer = "```integration_question\nSilent variant switch rejected: the alternative conflicts with the selected direct fixture change. Which variant should be used?\n```"
+    else:
+        with open("hello.txt", "w") as repaired:
+            repaired.write("unjustified alternative variant\n")
+        answer = "Repaired.""#,
+    );
+    std::fs::write(&agy, script).unwrap();
+    let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
+    let conversation = run_plan(&core, &project);
+    let task = original_tasks(&core, &conversation)[0].clone();
+    assert_eq!(task.status, "needs_user", "{:?}", task.report);
+    assert!(
+        task.report
+            .as_deref()
+            .unwrap()
+            .contains("Silent variant switch rejected")
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "user draft\n"
+    );
+    let calls = std::fs::read_to_string(dir.path().join("calls.jsonl")).unwrap();
+    let repair: Value = calls
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|call| {
+            call["args"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("Automatic integration conflict")
+        })
+        .unwrap();
+    let prompt = repair["args"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert!(prompt.contains("Selected: direct fixture change"));
+    assert!(prompt.contains("options report is binding"));
+    assert!(prompt.contains("Never silently switch variants"));
+    assert!(prompt.contains("justify a departure with evidence"));
+}

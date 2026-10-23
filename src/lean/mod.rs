@@ -1520,13 +1520,17 @@ impl Core {
                     access: agent::Access::ReadOnly,
                     upto_message: 0,
                 };
+                let upstream = self.upstream(&task.plan_id, &spec)?
+                    + &self.task_ledger_context(&req.conversation, &task)?;
                 let cancel = AtomicBool::new(false);
-                let answer = self.turn(setup, &cancel, |_| {
-                    tasks::verifier_prompt(
+                let answer = self.turn(setup, &cancel, |fresh| {
+                    tasks::verifier_turn_prompt(
                         &project.to_string_lossy(),
                         &spec,
                         task.report.as_deref().unwrap_or(""),
                         Some(&changes),
+                        fresh,
+                        &upstream,
                     )
                 })?;
                 let answer = answer.unwrap_or_default();
@@ -4201,7 +4205,20 @@ impl Core {
             access: agent::Access::Write,
             upto_message: 0,
         };
-        let Some(answer) = self.turn(setup, cancel, |_| prompt)? else {
+        let upstream =
+            self.upstream(&task.plan_id, spec)? + &self.task_ledger_context(conversation, task)?;
+        let Some(answer) = self.turn(setup, cancel, |_| {
+            tasks::worker_turn_prompt(
+                &worktree.to_string_lossy(),
+                spec,
+                &[],
+                false,
+                Some(&prompt),
+                &upstream,
+                "",
+            )
+        })?
+        else {
             return self.stop_task(conversation, task, &worker, cancel);
         };
         let report = self.post(conversation, Some(&task.plan_id), &spec.id, &answer)?;
