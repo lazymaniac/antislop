@@ -1,0 +1,13 @@
+R138	dependencies	Assuming library behavior that is not guaranteed.	Compare the version's contract with an experiment.
+R057	dependencies	Invented packages and slopsquatting.	Check package existence, provenance, and history.
+R060	dependencies	License violations or unclear code provenance.	Track sources and licenses of new material.
+R221	dependencies	An agent writes an available mechanism without checking alternatives.	Reconstruct the search and reuse map.
+R222	dependencies	Library popularity substitutes for fit assessment.	Compare the API with the required contract.
+R223	dependencies	A dependency without a license is treated as freely usable.	Read the relevant files and provenance.
+R224	dependencies	Only the direct dependency's license was checked.	Trace the lockfile, features, and native components.
+R225	dependencies	AND, OR, or a WITH exception is misinterpreted.	Compare the expression with license texts.
+R226	dependencies	The license does not fit the project's delivery model.	Check intended distribution and use.
+R227	dependencies	Notices, attribution, or required code are missing from delivery.	Check the final package against obligations.
+R228	dependencies	Copied or vendored code bypasses license checks.	Compare fragment and file provenance.
+R229	dependencies	Version or feature changes do not reopen assessment.	Compare the graph and report input hashes.
+R230	dependencies	Package existence and no known CVEs create false trust.	Check provenance, maintenance, and scanner scope.

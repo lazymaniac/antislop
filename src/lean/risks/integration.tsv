@@ -1,0 +1,13 @@
+R146	integration	Missing integration, rollout, or compatibility.	Trace the entire delivered outcome.
+R028	integration	Backward incompatibility or schema/API drift.	Run contract tests and compare public interfaces.
+R030	integration	A locally correct change breaks system consistency.	Test flows across modules.
+R045	integration	Approving an outdated diff.	Check artifact hashes and input revisions.
+R046	integration	Independent branches break when merged.	Validate the integrated candidate.
+R047	integration	A conflict is resolved with incorrect semantics.	Review the resolution diff and contract tests.
+R048	integration	Overwriting user or another agent's work.	Use snapshots, leases, and pre-write change checks.
+R078	integration	Incorrect transactions or data loss.	Fail between writes and check invariants.
+R091	integration	Incompatible CLI versions or schema drift.	Probe and keep fixtures for supported protocols.
+R092	integration	Missing authentication, network access, or provider quota.	Categorize provider-specific failures.
+R093	integration	Resuming the wrong or a lost session.	Persist provider_session_id and check workspace compatibility.
+R094	integration	Duplicate actions after a crash.	Use idempotency keys and reconcile effects.
+R098	integration	Host overload without application limits.	Check OS errors, memory, process count, and availability.

@@ -1,0 +1,19 @@
+R003	orchestration	Losing agreements after compaction.	Compare the handoff package with persistent decisions.
+R011	orchestration	Violating the assigned role.	Compare actions with the role contract.
+R012	orchestration	Repeating the same steps.	Check action history for a lack of new outcomes.
+R013	orchestration	Failing to recognize completion.	Use completion criteria instead of turn counts.
+R014	orchestration	Conversation drifts away from the goal.	Link each thread to a task.
+R015	orchestration	Failing to pass on important information.	Check unresolved dependencies in the handoff.
+R016	orchestration	Ignoring another agent's feedback.	Give findings and responses persistent statuses.
+R017	orchestration	Claims do not match actions.	Compare reports with tool events.
+R018	orchestration	Duplicated work and unnecessary roles.	Check overlapping contracts and outcomes.
+R019	orchestration	Deadlock or a dependency cycle.	Validate the DAG and wait graph.
+R020	orchestration	Message storms and loss of readability.	Check repeated status updates and the delivery queue.
+R032	orchestration	An incorrect reviewer verdict.	Reproduce independently and calibrate assessments.
+R041	orchestration	The executor and verifier share a false assumption.	Use a fresh session, separate sources, and tests.
+R042	orchestration	The reviewer is swayed by the executor's explanation.	Assess the artifact before reading its justification.
+R043	orchestration	The reviewer makes fixes and approves them.	Check artifact provenance and change authorship.
+R044	orchestration	Endless style disputes.	Look for findings without criteria or evidence.
+R070	orchestration	An agent acts outside the agreed team or scope.	Track processes, tools, and native subagents.
+R099	orchestration	Excessive process overhead relative to quality.	Measure time to acceptance and compare the baseline.
+R196	orchestration	A risk has no responsible verifier.	Check complete RiskCoverage against the catalog version.

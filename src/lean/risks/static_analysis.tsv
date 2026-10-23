@@ -1,0 +1,10 @@
+R181	static_analysis	Analysis covered only the default target or part of the workspace.	Compare report scope with the target matrix.
+R182	static_analysis	Excluded features hide an error.	Check build configurations and coverage.
+R183	static_analysis	Exit code 0 hides warnings or findings.	Read complete output, not just the process exit code.
+R184	static_analysis	Adding allow or suppression removes the alarm instead of its cause.	Compare rules and annotations before and after.
+R185	static_analysis	Changing the baseline or severity creates apparent improvement.	Compare analyzer configurations and findings.
+R186	static_analysis	An old issue is ignored as preexisting.	Compare the baseline with the final analysis scope.
+R187	static_analysis	An analyzer did not run or stopped early.	Check output and environment completeness.
+R188	static_analysis	Analysis covered an earlier code hash.	Compare evidence inputs with the delivery candidate.
+R189	static_analysis	Enabling every rule blindly creates a contradictory standard.	Check documentation and the agreed rule contract.
+R190	static_analysis	A finding is dismissed as a false positive without reproduction or justification.	Check triage evidence and the original finding.

@@ -1,0 +1,9 @@
+R085	analysis	Presenting correlation as causation.	Review methodology and conclusion strength.
+R086	analysis	Errors in units, denominators, arithmetic, or transformations.	Recalculate independently and test data.
+R087	analysis	Missing data and undisclosed assumptions.	Check data provenance and the missing-data register.
+R241	analysis	A conclusion does not follow from the stated premises.	Reconstruct the inference and look for a counterexample.
+R242	analysis	A conclusion generalizes beyond the cases examined.	Compare each conclusion's scope with the cases and evidence analyzed.
+R243	analysis	A hypothesis or plausible explanation is presented as an established fact.	Check evidence that distinguishes competing explanations.
+R244	analysis	The method or metric does not answer the analytical question.	Trace how the method's result answers the task's goal.
+R245	analysis	A result depends on an unverified assumption or arbitrary threshold.	Vary assumptions and thresholds over a justified range and compare conclusions.
+R246	analysis	The analysis cannot be independently reproduced.	Repeat the analysis using the stated inputs, versions, method, and parameters.

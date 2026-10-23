@@ -1,0 +1,16 @@
+R010	architecture	Blindly copying patterns from another project.	Compare proposals with the existing architecture.
+R023	architecture	Excessive abstractions and configuration.	Compare the number of new layers with the need.
+R155	architecture	A public interface exposes unnecessary implementation details.	Check exports and actual consumers.
+R157	architecture	Hidden shared state complicates reasoning and tests.	Find mutable globals, singletons, and implicit dependencies.
+R158	architecture	An intermediate layer adds no contract or value.	Trace forwarding and consumer needs.
+R159	architecture	An oversized module combines independent reasons to change.	Compare responsibilities and change history.
+R201	architecture	A dependency cycle prevents independent module changes.	Build import and runtime dependency graphs.
+R202	architecture	Domain logic leaks into UI, transport, and persistence.	Trace where rules are implemented.
+R203	architecture	Missing patterns cause duplicated, unreliable mechanics.	Compare the problem with suitable patterns and idioms.
+R204	architecture	A pattern is applied dogmatically without a need.	Compare a simpler option and structural cost.
+R205	architecture	A public API embeds external provider details.	Trace types and errors across boundaries.
+R206	architecture	Duplicated state has no consistency rule.	Compare sources of truth and update points.
+R207	architecture	Apparent modularity hides strong temporal coupling.	Change initialization and call order.
+R208	architecture	Code introduces risk without assessing its impact.	Trace failures to data and consumers.
+R209	architecture	A numerical risk score replaces scenario analysis.	Check score justifications and safeguard effectiveness.
+R210	architecture	Maintenance or rollback risk is ignored.	Analyze migration failures and future contract changes.

@@ -25,8 +25,8 @@ were not inspected. This is a focused publication review, not a complete securit
 
 - `design.md` still exists and is tracked (181,660 bytes). It is a Polish design
   document. Deleting it in a new commit would leave earlier copies in Git history.
-- `src/lean/risks.tsv` contains Polish risk descriptions included in the binary
-  by `src/lean/risks.rs:10` and supplied to tasks by `src/lean/tasks.rs:831`.
+- `src/lean/risks/*.tsv` contain Polish risk descriptions included in the binary
+  by `src/lean/risks.rs` and supplied to tasks by `src/lean/tasks.rs:831`.
   Polish is therefore present in runtime agent context, beyond Unicode tests.
   Other Polish material includes `docs/parity.md`, design documentation and tests.
 - `docs/m0/live-evidence.json` exposes `/Users/sebastian` in captured CLI evidence.

@@ -1,0 +1,26 @@
+R002	context	Missing relevant context.	List inspected modules and unknown areas.
+R004	context	Failing to use information in a long context.	Ask control questions about important constraints.
+R009	context	Unrecognized conflicts in project instructions.	Index instructions with scope and provenance.
+R101	context	Inspecting the wrong repository, branch, or snapshot.	Compare the directory, HEAD, status, and input hashes.
+R102	context	Inferring behavior solely from names, signatures, or stubs.	Trace the implementation and run a representative path.
+R103	context	Treating outdated documentation as current reality.	Compare documentation with code, configuration, and execution.
+R104	context	Missing a consumer of a changing contract.	Find calls, exports, and uses outside the module.
+R105	context	Missing a transitive dependency or indirect effect.	Trace the call, data, and dependency graphs.
+R106	context	Missing configuration that changes behavior.	Check file, environment, CLI, and default precedence.
+R107	context	Misidentifying the data source of truth.	Compare storage, caches, projections, and recovery.
+R108	context	Failing to recognize an invariant in existing data.	Check the schema, validation, and real cases.
+R109	context	Missing the error contract of an existing API.	Read error types and caller responses.
+R110	context	Missing lifecycle, shutdown, or cancellation behavior.	Trace start, stop, cleanup, and restart.
+R111	context	Assuming a concurrent path is sequential.	Check tasks, threads, locks, and shared data.
+R112	context	Missing time, ordering, or repetition semantics.	Check clocks, queues, retries, and delayed responses.
+R113	context	Reading only one platform or feature combination.	Compare cfg, platforms, and supported variants.
+R114	context	Using the API of a different version from the installed one.	Compare the lockfile, toolchain, and version documentation.
+R115	context	Missing serialization format and data compatibility.	Check producers, parsers, and old stored records.
+R116	context	Ignoring existing data and migrations.	Check schema history and recovery of old state.
+R118	context	Lacking a reliable baseline for behavior and analysis.	Run appropriate checks before making changes.
+R120	context	Treating poor existing code as the required standard.	Compare conventions with language rules and the quality contract.
+R121	context	Overlooking an available mechanism in the project.	Search implementations by behavior, not just name.
+R122	context	Losing qualifiers and provenance in summaries.	Compare summaries with source passages.
+R123	context	A fact becomes outdated after a concurrent change.	Compare the fact's dependency hashes with current state.
+R124	context	Searching only for evidence supporting the first idea.	Inspect queries, rejected sources, and counterevidence.
+R125	context	Closing an unknown by inventing a convenient assumption.	Check how every unknown was resolved.

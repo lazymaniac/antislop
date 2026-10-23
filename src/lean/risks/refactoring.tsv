@@ -1,0 +1,13 @@
+R145	refactoring	Refactoring order makes behavior changes hard to track.	Compare transformation steps and protective tests.
+R024	refactoring	Skipping necessary refactoring.	Find workarounds and duplication forced by old structure.
+R025	refactoring	Unjustified redesign disguised as refactoring.	Compare the diff with the problem and RefactorReport.
+R171	refactoring	Refactoring is planned but never performed.	Compare RefactorPlan, the patch, and RefactorReport.
+R172	refactoring	A transformation implicitly changes observable behavior.	Compare contracts and characterization tests before and after.
+R173	refactoring	A new abstraction has only hypothetical uses.	Check current consumers and requirements.
+R174	refactoring	Refactoring covers only new code despite a blockage in existing code.	Trace the entire changed flow.
+R175	refactoring	Cleanup spreads into unrelated areas.	Compare the problem, impact, and task scope.
+R176	refactoring	No behavior tests before a risky transformation.	Check the baseline and contract protection.
+R177	refactoring	A large one-shot rewrite prevents regression localization.	Compare refactoring steps and intermediate evidence.
+R178	refactoring	Dead paths and old mechanisms remain.	Check uses, configurations, and compatibility.
+R179	refactoring	Mechanically treating a code smell worsens the solution.	Compare complexity and contracts before and after.
+R180	refactoring	The Boy Scout Rule is skipped or reduced to a cosmetic commit.	Check encountered problems and transformation effects.

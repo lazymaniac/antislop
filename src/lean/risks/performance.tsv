@@ -1,0 +1,10 @@
+R137	performance	The plan works only at a small data scale.	Assess growth in cost, queues, and persistent data.
+R071	performance	Poor algorithmic complexity.	Measure scaling with growing input.
+R072	performance	N+1, unnecessary I/O, and repeated network calls.	Profile and count operations.
+R073	performance	Unbounded allocations, leaks, and missing streaming.	Profile memory under realistic load.
+R074	performance	Race conditions, deadlocks, and starvation.	Run concurrency tests and inspect the lock graph.
+R075	performance	Blocking the event loop or TUI thread.	Measure input latency and trace long operations.
+R076	performance	Incorrect retries and missing idempotency or cancellation.	Inject faults and interrupt execution.
+R077	performance	Incorrect caching and stale data.	Change inputs and check invalidation.
+R079	performance	An unrepresentative benchmark or missing baseline.	Review data, environment, and methodology.
+R080	performance	Optimization breaks semantics or increases code complexity.	Run behavior tests and analyze trade-offs.

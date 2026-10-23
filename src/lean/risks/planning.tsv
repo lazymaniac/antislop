@@ -1,0 +1,22 @@
+R006	planning	Presenting assumptions as requirements.	Track decisions and hypotheses separately.
+R007	planning	A plan without tests, integration, or migration.	Use a plan rubric and risk map.
+R008	planning	Tasks are too large or too fragmented.	Check shared context size and handoff count.
+R126	planning	Operations lack preconditions or postconditions.	Check every model operation.
+R127	planning	Module contracts are individually correct but do not compose.	Simulate data and error handoffs between modules.
+R128	planning	An event has no defined transition in a given state.	Walk through the state-by-event table.
+R129	planning	The representation permits impossible or contradictory states.	Try constructing all field combinations.
+R130	planning	The model describes results but omits side effects.	List writes, messages, and external actions.
+R131	planning	No analysis of failure between two writes.	Inject failure after every significant effect.
+R132	planning	A retry can duplicate an effect.	Simulate missing confirmation after execution.
+R133	planning	Correctness depends on ordering that is not guaranteed.	Reverse and delay events.
+R134	planning	Checking safety without checking progress.	Look for blocking, starvation, and infinite loops.
+R135	planning	Resource ownership and release time are undefined.	Trace ownership through every branch.
+R136	planning	Cancellation leaves inconsistent intermediate state.	Interrupt every significant model phase.
+R139	planning	Circular correctness arguments between components.	Check dependencies between premises.
+R140	planning	Pseudocode hides difficulty behind 'handle correctly'.	Expand the steps that determine the contract.
+R142	planning	Simulation repeats the author's reasoning without counterexamples.	Compare author and verifier scenarios.
+R143	planning	No model of partial states and checkpoints.	Simulate resuming from every persistent stage.
+R147	planning	No reverse mapping from model elements to goals.	Check the justification for every operation and entity.
+R148	planning	An added feature expands scope in the name of completeness.	Compare the model with requirements and the Boy Scout Rule.
+R149	planning	An unproven assumption is critical to the simulation result.	Challenge the premises of every scenario.
+R150	planning	Implementation departs from the model without revising it.	Compare the patch with contracts and simulations.

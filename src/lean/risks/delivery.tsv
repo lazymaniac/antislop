@@ -1,0 +1,11 @@
+R033	delivery	Prematurely declaring completion.	Check the final requirements-to-artifacts map.
+R069	delivery	Excessive user trust in apparent certainty.	Show evidence alongside verdicts and explicit unknowns.
+R095	delivery	False work or message-delivery status.	Derive status from receipts and events.
+R096	delivery	Authorization applies to an old scope.	Check the scope hash and policy revision.
+R097	delivery	Unknown cost is presented as zero.	Check usage provenance and completeness.
+R100	delivery	Unsafe or unreadable terminal output.	Check escape sequences, size, and encoding.
+R194	delivery	A test links to a requirement but does not check it.	Read the oracle, assertions, and execution path.
+R195	delivery	A completion percentage hides a critical omission.	Compare the final status of every obligation.
+R198	delivery	Not applicable conveniently excludes a difficult risk.	Check how the justification relates to actual scope.
+R199	delivery	Changing the checklist removes a finding during work.	Compare pinned versions and history.
+R200	delivery	An agent claims a check without performing it.	Compare the report with evidence and tool history.

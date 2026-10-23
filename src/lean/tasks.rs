@@ -1574,7 +1574,12 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         }
         Analysis => {
             "data and assumptions stated; calculations recomputed independently; \
-             units and denominators correct; reproducible"
+             units and denominators correct; conclusions follow from premises \
+             and stay within the examined scope; hypotheses distinguished from \
+             established facts by evidence that separates competing explanations; \
+             methods and metrics answer the analytical question; conclusions \
+             checked for sensitivity to assumptions and thresholds; reproducible \
+             from stated inputs, versions, method and parameters"
         }
         Delivery => {
             "the report matches what was actually done; limitations and open \

@@ -1,0 +1,10 @@
+R231	options	The first correct idea wins without comparison.	Check OptionsAnalysis and search scope.
+R232	options	Alternatives are superficial and deliberately weaker.	Compare mechanism distinctness and practical usability.
+R233	options	Criteria are retrofitted to the preferred option.	Check criterion and decision history.
+R234	options	Options were evaluated on different data or conditions.	Compare benchmarks, contracts, and configurations.
+R235	options	An average score compensates for an unmet requirement.	Check eligibility filtering before ranking.
+R236	options	A rating or advantage is invented without evidence.	Reconstruct sources, measurements, and experiments.
+R237	options	A significant available solution class was omitted.	Compare the problem space with the search.
+R238	options	The decision is unstable under small premise changes.	Perform sensitivity analysis.
+R239	options	Sunk implementation cost blocks a better choice.	Compare current evidence and future consequences.
+R240	options	The best examined option is advertised as a global optimum.	Check the claim's scope and study limitations.

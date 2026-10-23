@@ -93,7 +93,7 @@ verdicts; they do not prove the quality of an arbitrary real model's decision.
   of the repository's size.
 - Risks go only to the verifier paired with the task, never to the worker.
 - The risk catalog of design §19 is shared out among the kinds of work
-  (`src/lean/risks.tsv`, one kind per entry): a verifier gets as `R001`…
+  (`src/lean/risks/*.tsv`, one file per kind): a verifier gets as `R001`…
   obligations only the entries of its worker's kind, besides the task's own
   risks (`R1`…), the kind checklist (`C`) and the common checks (`V`). A
   verifier may name a risk outside them as a finding.

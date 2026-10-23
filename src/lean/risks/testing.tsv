@@ -1,0 +1,9 @@
+R031	testing	Missing or incomplete verification.	Find criteria without evidence.
+R034	testing	A test reproduces the implementation instead of the requirement.	Read assertions and specifications separately.
+R035	testing	A test passes despite an incorrect result.	Introduce a controlled change or error; use mutation testing when justified.
+R036	testing	Excessive mocks hide incorrect integration.	Check mock boundaries and real contract/E2E tests.
+R038	testing	Weakening or deleting tests to make them pass.	Compare the test diff with the baseline.
+R039	testing	Flaky tests and confusing regressions with environment failures.	Repeat the specific failure and inspect the environment.
+R040	testing	Treating green coverage or exit codes as quality.	Assess criteria independently of metrics.
+R049	testing	The agent evaluates a different version from the test runner.	Check input hashes and the pinned environment.
+R050	testing	The executor modified test results or logs.	Check evidence provenance and runner-controlled recording.

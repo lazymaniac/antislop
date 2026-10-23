@@ -1,0 +1,26 @@
+R021	implementation	Invented symbols, APIs, or library capabilities.	Build, check types, and read actual documentation.
+R022	implementation	Repetitive, redundant code.	Analyze similarity and review the diff.
+R026	implementation	Stubs, TODOs, and hardcoding replace functionality.	Run the user scenario and analyze execution paths.
+R027	implementation	Hiding errors, empty catches, and silent fallbacks.	Test failures and review error handling.
+R029	implementation	Dead code, unnecessary dependencies, and unhelpful comments.	Check symbol uses, the manifest, and the readability rubric.
+R151	implementation	The same rule has inconsistent meanings in different places.	Compare calculations and policies across modules.
+R152	implementation	A function mixes reads, policy, transformation, and effects.	Trace responsibilities and dependencies.
+R153	implementation	A name hides units, scope, or a side effect.	Compare names with contracts and calls.
+R154	implementation	Primitive types allow distinct concepts to be confused.	Swap arguments or units in a counterexample.
+R156	implementation	Inconsistent error and result-handling conventions.	Trace errors from source to consumer.
+R160	implementation	Comments substitute for a correct model and readable code.	Compare comments with behavior and types.
+R161	implementation	Error handling returns apparent success or an empty result.	Force a dependency error and trace the result.
+R162	implementation	A fallback weakens the required contract.	Force the primary path to become unavailable.
+R163	implementation	Panic, unwrap, or exceptions occur on reachable invalid input.	Trace preconditions and a counterexample.
+R164	implementation	Mutating input surprises the caller.	Check aliases, uses, and post-call state.
+R165	implementation	Poor ownership modeling causes unnecessary copies or allocations.	Trace the data lifecycle and memory profile.
+R166	implementation	An inappropriate abstraction level scatters a simple operation.	Reconstruct the reading path and the reason for each layer.
+R167	implementation	Semantic duplication remains despite different names.	Compare similar rules and transformations.
+R168	implementation	Overaggressive DRY combines similar but independent rules.	Check their different reasons to change.
+R169	implementation	The solution is not idiomatic for the language or framework.	Compare it with applicable standards and official APIs.
+R170	implementation	A temporary spike, debug code, or TODO reaches the product.	Review the final patch and execution paths.
+R211	implementation	A parameter, environment variable, or persistent state has no documented contract.	Compare interfaces and reads with InputDomainMatrix.
+R212	implementation	Missing, null, and empty values are confused.	Check each class separately.
+R214	implementation	Overflow, NaN, or infinity breaks an invariant.	Supply extreme values of the relevant type.
+R215	implementation	Unicode, encoding, or normalization changes meaning.	Check equivalent representations and invalid bytes.
+R218	implementation	Fragmentation, EOF, or large input changes parser behavior.	Test fragment boundaries and sizes.

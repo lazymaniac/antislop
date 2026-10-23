@@ -1,0 +1,8 @@
+R141	test_design	Incorrect partitioning into equivalence classes.	Look for differently behaving cases within one class.
+R144	test_design	The test strategy comes only from planned code.	Compare the oracle with requirements and the model.
+R037	test_design	Missing negative and boundary cases.	Map risks and input classes.
+R213	test_design	Zero, signs, and range boundaries are omitted.	Check minima, maxima, and neighboring values.
+R216	test_design	Combinations of individually valid parameters are unexamined.	Build constraints and interaction scenarios.
+R217	test_design	Pairwise testing is used for a rule depending on many fields.	Compare interaction strength with the rule model.
+R219	test_design	Duplicate and out-of-order events have no defined semantics.	Supply repetitions, delays, and reorderings.
+R220	test_design	Random examples are claimed as complete input verification.	Check class justifications and invariant coverage.
