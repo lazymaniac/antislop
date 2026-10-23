@@ -11,7 +11,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-OUTPUT = ROOT / 'tests/common/options-evidence'
+OUTPUT = ROOT / '.antislop/options-evidence'
 BASE = '3f77db2'
 
 
@@ -44,7 +44,7 @@ def execute(label, root, command, env):
 
 
 def main():
-    OUTPUT.mkdir(exist_ok=True)
+    OUTPUT.mkdir(parents=True, exist_ok=True)
     metadata = {'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip(),
                 'base': subprocess.check_output(['git', 'rev-parse', BASE], cwd=ROOT).decode().strip(),
                 'diff': subprocess.check_output(['git', 'diff', '--', 'tests/lean_options.rs', 'tests/common'], cwd=ROOT).decode(),
