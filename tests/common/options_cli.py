@@ -2,6 +2,10 @@
 import glob, json, os, re, sys
 prompt = sys.argv[-1]
 root = os.path.dirname(sys.argv[0])
+def record_call(call):
+    with open(os.path.join(root, 'calls.jsonl'), 'a') as log:
+        log.write(json.dumps(call)+'\n')
+
 settings = json.load(open(os.path.join(root, 'settings.json')))
 if os.path.basename(sys.argv[0]) == 'codex':
     answer = 'done' if '[runtime]' in prompt else '```plan\n'+json.dumps(settings['plan'])+'\n```'
@@ -15,8 +19,7 @@ else:
     count_file = os.path.join(root, session.replace(':', '-') + '-count')
     count = int(open(count_file).read()) + 1 if os.path.exists(count_file) else 1
     open(count_file, 'w').write(str(count))
-    with open(os.path.join(root,'calls.jsonl'),'a') as log:
-        log.write(json.dumps({'worker':worker,'task':task,'prompt':prompt,'args':sys.argv[1:-1],'pid':os.getpid(),'count':count})+'\n')
+    record_call({'worker':worker,'task':task,'prompt':prompt,'args':sys.argv[1:-1],'pid':os.getpid(),'count':count})
     if task == 'w' and count == 1:
         if scenario == ('resume-worker' if worker else 'resume-verifier'):
             print(json.dumps({'event':'init','conversation_id':session}), flush=True)
@@ -41,8 +44,7 @@ else:
             if implementation == 'selected':
                 implementation = re.findall(r'^Selected: ([AB])$', prompt, re.M)[-1]
             open('result-'+task+'.txt','w').write(implementation)
-            with open(os.path.join(root,'calls.jsonl'),'a') as log:
-                log.write(json.dumps({'written':task,'actual':open('result-'+task+'.txt').read()})+'\n')
+            record_call({'written':task,'actual':open('result-'+task+'.txt').read()})
             answer = 'APPROVED. I complied with the selected variant. '+settings['claim']
     else:
         # A deterministic oracle for these fixtures only. Real semantic assessment
@@ -63,8 +65,7 @@ else:
                     required = open(path).read().strip()
                     approved = (required != 'A' and evidence.get('variant') == required
                                 and all(value == required for value in actual))
-        with open(os.path.join(root,'calls.jsonl'),'a') as log:
-            log.write(json.dumps({'verified':task,'files':files,'required':open('required-format.txt').read().strip(),'approved':approved})+'\n')
+        record_call({'verified':task,'files':files,'required':open('required-format.txt').read().strip(),'approved':approved})
         ids = re.findall(r'^- ([RCV][0-9]+): ', prompt, re.M)
         answer = '```verdict\n'+json.dumps({'approved':approved,'findings':[] if approved else [{'severity':'high','issue':'Implementation B contradicts Selected: A without evidence'}], 'coverage':{i:{'status':'ok','note':'fixture inspected'} for i in ids}})+'\n```'
 if os.path.basename(sys.argv[0]) == 'codex':
