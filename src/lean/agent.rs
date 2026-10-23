@@ -371,7 +371,7 @@ fn command(spec: &Spec, prompt: &str) -> Result<Command> {
             // not shell commands. Gemini has no reasoning-effort flag.
             command
                 .args(["--output-format", "stream-json", "--approval-mode"])
-                .arg(if read_only { "plan" } else { "auto_edit" });
+                .arg(if read_only { "plan" } else { "yolo" });
             for dir in &spec.add_dirs {
                 command.arg("--include-directories").arg(dir);
             }
