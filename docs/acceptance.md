@@ -110,3 +110,17 @@ verdicts; they do not prove the quality of an arbitrary real model's decision.
   without asking, then the user decides (design §6.2 asks at each round).
   Autonomous mode has no count of rounds or plans, as design §14 says; it
   stops only when work repeats itself.
+
+## Writer branch resume compatibility
+
+New writer branches use the complete validated task ID. Existing worktrees may
+retain either that name or the legacy `antislop/<first-eight-ID-bytes>` name;
+an unrelated branch is an actionable error, not a candidate for adoption.
+Both worktree reuse and destructive cleanup compare the actual branch with the
+expected branch before proceeding. The `combine-` task-ID prefix is reserved
+for helper branches; generated UUID task IDs are unaffected. A manually stored
+ID using that prefix is rejected without changing its worktree or branch.
+Regression evidence: `task_branches_validate_ids_and_distinguish_shared_prefixes`
+and `resumed_worktrees_keep_legacy_branches_and_cleanup_the_actual_branch`.
+This validates task branch names, not protection against concurrent external Git
+mutations or proof of a branch creator's identity.

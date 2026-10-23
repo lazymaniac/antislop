@@ -4629,12 +4629,13 @@ fn land(
 /// Keep the original spelling so existing worktrees can be resumed.
 fn task_path_component(id: &str) -> Result<&str> {
     if id.len() < 8
+        || id.starts_with("combine-")
         || !id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(Error::Invalid(format!(
-            "invalid task ID {:?}: expected at least 8 ASCII letters, digits, hyphens or underscores",
+            "invalid task ID {:?}: expected at least 8 ASCII letters, digits, hyphens or underscores, excluding reserved combine- prefix",
             id.chars().take(32).collect::<String>()
         )));
     }
@@ -4650,7 +4651,16 @@ fn branch(task: &Task) -> Result<String> {
 fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
     let path = state.join("worktrees").join(task_path_component(&task.id)?);
     if path.exists() {
-        git::worktree_branch(&path)
+        let actual = git::worktree_branch(&path)?;
+        let expected = branch(task)?;
+        let legacy = format!("antislop/{}", &task_path_component(&task.id)?[..8]);
+        if actual != expected && actual != legacy {
+            return Err(Error::Invalid(format!(
+                "task {} worktree is on unrelated branch {actual}; expected {expected} or legacy {legacy}",
+                task.id
+            )));
+        }
+        Ok(actual)
     } else {
         branch(task)
     }
@@ -4929,6 +4939,8 @@ mod reliability_tests {
                     .contains("invalid task ID")
             );
         }
+        task.id = format!("combine-base-{}", "a".repeat(64));
+        assert!(branch(&task).is_err());
         task.id = "12345678-1234-4234-8234-123456789abc".to_owned();
         assert_eq!(branch(&task).unwrap(), format!("antislop/{}", task.id));
         let first = branch(&task).unwrap();
@@ -4962,7 +4974,7 @@ mod reliability_tests {
         git::add_worktree(root, &path, legacy, &base).unwrap();
         let actual = worktree_branch(&state, &task).unwrap();
         assert_eq!(actual, legacy);
-        git::add_worktree(root, &path, &branch(&task).unwrap(), &base).unwrap();
+        git::add_worktree(root, &path, &actual, &base).unwrap();
         assert_eq!(git::worktree_branch(&path).unwrap(), legacy);
         // A second task sharing the prefix gets its own branch and worktree.
         task.id = "12345678-2222-4222-8222-222222222222".into();
@@ -4981,6 +4993,26 @@ mod reliability_tests {
         git::remove_worktree_keep_branch(root, &other).unwrap();
         assert!(git::add_worktree(root, &other, &unique, &base).is_err());
         git::add_worktree(root, &other, &unique, &changed).unwrap();
+        assert_eq!(git::head(&other).unwrap(), changed);
+        // A switched worktree must neither resume nor delete an unrelated branch.
+        assert!(
+            std::process::Command::new("git")
+                .args(["checkout", "--quiet", "-b", "foreign-user-branch"])
+                .current_dir(&other)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            worktree_branch(&state, &task)
+                .unwrap_err()
+                .to_string()
+                .contains("unrelated branch")
+        );
+        assert!(git::add_worktree(root, &other, &unique, &changed).is_err());
+        assert!(git::remove_worktree(root, &other, &unique).is_err());
+        assert!(other.exists());
+        assert_eq!(git::worktree_branch(&other).unwrap(), "foreign-user-branch");
         assert_eq!(git::head(&other).unwrap(), changed);
         assert!(
             std::process::Command::new("git")

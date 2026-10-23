@@ -157,6 +157,16 @@ pub fn worktree_branch(path: &Path) -> Result<String> {
     ok(path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
 }
 
+fn require_worktree_branch(path: &Path, expected: &str) -> Result<()> {
+    let actual = worktree_branch(path)?;
+    if actual != expected {
+        return Err(Error::Invalid(format!(
+            "worktree branch {actual} differs from expected branch {expected}"
+        )));
+    }
+    Ok(())
+}
+
 pub fn head(dir: &Path) -> Result<String> {
     ok(dir, &["rev-parse", "HEAD"])
 }
@@ -168,7 +178,7 @@ pub fn common_base(dir: &Path, left: &str, right: &str) -> Result<String> {
 /// A worktree on a new branch `branch` at `base`; reused if it exists.
 pub fn add_worktree(project: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
     if path.exists() {
-        worktree_branch(path)?;
+        require_worktree_branch(path, branch)?;
         return Ok(());
     }
     if let Some(parent) = path.parent() {
@@ -198,6 +208,7 @@ pub fn add_worktree(project: &Path, path: &Path, branch: &str, base: &str) -> Re
 }
 
 pub fn remove_worktree(project: &Path, path: &Path, branch: &str) -> Result<()> {
+    require_worktree_branch(path, branch)?;
     let target = path.to_string_lossy();
     ok(project, &["worktree", "remove", "--force", &target])?;
     let _ = git(project, &["branch", "-D", branch]);
