@@ -17,3 +17,9 @@ R044	orchestration	Endless style disputes.	Look for findings without criteria or
 R070	orchestration	An agent acts outside the agreed team or scope.	Track processes, tools, and native subagents.
 R099	orchestration	Excessive process overhead relative to quality.	Measure time to acceptance and compare the baseline.
 R196	orchestration	A risk has no responsible verifier.	Check complete RiskCoverage against the catalog version.
+R288	orchestration	A dependent task starts before its required inputs are ready and accepted.	Compare launch time with required dependency status, artifact availability, and verification outcomes.
+R289	orchestration	A changed upstream result does not trigger reassessment of dependent tasks and verdicts.	Trace result provenance and identify which downstream tasks require revalidation after an input changes.
+R290	orchestration	A late message or verdict affects the wrong round or a superseded task.	Check response association with the task, attempt, and input revision and trace delayed responses after retries.
+R291	orchestration	Cancelled or superseded assignments continue running in part of the team.	Trace cancellation propagation and confirm that affected work ends and late results are handled without reviving obsolete assignments.
+R292	orchestration	A blocked task has no actionable recovery path despite available coordination actions.	Identify the cause, responsible person or role, and next step for each blocker and check whether independent tasks can proceed.
+R293	orchestration	Parallel assignments rely on conflicting agreements about a shared contract.	Compare delegated contracts, decisions, and responsibility boundaries before launch and after shared agreements change.
