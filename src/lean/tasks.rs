@@ -1647,7 +1647,14 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         }
         Research => {
             "every source exists and supports the claim attributed to it; facts \
-             separated from conclusions; sources current enough"
+             separated from conclusions; sources current enough; source \
+             credibility and applicability to the question assessed; original \
+             materials inspected where accessible and access limitations \
+             disclosed; counterevidence sought and source dependencies checked \
+             without requiring multiple sources for every fact; conflicting \
+             findings explained or explicitly unresolved; absence claims \
+             justified beyond an empty search result; important research \
+             questions mapped to evidence or explicit unknowns before stopping"
         }
         Writing => {
             "factually correct against the sources and the project; consistent; \
