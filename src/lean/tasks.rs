@@ -325,6 +325,19 @@ fn validate(tasks: &[TaskSpec]) -> Result<()> {
     crate::require(!tasks.is_empty(), "the plan has no tasks")?;
     let mut seen = std::collections::BTreeSet::new();
     for task in tasks {
+        crate::require(
+            !task.id.is_empty()
+                && task.id.len() <= 256
+                && task
+                    .id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+                && task.id.split('.').all(|fragment| !fragment.is_empty()),
+            &format!(
+                "invalid task id {:?}: use 1–256 ASCII letters, digits, hyphens or underscores, optionally separated by single dots (no empty fragments)",
+                task.id
+            ),
+        )?;
         for dependency in &task.depends_on {
             crate::require(
                 seen.contains(dependency.as_str()),
@@ -656,6 +669,15 @@ pub fn missing_quality_agents(tasks: &[TaskSpec]) -> Vec<&'static PredefinedAgen
 
 /// Reserve a task ID, keeping the base when free and otherwise trying -2, -3, ….
 fn reserve_task_id(base: &str, ids: &mut BTreeSet<String>) -> String {
+    // Leave room for collision suffixes when a writer already uses the limit.
+    // Normal IDs retain their familiar options/gate names unchanged.
+    let bounded;
+    let base = if base.len() > 240 {
+        bounded = format!("task-{}", crate::hash(base.as_bytes()));
+        bounded.as_str()
+    } else {
+        base
+    };
     let mut id = base.to_owned();
     let mut suffix = 2;
     while !ids.insert(id.clone()) {
@@ -2160,6 +2182,75 @@ mod tests {
 
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn task_ids_reject_paths_and_empty_fragments() {
+        for id in [
+            "",
+            "/tmp/task",
+            "a/b",
+            r"a\b",
+            "..",
+            "a..b",
+            ".a",
+            "a.",
+            "a//b",
+            "a b",
+            "é",
+        ] {
+            let task = json!({"id": id, "title": "Task", "goal": "Assess",
+                "kind": "analysis", "verifier": {"focus": "claims"}});
+            let answer = format!("```plan\n{}\n```", json!({"tasks": [task]}));
+            let error = parse_plan(&answer).1.unwrap().unwrap_err().to_string();
+            assert!(error.contains("invalid task id"), "{id:?}: {error}");
+        }
+        let mut task: TaskSpec = serde_json::from_value(json!({
+            "id": "x".repeat(257), "title": "Task", "goal": "Assess",
+            "kind": "analysis", "verifier": {"focus": "claims"}
+        }))
+        .unwrap();
+        assert!(validate(&[task.clone()]).is_err());
+        task.id = "x".repeat(256);
+        task.writes = true;
+        assert!(validate(&[task.clone()]).is_ok());
+        let generated = with_options(vec![
+            task.clone(),
+            TaskSpec {
+                id: format!("{}-2", "x".repeat(254)),
+                ..task
+            },
+        ]);
+        validate(&generated).unwrap();
+    }
+
+    #[test]
+    fn saved_plans_keep_valid_ids_and_generated_options() {
+        let ids = [
+            "W1",
+            "W2",
+            "options-W1",
+            "W1-options",
+            "W1-options-2",
+            "task_1.v2",
+        ];
+        let saved = json!({"tasks": ids.iter().map(|id| json!({
+            "id": id, "title": "Task", "goal": "Assess", "writes": true,
+            "kind": "implementation", "verifier": {"focus": "claims"}
+        })).collect::<Vec<_>>()});
+        let answer = format!("```plan\n{saved}\n```");
+        let tasks = parse_plan(&answer).1.unwrap().unwrap();
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            ids
+        );
+        let restored: Vec<TaskSpec> =
+            serde_json::from_str(&serde_json::to_string(&tasks).unwrap()).unwrap();
+        assert_eq!(restored, tasks);
+        validate(&with_options(with_required_agents(restored))).unwrap();
+    }
 
     #[test]
     fn plan_block_is_split_from_the_answer() {

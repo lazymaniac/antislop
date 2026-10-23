@@ -3867,10 +3867,7 @@ impl Core {
         if changes.is_empty() {
             return Ok(onto);
         }
-        let scratch = self
-            .state
-            .join("worktrees")
-            .join(format!("base-{plan_id}-{}", spec.id));
+        let scratch = writer_base_scratch(&self.state, plan_id, &spec.id);
         git::combine(project, &scratch, &onto, &changes).map_err(|error| {
             Error::Invalid(format!(
                 "could not combine the results of {} for {}: {error}",
@@ -4645,6 +4642,15 @@ pub fn comment_label(target: &str, plan: &[Task]) -> String {
     }
 }
 
+/// Hash a length-framed pair so even legacy, unvalidated IDs cannot form paths
+/// or alias another plan/task pair by moving a delimiter between the IDs.
+fn writer_base_scratch(state: &Path, plan_id: &str, spec_id: &str) -> PathBuf {
+    let key = format!("{}:{plan_id}{spec_id}", plan_id.len());
+    state
+        .join("worktrees")
+        .join(format!("base-{}", crate::hash(key.as_bytes())))
+}
+
 /// Add options after quality gates so every writer, including gates, is covered.
 fn finalize_plan(specs: Vec<TaskSpec>, required_gates: bool) -> Vec<TaskSpec> {
     let specs = if required_gates {
@@ -4797,6 +4803,30 @@ mod reliability_tests {
     use super::*;
 
     #[test]
+    fn scratch_paths_contain_untrusted_ids_and_distinguish_pairs() {
+        let state = Path::new(".antislop");
+        for id in ["../../escape", "/tmp/escape", r"a\b", "", "W1", "a..b"] {
+            let path = writer_base_scratch(state, "../../plan", id);
+            assert_eq!(path.parent(), Some(state.join("worktrees").as_path()));
+            assert!(
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("base-")
+            );
+        }
+        assert_ne!(
+            writer_base_scratch(state, "a-b", "c"),
+            writer_base_scratch(state, "a", "b-c")
+        );
+        assert_ne!(
+            writer_base_scratch(state, "p", "W1"),
+            writer_base_scratch(state, "p", "w1")
+        );
+    }
+
+    #[test]
     fn finalization_adds_options_with_and_without_required_gates() {
         let writer: TaskSpec = serde_json::from_value(json!({
             "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
@@ -4939,9 +4969,7 @@ mod reliability_tests {
             "local edit\n"
         );
         assert!(!root.join("config.txt").exists());
-        let scratch = root
-            .join(".antislop/worktrees")
-            .join(format!("base-{}-t5", tasks[4].plan_id));
+        let scratch = writer_base_scratch(&root.join(".antislop"), &tasks[4].plan_id, "t5");
         assert!(!scratch.exists());
         assert!(!scratch.with_extension("patch").exists());
 
