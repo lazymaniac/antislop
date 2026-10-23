@@ -2288,8 +2288,37 @@ pub fn requirements_summary(answer: &str) -> Option<String> {
     None
 }
 
+/// Readable id + text list of the requirements and criteria a verifier must check.
+fn requirements_note(entries: &[super::ledger::LedgerEntry]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut note = String::from("Requirements and acceptance criteria:\n");
+    for entry in entries {
+        note.push_str(&format!(
+            "- {}: {}\n",
+            entry.spec.id, entry.spec.interpretation
+        ));
+        for criterion in &entry.spec.criteria {
+            let optional = if criterion.mandatory {
+                ""
+            } else {
+                " (optional)"
+            };
+            note.push_str(&format!(
+                "  - {}{optional}: {}\n",
+                criterion.id, criterion.text
+            ));
+        }
+    }
+    note
+}
+
 /// Full context for a new provider session; reports are deliberately unabridged.
-pub(crate) fn round_handoff_prompt(handoff: &super::rounds::RoundHandoff) -> String {
+pub(crate) fn round_handoff_prompt(
+    handoff: &super::rounds::RoundHandoff,
+    verifier: bool,
+) -> String {
     let protection = if handoff.in_place {
         user_edits_note(&handoff.protected_paths)
     } else if handoff.protected_paths.is_empty() {
@@ -2321,9 +2350,13 @@ pub(crate) fn round_handoff_prompt(handoff: &super::rounds::RoundHandoff) -> Str
         serde_json::json!(handoff.files),
         dependency_reports_note(&handoff.dependencies),
         format_args!(
-            "\nPrevious round interruptions (fresh session continues from files and the report):\n{}\nRequirements and acceptance criteria:\n{}\nCurrent open comments:\n{}{}",
+            "\nPrevious round interruptions (fresh session continues from files and the report):\n{}\n{}Current open comments:\n{}{}",
             serde_json::json!(handoff.interruptions),
-            serde_json::json!(handoff.requirements),
+            if verifier {
+                requirements_note(&handoff.requirements)
+            } else {
+                String::new()
+            },
             serde_json::json!(handoff.comments),
             protection
         ),
@@ -2332,6 +2365,51 @@ pub(crate) fn round_handoff_prompt(handoff: &super::rounds::RoundHandoff) -> Str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn requirements_reach_only_verifiers_as_readable_id_and_text() {
+        let entry: crate::lean::ledger::LedgerEntry = serde_json::from_value(serde_json::json!({
+            "run_id":"run","version":1,"spec_revision":1,"original":"","status":"active",
+            "spec":{"id":"R1","source":{"source_id":"s","start":0,"end":0},
+                "interpretation":"Export works 👩‍💻",
+                "criteria":[
+                    {"id":"C1","text":"CSV has a header"},
+                    {"id":"C2","text":"Large files stream","mandatory":false}
+                ]}
+        }))
+        .unwrap();
+        let task: TaskSpec = serde_json::from_value(serde_json::json!({
+            "id":"t","title":"t","goal":"deliver observable result","kind":"analysis",
+            "verifier":{"focus":"correctness"}
+        }))
+        .unwrap();
+        let handoff = crate::lean::rounds::RoundHandoff {
+            task,
+            round: 1,
+            worktree: "/wt".into(),
+            report: None,
+            verdict: None,
+            files: vec![],
+            base: None,
+            result: None,
+            interrupted: false,
+            interruptions: vec![],
+            dependencies: vec![],
+            requirements: vec![entry],
+            comments: vec![],
+            protected_paths: vec![],
+            primary: "/primary".into(),
+            in_place: false,
+        };
+        let verifier = super::round_handoff_prompt(&handoff, true);
+        assert!(verifier.contains(
+            "Requirements and acceptance criteria:\n- R1: Export works 👩‍💻\n  - C1: CSV has a header\n  - C2 (optional): Large files stream\n"
+        ));
+        assert!(!verifier.contains("\"interpretation\""));
+        let worker = super::round_handoff_prompt(&handoff, false);
+        assert!(!worker.contains("Requirements and acceptance criteria"));
+        assert!(!worker.contains("CSV has a header"));
+    }
+
     #[test]
     fn graph_edits_insert_between_existing_dependencies_without_removing_nodes() {
         let spec = |id: &str, deps: &[&str]| {

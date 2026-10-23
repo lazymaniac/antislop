@@ -524,7 +524,7 @@ mod tests {
         let handoff = core.round_handoff(&task.id, 4, cwd).unwrap();
         assert!(handoff.interrupted);
         assert_eq!(handoff.report.as_ref().unwrap().0, 2);
-        let prompt = tasks::round_handoff_prompt(&handoff);
+        let prompt = tasks::round_handoff_prompt(&handoff, false);
         assert!(prompt.contains(&"Latest complete report\n".repeat(2000)));
         assert!(prompt.contains("Keep all context"));
         assert!(prompt.contains("Check everything"));
@@ -1047,7 +1047,7 @@ echo '{"type":"turn.completed"}'
             if !after_report {
                 assert!(handoff.interrupted)
             }
-            let context = tasks::round_handoff_prompt(&handoff);
+            let context = tasks::round_handoff_prompt(&handoff, false);
             assert!(context.contains("interrupted"));
             assert!(context.contains(&role));
             task.round = 3;
@@ -1110,7 +1110,7 @@ echo '{"type":"turn.completed"}'
         core.store.update_task(&task).unwrap();
         let handoff = core.round_handoff(&task.id, 2, dir.path()).unwrap();
         assert_eq!(handoff.protected_paths, ["user.txt"]);
-        let prompt = tasks::round_handoff_prompt(&handoff);
+        let prompt = tasks::round_handoff_prompt(&handoff, false);
         assert!(prompt.contains("Changes already present in the primary working tree"));
         assert!(!prompt.contains("You work directly in the user's directory"));
         let mut config = (*core.config_snapshot()).clone();
@@ -1118,7 +1118,7 @@ echo '{"type":"turn.completed"}'
         *core.config.write().unwrap() = Arc::new(config);
         let handoff = core.round_handoff(&task.id, 2, dir.path()).unwrap();
         assert_eq!(handoff.protected_paths, ["user.txt"]);
-        let prompt = tasks::round_handoff_prompt(&handoff);
+        let prompt = tasks::round_handoff_prompt(&handoff, false);
         assert!(prompt.contains("You work directly in the user's directory"));
         assert!(prompt.contains("do not modify them"));
     }
@@ -1181,7 +1181,7 @@ echo '{"type":"turn.completed"}'
             .unwrap();
         assert_eq!(handoff.dependencies.len(), 1);
         assert_eq!(handoff.dependencies[0].report, full_report);
-        let prompt = tasks::round_handoff_prompt(&handoff);
+        let prompt = tasks::round_handoff_prompt(&handoff, false);
         assert!(prompt.contains(&full_report));
         assert!(!prompt.contains("UNRELATED REPORT"));
         std::fs::remove_file(content_path(&others[0].id, "report")).unwrap();

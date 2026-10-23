@@ -3128,7 +3128,10 @@ impl Core {
                 && let SessionPolicy::TaskRound { task, round } = &session_policy
             {
                 let handoff = self.round_handoff(task, *round, &spec.cwd)?;
-                text.push_str(&tasks::round_handoff_prompt(&handoff));
+                text.push_str(&tasks::round_handoff_prompt(
+                    &handoff,
+                    task_role(&role).is_some_and(|(_, verifier)| verifier),
+                ));
             }
             if let Some((id, _)) = task_role(&role)
                 && let Some(task) = self.store.task_by_id(id)?
@@ -4604,7 +4607,7 @@ impl Core {
             if fresh {
                 prompt
             } else {
-                prompt + &tasks::round_handoff_prompt(&handoff)
+                prompt + &tasks::round_handoff_prompt(&handoff, false)
             }
         })?
         else {
