@@ -1780,6 +1780,27 @@ fn dependency_metadata(text: &str) -> String {
     escaped
 }
 
+#[derive(Debug)]
+pub(crate) struct DependencyReport {
+    pub id: String,
+    pub title: String,
+    pub report: String,
+}
+
+pub(crate) fn dependency_reports_note(reports: &[DependencyReport]) -> String {
+    let records: Vec<_> = reports
+        .iter()
+        .map(|entry| {
+            (
+                entry.id.as_str(),
+                entry.title.as_str(),
+                entry.report.as_str(),
+            )
+        })
+        .collect();
+    upstream_note(&records)
+}
+
 /// What the tasks this one depends on concluded. Their reports live only in
 /// the runtime's store, out of reach of an agent reading files, so an
 /// approved dependency's full report is handed over; a task with
@@ -2269,13 +2290,24 @@ pub fn requirements_summary(answer: &str) -> Option<String> {
 
 /// Full context for a new provider session; reports are deliberately unabridged.
 pub(crate) fn round_handoff_prompt(handoff: &super::rounds::RoundHandoff) -> String {
+    let protection = if handoff.in_place {
+        user_edits_note(&handoff.protected_paths)
+    } else if handoff.protected_paths.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nChanges already present in the primary working tree at {}:\n{}\nPreserve these changes when integrating. Work only in the allocated worktree; never edit the primary tree during repair. These paths do not prohibit task changes inside your own worktree.\n",
+            handoff.primary.display(),
+            serde_json::json!(handoff.protected_paths)
+        )
+    };
     let report = handoff.report.as_ref().map_or_else(
         || "No completed worker report is available.".to_owned(),
         |(round, report)| format!("Latest worker report (source round {round}):\n{report}"),
     );
     format!(
         "\n\nRound handoff\nFull task and working rules: {}\nWorktree: {}\nRound: {}\nInterrupted before a report: {}\n{}\nPrevious verifier findings and evidence: {}\nBase commit: {:?}\nLatest result commit: {:?}\nFiles changed in earlier rounds: {}\nInspect the actual files, uncommitted changes and the Git diff between the base and latest result yourself. Preserve user changes and follow repository instructions. A verifier must assess every obligation and the complete task, including areas outside earlier findings.\n{}{}",
-        handoff.task,
+        serde_json::json!(handoff.task),
         handoff.worktree.display(),
         handoff.round,
         handoff.interrupted,
@@ -2287,8 +2319,14 @@ pub(crate) fn round_handoff_prompt(handoff: &super::rounds::RoundHandoff) -> Str
         handoff.base,
         handoff.result,
         serde_json::json!(handoff.files),
-        handoff.upstream,
-        handoff.instructions,
+        dependency_reports_note(&handoff.dependencies),
+        format_args!(
+            "\nPrevious round interruptions (fresh session continues from files and the report):\n{}\nRequirements and acceptance criteria:\n{}\nCurrent open comments:\n{}{}",
+            serde_json::json!(handoff.interruptions),
+            serde_json::json!(handoff.requirements),
+            serde_json::json!(handoff.comments),
+            protection
+        ),
     )
 }
 

@@ -63,11 +63,17 @@ work.
 `lean::agent::run(spec, prompt, cancel, on_event)` starts one CLI turn and
 streams normalized events: `Session(id)`, `Text(delta)`, `Tool{name, detail}`,
 `Usage`, and finally `Done{text}` or a failure with the CLI's own message.
+Codex and OpenCode first probe for native attachment support. Supported direct
+executables use a daemon-owned app-server/serve backend; the interactive CLI
+and structured driver share its provider thread/session. Other providers,
+unsupported CLIs and custom launchers retain the JSON driver below.
+An unsupported server API also falls back before submitting a prompt. Once a
+native backend accepts a turn, a failure never resubmits it through another driver.
 
 | | read-only (orchestrator, verifier, analysis) | write (worker) |
 |---|---|---|
 | cwd | project (or the worktree being reviewed) | task worktree |
-| codex | `exec --json -s read-only -C <dir>` | `-s danger-full-access` |
+| codex | `exec --json -s read-only -C <dir>` | `-s workspace-write` |
 | agy | `-p --output-format stream-json --mode plan` | `--mode accept-edits --sandbox` |
 | claude | `-p --output-format stream-json --permission-mode plan` | `acceptEdits` |
 | gemini | `-p --output-format stream-json --approval-mode plan` | `auto_edit` (no shell, no sandbox) |
@@ -269,9 +275,45 @@ Per-conversation reads include global config events while keeping private events
 scoped to their conversation. An agent's details show time when both ends are known.
 
 The daemon's `run_context` request takes `conversation` and `turn`, returning the
-context or `null` when none is recorded for that scope. The currently active
-backend remains `cli`; native server adapters and an embedded terminal are not
-implemented yet.
+context or `null` when none is recorded for that scope. Its backend is `cli`,
+`codex_app_server` or `opencode_server`. Provider thread, session and executing
+turn IDs are recorded separately. An executing backend failure disables
+automatic delivery retries; it never falls back and resubmits the prompt.
+
+Native CLIs connect through a managed gateway. Text submissions use the durable
+`send_to_agent` queue, role locks and round/run checks. Interrupts are recorded
+separately. Requests to change the managed thread, worktree, permissions or
+agent, and unsupported operations such as arbitrary CLI shell execution, return
+explicit errors. OpenCode events and session lists are restricted to its session.
+The worker mailbox is checked under the integration lock before verification.
+
+`terminal_open`, `terminal_read`, `terminal_input`, `terminal_resize` and
+`terminal_detach` take a conversation and role. Opening returns a view handle;
+subsequent requests must use that handle. Reads return viewport cells, cursor,
+revision and attachment errors, or `null` for an unchanged revision. Input has
+an increasing sequence starting at 1; duplicate sequences do not repeat keys.
+If an input acknowledgement is lost, the frontend reconnects with the same
+sequence. Unconfirmed text is recovered into the conversation/role's message
+draft with the raw error and a request to check the terminal before resending;
+subsequent queued text is recovered there as well. It is never submitted again
+automatically. Closing a view drains its accepted input before detaching.
+Detached or expired handles cannot send input. Detaching preserves the PTY and
+unfinished CLI input. Unopened idle backends are released and restored from
+provider history on demand; a missing worktree falls back to JSON inspection.
+Process tracking and sockets live under `.antislop/`; daemon restart interrupts
+in-flight turns and reaps its previous processes.
+
+The emulator uses `portable-pty` and the published WezTerm terminal core. It has
+no scrollback, bounds dimensions to 500×200, and filters graphics/string controls
+before allocating terminal images. A grapheme adapter keeps combining marks and
+ZWJ sequences together across reads and resize. Terminal query replies, keyboard
+encoding, bracketed paste and mouse input use the emulator's terminal state.
+Bounded OSC palette queries are preserved for native theme detection; image and
+clipboard string controls remain filtered. PTY writer backpressure cannot stop
+the emulator's writer thread or discard subsequent keystrokes.
+
+Native Overview implementation and acceptance evidence are indexed in
+[native-overview.md](native-overview.md).
 
 Writer worktrees live in `<state>/worktrees/<task>`, removed after a clean
 integration. A real nine-task analysis of this repository (40 agent turns,
@@ -326,6 +368,14 @@ directory to run both. The socket is `<state>/core.sock`, or
   and Raw JSON view, `/` searches whole records (`DetailRecord`) with query highlighting, and per-tab
   scroll and search memory is preserved across tab and conversation switches. Explicit notices state
   historical data gaps (`unavailable (CLI did not report them)`, `unknown`).
+  Current Codex/OpenCode Overview panels display their native terminal when
+  supported; older rounds retain their own JSON history. Two panels appear from
+  80 columns; `Ctrl+W` changes the active panel outside terminal focus. `i` focuses
+  the CLI and `Ctrl+]` returns to antislop. In terminal focus, Escape, Ctrl+C,
+  paste and mouse events go to the CLI. Outside focus, `a` opens the existing
+  message composer, `h` switches to/from JSON history and `r` retries attachment.
+  Existing drafts, search state, small-terminal guards, `NO_COLOR` and
+  `ANTISLOP_ASCII` remain available.
   `/` in the graph finds an agent by role or task title; `@` on an empty draft or `Ctrl+P > Address a message`
   opens a recipient picker (`@orchestrator`, `@all`, `@worker:t1`, `@verifier:t1`), validated by the daemon.
   Ctrl+F searches the conversation (newest first; Enter brings the entry to the top, highlighted);
@@ -978,7 +1028,15 @@ benchmark. This gate makes no new guarantees for these three limitations.
 Each worker and task verifier starts a fresh provider session in each round.
 Mail follow-ups and verdict coverage corrections within that round reuse the
 role's session, provided its provider, profile, directory and access still match.
-The persisted `turn_scopes` and `run_contexts` enforce this after daemon restart;
+A known resumed CLI identity is persisted before execution, so providers that
+omit repeated session announcements do not break same-round continuity.
+Compatibility also checks a SHA-256 fingerprint of the resolved provider,
+profile name, executable, launcher arguments, model and effort. The fingerprint
+is recorded in the existing `turn_started` event; changing settings under the
+same profile name starts a new session with a full handoff. Missing fingerprints
+in older task turns also start fresh. Terminal attachment refuses a task session
+whose recorded execution settings differ from the current profile.
+The persisted `turn_scopes`, `run_contexts` and execution event enforce this after daemon restart;
 orchestrator, plan verifier and code review session policies are unchanged.
 Native session rotation retires the old gateway, terminal and provider process.
 Historical provider identifiers and transcripts remain available for inspection.
@@ -992,5 +1050,22 @@ no report falls back to the latest earlier report and explicitly directs the
 agent to inspect uncommitted work. Completed worker reports are persisted before
 mail follow-ups. Missing first reports are normal; content and Git read failures
 are surfaced with their underlying cause. Integration repair uses the same
-handoff alongside its conflict instructions. No extra model call, configuration
+handoff alongside its conflict instructions, even when continuing a session.
+Dependency collection reads only requested approved reports, without loading
+unrelated task reports or dependency verdicts; team instructions read task metadata only.
+The runtime gathers a typed task, dependencies, requirement entries, comments and protected
+primary-tree paths; the prompt module formats them. In-place protection names
+files the worker must not edit. Worktree protection identifies concurrent primary
+changes to preserve during integration without forbidding the task's own edits.
+A completed `agent_final` recovers the window before the scheduler saves a report;
+receipt-only replies never replace task reports. Oversized context is sent whole;
+a provider rejection is retained as a raw turn failure without shortening reports.
+The handoff also names interrupted roles and their recorded failure reasons from
+the previous round, including interruption after the worker report but before a verdict.
+
+Offline tests cover native thread/session creation and gateway/process retirement
+for both Codex and OpenCode, same-round continuity, configuration changes under
+one profile name, restart before a report or verdict, long-context rejection,
+historical rename/deletion/revert paths, and integration-repair handoffs.
+No extra model call, configuration
 flag, database schema or report archive is required.

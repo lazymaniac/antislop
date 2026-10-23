@@ -409,6 +409,40 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_verified_before_landing() 
     assert!(calls.contains("Automatic integration conflict"));
     assert!(calls.contains("Verify the conflict resolution independently"));
     assert!(calls.contains("integration_question"));
+    let logged: Vec<Value> = calls
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let repair = logged
+        .iter()
+        .filter_map(|call| call["args"].as_array()?.last()?.as_str())
+        .find(|prompt| prompt.contains("Automatic integration conflict"))
+        .unwrap();
+    for required in [
+        "Round handoff",
+        "Create hello.txt",
+        "Latest worker report",
+        "wrote hello.txt",
+        "Requirements and acceptance criteria",
+        "Current open comments",
+        "hello.txt",
+        "README",
+        "Changes already present in the primary working tree",
+        "never edit the primary tree during repair",
+    ] {
+        assert!(
+            repair.contains(required),
+            "missing {required} from integration handoff: {repair}"
+        );
+    }
+    let verify = logged
+        .iter()
+        .filter_map(|call| call["args"].as_array()?.last()?.as_str())
+        .find(|prompt| prompt.contains("Verify the conflict resolution independently"))
+        .unwrap();
+    assert!(verify.contains("Round: 2"));
+    assert!(verify.contains("Your obligations"));
+    assert!(verify.contains("Preserved the user draft and added the worker greeting."));
 }
 
 #[test]
@@ -1331,8 +1365,8 @@ fn a_retry_invalidates_the_earlier_rounds_card_result() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
-    // A retried round resumes the verifier's session, so its prompt is a
-    // follow-up; the stub must answer those as a verifier, not a worker.
+    // A new round starts a fresh verifier session. Coverage follow-ups within
+    // that round also need verifier answers from the stub.
     let script = std::fs::read_to_string(&agy).unwrap().replace(
         "elif \"You verify\" in prompt:",
         "elif (\"You verify\" in prompt or \"account again\" in prompt or \"does not account for\" in prompt):",

@@ -6,6 +6,7 @@ mod opencode;
 
 use super::{Core, agent, daemon, store};
 use crate::{Error, Result, config::ProviderKind, require};
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufReader, Read};
@@ -17,6 +18,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 pub(crate) const EXECUTION_FAILED: &str =
     "native backend execution failed (automatic retry disabled): ";
+const UNSUPPORTED_PROTOCOL: &str = "native backend protocol unsupported: ";
 
 pub(super) fn invalid(error: impl std::fmt::Display) -> Error {
     Error::Invalid(error.to_string())
@@ -47,6 +49,7 @@ pub struct Session {
     pub(crate) executing: AtomicBool,
     pub(crate) user_interrupted: AtomicBool,
     pub(crate) touched: Mutex<Instant>,
+    pub(crate) scope_round: Option<u32>,
     process: Process,
 }
 
@@ -99,6 +102,16 @@ impl Registry {
         conversation: &str,
         role: &str,
     ) -> Result<Arc<Session>> {
+        self.restore_with(core, conversation, role, capable)
+    }
+
+    fn restore_with(
+        &self,
+        core: &Core,
+        conversation: &str,
+        role: &str,
+        probe: impl FnOnce(&agent::Spec) -> bool,
+    ) -> Result<Arc<Session>> {
         let turn = core
             .store
             .last_turn(conversation, role)?
@@ -150,7 +163,36 @@ impl Registry {
             spec.resume.is_some(),
             "waiting for the native provider's session identifier",
         )?;
-        self.prepare(core, conversation, role, &spec)?
+        let execution_signature =
+            super::rounds::spec_signature(&context.profile, profile.effort, &spec)?;
+        if super::task_role(role).is_some() {
+            let recorded: Option<String> = core
+                .store
+                .db()
+                .query_row(
+                    "SELECT json_extract(payload,'$.execution_signature') FROM events
+                 WHERE turn_id=?1 AND kind='turn_started' ORDER BY seq DESC LIMIT 1",
+                    [&turn.id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten();
+            require(
+                recorded.as_deref() == Some(execution_signature.as_str()),
+                "native execution profile changed; start a fresh task turn before attaching",
+            )?;
+        }
+        let scope = role_round(core, conversation, role)?
+            .map(|(task, round)| {
+                format!(
+                    "{:?}:{}:{}",
+                    super::SessionPolicy::TaskRound { task, round },
+                    context.profile,
+                    execution_signature
+                )
+            })
+            .unwrap_or_default();
+        self.prepare_scoped_with(core, conversation, role, &spec, &scope, probe)?
             .ok_or_else(|| {
                 invalid("native attachment is unsupported by the current CLI or launcher")
             })
@@ -165,6 +207,7 @@ impl Registry {
         sessions.clear();
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn prepare(
         &self,
         core: &Core,
@@ -182,6 +225,18 @@ impl Registry {
         role: &str,
         spec: &agent::Spec,
         scope: &str,
+    ) -> Result<Option<Arc<Session>>> {
+        self.prepare_scoped_with(core, conversation, role, spec, scope, capable)
+    }
+
+    fn prepare_scoped_with(
+        &self,
+        core: &Core,
+        conversation: &str,
+        role: &str,
+        spec: &agent::Spec,
+        scope: &str,
+        probe: impl FnOnce(&agent::Spec) -> bool,
     ) -> Result<Option<Arc<Session>>> {
         // Resume changes after the first turn, but does not replace the backend.
         let mut stable = spec.clone();
@@ -212,16 +267,18 @@ impl Registry {
         {
             return Ok(None);
         }
-        if !capable(spec) {
+        if !probe(spec) {
             return Ok(None);
         }
-        let session = Arc::new(Session::start(
-            core,
-            conversation,
-            role,
-            spec.clone(),
-            signature,
-        )?);
+        let session = match Session::start(core, conversation, role, spec.clone(), signature) {
+            Ok(session) => Arc::new(session),
+            // An older CLI may expose the server flag but lack the RPC API.
+            // This decision is made before submitting any executable prompt.
+            Err(Error::Invalid(message)) if message.starts_with(UNSUPPORTED_PROTOCOL) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
         session.start_gateway()?;
         sessions.insert(key, session.clone());
         Ok(Some(session))
@@ -304,6 +361,7 @@ impl Session {
             _ => return Err(invalid("provider has no native adapter")),
         };
         let started = spec.resume.is_some();
+        let scope_round = role_round(core, conversation, role)?.map(|(_, round)| round);
         Ok(Self {
             core: core.weak.get().expect("core weak").clone(),
             conversation: conversation.into(),
@@ -324,6 +382,7 @@ impl Session {
             executing: AtomicBool::new(false),
             user_interrupted: AtomicBool::new(false),
             touched: Mutex::new(Instant::now()),
+            scope_round,
             process,
         })
     }
@@ -435,6 +494,18 @@ impl Session {
             .map(|(id, _)| core.store.task_by_id(id))
             .transpose()?
             .flatten();
+        require(
+            latest
+                .session_id
+                .as_deref()
+                .is_none_or(|id| id == self.identity),
+            "managed session changed; reopen the native terminal",
+        )?;
+        require(
+            task.as_ref()
+                .is_none_or(|task| Some(task.round) == self.scope_round),
+            "task round changed; reopen the native terminal",
+        )?;
         use sha2::Digest;
         let digest = sha2::Sha256::digest(
             format!(
@@ -528,6 +599,26 @@ pub(crate) struct Process {
     diagnostic: Arc<Mutex<Vec<u8>>>,
     registered: Mutex<Option<(Weak<Core>, u32)>>,
     readers: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+fn role_round(core: &Core, conversation: &str, role: &str) -> Result<Option<(String, u32)>> {
+    let row = core
+        .store
+        .db()
+        .query_row(
+            "SELECT s.task_id,s.round FROM turns t
+        LEFT JOIN turn_scopes s ON s.turn_id=t.id WHERE t.conversation_id=?1 AND t.role=?2
+        ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",
+            rusqlite::params![conversation, role],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<u32>>(1)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(row.and_then(|(task, round)| task.zip(round)))
 }
 
 impl Process {
@@ -658,7 +749,7 @@ impl Drop for Process {
     }
 }
 
-pub(crate) fn recover(store: &store::Store) -> Result<()> {
+pub(crate) fn recover(store: &store::Store, state: &Path) -> Result<()> {
     store.db().execute_batch(
         "CREATE TABLE IF NOT EXISTS native_processes(
         pid INTEGER PRIMARY KEY,started_ms INTEGER NOT NULL,provider TEXT NOT NULL)",
@@ -678,8 +769,34 @@ pub(crate) fn recover(store: &store::Store) -> Result<()> {
     };
     for (pid, started, provider) in rows {
         agent::reap(pid, started, &provider);
+        store
+            .db()
+            .execute("DELETE FROM native_processes WHERE pid=?1", [pid])?;
     }
-    store.db().execute("DELETE FROM native_processes", [])?;
+    let directory = state.join("native");
+    if directory.exists() {
+        use std::os::unix::fs::FileTypeExt;
+        daemon::private_directory(&directory)?;
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let stem = name
+                .strip_suffix(".sock")
+                .or_else(|| name.strip_suffix(".gate"));
+            if stem.is_some_and(|stem| {
+                stem.len() == 16
+                    && stem
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+            }) && entry.file_type()?.is_socket()
+            {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -712,6 +829,224 @@ pub(crate) fn text_input(input: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn restart_config(directory: &Path, provider: ProviderKind) -> crate::config::Config {
+        let mut config =
+            crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        config.profiles.insert(
+            "fixture".into(),
+            crate::config::Profile {
+                provider,
+                binary: Some(directory.join(agent::name(provider))),
+                args: vec![],
+                command: None,
+                model: None,
+                effort: crate::config::Effort::Low,
+            },
+        );
+        config
+            .providers
+            .entry(provider)
+            .or_insert_with(|| crate::config::ProviderConfig {
+                binary: directory.join(agent::name(provider)),
+                args: vec![],
+                command: None,
+            });
+        config
+    }
+
+    #[test]
+    fn daemon_restart_reaps_native_processes_and_restores_the_same_identity() {
+        const CHILD: &str = "ANTISLOP_NATIVE_RESTART_FIXTURE";
+        if let Some(directory) = std::env::var_os(CHILD) {
+            let directory = PathBuf::from(directory);
+            let provider = if directory.join("codex").exists() {
+                ProviderKind::Codex
+            } else {
+                ProviderKind::Opencode
+            };
+            let core = Core::open(
+                &directory.join(".antislop"),
+                restart_config(&directory, provider),
+            )
+            .unwrap();
+            let conversation = core
+                .store
+                .create_conversation(directory.to_str().unwrap())
+                .unwrap();
+            let turn = core
+                .store
+                .start_turn(
+                    &conversation.id,
+                    "orchestrator",
+                    agent::name(provider),
+                    0,
+                    None,
+                )
+                .unwrap();
+            let spec = agent::Spec {
+                provider,
+                binary: directory.join(agent::name(provider)),
+                args: vec![],
+                model: None,
+                effort: None,
+                cwd: directory.clone(),
+                add_dirs: vec![],
+                access: agent::Access::ReadOnly,
+                resume: None,
+            };
+            let session = core
+                .native
+                .prepare_scoped_with(&core, &conversation.id, "orchestrator", &spec, "", |_| true)
+                .unwrap()
+                .unwrap();
+            core.store
+                .record_run_context(&store::RunContext {
+                    turn_id: turn.id.clone(),
+                    conversation: conversation.id.clone(),
+                    role: "orchestrator".into(),
+                    provider: agent::name(provider).into(),
+                    profile: "fixture".into(),
+                    cwd: directory.clone(),
+                    add_dirs: vec![],
+                    access: store::RunAccess::ReadOnly,
+                    backend: session.backend_kind(),
+                    provider_thread_id: (provider == ProviderKind::Codex)
+                        .then(|| session.identity.clone()),
+                    provider_session_id: (provider == ProviderKind::Opencode)
+                        .then(|| session.identity.clone()),
+                    provider_turn_id: None,
+                })
+                .unwrap();
+            core.store.set_session(&turn.id, &session.identity).unwrap();
+            session.started.store(true, Ordering::SeqCst);
+            let screen = core
+                .terminal_open(&conversation.id, "orchestrator", 40, 8, false)
+                .unwrap();
+            std::fs::write(core.state.join("restart-fixture.json"), json!({"conversation":conversation.id,"turn":turn.id,"identity":session.identity,"handle":screen.handle}).to_string()).unwrap();
+            // Simulate an abruptly lost daemon: no destructors or shutdown.
+            std::process::exit(0);
+        }
+        for provider in [ProviderKind::Codex, ProviderKind::Opencode] {
+            let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+            let binary = directory.path().join(agent::name(provider));
+            std::fs::write(&binary, include_str!("native/test_backend.py")).unwrap();
+            std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "lean::native::tests::daemon_restart_reaps_native_processes_and_restores_the_same_identity", "--nocapture"])
+                .env(CHILD, directory.path()).output().unwrap();
+            assert!(
+                child.status.success(),
+                "{}",
+                String::from_utf8_lossy(&child.stderr)
+            );
+            let state = directory.path().join(".antislop");
+            let saved: Value =
+                serde_json::from_slice(&std::fs::read(state.join("restart-fixture.json")).unwrap())
+                    .unwrap();
+            let core = Core::open(&state, restart_config(directory.path(), provider)).unwrap();
+            let conversation = saved["conversation"].as_str().unwrap();
+            let turn = core
+                .store
+                .last_turn(conversation, "orchestrator")
+                .unwrap()
+                .unwrap();
+            assert_eq!(turn.id, saved["turn"]);
+            assert_eq!(turn.status, store::TurnStatus::Interrupted);
+            let count: u32 = core
+                .store
+                .db()
+                .query_row("SELECT count(*) FROM native_processes", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "orphan process registrations survived restart");
+            let session = core
+                .native
+                .restore_with(&core, conversation, "orchestrator", |_| true)
+                .unwrap();
+            assert_eq!(session.identity, saved["identity"]);
+            let screen = core
+                .terminal_open(conversation, "orchestrator", 40, 8, false)
+                .unwrap();
+            assert_ne!(screen.handle, saved["handle"]);
+            assert!(
+                core.terminal_input(
+                    conversation,
+                    "orchestrator",
+                    saved["handle"].as_str().unwrap(),
+                    1,
+                    super::super::terminal::Input::Paste {
+                        text: "stale".into()
+                    }
+                )
+                .is_err()
+            );
+            let context = core
+                .store
+                .run_context(conversation, &turn.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(context.backend, session.backend_kind());
+            core.native.shutdown().unwrap();
+        }
+    }
+    #[test]
+    fn unsupported_server_protocol_falls_back_before_sending_a_prompt() {
+        for provider in [ProviderKind::Codex, ProviderKind::Opencode] {
+            let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+            let binary = directory.path().join("native-fixture");
+            std::fs::write(&binary, include_str!("native/test_backend.py")).unwrap();
+            std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let config =
+                crate::config::Config::from_toml(include_str!("../../examples/antislop.toml"))
+                    .unwrap();
+            let core = Core::open(&directory.path().join(".antislop"), config).unwrap();
+            std::fs::write(core.state.join("unsupported-native-protocol"), "").unwrap();
+            let conversation = core
+                .store
+                .create_conversation(directory.path().to_str().unwrap())
+                .unwrap();
+            let spec = agent::Spec {
+                provider,
+                binary,
+                args: vec![],
+                model: None,
+                effort: None,
+                cwd: directory.path().into(),
+                add_dirs: vec![],
+                access: agent::Access::ReadOnly,
+                resume: None,
+            };
+            assert!(
+                core.native
+                    .prepare_scoped_with(&core, &conversation.id, "orchestrator", &spec, "", |_| {
+                        true
+                    })
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                core.native
+                    .get(&conversation.id, "orchestrator")
+                    .unwrap()
+                    .is_none()
+            );
+            let calls =
+                std::fs::read_to_string(directory.path().join("native-calls.jsonl")).unwrap();
+            assert!(!calls.contains("turn/start"));
+            assert!(!calls.contains("prompt_async"));
+            let processes: u32 = core
+                .store
+                .db()
+                .query_row("SELECT count(*) FROM native_processes", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(processes, 0, "failed preflight left a backend behind");
+        }
+    }
     #[test]
     fn native_messages_reject_non_text_and_empty_input() {
         assert_eq!(
@@ -723,6 +1058,277 @@ mod tests {
         assert!(text_input(&json!([])).is_err());
         assert!(text_input(&json!([{"type":"text","text":" "}])).is_err());
     }
+    fn native_round_rotation(provider: ProviderKind) {
+        // Short socket paths are required by Unix-domain socket platforms.
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let binary = directory.path().join("native-fixture");
+        std::fs::write(&binary, include_str!("native/test_backend.py")).unwrap();
+        std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let config =
+            crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let mut config = config;
+        config.profiles.insert(
+            "fixture".into(),
+            crate::config::Profile {
+                provider,
+                binary: Some(binary.clone()),
+                args: vec![],
+                command: None,
+                model: None,
+                effort: crate::config::Effort::Low,
+            },
+        );
+        config
+            .providers
+            .entry(provider)
+            .or_insert_with(|| crate::config::ProviderConfig {
+                binary: binary.clone(),
+                args: vec![],
+                command: None,
+            });
+        let core = Core::open(&directory.path().join(".antislop"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(directory.path().to_str().unwrap())
+            .unwrap();
+        let mut task = core
+            .store
+            .add_plan(&conversation.id, &[json!({"id":"task","title":"Task"})])
+            .unwrap()
+            .remove(0);
+        let mut spec = agent::Spec {
+            provider,
+            binary,
+            args: vec![],
+            model: None,
+            effort: provider
+                .native_effort(crate::config::Effort::Low)
+                .map(str::to_owned),
+            cwd: directory.path().into(),
+            add_dirs: vec![],
+            access: agent::Access::ReadOnly,
+            resume: None,
+        };
+        let mut previous: HashMap<String, Arc<Session>> = HashMap::new();
+        for round in 1..=2 {
+            task.round = round;
+            core.store.update_task(&task).unwrap();
+            for role in [
+                format!("worker:{}", task.id),
+                format!("verifier:{}", task.id),
+            ] {
+                let turn = core
+                    .store
+                    .start_turn(
+                        &conversation.id,
+                        &role,
+                        agent::name(provider),
+                        0,
+                        Some(&task.plan_id),
+                    )
+                    .unwrap();
+                spec.resume = None;
+                let fingerprint = crate::lean::rounds::spec_signature(
+                    "fixture",
+                    crate::config::Effort::Low,
+                    &spec,
+                )
+                .unwrap();
+                let scope = format!(
+                    "{:?}:fixture:{fingerprint}",
+                    crate::lean::SessionPolicy::TaskRound {
+                        task: task.id.clone(),
+                        round
+                    }
+                );
+                let current = core
+                    .native
+                    .prepare_scoped_with(&core, &conversation.id, &role, &spec, &scope, |_| true)
+                    .unwrap()
+                    .unwrap();
+                spec.resume = Some(current.identity.clone());
+                let continued = core
+                    .native
+                    .prepare_scoped_with(&core, &conversation.id, &role, &spec, &scope, |_| {
+                        panic!("same-round session must not be recreated")
+                    })
+                    .unwrap()
+                    .unwrap();
+                assert!(Arc::ptr_eq(&current, &continued));
+                core.store
+                    .record_run_context(&store::RunContext {
+                        turn_id: turn.id.clone(),
+                        conversation: conversation.id.clone(),
+                        role: role.clone(),
+                        provider: agent::name(provider).into(),
+                        profile: "fixture".into(),
+                        cwd: spec.cwd.clone(),
+                        add_dirs: vec![],
+                        access: store::RunAccess::ReadOnly,
+                        backend: current.backend_kind(),
+                        provider_thread_id: (provider == ProviderKind::Codex)
+                            .then(|| current.identity.clone()),
+                        provider_session_id: (provider == ProviderKind::Opencode)
+                            .then(|| current.identity.clone()),
+                        provider_turn_id: None,
+                    })
+                    .unwrap();
+                core.store.set_session(&turn.id, &current.identity).unwrap();
+                core.store
+                    .append_event(
+                        &conversation.id,
+                        Some(&turn.id),
+                        Some(&task.plan_id),
+                        "turn_started",
+                        &json!({"execution_signature":fingerprint}),
+                    )
+                    .unwrap();
+                core.store
+                    .finish_turn(&turn.id, store::TurnStatus::Done, None)
+                    .unwrap();
+                let restored = core.native.restore(&core, &conversation.id, &role).unwrap();
+                assert!(Arc::ptr_eq(&restored, &current));
+                let mut updated = (*core.config_snapshot()).clone();
+                updated.profiles.get_mut("fixture").unwrap().model = Some("changed-model".into());
+                *core.config.write().unwrap() = Arc::new(updated.clone());
+                let rejected = core
+                    .native
+                    .restore(&core, &conversation.id, &role)
+                    .err()
+                    .expect("changed profile must not resume an old native thread");
+                assert!(
+                    rejected
+                        .to_string()
+                        .contains("native execution profile changed")
+                );
+                updated.profiles.get_mut("fixture").unwrap().model = None;
+                *core.config.write().unwrap() = Arc::new(updated);
+                if round == 1 {
+                    // The fixture has no model rollout; mark its synthetic first turn ready for attachment.
+                    current.started.store(true, Ordering::SeqCst);
+                    core.terminal_open(&conversation.id, &role, 40, 8, false)
+                        .unwrap();
+                    assert!(current.terminal.lock().unwrap().is_some());
+                    let until = Instant::now() + Duration::from_secs(3);
+                    loop {
+                        let calls =
+                            std::fs::read_to_string(directory.path().join("native-calls.jsonl"))
+                                .unwrap();
+                        if calls
+                            .lines()
+                            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                            .any(|call| {
+                                call["method"] == "terminal_attached"
+                                    && call["params"]["identity"]
+                                        .as_array()
+                                        .unwrap()
+                                        .iter()
+                                        .any(|arg| arg == &current.identity)
+                            })
+                        {
+                            break;
+                        }
+                        assert!(Instant::now() < until, "mock terminal did not attach");
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
+                if let Some(old) = previous.insert(role.clone(), current.clone()) {
+                    assert_ne!(old.identity, current.identity);
+                    assert!(old.stop.load(Ordering::SeqCst));
+                    assert!(old.terminal.lock().unwrap().is_none());
+                    let calls =
+                        std::fs::read_to_string(directory.path().join("native-calls.jsonl"))
+                            .unwrap();
+                    for call in calls
+                        .lines()
+                        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    {
+                        if call["method"] == "terminal_attached"
+                            && call["params"]["identity"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|arg| arg == &old.identity)
+                        {
+                            let pid = call["pid"].as_i64().unwrap() as i32;
+                            assert_eq!(
+                                unsafe { libc::kill(pid, 0) },
+                                -1,
+                                "old terminal process stayed alive"
+                            );
+                            assert_eq!(
+                                std::io::Error::last_os_error().raw_os_error(),
+                                Some(libc::ESRCH)
+                            );
+                        }
+                    }
+                    assert!(
+                        old.process
+                            .child
+                            .lock()
+                            .unwrap()
+                            .try_wait()
+                            .unwrap()
+                            .is_some()
+                    );
+                    let until = Instant::now() + Duration::from_secs(3);
+                    loop {
+                        let open = match provider {
+                            ProviderKind::Codex => std::os::unix::net::UnixStream::connect(
+                                old.endpoint.strip_prefix("unix://").unwrap(),
+                            )
+                            .is_ok(),
+                            ProviderKind::Opencode => std::net::TcpStream::connect(
+                                old.gateway_address
+                                    .lock()
+                                    .unwrap()
+                                    .as_ref()
+                                    .unwrap()
+                                    .strip_prefix("http://")
+                                    .unwrap(),
+                            )
+                            .is_ok(),
+                            _ => unreachable!(),
+                        };
+                        if !open {
+                            break;
+                        }
+                        assert!(Instant::now() < until, "old gateway stayed available");
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
+            }
+        }
+        let calls = std::fs::read_to_string(directory.path().join("native-calls.jsonl")).unwrap();
+        let calls: Vec<Value> = calls
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let create = if provider == ProviderKind::Codex {
+            "thread/start"
+        } else {
+            "/session"
+        };
+        assert_eq!(
+            calls.iter().filter(|call| call["method"] == create).count(),
+            4
+        );
+        assert!(!calls.iter().any(|call| call["method"] == "thread/resume"
+            || call["method"].as_str().unwrap().starts_with("/session/")));
+        assert_eq!(core.store.sessions(&conversation.id).unwrap().len(), 4);
+        core.native.shutdown().unwrap();
+    }
+
+    #[test]
+    fn codex_rounds_create_new_threads_and_retire_previous_backends() {
+        native_round_rotation(ProviderKind::Codex);
+    }
+    #[test]
+    fn opencode_rounds_create_new_sessions_and_retire_previous_backends() {
+        native_round_rotation(ProviderKind::Opencode);
+    }
+
     fn attach_smoke(provider: ProviderKind, binary: &str) {
         let directory = tempfile::tempdir_in("/private/tmp").unwrap();
         let config =
@@ -758,44 +1364,69 @@ mod tests {
                 None,
             )
             .unwrap();
-        if provider == ProviderKind::Codex {
+        let live_run = {
             core.store
                 .record_run_context(&store::RunContext {
                     turn_id: turn.id.clone(),
                     conversation: conversation.id.clone(),
                     role: "orchestrator".into(),
-                    provider: "codex".into(),
+                    provider: agent::name(provider).into(),
                     profile: "smoke".into(),
                     cwd: spec.cwd.clone(),
                     add_dirs: vec![],
                     access: store::RunAccess::ReadOnly,
-                    backend: store::RunBackend::CodexAppServer,
-                    provider_thread_id: Some(native.identity.clone()),
-                    provider_session_id: None,
+                    backend: native.backend_kind(),
+                    provider_thread_id: (provider == ProviderKind::Codex)
+                        .then(|| native.identity.clone()),
+                    provider_session_id: (provider == ProviderKind::Opencode)
+                        .then(|| native.identity.clone()),
                     provider_turn_id: None,
                 })
                 .unwrap();
             let cancelled = Arc::new(AtomicBool::new(false));
             let timeout = cancelled.clone();
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_secs(20));
+                std::thread::sleep(Duration::from_secs(60));
                 timeout.store(true, Ordering::SeqCst);
             });
-            let result = native
-                .run(
-                    &turn.id,
+            let running = native.clone();
+            let turn_id = turn.id.clone();
+            let run = std::thread::spawn(move || {
+                running.run(
+                    &turn_id,
                     "Reply with exactly ANTISLOP_SMOKE. Do not call tools.",
                     &[],
                     &cancelled,
-                    &mut |_| {},
+                    &mut |event| {
+                        if std::env::var_os("ANTISLOP_NATIVE_DEBUG").is_some() {
+                            eprintln!("Native smoke event: {event:?}");
+                        }
+                    },
                 )
-                .unwrap();
-            assert!(result.text.contains("ANTISLOP_SMOKE"));
-        }
+            });
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !(if provider == ProviderKind::Codex {
+                native.started.load(Ordering::SeqCst)
+            } else {
+                native.executing.load(Ordering::SeqCst)
+            }) {
+                assert!(
+                    Instant::now() < deadline && !run.is_finished(),
+                    "native turn did not start"
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert!(
+                native.executing.load(Ordering::SeqCst),
+                "attach must begin during execution"
+            );
+            Some(run)
+        };
         let screen = core
             .terminal_open(&conversation.id, "orchestrator", 80, 24, false)
             .unwrap();
-        let until = Instant::now() + Duration::from_secs(5);
+        let until = Instant::now() + Duration::from_secs(20);
+        let mut visible = None;
         let mut text = String::new();
         while Instant::now() < until {
             std::thread::sleep(Duration::from_millis(100));
@@ -805,6 +1436,13 @@ mod tests {
             {
                 text = screen.cells.iter().map(|cell| cell.text.as_str()).collect();
                 assert!(screen.error.is_none(), "{text}: {:?}", screen.error);
+                let ready = text.contains("ANTISLOP_SMOKE");
+                if ready {
+                    let first = visible.get_or_insert_with(Instant::now);
+                    if first.elapsed() > Duration::from_secs(1) {
+                        break;
+                    }
+                }
             }
         }
         assert!(!text.trim().is_empty(), "native CLI produced no screen");
@@ -813,6 +1451,66 @@ mod tests {
             "{text}"
         );
         assert!(!native.stop.load(Ordering::SeqCst));
+        if let Some(run) = live_run {
+            let result = run.join().unwrap();
+            assert!(result.is_ok(), "{result:?}; native screen: {text}");
+            assert!(result.unwrap().text.contains("ANTISLOP_SMOKE"));
+        }
+        {
+            // Exercise the real TUI's submit route while holding the role
+            // lock. The accepted message is durable, but no model is invoked.
+            let lock = core.turn_lock(&conversation.id, "orchestrator");
+            let guard = lock.lock().unwrap();
+            struct CancelOnDrop<'a>(&'a Core, &'a str);
+            impl Drop for CancelOnDrop<'_> {
+                fn drop(&mut self) {
+                    self.0.cancel(self.1);
+                }
+            }
+            // Cancel even if an assertion fails, before releasing the role lock.
+            let cancel = CancelOnDrop(&core, &conversation.id);
+            core.terminal_input(
+                &conversation.id,
+                "orchestrator",
+                &screen.handle,
+                1,
+                super::super::terminal::Input::Paste {
+                    text: "ANTISLOP_QUEUE_SMOKE".into(),
+                },
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            core.terminal_input(
+                &conversation.id,
+                "orchestrator",
+                &screen.handle,
+                2,
+                super::super::terminal::Input::Key {
+                    event: crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Enter,
+                        crossterm::event::KeyModifiers::NONE,
+                    ),
+                },
+            )
+            .unwrap();
+            let until = Instant::now() + Duration::from_secs(5);
+            loop {
+                let mail = core.store.mail(&conversation.id).unwrap();
+                if mail
+                    .iter()
+                    .any(|mail| mail.sender == "user" && mail.text.contains("ANTISLOP_QUEUE_SMOKE"))
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < until,
+                    "native CLI did not enqueue its message"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            drop(cancel);
+            drop(guard);
+        }
         core.store
             .finish_turn(&turn.id, store::TurnStatus::Done, None)
             .unwrap();
@@ -823,7 +1521,7 @@ mod tests {
         attach_smoke(ProviderKind::Codex, "codex");
     }
     #[test]
-    #[ignore = "uses the locally installed OpenCode and account configuration; no model turn"]
+    #[ignore = "uses the locally installed OpenCode, account configuration and one short model turn"]
     fn installed_opencode_attach_smoke() {
         attach_smoke(ProviderKind::Opencode, "opencode");
     }

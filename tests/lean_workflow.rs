@@ -161,6 +161,9 @@ else:
     );
     // A completed interview left by an older daemon must resume without /planning.
     let waiting = core.start(dir.path()).unwrap();
+    // Match the first conversation's autonomous interview policy. Supervised
+    // conversations correctly wait for explicit requirements approval.
+    core.set_mode(&waiting.id, true).unwrap();
     let message = core
         .store
         .add_message(&waiting.id, "user", "Inspect the project")

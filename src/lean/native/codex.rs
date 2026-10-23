@@ -3,6 +3,13 @@ use std::collections::VecDeque;
 use std::os::unix::net::{UnixListener, UnixStream};
 use tungstenite::{Message, WebSocket};
 
+fn websocket_config() -> tungstenite::protocol::WebSocketConfig {
+    // Startup catalogs may exceed tungstenite's default 16 MiB frame size.
+    tungstenite::protocol::WebSocketConfig::default()
+        .max_frame_size(Some(64 * 1024 * 1024))
+        .max_message_size(Some(64 * 1024 * 1024))
+}
+
 pub(crate) struct Rpc {
     socket: WebSocket<UnixStream>,
     next: u64,
@@ -18,8 +25,12 @@ impl Rpc {
         let stream = UnixStream::connect(path)?;
         stream.set_read_timeout(Some(Duration::from_secs(2)))?;
         stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-        let (socket, _) = tungstenite::client("ws://localhost/", stream)
-            .map_err(|e| invalid(format!("Codex upstream handshake: {e}")))?;
+        let (socket, _) = tungstenite::client::client_with_config(
+            "ws://localhost/",
+            stream,
+            Some(websocket_config()),
+        )
+        .map_err(|e| invalid(format!("Codex upstream handshake: {e}")))?;
         socket
             .get_ref()
             .set_read_timeout(Some(Duration::from_millis(50)))?;
@@ -64,6 +75,11 @@ impl Rpc {
             };
             if message["id"] == id {
                 if let Some(error) = message.get("error") {
+                    if error["code"] == -32601 {
+                        return Err(invalid(format!(
+                            "{UNSUPPORTED_PROTOCOL}Codex {method}: {error}"
+                        )));
+                    }
                     return Err(invalid(format!("Codex {method}: {error}")));
                 }
                 return Ok(message["result"].clone());
@@ -368,7 +384,7 @@ fn client_send(client: &mut WebSocket<UnixStream>, value: Value) -> Result<()> {
 fn connection(weak: Weak<Session>, stream: UnixStream) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-    let mut client = tungstenite::accept(stream)
+    let mut client = tungstenite::accept_with_config(stream, Some(websocket_config()))
         .map_err(|e| invalid(format!("Codex gateway handshake: {e}")))?;
     client
         .get_mut()
@@ -528,6 +544,32 @@ fn connection(weak: Weak<Session>, stream: UnixStream) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn startup_catalog_can_exceed_sixteen_megabytes() {
+        let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+        let path = directory.path().join("catalog.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let length = 17 * 1024 * 1024;
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            socket
+                .send(Message::Text(
+                    json!({"catalog":"x".repeat(length)}).to_string().into(),
+                ))
+                .unwrap();
+        });
+        let mut rpc = Rpc::raw(&path).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(message) = rpc.read().unwrap() {
+                assert_eq!(message["catalog"].as_str().unwrap().len(), length);
+                break;
+            }
+            assert!(Instant::now() < deadline, "catalog response timed out");
+        }
+        server.join().unwrap();
+    }
     use std::sync::atomic::AtomicU64;
     struct Fixture {
         directory: tempfile::TempDir,
@@ -691,6 +733,7 @@ mod tests {
             executing: AtomicBool::new(false),
             user_interrupted: AtomicBool::new(false),
             touched: Mutex::new(Instant::now()),
+            scope_round: None,
             process,
         });
         Fixture {

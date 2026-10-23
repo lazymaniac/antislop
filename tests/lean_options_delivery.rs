@@ -68,10 +68,10 @@ fn options_delivery_and_missing_choice_obligation_survive_verifier_followups() {
         "For writer: Selected: A\nFor other: Selected: B",
     ] {
         let upstream = tasks::upstream_note(&[("shared", "Shared options", report)]);
-        // Both resumed and rejected verifier sessions use fresh=false in Core.
+        // New rounds use full instructions; compatible turns within one round use continuation.
         for (path, fresh) in [
-            ("verifier-new", true),
-            ("verifier-resume-or-followup", false),
+            ("verifier-fresh-round", true),
+            ("verifier-same-round-followup", false),
         ] {
             let prompt = tasks::verifier_turn_prompt(
                 "project",

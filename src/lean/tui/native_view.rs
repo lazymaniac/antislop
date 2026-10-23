@@ -12,6 +12,28 @@ enum Command {
     Resize(u16, u16),
     Retry,
 }
+
+fn call_input(client: &Client, request: &Request) -> Result<Value> {
+    // TerminalInput is deduplicated by handle and sequence. Reconnect with
+    // the same request if the daemon accepted it but its reply was lost.
+    let mut result = client.call(request);
+    for _ in 0..2 {
+        let transient = match &result {
+            Err(crate::Error::Io(_)) => true,
+            Err(crate::Error::Invalid(message)) => {
+                message == "the daemon disconnected"
+                    || message.starts_with("terminal input not accepted:")
+            }
+            _ => false,
+        };
+        if !transient {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        result = client.call(request);
+    }
+    result
+}
 pub(super) struct View {
     state: Arc<std::sync::Mutex<Snapshot>>,
     commands: SyncSender<Command>,
@@ -19,7 +41,14 @@ pub(super) struct View {
     dimensions: (u16, u16),
 }
 impl View {
-    fn start(client: Client, conversation: String, role: String, columns: u16, rows: u16) -> Self {
+    fn start(
+        client: Client,
+        conversation: String,
+        role: String,
+        columns: u16,
+        rows: u16,
+        updates: mpsc::Sender<Update>,
+    ) -> Self {
         let state = Arc::new(std::sync::Mutex::new(Snapshot::default()));
         let output = state.clone();
         let stop = Arc::new(AtomicBool::new(false));
@@ -30,7 +59,10 @@ impl View {
             let mut sequence = 0;
             let mut dimensions = (columns, rows);
             let mut retry = false;
-            while !stopped.load(Ordering::SeqCst) {
+            let mut blocked = None::<String>;
+            loop {
+                // Finish accepted keystrokes before detaching a closed view.
+                let closing = stopped.load(Ordering::SeqCst);
                 if screen.is_none()
                     && output
                         .lock()
@@ -55,7 +87,15 @@ impl View {
                         }
                     }
                 }
-                match received.recv_timeout(Duration::from_millis(80)) {
+                let command = if closing {
+                    match received.try_recv() {
+                        Ok(command) => Ok(command),
+                        Err(_) => break,
+                    }
+                } else {
+                    received.recv_timeout(Duration::from_millis(80))
+                };
+                match command {
                     Ok(Command::Retry) => {
                         if let Some(old) = screen.take() {
                             let _ = client.call(&Request::TerminalDetach {
@@ -64,24 +104,33 @@ impl View {
                                 handle: old.handle,
                             });
                         }
-                        output.lock().expect("native view").error = None;
+                        *output.lock().expect("native view") = Snapshot::default();
                         sequence = 0;
+                        blocked = None;
                         retry = true;
                         continue;
                     }
                     Ok(command) => {
+                        if let Command::Input(input) = &command
+                            && let Some(error) = &blocked
+                        {
+                            let _ = updates.send(Update::NativeInputRejected {
+                                conversation: conversation.clone(),
+                                role: role.clone(),
+                                input: input.clone(),
+                                error: error.clone(),
+                            });
+                            continue;
+                        }
                         if let Some(current) = &screen {
                             let request = match command {
-                                Command::Input(input) => {
-                                    sequence += 1;
-                                    Request::TerminalInput {
-                                        conversation: conversation.clone(),
-                                        role: role.clone(),
-                                        handle: current.handle.clone(),
-                                        sequence,
-                                        input,
-                                    }
-                                }
+                                Command::Input(input) => Request::TerminalInput {
+                                    conversation: conversation.clone(),
+                                    role: role.clone(),
+                                    handle: current.handle.clone(),
+                                    sequence: sequence + 1,
+                                    input,
+                                },
                                 Command::Resize(columns, rows) => {
                                     dimensions = (columns, rows);
                                     Request::TerminalResize {
@@ -94,9 +143,39 @@ impl View {
                                 }
                                 Command::Retry => unreachable!(),
                             };
-                            if let Err(error) = client.call(&request) {
-                                output.lock().expect("native view").error = Some(error.to_string());
+                            let result = if matches!(request, Request::TerminalInput { .. }) {
+                                call_input(&client, &request)
+                            } else {
+                                client.call(&request)
+                            };
+                            match result {
+                                Ok(_) => {
+                                    if matches!(request, Request::TerminalInput { .. }) {
+                                        sequence += 1;
+                                    }
+                                    output.lock().expect("native view").error = None;
+                                }
+                                Err(error) => {
+                                    if let Request::TerminalInput { input, .. } = &request {
+                                        blocked = Some(error.to_string());
+                                        let _ = updates.send(Update::NativeInputRejected {
+                                            conversation: conversation.clone(),
+                                            role: role.clone(),
+                                            input: input.clone(),
+                                            error: error.to_string(),
+                                        });
+                                    }
+                                    output.lock().expect("native view").error =
+                                        Some(error.to_string());
+                                }
                             }
+                        } else if let Command::Input(input) = command {
+                            let _ = updates.send(Update::NativeInputRejected {
+                                conversation: conversation.clone(),
+                                role: role.clone(),
+                                input,
+                                error: "native terminal is not ready".into(),
+                            });
                         }
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -244,6 +323,7 @@ impl App {
                     role.clone(),
                     columns,
                     rows,
+                    self.updates.clone(),
                 )
             });
             controller.resize(columns, rows);
@@ -271,9 +351,60 @@ impl App {
                 .native_views
                 .get(&format!("{}:{role}", self.conversation))
                 .ok_or_else(|| crate::Error::Invalid("native terminal is not ready".into()))
-                .and_then(|v| v.send(Command::Input(input)));
+                .and_then(|v| v.send(Command::Input(input.clone())));
             if let Err(error) = result {
-                self.notice = Some(error.to_string());
+                self.recover_native_input(
+                    &self.conversation.clone(),
+                    &role,
+                    input,
+                    &error.to_string(),
+                );
+            }
+        }
+    }
+    pub(super) fn recover_native_input(
+        &mut self,
+        conversation: &str,
+        role: &str,
+        input: Input,
+        error: &str,
+    ) {
+        let text = match input {
+            Input::Paste { text } => text,
+            Input::Key { event }
+                if !event
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                match event.code {
+                    KeyCode::Char(ch) => ch.to_string(),
+                    KeyCode::Enter => "\n".into(),
+                    _ => String::new(),
+                }
+            }
+            _ => String::new(),
+        };
+        let message = format!(
+            "Native input could not be confirmed; text recovered in message draft. Check the terminal before resending: {error}"
+        );
+        let mut drafts = self.agent_drafts.borrow_mut();
+        let draft = drafts
+            .entry((conversation.into(), role.into()))
+            .or_default();
+        draft.input.insert_str(&text);
+        draft.error = Some(message.clone());
+        drop(drafts);
+        if self.conversation == conversation {
+            self.notice = Some(message);
+            if let Some(details) = self.details.as_mut()
+                && details
+                    .session_keys()
+                    .iter()
+                    .any(|key| details.composer_recipient(key) == role)
+            {
+                details.native_focus = false;
+                details.native_history = true;
+                details.editing = true;
             }
         }
     }
@@ -292,6 +423,103 @@ impl App {
 mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+    use serde_json::json;
+    use std::time::Instant;
+    #[test]
+    fn a_lost_input_acknowledgement_reuses_the_same_sequence() {
+        let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
+                .unwrap();
+        let server = std::thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request: Value = crate::transport::read(&mut std::io::BufReader::new(
+                    stream.try_clone().unwrap(),
+                ))
+                .unwrap()
+                .unwrap();
+                assert_eq!(request["op"], "terminal_input");
+                assert_eq!(request["sequence"], 7);
+                assert_eq!(request["input"]["text"], "draft 👩‍💻");
+                if attempt == 1 {
+                    crate::transport::write(&mut stream, &json!({"data":null,"error":null}))
+                        .unwrap();
+                }
+                // First delivery was accepted; emulate losing only its reply.
+            }
+        });
+        call_input(
+            &Client::at(directory.path()),
+            &Request::TerminalInput {
+                conversation: "conversation".into(),
+                role: "worker".into(),
+                handle: "view".into(),
+                sequence: 7,
+                input: Input::Paste {
+                    text: "draft 👩‍💻".into(),
+                },
+            },
+        )
+        .unwrap();
+        server.join().unwrap();
+    }
+    #[test]
+    fn closing_a_view_delivers_accepted_input_before_detaching() {
+        let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
+                .unwrap();
+        let (finished, result) = mpsc::sync_channel(1);
+        let server = std::thread::spawn(move || {
+            let mut sequences = vec![];
+            loop {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request: Request = crate::transport::read(&mut std::io::BufReader::new(
+                    stream.try_clone().unwrap(),
+                ))
+                .unwrap()
+                .unwrap();
+                let detach = matches!(request, Request::TerminalDetach { .. });
+                let data = match request {
+                    Request::TerminalOpen { .. } => serde_json::to_value(screen("ready")).unwrap(),
+                    Request::TerminalInput { sequence, .. } => {
+                        sequences.push(sequence);
+                        Value::Null
+                    }
+                    _ => Value::Null,
+                };
+                crate::transport::write(&mut stream, &json!({"data":data,"error":null})).unwrap();
+                if detach {
+                    finished.send(sequences).unwrap();
+                    break;
+                }
+            }
+        });
+        let view = View::start(
+            Client::at(directory.path()),
+            "conversation".into(),
+            "worker".into(),
+            80,
+            24,
+            mpsc::channel().0,
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while view.state.lock().unwrap().screen.is_none() {
+            assert!(Instant::now() < deadline, "terminal did not open");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        for text in ["first", "second", "third"] {
+            view.send(Command::Input(Input::Paste { text: text.into() }))
+                .unwrap();
+        }
+        drop(view);
+        assert_eq!(
+            result.recv_timeout(Duration::from_secs(3)).unwrap(),
+            [1, 2, 3]
+        );
+        server.join().unwrap();
+    }
     fn screen(text: &str) -> Screen {
         Screen {
             handle: "view".into(),
@@ -314,6 +542,16 @@ mod tests {
     #[test]
     fn native_focus_routes_control_c_escape_and_paste_before_global_shortcuts() {
         let mut app = App::test_app();
+        let (commands, received) = mpsc::sync_channel(8);
+        app.native_views.insert(
+            format!("{}:orchestrator", app.conversation),
+            View {
+                state: Arc::new(std::sync::Mutex::new(Snapshot::default())),
+                commands,
+                stop: Arc::new(AtomicBool::new(false)),
+                dimensions: (80, 24),
+            },
+        );
         app.input.insert_str("background draft");
         let mut details = Details::new("orchestrator".into());
         details.native_focus = true;
@@ -325,6 +563,15 @@ mod tests {
         assert!(app.key(event::KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         assert!(app.details.is_some());
         app.paste("native input");
+        assert!(
+            matches!(received.try_recv().unwrap(), Command::Input(Input::Key { event }) if event.code == KeyCode::Char('c'))
+        );
+        assert!(
+            matches!(received.try_recv().unwrap(), Command::Input(Input::Key { event }) if event.code == KeyCode::Esc)
+        );
+        assert!(
+            matches!(received.try_recv().unwrap(), Command::Input(Input::Paste { text }) if text == "native input")
+        );
         assert_eq!(app.input.text, "background draft");
         assert!(app.key(event::KeyEvent::new(
             KeyCode::Char(']'),
@@ -335,6 +582,50 @@ mod tests {
             KeyCode::Char('c'),
             KeyModifiers::CONTROL
         )));
+    }
+    #[test]
+    fn unconfirmed_native_text_is_recovered_without_overwriting_other_drafts() {
+        let mut app = App::test_app();
+        let current = app.conversation.clone();
+        app.input.insert_str("main draft");
+        app.agent_drafts
+            .borrow_mut()
+            .entry((current.clone(), "orchestrator".into()))
+            .or_default()
+            .input
+            .insert_str("existing ");
+        let mut details = Details::new("orchestrator".into());
+        details.drafts = app.agent_drafts.clone();
+        details.native_focus = true;
+        app.details = Some(details);
+        for (conversation, text) in [(&current, "👩‍💻"), (&"another".into(), "other text")] {
+            app.apply_update(Update::NativeInputRejected {
+                conversation: conversation.clone(),
+                role: "orchestrator".into(),
+                input: Input::Paste { text: text.into() },
+                error: "the daemon disconnected".into(),
+            });
+        }
+        let drafts = app.agent_drafts.borrow();
+        let draft = &drafts[&(current, "orchestrator".into())];
+        assert_eq!(draft.input.text, "existing 👩‍💻");
+        assert!(
+            draft
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("the daemon disconnected")
+        );
+        assert_eq!(
+            drafts[&("another".into(), "orchestrator".into())]
+                .input
+                .text,
+            "other text"
+        );
+        assert_eq!(app.input.text, "main draft");
+        let details = app.details.as_ref().unwrap();
+        assert!(!details.native_focus);
+        assert!(details.editing && details.native_history);
     }
     #[test]
     fn native_cells_keep_graphemes_bounds_and_no_color_modifiers() {

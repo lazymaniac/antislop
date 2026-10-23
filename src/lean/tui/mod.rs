@@ -69,6 +69,12 @@ use view::{
 };
 
 pub enum Update {
+    NativeInputRejected {
+        conversation: String,
+        role: String,
+        input: crate::lean::terminal::Input,
+        error: String,
+    },
     PlanHistory {
         conversation: String,
         generation: u64,
@@ -1569,6 +1575,14 @@ impl App {
 
     fn apply_update_inner(&mut self, update: Update) {
         match update {
+            Update::NativeInputRejected {
+                conversation,
+                role,
+                input,
+                error,
+            } => {
+                self.recover_native_input(&conversation, &role, input, &error);
+            }
             Update::PlanHistory {
                 conversation,
                 generation,
@@ -3738,6 +3752,7 @@ impl App {
                 return;
             }
             KeyCode::Char('/') => {
+                details.native_history = true;
                 details.searching = true;
                 details.follow = false;
                 details.query.clear();
@@ -3760,7 +3775,12 @@ impl App {
                     && details
                         .native
                         .get(&details.session_keys()[details.active_panel])
-                        .is_some_and(|s| s.screen.is_some()) =>
+                        .is_some_and(|s| {
+                            s.error.is_none()
+                                && s.screen
+                                    .as_ref()
+                                    .is_some_and(|screen| screen.error.is_none())
+                        }) =>
             {
                 details.native_focus = true;
                 details.editing = false;
@@ -3783,6 +3803,7 @@ impl App {
                 return;
             }
             KeyCode::Char('v') => {
+                details.native_history = true;
                 details.raw = !details.raw;
                 return;
             }
@@ -5417,7 +5438,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                 continue;
             }
             match event::read()? {
-                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                Event::Key(key) if key.kind != KeyEventKind::Release || app.native_focused() => {
                     app.notice = None;
                     if !app.key(key) {
                         return Ok(());

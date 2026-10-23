@@ -1006,6 +1006,56 @@ impl Store {
         plan_id.map(|plan_id| self.plan(&plan_id)).transpose()
     }
 
+    /// Compact task instructions, without opening report or verdict contents.
+    pub(super) fn plan_specs(&self, plan: &str) -> Result<Vec<Value>> {
+        let db = self.db();
+        let mut query = db.prepare("SELECT spec FROM tasks WHERE plan_id=?1 ORDER BY position")?;
+        let records = query
+            .query_map([plan], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        records
+            .into_iter()
+            .map(|record| serde_json::from_str(&record).map_err(Into::into))
+            .collect()
+    }
+
+    /// Only the approved reports requested by this task; unrelated content is
+    /// neither decoded nor needed for a fresh session's dependency handoff.
+    pub(super) fn dependency_reports(
+        &self,
+        plan: &str,
+        dependencies: &[String],
+    ) -> Result<Vec<super::tasks::DependencyReport>> {
+        if dependencies.is_empty() {
+            return Ok(vec![]);
+        }
+        let rows = {
+            let db = self.db();
+            let mut query = db.prepare(
+                "SELECT json_extract(spec,'$.id'),coalesce(json_extract(spec,'$.title'),''),report
+                 FROM tasks WHERE plan_id=?1 AND status='approved' AND report IS NOT NULL
+                 AND json_extract(spec,'$.id') IN (SELECT value FROM json_each(?2)) ORDER BY position")?;
+            query
+                .query_map(params![plan, serde_json::to_string(dependencies)?], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        rows.into_iter()
+            .map(|(id, title, report)| {
+                Ok(super::tasks::DependencyReport {
+                    id,
+                    title,
+                    report: self.content.decode(&report)?,
+                })
+            })
+            .collect()
+    }
+
     /// Tasks of one plan, in the orchestrator's order.
     pub fn plan(&self, plan_id: &str) -> Result<Vec<Task>> {
         let db = self.db();
@@ -1147,6 +1197,30 @@ impl Store {
                         .expect("encoded content"),
                 )?;
                 snapshot[field] = serde_json::json!({"session_content":reference});
+            }
+        }
+        // A requeue may clear the task's mutable result before its next round
+        // starts. Keep the last durable report, verdict and Git range in that
+        // round's history, including when setup fails before another turn.
+        let previous: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT content FROM task_rounds WHERE task_id=?1 AND round=?2",
+                params![task.id, task.round],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(previous) = previous {
+            let reference = serde_json::from_str(&previous)?;
+            let previous: Value = serde_json::from_str(&self.content.read(&reference)?)?;
+            for field in ["report", "verdict"] {
+                if snapshot[field].is_null() {
+                    snapshot[field] = previous[field].clone();
+                }
+            }
+            if snapshot["result"].is_null() && !previous["result"].is_null() {
+                snapshot["base"] = previous["base"].clone();
+                snapshot["result"] = previous["result"].clone();
             }
         }
         let content = self.content.write(&serde_json::to_string(&snapshot)?)?;

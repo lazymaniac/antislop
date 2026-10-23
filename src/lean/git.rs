@@ -130,6 +130,13 @@ pub fn commit_paths(dir: &Path, files: &[String], message: &str) -> Result<Strin
 pub fn uncommitted(dir: &Path) -> Result<Vec<String>> {
     // Not `ok()`: trimming would eat the leading space of " M path".
     let status = git(dir, &["status", "--porcelain=v1", "-z", "--no-renames"])?;
+    crate::require(
+        status.status.success(),
+        &format!(
+            "git status: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
+        ),
+    )?;
     Ok(String::from_utf8_lossy(&status.stdout)
         .split('\0')
         .filter(|entry| entry.len() > 3)

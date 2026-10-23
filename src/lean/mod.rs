@@ -214,6 +214,12 @@ pub struct Core {
     unblocked: Mutex<HashMap<(String, String), u32>>,
 }
 
+impl Drop for Core {
+    fn drop(&mut self) {
+        let _ = self.native.shutdown();
+    }
+}
+
 /// Who runs a turn, where, and with what access.
 struct PlanProposal<'a> {
     config: &'a Config,
@@ -284,7 +290,7 @@ impl Core {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let store = Store::open(&state.join("core.db"))?;
-        native::recover(&store)?;
+        native::recover(&store, state)?;
         // A daemon that died leaves its agents' CLIs running; a resumed turn
         // must not work beside its own orphan.
         for (pid, started_ms, provider) in store.running_processes()? {
@@ -364,7 +370,7 @@ impl Core {
         }
         // Pick up where the previous process stopped: the orchestrator answers
         // what it was answering, and an autonomous conversation resumes its
-        // plan through the agents' own sessions.
+        // plan from durable history in fresh task rounds.
         for conversation in cut_off {
             core.wake(&conversation);
         }
@@ -1581,7 +1587,7 @@ impl Core {
                         },
                         Some(&changes),
                         fresh,
-                        &upstream,
+                        if fresh { "" } else { &upstream },
                     )
                 })?;
                 let answer = answer.unwrap_or_default();
@@ -3045,10 +3051,12 @@ impl Core {
                 "effort": profile.as_ref().ok().and_then(|profile| profile.native_effort.clone()),
                 "comments": comments,
                 "mail_only": mail_only,
+                "execution_signature": profile.as_ref().ok().map(rounds::execution_signature).transpose()?,
             }),
         );
         let outcome = profile.and_then(|profile| {
             let profile_name = profile.profile.clone();
+            let profile_effort = profile.effort;
             let spec = agent::Spec {
                 provider: profile.provider,
                 binary: profile.binary,
@@ -3067,7 +3075,10 @@ impl Core {
                 &spec,
                 &match &session_policy {
                     SessionPolicy::Role => String::new(),
-                    SessionPolicy::TaskRound { .. } => format!("{session_policy:?}:{profile_name}"),
+                    SessionPolicy::TaskRound { .. } => format!(
+                        "{session_policy:?}:{profile_name}:{}",
+                        rounds::spec_signature(&profile_name, profile_effort, &spec)?
+                    ),
                 },
             )?;
             let identity = native
@@ -3097,8 +3108,10 @@ impl Core {
                     .flatten(),
                 provider_turn_id: None,
             })?;
-            if let Some(native) = &native {
-                self.store.set_session(&turn.id, &native.identity)?;
+            // A resumed CLI may omit another session announcement. Persist
+            // its known identity now so further turns in this round continue it.
+            if let Some(identity) = &identity {
+                self.store.set_session(&turn.id, identity)?;
             }
             let prompt_mail = inbox
                 .iter()
@@ -3115,15 +3128,6 @@ impl Core {
                 && let SessionPolicy::TaskRound { task, round } = &session_policy
             {
                 let handoff = self.round_handoff(task, *round, &spec.cwd)?;
-                let task_spec: TaskSpec = serde_json::from_value(handoff.task.clone())?;
-                if role.starts_with("verifier:") {
-                    text.push_str(&tasks::verifier_prompt(
-                        &spec.cwd.to_string_lossy(),
-                        &task_spec,
-                        "",
-                        None,
-                    ));
-                }
                 text.push_str(&tasks::round_handoff_prompt(&handoff));
             }
             if let Some((id, _)) = task_role(&role)
@@ -3423,7 +3427,12 @@ impl Core {
                                 if let Err(error) =
                                     self.run_task(conversation, &mut task_clone, &task_cancel)
                                 {
-                                    task_clone.report.get_or_insert_with(|| error.to_string());
+                                    let report = task_clone.report.take().unwrap_or_default();
+                                    task_clone.report = Some(
+                                        format!("{report}\n\n[runtime] {error}")
+                                            .trim_start()
+                                            .to_owned(),
+                                    );
                                     let _ = self.stop(
                                         conversation,
                                         &mut task_clone,
@@ -3577,10 +3586,10 @@ impl Core {
             .collect::<Vec<_>>();
         let team: Vec<TaskSpec> = self
             .store
-            .plan(&task.plan_id)?
+            .plan_specs(&task.plan_id)?
             .into_iter()
-            .filter_map(|task| serde_json::from_value(task.spec).ok())
-            .collect();
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<_, _>>()?;
         let upstream = self.upstream(&task.plan_id, &spec)?;
         let worker = format!("worker:{}", task.id);
         let verifier = format!("verifier:{}", task.id);
@@ -3671,7 +3680,7 @@ impl Core {
             let report = if recheck {
                 task.report.clone()
             } else {
-                self.turn(worker_setup(), cancel, |_first| {
+                self.turn(worker_setup(), cancel, |first| {
                     let continuation = if round == 1 {
                         None
                     } else if resumed && round == first_round {
@@ -3685,8 +3694,12 @@ impl Core {
                         &team,
                         autonomous,
                         continuation.as_deref(),
-                        &upstream,
-                        &tasks::user_edits_note(&user_edits),
+                        if first { "" } else { &upstream },
+                        &if first {
+                            String::new()
+                        } else {
+                            tasks::user_edits_note(&user_edits)
+                        },
                     )
                 })?
             };
@@ -3714,8 +3727,12 @@ impl Core {
                         } else {
                             Some(tasks::INBOX_FOLLOWUP)
                         },
-                        &upstream,
-                        &tasks::user_edits_note(&user_edits),
+                        if first { "" } else { &upstream },
+                        &if first {
+                            String::new()
+                        } else {
+                            tasks::user_edits_note(&user_edits)
+                        },
                     )
                 })?;
                 let Some(next) = next else {
@@ -3832,7 +3849,7 @@ impl Core {
                     if first { "" } else { &report },
                     changes.as_deref(),
                     first || round == 1,
-                    &upstream,
+                    if first { "" } else { &upstream },
                 );
                 format!("{user_checks}{prompt}")
             })?;
@@ -3868,7 +3885,22 @@ impl Core {
                     access: agent::Access::ReadOnly,
                     upto_message: 0,
                 };
-                let Some(answer) = self.turn(setup, cancel, |_| prompt)? else {
+                let Some(answer) = self.turn(setup, cancel, |fresh| {
+                    if fresh {
+                        let instructions = tasks::verifier_turn_prompt(
+                            &project_text,
+                            &spec,
+                            "",
+                            changes.as_deref(),
+                            true,
+                            "",
+                        );
+                        format!("{user_checks}{instructions}\n\n{prompt}")
+                    } else {
+                        prompt
+                    }
+                })?
+                else {
                     return self.stop_task(conversation, task, &verifier, cancel);
                 };
                 let answer = self.post(
@@ -4177,21 +4209,8 @@ impl Core {
 
     /// The approved reports of the tasks `spec` depends on, as prompt text.
     fn upstream(&self, plan_id: &str, spec: &TaskSpec) -> Result<String> {
-        let plan = self.store.plan(plan_id)?;
-        let done: Vec<(&str, &str, &str)> = plan
-            .iter()
-            .filter(|task| task.status == status::APPROVED)
-            .filter_map(|task| {
-                let id = task.spec["id"].as_str()?;
-                spec.depends_on.iter().any(|d| d == id).then_some(())?;
-                Some((
-                    id,
-                    task.spec["title"].as_str().unwrap_or_default(),
-                    task.report.as_deref()?,
-                ))
-            })
-            .collect();
-        Ok(tasks::upstream_note(&done))
+        let reports = self.store.dependency_reports(plan_id, &spec.depends_on)?;
+        Ok(tasks::dependency_reports_note(&reports))
     }
 
     /// Where a writer starts: from the result of the one task it depends on,
@@ -4571,17 +4590,22 @@ impl Core {
             access: agent::Access::Write,
             upto_message: 0,
         };
-        let upstream = self.upstream(&task.plan_id, spec)?;
-        let Some(answer) = self.turn(setup, cancel, |_| {
-            tasks::worker_turn_prompt(
+        let handoff = self.round_handoff(&task.id, task.round, worktree)?;
+        let Some(answer) = self.turn(setup, cancel, |fresh| {
+            let prompt = tasks::worker_turn_prompt(
                 &worktree.to_string_lossy(),
                 spec,
                 &[],
                 false,
                 Some(&prompt),
-                &upstream,
                 "",
-            )
+                "",
+            );
+            if fresh {
+                prompt
+            } else {
+                prompt + &tasks::round_handoff_prompt(&handoff)
+            }
         })?
         else {
             return self.stop_task(conversation, task, &worker, cancel);

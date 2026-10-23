@@ -75,8 +75,11 @@ struct Writer(std::sync::mpsc::SyncSender<Vec<u8>>);
 impl Write for Writer {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0
-            .try_send(bytes.to_vec())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, e))?;
+            // WezTerm calls this on its own writer thread. Apply backpressure
+            // there: WouldBlock would terminate that thread and lose later
+            // keystrokes even after the PTY became writable again.
+            .send(bytes.to_vec())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))?;
         Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -314,7 +317,6 @@ impl Session {
             sequence == last.sequence.saturating_add(1),
             "terminal input sequence has a gap",
         )?;
-        last.sequence = sequence;
         last.seen = std::time::Instant::now();
         let mut state = self.state.lock().map_err(invalid)?;
         require(
@@ -351,7 +353,11 @@ impl Session {
                 if event.code == KeyCode::BackTab {
                     mods |= wezterm_term::KeyModifiers::SHIFT;
                 }
-                state.term.key_down(key, mods).map_err(invalid)?;
+                if event.kind == crossterm::event::KeyEventKind::Release {
+                    state.term.key_up(key, mods).map_err(invalid)?;
+                } else {
+                    state.term.key_down(key, mods).map_err(invalid)?;
+                }
             }
             Input::Mouse { event } => {
                 let (kind, button) = match event.kind {
@@ -376,7 +382,14 @@ impl Session {
                         wezterm_term::MouseEventKind::Press,
                         wezterm_term::MouseButton::WheelDown(1),
                     ),
-                    _ => return Ok(()),
+                    MouseEventKind::ScrollLeft => (
+                        wezterm_term::MouseEventKind::Press,
+                        wezterm_term::MouseButton::WheelLeft(1),
+                    ),
+                    MouseEventKind::ScrollRight => (
+                        wezterm_term::MouseEventKind::Press,
+                        wezterm_term::MouseButton::WheelRight(1),
+                    ),
                 };
                 state
                     .term
@@ -392,6 +405,7 @@ impl Session {
                     .map_err(invalid)?;
             }
         }
+        last.sequence = sequence;
         Ok(())
     }
 }
@@ -600,6 +614,7 @@ impl Core {
 struct Filter {
     mode: u8,
     sequence: Vec<u8>,
+    osc: bool,
 }
 
 /// wezterm flushes its printable run at each advance_bytes call. Retain the
@@ -652,9 +667,19 @@ impl GraphemeStream {
                 if self.mode == 1 {
                     if byte == b'[' {
                         self.mode = 2;
+                    } else if byte == b']' {
+                        self.mode = 3;
                     } else if !(0x20..=0x2f).contains(&byte) {
                         self.mode = 0;
                     }
+                } else if self.mode == 3 {
+                    if byte == 7 {
+                        self.mode = 0;
+                    } else if byte == 27 {
+                        self.mode = 4;
+                    }
+                } else if self.mode == 4 {
+                    self.mode = if byte == b'\\' { 0 } else { 3 };
                 } else if (0x40..=0x7e).contains(&byte) {
                     self.mode = 0;
                 }
@@ -815,6 +840,24 @@ impl GraphemeStream {
     }
 }
 impl Filter {
+    fn finish_string(&mut self, terminator: &[u8], output: &mut Vec<u8>) {
+        // Preserve bounded palette queries needed by native CLI theme
+        // detection. Graphics, clipboard and other string controls stay out.
+        if self.osc && self.sequence.starts_with(b"\x1b]") {
+            let query = std::str::from_utf8(&self.sequence[2..]).unwrap_or("");
+            let parts: Vec<_> = query.split(';').collect();
+            let dynamic = matches!(parts.as_slice(), ["10" | "11" | "12", "?"]);
+            let indexed =
+                matches!(parts.as_slice(), ["4", index, "?"] if index.parse::<u8>().is_ok());
+            if dynamic || indexed {
+                output.append(&mut self.sequence);
+                output.extend_from_slice(terminator);
+            }
+        }
+        self.sequence.clear();
+        self.osc = false;
+        self.mode = 0;
+    }
     fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
         let mut output = Vec::with_capacity(bytes.len());
         for &byte in bytes {
@@ -831,7 +874,14 @@ impl Filter {
                         self.sequence = vec![27, b'['];
                         self.mode = 2;
                     }
-                    b']' | b'P' | b'_' | b'^' => self.mode = 3,
+                    b']' | b'P' | b'_' | b'^' => {
+                        self.osc = byte == b']';
+                        self.sequence.clear();
+                        if self.osc {
+                            self.sequence.extend_from_slice(b"\x1b]");
+                        }
+                        self.mode = 3;
+                    }
                     _ => {
                         output.extend_from_slice(&[27, byte]);
                         self.mode = 0;
@@ -851,15 +901,24 @@ impl Filter {
                 }
                 3 => {
                     if byte == 7 {
-                        self.mode = 0;
+                        self.finish_string(&[7], &mut output);
                     } else if byte == 27 {
                         self.mode = 4;
+                    } else if self.osc {
+                        if self.sequence.len() < 1024 {
+                            self.sequence.push(byte);
+                        } else {
+                            self.sequence.clear();
+                            self.osc = false;
+                        }
                     }
                 }
                 4 => {
                     if byte == b'\\' || byte == 7 {
-                        self.mode = 0;
+                        self.finish_string(&[27, byte], &mut output);
                     } else if byte != 27 {
+                        self.osc = false;
+                        self.sequence.clear();
                         self.mode = 3;
                     }
                 }
@@ -877,6 +936,72 @@ impl Filter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn split_palette_and_cursor_queries_receive_terminal_responses() {
+        let (sender, received) = std::sync::mpsc::sync_channel(8);
+        let mut term = Terminal::new(
+            size(40, 4).unwrap(),
+            Arc::new(Config),
+            "test",
+            "test",
+            Box::new(Writer(sender)),
+        );
+        let mut filter = Filter::default();
+        let mut graphemes = GraphemeStream::default();
+        for &byte in b"\x1b]11;?\x1b\\\x1b[6n" {
+            graphemes.feed(&mut term, &filter.feed(&[byte])).unwrap();
+        }
+        let mut output = String::new();
+        for _ in 0..8 {
+            output.push_str(
+                &String::from_utf8(
+                    received
+                        .recv_timeout(std::time::Duration::from_secs(1))
+                        .unwrap(),
+                )
+                .unwrap(),
+            );
+            if output.contains("11;rgb:") && output.contains("1;1R") {
+                break;
+            }
+        }
+        assert!(output.contains("11;rgb:"), "{output:?}");
+        assert!(output.contains("1;1R"), "{output:?}");
+        assert!(text(&term).trim().is_empty());
+        assert!(filter.feed(b"\x1b]52;c;?\x07").is_empty());
+    }
+    #[test]
+    fn writer_backpressure_keeps_the_complete_paste_and_later_input() {
+        let (sender, received) = std::sync::mpsc::sync_channel(1);
+        sender.send(b"occupied".to_vec()).unwrap();
+        let mut writer = Writer(sender);
+        let (ready, started) = std::sync::mpsc::sync_channel(1);
+        let (finished, done) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            ready.send(()).unwrap();
+            let paste = "\x1b[200~draft 👩‍💻\x1b[201~";
+            finished
+                .send(writer.write_all(paste.as_bytes()).is_ok())
+                .unwrap();
+            writer.write_all(b"next").unwrap();
+        });
+        started.recv().unwrap();
+        assert!(
+            done.recv_timeout(std::time::Duration::from_millis(50))
+                .is_err()
+        );
+        assert_eq!(received.recv().unwrap(), b"occupied");
+        assert!(
+            done.recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+        );
+        assert_eq!(
+            received.recv().unwrap(),
+            "\x1b[200~draft 👩‍💻\x1b[201~".as_bytes()
+        );
+        assert_eq!(received.recv().unwrap(), b"next");
+        worker.join().unwrap();
+    }
     fn emulator(columns: usize, rows: usize) -> Terminal {
         Terminal::new(
             TerminalSize {

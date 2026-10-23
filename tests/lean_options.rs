@@ -474,10 +474,6 @@ fn assert_core_delivery(scenario: &str) {
         "A",
         scenario,
     );
-    println!(
-        "SCENARIO={scenario}\n{}",
-        serde_json::to_string_pretty(&calls).unwrap()
-    );
     let task = stored.iter().find(|t| t.spec["id"] == "w").unwrap();
     assert_eq!(task.status, "approved", "{scenario}: {task:?}");
     let worker_calls: Vec<_> = calls
@@ -510,11 +506,25 @@ fn assert_core_delivery(scenario: &str) {
             "resume/rejection must advance the Core round"
         );
     }
+    if !scenario.starts_with("mail-") {
+        assert!(
+            continued[1]["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Round: 2")
+        );
+        assert!(
+            continued[1]["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Round handoff")
+        );
+    }
     if scenario == "resume-verifier" {
         assert_eq!(
             worker_calls.len(),
             2,
-            "resume_plan reruns the worker before resuming the verifier"
+            "resume_plan reruns the worker before a fresh verifier round"
         );
     }
     let second = continued[1];
@@ -523,14 +533,20 @@ fn assert_core_delivery(scenario: &str) {
         prompt.contains(REPORT),
         "{scenario}: missing dependency report"
     );
+    assert_eq!(
+        prompt.matches(REPORT).count(),
+        1,
+        "dependency reports must not be duplicated in a handoff"
+    );
     let args = second["args"].as_array().unwrap();
     assert_eq!(
         args.iter().any(|v| v == "--conversation"),
-        scenario != "mail-new",
+        scenario == "mail-existing",
         "{scenario}"
     );
     if scenario == "resume-verifier" {
-        assert!(prompt.contains("The worker's updated report:"));
+        assert!(prompt.contains("You verify another agent's work."));
+        assert!(prompt.contains("Latest worker report"));
         assert!(prompt.contains("Report a missing or ambiguous selection"));
     } else {
         assert!(prompt.contains("options report is binding"));
@@ -553,7 +569,8 @@ fn assert_core_delivery(scenario: &str) {
     if scenario == "reject-once" {
         assert_eq!(verifier_calls.len(), 2);
         let followup = verifier_calls[1]["prompt"].as_str().unwrap();
-        assert!(followup.contains("The worker's updated report:"));
+        assert!(followup.contains("You verify another agent's work."));
+        assert!(followup.contains("Latest worker report"));
         assert!(followup.contains(REPORT));
         assert!(followup.contains("Report a missing or ambiguous selection"));
         let bytes: Vec<_> = calls
@@ -565,12 +582,12 @@ fn assert_core_delivery(scenario: &str) {
 }
 
 #[test]
-fn core_delivery_resumes_worker_session() {
+fn core_delivery_starts_fresh_worker_session_after_interruption() {
     assert_core_delivery("resume-worker");
 }
 
 #[test]
-fn core_delivery_resumes_verifier_session() {
+fn core_delivery_starts_fresh_verifier_session_after_interruption() {
     assert_core_delivery("resume-verifier");
 }
 

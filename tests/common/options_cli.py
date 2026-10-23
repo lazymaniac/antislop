@@ -57,7 +57,8 @@ else:
             # Parse the worker report delivered by runtime, never settings['claim'].
             # A claim is insufficient: check the cited repository contract and
             # compare its required format with the actual implementation bytes.
-            report = prompt.split("The worker's report:\n<<<\n", 1)[-1].split('\n>>>', 1)[0]
+            handoff = re.search(r'Latest worker report \(source round [0-9]+\):\n(.*?)\nPrevious verifier findings and evidence:', prompt, re.S)
+            report = handoff.group(1) if handoff else prompt.split("The worker's report:\n<<<\n", 1)[-1].split('\n>>>', 1)[0]
             departure = re.search(r'Departure: (\{[^\n]+\})', report)
             if departure:
                 evidence = json.loads(departure.group(1))

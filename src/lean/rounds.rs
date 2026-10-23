@@ -4,7 +4,7 @@ use rusqlite::{OptionalExtension, params};
 
 #[derive(Debug)]
 pub(crate) struct RoundHandoff {
-    pub task: serde_json::Value,
+    pub task: tasks::TaskSpec,
     pub round: u32,
     pub worktree: PathBuf,
     pub report: Option<(u32, String)>,
@@ -13,8 +13,69 @@ pub(crate) struct RoundHandoff {
     pub base: Option<String>,
     pub result: Option<String>,
     pub interrupted: bool,
-    pub upstream: String,
-    pub instructions: String,
+    pub interruptions: Vec<RoundInterruption>,
+    pub dependencies: Vec<tasks::DependencyReport>,
+    pub requirements: Vec<ledger::LedgerEntry>,
+    pub comments: Vec<Comment>,
+    pub protected_paths: Vec<String>,
+    pub primary: PathBuf,
+    pub in_place: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct RoundInterruption {
+    pub round: u32,
+    pub role: String,
+    pub status: String,
+    pub reason: Option<String>,
+}
+
+/// Hash only provider execution settings, never repository contents or secrets in logs.
+/// Keeping this in turn metadata avoids a second session archive or schema change.
+pub(super) fn execution_signature(profile: &ResolvedProfile) -> Result<String> {
+    execution_signature_fields(
+        &profile.profile,
+        profile.provider,
+        &profile.binary,
+        &profile.args,
+        profile.model.as_deref(),
+        profile.native_effort.as_deref(),
+        profile.effort,
+    )
+}
+
+pub(super) fn spec_signature(
+    profile: &str,
+    effort: crate::config::Effort,
+    spec: &agent::Spec,
+) -> Result<String> {
+    execution_signature_fields(
+        profile,
+        spec.provider,
+        &spec.binary,
+        &spec.args,
+        spec.model.as_deref(),
+        spec.effort.as_deref(),
+        effort,
+    )
+}
+
+fn execution_signature_fields(
+    profile: &str,
+    provider: crate::config::ProviderKind,
+    binary: &Path,
+    args: &[String],
+    model: Option<&str>,
+    effort: Option<&str>,
+    configured_effort: crate::config::Effort,
+) -> Result<String> {
+    use sha2::Digest;
+    let encoded = serde_json::to_vec(&json!({"profile":profile,"provider":provider,
+        "binary":binary,"args":args,"model":model,"effort":effort,"configured_effort":configured_effort}))?;
+    Ok(sha2::Sha256::digest(encoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 impl Core {
@@ -51,11 +112,19 @@ impl Core {
         let Some(context) = self.store.run_context(conversation, &turn)? else {
             return Ok(None);
         };
+        let stored_signature: Option<String> = self.store.db().query_row(
+            "SELECT json_extract(payload,'$.execution_signature') FROM events
+             WHERE conversation_id=?1 AND turn_id=?2 AND kind='turn_started' ORDER BY seq DESC LIMIT 1",
+            params![conversation, turn], |row| row.get(0),
+        ).optional()?.flatten();
+        let expected_signature = profile.map(execution_signature).transpose()?;
         let access = match access {
             agent::Access::ReadOnly => store::RunAccess::ReadOnly,
             agent::Access::Write => store::RunAccess::Write,
         };
-        Ok((context.provider == provider
+        Ok((stored_signature.is_some()
+            && stored_signature == expected_signature
+            && context.provider == provider
             && profile.is_some_and(|p| p.profile == context.profile)
             && context.cwd == cwd
             && context.add_dirs == add_dirs
@@ -70,31 +139,38 @@ impl Core {
             .ok_or_else(|| Error::Invalid(format!("task {id} does not exist")))?;
         let spec: tasks::TaskSpec = serde_json::from_value(task.spec.clone())?;
         let mut handoff = RoundHandoff {
-            task: task.spec.clone(),
+            task: spec.clone(),
             round,
             worktree: cwd.into(),
-            report: None,
+            report: self.store.completed_worker_report(id, round)?,
             verdict: task.verdict.clone(),
             files: vec![],
             base: task.base.clone(),
             result: task.result.clone(),
             interrupted: false,
-            upstream: self.upstream(&task.plan_id, &spec)?,
-            instructions: String::new(),
+            interruptions: vec![],
+            dependencies: self
+                .store
+                .dependency_reports(&task.plan_id, &spec.depends_on)?,
+            requirements: vec![],
+            comments: vec![],
+            protected_paths: vec![],
+            primary: PathBuf::from(
+                self.store
+                    .conversation(&self.store.plan_conversation(&task.plan_id)?)?
+                    .project,
+            ),
+            in_place: self.config_snapshot().workspace.mode == WorkspaceMode::InPlace,
         };
         let conversation = self.store.plan_conversation(&task.plan_id)?;
         if let Some(run) = self.store.plan_run(&task.plan_id)? {
             let entries = self.store.ledger_entries(&conversation, &run, None)?;
-            let entries: Vec<_> = entries
+            handoff.requirements = entries
                 .into_iter()
                 .filter(|entry| spec.requirement_ids.contains(&entry.spec.id))
                 .collect();
-            handoff.instructions.push_str(&format!(
-                "\nRequirements and acceptance criteria:\n{}",
-                serde_json::to_string(&entries)?
-            ));
         }
-        let comments: Vec<_> = self
+        handoff.comments = self
             .store
             .comments(&conversation, "open")?
             .into_iter()
@@ -105,10 +181,39 @@ impl Core {
                     .is_none_or(|plan| plan == task.plan_id)
             })
             .collect();
-        handoff.instructions.push_str(&format!(
-            "\nCurrent open comments:\n{}",
-            serde_json::to_string(&comments)?
-        ));
+        if spec.writes {
+            let project = &handoff.primary;
+            handoff.protected_paths = if handoff.in_place {
+                task.base
+                    .as_ref()
+                    .map(|base| self.in_place_user_edits(project, base))
+                    .transpose()?
+                    .unwrap_or_default()
+            } else {
+                git::uncommitted(project)?
+            };
+            handoff.protected_paths.sort();
+            handoff.protected_paths.dedup();
+        }
+        handoff.interruptions = {
+            let db = self.store.db();
+            let mut query = db.prepare(
+                "SELECT s.round,t.role,t.status,t.error FROM turns t JOIN turn_scopes s ON s.turn_id=t.id
+                 WHERE s.task_id=?1 AND s.round=(SELECT max(round) FROM turn_scopes WHERE task_id=?1 AND round<?2)
+                 AND t.role IN ('worker:'||?1,'verifier:'||?1) AND t.status IN ('failed','interrupted','cancelled')
+                 AND t.rowid=(SELECT max(n.rowid) FROM turns n JOIN turn_scopes ns ON ns.turn_id=n.id WHERE ns.task_id=s.task_id AND ns.round=s.round AND n.role=t.role)
+                 ORDER BY t.role")?;
+            query
+                .query_map(params![id, round], |row| {
+                    Ok(RoundInterruption {
+                        round: row.get(0)?,
+                        role: row.get(1)?,
+                        status: row.get(2)?,
+                        reason: row.get(3)?,
+                    })
+                })?
+                .collect::<std::result::Result<_, _>>()?
+        };
         let mut files = std::collections::BTreeSet::new();
         for (source, record) in self.store.handoff_rounds(id, round)? {
             if handoff.result.is_none() {
@@ -124,14 +229,15 @@ impl Core {
                     handoff.verdict = Some(self.store.handoff_field(&record["verdict"], true)?);
                 }
             }
-            if handoff.report.is_none()
-                && let Some(report) = self.store.completed_worker_report(id, source)?
-            {
-                handoff.report = Some((source, report));
-            }
             let incomplete_worker =
                 record["worker_started"] == true && record["worker_completed"] != true;
-            if incomplete_worker && handoff.report.is_none() {
+            if incomplete_worker
+                && source < round
+                && handoff
+                    .report
+                    .as_ref()
+                    .is_none_or(|(reported, _)| source > *reported)
+            {
                 handoff.interrupted = true;
             }
             if !incomplete_worker && handoff.report.is_none() && !record["report"].is_null() {
@@ -140,7 +246,13 @@ impl Core {
                     handoff.report = Some((source, report.to_owned()));
                 }
             }
-            if source < round && handoff.report.is_none() {
+            if source < round
+                && record["report"].is_null()
+                && handoff
+                    .report
+                    .as_ref()
+                    .is_none_or(|(reported, _)| source > *reported)
+            {
                 handoff.interrupted = true;
             }
         }
@@ -245,6 +357,15 @@ mod tests {
                 })
                 .unwrap();
             core.store
+                .append_event(
+                    &conversation,
+                    Some(&turn.id),
+                    Some(&task.plan_id),
+                    "turn_started",
+                    &json!({"execution_signature":execution_signature(&profile).unwrap()}),
+                )
+                .unwrap();
+            core.store
                 .set_session(&turn.id, "round-one-session")
                 .unwrap();
             let lookup = |round, cwd: &Path, access| {
@@ -289,6 +410,41 @@ mod tests {
                 .unwrap()
                 .is_none()
             );
+            for field in ["model", "effort", "configured_effort", "binary", "args"] {
+                let mut changed = profile.clone();
+                match field {
+                    "model" => changed.model = Some("another-model".into()),
+                    "effort" => changed.native_effort = Some("another-effort".into()),
+                    "configured_effort" => {
+                        changed.effort = if profile.effort == crate::config::Effort::Low {
+                            crate::config::Effort::High
+                        } else {
+                            crate::config::Effort::Low
+                        }
+                    }
+                    "binary" => changed.binary = cwd.join("different-cli"),
+                    "args" => changed.args.push("--different".into()),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    core.session_for_turn(
+                        &conversation,
+                        &role,
+                        agent::name(profile.provider),
+                        &SessionPolicy::TaskRound {
+                            task: task.id.clone(),
+                            round: 1
+                        },
+                        Some(&changed),
+                        &cwd,
+                        &[],
+                        agent::Access::ReadOnly
+                    )
+                    .unwrap()
+                    .is_none(),
+                    "{field}"
+                );
+            }
             let other = core
                 .store
                 .start_turn(
@@ -322,6 +478,28 @@ mod tests {
         task.round = 1;
         task.report = Some("OLD REPORT MUST NOT APPEAR".into());
         core.store.update_task(&task).unwrap();
+        let historical = core
+            .store
+            .start_turn(
+                &conversation,
+                &format!("worker:{}", task.id),
+                "codex",
+                0,
+                Some(&task.plan_id),
+            )
+            .unwrap();
+        core.store
+            .append_event(
+                &conversation,
+                Some(&historical.id),
+                Some(&task.plan_id),
+                "agent",
+                &json!({"type":"tool","name":"shell","detail":"HISTORICAL TOOL NEVER IN HANDOFF"}),
+            )
+            .unwrap();
+        core.store
+            .finish_turn(&historical.id, TurnStatus::Done, None)
+            .unwrap();
         task.round = 2;
         task.report = Some("Latest complete report\n".repeat(2000));
         task.verdict = Some(json!({"findings":[{"message":"Fix this", "evidence":"file:12"}]}));
@@ -352,6 +530,7 @@ mod tests {
         assert!(prompt.contains("Check everything"));
         assert!(prompt.contains("file:12"));
         assert!(!prompt.contains("OLD REPORT MUST NOT APPEAR"));
+        assert!(!prompt.contains("HISTORICAL TOOL NEVER IN HANDOFF"));
         assert!(handoff.files.is_empty());
     }
     #[test]
@@ -430,10 +609,12 @@ echo '{"type":"turn.completed"}'
         let handoff = core.round_handoff(&task.id, 3, dir.path()).unwrap();
         assert_eq!(handoff.report.unwrap(), (2, "complete report".into()));
         let role = format!("worker:{}", task.id);
-        let profile = core
+        let mut profile = core
             .config_snapshot()
             .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
             .unwrap();
+        profile.binary = script;
+        profile.args = vec!["--fake-cli".into()];
         for (round, expected) in [(2, true), (3, false)] {
             assert_eq!(
                 core.session_for_turn(
@@ -512,6 +693,9 @@ echo '{"type":"turn.completed"}'
                 text: "Review this result again".into(),
             })
             .unwrap();
+        let queued = core.store.task_by_id(&task.id).unwrap().unwrap();
+        assert!(queued.result.is_none());
+        core.store.update_task(&queued).unwrap();
         let handoff = core.round_handoff(&task.id, 3, dir.path()).unwrap();
         assert_eq!(handoff.result, task.result);
         assert_eq!(
@@ -617,5 +801,418 @@ echo '{"type":"turn.completed"}'
             handoff.report,
             Some((1, "Complete report before scheduler crash".into()))
         );
+    }
+    fn fake_cli(dir: &Path) -> PathBuf {
+        let binary = dir.join("offline-codex");
+        std::fs::write(
+            &binary,
+            r#"#!/bin/sh
+session="session-$$"
+reject=false
+resumed=false
+omit_session=false
+for arg; do
+  case "$arg" in session-*) session="$arg"; resumed=true ;; --reject-context) reject=true ;; --omit-resumed-session-id) omit_session=true ;; esac
+done
+if [ "$resumed" != true ] || [ "$omit_session" != true ]; then
+  printf '{"type":"thread.started","thread_id":"%s"}\n' "$session"
+fi
+if [ "$reject" = true ]; then
+  echo 'context_length_exceeded: full handoff rejected by offline provider' >&2
+  exit 1
+fi
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"complete report"}}'
+echo '{"type":"turn.completed"}'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        binary
+    }
+
+    fn fake_profile(core: &Core, binary: &Path) -> ResolvedProfile {
+        let mut profile = core
+            .config_snapshot()
+            .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
+            .unwrap();
+        profile.provider = crate::config::ProviderKind::Codex;
+        profile.binary = binary.into();
+        profile.args = vec!["--offline-cli".into()];
+        profile
+    }
+
+    fn execute(
+        core: &Arc<Core>,
+        conversation: &str,
+        task: &Task,
+        profile: ResolvedProfile,
+        verifier: bool,
+    ) -> Option<String> {
+        core.turn(
+            TurnSetup {
+                session_policy: SessionPolicy::TaskRound {
+                    task: task.id.clone(),
+                    round: task.round,
+                },
+                conversation,
+                plan_id: Some(task.plan_id.clone()),
+                role: format!(
+                    "{}:{}",
+                    if verifier { "verifier" } else { "worker" },
+                    task.id
+                ),
+                cwd: PathBuf::from(core.store.conversation(conversation).unwrap().project),
+                add_dirs: vec![],
+                access: agent::Access::ReadOnly,
+                profile: Ok(profile),
+                upto_message: 0,
+            },
+            &AtomicBool::new(false),
+            |_| "Perform the task using the round handoff.".into(),
+        )
+        .unwrap()
+    }
+
+    fn turn_prompt(core: &Core, conversation: &str, turn: &str) -> String {
+        core.store
+            .events_since(conversation, 0, 10000)
+            .unwrap()
+            .into_iter()
+            .find(|event| {
+                event.turn_id.as_deref() == Some(turn)
+                    && event.kind == "agent"
+                    && event.payload["type"] == "prompt"
+            })
+            .unwrap()
+            .payload["text"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    #[test]
+    fn editing_same_named_profile_rotates_cli_and_supplies_full_context_after_restart() {
+        let (dir, core, conversation, mut task) = fixture();
+        let binary = fake_cli(dir.path());
+        task.round = 1;
+        core.store.update_task(&task).unwrap();
+        let profile = fake_profile(&core, &binary);
+        assert_eq!(
+            execute(&core, &conversation, &task, profile.clone(), false).as_deref(),
+            Some("complete report")
+        );
+        let role = format!("worker:{}", task.id);
+        let first = core.store.last_turn(&conversation, &role).unwrap().unwrap();
+        let mut changed = profile.clone();
+        changed.model = Some("changed-model-under-the-same-name".into());
+        assert_eq!(
+            execute(&core, &conversation, &task, changed.clone(), false).as_deref(),
+            Some("complete report")
+        );
+        let second = core.store.last_turn(&conversation, &role).unwrap().unwrap();
+        assert_ne!(first.session_id, second.session_id);
+        let prompt = turn_prompt(&core, &conversation, &second.id);
+        assert!(prompt.contains("Latest worker report (source round 1):\ncomplete report"));
+        assert!(prompt.contains("Check everything"));
+        assert_eq!(
+            execute(&core, &conversation, &task, changed.clone(), false).as_deref(),
+            Some("complete report")
+        );
+        assert_eq!(
+            core.store
+                .last_turn(&conversation, &role)
+                .unwrap()
+                .unwrap()
+                .session_id,
+            second.session_id
+        );
+        let state = core.state.clone();
+        let config = (*core.config_snapshot()).clone();
+        drop(core);
+        let core = Core::open(&state, config).unwrap();
+        assert_eq!(
+            execute(&core, &conversation, &task, changed.clone(), false).as_deref(),
+            Some("complete report")
+        );
+        assert_eq!(
+            core.store
+                .last_turn(&conversation, &role)
+                .unwrap()
+                .unwrap()
+                .session_id,
+            second.session_id
+        );
+        changed.native_effort = Some("low".into());
+        assert_eq!(
+            execute(&core, &conversation, &task, changed, false).as_deref(),
+            Some("complete report")
+        );
+        assert_ne!(
+            core.store
+                .last_turn(&conversation, &role)
+                .unwrap()
+                .unwrap()
+                .session_id,
+            second.session_id
+        );
+    }
+
+    #[test]
+    fn provider_context_rejection_preserves_full_report_and_raw_reason() {
+        let (dir, core, conversation, mut task) = fixture();
+        let report = "COMPLETE-LONG-REPORT\n".repeat(4000);
+        task.round = 1;
+        task.report = Some(report.clone());
+        core.store.update_task(&task).unwrap();
+        task.round = 2;
+        task.report = None;
+        core.store.update_task(&task).unwrap();
+        let mut profile = fake_profile(&core, &fake_cli(dir.path()));
+        profile.args.push("--reject-context".into());
+        assert!(execute(&core, &conversation, &task, profile, false).is_none());
+        let turn = core
+            .store
+            .last_turn(&conversation, &format!("worker:{}", task.id))
+            .unwrap()
+            .unwrap();
+        assert!(
+            turn.error
+                .as_deref()
+                .unwrap()
+                .contains("context_length_exceeded: full handoff rejected by offline provider")
+        );
+        assert!(turn_prompt(&core, &conversation, &turn.id).contains(&report));
+        assert_eq!(
+            core.store.task_round(&task.id, 1).unwrap()["report"],
+            report
+        );
+        assert_eq!(
+            core.round_handoff(&task.id, 3, dir.path()).unwrap().report,
+            Some((1, report))
+        );
+    }
+
+    #[test]
+    fn restart_before_report_or_verdict_keeps_handoff_and_next_round_sessions_fresh() {
+        for after_report in [false, true] {
+            let (dir, core, conversation, mut task) = fixture();
+            let profile = fake_profile(&core, &fake_cli(dir.path()));
+            task.round = 1;
+            task.report = Some("earlier complete report".into());
+            core.store.update_task(&task).unwrap();
+            task.round = 2;
+            task.report = after_report.then(|| "completed report awaiting verdict".into());
+            core.store.update_task(&task).unwrap();
+            let role = format!(
+                "{}:{}",
+                if after_report { "verifier" } else { "worker" },
+                task.id
+            );
+            let turn = core
+                .store
+                .start_turn(&conversation, &role, "codex", 0, Some(&task.plan_id))
+                .unwrap();
+            core.store
+                .set_session(&turn.id, "interrupted-round-two-session")
+                .unwrap();
+            core.store
+                .append_event(
+                    &conversation,
+                    Some(&turn.id),
+                    Some(&task.plan_id),
+                    "turn_started",
+                    &json!({"execution_signature":execution_signature(&profile).unwrap()}),
+                )
+                .unwrap();
+            let state = core.state.clone();
+            let config = (*core.config_snapshot()).clone();
+            drop(core);
+            let core = Core::open(&state, config).unwrap();
+            assert_eq!(
+                core.store
+                    .last_turn(&conversation, &role)
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                TurnStatus::Interrupted
+            );
+            let handoff = core.round_handoff(&task.id, 3, dir.path()).unwrap();
+            let expected = if after_report {
+                "completed report awaiting verdict"
+            } else {
+                "earlier complete report"
+            };
+            assert_eq!(handoff.report.as_ref().unwrap().1, expected);
+            if !after_report {
+                assert!(handoff.interrupted)
+            }
+            let context = tasks::round_handoff_prompt(&handoff);
+            assert!(context.contains("interrupted"));
+            assert!(context.contains(&role));
+            task.round = 3;
+            task.report = None;
+            core.store.update_task(&task).unwrap();
+            execute(&core, &conversation, &task, profile.clone(), false).unwrap();
+            execute(&core, &conversation, &task, profile, true).unwrap();
+            for prefix in ["worker", "verifier"] {
+                let latest = core
+                    .store
+                    .last_turn(&conversation, &format!("{prefix}:{}", task.id))
+                    .unwrap()
+                    .unwrap();
+                assert_ne!(
+                    latest.session_id.as_deref(),
+                    Some("interrupted-round-two-session")
+                );
+                let prompt = turn_prompt(&core, &conversation, &latest.id);
+                assert!(prompt.contains("Round: 3"));
+                assert!(prompt.contains("Check everything"));
+                if prefix == "worker" {
+                    assert!(prompt.contains(expected))
+                }
+            }
+        }
+    }
+    #[test]
+    fn protection_data_is_formatted_for_the_actual_workspace_mode() {
+        let (dir, core, _conversation, mut task) = fixture();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["config", "user.email", "test@example.com"]);
+        std::fs::write(dir.path().join(".gitignore"), ".antislop/\n").unwrap();
+        std::fs::write(dir.path().join("user.txt"), "original").unwrap();
+        git(&["add", ".gitignore", "user.txt"]);
+        git(&["commit", "-m", "base"]);
+        std::fs::write(dir.path().join("user.txt"), "user draft").unwrap();
+        task.spec["writes"] = true.into();
+        core.store
+            .db()
+            .execute(
+                "UPDATE tasks SET spec=?2 WHERE id=?1",
+                params![task.id, task.spec.to_string()],
+            )
+            .unwrap();
+        task.round = 1;
+        task.base = Some(git::snapshot(dir.path(), "user baseline").unwrap());
+        core.store.update_task(&task).unwrap();
+        let handoff = core.round_handoff(&task.id, 2, dir.path()).unwrap();
+        assert_eq!(handoff.protected_paths, ["user.txt"]);
+        let prompt = tasks::round_handoff_prompt(&handoff);
+        assert!(prompt.contains("Changes already present in the primary working tree"));
+        assert!(!prompt.contains("You work directly in the user's directory"));
+        let mut config = (*core.config_snapshot()).clone();
+        config.workspace.mode = WorkspaceMode::InPlace;
+        *core.config.write().unwrap() = Arc::new(config);
+        let handoff = core.round_handoff(&task.id, 2, dir.path()).unwrap();
+        assert_eq!(handoff.protected_paths, ["user.txt"]);
+        let prompt = tasks::round_handoff_prompt(&handoff);
+        assert!(prompt.contains("You work directly in the user's directory"));
+        assert!(prompt.contains("do not modify them"));
+    }
+    #[test]
+    fn handoff_reads_only_requested_dependency_reports_and_no_dependency_verdicts() {
+        let (_dir, core, conversation, mut task) = fixture();
+        let extra_specs: Vec<_>=["dep","unrelated"].into_iter().map(|id|json!({
+            "id":id,"title":id,"goal":"Provide evidence","kind":"analysis","verifier":{"focus":"Check evidence"}
+        })).collect();
+        let mut others = core.store.add_plan(&conversation, &extra_specs).unwrap();
+        let full_report = "FULL DEPENDENCY REPORT\n".repeat(2000);
+        for (index, other) in others.iter_mut().enumerate() {
+            core.store
+                .db()
+                .execute(
+                    "UPDATE tasks SET plan_id=?2,position=?3 WHERE id=?1",
+                    params![other.id, task.plan_id, 100 + index as i64],
+                )
+                .unwrap();
+            other.plan_id = task.plan_id.clone();
+            other.round = 1;
+            other.status = status::APPROVED.into();
+            other.report = Some(if index == 0 {
+                full_report.clone()
+            } else {
+                "UNRELATED REPORT".into()
+            });
+            other.verdict = Some(json!({"approved":true,"findings":[]}));
+            core.store.update_task(other).unwrap();
+        }
+        let content_path = |id: &str, field: &str| {
+            let encoded: String = core
+                .store
+                .db()
+                .query_row(
+                    &format!("SELECT {field} FROM tasks WHERE id=?1"),
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let reference: serde_json::Value =
+                serde_json::from_str(encoded.strip_prefix("\0antislop-content:").unwrap()).unwrap();
+            core.state
+                .join("session-content")
+                .join(reference["id"].as_str().unwrap())
+        };
+        std::fs::remove_file(content_path(&others[1].id, "report")).unwrap();
+        std::fs::remove_file(content_path(&others[0].id, "verdict")).unwrap();
+        task.spec["depends_on"] = json!(["dep"]);
+        core.store
+            .db()
+            .execute(
+                "UPDATE tasks SET spec=?2 WHERE id=?1",
+                params![task.id, task.spec.to_string()],
+            )
+            .unwrap();
+        assert_eq!(core.store.plan_specs(&task.plan_id).unwrap().len(), 3);
+        let handoff = core
+            .round_handoff(&task.id, 1, core.state.parent().unwrap())
+            .unwrap();
+        assert_eq!(handoff.dependencies.len(), 1);
+        assert_eq!(handoff.dependencies[0].report, full_report);
+        let prompt = tasks::round_handoff_prompt(&handoff);
+        assert!(prompt.contains(&full_report));
+        assert!(!prompt.contains("UNRELATED REPORT"));
+        std::fs::remove_file(content_path(&others[0].id, "report")).unwrap();
+        let error = core
+            .round_handoff(&task.id, 1, core.state.parent().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("No such file"), "{error}");
+    }
+    #[test]
+    fn same_round_cli_turns_keep_known_identity_when_resumed_output_omits_it() {
+        let (dir, core, conversation, mut task) = fixture();
+        task.round = 1;
+        core.store.update_task(&task).unwrap();
+        let mut profile = fake_profile(&core, &fake_cli(dir.path()));
+        profile.args.push("--omit-resumed-session-id".into());
+        for verifier in [false, true] {
+            let role = format!(
+                "{}:{}",
+                if verifier { "verifier" } else { "worker" },
+                task.id
+            );
+            execute(&core, &conversation, &task, profile.clone(), verifier).unwrap();
+            let first = core.store.last_turn(&conversation, &role).unwrap().unwrap();
+            assert!(first.session_id.is_some());
+            for _ in 0..2 {
+                execute(&core, &conversation, &task, profile.clone(), verifier).unwrap();
+                let next = core.store.last_turn(&conversation, &role).unwrap().unwrap();
+                assert_eq!(next.session_id, first.session_id);
+                assert!(!turn_prompt(&core, &conversation, &next.id).contains("Round handoff"));
+            }
+        }
     }
 }

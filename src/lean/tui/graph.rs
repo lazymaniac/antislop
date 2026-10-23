@@ -13,6 +13,57 @@ use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// The requirements phase runs these roles as rounds of one agent; the graph
+/// shows them as a single card, represented by the first one present.
+const REQUIREMENTS_ROUNDS: [&str; 4] = [
+    "requirements-extraction-analyst",
+    "requirements-extraction-verifier",
+    "requirements-options-analyst",
+    "requirements-options-verifier",
+];
+const REQUIREMENTS_NAME: &str = "requirements";
+
+fn requirements_round(key: &str) -> Option<usize> {
+    REQUIREMENTS_ROUNDS.iter().position(|role| *role == key)
+}
+
+/// The members of the agent a card stands for: the card's own key for most
+/// agents, every round present for the requirements agent.
+fn card_members<'a>(view: &'a View, key: &'a str) -> Vec<&'a str> {
+    if requirements_round(key).is_none() {
+        return vec![key];
+    }
+    REQUIREMENTS_ROUNDS
+        .into_iter()
+        .filter(|role| view.agents.contains_key(*role))
+        .collect()
+}
+
+/// The round the requirements agent is in: the last one running, else the
+/// last one that reported anything.
+fn current_round<'a>(view: &View, members: &[&'a str]) -> Option<&'a str> {
+    members
+        .iter()
+        .rev()
+        .find(|key| view.agents.get(**key).is_some_and(|agent| agent.running))
+        .or_else(|| {
+            members.iter().rev().find(|key| {
+                view.agents
+                    .get(**key)
+                    .is_some_and(|agent| !agent.activity.is_empty())
+            })
+        })
+        .copied()
+}
+
+fn node_name(key: &str) -> String {
+    if requirements_round(key).is_some() {
+        REQUIREMENTS_NAME.into()
+    } else {
+        agent_name(key)
+    }
+}
+
 pub const WIDTH: u16 = 26;
 const MAX_SUMMARY_LINES: usize = 4;
 const MAX_EFFECT_LINES: usize = 2;
@@ -256,6 +307,18 @@ pub fn task_node_key(key: &str) -> String {
     }
 }
 
+/// `task_node_key`, with the requirements rounds folded into their one card.
+fn card_key(view: &View, key: &str) -> String {
+    if requirements_round(key).is_some() {
+        return REQUIREMENTS_ROUNDS
+            .into_iter()
+            .find(|role| view.agents.contains_key(*role))
+            .unwrap_or(key)
+            .to_owned();
+    }
+    task_node_key(key)
+}
+
 fn column_x(column: u16) -> u16 {
     MARGIN + column * (WIDTH + GAP_X)
 }
@@ -393,7 +456,7 @@ impl Graph {
             };
             let q_lower = q.to_lowercase();
             key.to_lowercase().contains(&q_lower)
-                || agent_name(key).to_lowercase().contains(&q_lower)
+                || node_name(key).to_lowercase().contains(&q_lower)
                 || key
                     .split_once(':')
                     .and_then(|(_, id)| view.tasks.iter().find(|t| t.id == id))
@@ -436,6 +499,11 @@ impl Graph {
                     && !key.starts_with("verifier:")
             })
             .collect();
+        // One card for the requirements agent, whichever round exists first.
+        let first_round = REQUIREMENTS_ROUNDS
+            .into_iter()
+            .find(|role| view.agents.contains_key(*role));
+        extra_agents.retain(|key| requirements_round(key).is_none() || Some(*key) == first_round);
         extra_agents.sort_unstable();
         admin.extend(extra_agents.iter().map(|&key| (key, matches_query(key))));
         let admin_vis = admin.iter().any(|&(_, visible)| visible);
@@ -655,7 +723,7 @@ impl Graph {
         // retain a recent highlight if either underlying link is recent.
         let mut links = std::collections::BTreeMap::<(String, String), (u32, bool)>::new();
         for ((from, to), link) in &view.links {
-            let pair = (task_node_key(from), task_node_key(to));
+            let pair = (card_key(view, from), card_key(view, to));
             if pair.0 == pair.1 {
                 continue;
             }
@@ -940,12 +1008,17 @@ pub fn health(view: &View, key: &str) -> Health {
             _ => Health::Idle,
         };
     }
-    let Some(agent) = view.agents.get(key) else {
-        return Health::Idle;
-    };
-    if agent.running {
+    let members = card_members(view, key);
+    let agents: Vec<_> = members
+        .iter()
+        .filter_map(|member| view.agents.get(*member))
+        .collect();
+    if agents.iter().any(|agent| agent.running) {
         Health::Working
-    } else if agent.activity.starts_with('✗') || agent.activity.starts_with('⚠') {
+    } else if current_round(view, &members)
+        .and_then(|round| view.agents.get(round))
+        .is_some_and(|agent| agent.activity.starts_with('✗') || agent.activity.starts_with('⚠'))
+    {
         Health::Problem
     } else {
         Health::Idle
@@ -957,7 +1030,9 @@ pub fn health(view: &View, key: &str) -> Health {
 /// through the shared interpretation (taskinfo); what the agent is doing
 /// and why it waits have their own line and never crowd the state out.
 fn describe(view: &View, key: &str) -> String {
-    let agent = view.agents.get(key);
+    let members = card_members(view, key);
+    let round = current_round(view, &members);
+    let agent = round.or(Some(key)).and_then(|round| view.agents.get(round));
     let provider = agent.map(|agent| agent.provider.as_str());
     if let Some((_, id)) = key.split_once(':') {
         let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
@@ -982,7 +1057,7 @@ fn describe(view: &View, key: &str) -> String {
     let working = health(view, key) == Health::Working;
     // The live-activity rule (only while running, never the placeholder)
     // is taskinfo's, the one every view reads the same way.
-    let doing = taskinfo::doing(view, key);
+    let doing = taskinfo::doing(view, round.unwrap_or(key));
     let text = if working {
         "working".to_owned()
     } else {
@@ -993,6 +1068,15 @@ fn describe(view: &View, key: &str) -> String {
         } else {
             activity.to_owned()
         }
+    };
+    let text = match round.and_then(requirements_round) {
+        Some(index) => format!(
+            "r{}/{} {} · {text}",
+            index + 1,
+            REQUIREMENTS_ROUNDS.len(),
+            REQUIREMENTS_ROUNDS[index].trim_start_matches("requirements-")
+        ),
+        None => text,
     };
     let text = taskinfo::with_provider(&text, provider);
     match doing {
@@ -1026,7 +1110,7 @@ fn card_lines(view: &View, key: &str) -> Vec<String> {
                     .find(|task| task.id == id)
                     .map(|task| (role, task))
             }) else {
-                return vec![normalize(&agent_name(key))];
+                return fit_lines(&normalize(&node_name(key)), usize::from(WIDTH - 4), 1);
             };
             let summary = if role == "worker" {
                 &task.summary
@@ -1165,7 +1249,7 @@ fn draw_node(
     let name = task
         .map(|task| clean(&task.title))
         .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| agent_name(&node.key));
+        .unwrap_or_else(|| node_name(&node.key));
     let title = if node.collapsed {
         format!("{} [+]", truncate(&name, inner.saturating_sub(7)))
     } else {
@@ -1510,6 +1594,30 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn requirements_rounds_share_one_card_that_fits() {
+        let mut view = View::default();
+        for key in REQUIREMENTS_ROUNDS {
+            view.agents.insert(key.into(), Default::default());
+        }
+        let graph = Graph::new_with_viewport(
+            &view,
+            None,
+            &Default::default(),
+            GroupingMode::Dependency,
+            None,
+        );
+        let cards: Vec<_> = graph
+            .nodes
+            .iter()
+            .filter(|node| node.visible && requirements_round(&node.key).is_some())
+            .collect();
+        assert_eq!(cards.len(), 1);
+        for line in card_lines(&view, &cards[0].key) {
+            assert!(line.width() <= usize::from(WIDTH - 4), "{line}");
+        }
+    }
+
     #[test]
     fn graph_includes_planning_agents_in_every_layout() {
         let mut view = View::default();

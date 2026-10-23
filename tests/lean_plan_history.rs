@@ -284,16 +284,10 @@ fn plan_pagination_and_active_plan_invariance() {
     assert_eq!(latest_after_viewing[0].plan_id, active_id);
 }
 
-// 3. Database replay & schema migration 3 -> 4.
-// Replay existing database written with schema 3 without plan_id on events/turns or plans table.
-// Verify:
-// - Store::open migrates safely to schema 4.
-// - plans table is populated from tasks.
-// - turns and events with recognizable relations are backfilled.
-// - events/turns without plan links explicitly have plan_id: None (NULL in SQL).
-// - existing messages, tasks, and conversations are preserved intact.
+// 3. Incompatible databases are rejected without migrating or deleting history.
+// Keep messages, reports, verdicts, sessions and events available for manual archival.
 #[test]
-fn database_replay_and_schema_migration_preserves_data() {
+fn incompatible_legacy_database_is_rejected_without_changing_history() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("legacy.db");
 
@@ -398,52 +392,51 @@ fn database_replay_and_schema_migration_preserves_data() {
         .unwrap();
     }
 
-    // 2. Open with Store::open - triggers automatic migration to schema 4
-    let store = Store::open(&db_path).unwrap();
-
-    // Verify conversations and messages intact
-    let conv = store.conversation("c1").unwrap();
-    assert_eq!(conv.project, "/test/project");
-    let msgs = store.messages_after("c1", 0).unwrap();
-    assert_eq!(msgs.len(), 1);
-    assert_eq!(msgs[0].text, "hello legacy");
-
-    // Verify plans table backfilled
-    assert!(
-        store
-            .plan_belongs_to_conversation("c1", "legacy_p1")
-            .unwrap()
+    // The current store deliberately rejects incompatible schemas instead of
+    // silently migrating their histories. Verify the archive stays intact.
+    let before = std::fs::read(&db_path).unwrap();
+    let error = Store::open(&db_path)
+        .err()
+        .expect("schema 3 must be rejected")
+        .to_string();
+    assert!(error.contains("incompatible schema 3"), "{error}");
+    assert!(error.contains("No data was migrated or deleted"), "{error}");
+    assert_eq!(std::fs::read(&db_path).unwrap(), before);
+    let connection = rusqlite::Connection::open(&db_path).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    let task: (String, String) = connection
+        .query_row(
+            "SELECT report,verdict FROM tasks WHERE id='task_uuid_1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(task.0, "legacy report");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&task.1).unwrap()["approved"],
+        true
     );
-
-    // Verify plan history reading works on migrated data
-    let hist = store.plan_history("c1", "legacy_p1").unwrap();
-    assert_eq!(hist.id, "legacy_p1");
-    assert_eq!(hist.status, "approved");
-    assert_eq!(hist.tasks.len(), 1);
-    assert_eq!(hist.tasks[0].id, "task_uuid_1");
-    assert_eq!(hist.reports.len(), 1);
-    assert_eq!(hist.reports[0].report, "legacy report");
-    assert_eq!(hist.verdicts.len(), 1);
-
-    // Verify turns: worker turn should have plan_id backfilled, orchestrator turn should have plan_id: None
-    let events = store.events_since("c1", 0, 10).unwrap();
-    assert_eq!(events.len(), 4);
-
-    // Event 1 (worker turn): plan_id backfilled to legacy_p1
-    assert_eq!(events[0].seq, 1);
-    assert_eq!(events[0].plan_id.as_deref(), Some("legacy_p1"));
-
-    // Event 2 (orchestrator turn without plan): explicitly plan_id: None
-    assert_eq!(events[1].seq, 2);
-    assert_eq!(events[1].plan_id, None);
-
-    // Event 3 (task payload reference): plan_id backfilled to legacy_p1
-    assert_eq!(events[2].seq, 3);
-    assert_eq!(events[2].plan_id.as_deref(), Some("legacy_p1"));
-
-    // Event 4 (unassociated event): explicitly plan_id: None
-    assert_eq!(events[3].seq, 4);
-    assert_eq!(events[3].plan_id, None);
+    let session: String = connection
+        .query_row(
+            "SELECT session_id FROM turns WHERE id='turn_w1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(session, "s1");
+    let count: i64 = connection
+        .query_row("SELECT count(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 4);
+    let message: String = connection
+        .query_row("SELECT text FROM messages WHERE seq=1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(message, "hello legacy");
 }
 
 // 4. Foreign scope rejection on daemon.

@@ -44,7 +44,15 @@ fn raw(
             .send_json(body.unwrap_or(json!({}))),
         _ => return Err(invalid("unsupported OpenCode request method")),
     };
-    response.map_err(invalid)
+    response.map_err(|error| {
+        if path == "/session" && matches!(error, ureq::Error::StatusCode(404 | 405)) {
+            invalid(format!(
+                "{UNSUPPORTED_PROTOCOL}OpenCode {method} {path}: {error}"
+            ))
+        } else {
+            invalid(error)
+        }
+    })
 }
 
 pub(super) fn request(
@@ -225,13 +233,19 @@ pub(super) fn gateway(session: &Arc<Session>) -> Result<()> {
 }
 
 fn respond(request: tiny_http::Request, status: u16, value: Value) -> Result<()> {
-    request.respond(
-        tiny_http::Response::from_string(value.to_string())
-            .with_status_code(status)
-            .with_header(
-                tiny_http::Header::from_bytes("Content-Type", "application/json").expect("header"),
-            ),
+    let body = if status == 204 {
+        String::new()
+    } else {
+        value.to_string()
+    };
+    let mut writer = request.into_writer();
+    write!(
+        writer,
+        "HTTP/1.1 {status} Response\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
     )?;
+    writer.write_all(body.as_bytes())?;
+    writer.flush()?;
     Ok(())
 }
 
@@ -302,6 +316,28 @@ fn serve(weak: Weak<Session>, mut incoming: tiny_http::Request) -> Result<()> {
         if path == "/global/config" {
             return Ok((200, request(&session, "GET", "/config", None)?));
         }
+        if path == "/agent" {
+            let agents = request(&session, "GET", "/agent", None)?;
+            return Ok((
+                200,
+                Value::Array(
+                    agents
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|agent| agent["name"] == "antislop")
+                        .cloned()
+                        .collect(),
+                ),
+            ));
+        }
+        if path == "/config" {
+            let mut config = request(&session, "GET", "/config", None)?;
+            let managed = config["agent"]["antislop"].clone();
+            config["agent"] = json!({"antislop":managed});
+            config["default_agent"] = "antislop".into();
+            return Ok((200, config));
+        }
         if path == "/session" {
             return Ok((200, json!([request(&session, "GET", &root, None)?])));
         }
@@ -346,6 +382,10 @@ fn serve(weak: Weak<Session>, mut incoming: tiny_http::Request) -> Result<()> {
             unreachable!()
         };
         let response = raw(endpoint, password, "GET", &path, None)?;
+        #[cfg(test)]
+        if std::env::var_os("ANTISLOP_NATIVE_DEBUG").is_some() {
+            eprintln!("OpenCode SSE upstream connected");
+        }
         let mut reader = Events {
             reader: BufReader::new(response.into_body().into_reader()),
             pending: std::io::Cursor::new(vec![]),
@@ -356,7 +396,7 @@ fn serve(weak: Weak<Session>, mut incoming: tiny_http::Request) -> Result<()> {
         // tiny_http's normal chunked response buffers 8 KiB. Flush each SSE
         // frame explicitly so a quiet live session cannot stall its TUI.
         let mut writer = incoming.into_writer();
-        writer.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")?;
+        writer.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")?;
         writer.flush()?;
         let mut buffer = [0; 8192];
         loop {
@@ -364,9 +404,17 @@ fn serve(weak: Weak<Session>, mut incoming: tiny_http::Request) -> Result<()> {
             if count == 0 {
                 break;
             }
+            #[cfg(test)]
+            if std::env::var_os("ANTISLOP_NATIVE_DEBUG").is_some() {
+                eprintln!("OpenCode SSE frame bytes: {count}");
+            }
+            write!(writer, "{count:x}\r\n")?;
             writer.write_all(&buffer[..count])?;
+            writer.write_all(b"\r\n")?;
             writer.flush()?;
         }
+        writer.write_all(b"0\r\n\r\n")?;
+        writer.flush()?;
         return Ok(());
     }
     match result {
@@ -419,6 +467,13 @@ impl Read for Events {
                     &event
                 };
                 let properties = &payload["properties"];
+                #[cfg(test)]
+                if std::env::var_os("ANTISLOP_NATIVE_DEBUG").is_some() {
+                    eprintln!(
+                        "OpenCode SSE event: {} status={} error={}",
+                        payload["type"], properties["status"], properties["error"]
+                    );
+                }
                 let id = properties["sessionID"]
                     .as_str()
                     .or(properties["info"]["sessionID"].as_str())
@@ -538,6 +593,7 @@ mod tests {
             executing: AtomicBool::new(false),
             user_interrupted: AtomicBool::new(false),
             touched: Mutex::new(Instant::now()),
+            scope_round: None,
             process: Process::spawn(command, None).unwrap(),
         });
         gateway(&session).unwrap();

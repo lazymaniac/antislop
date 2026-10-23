@@ -473,6 +473,7 @@ impl Store {
             "SELECT t.role,r.backend FROM tasks k JOIN turns t
             ON t.conversation_id=k.conversation_id AND t.role IN ('worker:'||k.id,'verifier:'||k.id)
             JOIN run_contexts r ON r.turn_id=t.id
+            JOIN turn_scopes current_scope ON current_scope.turn_id=t.id AND current_scope.round=k.round
             WHERE k.id=?1 AND k.round=?2 AND t.id=(SELECT p.id FROM turns p
                 WHERE p.conversation_id=t.conversation_id AND p.role=t.role
                 ORDER BY p.started_ms DESC,p.rowid DESC LIMIT 1)",
@@ -661,25 +662,25 @@ impl Store {
         &self,
         task: &str,
         round: u32,
-    ) -> Result<Option<String>> {
-        let encoded: Option<String> = self
+    ) -> Result<Option<(u32, String)>> {
+        let encoded: Option<(u32, String)> = self
             .db()
             .query_row(
-                "SELECT e.payload FROM events e JOIN turns t ON t.id=e.turn_id
+                "SELECT s.round,e.payload FROM events e JOIN turns t ON t.id=e.turn_id
              JOIN turn_scopes s ON s.turn_id=t.id
-             WHERE s.task_id=?1 AND s.round=?2 AND t.role='worker:'||?1 AND e.kind='agent_final'
+             WHERE s.task_id=?1 AND s.round<=?2 AND t.role='worker:'||?1 AND e.kind='agent_final'
              AND NOT EXISTS(SELECT 1 FROM events start WHERE start.turn_id=t.id AND start.kind='turn_started' AND json_extract(start.payload,'$.mail_only')=1)
              ORDER BY e.seq DESC LIMIT 1",
                 params![task, round],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         encoded
-            .map(|encoded| {
+            .map(|(source, encoded)| {
                 let payload = self.hydrate_event_payload("agent_final", &encoded)?;
                 payload["text"]
                     .as_str()
-                    .map(str::to_owned)
+                    .map(|text| (source, text.to_owned()))
                     .ok_or_else(|| Error::Invalid("worker final answer has no text".into()))
             })
             .transpose()

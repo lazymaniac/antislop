@@ -6422,7 +6422,12 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
                 text: "first turn".into(),
             })
             .unwrap();
-        wait(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("before-save")));
+        // Wait for the complete record: a long shell printf can be observed
+        // after its first write, before the rest of the prompt reaches disk.
+        wait(|| {
+            std::fs::read_to_string(&log)
+                .is_ok_and(|s| s.contains("before-save") && s.ends_with("\n---\n"))
+        });
         assert_eq!(
             daemon.client.call(&Request::Identity).unwrap()["busy"],
             true
