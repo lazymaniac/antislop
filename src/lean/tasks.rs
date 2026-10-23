@@ -1586,7 +1586,12 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         }
         Integration => {
             "the combined change builds and passes checks as a whole; contracts \
-             between changed modules agree; no regression"
+             between changed modules agree; no regression; components connected \
+             to actual flows from public entry points; adapters preserve data \
+             meaning; failures propagate according to the end-to-end contract; \
+             packaged artifacts work outside the source tree when packaging is \
+             in scope; supported upgrade and mixed-version scenarios work when \
+             applicable; required rollback restores a working system"
         }
         Research => {
             "every source exists and supports the claim attributed to it; facts \
