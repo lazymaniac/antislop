@@ -5,3 +5,9 @@ R191	requirements	A requirement disappears during extraction from a long source.
 R192	requirements	A partially satisfied requirement is marked complete.	Check every criterion and qualifier separately.
 R193	requirements	A plan step is silently removed or replaced.	Compare PlanItemLedger with the original plan.
 R197	requirements	An aggregate checkbox hides unexamined subitems.	Check results for atomic items.
+R319	requirements	A requirement permits materially different interpretations.	Construct competing interpretations and check whether the source distinguishes them, clarifying differences that affect acceptance.
+R320	requirements	An acceptance criterion cannot objectively distinguish fulfillment from nonfulfillment.	Identify the observable outcome, checking conditions, and acceptance boundary appropriate to the task without inventing numerical thresholds.
+R321	requirements	Conflicting requirements are retained without an explicit resolution or an open conflict.	Check whether requirements can be satisfied together and record an authorized resolution or explicitly retain the unresolved conflict.
+R322	requirements	A preference, example, or suggested solution is promoted to a mandatory requirement.	Trace each obligation to its source and distinguish mandates from illustrations, preferences, and permitted options.
+R323	requirements	A changed or withdrawn requirement does not update the current acceptance criteria.	Compare current requirements with decision history, identify superseded items, and preserve constraints that still apply.
+R324	requirements	A requirement loses its applicability conditions or scope.	Compare actors, conditions, exceptions, and scope of each requirement with its source.

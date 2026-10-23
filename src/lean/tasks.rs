@@ -1529,7 +1529,14 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         }
         Requirements => {
             "every requirement of the source found, including ones in the middle; \
-             each qualifier of a requirement kept; contradictions named"
+             each qualifier, applicability condition and scope kept; material \
+             ambiguities resolved or explicitly left open; acceptance criteria \
+             have observable outcomes and conditions that distinguish fulfillment; \
+             contradictions named and resolved only by an authorized decision \
+             or retained as open; mandates distinguished from preferences, \
+             examples and suggestions using source evidence; current requirements \
+             and criteria reflect changes and withdrawals without losing \
+             constraints that still apply"
         }
         Options => {
             "real alternatives considered under the same conditions; a variant \
