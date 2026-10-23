@@ -16,7 +16,8 @@ else:
     task = re.search(r'Task id: ([^\n]+)', prompt) if worker else re.search(r'Task: ([^\n]+)', prompt)
     task = task.group(1) if task else previous.split(':', 1)[-1]
     session = ('worker:' if worker else 'verifier:') + task
-    count_file = os.path.join(root, session.replace(':', '-') + '-count')
+    counter_name = re.sub(r'[^A-Za-z0-9_-]', '_', session)
+    count_file = os.path.join(root, counter_name + '-count')
     count = int(open(count_file).read()) + 1 if os.path.exists(count_file) else 1
     open(count_file, 'w').write(str(count))
     record_call({'worker':worker,'task':task,'prompt':prompt,'args':sys.argv[1:-1],'pid':os.getpid(),'count':count})
