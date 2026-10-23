@@ -2,10 +2,7 @@ use super::*;
 use crate::{
     Error,
     config::{RoleKind, WorkKind},
-    lean::{
-        Core, TurnSetup, agent, git,
-        tasks::{self, TaskSpec},
-    },
+    lean::{Core, TurnSetup, agent, git, tasks},
 };
 use serde_json::json;
 use std::{
@@ -501,32 +498,6 @@ impl Core {
             &json!({"run":run_id,"spec_revision":revision,"approved":gaps.is_empty(),"gaps":gaps}),
         )?;
         Ok(gaps)
-    }
-    pub(in crate::lean) fn task_ledger_context(
-        &self,
-        conversation: &str,
-        task: &crate::lean::store::Task,
-    ) -> Result<String> {
-        let Some(run_id) = self.store.plan_run(&task.plan_id)? else {
-            return Ok(
-                "\nLegacy task: its approval cannot establish requirements completion.\n".into(),
-            );
-        };
-        let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
-        let entries: Vec<_> = self
-            .store
-            .ledger_entries(conversation, &run_id, None)?
-            .into_iter()
-            .filter(|e| {
-                spec.requirement_ids.contains(&e.spec.id) || spec.plan_item_ids.contains(&e.spec.id)
-            })
-            .collect();
-        Ok(format!(
-            "\nCurrent run {run_id}, task generation {}, ledger inputs: {}\nEvidence gaps: all mandatory criteria require independent verification on the integrated project. Source artifacts: {}\n",
-            task.input_generation,
-            serde_json::to_string(&entries.iter().map(|e|json!({"id":e.spec.id,"version":e.version,"spec_revision":e.spec_revision,"spec":e.spec})).collect::<Vec<_>>())?,
-            serde_json::to_string(&self.store.ledger_sources(conversation, &run_id)?)?
-        ))
     }
 }
 

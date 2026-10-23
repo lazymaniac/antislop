@@ -1533,8 +1533,7 @@ impl Core {
                     access: agent::Access::ReadOnly,
                     upto_message: 0,
                 };
-                let upstream = self.upstream(&task.plan_id, &spec)?
-                    + &self.task_ledger_context(&req.conversation, &task)?;
+                let upstream = self.upstream(&task.plan_id, &spec)?;
                 let cancel = AtomicBool::new(false);
                 let answer = self.turn(setup, &cancel, |fresh| {
                     tasks::verifier_turn_prompt(
@@ -2850,15 +2849,13 @@ impl Core {
             text.push_str(&prompt(resume.is_none()));
             if let Some((id, _)) = task_role(&role)
                 && let Some(task) = self.store.task_by_id(id)?
+                && !mail_only
             {
-                if !mail_only {
-                    require(
-                        task.status != status::STALE,
-                        "task was invalidated before its process started",
-                    )?;
-                    self.store.assert_task_inputs(&task)?;
-                }
-                text.push_str(&self.task_ledger_context(conversation, &task)?);
+                require(
+                    task.status != status::STALE,
+                    "task was invalidated before its process started",
+                )?;
+                self.store.assert_task_inputs(&task)?;
             }
             for message in &inbox {
                 if message.sender == "user" {
@@ -3287,8 +3284,7 @@ impl Core {
             .into_iter()
             .filter_map(|task| serde_json::from_value(task.spec).ok())
             .collect();
-        let upstream =
-            self.upstream(&task.plan_id, &spec)? + &self.task_ledger_context(conversation, task)?;
+        let upstream = self.upstream(&task.plan_id, &spec)?;
         let worker = format!("worker:{}", task.id);
         let verifier = format!("verifier:{}", task.id);
         // A resumed task keeps its rounds and its verifier's last word.
@@ -4239,8 +4235,7 @@ impl Core {
             access: agent::Access::Write,
             upto_message: 0,
         };
-        let upstream =
-            self.upstream(&task.plan_id, spec)? + &self.task_ledger_context(conversation, task)?;
+        let upstream = self.upstream(&task.plan_id, spec)?;
         let Some(answer) = self.turn(setup, cancel, |_| {
             tasks::worker_turn_prompt(
                 &worktree.to_string_lossy(),
