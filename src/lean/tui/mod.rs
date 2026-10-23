@@ -288,6 +288,7 @@ pub struct App {
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
     pub graph_area: Option<Rect>,
+    pub phase_action_area: Option<Rect>,
     pub graph_viewport: Option<(u16, u16)>,
     pub trust_prompt: Option<String>,
     /// The way out for a stopped step, while the user picks one.
@@ -383,6 +384,7 @@ impl App {
             details_query_memory: std::collections::HashMap::new(),
             graph_viewport: None,
             graph_area: None,
+            phase_action_area: None,
             trust_prompt: None,
             unblock: None,
             projects: Vec::new(),
@@ -3924,6 +3926,7 @@ impl App {
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
+        self.phase_action_area = None;
         self.sync_interview();
         self.settle_focus();
         self.terminal_area = frame.area();
@@ -4324,7 +4327,7 @@ impl App {
                 } else if self.view.requirements_summary.is_empty() {
                     "Enter answer interview · Ctrl+P commands"
                 } else {
-                    "Preparing the plan from collected requirements · Ctrl+P commands"
+                    "Review the summary · comment below or Ctrl+A to proceed to planning"
                 })
             } else {
                 None
@@ -4359,12 +4362,31 @@ impl App {
             })
         });
         let status_height = u16::from(self.sending || activity.is_some());
-        let [transcript, status, input] = Layout::vertical([
+        let phase_action = if self.view.requirements_approval_run.is_some() {
+            Some(("Review requirements changes", "/requirements"))
+        } else if self.view.workflow_phase.as_deref() == Some("interview")
+            && !self.view.requirements_summary.is_empty()
+        {
+            Some(("Proceed to planning", "/planning"))
+        } else if self.view.plan_proposed() {
+            Some(("Proceed to implementation", "/accept"))
+        } else {
+            None
+        };
+        let [transcript, status, action, input] = Layout::vertical([
             Constraint::Min(0),
             Constraint::Length(status_height),
+            Constraint::Length(u16::from(phase_action.is_some())),
             Constraint::Length(input_height),
         ])
         .areas(area);
+        self.phase_action_area = phase_action.map(|_| action);
+        if let Some((label, _)) = phase_action {
+            frame.render_widget(
+                Paragraph::new(format!("[ {label} ]")).style(theme.bar()),
+                action,
+            );
+        }
         if status_height > 0 {
             let text = if self.sending {
                 "orchestrator sending…".to_owned()
@@ -4666,7 +4688,7 @@ impl App {
                 ),
                 view::Stage::Interview => (
                     "1/3 · Review requirements",
-                    format!("{}\n\nPlanning starts automatically after the interview.", self.view.requirements_summary),
+                    format!("{}\n\nReview the summary. Add comments in chat or choose Proceed to planning.", self.view.requirements_summary),
                 ),
                 view::Stage::Planning => (
                     "2/3 · Planning",
@@ -4999,6 +5021,17 @@ impl App {
                 {
                     return true;
                 }
+                if self
+                    .phase_action_area
+                    .is_some_and(|area| area.contains((col, row).into()))
+                {
+                    if self.view.requirements_approval_run.is_some() {
+                        self.command("/requirements");
+                    } else {
+                        self.command("/accept");
+                    }
+                    return true;
+                }
                 if let Some(inner) = self.graph_area
                     && inner.contains((col, row).into())
                 {
@@ -5309,6 +5342,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         details_query_memory: std::collections::HashMap::new(),
         graph_viewport: None,
         graph_area: None,
+        phase_action_area: None,
         unblock: None,
         projects: Vec::new(),
         active_project: 0,
@@ -5608,6 +5642,27 @@ pub mod tests {
             result: Ok(()),
         });
         assert!(!app.interview_forms["interview-a"].sent);
+    }
+
+    #[test]
+    fn requirements_button_opens_ledger_and_preserves_chat_draft() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut app = test_app();
+        app.view.requirements_approval_run = Some("run1".into());
+        app.input = InputBuffer::with_text("My comment 👩‍💻");
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let area = app
+            .phase_action_area
+            .expect("requirements action above input");
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.ledger_view.as_ref().is_some_and(|view| view.visible));
+        assert_eq!(app.input.text, "My comment 👩‍💻");
     }
 
     #[test]

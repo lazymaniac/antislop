@@ -248,6 +248,7 @@ pub struct View {
     pub session_branch: Option<String>,
     pub interview_question: Option<(u64, crate::lean::interview::Question)>,
     pub requirements_summary: String,
+    pub requirements_approval_run: Option<String>,
     pub requirements_progress: Option<(bool, String)>,
     latest_user_message: u64,
     pub retain_session_history: bool,
@@ -647,6 +648,14 @@ impl View {
         let turn = event["turn_id"].as_str().unwrap_or_default();
         let key = self.roles.get(turn).cloned().unwrap_or_default();
         match event["kind"].as_str().unwrap_or_default() {
+            "ledger_approval_required" => {
+                self.requirements_approval_run = payload["run"].as_str().map(str::to_owned);
+            }
+            "ledger_changed" => {
+                if self.requirements_approval_run.as_deref() == payload["run"].as_str() {
+                    self.requirements_approval_run = None;
+                }
+            }
             "interview_question" => {
                 if let Ok(question) =
                     serde_json::from_value::<crate::lean::interview::Question>(payload.clone())
@@ -2267,6 +2276,22 @@ mod tests {
         );
         assert_eq!(view.task_rows["extra-uuid"], 1);
         assert_eq!(view.plan_scope_hash.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn requirements_approval_survives_replay_until_its_run_changes() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "ledger_approval_required",
+            json!({"run":"r1"}),
+        ));
+        assert_eq!(view.requirements_approval_run.as_deref(), Some("r1"));
+        view.apply(&event(2, None, "ledger_changed", json!({"run":"r2"})));
+        assert_eq!(view.requirements_approval_run.as_deref(), Some("r1"));
+        view.apply(&event(3, None, "ledger_changed", json!({"run":"r1"})));
+        assert!(view.requirements_approval_run.is_none());
     }
 
     #[test]

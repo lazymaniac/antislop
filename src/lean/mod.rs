@@ -303,7 +303,9 @@ impl Core {
         core.store.recover_options_comparisons()?;
         // Complete checkpoints left by an older daemon or a crash between turns.
         for conversation in core.store.conversations()? {
-            core.store.finish_interview(&conversation.id)?;
+            if core.autonomous(&conversation.id)? {
+                core.store.finish_interview(&conversation.id)?;
+            }
             if core
                 .store
                 .workflow(&conversation.id)?
@@ -2356,7 +2358,7 @@ impl Core {
                 ));
             }
             if interviewing {
-                prompt.insert_str(0, "\nSESSION PHASE: INTERVIEW. This overrides any instruction to propose a plan. Ask concise concrete questions in the user's language to establish the goal, scope, constraints, exclusions and observable acceptance criteria. Use answers already given; do not repeat questions. Even a self-contained request needs a requirements checkpoint. Ask one question at a time using a fenced ```question JSON block: {\"id\":\"scope\",\"context\":\"Why this decision matters\",\"question\":\"What should we build?\",\"options\":[{\"label\":\"Option A\",\"description\":\"Tradeoff\"},{\"label\":\"Option B\",\"description\":\"Tradeoff\"}]}. Offer 2–6 concrete options, put the recommended option first, mark its label as recommended in the user's language and explain its tradeoff. Do not include an Other option: the UI always supplies a custom answer field. Do not combine a question with the requirements checkpoint in the same answer. When no more questions are needed, end with a fenced ```requirements Markdown summary containing those agreed requirements and any explicit assumptions. This completes the interview and automatically starts planning. Do not emit a plan block, schedule work or implement anything. Do not ask the user to approve the requirements or send /planning.\n");
+                prompt.insert_str(0, "\nSESSION PHASE: INTERVIEW. This overrides any instruction to propose a plan. Ask concise concrete questions in the user's language to establish the goal, scope, constraints, exclusions and observable acceptance criteria. Use answers already given; do not repeat questions. Even a self-contained request needs a requirements checkpoint. Ask one question at a time using a fenced ```question JSON block: {\"id\":\"scope\",\"context\":\"Why this decision matters\",\"question\":\"What should we build?\",\"options\":[{\"label\":\"Option A\",\"description\":\"Tradeoff\"},{\"label\":\"Option B\",\"description\":\"Tradeoff\"}]}. Offer 2–6 concrete options, put the recommended option first, mark its label as recommended in the user's language and explain its tradeoff. Do not include an Other option: the UI always supplies a custom answer field. Do not combine a question with the requirements checkpoint in the same answer. When no more questions are needed, end with a fenced ```requirements Markdown summary containing those agreed requirements and any explicit assumptions. This completes the interview. In supervised mode, wait for explicit user approval before planning; in autonomous mode planning starts automatically. Do not emit a plan block, schedule work or implement anything. The UI offers approval of the requirements summary; the user can comment before proceeding.\n");
             } else if let Some(workflow) = &workflow {
                 prompt.insert_str(0, &format!("\nSESSION PHASE: {}. Collected requirements:\n{}\nPrepare or revise the complete plan for review and comments. Never start implementation yourself; separate user plan approval is required. During implementation, follow progress and respond to results or questions; propose revisions for approval if necessary.\n", workflow.phase, workflow.summary));
             }
@@ -2440,7 +2442,7 @@ impl Core {
             self.store.append_event(conversation, None, None, "planning_progress", &json!({"text": if plan.as_ref().is_some_and(|p| p.is_ok()) { "Plan draft ready" } else { "Working on the plan draft" }}))?;
         }
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
-        if interviewing && !cancel.load(Ordering::SeqCst) {
+        if interviewing && !cancel.load(Ordering::SeqCst) && self.autonomous(conversation)? {
             self.store.finish_interview(conversation)?;
         }
         if !interviewing && !unblocking.is_empty() {
