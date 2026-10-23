@@ -4649,11 +4649,12 @@ fn branch(task: &Task) -> Result<String> {
 
 /// Existing worktrees retain their actual branch, including legacy short names.
 fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
-    let path = state.join("worktrees").join(task_path_component(&task.id)?);
+    let id = task_path_component(&task.id)?;
+    let path = state.join("worktrees").join(id);
+    let expected = branch(task)?;
     if path.exists() {
         let actual = git::worktree_branch(&path)?;
-        let expected = branch(task)?;
-        let legacy = format!("antislop/{}", &task_path_component(&task.id)?[..8]);
+        let legacy = format!("antislop/{}", &id[..8]);
         if actual != expected && actual != legacy {
             return Err(Error::Invalid(format!(
                 "task {} worktree is on unrelated branch {actual}; expected {expected} or legacy {legacy}",
@@ -4662,7 +4663,7 @@ fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
         }
         Ok(actual)
     } else {
-        branch(task)
+        Ok(expected)
     }
 }
 
@@ -5014,6 +5015,13 @@ mod reliability_tests {
         assert!(other.exists());
         assert_eq!(git::worktree_branch(&other).unwrap(), "foreign-user-branch");
         assert_eq!(git::head(&other).unwrap(), changed);
+        let preserved = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", &format!("refs/heads/{unique}")])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(preserved.status.success());
+        assert_eq!(String::from_utf8(preserved.stdout).unwrap().trim(), changed);
         assert!(
             std::process::Command::new("git")
                 .args(["checkout", "--quiet", "--detach"])
