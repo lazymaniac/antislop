@@ -176,7 +176,23 @@ pub(crate) fn run_process(
     spec: &Spec,
     cancel: &AtomicBool,
     on_event: &mut dyn FnMut(Event),
+    command: Command,
+) -> Result<Outcome> {
+    run_process_with_timeout(
+        spec,
+        cancel,
+        on_event,
+        command,
+        Duration::from_secs(30 * 60),
+    )
+}
+
+fn run_process_with_timeout(
+    spec: &Spec,
+    cancel: &AtomicBool,
+    on_event: &mut dyn FnMut(Event),
     mut command: Command,
+    timeout: Duration,
 ) -> Result<Outcome> {
     command
         .stdin(Stdio::null())
@@ -218,11 +234,16 @@ pub(crate) fn run_process(
     let mut exited: Option<std::time::Instant> = None;
     let started = Instant::now();
     loop {
-        if started.elapsed() > Duration::from_secs(30 * 60) {
+        if started.elapsed() > timeout {
             stop(&mut child);
-            return Err(Error::Invalid(
-                "agent turn timed out after 30 minutes".into(),
-            ));
+            let elapsed = if timeout < Duration::from_secs(60) {
+                format!("{} seconds", timeout.as_secs().max(1))
+            } else {
+                format!("{} minutes", timeout.as_secs() / 60)
+            };
+            return Err(Error::Invalid(format!(
+                "agent turn timed out after {elapsed}"
+            )));
         }
         if cancel.load(Ordering::SeqCst) {
             stop(&mut child);
@@ -294,6 +315,17 @@ pub(crate) fn run_process(
     }
 }
 
+/// Writers run unsandboxed: the sandbox denies sockets, daemons and git
+/// metadata, which fails the very builds and tests they must run. Their
+/// isolation is the task worktree; read-only turns keep the sandbox.
+pub(crate) fn codex_sandbox(read_only: bool) -> &'static str {
+    if read_only {
+        "read-only"
+    } else {
+        "danger-full-access"
+    }
+}
+
 pub(crate) fn command(spec: &Spec, prompt: &str) -> Result<Command> {
     // A CLI's own subagents would be a team nobody verifies (design §9.5).
     const NO_CODEX_SUBAGENTS: &str = "features.multi_agent=false";
@@ -309,11 +341,7 @@ pub(crate) fn command(spec: &Spec, prompt: &str) -> Result<Command> {
                 // `exec resume` takes no -C/-s/--add-dir; cwd is the process's.
                 command.arg("resume");
                 command.arg("-c").arg("approval_policy=\"never\"");
-                let sandbox = if read_only {
-                    "read-only"
-                } else {
-                    "workspace-write"
-                };
+                let sandbox = codex_sandbox(read_only);
                 command.arg("-c").arg(format!("sandbox_mode=\"{sandbox}\""));
                 command.arg("-c").arg(NO_CODEX_SUBAGENTS);
                 command.arg("--json").arg("--skip-git-repo-check");
@@ -329,11 +357,7 @@ pub(crate) fn command(spec: &Spec, prompt: &str) -> Result<Command> {
                 .args(["--json", "--skip-git-repo-check", "-C"])
                 .arg(&spec.cwd)
                 .arg("-s")
-                .arg(if read_only {
-                    "read-only"
-                } else {
-                    "workspace-write"
-                });
+                .arg(codex_sandbox(read_only));
             for dir in &spec.add_dirs {
                 command.arg("--add-dir").arg(dir);
             }
@@ -654,14 +678,14 @@ fn short(text: &str) -> String {
     }
 }
 
-enum Finish {
+pub(crate) enum Finish {
     Done(String),
     Failed(String),
     Missing,
 }
 
 /// Normalizes one provider's JSON lines.
-struct Parser {
+pub(crate) struct Parser {
     provider: ProviderKind,
     session: Option<String>,
     text: String,
@@ -673,7 +697,7 @@ struct Parser {
 }
 
 impl Parser {
-    fn new(provider: ProviderKind) -> Self {
+    pub(crate) fn new(provider: ProviderKind) -> Self {
         Self {
             provider,
             session: None,
@@ -691,7 +715,7 @@ impl Parser {
             events.push(Event::Session { id: id.to_owned() });
         }
     }
-    fn feed(&mut self, line: &Value) -> Vec<Event> {
+    pub(crate) fn feed(&mut self, line: &Value) -> Vec<Event> {
         let mut events = vec![];
         match self.provider {
             ProviderKind::Codex => self.codex(line, &mut events),
@@ -1083,7 +1107,7 @@ impl Parser {
             _ => {}
         }
     }
-    fn finish(&mut self) -> Finish {
+    pub(crate) fn finish(&mut self) -> Finish {
         if self.provider == ProviderKind::Opencode
             && let Some(error) = self.error.take()
         {
@@ -1099,6 +1123,12 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn writers_run_unsandboxed_and_readers_stay_read_only() {
+        assert_eq!(codex_sandbox(false), "danger-full-access");
+        assert_eq!(codex_sandbox(true), "read-only");
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -1153,7 +1183,7 @@ mod tests {
                     .map(|arg| arg.to_string_lossy().into_owned())
                     .collect();
                 let expected = if access == Access::Write {
-                    "workspace-write"
+                    "danger-full-access"
                 } else {
                     "read-only"
                 };
@@ -1164,7 +1194,6 @@ mod tests {
                     "{args:?}"
                 );
                 assert!(args.iter().any(|arg| arg == "approval_policy=\"never\""));
-                assert!(!args.iter().any(|arg| arg.contains("danger-full-access")));
             }
         }
     }
@@ -1723,6 +1752,38 @@ print(json.dumps({'type':'step_finish', 'part':{'reason':'stop'}}))
         };
         let error = run(&spec, "hi", &AtomicBool::new(false), &mut |_| {}).unwrap_err();
         assert!(error.to_string().contains("login required"), "{error}");
+    }
+
+    #[test]
+    fn a_timed_out_cli_is_stopped_and_reports_the_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let spawned = dir.path().join("child-started");
+        let marker = dir.path().join("child-survived");
+        let script = format!(
+            "(touch '{}'; sleep 2; touch '{}') &\nwhile [ ! -e '{}' ]; do sleep 0.01; done\nsleep 30\n",
+            spawned.display(),
+            marker.display(),
+            spawned.display()
+        );
+        let spec = script_spec(dir.path(), &script);
+        let started = Instant::now();
+        let error = run_process_with_timeout(
+            &spec,
+            &AtomicBool::new(false),
+            &mut |_| {},
+            command(&spec, "hi").unwrap(),
+            Duration::from_secs(1),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("agent turn timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(spawned.exists(), "child did not start before the timeout");
+        std::thread::sleep(Duration::from_millis(2_200));
+        assert!(
+            !marker.exists(),
+            "timed-out CLI child survived long enough to create its marker"
+        );
     }
 
     #[test]

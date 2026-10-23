@@ -768,6 +768,17 @@ impl Store {
             .max(self.last_answered(conversation, super::COMMENT_ORCHESTRATOR)?))
     }
 
+    /// Forgets the CLI sessions of a task's worker and verifier turns, so the
+    /// next turns start fresh instead of resuming a wedged conversation.
+    pub fn forget_task_sessions(&self, task: &str) -> Result<()> {
+        self.db().execute(
+            "UPDATE turns SET session_id=NULL WHERE session_id IS NOT NULL AND id IN
+             (SELECT turn_id FROM turn_scopes WHERE task_id=?1)",
+            [task],
+        )?;
+        Ok(())
+    }
+
     /// The session of the latest turn of `role` with `provider` that got one,
     /// even if that turn later failed: the CLI keeps what it already saw.
     /// Another CLI's session id would mean nothing to it.
@@ -2825,6 +2836,52 @@ mod tests {
     }
 
     #[test]
+    fn large_agent_text_is_kept_out_of_the_sqlite_event_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("core.db")).unwrap();
+        let conversation = store.create_conversation("/p").unwrap();
+        let text = "x".repeat(200_000);
+        let seq = store
+            .append_event(
+                &conversation.id,
+                None,
+                None,
+                "agent",
+                &serde_json::json!({"type": "text", "text": text}),
+            )
+            .unwrap();
+        let stored: String = store
+            .db()
+            .query_row(
+                "SELECT payload FROM events WHERE seq=?1",
+                [seq as i64],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            stored.len() < 256,
+            "event row grew to {} bytes",
+            stored.len()
+        );
+        let payload: Value = serde_json::from_str(&stored).unwrap();
+        assert!(payload["text"]["session_content"].is_object());
+        let mut restored = String::new();
+        let mut offset = 0;
+        loop {
+            let chunk = store
+                .session_content(&conversation.id, seq, "text", offset)
+                .unwrap();
+            assert!(chunk.text.len() <= super::super::content::CHUNK_BYTES);
+            restored.push_str(&chunk.text);
+            offset = chunk.next_offset;
+            if chunk.done {
+                break;
+            }
+        }
+        assert_eq!(restored, text);
+    }
+
+    #[test]
     fn running_turns_become_interrupted_on_restart() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("core.db")).unwrap();
@@ -2843,6 +2900,21 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(turn.status, TurnStatus::Interrupted);
+        let events = store.events_since(&conversation.id, 0, 10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "turn_finished");
+        assert_eq!(events[0].payload["status"], "interrupted");
+        assert!(
+            events[0].payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("daemon stopped")
+        );
+        assert!(store.interrupt_running_turns().unwrap().is_empty());
+        assert_eq!(
+            store.events_since(&conversation.id, 0, 10).unwrap().len(),
+            1
+        );
     }
 
     #[test]
