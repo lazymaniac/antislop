@@ -1613,7 +1613,16 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         TestDesign => {
             "scenarios follow from the requirements and the likely failures; \
              combinations of parameters that interact are covered, not only \
-             each one separately or in pairs when three or more are coupled"
+             each one separately or in pairs when three or more are coupled; \
+             scenarios state initial conditions, stimuli and observable \
+             contract-based outcomes; relevant state transitions and usage \
+             sequences covered; duplicate, delayed and reordered events have \
+             expected outcomes or explicitly unresolved semantics; significant \
+             failure, interruption and resumption points covered where relevant; \
+             critical concurrent orderings controllable without timing alone; \
+             required side effects and forbidden changes specified; test levels \
+             cross the boundaries needed to expose their target risks without \
+             requiring every test level or possible interleaving for each change"
         }
         Testing => {
             "tests have assertions that fail on the bug they target; they run \

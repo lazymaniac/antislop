@@ -4,5 +4,11 @@ R037	test_design	Missing negative and boundary cases.	Map risks and input classe
 R213	test_design	Zero, signs, and range boundaries are omitted.	Check minima, maxima, and neighboring values.
 R216	test_design	Combinations of individually valid parameters are unexamined.	Build constraints and interaction scenarios.
 R217	test_design	Pairwise testing is used for a rule depending on many fields.	Compare interaction strength with the rule model.
-R219	test_design	Duplicate and out-of-order events have no defined semantics.	Supply repetitions, delays, and reorderings.
+R219	test_design	Scenarios omit verification of required handling of duplicate, delayed, and out-of-order events.	Map repetitions, delays, and reorderings to contract-based expected outcomes and report undefined semantics as an open question.
 R220	test_design	Random examples are claimed as complete input verification.	Check class justifications and invariant coverage.
+R331	test_design	A scenario has no expected outcome or way to recognize correctness.	Specify initial conditions, the stimulus, and observable expectations derived from the contract.
+R332	test_design	Cases cover isolated operations but omit important sequences and state transitions.	Map scenarios to states, transitions, and usage histories, including prohibited transitions and repeated operations where relevant.
+R333	test_design	The test plan omits failures at significant points within an operation.	Identify dependency and side-effect failure points and plan checks of state after failure, interruption, and resumption where the contract supports them.
+R334	test_design	Concurrent behavior is left to accidental scheduling instead of distinguishing interleavings.	Identify critical event orderings and a way to control them in tests without relying solely on timed delays.
+R335	test_design	Expectations cover return values but omit required side effects and absence of forbidden changes.	Specify what must and must not change in data, resources, and communication for each relevant scenario.
+R336	test_design	The selected test level cannot expose the risk it is intended to verify.	Map each risk to the system boundary the test must cross and justify the chosen unit, contract, integration, or end-to-end test level.
