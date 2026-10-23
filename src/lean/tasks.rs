@@ -1518,7 +1518,15 @@ pub fn checklist(kind: WorkKind) -> &'static str {
             "real alternatives considered under the same conditions; a variant \
              that misses an obligation is excluded before ranking; the choice \
              follows from the evidence; a result that shows a better variant \
-             or breaks a premise is reported explicitly with evidence instead of silently reopening the choice, without automatically stopping the plan; 2–4 genuinely different realistic variants and explicit common criteria; no implementation, invented measurements or copied repository contents; report ends with Selected: <id>"
+             or breaks a premise is reported explicitly with evidence instead of silently reopening the choice, without automatically stopping the plan; 2–4 genuinely different realistic variants and explicit common criteria; \
+             feasible no-change, reuse and minimal-change options considered or \
+             their exclusion justified; material lifecycle costs compared over \
+             the same time horizon; correlated criteria do not double count \
+             advantages; unknowns distinguished from demonstrated strengths and \
+             weaknesses; material trade-offs and disadvantages of the selected \
+             option stated; an observable condition for reconsidering the \
+             selection stated; no implementation, invented measurements or \
+             copied repository contents; report ends with Selected: <id>"
         }
         Architecture => {
             "fits the project's existing structure and idioms; the simplest \
