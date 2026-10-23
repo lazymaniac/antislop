@@ -1792,7 +1792,17 @@ impl View {
             }
         }
         if lines.is_empty() {
-            lines.push(if self.plan_proposed() {
+            lines.push(if !self.idle {
+                // The daemon has the message but no step has said anything yet.
+                if matches!(
+                    self.stage(),
+                    Stage::Interview | Stage::Planning | Stage::Review
+                ) {
+                    "waiting for the orchestrator to start".into()
+                } else {
+                    "tasks in progress…".into()
+                }
+            } else if self.plan_proposed() {
                 "waiting for you: plan to accept".into()
             } else if self.plan_resumable() {
                 "waiting for you: plan to resume".into()

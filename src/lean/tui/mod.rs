@@ -63,7 +63,6 @@ use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use unicode_width::UnicodeWidthStr;
 use view::{
     ORCHESTRATOR, PanelFocus, SIDE_BY_SIDE_BREAKPOINT, View, dim, draw_min_term_guard,
     main_footer_hint, target_name, truncate, wrap,
@@ -4379,19 +4378,7 @@ impl App {
         let input_lines = visual_text_lines(&self.input.text, self.input_width);
         let max_input_height = area.height.saturating_sub(1).max(1);
         let input_height = (input_lines.len().clamp(1, 6) as u16 + 2).min(max_input_height);
-        let activity = self.view.orchestrator_activity().or_else(|| {
-            (!self.view.idle).then(|| {
-                if matches!(
-                    self.view.stage(),
-                    view::Stage::Interview | view::Stage::Planning | view::Stage::Review
-                ) {
-                    "waiting for the orchestrator to start".to_owned()
-                } else {
-                    "tasks in progress…".to_owned()
-                }
-            })
-        });
-        let status_height = u16::from(self.sending || activity.is_some());
+        let status_height = u16::from(self.sending);
         let phase_action = if self.view.requirements_approval_run.is_some() {
             Some(("Review requirements changes", "/requirements"))
         } else if self.view.workflow_phase.as_deref() == Some("interview")
@@ -4418,16 +4405,10 @@ impl App {
             );
         }
         if status_height > 0 {
-            let text = if self.sending {
-                "orchestrator sending…".to_owned()
-            } else {
-                activity.unwrap_or_default()
-            };
             frame.render_widget(
                 Paragraph::new(format!(
-                    "{} {}",
-                    theme.spinner(self.tick),
-                    view::clean_line(&text)
+                    "{} orchestrator sending…",
+                    theme.spinner(self.tick)
                 ))
                 .style(theme.bar()),
                 status,
@@ -4817,6 +4798,19 @@ impl App {
             ));
         let frame_inner = block.inner(area);
         frame.render_widget(block, area);
+        // What is happening now: a box across the whole canvas width under
+        // the graph, so it never covers a card and is the only place agent
+        // updates show. It gives way only when the panel is too small for it.
+        let progress = self.view.progress();
+        let box_height = (progress.len().min(6) as u16 + 2).min(frame_inner.height / 2);
+        let (frame_inner, now_area) = if box_height >= 3 {
+            let [graph_area, now_area] =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(box_height)])
+                    .areas(frame_inner);
+            (graph_area, Some(now_area))
+        } else {
+            (frame_inner, None)
+        };
         // Padding between the border and the graph; skipped when the panel is tiny.
         let inner = padded(frame_inner);
 
@@ -4905,43 +4899,24 @@ impl App {
         );
         canvas.show(frame.buffer_mut(), inner, self.offset.0, self.offset.1);
 
-        // What is happening now, in a corner that leaves the selection free.
-        let progress = self.view.progress();
-        let width = progress
-            .iter()
-            .map(|line| line.width().saturating_add(4))
-            .max()
-            .unwrap_or(0)
-            .clamp(16, 48) as u16;
-        let width = width.min(inner.width);
-        let height = progress.len().min(6) as u16 + 2;
-        let visible_nodes: Vec<&graph::Node> = graph.nodes.iter().filter(|n| n.visible).collect();
-        let Some(overlay) = graph::compute_progress_overlay_with_nodes(
-            inner,
-            graph.node(&self.selected),
-            &visible_nodes,
-            self.offset,
-            width,
-            height,
-        ) else {
-            return;
-        };
-        let lines: Vec<Line> = progress
-            .iter()
-            .take(6)
-            .map(|line| Line::raw(truncate(line, usize::from(width.saturating_sub(4)))))
-            .collect();
-        frame.render_widget(Clear, overlay);
-        frame.render_widget(
-            Paragraph::new(lines).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow))
-                    .title(" now ")
-                    .padding(ratatui::widgets::Padding::horizontal(1)),
-            ),
-            overlay,
-        );
+        if let Some(now_area) = now_area {
+            let text_width = usize::from(now_area.width.saturating_sub(4));
+            let lines: Vec<Line> = progress
+                .iter()
+                .take(usize::from(now_area.height.saturating_sub(2)))
+                .map(|line| Line::raw(truncate(line, text_width)))
+                .collect();
+            frame.render_widget(
+                Paragraph::new(lines).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Yellow))
+                        .title(" now ")
+                        .padding(ratatui::widgets::Padding::horizontal(1)),
+                ),
+                now_area,
+            );
+        }
     }
 
     fn mouse_scroll(&mut self, down: bool) {
@@ -6219,7 +6194,7 @@ pub mod tests {
         assert!(orchestrator_visible, "Selected node must remain visible");
 
         // 2. Compact render with tiny inner area where all overlay placements collide
-        // When compute_progress_overlay returns None, App::draw hides the overlay
+        // The overlay is only hidden when the viewport is too small for it
         let mut app_compact = test_app();
         app_compact.view.activity = Some("very long activity line".into());
         app_compact.view.tasks = app.view.tasks.clone();
@@ -6416,7 +6391,7 @@ pub mod tests {
                 state: "sent".into(),
                 kind: "user".into(),
             }));
-        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
         let screen = |app: &mut App, term: &mut Terminal<TestBackend>| -> String {
             term.draw(|f| app.draw(f)).unwrap();
             term.backend()
@@ -6434,11 +6409,9 @@ pub mod tests {
         app.sending = false;
         app.view.activity = Some("orchestrator: exec ls".into());
         let thinking = screen(&mut app, &mut term);
-        assert!(thinking.contains("orchestrator: exec ls"));
-        assert!(thinking.contains("exec ls"));
-        // The spinner moves with the tick.
-        app.tick = 1;
-        assert_ne!(thinking, screen(&mut app, &mut term));
+        // Agent updates show in the graph's "now" box only, not above the input.
+        assert!(thinking.contains(" now "));
+        assert_eq!(thinking.matches("orchestrator: exec ls").count(), 1);
 
         // Between the daemon taking the message and the turn starting.
         app.view.activity = None;

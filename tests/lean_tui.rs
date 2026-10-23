@@ -231,7 +231,7 @@ fn graph_scrolls_through_many_short_cards() {
         .collect();
     app.focus = Focus::Graph;
     app.selected = "worker:t0".into();
-    let mut terminal = Terminal::new(TestBackend::new(80, 21)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let start = app.offset.1;
     assert!(app.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)));
@@ -379,26 +379,31 @@ fn long_activity_labels_fit_the_status_above_chat_input() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(!rendered.contains(" now "));
+    assert!(rendered.contains(" now "));
     assert!(rendered.contains(&"a".repeat(30)));
     let header: String = terminal.backend().buffer().content[..120]
         .iter()
         .map(|cell| cell.symbol())
         .collect();
     assert!(!header.contains("aaaa"));
-    let input_top = (0..30)
-        .rev()
+    // Agent updates live only in the "now" box, never above the chat input.
+    let now_row = (0..30)
         .find(|&y| {
             (0..120)
                 .map(|x| terminal.backend().buffer()[(x, y)].symbol())
                 .collect::<String>()
-                .contains(" message ")
+                .contains(" now ")
         })
         .unwrap();
-    let status: String = (0..120)
-        .map(|x| terminal.backend().buffer()[(x, input_top - 1)].symbol())
+    let rows: Vec<String> = (0..30)
+        .map(|y| {
+            (0..120)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect()
+        })
         .collect();
-    assert!(status.contains(&"a".repeat(30)));
+    assert!(rows[usize::from(now_row) + 1].contains(&"a".repeat(30)));
+    assert_eq!(rows.iter().filter(|row| row.contains("aaaa")).count(), 1);
 }
 
 #[test]
@@ -3245,76 +3250,8 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
 }
 
 #[test]
-fn test_refresh_updates_and_overlay_collision_avoidance() {
-    use antislop::lean::tui::graph::{Graph, Node, compute_progress_overlay};
-    use ratatui::layout::Rect;
-
-    // 1. Overlay collision avoidance
-    let inner = Rect::new(0, 0, 80, 25);
-    let progress_width = 30;
-    let progress_height = 6;
-    let default_overlay = Rect::new(50, 19, 30, 6);
-
-    // Case A: No node selected
-    let pos_none = compute_progress_overlay(inner, None, (0, 0), progress_width, progress_height);
-    assert_eq!(pos_none, Some(default_overlay));
-
-    // Case B: Node selected at top-left (no collision)
-    let node_top_left = Node {
-        key: "worker:t1".into(),
-        x: 0,
-        y: 0,
-        height: antislop::lean::tui::graph::HEIGHT,
-        visible: true,
-        group: None,
-        collapsed: false,
-    };
-    let pos_top_left = compute_progress_overlay(
-        inner,
-        Some(&node_top_left),
-        (0, 0),
-        progress_width,
-        progress_height,
-    );
-    assert_eq!(pos_top_left, Some(default_overlay));
-
-    // Case C: Node selected at bottom-right (collision!) -> flips to top-right
-    let node_bottom_right = Node {
-        key: "worker:t2".into(),
-        x: 55,
-        y: 20,
-        height: antislop::lean::tui::graph::HEIGHT,
-        visible: true,
-        group: None,
-        collapsed: false,
-    };
-    let pos_flipped = compute_progress_overlay(
-        inner,
-        Some(&node_bottom_right),
-        (0, 0),
-        progress_width,
-        progress_height,
-    );
-    assert_eq!(pos_flipped, Some(Rect::new(50, 0, 30, 6)));
-
-    // Case D: Node selected at bottom-right but HIDDEN -> stays at default bottom-right
-    let node_hidden = Node {
-        key: "verifier:t2".into(),
-        x: 55,
-        y: 20,
-        height: antislop::lean::tui::graph::HEIGHT,
-        visible: false,
-        group: None,
-        collapsed: false,
-    };
-    let pos_hidden = compute_progress_overlay(
-        inner,
-        Some(&node_hidden),
-        (0, 0),
-        progress_width,
-        progress_height,
-    );
-    assert_eq!(pos_hidden, Some(default_overlay));
+fn test_refresh_updates_preserve_graph_selection() {
+    use antislop::lean::tui::graph::Graph;
 
     // 2. Refresh updates preserving graph selection and state
     let mut app = App::test_app();
@@ -4187,9 +4124,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
 
 #[test]
 fn test_adaptive_graph_collision_and_routing_safety() {
-    use antislop::lean::tui::graph::{
-        Canvas, Graph, GroupingMode, HEIGHT, WIDTH, compute_progress_overlay_with_nodes,
-    };
+    use antislop::lean::tui::graph::{Canvas, Graph, GroupingMode, HEIGHT, WIDTH};
     use antislop::lean::tui::view::{Link, TaskRow, View};
 
     let tasks = vec![
@@ -4281,21 +4216,6 @@ fn test_adaptive_graph_collision_and_routing_safety() {
         let mut canvas = Canvas::new_window(0, 0, w, h);
         graph.render(&view, &mut canvas, Filter::All, "worker:t1");
     }
-
-    // 3. Progress overlay yields when cards occupy all candidate corners
-    let inner = Rect::new(0, 0, 78, 20);
-    let full_nodes = [
-        antislop::lean::tui::graph::Node::new("br".into(), 50, 14),
-        antislop::lean::tui::graph::Node::new("tr".into(), 50, 0),
-        antislop::lean::tui::graph::Node::new("tl".into(), 0, 0),
-        antislop::lean::tui::graph::Node::new("bl".into(), 0, 14),
-    ];
-    let refs: Vec<&_> = full_nodes.iter().collect();
-    let overlay = compute_progress_overlay_with_nodes(inner, None, &refs, (0, 0), 24, 6);
-    assert_eq!(
-        overlay, None,
-        "Overlay must yield (return None) when all corners collide"
-    );
 }
 
 #[test]
@@ -4402,7 +4322,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     term_small.draw(|f| app.draw(f)).unwrap();
 
     let initial_viewport = app.graph_viewport.expect("viewport set after draw");
-    assert_eq!(initial_viewport, (76, 18));
+    assert_eq!(initial_viewport, (76, 13));
 
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(
@@ -4442,7 +4362,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     let mut term_large = Terminal::new(TestBackend::new(160, 50)).unwrap();
     term_large.draw(|f| app.draw(f)).unwrap();
     let resized_viewport = app.graph_viewport.expect("viewport updated after resize");
-    assert_eq!(resized_viewport, (102, 44));
+    assert_eq!(resized_viewport, (102, 38));
 }
 
 #[test]
@@ -4748,10 +4668,10 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
     // 120x30 (split: 77x26)
     // 160x50 (split: 104x46)
     let terminal_configs = [
-        ("80x24", 80u16, 24u16, 76u16, 18u16),
-        ("85x24", 85u16, 24u16, 46u16, 18u16),
-        ("120x30", 120u16, 30u16, 75u16, 24u16),
-        ("160x50", 160u16, 50u16, 102u16, 44u16),
+        ("80x24", 80u16, 24u16, 76u16, 15u16),
+        ("85x24", 85u16, 24u16, 46u16, 15u16),
+        ("120x30", 120u16, 30u16, 75u16, 21u16),
+        ("160x50", 160u16, 50u16, 102u16, 41u16),
     ];
 
     for &(term_name, term_w, term_h, inner_w, inner_h) in &terminal_configs {
