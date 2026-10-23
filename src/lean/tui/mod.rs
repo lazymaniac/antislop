@@ -1434,12 +1434,9 @@ impl App {
         });
     }
 
-    fn open_ledger(&mut self, kind: super::ledger::LedgerKind) {
-        let view = self
-            .ledger_view
-            .get_or_insert_with(|| ledger::LedgerView::new(kind));
+    fn open_ledger(&mut self) {
+        let view = self.ledger_view.get_or_insert_with(ledger::LedgerView::new);
         view.visible = true;
-        view.kind = kind;
         self.ledger_action(ledger::Action::Fetch);
     }
 
@@ -2179,7 +2176,7 @@ impl App {
         let conversation = self.conversation.clone();
         match text.as_str() {
             "" => {}
-            "/requirements" => self.open_ledger(super::ledger::LedgerKind::Requirement),
+            "/requirements" => self.open_ledger(),
             "/interview" => {
                 self.sync_interview();
                 if let Some(form) = self
@@ -2192,7 +2189,6 @@ impl App {
                     self.notice = Some("No interview question is waiting for an answer.".into());
                 }
             }
-            "/plan-items" => self.open_ledger(super::ledger::LedgerKind::PlanItem),
             "/plans" => {
                 self.plan_history = Some(planhistory::Browser::new());
                 self.load_plan_history(0);
@@ -2740,8 +2736,7 @@ impl App {
                 let help = self.help_here();
                 self.show_help(help);
             }
-            Command::Requirements => self.open_ledger(super::ledger::LedgerKind::Requirement),
-            Command::PlanItems => self.open_ledger(super::ledger::LedgerKind::PlanItem),
+            Command::Requirements => self.open_ledger(),
             Command::Config => self.open_config(),
             Command::Projects => self.open_projects_picker(),
             Command::Quit => return false,

@@ -30,9 +30,9 @@ if _ledger_prompt.startswith('Act as requirements analyst before planning.'):
         source = next(s for s in _ledger_sources if s['message'] is not None)
         marker = 'Full user source '+source['id']+':\n'
         full = _lr.split(r'\n(?:Full user source |Interview question context |Interview summary |Run and ledger inputs)', _ledger_prompt.split(marker,1)[1], maxsplit=1)[0].rstrip('\n')
-        entries = [{'id':'fixture-requirement','kind':'requirement','source':{'source_id':source['id'],'start':0,'end':len(full.encode())},'interpretation':'Deliver the fixture user request','criteria':[{'id':'fixture.accept','text':'Independently inspect the actual fixture result','mandatory':True}]}]
+        entries = [{'id':'fixture-requirement','source':{'source_id':source['id'],'start':0,'end':len(full.encode())},'interpretation':'Deliver the fixture user request','criteria':[{'id':'fixture.accept','text':'Independently inspect the actual fixture result','mandatory':True}]}]
     _ledger_emit(_ledger_block('ledger',{'run_id':_ledger_run['id'],'expected_spec_revision':_ledger_run['spec_revision'],'entries':entries}))
-if _ledger_prompt.startswith(('Independently compare both ledgers','Independently compare the requirement entries','Independently verify implementation options')):
+if _ledger_prompt.startswith(('Independently compare the requirement entries','Independently verify implementation options')):
     _reject_options = _ledger_prompt.startswith('Independently verify implementation options') and _lo.path.exists(_lo.path.join(_lo.path.dirname(sys.argv[0]),'reject-options'))
     _ledger_emit(_ledger_block('verdict',{'approved':not _reject_options,'findings':[{'issue':'Choice lacks adequate evidence'}] if _reject_options else []}))
 if _ledger_prompt.startswith('Compare implementation options before task planning.'):
@@ -51,9 +51,8 @@ def _ledger_answer(answer):
         payload = json.loads(match.group(1))
         if _ledger_run:
             for task in payload['tasks']:
-                task['requirement_ids']=[e['spec']['id'] for e in _ledger_entries if e['spec']['kind']=='requirement']
+                task['requirement_ids']=[e['spec']['id'] for e in _ledger_entries]
                 task['criterion_ids']=[c['id'] for e in _ledger_entries for c in e['spec']['criteria']]
-                task['plan_item_ids']=[e['spec']['id'] for e in _ledger_entries if e['spec']['kind']=='plan_item']
         with open(_ledger_cache,'w') as cache: cache.write(_ledger_json(payload))
         return answer[:match.start()] + _ledger_block('plan',payload) + answer[match.end():]
     return answer

@@ -15,8 +15,6 @@ pub struct TaskSpec {
     pub requirement_ids: Vec<String>,
     #[serde(default)]
     pub criterion_ids: Vec<String>,
-    #[serde(default)]
-    pub plan_item_ids: Vec<String>,
     pub title: String,
     pub goal: String,
     /// One concise sentence describing the worker's task on the graph.
@@ -835,12 +833,6 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect(),
-            plan_item_ids: tasks
-                .iter()
-                .flat_map(|t| t.plan_item_ids.clone())
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect(),
             id,
             title: agent.title.to_owned(),
             summary: Some(summary.to_owned()),
@@ -893,7 +885,6 @@ pub fn with_options(tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
                 id: id.clone(),
                 requirement_ids: task.requirement_ids.clone(),
                 criterion_ids: task.criterion_ids.clone(),
-                plan_item_ids: task.plan_item_ids.clone(),
                 title: format!("Options for {}", task.title),
                 summary: Some("Compare feasible approaches and select the best supported variant.".into()),
                 section: Some("Options".into()),
@@ -2570,8 +2561,7 @@ mod tests {
         serde_json::from_value(serde_json::json!({
             "id": id, "title": "Change storage", "goal": "Preserve storage behavior",
             "kind": "implementation", "writes": writes, "scope": ["src/"],
-            "requirement_ids": ["req"], "criterion_ids": ["criterion"],
-            "plan_item_ids": ["item"], "verifier": {"focus": "Check storage"}
+            "requirement_ids": ["req"], "criterion_ids": ["criterion"], "verifier": {"focus":"Check storage"},
         }))
         .unwrap()
     }
@@ -2591,7 +2581,6 @@ mod tests {
         assert_eq!(options.depends_on, writer.depends_on);
         assert_eq!(options.requirement_ids, writer.requirement_ids);
         assert_eq!(options.criterion_ids, writer.criterion_ids);
-        assert_eq!(options.plan_item_ids, writer.plan_item_ids);
         assert_eq!(full[2].depends_on, ["context", "writer-options"]);
         assert!(options.goal.contains("2–4"));
         assert!(options.goal.contains("Selected: <id>"));
@@ -2729,7 +2718,6 @@ mod tests {
         let task = |at: usize, deps: Vec<String>| TaskSpec {
             requirement_ids: vec![],
             criterion_ids: vec![],
-            plan_item_ids: vec![],
             id: format!("t{at}"),
             depends_on: deps,
             ..serde_json::from_value(serde_json::json!({

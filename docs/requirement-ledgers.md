@@ -1,6 +1,6 @@
-# Requirement and plan-item ledgers
+# Requirements, tasks and evidence
 
-Schema 7 adds a durable run and two versioned ledgers to the lean runtime.
+Schema 11 stores a durable run, versioned requirements, tasks and evidence.
 A run groups one order and its successive task plans. Plans name their `run_id`
 explicitly; corrections keep that identity. A new manually created run starts
 at the latest user message, while the first run includes the interview.
@@ -17,27 +17,27 @@ copied into version rows or agent handoffs. A source hash mismatch fails with
 the underlying reason. Source lines are derived from the immutable byte span.
 
 Criteria have stable IDs, mandatory flags and an integration flag. Composite
-requirements need their own mandatory integration criterion. Technical plan
-items need task assignments and, without a product requirement, a technical
-goal and an execution check. They also need criterion evidence to become
-verified. The analyst and its independent verifier check that a prescribed
-implementation method has a corresponding requirement.
+requirements need their own mandatory integration criterion. Every mandatory
+outcome, constraint, method or step prescribed by the user becomes a requirement
+with a source and acceptance criteria. Suggestions and examples are not automatic
+obligations. Agent-selected technical work remains tasks serving existing
+requirements; agents must not invent requirements solely to justify tasks.
 
 Requirement states are `identified`, `clarification_needed`, `planned`,
 `in_progress`, `implemented`, `verified`, `blocked`, `stale`, and
-`superseded_by_user`. Plan-item states are `pending`, `planned`, `in_progress`,
-`executed`, `verified`, `blocked`, `stale`, `replaced_by_user`, and
-`withdrawn_by_user`. Execution states are derived, never editable approvals.
+`superseded_by_user`. Dispositions are `active` and `superseded_by_user`.
+Execution states are derived, never editable approvals.
 No operation deletes an obligation or its history.
 
 ## Runtime contract
 
 A candidate task plan triggers a requirements analyst using the existing
-requirements executor profile. A separate requirements verifier compares both
-ledgers with every full source. Document sources are supplied by reference;
+requirements executor profile. A separate requirements verifier compares requirements with every full source. Document sources are supplied by reference;
 user messages are supplied in full. Only then can the orchestrator produce an
-executable plan with explicit `run_id`, `requirement_ids`, `criterion_ids`, and
-`plan_item_ids`. Unresolved mandatory criteria, unknown references, missing
+executable plan with explicit `run_id`, `requirement_ids` and `criterion_ids`. Every task references at least
+one active requirement. Each criterion belongs to a linked requirement; mandatory
+criteria need collective task coverage. Supporting tasks may cover a subset.
+Initial plans and graph edits share these validation rules. Unresolved mandatory criteria, unknown references, missing
 coverage, and ignored ledger task assignments block execution. Automatic
 quality tasks inherit the obligations they inspect. Continuations can reuse
 current approved work from earlier plans in the same run.
@@ -54,7 +54,7 @@ commit in one SQLite transaction. Comments and execution progress do not
 advance the specification revision. Repeated proposals and applications reuse
 the original operation result; a different payload cannot reuse its ID.
 
-Invalidation follows ledger dependencies, parents/children, requirement links,
+Invalidation follows ledger dependencies, parents/children,
 task inputs and transitive task dependencies. Affected tasks become `stale`
 and receive individual cancellation signals. Unrelated processes continue.
 Late reports cannot overwrite the current task generation. Scope publication
@@ -79,12 +79,21 @@ The completion gate is closed if the integrated Git snapshot cannot be obtained;
 exploratory work can still run, but cannot be announced as verified delivery.
 
 `requirements_complete` opens only with current source coverage, all mandatory
-criteria, accounted plan items, and an independently checked compliance audit.
+criteria and an independently checked compliance audit.
 Conversation summaries report `requirements_pending` until this holds. The
 final runtime report names gaps and asks for executor work; verifiers stay
-read-only. Historical plans remain `legacy`, without fabricated verification.
-Resuming one requests source extraction and a replacement mapping; historical
-reports are inputs, never proof of current completion.
+read-only. A missing run or task requirement mapping is an integrity error.
+
+## Database compatibility
+
+Only schema 11 or an empty database can be opened. Version 0 is empty only
+when it has no application objects. Compatibility is checked before DDL or
+journal-mode changes. Initialization creates the current schema and version in
+one transaction, without migrations or historical backfills. Older, newer and
+unmarked nonempty databases are rejected without changes. Stop the daemon,
+manually archive the project's `.antislop/` directory, then restart to create
+fresh state. Nothing is automatically archived or deleted. Deploy client and
+daemon together and restart any existing daemon.
 
 ## Daemon API
 
@@ -94,7 +103,7 @@ All operations are project/conversation/run scoped and reject unknown fields.
 | --- | --- |
 | `CreateRun`, `ListRuns` | Create an explicit order or inspect run identities |
 | `AddLedgerSource`, `GetLedgerSource` | Import an immutable correction/document or read a full source |
-| `ListRequirements`, `ListPlanItems` | Query by optional revision, status, task and missing coverage; bounded pages |
+| `ListRequirements` | Query by optional revision, status, task and missing coverage; bounded pages |
 | `GetLedgerEntry` | Entry, version history and evidence |
 | `GetLedgerDiff` | Semantic differences between revisions and affected tasks |
 | `GetEvidence` | Criterion evidence with provenance |
@@ -110,10 +119,10 @@ contents. Updates publish IDs and versions rather than whole-ledger snapshots.
 
 ## TUI
 
-Use `/requirements`, `/plan-items`, or their command-palette entries. Task
+Use `/requirements` or its command-palette entry. Task
 details have a Requirements tab linking the task's obligation IDs.
 
-- `Tab`: switch ledger; arrows select records and detail tabs.
+- Arrows select records and detail tabs.
 - `Enter`: load details; `s`: full source; `/`: search; `f`: status filter;
   `t`: task ID/UUID filter; `m`: gaps; `PgUp`/`PgDn`: page; `r`: refresh.
 - `n`: create a record (or initialize a manual run); `N`: new manual run;
@@ -123,7 +132,7 @@ details have a Requirements tab linking the task's obligation IDs.
   `ID | required/optional | integration/check | text`, one per line.
 - `Ctrl+S` prepares a preview showing the exact change and affected tasks.
   `Enter` applies that preview; `Esc` returns without losing the draft.
-  Supply a reason for edits, withdrawal or weakening. New records need a
+  Supply a reason for edits, supersession or weakening. New records need a
   source/correction. Existing source text and record identity are immutable.
 - `Ctrl+R` explicitly reloads the revision before preparing a new preview.
   Conflicts and transport failures retain text and cursor. Drafts, filters and
@@ -136,7 +145,7 @@ Execution and `verified` statuses cannot be set through the form.
 ## Verification
 
 `tests/lean_ledger.rs` exercises immutable/long sources, middle-document negative
-obligations, parents/integration, technical steps, author/session checks,
+obligations, parents/integration, supporting tasks, author/session checks,
 versioned evidence, concurrent edits, exact proposals, idempotency/restart,
 transitive invalidation, real process cancellation and integrated audit sessions.
 `tests/lean_ledger_tui.rs` covers Unicode/ZWJ editing, mouse selection, small

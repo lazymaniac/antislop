@@ -7,12 +7,12 @@ CREATE TABLE IF NOT EXISTS ledger_sources(
  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), message INTEGER REFERENCES messages(seq),
  locator TEXT, hash TEXT NOT NULL, CHECK((message IS NULL) != (locator IS NULL)));
 CREATE TABLE IF NOT EXISTS ledger_entries(
- run_id TEXT NOT NULL REFERENCES runs(id), id TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY(run_id,id));
+ run_id TEXT NOT NULL REFERENCES runs(id), id TEXT NOT NULL, PRIMARY KEY(run_id,id));
 CREATE TABLE IF NOT EXISTS ledger_versions(
  run_id TEXT NOT NULL, entry_id TEXT NOT NULL, version INTEGER NOT NULL, spec_revision INTEGER NOT NULL,
  source_id TEXT NOT NULL REFERENCES ledger_sources(id), start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL,
  original TEXT NOT NULL, interpretation TEXT NOT NULL, mandatory INTEGER NOT NULL, position INTEGER NOT NULL,
- technical_goal TEXT, execution_check TEXT, disposition TEXT NOT NULL,
+ disposition TEXT NOT NULL CHECK(disposition IN ('active','superseded_by_user')),
  PRIMARY KEY(run_id,entry_id,version), FOREIGN KEY(run_id,entry_id) REFERENCES ledger_entries(run_id,id));
 CREATE INDEX IF NOT EXISTS ledger_versions_by_revision ON ledger_versions(run_id,spec_revision,entry_id);
 CREATE TABLE IF NOT EXISTS ledger_criteria(
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS ledger_criteria(
  PRIMARY KEY(run_id,entry_id,version,id), FOREIGN KEY(run_id,entry_id,version) REFERENCES ledger_versions(run_id,entry_id,version));
 CREATE TABLE IF NOT EXISTS ledger_relations(
  run_id TEXT NOT NULL, entry_id TEXT NOT NULL, version INTEGER NOT NULL,
- kind TEXT NOT NULL, target TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('qualifier','parent','dependency','task','implementer','verifier')), target TEXT NOT NULL,
  PRIMARY KEY(run_id,entry_id,version,kind,target), FOREIGN KEY(run_id,entry_id,version) REFERENCES ledger_versions(run_id,entry_id,version));
 CREATE INDEX IF NOT EXISTS ledger_dependents ON ledger_relations(run_id,kind,target);
 CREATE TABLE IF NOT EXISTS ledger_decisions(

@@ -2,7 +2,7 @@ use antislop::lean::{
     ledger::*,
     tui::{
         App, InputBuffer,
-        ledger::{Action, LedgerView},
+        ledger::{Action, FormField, LedgerView},
     },
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -10,8 +10,8 @@ use ratatui::{Terminal, backend::TestBackend};
 use serde_json::json;
 
 fn browser() -> LedgerView {
-    let spec:EntrySpec=serde_json::from_value(json!({"id":"r1","kind":"requirement","source":{"source_id":"s1","start":0,"end":4},"interpretation":"Keep the source","criteria":[{"id":"c1","text":"Check actual behavior"}]})).unwrap();
-    let mut view = LedgerView::new(LedgerKind::Requirement);
+    let spec:EntrySpec=serde_json::from_value(json!({"id":"r1","source":{"source_id":"s1","start":0,"end":4},"interpretation":"Keep the source","criteria":[{"id":"c1","text":"Check actual behavior"}]})).unwrap();
+    let mut view = LedgerView::new();
     view.page = Some(LedgerPage {
         run: Run {
             id: "run1".into(),
@@ -76,7 +76,7 @@ fn fields_support_mouse_selection_and_small_viewports() {
         row: 6,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!(view.form_mut().unwrap().field, 2);
+    assert_eq!(view.form_mut().unwrap().field, FormField::Qualifiers);
     view.paste("all qualifiers\nexcept offline");
     assert_eq!(
         view.form_mut().unwrap().fields[2].text,
@@ -113,7 +113,8 @@ fn preview_is_required_and_has_no_manual_verified_field() {
     let mut view = browser();
     view.key(key(KeyCode::Char('e')), "c1");
     let form = view.form_mut().unwrap();
-    form.fields[13] = InputBuffer::with_text("user corrected interpretation");
+    form.fields[FormField::Reason as usize] =
+        InputBuffer::with_text("user corrected interpretation");
     let Action::Prepare { change, .. } = view.key(
         KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
         "c1",
@@ -138,15 +139,9 @@ fn preview_is_required_and_has_no_manual_verified_field() {
 }
 
 #[test]
-fn stale_reads_are_invalidated_when_switching_ledger_or_record() {
+fn stale_reads_are_invalidated_when_switching_record() {
     let mut view = browser();
-    view.pending = true;
-    view.pending_kind = "page".into();
-    view.request_id = 10;
-    assert!(matches!(view.key(key(KeyCode::Tab), "c1"), Action::Fetch));
-    assert!(!view.pending);
-    assert!(view.request_id > 10);
-    assert_eq!(view.kind, LedgerKind::PlanItem);
+    assert!(matches!(view.key(key(KeyCode::Tab), "c1"), Action::None));
     view.pending = true;
     view.pending_kind = "detail".into();
     let old = view.request_id;
@@ -309,9 +304,8 @@ fn mouse_tabs_and_review_action_match_the_rendered_controls() {
             row: 1,
             modifiers: KeyModifiers::NONE
         }),
-        Action::Fetch
+        Action::None
     ));
-    assert_eq!(view.kind, LedgerKind::PlanItem);
     assert!(matches!(
         view.mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -362,4 +356,53 @@ fn progress_and_failure_remain_visible_while_requirements_are_open() {
         assert!(text.contains(expected), "{text}");
         assert_eq!(app.input.text, "unsent background draft");
     }
+}
+
+#[test]
+fn simplified_form_maps_named_requirement_fields() {
+    let mut view = browser();
+    view.key(key(KeyCode::Char('e')), "c1");
+    let form = view.form_mut().unwrap();
+    for (field, text) in [
+        (FormField::Interpretation, "Preserve the required method"),
+        (FormField::Qualifiers, "except offline"),
+        (
+            FormField::Criteria,
+            "accept | required | integration | independently check",
+        ),
+        (FormField::Parent, "parent"),
+        (FormField::Dependencies, "dependency"),
+        (FormField::ImplementationOwners, "worker"),
+        (FormField::VerificationOwners, "verifier"),
+        (FormField::Tasks, "task"),
+        (FormField::Disposition, "superseded_by_user"),
+        (FormField::Reason, "user correction"),
+        (FormField::Source, "new source"),
+        (FormField::Mandatory, "no"),
+        (FormField::Position, "7"),
+    ] {
+        form.fields[field as usize] = InputBuffer::with_text(text);
+    }
+    let spec = form.spec().unwrap();
+    assert_eq!(spec.id, "r1");
+    assert_eq!(spec.interpretation, "Preserve the required method");
+    assert_eq!(spec.qualifiers, ["except offline"]);
+    assert_eq!(spec.criteria[0].id, "accept");
+    assert!(spec.criteria[0].mandatory && spec.criteria[0].integration);
+    assert_eq!(spec.parent.as_deref(), Some("parent"));
+    assert_eq!(spec.depends_on, ["dependency"]);
+    assert_eq!(spec.implementation_owners, ["worker"]);
+    assert_eq!(spec.verification_owners, ["verifier"]);
+    assert_eq!(spec.task_ids, ["task"]);
+    assert_eq!(spec.disposition, Disposition::SupersededByUser);
+    assert!(!spec.mandatory);
+    assert_eq!(spec.position, 7);
+    let Action::Prepare { change, source } = view.key(
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        "c1",
+    ) else {
+        panic!("expected preview")
+    };
+    assert_eq!(change.reason, "user correction");
+    assert_eq!(source, "new source");
 }

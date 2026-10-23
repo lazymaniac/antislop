@@ -35,7 +35,7 @@ pub enum HistoryScope {
 }
 
 impl Store {
-    pub(super) fn migrate_history(connection: &Connection) -> Result<()> {
+    pub(super) fn initialize_history(connection: &Connection) -> Result<()> {
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS turn_scopes(
                 turn_id TEXT PRIMARY KEY REFERENCES turns(id),
@@ -58,20 +58,6 @@ impl Store {
                 status TEXT NOT NULL, content TEXT NOT NULL,
                 PRIMARY KEY(task_id,round));",
         )?;
-        // Only recover a legacy attribution when an explicit UUID task event
-        // established its working/verifying round immediately before the turn.
-        // Timestamps and current task.round alone are never enough evidence.
-        connection.execute_batch("INSERT OR IGNORE INTO turn_scopes(turn_id,task_id,round)
-            SELECT t.id,k.id,json_extract(e.payload,'$.round') FROM turns t JOIN tasks k
-              ON k.conversation_id=t.conversation_id AND k.plan_id=t.plan_id AND t.role IN ('worker:'||k.id,'verifier:'||k.id)
-            JOIN events e ON e.seq=(SELECT max(p.seq) FROM events p
-              WHERE p.conversation_id=t.conversation_id AND p.plan_id=t.plan_id AND p.kind='task'
-              AND json_extract(p.payload,'$.task')=k.id
-              AND p.seq<(SELECT min(s.seq) FROM events s WHERE s.turn_id=t.id))
-            WHERE NOT EXISTS(SELECT 1 FROM turn_scopes assigned WHERE assigned.turn_id=t.id)
-              AND json_type(e.payload,'$.round')='integer'
-              AND ((t.role='worker:'||k.id AND json_extract(e.payload,'$.status')='working')
-                OR (t.role='verifier:'||k.id AND json_extract(e.payload,'$.status')='verifying'));")?;
         Ok(())
     }
 
@@ -881,7 +867,7 @@ mod recovery_tests {
     }
 
     #[test]
-    fn restart_recovers_only_explicit_unambiguous_legacy_rounds() {
+    fn restart_does_not_infer_missing_round_attribution() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("core.db");
         let store = Store::open(&path).unwrap();
@@ -947,10 +933,7 @@ mod recovery_tests {
             .unwrap();
         drop(store);
         let store = Store::open(&path).unwrap();
-        let historical = store.task_round(&task.id, 7).unwrap();
-        assert_eq!(historical["history_unavailable"], true);
-        assert_eq!(historical["turns"].as_array().unwrap().len(), 1);
-        assert_eq!(historical["turns"][0]["turn_id"], known.id);
+        assert!(store.task_round(&task.id, 7).is_err());
         let assigned: bool = store
             .db()
             .query_row(

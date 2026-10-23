@@ -10,17 +10,6 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
-pub(super) fn migrate(db: &Connection) -> Result<()> {
-    let tx = db.unchecked_transaction()?;
-    tx.execute_batch(include_str!("schema.sql"))?;
-    let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version < 7 {
-        tx.pragma_update(None, "user_version", 7)?;
-    }
-    tx.commit()?;
-    Ok(())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
     pub id: String,
@@ -31,29 +20,12 @@ pub struct Run {
     pub start_message: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LedgerKind {
-    Requirement,
-    PlanItem,
-}
-impl LedgerKind {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Requirement => "requirement",
-            Self::PlanItem => "plan_item",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Disposition {
     #[default]
     Active,
     SupersededByUser,
-    ReplacedByUser,
-    WithdrawnByUser,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,7 +89,6 @@ fn yes() -> bool {
 #[serde(deny_unknown_fields)]
 pub struct EntrySpec {
     pub id: String,
-    pub kind: LedgerKind,
     pub source: SourceSpan,
     pub interpretation: String,
     #[serde(default)]
@@ -135,15 +106,9 @@ pub struct EntrySpec {
     #[serde(default)]
     pub criteria: Vec<Criterion>,
     #[serde(default)]
-    pub requirement_ids: Vec<String>,
-    #[serde(default)]
     pub task_ids: Vec<String>,
     #[serde(default)]
     pub position: u32,
-    #[serde(default)]
-    pub technical_goal: Option<String>,
-    #[serde(default)]
-    pub check: Option<String>,
     #[serde(default)]
     pub disposition: Disposition,
 }
@@ -270,4 +235,58 @@ pub fn diff_hash(diff: &LedgerDiff) -> Result<String> {
     Ok(crate::hash(serde_json::to_vec(
         &serde_json::json!({"run_id":diff.run_id,"from_revision":diff.from_revision,"to_revision":diff.to_revision,"before":diff.before.iter().map(|e|serde_json::json!({"id":e.spec.id,"version":e.version,"spec_revision":e.spec_revision})).collect::<Vec<_>>(),"after":diff.after,"affected_tasks":diff.affected_tasks}),
     )?))
+}
+
+/// Shared by initial plans and edits of the running task graph.
+pub(crate) fn validate_task_links(
+    spec: &crate::lean::tasks::TaskSpec,
+    entries: &[LedgerEntry],
+) -> Result<()> {
+    require(
+        !spec.requirement_ids.is_empty(),
+        "task needs at least one active requirement",
+    )?;
+    for id in &spec.requirement_ids {
+        require(
+            entries
+                .iter()
+                .any(|e| e.spec.id == *id && e.spec.disposition == Disposition::Active),
+            "unknown or inactive task requirement",
+        )?;
+    }
+    for id in &spec.criterion_ids {
+        require(
+            entries.iter().any(|e| {
+                spec.requirement_ids.contains(&e.spec.id)
+                    && e.spec.criteria.iter().any(|c| c.id == *id)
+            }),
+            "task criterion is not owned by a linked requirement",
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_criterion_coverage(
+    entries: &[LedgerEntry],
+    covered: &std::collections::HashSet<String>,
+) -> Result<()> {
+    for e in entries
+        .iter()
+        .filter(|e| e.spec.disposition == Disposition::Active && e.spec.mandatory)
+    {
+        require(
+            e.spec.criteria.iter().any(|c| c.mandatory),
+            &format!(
+                "mandatory requirement {} needs clarification and acceptance criteria",
+                e.spec.id
+            ),
+        )?;
+        for c in e.spec.criteria.iter().filter(|c| c.mandatory) {
+            require(
+                covered.contains(&c.id),
+                &format!("mandatory criterion {} has no task", c.id),
+            )?;
+        }
+    }
+    Ok(())
 }

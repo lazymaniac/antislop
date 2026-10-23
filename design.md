@@ -220,7 +220,7 @@ The Requirements analyst extracts atomic requirements while preserving hierarchy
 
 Each record contains `requirement_id`, source and text range, original text, precise interpretation, parent, mandatory criteria, implementation/verification owners, dependencies, version, and evidence. Splitting a requirement does not remove the original; satisfying a parent requires every mandatory child and the integration condition.
 
-A separate `PlanItemLedger` accounts for user-plan steps: linked requirements, execution, evidence, or an agreed change in approach. Not every technical step is an independent product requirement, but none disappears without explanation. A user-mandated implementation method is also a requirement rather than an optional suggestion.
+Every mandatory user-prescribed step or implementation method is a source-backed requirement with acceptance criteria. Suggestions and examples are not automatic obligations. Agent-selected technical steps remain tasks linked to existing active requirements; they do not create artificial requirements to justify themselves.
 
 The Requirements verifier independently reads the full source and compares it with the register, checking coverage of every obligation-bearing passage and interpretation accuracy. It does not merely approve the executor's extraction. Ambiguity requires resolution; a requirement cannot silently become optional.
 
@@ -624,8 +624,6 @@ Approval: id, actor, scope, scope_hash, policy_revision, decision, expires_if_an
 Event: seq, id, run_id, type, entity_id, causation_id, timestamp, payload_version
 Requirement: id, run_id, spec_revision, parent_id, source_ref, source_span,
              original_text, interpretation, qualifiers, criteria, owner, status
-PlanItem: id, source_ref, source_span, requirement_ids, task_ids, disposition,
-          decision_ref, evidence_refs
 ContextFact: id, revision, claim, source_refs, input_hashes, verification, status
 Unknown: id, impact, resolution_method, owner, evidence_refs, status
 ModelElement: id, model_revision, kind, contract, invariant_ids, requirement_ids
@@ -1006,7 +1004,7 @@ Product requirements include all three providers and all agreed task kinds. The 
 | M0: integration spike | Probe three CLIs, capabilities, auth, streaming/resume/cancel, permissions, and environments. | Documented version/limitation matrix; selected transport per CLI. |
 | M1: local runtime | Daemon, IPC, SQLite, events, fake provider, start/stop/reattach. | State recovery without lost approvals or duplicate actions. |
 | M2: vertical slice | One real adapter, plan → executor → verifier → result, supervised. | Evidence-based completion and rejection of weak results. |
-| M2Q: quality contracts | Requirements/plan-item ledgers, ContextModel, model/simulations, option comparison, checklists, RiskCoverage, evidence-validity graph. | Fake providers cannot close tasks with omitted requirements, risks, or gates. Part of MVP, not a post-release extension. |
+| M2Q: quality contracts | Requirements, tasks and evidence, ContextModel, model/simulations, option comparison, checklists, RiskCoverage, evidence-validity graph. | Fake providers cannot close tasks with omitted requirements, risks, or gates. Part of MVP, not a post-release extension. |
 | M3: team and TUI | Two panels, spatial node/edge graph, current-step overlay, details, sessions, direct messages, and element comments. | Actual events, correct navigation, truthful delivery states, independently checked orchestrator comment responses. |
 | M4: complete MVP | Three adapters, effort/TOML profiles, two modes, worktree/in-place, integration, restart resume, software/research/document/analysis templates. | Dedicated verification for every activated role; passing acceptance scenarios. |
 
@@ -1377,7 +1375,7 @@ Extend the catalog when new failure classes are discovered. Incidents record the
 | --- | --- | --- | --- |
 | R191 / P | A requirement disappears during extraction from a long source. | Compare independent extraction with the ledger. | Requirements verifier rereads the full source. |
 | R192 / P | A partially satisfied requirement is marked complete. | Check every criterion and qualifier separately. | Parents become verified only after all parts and integration. |
-| R193 / P | A plan step is silently removed or replaced. | Compare PlanItemLedger with the original plan. | Alternatives have justification and an appropriate scope decision. |
+| R193 / P | A plan step is silently removed or replaced. | Compare source-backed requirements with every mandatory user-prescribed step. | Alternatives have justification and an appropriate scope decision. |
 | R194 / P | A test links to a requirement but does not check it. | Read the oracle, assertions, and execution path. | Compliance verifier assesses evidence content, not link presence. |
 | R195 / P | A completion percentage hides a critical omission. | Compare the final status of every obligation. | requirements_complete is a conjunction, not an average. |
 | R196 / P | A risk has no responsible verifier. | Check complete RiskCoverage against the catalog version. | Runtime rejects missing assignments. |

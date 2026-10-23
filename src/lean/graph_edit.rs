@@ -1,7 +1,7 @@
 //! Atomic additive edits to a running DAG. Executed tasks are immutable.
 use super::{Store, Task, now_ms};
 use crate::lean::{
-    ledger::{Disposition, LedgerKind},
+    ledger::validate_task_links,
     tasks::{TaskSpec, status},
 };
 use crate::{Result, require};
@@ -28,6 +28,22 @@ impl Store {
         for task in baseline {
             self.assert_task_inputs(task)?;
         }
+        let mut covered = std::collections::HashSet::new();
+        for spec in specs {
+            validate_task_links(spec, &entries)?;
+            covered.extend(spec.criterion_ids.iter().cloned());
+        }
+        for task in self
+            .run_tasks(conversation, &run)?
+            .iter()
+            .filter(|t| t.plan_id != *plan && t.status == "approved")
+        {
+            if self.assert_task_inputs(task).is_ok() {
+                let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
+                covered.extend(spec.criterion_ids);
+            }
+        }
+        super::super::ledger::validate_criterion_coverage(&entries, &covered)?;
         let mut db = self.db();
         let tx = db.transaction()?;
         let count: i64 = tx.query_row(
@@ -101,45 +117,13 @@ impl Store {
                 )?;
                 (old.id.clone(), state, round)
             } else {
-                require(
-                    !spec.requirement_ids.is_empty() || !spec.plan_item_ids.is_empty(),
-                    "added task needs a link to an active requirement or plan item",
-                )?;
-                for (ids, kind) in [
-                    (&spec.requirement_ids, LedgerKind::Requirement),
-                    (&spec.plan_item_ids, LedgerKind::PlanItem),
-                ] {
-                    for id in ids {
-                        require(
-                            entries.iter().any(|e| {
-                                e.spec.id == *id
-                                    && e.spec.kind == kind
-                                    && e.spec.disposition == Disposition::Active
-                            }),
-                            "added task refers to an unknown or inactive requirement/plan item",
-                        )?;
-                    }
-                }
-                for criterion in &spec.criterion_ids {
-                    require(
-                        entries.iter().any(|e| {
-                            spec.requirement_ids.contains(&e.spec.id)
-                                && e.spec.criteria.iter().any(|c| c.id == *criterion)
-                        }),
-                        "added task criterion is not owned by a linked requirement",
-                    )?;
-                }
                 let uuid = crate::id();
                 tx.execute("INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms) VALUES(?1,?2,?3,?4,?5,'queued',?6)",params![uuid,conversation,plan,position as i64,value.to_string(),now_ms()])?;
                 tx.execute(
                     "INSERT INTO task_inputs(task_id,run_id) VALUES(?1,?2)",
                     params![uuid, run],
                 )?;
-                let ids: std::collections::BTreeSet<_> = spec
-                    .requirement_ids
-                    .iter()
-                    .chain(&spec.plan_item_ids)
-                    .collect();
+                let ids: std::collections::BTreeSet<_> = spec.requirement_ids.iter().collect();
                 for id in ids {
                     let entry = entries
                         .iter()

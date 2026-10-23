@@ -639,13 +639,13 @@ impl Details {
             REQUIREMENTS => {
                 let mut lines = vec![label("Requirement ledger · shared across all rounds")];
                 if let Some(stored) = &self.task {
-                    for (field,name) in [("requirement_ids","Requirements"),("criterion_ids","Criteria"),("plan_item_ids","Plan items")] {
+                    for (field,name) in [("requirement_ids","Requirements"),("criterion_ids","Criteria")] {
                         let ids = stored["spec"][field].as_array().map(|ids|ids.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
                         lines.push(plain(format!("{name}: {ids}")));
                     }
                     lines.push(plain(format!("Input generation: {}",stored["input_generation"])));
                 }
-                lines.push(plain("Open /requirements or /plan-items for sources, evidence and version history. Task approval alone does not verify requirements.".into()));
+                lines.push(plain("Open /requirements for sources, evidence and version history. Task approval alone does not verify requirements.".into()));
                 let text = lines.iter().map(|(_,text)|text.as_str()).collect::<Vec<_>>().join(" ");
                 records.push(Rc::new(DetailRecord {lines,search_text:text,raw_value:None}));
             }

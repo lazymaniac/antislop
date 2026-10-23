@@ -12,7 +12,7 @@ use ratatui::{
 use serde_json::Value;
 use std::collections::HashMap;
 
-const LABELS: [&str; 17] = [
+const LABELS: [&str; 14] = [
     "ID",
     "Interpretation",
     "Qualifiers (one per line)",
@@ -21,11 +21,8 @@ const LABELS: [&str; 17] = [
     "Dependency IDs (comma separated)",
     "Implementation owners",
     "Verification owners",
-    "Requirement IDs",
     "Task IDs",
-    "Technical goal",
-    "Execution check",
-    "Disposition (active/superseded_by_user/replaced_by_user/withdrawn_by_user)",
+    "Disposition (active/superseded_by_user)",
     "Reason for change",
     "New source / user correction (immutable)",
     "Mandatory (yes/no)",
@@ -33,12 +30,53 @@ const LABELS: [&str; 17] = [
 ];
 const TABS: [&str; 5] = ["Overview", "Criteria", "Tasks", "Evidence", "History"];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum FormField {
+    Id,
+    Interpretation,
+    Qualifiers,
+    Criteria,
+    Parent,
+    Dependencies,
+    ImplementationOwners,
+    VerificationOwners,
+    Tasks,
+    Disposition,
+    Reason,
+    Source,
+    Mandatory,
+    Position,
+}
+impl FormField {
+    pub const ALL: [Self; 14] = [
+        Self::Id,
+        Self::Interpretation,
+        Self::Qualifiers,
+        Self::Criteria,
+        Self::Parent,
+        Self::Dependencies,
+        Self::ImplementationOwners,
+        Self::VerificationOwners,
+        Self::Tasks,
+        Self::Disposition,
+        Self::Reason,
+        Self::Source,
+        Self::Mandatory,
+        Self::Position,
+    ];
+    fn next(self, backwards: bool) -> Self {
+        Self::ALL
+            [(self as usize + if backwards { Self::ALL.len() - 1 } else { 1 }) % Self::ALL.len()]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Form {
     pub base: EntrySpec,
     pub revision: i64,
     pub fields: Vec<InputBuffer>,
-    pub field: usize,
+    pub field: FormField,
     pub operation_id: String,
 }
 impl Form {
@@ -68,10 +106,7 @@ impl Form {
             spec.depends_on.join(", "),
             spec.implementation_owners.join(", "),
             spec.verification_owners.join(", "),
-            spec.requirement_ids.join(", "),
             spec.task_ids.join(", "),
-            spec.technical_goal.clone().unwrap_or_default(),
-            spec.check.clone().unwrap_or_default(),
             serde_json::to_value(spec.disposition)
                 .unwrap()
                 .as_str()
@@ -89,13 +124,13 @@ impl Form {
                 .into_iter()
                 .map(|text| InputBuffer::with_text(super::sanitize_paste(&text)))
                 .collect(),
-            field: 1,
+            field: FormField::Interpretation,
             operation_id: crate::id(),
         }
     }
     pub fn spec(&self) -> crate::Result<EntrySpec> {
-        let text = |i: usize| self.fields[i].text.trim().to_owned();
-        let ids = |i: usize| {
+        let text = |field: FormField| self.fields[field as usize].text.trim().to_owned();
+        let ids = |i: FormField| {
             text(i)
                 .split(',')
                 .map(str::trim)
@@ -104,18 +139,18 @@ impl Form {
                 .collect::<Vec<_>>()
         };
         let mut spec = self.base.clone();
-        spec.id = text(0);
+        spec.id = text(FormField::Id);
         crate::require(
             self.base.source.source_id == "new" || spec.id == self.base.id,
             "existing record identity is immutable",
         )?;
-        spec.interpretation = text(1);
-        spec.qualifiers = text(2)
+        spec.interpretation = text(FormField::Interpretation);
+        spec.qualifiers = text(FormField::Qualifiers)
             .lines()
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
             .collect();
-        spec.criteria = text(3)
+        spec.criteria = text(FormField::Criteria)
             .lines()
             .filter(|s| !s.trim().is_empty())
             .map(|line| {
@@ -134,33 +169,22 @@ impl Form {
                 })
             })
             .collect::<crate::Result<_>>()?;
-        spec.parent = if text(4).is_empty() {
+        spec.parent = if text(FormField::Parent).is_empty() {
             None
         } else {
-            Some(text(4))
+            Some(text(FormField::Parent))
         };
-        spec.depends_on = ids(5);
-        spec.implementation_owners = ids(6);
-        spec.verification_owners = ids(7);
-        spec.requirement_ids = ids(8);
-        spec.task_ids = ids(9);
-        spec.technical_goal = if text(10).is_empty() {
-            None
-        } else {
-            Some(text(10))
-        };
-        spec.check = if text(11).is_empty() {
-            None
-        } else {
-            Some(text(11))
-        };
-        spec.disposition = serde_json::from_value(Value::String(text(12)))?;
+        spec.depends_on = ids(FormField::Dependencies);
+        spec.implementation_owners = ids(FormField::ImplementationOwners);
+        spec.verification_owners = ids(FormField::VerificationOwners);
+        spec.task_ids = ids(FormField::Tasks);
+        spec.disposition = serde_json::from_value(Value::String(text(FormField::Disposition)))?;
         crate::require(
-            matches!(text(15).as_str(), "yes" | "no"),
+            matches!(text(FormField::Mandatory).as_str(), "yes" | "no"),
             "mandatory must be yes or no",
         )?;
-        spec.mandatory = text(15) == "yes";
-        spec.position = text(16)
+        spec.mandatory = text(FormField::Mandatory) == "yes";
+        spec.position = text(FormField::Position)
             .parse()
             .map_err(|_| crate::Error::Invalid("position must be a nonnegative integer".into()))?;
         Ok(spec)
@@ -169,7 +193,6 @@ impl Form {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LedgerView {
     pub visible: bool,
-    pub kind: LedgerKind,
     pub page: Option<LedgerPage>,
     pub selected: usize,
     pub query: InputBuffer,
@@ -202,7 +225,7 @@ pub struct LedgerView {
     pub edit_scroll: usize,
     pub pending_kind: String,
     pub prepared_draft: Option<((String, String), Form)>,
-    pub run_filters: HashMap<(String, String), RunFilter>,
+    pub run_filters: HashMap<String, RunFilter>,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunFilter {
@@ -233,11 +256,16 @@ pub enum Action {
     Runs,
     Proposal,
 }
+impl Default for LedgerView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LedgerView {
-    pub fn new(kind: LedgerKind) -> Self {
+    pub fn new() -> Self {
         Self {
             visible: true,
-            kind,
             page: None,
             selected: 0,
             query: InputBuffer::new(),
@@ -292,11 +320,7 @@ impl LedgerView {
             task: self.task.clone(),
             ..Default::default()
         };
-        if self.kind == LedgerKind::Requirement {
-            Request::ListRequirements { query }
-        } else {
-            Request::ListPlanItems { query }
-        }
+        Request::ListRequirements { query }
     }
     pub fn filtered(&self) -> Vec<&LedgerEntry> {
         self.page
@@ -327,7 +351,7 @@ impl LedgerView {
         let text = super::sanitize_paste(text);
         if let Some(form) = self.form_mut() {
             let field = form.field;
-            form.fields[field].insert_str(&text);
+            form.fields[field as usize].insert_str(&text);
         } else if self.searching {
             self.query.insert_str(&text.replace('\n', " "));
         } else if self.status_edit {
@@ -350,7 +374,7 @@ impl LedgerView {
     fn preserve_filter(&mut self) {
         if let Some(page) = &self.page {
             self.run_filters.insert(
-                (page.run.id.clone(), self.kind.name().into()),
+                page.run.id.clone(),
                 RunFilter {
                     query: self.query.clone(),
                     status: self.status.clone(),
@@ -364,10 +388,7 @@ impl LedgerView {
         }
     }
     fn restore_filter(&mut self) {
-        let key = self
-            .page
-            .as_ref()
-            .map(|p| (p.run.id.clone(), self.kind.name().into()));
+        let key = self.page.as_ref().map(|p| p.run.id.clone());
         let state = key
             .and_then(|key| self.run_filters.get(&key).cloned())
             .unwrap_or_else(|| RunFilter {
@@ -455,10 +476,10 @@ impl LedgerView {
                                 run_id: page.run.id.clone(),
                                 expected_spec_revision: form.revision,
                                 operation_id: form.operation_id.clone(),
-                                reason: form.fields[13].text.clone(),
+                                reason: form.fields[FormField::Reason as usize].text.clone(),
                                 entries: vec![spec],
                             },
-                            source: form.fields[14].text.clone(),
+                            source: form.fields[FormField::Source as usize].text.clone(),
                         };
                     }
                     Err(error) => {
@@ -473,12 +494,12 @@ impl LedgerView {
             let width = self.form_area().width as usize;
             if let Some(form) = self.form_mut() {
                 match key.code {
-                    KeyCode::Tab => form.field = (form.field + 1) % LABELS.len(),
-                    KeyCode::BackTab => form.field = (form.field + LABELS.len() - 1) % LABELS.len(),
-                    KeyCode::Up => form.fields[form.field].move_up(width),
-                    KeyCode::Down => form.fields[form.field].move_down(width),
-                    KeyCode::Enter => form.fields[form.field].insert_char('\n'),
-                    _ => form.fields[form.field].edit_key(key),
+                    KeyCode::Tab => form.field = form.field.next(false),
+                    KeyCode::BackTab => form.field = form.field.next(true),
+                    KeyCode::Up => form.fields[form.field as usize].move_up(width),
+                    KeyCode::Down => form.fields[form.field as usize].move_down(width),
+                    KeyCode::Enter => form.fields[form.field as usize].insert_char('\n'),
+                    _ => form.fields[form.field as usize].edit_key(key),
                 }
             }
             return Action::None;
@@ -532,20 +553,6 @@ impl LedgerView {
             }
             KeyCode::Char('m') => {
                 self.missing_only = !self.missing_only;
-                return Action::Fetch;
-            }
-            KeyCode::Tab => {
-                self.invalidate_read();
-                self.preserve_filter();
-                self.kind = if self.kind == LedgerKind::Requirement {
-                    LedgerKind::PlanItem
-                } else {
-                    LedgerKind::Requirement
-                };
-                self.restore_filter();
-                if let Some(p) = &mut self.page {
-                    p.offset = 0;
-                }
                 return Action::Fetch;
             }
             KeyCode::Down => {
@@ -605,10 +612,10 @@ impl LedgerView {
                 let Some(page) = &self.page else {
                     return Action::Create;
                 };
-                let spec:EntrySpec=serde_json::from_value(serde_json::json!({"id":format!("{}-{}",if self.kind==LedgerKind::Requirement{"req"}else{"step"},crate::id()),"kind":self.kind,"source":{"source_id":"new","start":0,"end":1},"interpretation":"","criteria":[],"mandatory":true})).unwrap();
+                let spec:EntrySpec=serde_json::from_value(serde_json::json!({"id":format!("req-{}",crate::id()),"source":{"source_id":"new","start":0,"end":1},"interpretation":"","criteria":[],"mandatory":true})).unwrap();
                 let key = (page.run.id.clone(), spec.id.clone());
                 let mut form = Form::new(spec, page.run.spec_revision);
-                form.field = 1;
+                form.field = FormField::Interpretation;
                 self.drafts.insert(key.clone(), form);
                 self.editing = Some(key);
             }
@@ -622,7 +629,7 @@ impl LedgerView {
             let visible = body.height as usize;
             let start = self
                 .form_mut()
-                .map_or(0, |f| f.field.saturating_sub(visible / 2));
+                .map_or(0, |f| (f.field as usize).saturating_sub(visible / 2));
             if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
                 if self.area.width >= 60
                     && mouse.column < body.x
@@ -630,19 +637,20 @@ impl LedgerView {
                     && mouse.row < body.bottom()
                 {
                     if let Some(form) = self.form_mut() {
-                        form.field = (start + mouse.row.saturating_sub(body.y) as usize)
-                            .min(LABELS.len() - 1);
+                        form.field = FormField::ALL[(start
+                            + mouse.row.saturating_sub(body.y) as usize)
+                            .min(LABELS.len() - 1)];
                     }
                     self.edit_scroll = 0;
                 } else if mouse.row == self.area.y + 2 {
                     if let Some(form) = self.form_mut() {
-                        form.field = (form.field + 1) % LABELS.len();
+                        form.field = form.field.next(false);
                     }
                     self.edit_scroll = 0;
                 } else if body.contains((mouse.column, mouse.row).into()) {
                     let row = mouse.row.saturating_sub(body.y) as usize + self.edit_scroll;
                     if let Some(form) = self.form_mut() {
-                        let input = &mut form.fields[form.field];
+                        let input = &mut form.fields[form.field as usize];
                         let lines =
                             super::editor::compute_visual_lines(&input.text, body.width as usize);
                         if let Some(line) = lines.get(row) {
@@ -664,9 +672,9 @@ impl LedgerView {
             {
                 for _ in 0..3 {
                     if mouse.kind == MouseEventKind::ScrollUp {
-                        form.fields[form.field].move_up(body.width as usize);
+                        form.fields[form.field as usize].move_up(body.width as usize);
                     } else {
-                        form.fields[form.field].move_down(body.width as usize);
+                        form.fields[form.field as usize].move_down(body.width as usize);
                     }
                 }
             }
@@ -681,28 +689,6 @@ impl LedgerView {
             return Action::None;
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-            if mouse.row == self.area.y + 1 {
-                if self.pending
-                    && matches!(
-                        self.pending_kind.as_str(),
-                        "preview" | "applied" | "created"
-                    )
-                {
-                    return Action::None;
-                }
-                self.invalidate_read();
-                self.preserve_filter();
-                let column = mouse.column.saturating_sub(self.area.x);
-                self.kind = if column < 16 {
-                    LedgerKind::Requirement
-                } else if column < 30 {
-                    LedgerKind::PlanItem
-                } else {
-                    return Action::None;
-                };
-                self.restore_filter();
-                return Action::Fetch;
-            }
             if mouse.row == self.area.bottom().saturating_sub(2)
                 && mouse.column.saturating_sub(self.area.x) < 26
             {
@@ -868,11 +854,15 @@ impl LedgerView {
             Rect::new(area.x, area.y + 1, area.width, 1),
         );
         frame.render_widget(
-            Paragraph::new(format!("{}: {}", form.field + 1, LABELS[form.field])),
+            Paragraph::new(format!(
+                "{}: {}",
+                form.field as usize + 1,
+                LABELS[form.field as usize]
+            )),
             Rect::new(area.x, area.y + 2, area.width, 1),
         );
         if area.width >= 60 {
-            let start = form.field.saturating_sub(body.height as usize / 2);
+            let start = (form.field as usize).saturating_sub(body.height as usize / 2);
             let labels = LABELS
                 .iter()
                 .enumerate()
@@ -881,7 +871,7 @@ impl LedgerView {
                 .map(|(i, label)| {
                     Line::from(format!(
                         "{} {}",
-                        if i == form.field { ">" } else { " " },
+                        if i == form.field as usize { ">" } else { " " },
                         label
                     ))
                 })
@@ -891,7 +881,7 @@ impl LedgerView {
                 Rect::new(area.x, body.y, 24, body.height),
             );
         }
-        let input = &form.fields[form.field];
+        let input = &form.fields[form.field as usize];
         let (column, row) = input.visual_cursor(body.width as usize);
         if row < self.edit_scroll {
             self.edit_scroll = row;
@@ -967,20 +957,8 @@ impl LedgerView {
                             .join("\n")
                     },
                 );
-                if !entry.spec.requirement_ids.is_empty() {
-                    section(
-                        "Linked requirements",
-                        &entry.spec.requirement_ids.join(", "),
-                    );
-                }
                 if !entry.spec.depends_on.is_empty() {
                     section("Dependencies", &entry.spec.depends_on.join(", "));
-                }
-                if let Some(goal) = &entry.spec.technical_goal {
-                    section("Technical goal", goal);
-                }
-                if let Some(check) = &entry.spec.check {
-                    section("Execution check", check);
                 }
                 section("Original wording", &entry.original);
                 section(
@@ -1199,6 +1177,10 @@ impl LedgerView {
             Constraint::Length(1),
         ])
         .split(area);
+        frame.render_widget(
+            Paragraph::new(" Requirements ").style(theme.selected()),
+            rows[1],
+        );
         let selected = |label: &str, active: bool| {
             Span::styled(
                 format!(" {label} "),
@@ -1209,15 +1191,6 @@ impl LedgerView {
                 },
             )
         };
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                selected("Requirements", self.kind == LedgerKind::Requirement),
-                Span::raw("  "),
-                selected("Plan items", self.kind == LedgerKind::PlanItem),
-                Span::styled("   Tab switches view", theme.dim()),
-            ])),
-            rows[1],
-        );
         let heading = self
             .page
             .as_ref()
@@ -1378,8 +1351,6 @@ impl LedgerView {
                 "Loading records..."
             } else if !self.query.text.is_empty() {
                 "No matches. Change the search or filters."
-            } else if self.kind == LedgerKind::PlanItem {
-                "Plan items appear when a plan is mapped to verified requirements."
             } else {
                 "No requirements yet. Continue the interview or add a requirement with n."
             };

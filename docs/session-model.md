@@ -138,19 +138,13 @@ Retrieves detailed history for a single specific plan:
 
 ---
 
-## 4. Event and Turn Plan Association & Database Migration
+## 4. Event and Turn Plan Association
 
-### Schema Version
-The database schema version is bumped from `3` to `4` (`PRAGMA user_version = 4`).
-
-### Migration 3 → 4
-- The migration is non-destructive: existing tables are preserved without data loss.
-- Column `plan_id TEXT` is added to `events` and `turns`.
-- Indexes `events_by_plan` on `(conversation_id, plan_id, seq)` and `turns_by_plan` on `(conversation_id, plan_id, started_ms)` are created.
-- The `plans` table is created and backfilled from existing `tasks` grouped by `(plan_id, conversation_id)`.
-- `turns.plan_id` is backfilled where `role` matches `worker:<task_uuid>` or `verifier:<task_uuid>`.
-- `events.plan_id` is backfilled from linked `turns` and from payloads containing `plan` or `plan_id`.
-- Unassociated entries (such as global messages, conversation setup notices, or events predating plan tracking) explicitly retain `plan_id = NULL` (`None`).
+Schema 11 creates plan associations and their indexes directly. Events, turns
+and comments carry `plan_id`; global events may have a NULL conversation ID.
+History is recorded when work occurs, without startup backfills. Incompatible
+schemas require manual archival of `.antislop/` and a fresh state, as described
+in [the requirements contract](requirement-ledgers.md#database-compatibility).
 
 ---
 
@@ -261,9 +255,8 @@ acknowledged after successful completion. Failed direct task messages remain
 queued for work, never for receipt-only dispatch. A successful verifier-only
 recheck preserves dependent results; a rejected recheck invalidates the dependent
 chain before worker corrections begin. Starting a turn and recording its round
-are atomic. Legacy attribution is recovered only from an explicit preceding UUID
-task event in the corresponding working/verifying stage; other legacy turns remain
-unassigned and missing historical results are labeled unavailable.
+are atomic. Missing attribution is never inferred at startup; unavailable
+historical results remain unavailable.
 
 
 ## Guided session workflow
@@ -294,7 +287,7 @@ replaying events restores the UI after restart or conversation switching.
 
 ### Requirements review and solution selection
 
-`/requirements` and `/plan-items` open a shared workspace with a record list,
+`/requirements` opens a workspace with a record list,
 separate details, search and coverage filters. Wide terminals use two columns;
 narrow terminals stack the list and details. Live progress and failures remain
 visible while the workspace is open. Arrow keys select records and detail tabs;
@@ -340,8 +333,8 @@ it does not replace task-level `WorkKind::Options` dependencies. When finalizing
 plan, the runtime first adds optional quality gates, then runs `with_options`.
 Every task with `writes=true`, including writing quality gates, must have a direct
 options dependency. If it lacks one, the runtime inserts a read-only options task
-before it, inheriting its scope, original dependencies, and requirement, criterion
-and plan-item links. The writer retains its original dependencies and gains the
+before it, inheriting its scope, original dependencies, and requirement and criterion
+links. The writer retains its original dependencies and gains the
 new one. An existing direct options dependency is reused; shared options must
 cover every dependent writer. Normalization is idempotent and applies even with
 `policy.required_gates=false`. Configuration validation at startup always requires

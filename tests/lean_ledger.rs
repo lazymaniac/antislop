@@ -38,7 +38,7 @@ impl Fixture {
         }
     }
     fn entry(&self, id: &str) -> EntrySpec {
-        serde_json::from_value(json!({"id":id,"kind":"requirement","source":{"source_id":self.source.id,"start":0,"end":self.text.len()},"interpretation":format!("Deliver {id} with all qualifiers"),"qualifiers":["except offline","never send secrets"],"criteria":[{"id":format!("{id}.accept"),"text":"independently reproduce the acceptance check","mandatory":true}],"task_ids":[]})).unwrap()
+        serde_json::from_value(json!({"id":id,"source":{"source_id":self.source.id,"start":0,"end":self.text.len()},"interpretation":format!("Deliver {id} with all qualifiers"),"qualifiers":["except offline","never send secrets"],"criteria":[{"id":format!("{id}.accept"),"text":"independently reproduce the acceptance check","mandatory":true}],"task_ids":[]})).unwrap()
     }
     fn change(&self, revision: i64, entries: Vec<EntrySpec>) -> LedgerChange {
         LedgerChange {
@@ -55,14 +55,8 @@ impl Fixture {
             .apply_ledger_change(change, self.dir.path(), true)
             .unwrap()
     }
-    fn task(
-        &self,
-        id: &str,
-        requirements: &[&str],
-        plan_items: &[&str],
-        depends: &[&str],
-    ) -> serde_json::Value {
-        json!({"id":id,"title":id,"goal":"implement and check scope","kind":"implementation","verifier":{"focus":"actual behavior"},"requirement_ids":requirements,"criterion_ids":requirements.iter().map(|id|format!("{id}.accept")).collect::<Vec<_>>(),"plan_item_ids":plan_items,"depends_on":depends})
+    fn task(&self, id: &str, requirements: &[&str], depends: &[&str]) -> serde_json::Value {
+        json!({"id":id,"title":id,"goal":"implement and check scope","kind":"implementation","verifier":{"focus":"actual behavior"},"requirement_ids":requirements,"criterion_ids":requirements.iter().map(|id|format!("{id}.accept")).collect::<Vec<_>>(),"depends_on":depends})
     }
     fn plan(&self, specs: Vec<serde_json::Value>) -> Vec<antislop::lean::store::Task> {
         let tasks = self.store.add_plan(&self.conversation, &specs).unwrap();
@@ -262,9 +256,9 @@ fn semantic_edit_invalidates_dependency_closure_but_keeps_independent_tasks() {
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1"), f.entry("r2")]));
     let tasks = f.plan(vec![
-        f.task("a", &["r1"], &[], &[]),
-        f.task("b", &["r2"], &[], &["a"]),
-        f.task("c", &["r2"], &[], &[]),
+        f.task("a", &["r1"], &[]),
+        f.task("b", &["r2"], &["a"]),
+        f.task("c", &["r2"], &[]),
     ]);
     let mut edited = f.entry("r1");
     edited.qualifiers.push("new qualifier".into());
@@ -292,7 +286,7 @@ fn parent_requires_children_and_its_own_integration_evidence() {
     let mut child = f.entry("child");
     child.parent = Some("parent".into());
     f.apply(&f.change(0, vec![parent, child]));
-    let tasks = f.approved(f.plan(vec![f.task("a", &["parent", "child"], &[], &[])]));
+    let tasks = f.approved(f.plan(vec![f.task("a", &["parent", "child"], &[])]));
     let verifier = f.turn("audit", true);
     f.store
         .add_ledger_evidence(
@@ -341,7 +335,7 @@ fn parent_requires_children_and_its_own_integration_evidence() {
 fn evidence_rejects_self_verification_empty_claims_and_stale_inputs() {
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1")]));
-    let tasks = f.approved(f.plan(vec![f.task("a", &["r1"], &[], &[])]));
+    let tasks = f.approved(f.plan(vec![f.task("a", &["r1"], &[])]));
     let verifier = f.turn("audit", true);
     let mut a = f.assessment(&tasks[0], "r1", "tree");
     assert!(
@@ -374,7 +368,7 @@ fn evidence_rejects_self_verification_empty_claims_and_stale_inputs() {
 fn completion_gate_requires_source_coverage_current_audit_and_integrated_evidence() {
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1")]));
-    let tasks = f.approved(f.plan(vec![f.task("a", &["r1"], &[], &[])]));
+    let tasks = f.approved(f.plan(vec![f.task("a", &["r1"], &[])]));
     assert!(
         !f.store
             .requirements_gaps(&f.conversation, &f.run.id, "tree")
@@ -419,74 +413,66 @@ fn completion_gate_requires_source_coverage_current_audit_and_integrated_evidenc
     );
 }
 #[test]
-fn technical_steps_need_goal_checks_tasks_and_cannot_be_silently_withdrawn() {
+fn supporting_tasks_serve_existing_requirements_and_user_steps_can_be_superseded() {
     let f = Fixture::new();
-    let mut step = f.entry("step");
-    step.kind = LedgerKind::PlanItem;
-    step.task_ids = vec!["task-step".into()];
-    step.technical_goal = Some("verify build assumptions".into());
-    step.check = Some("inspect compiler output".into());
-    let mut invalid = step.clone();
-    invalid.check = None;
-    assert!(
-        f.store
-            .preview_ledger_change(&f.change(0, vec![invalid]), f.dir.path())
-            .is_err()
-    );
+    let mut step = f.entry("user-step");
+    step.interpretation = "Run the method explicitly requested by the user".into();
     f.apply(&f.change(0, vec![step.clone()]));
-    let specs = f.task("task-step", &[], &["step"], &[]);
-    let _: TaskSpec = serde_json::from_value(specs.clone()).unwrap();
-    f.plan(vec![specs]);
-    step.disposition = Disposition::WithdrawnByUser;
-    let mut change = f.change(1, vec![step]);
-    change.reason.clear();
-    assert!(
-        f.store
-            .apply_ledger_change(&change, f.dir.path(), true)
-            .is_err()
-    );
-    change.reason = "user no longer requires this technical step".into();
-    f.apply(&change);
+    let implement = f.task("implement", &["user-step"], &[]);
+    let mut support = f.task("support", &["user-step"], &["implement"]);
+    support["criterion_ids"] = json!([]);
+    f.plan(vec![implement, support]);
+    step.disposition = Disposition::SupersededByUser;
+    f.apply(&f.change(1, vec![step]));
     assert_eq!(
         f.store
             .ledger_statuses(&f.conversation, &f.run.id, None, "")
             .unwrap()[0]
             .status,
-        "withdrawn_by_user"
+        "superseded_by_user"
     );
 }
+
 #[test]
-fn schema_six_migrates_and_preserves_legacy_history_without_verification() {
+fn old_schema_is_rejected_and_history_is_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("core.db");
     let store = Store::open(&path).unwrap();
     let conversation = store.create_conversation("project").unwrap();
-    let tasks = store
-        .add_plan(
-            &conversation.id,
-            &[json!({"id":"old","title":"Historical","kind":"analysis"})],
-        )
+    store
+        .add_message(&conversation.id, "user", "Keep history")
         .unwrap();
     drop(store);
     let db = rusqlite::Connection::open(&path).unwrap();
-    db.pragma_update(None, "foreign_keys", false).unwrap();
-    let tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'ledger_%' OR name IN ('runs','plan_runs','task_inputs','task_ledger_inputs'))").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<std::result::Result<Vec<_>,_>>().unwrap();
-    for table in tables {
-        db.execute_batch(&format!("DROP TABLE {table}")).unwrap();
-    }
     db.pragma_update(None, "user_version", 6).unwrap();
     drop(db);
-    let store = Store::open(&path).unwrap();
-    assert!(store.plan_run(&tasks[0].plan_id).unwrap().is_none());
-    assert_eq!(store.plan(&tasks[0].plan_id).unwrap(), tasks);
-    let version = rusqlite::Connection::open(&path)
-        .unwrap()
-        .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-        .unwrap();
-    assert!(
-        version >= 7,
-        "ledger migration must be installed without downgrading newer migrations"
-    );
+    let before = std::fs::read(&path).unwrap();
+    assert!(Store::open(&path).is_err());
+    assert_eq!(before, std::fs::read(&path).unwrap());
+}
+
+#[test]
+fn removed_entry_and_task_fields_are_rejected() {
+    let f = Fixture::new();
+    let entry = serde_json::to_value(f.entry("r")).unwrap();
+    for (field, value) in [
+        ("kind", json!("requirement")),
+        ("requirement_ids", json!([])),
+        ("technical_goal", json!(null)),
+        ("check", json!(null)),
+    ] {
+        let mut old = entry.clone();
+        old[field] = value;
+        assert!(serde_json::from_value::<EntrySpec>(old).is_err(), "{field}");
+    }
+    for disposition in ["withdrawn_by_user", "replaced_by_user"] {
+        let mut old = entry.clone();
+        old["disposition"] = json!(disposition);
+        assert!(serde_json::from_value::<EntrySpec>(old).is_err());
+    }
+    let mut task = f.task("task", &["r"], &[]);
+    task["plan_item_ids"] = json!([]);
+    assert!(serde_json::from_value::<TaskSpec>(task).is_err());
 }
 
 #[test]
@@ -495,10 +481,7 @@ fn live_scope_edit_cancels_only_affected_process_and_rejects_late_task_updates()
     use std::time::{Duration, Instant};
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1"), f.entry("r2")]));
-    let tasks = f.plan(vec![
-        f.task("a", &["r1"], &[], &[]),
-        f.task("b", &["r2"], &[], &[]),
-    ]);
+    let tasks = f.plan(vec![f.task("a", &["r1"], &[]), f.task("b", &["r2"], &[])]);
     f.review("extraction", "", true);
     let script = f.dir.path().join("fixture-codex");
     std::fs::write(&script,r#"#!/usr/bin/env python3
@@ -584,7 +567,7 @@ fn compliance_sessions_verify_integrated_files_and_reopen_after_file_changes() {
     use std::{os::unix::fs::PermissionsExt, process::Command, sync::atomic::AtomicBool};
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1")]));
-    let tasks = f.approved(f.plan(vec![f.task("a", &["r1"], &[], &[])]));
+    let tasks = f.approved(f.plan(vec![f.task("a", &["r1"], &[])]));
     f.review("extraction", "", true);
     std::fs::write(f.dir.path().join(".gitignore"), "*\n").unwrap();
     std::fs::write(f.dir.path().join("observed-result"), "delivered").unwrap();
@@ -619,7 +602,7 @@ if prompt.startswith('Audit the integrated project'):
     evidence=[]
     for entry in entries:
         spec=entry['spec']
-        task=next(t for t in tasks if spec['id'] in t['spec']['requirement_ids']+t['spec']['plan_item_ids'])
+        task=next(t for t in tasks if spec['id'] in t['spec']['requirement_ids'])
         for criterion in spec['criteria']:
             evidence.append({'entry_id':spec['id'],'entry_version':entry['version'],'criterion_id':criterion['id'],'task_id':task['id'],'generation':task['input_generation'],'attempt':task['round'],'producer_turn':'','result':'Read observed-result in integrated project: exact expected content delivered','artifact':None,'integrated_fingerprint':fingerprint})
     answer=block('compliance',{'approved':not os.path.exists('audit-gap'),'findings':[{'issue':'obligation omitted during extraction'}] if os.path.exists('audit-gap') else [],'evidence':evidence})
@@ -864,10 +847,10 @@ fn continuation_reuses_current_approved_inputs_and_task_filter_follows_real_link
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1"), f.entry("r2")]));
     f.approved(f.plan(vec![
-        f.task("first", &["r1"], &[], &[]),
-        f.task("second", &["r2"], &[], &[]),
+        f.task("first", &["r1"], &[]),
+        f.task("second", &["r2"], &[]),
     ]));
-    let next = f.plan(vec![f.task("repair", &["r2"], &[], &[])]);
+    let next = f.plan(vec![f.task("repair", &["r2"], &[])]);
     let statuses = f
         .store
         .ledger_statuses(&f.conversation, &f.run.id, None, "")
@@ -890,7 +873,6 @@ fn continuation_reuses_current_approved_inputs_and_task_filter_follows_real_link
                 limit: Some(1),
                 ..Default::default()
             },
-            LedgerKind::Requirement,
             "",
         )
         .unwrap();
@@ -903,7 +885,7 @@ fn a_positive_assessment_cannot_hide_a_conflicting_result_on_the_same_inputs() {
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1")]));
     let mut task = f
-        .approved(f.plan(vec![f.task("a", &["r1"], &[], &[])]))
+        .approved(f.plan(vec![f.task("a", &["r1"], &[])]))
         .remove(0);
     let verifier = f.turn("audit", true);
     let mut failed = f.assessment(&task, "r1", "tree");
@@ -1307,9 +1289,9 @@ fn live_graph_inserts_work_before_gates_preserving_existing_task_identity() {
     f.apply(&f.change(0, vec![f.entry("R1")]));
     f.review("extraction", "", true);
     let tasks = f.plan(vec![
-        f.task("implementation", &["R1"], &[], &[]),
-        f.task("security", &["R1"], &[], &["implementation"]),
-        f.task("performance", &["R1"], &[], &["implementation"]),
+        f.task("implementation", &["R1"], &[]),
+        f.task("security", &["R1"], &["implementation"]),
+        f.task("performance", &["R1"], &["implementation"]),
     ]);
     let plan = &tasks[0].plan_id;
     f.store.queue_plan(&f.conversation, plan).unwrap();
@@ -1321,9 +1303,9 @@ fn live_graph_inserts_work_before_gates_preserving_existing_task_identity() {
     f.store.update_task(&worker).unwrap();
     let baseline = f.store.plan(plan).unwrap();
     let patch = json!({"base_plan":plan,"tasks":[
-        f.task("extra", &["R1"], &[], &["implementation"]),
-        f.task("security", &["R1"], &[], &["extra"]),
-        f.task("performance", &["R1"], &[], &["extra"])
+        f.task("extra", &["R1"], &["implementation"]),
+        f.task("security", &["R1"], &["extra"]),
+        f.task("performance", &["R1"], &["extra"])
     ]});
     let current = baseline
         .iter()
@@ -1363,16 +1345,16 @@ fn live_graph_rejects_started_gate_changes_atomically() {
     f.apply(&f.change(0, vec![f.entry("R1")]));
     f.review("extraction", "", true);
     let tasks = f.plan(vec![
-        f.task("implementation", &["R1"], &[], &[]),
-        f.task("security", &["R1"], &[], &["implementation"]),
+        f.task("implementation", &["R1"], &[]),
+        f.task("security", &["R1"], &["implementation"]),
     ]);
     let plan = &tasks[0].plan_id;
     f.store.queue_plan(&f.conversation, plan).unwrap();
     let baseline = f.store.plan(plan).unwrap();
     let specs = vec![
-        serde_json::from_value(f.task("implementation", &["R1"], &[], &[])).unwrap(),
-        serde_json::from_value(f.task("extra", &["R1"], &[], &["implementation"])).unwrap(),
-        serde_json::from_value(f.task("security", &["R1"], &[], &["extra"])).unwrap(),
+        serde_json::from_value(f.task("implementation", &["R1"], &[])).unwrap(),
+        serde_json::from_value(f.task("extra", &["R1"], &["implementation"])).unwrap(),
+        serde_json::from_value(f.task("security", &["R1"], &["extra"])).unwrap(),
     ];
     let mut gate = baseline[1].clone();
     gate.status = "verifying".into();
@@ -1387,4 +1369,57 @@ fn live_graph_rejects_started_gate_changes_atomically() {
     assert_eq!(unchanged.len(), 2);
     assert_eq!(unchanged[1].spec["depends_on"], json!(["implementation"]));
     assert_eq!(unchanged[1].status, "verifying");
+}
+
+#[test]
+fn initial_and_graph_plans_reject_the_same_invalid_requirement_links() {
+    let f = Fixture::new();
+    let mut inactive = f.entry("inactive");
+    f.apply(&f.change(0, vec![f.entry("R1"), f.entry("R2"), inactive.clone()]));
+    inactive.disposition = Disposition::SupersededByUser;
+    f.apply(&f.change(1, vec![inactive]));
+    f.review("extraction", "", true);
+    let tasks = f.plan(vec![f.task("base", &["R1", "R2"], &[])]);
+    f.store
+        .queue_plan(&f.conversation, &tasks[0].plan_id)
+        .unwrap();
+    let baseline = f.store.plan(&tasks[0].plan_id).unwrap();
+    for (requirements, criteria) in [
+        (json!([]), json!([])),
+        (json!(["missing"]), json!([])),
+        (json!(["inactive"]), json!([])),
+        (json!(["R1"]), json!(["R2.accept"])),
+    ] {
+        let mut invalid = f.task("added", &["R1"], &["base"]);
+        invalid["requirement_ids"] = requirements;
+        invalid["criterion_ids"] = criteria;
+        let specs = vec![baseline[0].spec.clone(), invalid];
+        let candidate = f.store.add_plan(&f.conversation, &specs).unwrap();
+        f.store
+            .link_plan_run(&f.conversation, &candidate[0].plan_id, &f.run.id)
+            .unwrap();
+        let initial = f
+            .store
+            .bind_task_ledger(&f.conversation, &f.run.id, &candidate[0].plan_id)
+            .unwrap_err();
+        let specs: Vec<TaskSpec> = specs
+            .into_iter()
+            .map(|s| serde_json::from_value(s).unwrap())
+            .collect();
+        let edit = f
+            .store
+            .extend_running_graph(&f.conversation, &baseline, &specs)
+            .unwrap_err();
+        assert_eq!(initial.to_string(), edit.to_string());
+        assert_eq!(f.store.plan(&tasks[0].plan_id).unwrap(), baseline);
+    }
+    let mut support = f.task("support", &["R1"], &["base"]);
+    support["criterion_ids"] = json!([]);
+    let specs = vec![
+        serde_json::from_value(baseline[0].spec.clone()).unwrap(),
+        serde_json::from_value(support).unwrap(),
+    ];
+    f.store
+        .extend_running_graph(&f.conversation, &baseline, &specs)
+        .unwrap();
 }

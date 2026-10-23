@@ -1289,15 +1289,10 @@ impl Core {
                 .plan_belongs_to_conversation(conversation, plan_id)?,
             "plan does not belong to conversation",
         )?;
-        if self.store.plan_run(plan_id)?.is_none() {
-            require(
-                !self.store.messages_by(conversation, "user", 0)?.is_empty(),
-                "legacy plan needs original user sources before requirement extraction and a newly verified task mapping",
-            )?;
-            self.store.add_message(conversation,RUNTIME,&format!("Legacy plan {plan_id} cannot resume without source extraction and independent ledger verification. Read the original user sources and historical plan as input, then propose a replacement task plan with explicit run_id, requirement_ids, criterion_ids and plan_item_ids. Historical reports are not completion evidence."))?;
-            self.wake(conversation);
-            return Err(Error::Invalid("legacy plan needs requirement extraction and a newly verified task mapping before execution; replanning requested".into()));
-        }
+        require(
+            self.store.plan_run(plan_id)?.is_some(),
+            "integrity error: plan has no requirements run",
+        )?;
         self.start_plan(conversation, plan_id, |store| {
             require(
                 store.requeue_plan(conversation, plan_id)? > 0,
@@ -2020,7 +2015,9 @@ impl Core {
             !plans.contains_key(conversation),
             "a plan is already running",
         )?;
-        let run = self.store.plan_run(plan_id)?.ok_or_else(|| Error::Invalid("legacy plan needs requirement extraction and a newly verified task mapping before execution".into()))?;
+        let run = self.store.plan_run(plan_id)?.ok_or_else(|| {
+            Error::Invalid("integrity error: plan has no requirements run".into())
+        })?;
         self.validate_ledger_plan(conversation, plan_id, &run)?;
         for task in self.store.plan(plan_id)? {
             self.store.assert_task_inputs(&task)?;
@@ -2364,7 +2361,7 @@ impl Core {
             }
             if let Ok(Some(run)) = self.store.planning_run(conversation) {
                 prompt.push_str(&self.ledger_context(conversation, &run.id).unwrap_or_default());
-                prompt.push_str("\nThe runtime binds this plan to the active requirements run. Each task must include requirement_ids, criterion_ids and plan_item_ids. Cover every mandatory criterion and plan item. Use the reviewed implementation comparison and resolve its findings in the plan. Do not ask the user to copy run or option identifiers.\n");
+                prompt.push_str("\nThe runtime binds this plan to the active requirements run. Each task must include requirement_ids and criterion_ids. Every task serves at least one active requirement. Cover every mandatory criterion across the tasks; supporting tasks need not cover every criterion themselves. Use the reviewed implementation comparison and resolve its findings in the plan. Do not ask the user to copy run or option identifiers.\n");
             }
             prompt
         })?
@@ -2673,7 +2670,7 @@ impl Core {
         let tasks = self.store.add_plan(conversation, &values)?;
         let plan_id = tasks[0].plan_id.clone();
         self.store.link_plan_run(conversation, &plan_id, &run.id)?;
-        if let Err(error) = self.validate_ledger_plan(conversation, &plan_id, &run.id) {
+        if let Err(error) = self.store.bind_task_ledger(conversation, &run.id, &plan_id) {
             self.store
                 .set_plan_status(&plan_id, status::PROPOSED, status::REVISED)?;
             self.notice(

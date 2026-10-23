@@ -16,6 +16,7 @@ fn fake_clis(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
         r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
+prompt = prompt.split("\nEditable graph snapshot, base_plan=",1)[0].rstrip()
 def task(id, title, depends=(), writes=False):
     return {"id": id, "title": title, "goal": "g", "depends_on": list(depends),
             "writes": writes, "scope": ["."], "kind": "implementation" if writes else "analysis",
@@ -270,12 +271,12 @@ fn legacy_supervised_tasks_require_ledger_extraction_after_restart() {
         core.resume_plan(&conversation, &tasks[0].plan_id)
             .unwrap_err()
             .to_string()
-            .contains("legacy plan")
+            .contains("integrity error: plan has no requirements run")
     );
 }
 
 #[test]
-fn legacy_autonomous_plan_cannot_resume_without_ledger_extraction() {
+fn autonomous_plan_without_requirements_cannot_resume() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     std::fs::write(dir.path().join("logged-in"), "").unwrap();
@@ -302,7 +303,7 @@ fn legacy_autonomous_plan_cannot_resume_without_ledger_extraction() {
         core.resume_plan(&conversation, &tasks[0].plan_id)
             .unwrap_err()
             .to_string()
-            .contains("legacy plan")
+            .contains("integrity error: plan has no requirements run")
     );
 }
 
@@ -312,7 +313,24 @@ fn test_freshness_token_staleness_and_rejection() {
     let project = init_git_project(dir.path());
     let core = open(dir.path());
     let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let message = core
+        .store
+        .add_message(&conversation, "user", "Check freshness token")
+        .unwrap();
+    let run = core
+        .store
+        .create_run(&conversation, "Check freshness token")
+        .unwrap();
+    let source = core
+        .store
+        .register_message_source(&conversation, &run.id, message.seq)
+        .unwrap();
+    let change = serde_json::from_value(json!({"conversation":conversation,"run_id":run.id,"expected_spec_revision":0,"operation_id":"freshness-scope","reason":"test scope","entries":[{"id":"R1","source":{"source_id":source.id,"start":0,"end":message.text.len()},"interpretation":"Check freshness token","criteria":[{"id":"R1.accept","text":"Reject stale tokens without changes"}]}]})).unwrap();
+    core.store
+        .apply_ledger_change(&change, &dir.path().join("state"), true)
+        .unwrap();
     let spec = json!({
+        "requirement_ids": ["R1"], "criterion_ids": ["R1.accept"],
         "id": "t1",
         "title": "T1",
         "goal": "g",
@@ -321,6 +339,12 @@ fn test_freshness_token_staleness_and_rejection() {
         "verifier": {"focus": "f"}
     });
     let tasks = core.store.add_plan(&conversation, &[spec]).unwrap();
+    core.store
+        .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
+        .unwrap();
+    core.store
+        .bind_task_ledger(&conversation, &run.id, &tasks[0].plan_id)
+        .unwrap();
     let plan = &tasks[0].plan_id;
     let task_id = &tasks[0].id;
 

@@ -18,7 +18,7 @@ impl Core {
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         git::integrated_fingerprint(&project)
     }
-    pub fn ledger_query(&self, mut query: LedgerQuery, kind: LedgerKind) -> Result<LedgerPage> {
+    pub fn ledger_query(&self, mut query: LedgerQuery) -> Result<LedgerPage> {
         if query.run_id.is_empty() {
             query.run_id = self
                 .store
@@ -33,7 +33,7 @@ impl Core {
         let fp = self
             .ledger_fingerprint(&query.conversation)
             .unwrap_or_default();
-        self.store.list_ledger(&query, kind, &fp)
+        self.store.list_ledger(&query, &fp)
     }
     pub fn apply_user_ledger_change(
         self: &Arc<Self>,
@@ -237,12 +237,6 @@ impl Core {
             )?,
         };
         self.store.select_planning_run(conversation, &r.id)?;
-        if let Some(task) = self.store.latest_plan(conversation)?.first()
-            && self.store.plan_run(&task.plan_id)?.is_none()
-            && let Some(document) = self.store.plan_document(conversation, &task.plan_id)?
-        {
-            self.store.register_document_source(conversation,&r.id,&format!("Legacy agent plan (input only; not verification or authority to weaken user requirements):\n{document}"),&self.state)?;
-        }
         let mut new_source = false;
         let known = self.store.ledger_sources(conversation, &r.id)?;
         for message in user.iter().filter(|m| m.seq >= r.start_message) {
@@ -272,7 +266,7 @@ impl Core {
                 .map(|message| message.text.as_str())
                 .unwrap_or("");
             let prompt = format!(
-                "Act as requirements analyst before planning. Read ALL sources, including middle sections. Preserve qualifiers, exceptions, negative obligations, original byte ranges, parents and dependencies. parent must reference an entry of the SAME kind, or be null. Link plan_item entries to requirements using requirement_ids, never parent. All references must exist in the combined existing and proposed ledger. Split acceptance criteria with globally unique stable IDs; composite parents need mandatory integration criteria. Preserve every supplied plan step. A prescribed implementation method is also a separate requirement. Technical steps need task_ids, technical_goal, check and criteria. task_ids are proposed planner IDs. Return a ```ledger JSON block with {{\"run_id\":\"{}\",\"expected_spec_revision\":{},\"entries\":[EntrySpec...]}}. EntrySpec fields: id, kind (requirement|plan_item), source (source_id,start,end byte range on grapheme boundaries), interpretation, qualifiers, parent, depends_on, mandatory, implementation_owners, verification_owners, criteria (id,text,mandatory,integration), requirement_ids, task_ids, position, technical_goal, check, disposition (active). Include only additions or proposed semantic changes. Existing obligations must retain stable IDs. Never silently supersede or weaken obligations. For a planning-only request, distinguish acceptance tests the plan must specify from results checked during later execution. Do not invent implementation tasks that have not been planned. Previous independent review feedback (correct omissions; semantic changes still require user approval): {review_feedback}. Sources:\n{sources}",
+                "Act as requirements analyst before planning. Read ALL sources, including middle sections. Preserve qualifiers, exceptions, negative obligations, original byte ranges, parents and dependencies. parent references another requirement or is null. All references must exist in the combined existing and proposed ledger. Split acceptance criteria with globally unique stable IDs; composite parents need mandatory integration criteria. Preserve every mandatory outcome, constraint, method and step prescribed by the user as a requirement with source and acceptance criteria. Suggestions and examples are not automatically obligations. Agent-selected technical steps remain tasks serving existing requirements; do not invent requirements merely to justify tasks. task_ids are proposed planner IDs. Return a ```ledger JSON block with {{\"run_id\":\"{}\",\"expected_spec_revision\":{},\"entries\":[EntrySpec...]}}. EntrySpec fields: id, source (source_id,start,end byte range on grapheme boundaries), interpretation, qualifiers, parent, depends_on, mandatory, implementation_owners, verification_owners, criteria (id,text,mandatory,integration), task_ids, position, disposition (active). Include only additions or proposed semantic changes. Existing obligations must retain stable IDs. Never silently supersede or weaken obligations. For a planning-only request, distinguish acceptance tests the plan must specify from results checked during later execution. Do not invent implementation tasks that have not been planned. Previous independent review feedback (correct omissions; semantic changes still require user approval): {review_feedback}. Sources:\n{sources}",
                 r.id, r.spec_revision
             );
             let mut feedback = String::new();
@@ -359,7 +353,7 @@ impl Core {
             "requirements extraction is empty",
         )?;
         let (answer,verifier)=self.requirements_turn(conversation,&r.id,"extraction",true,format!(
-            "Independently compare the requirement entries to every full source and the interview context. This is extraction before task planning: the task/plan-item ledger may legitimately be absent. Do not reject solely because a second ledger or execution evidence does not exist yet. Selected interview options include their descriptions; use that context before declaring ambiguity. For planning-only requests, completion criteria describe acceptance tests for later implementation, not a demand to implement now. Do not add obligations unsupported by user sources or project instructions. Find omitted obligations, lost qualifiers, ambiguous interpretation, missing plan steps, prescribed methods and missing composite integration criteria. Do not accept analyst assertions as evidence. Read full document artifacts. Return a ```verdict JSON block {{\"approved\":true|false,\"findings\":[{{\"issue\":\"...\"}}]}}. Full sources:\n{sources}"),cancel)?;
+            "Independently compare the requirement entries to every full source and the interview context. This is extraction before task planning: tasks and execution evidence may legitimately be absent. Selected interview options include their descriptions; use that context before declaring ambiguity. For planning-only requests, completion criteria describe acceptance tests for later implementation, not a demand to implement now. Do not add obligations unsupported by user sources or project instructions. Find omitted obligations, lost qualifiers, ambiguous interpretation, missing plan steps, prescribed methods and missing composite integration criteria. Do not accept analyst assertions as evidence. Read full document artifacts. Return a ```verdict JSON block {{\"approved\":true|false,\"findings\":[{{\"issue\":\"...\"}}]}}. Full sources:\n{sources}"),cancel)?;
         let verdict = tasks::parse_verdict(&answer);
         self.store.record_ledger_review(
             conversation,
@@ -404,17 +398,15 @@ impl Core {
             "requirements source coverage needs independent verification",
         )?;
         let tasks = self.store.plan(plan)?;
-        if tasks
-            .iter()
-            .all(|t| self.store.task_has_ledger_inputs(&t.id).unwrap_or(false))
-        {
-            for t in &tasks {
-                self.store.assert_task_inputs(t)?;
-            }
-            Ok(())
-        } else {
-            self.store.bind_task_ledger(conversation, run_id, plan)
+        require(!tasks.is_empty(), "integrity error: plan has no tasks")?;
+        for task in &tasks {
+            require(
+                self.store.task_has_ledger_inputs(&task.id)?,
+                "integrity error: task has no requirement inputs",
+            )?;
+            self.store.assert_task_inputs(task)?;
         }
+        Ok(())
     }
     /// Auditors inspect the primary integrated tree. Worktree approval is never imported.
     pub(in crate::lean) fn compliance_audit(
@@ -424,14 +416,14 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<Vec<String>> {
         let Some(run_id) = self.store.plan_run(plan)? else {
-            return Ok(vec!["legacy plan has no verified requirement ledger; extract and replan before claiming success".into()]);
+            return Ok(vec!["integrity error: plan has no requirements run".into()]);
         };
         let revision = self.store.run(conversation, &run_id)?.spec_revision;
         let fingerprint = self.ledger_fingerprint(conversation)?;
         let sources = self.full_ledger_sources(conversation, &run_id)?;
         let tasks = self.store.run_tasks(conversation, &run_id)?;
         let (answer,producer)=self.requirements_turn(conversation,&run_id,"audit",false,format!(
-            "Audit the integrated project against every full source and both ledgers. Search for obligations omitted in extraction. Inspect actual files and run relevant read-only checks. Do not change files. Integrated fingerprint: {fingerprint}. Task inputs and reports: {}. Return ```compliance JSON {{\"approved\":true|false,\"findings\":[...],\"evidence\":[EvidenceProposal...]}}. Each evidence proposal: entry_id,entry_version,criterion_id,task_id (UUID),generation,attempt (round),producer_turn (leave empty; runtime supplies),result (concrete checks and observed results, never just done),artifact (optional),integrated_fingerprint. Include technical step execution and composite integration criteria. Evidence must concern this integrated tree. Full sources:\n{sources}",serde_json::to_string(&tasks)?),cancel)?;
+            "Audit the integrated project against every full source and the requirements and their task evidence. Search for obligations omitted in extraction. Inspect actual files and run relevant read-only checks. Do not change files. Integrated fingerprint: {fingerprint}. Task inputs and reports: {}. Return ```compliance JSON {{\"approved\":true|false,\"findings\":[...],\"evidence\":[EvidenceProposal...]}}. Each evidence proposal: entry_id,entry_version,criterion_id,task_id (UUID),generation,attempt (round),producer_turn (leave empty; runtime supplies),result (concrete checks and observed results, never just done),artifact (optional),integrated_fingerprint. Include user-prescribed methods and steps and composite integration criteria. Evidence must concern this integrated tree. Full sources:\n{sources}",serde_json::to_string(&tasks)?),cancel)?;
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Audit {
@@ -448,7 +440,7 @@ impl Core {
             )?;
         }
         let (answer,verifier)=self.requirements_turn(conversation,&run_id,"audit",true,format!(
-            "Verify this audit independently against ALL full sources, both ledgers and actual integrated files. Find omitted obligations. Independently reproduce/check every evidence result. Reject empty, stale, failed or worktree-only evidence. Read-only access. Integrated fingerprint: {fingerprint}. Analyst findings: {}. Proposed evidence: {}. Return ```compliance_verdict JSON {{\"approved\":true|false,\"note\":\"coverage and gaps\",\"assessments\":[{{\"evidence\":EvidenceProposal,\"approved\":true|false,\"note\":\"independent observation\"}}]}}. Preserve exact proposal fields; runtime owns session identity. Full sources:\n{sources}",serde_json::to_string(&proposed.findings)?,serde_json::to_string(&proposed.evidence)?),cancel)?;
+            "Verify this audit independently against ALL full sources, the requirements and their task evidence and actual integrated files. Find omitted obligations. Independently reproduce/check every evidence result. Reject empty, stale, failed or worktree-only evidence. Read-only access. Integrated fingerprint: {fingerprint}. Analyst findings: {}. Proposed evidence: {}. Return ```compliance_verdict JSON {{\"approved\":true|false,\"note\":\"coverage and gaps\",\"assessments\":[{{\"evidence\":EvidenceProposal,\"approved\":true|false,\"note\":\"independent observation\"}}]}}. Preserve exact proposal fields; runtime owns session identity. Full sources:\n{sources}",serde_json::to_string(&proposed.findings)?,serde_json::to_string(&proposed.evidence)?),cancel)?;
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Review {
@@ -522,16 +514,16 @@ if prompt.startswith('Independently compare'):
     assert 'may legitimately be absent' in prompt
     answer='```verdict\n'+json.dumps({'approved':not os.path.exists('reject-review'),'findings':[{'issue':'missing qualifier'}] if os.path.exists('reject-review') else []})+'\n```'
 else:
-    assert 'SAME kind' in prompt
+    assert 'parent references another requirement' in prompt
     n=int(open('attempts').read()) if os.path.exists('attempts') else 0
     open('attempts','w').write(str(n+1))
     if n == 1:
-        assert 'entry p has unknown or incompatible parent r' in prompt, prompt
+        assert 'entry p has unknown parent missing' in prompt, prompt
         assert 'Previous response:' in prompt
     source=json.loads(lines[1].removeprefix('Sources: '))[0]['id']
     base={'source':{'source_id':source,'start':0,'end':4},'interpretation':'Keep scope','criteria':[{'id':'r.c','text':'Check scope','mandatory':True,'integration':True}]}
-    r=dict(base,id='r',kind='requirement')
-    p=dict(base,id='p',kind='plan_item',parent=None if n and os.path.exists('repair') else 'r',requirement_ids=['r'],task_ids=['t'],criteria=[{'id':'p.c','text':'Check task','mandatory':True}])
+    r=dict(base,id='r')
+    p=dict(base,id='p',parent='r' if n and os.path.exists('repair') else 'missing',criteria=[{'id':'p.c','text':'Check task','mandatory':True}])
     answer='```ledger\n'+json.dumps({'run_id':run['id'],'expected_spec_revision':run['spec_revision'],'entries':[r,p]})+'\n```'
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
@@ -625,7 +617,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                     result
                         .unwrap_err()
                         .to_string()
-                        .contains("entry p has unknown or incompatible parent r")
+                        .contains("entry p has unknown parent missing")
                 );
                 assert!(entries.is_empty());
                 assert_eq!(run.spec_revision, 0);

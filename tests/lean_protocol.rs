@@ -737,6 +737,9 @@ fn test_task_scoped_query_includes_freshness_token() {
     let daemon = DaemonGuard::start(&project, &config, &state);
     let started = daemon.call_raw(&json!({"op": "start"})).unwrap();
     let conv_id = started["id"].as_str().unwrap();
+    daemon
+        .call_raw(&json!({"op":"mode","conversation":conv_id,"autonomous":true}))
+        .unwrap();
 
     daemon
         .call_raw(&json!({
@@ -763,6 +766,19 @@ fn test_task_scoped_query_includes_freshness_token() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(!plan_id.is_empty(), "plan was not proposed");
+
+    // Task rows precede independent plan review; tokens stabilize when it ends.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let state = daemon
+            .call_raw(&json!({"op":"events","conversation":conv_id,"after":0,"wait_ms":0}))
+            .unwrap();
+        if state["idle"] == true {
+            break;
+        }
+        assert!(Instant::now() < deadline, "plan review did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 
     // Query task with conversation
     let task_resp = daemon
@@ -801,6 +817,9 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
 
     let conv = daemon.call_raw(&json!({"op": "start"})).unwrap();
     let conv = conv["id"].as_str().unwrap();
+    daemon
+        .call_raw(&json!({"op":"mode","conversation":conv,"autonomous":true}))
+        .unwrap();
     daemon
         .call_raw(&json!({"op": "send", "conversation": conv, "text": "please propose"}))
         .unwrap();
@@ -1130,7 +1149,7 @@ fn ledger_protocol_preserves_exact_diff_approval_revision_and_idempotency() {
     let run_id = run["id"].as_str().unwrap();
     let text = "Never split 👩‍💻 or combining e\u{301}; preserve every qualifier.";
     let source=daemon.call_raw(&json!({"op":"add_ledger_source","conversation":conversation,"run_id":run_id,"text":text})).unwrap();
-    let change = json!({"conversation":conversation,"run_id":run_id,"expected_spec_revision":0,"operation_id":"create-requirement-once","reason":"User adds explicit scope","entries":[{"id":"REQ-1","kind":"requirement","source":{"source_id":source["id"],"start":0,"end":text.len()},"interpretation":"Preserve grapheme clusters and qualifiers","criteria":[{"id":"REQ-1.C1","text":"Independently exercise ZWJ and combining sequences","mandatory":true}]}]});
+    let change = json!({"conversation":conversation,"run_id":run_id,"expected_spec_revision":0,"operation_id":"create-requirement-once","reason":"User adds explicit scope","entries":[{"id":"REQ-1","source":{"source_id":source["id"],"start":0,"end":text.len()},"interpretation":"Preserve grapheme clusters and qualifiers","criteria":[{"id":"REQ-1.C1","text":"Independently exercise ZWJ and combining sequences","mandatory":true}]}]});
     let proposal = daemon
         .call_raw(&json!({"op":"propose_ledger_change","change":change}))
         .unwrap();
@@ -1369,4 +1388,15 @@ fn history_reference_pages_stream_large_rounds_and_mail_without_hydrating_them()
         }
         assert_eq!(restored, text);
     }
+}
+
+#[test]
+fn removed_ledger_endpoint_is_rejected() {
+    assert!(
+        serde_json::from_value::<Request>(
+            json!({"op":"list_plan_items","query":{"conversation":"c","run_id":"r"}})
+        )
+        .is_err()
+    );
+    assert!(serde_json::from_value::<Request>(json!({"op":"list_requirements","query":{"conversation":"c","run_id":"r","kind":"requirement"}})).is_err());
 }

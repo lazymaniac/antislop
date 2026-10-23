@@ -9,10 +9,10 @@ the old runtime, its context reader, recovery/proof machinery and requirement
 audits were deleted once the lean core handled "analyze the project
 architecture" end to end.
 
-Schema 7 adds [versioned requirement and plan-item ledgers](requirement-ledgers.md),
+Schema 11 provides [versioned requirements, tasks and evidence](requirement-ledgers.md),
 run revisions, independent integrated-result evidence and TUI scope editing.
 The historical notes below describe earlier milestones; the ledger document
-defines the current completion and legacy-recovery contract.
+defines the current completion and database compatibility contract.
 
 ## Principles
 
@@ -251,17 +251,16 @@ the user's version recoverable.
 - `pauses(conversation_id)` and `modes(conversation_id, autonomous)` — what
   the user set for a conversation.
 
-`PRAGMA user_version` holds database schema version 6 (independent of the TOML
-configuration's `schema_version = 1`). Opening an older database migrates it:
-1 → 2 adds event timestamps; 2 → 3 adds process-group IDs; 3 → 4 adds plan
-associations; 4 → 5 adds compact task feedback; 5 → 6 rebuilds the events table
-transactionally to permit daemon-wide events with a NULL conversation id.
-Existing event sequence IDs, plan associations, payloads and timestamps are
-preserved, and both event indexes are recreated. Per-conversation reads include
-global config events without exposing another conversation's private events.
-A binary that only supports an older database schema refuses version 6 rather
-than rewriting it; downgrade requires a pre-migration backup. An agent's details
-show its time in turns where both ends are known.
+`PRAGMA user_version` holds database schema version 11 (independent of the TOML
+configuration's `schema_version = 1`). Only version 11 and genuinely empty
+unmarked databases can open. Initialization is transactional. Older, newer or
+unmarked nonempty files are rejected before DDL or journal changes. Stop the
+daemon, manually archive `.antislop/`, then restart for a fresh state; the app
+never archives or deletes it automatically. Restart client and daemon together.
+History tables are created directly without backfills.
+Per-conversation reads include global config events while keeping private events
+scoped to their conversation. An agent's details show time when both ends are known.
+
 
 Writer worktrees live in `<state>/worktrees/<task>`, removed after a clean
 integration. A real nine-task analysis of this repository (40 agent turns,

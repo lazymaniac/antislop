@@ -3,7 +3,7 @@ R005	requirements	Failing to obtain necessary clarification.	Identify unknowns t
 R119	requirements	Missing prohibitions and negative requirements in context.	Compare the complete source with role packages.
 R191	requirements	A requirement disappears during extraction from a long source.	Compare independent extraction with the ledger.
 R192	requirements	A partially satisfied requirement is marked complete.	Check every criterion and qualifier separately.
-R193	requirements	A plan step is silently removed or replaced.	Compare PlanItemLedger with the original plan.
+R193	requirements	A plan step is silently removed or replaced.	Compare source-backed requirements with every mandatory user-prescribed step.
 R197	requirements	An aggregate checkbox hides unexamined subitems.	Check results for atomic items.
 R319	requirements	A requirement permits materially different interpretations.	Construct competing interpretations and check whether the source distinguishes them, clarifying differences that affect acceptance.
 R320	requirements	An acceptance criterion cannot objectively distinguish fulfillment from nonfulfillment.	Identify the observable outcome, checking conditions, and acceptance boundary appropriate to the task without inventing numerical thresholds.

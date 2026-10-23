@@ -151,7 +151,6 @@ pub struct TaskVerdictInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanHistory {
-    pub ledger_mode: String,
     pub run_id: Option<String>,
     pub id: String,
     pub conversation_id: String,
@@ -264,25 +263,42 @@ impl TurnStatus {
 }
 
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
-/// Tables only ever get added; a change to an existing one raises it and
-/// migrates from the version found.
-const SCHEMA: u32 = 9;
+/// Incompatible databases are never modified or migrated.
+const SCHEMA: u32 = 11;
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let found: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let nonempty: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*')",
+            [],
+            |row| row.get(0),
+        )?;
         crate::require(
-            found <= SCHEMA,
+            found == SCHEMA || (found == 0 && !nonempty),
             &format!(
-                "{} was written by a newer antislop (schema {found}, this one knows {SCHEMA})",
+                "{} has incompatible schema {found}; this build requires {SCHEMA}. Stop the daemon, manually archive the project's .antislop/ directory, then restart to create fresh state. No data was migrated or deleted; client and daemon must be restarted together.",
                 path.display()
             ),
         )?;
+        if found == 0 {
+            Self::initialize(&connection)?;
+        }
         connection.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
-             CREATE TABLE IF NOT EXISTS conversations(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
+        )?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+            content: super::content::Content::new(path),
+        })
+    }
+
+    fn initialize(connection: &Connection) -> Result<()> {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS conversations(
                id TEXT PRIMARY KEY, project TEXT NOT NULL, created_ms INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS session_workflow(
                conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
@@ -300,7 +316,7 @@ impl Store {
                started_ms INTEGER NOT NULL, finished_ms INTEGER, pid INTEGER);
              CREATE TABLE IF NOT EXISTS events(
                seq INTEGER PRIMARY KEY AUTOINCREMENT,
-               conversation_id TEXT NOT NULL REFERENCES conversations(id),
+               conversation_id TEXT REFERENCES conversations(id),
                turn_id TEXT, plan_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL,
                created_ms INTEGER NOT NULL DEFAULT 0);
              CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, seq);
@@ -343,62 +359,7 @@ impl Store {
                project TEXT PRIMARY KEY,
                trusted_ms INTEGER NOT NULL);",
         )?;
-        // 1 → 2: events got their time; earlier ones keep 0, unknown.
-        let timed: bool = connection.query_row(
-            "SELECT count(*) FROM pragma_table_info('events') WHERE name='created_ms'",
-            [],
-            |row| row.get(0),
-        )?;
-        if !timed {
-            connection.execute_batch(
-                "ALTER TABLE events ADD COLUMN created_ms INTEGER NOT NULL DEFAULT 0",
-            )?;
-        }
-        // 2 → 3: turns record their CLI's process group.
-        let tracked: bool = connection.query_row(
-            "SELECT count(*) FROM pragma_table_info('turns') WHERE name='pid'",
-            [],
-            |row| row.get(0),
-        )?;
-        if !tracked {
-            connection.execute_batch("ALTER TABLE turns ADD COLUMN pid INTEGER")?;
-        }
-        // 3 → 4: events, turns and comments associate with plan; plans table backfilled.
-        let event_plan: bool = connection.query_row(
-            "SELECT count(*) FROM pragma_table_info('events') WHERE name='plan_id'",
-            [],
-            |row| row.get(0),
-        )?;
-        if !event_plan {
-            connection.execute_batch("ALTER TABLE events ADD COLUMN plan_id TEXT")?;
-        }
-        let turn_plan: bool = connection.query_row(
-            "SELECT count(*) FROM pragma_table_info('turns') WHERE name='plan_id'",
-            [],
-            |row| row.get(0),
-        )?;
-        if !turn_plan {
-            connection.execute_batch("ALTER TABLE turns ADD COLUMN plan_id TEXT")?;
-        }
-        let comment_plan: bool = connection.query_row(
-            "SELECT count(*) FROM pragma_table_info('comments') WHERE name='plan_id'",
-            [],
-            |row| row.get(0),
-        )?;
-        if !comment_plan {
-            connection.execute_batch("ALTER TABLE comments ADD COLUMN plan_id TEXT")?;
-        }
-        // 4 → 5: tasks carry compact card feedback, tied to its round.
-        // Older rows keep `None`: their cards show no result, not a wrong one.
-        let card_feedback: bool = connection.query_row(
-            "SELECT count(*) FROM pragma_table_info('tasks') WHERE name='feedback'",
-            [],
-            |row| row.get(0),
-        )?;
-        if !card_feedback {
-            connection.execute_batch("ALTER TABLE tasks ADD COLUMN feedback TEXT")?;
-        }
-        connection.execute_batch(
+        transaction.execute_batch(
             "CREATE TABLE IF NOT EXISTS plans(
                id TEXT PRIMARY KEY,
                conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -406,44 +367,13 @@ impl Store {
              CREATE INDEX IF NOT EXISTS plans_by_conversation ON plans(conversation_id, created_ms);
              CREATE INDEX IF NOT EXISTS events_by_plan ON events(conversation_id, plan_id, seq);
              CREATE INDEX IF NOT EXISTS turns_by_plan ON turns(conversation_id, plan_id, started_ms);
-             INSERT OR IGNORE INTO plans(id, conversation_id, created_ms)
-               SELECT plan_id, conversation_id, MIN(created_ms) FROM tasks GROUP BY plan_id, conversation_id;
-             UPDATE turns SET plan_id = (
-               SELECT plan_id FROM tasks WHERE tasks.id = substr(turns.role, 8)
-             ) WHERE turns.plan_id IS NULL AND turns.role LIKE 'worker:%';
-             UPDATE turns SET plan_id = (
-               SELECT plan_id FROM tasks WHERE tasks.id = substr(turns.role, 10)
-             ) WHERE turns.plan_id IS NULL AND turns.role LIKE 'verifier:%';
-             UPDATE events SET plan_id = (
-               SELECT plan_id FROM turns WHERE turns.id = events.turn_id AND turns.plan_id IS NOT NULL
-             ) WHERE events.plan_id IS NULL AND events.turn_id IS NOT NULL;
-             UPDATE events SET plan_id = (
-               SELECT plan_id FROM tasks WHERE tasks.id = json_extract(events.payload, '$.task')
-             ) WHERE events.plan_id IS NULL AND events.kind = 'task' AND json_extract(events.payload, '$.task') IS NOT NULL;
-             UPDATE events SET plan_id = json_extract(events.payload, '$.plan')
-             WHERE events.plan_id IS NULL AND json_extract(events.payload, '$.plan') IS NOT NULL;",
+             ",
         )?;
-        // 5 → 6: global daemon events share the readable event stream.
-        if found < 6 {
-            let transaction = connection.unchecked_transaction()?;
-            transaction.execute_batch("CREATE TABLE events_v6(seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    conversation_id TEXT REFERENCES conversations(id), turn_id TEXT, plan_id TEXT,
-                    kind TEXT NOT NULL, payload TEXT NOT NULL, created_ms INTEGER NOT NULL DEFAULT 0);
-                INSERT INTO events_v6 SELECT seq,conversation_id,turn_id,plan_id,kind,payload,created_ms FROM events;
-                DROP TABLE events;
-                ALTER TABLE events_v6 RENAME TO events;
-                CREATE INDEX events_by_conversation ON events(conversation_id,seq);
-                CREATE INDEX events_by_plan ON events(conversation_id,plan_id,seq);")?;
-            transaction.pragma_update(None, "user_version", 6)?;
-            transaction.commit()?;
-        }
-        super::ledger::migrate(&connection)?;
-        Self::migrate_history(&connection)?;
-        connection.pragma_update(None, "user_version", SCHEMA)?;
-        Ok(Self {
-            connection: Mutex::new(connection),
-            content: super::content::Content::new(path),
-        })
+        transaction.execute_batch(include_str!("ledger/schema.sql"))?;
+        Self::initialize_history(&transaction)?;
+        transaction.pragma_update(None, "user_version", SCHEMA)?;
+        transaction.commit()?;
+        Ok(())
     }
 
     pub(super) fn decode_content(&self, text: &str) -> Result<String> {
@@ -2436,7 +2366,6 @@ impl Store {
             )
             .optional()?;
         Ok(PlanHistory {
-            ledger_mode: if run_id.is_some() { "ledger" } else { "legacy" }.into(),
             run_id,
             id: plan_id.to_string(),
             conversation_id: conversation.to_string(),
@@ -2455,6 +2384,85 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incompatible_databases_are_rejected_without_writes() {
+        for version in [0, 1, 5, 10, 12] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("core.db");
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(
+                "CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES('preserved');",
+            )
+            .unwrap();
+            db.pragma_update(None, "user_version", version).unwrap();
+            drop(db);
+            let bytes = std::fs::read(&path).unwrap();
+            let error = Store::open(&path).err().unwrap().to_string();
+            assert!(
+                error.contains("incompatible schema")
+                    && error.contains("archive")
+                    && error.contains(".antislop/"),
+                "{error}"
+            );
+            assert_eq!(bytes, std::fs::read(&path).unwrap());
+            assert!(!path.with_extension("db-wal").exists());
+        }
+    }
+
+    #[test]
+    fn current_schema_initializes_and_reopens_without_removed_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core.db");
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.conversations().unwrap()[0].id, conversation.id);
+        let db = store.db();
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+                .unwrap(),
+            SCHEMA
+        );
+        for (table, column) in [
+            ("ledger_entries", "kind"),
+            ("ledger_versions", "technical_goal"),
+            ("ledger_versions", "execution_check"),
+        ] {
+            let count: i64 = db
+                .query_row(
+                    "SELECT count(*) FROM pragma_table_info(?1) WHERE name=?2",
+                    params![table, column],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0);
+        }
+    }
+
+    #[test]
+    fn failed_initialization_is_atomic() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE ledger_versions(conflict TEXT);")
+            .unwrap();
+        assert!(Store::initialize(&db).is_err());
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE type='table'",
+                [],
+                |r| r.get::<_, u32>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert!(db.is_autocommit());
+    }
 
     #[test]
     fn deferred_plan_comment_claims_expire_after_user_input_or_plan_publication() {
@@ -2495,61 +2503,6 @@ mod tests {
             .append_event(id, None, None, "plan_proposed", &serde_json::json!({}))
             .unwrap();
         assert_eq!(store.pending_plan_comment_ids(id).unwrap(), None);
-    }
-
-    #[test]
-    fn schema_five_events_migrate_without_losing_history_or_plan_scope() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("core.db");
-        let store = Store::open(&path).unwrap();
-        let conversation = store.create_conversation("/project").unwrap();
-        let other = store.create_conversation("/project").unwrap();
-        store
-            .append_event(
-                &conversation.id,
-                None,
-                Some("p1"),
-                "notice",
-                &serde_json::json!({"text": "preserved"}),
-            )
-            .unwrap();
-        let before = store.events_since(&conversation.id, 0, 100).unwrap();
-        drop(store);
-        let db = Connection::open(&path).unwrap();
-        db.execute_batch("BEGIN;
-            CREATE TABLE events_v5(seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id TEXT NOT NULL REFERENCES conversations(id),
-                turn_id TEXT, plan_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL,
-                created_ms INTEGER NOT NULL DEFAULT 0);
-            INSERT INTO events_v5 SELECT seq,conversation_id,turn_id,plan_id,kind,payload,created_ms FROM events;
-            DROP TABLE events;
-            ALTER TABLE events_v5 RENAME TO events;
-            PRAGMA user_version=5;
-            COMMIT;").unwrap();
-        drop(db);
-        let store = Store::open(&path).unwrap();
-        let after = store.events_since(&conversation.id, 0, 100).unwrap();
-        assert_eq!(
-            serde_json::to_value(&before).unwrap(),
-            serde_json::to_value(&after).unwrap()
-        );
-        assert!(store.events_since(&other.id, 0, 100).unwrap().is_empty());
-        store
-            .publish_config_with_event(Path::new("config.toml"), || Ok(()))
-            .unwrap();
-        let own = store.events_since(&conversation.id, 0, 100).unwrap();
-        let shared = store.events_since(&other.id, 0, 100).unwrap();
-        assert_eq!(shared.len(), 1);
-        assert_eq!(shared[0].kind, "config_updated");
-        assert_eq!(own.last().unwrap().seq, shared[0].seq);
-        assert!(shared[0].seq > before.last().unwrap().seq);
-        let db = Connection::open(&path).unwrap();
-        assert_eq!(
-            db.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
-                .unwrap(),
-            SCHEMA
-        );
-        assert_eq!(db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('events_by_plan','events_by_conversation')", [], |row| row.get::<_, u32>(0)).unwrap(), 2);
     }
 
     #[test]
@@ -2610,33 +2563,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_event_migration_rolls_back_the_schema_and_releases_the_transaction() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("core.db");
-        drop(Store::open(&path).unwrap());
-        let db = Connection::open(&path).unwrap();
-        db.execute_batch("PRAGMA user_version=5; CREATE VIEW event_view AS SELECT * FROM events;")
-            .unwrap();
-        assert!(Store::open(&path).is_err());
-        assert_eq!(
-            db.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
-                .unwrap(),
-            5
-        );
-        let tables: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='events_v6'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(tables, 0);
-        db.execute_batch("DROP VIEW event_view;").unwrap();
-        drop(db);
-        assert!(Store::open(&path).is_ok());
-    }
-
-    #[test]
     fn a_newer_schema_is_refused_not_rewritten() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("core.db");
@@ -2651,32 +2577,7 @@ mod tests {
             .unwrap();
         drop(connection);
         let error = Store::open(&path).err().unwrap();
-        assert!(error.to_string().contains("newer antislop"), "{error}");
-    }
-
-    #[test]
-    fn a_schema_1_state_gains_event_times() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("core.db");
-        let old = Connection::open(&path).unwrap();
-        old.execute_batch(
-            "CREATE TABLE conversations(id TEXT PRIMARY KEY, project TEXT NOT NULL, created_ms INTEGER NOT NULL);
-             CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,
-               conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               turn_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL);
-             INSERT INTO conversations VALUES('c', '/p', 0);
-             INSERT INTO events(conversation_id,turn_id,kind,payload) VALUES('c',NULL,'old','{}');
-             PRAGMA user_version=1;",
-        )
-        .unwrap();
-        drop(old);
-        let store = Store::open(&path).unwrap();
-        store
-            .append_event("c", None, None, "new", &serde_json::json!({}))
-            .unwrap();
-        let events = store.events_since("c", 0, 10).unwrap();
-        assert_eq!(events[0].created_ms, 0, "unknown, not invented");
-        assert!(events[1].created_ms > 1_700_000_000_000);
+        assert!(error.to_string().contains("incompatible schema"), "{error}");
     }
 
     #[test]
@@ -2718,30 +2619,24 @@ mod tests {
     fn card_feedback_round_trips_and_rows_without_it_stay_readable() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("core.db");
-        // A database from before tasks carried card feedback.
-        let old = Connection::open(&path).unwrap();
-        old.execute_batch(
-            "CREATE TABLE conversations(id TEXT PRIMARY KEY, project TEXT NOT NULL, created_ms INTEGER NOT NULL);
-             CREATE TABLE tasks(id TEXT PRIMARY KEY,
-               conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               plan_id TEXT NOT NULL, position INTEGER NOT NULL, spec TEXT NOT NULL,
-               status TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 0,
-               report TEXT, verdict TEXT, base TEXT, result TEXT,
-               created_ms INTEGER NOT NULL);
-             INSERT INTO conversations VALUES('c', '/p', 0);
-             INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms)
-               VALUES('u1','c','p1',0,'{\"id\":\"t1\"}','queued',0);
-             PRAGMA user_version=4;",
-        )
-        .unwrap();
-        drop(old);
         let store = Store::open(&path).unwrap();
+        store
+            .db()
+            .execute_batch(
+                "INSERT INTO conversations VALUES('c','/p',0);
+            INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms)
+            VALUES('u1','c','p1',0,'{\"id\":\"t1\"}','queued',0);",
+            )
+            .unwrap();
         let before = store.plan("p1").unwrap().remove(0);
         assert_eq!(before.status, "queued");
-        assert_eq!(before.feedback, None, "an old row shows no card result");
+        assert_eq!(
+            before.feedback, None,
+            "a task without feedback shows no card result"
+        );
         assert_eq!(store.task_by_id("u1").unwrap().unwrap().feedback, None);
 
-        // The new column round-trips through both read paths.
+        // Feedback round-trips through both read paths.
         let feedback = serde_json::json!({"round": 2, "integration": {"outcome": "applied"}});
         store
             .update_task(&Task {

@@ -33,7 +33,7 @@ Incomplete relative to design.md:
 
 Ledgers and quality gates (§3, §6.4-6.7, §7.6, §10.1, M2Q):
 
-- [x] Runtime RequirementLedger and PlanItemLedger: atomic requirements, statuses (identified..verified/stale/superseded_by_user), evidence, parents/children (§6.6).
+- [x] Runtime requirements, tasks and evidence: atomic requirements, statuses (identified..verified/stale/superseded_by_user), evidence, parents/children (§6.6).
 - [x] Run spec_revision; versioned requirements/steps, dependent-task/evidence invalidation, process cancellation, and rejection of old results after scope changes (§6.3, scenario 31).
 - [ ] Invalidate future ContextModel/SolutionModel and ChecklistDefinition records when changed (§6.3).
 - [ ] ContextModel, Unknown register, SolutionModel, SimulationCase, TraceabilityMap records with runtime-enforced context_ready, plan_ready, solution_selected, requirements_complete gates (§6.4-6.5).
@@ -42,14 +42,14 @@ Ledgers and quality gates (§3, §6.4-6.7, §7.6, §10.1, M2Q):
 - [ ] ChecklistDefinition as a versioned catalog with content_hash: shared V01-V08 and extensions for every verifier role (§7.6).
 - [ ] Runtime rejection of reports with empty checklist items, missing risks, stale evidence, or unauthorized authors (scenario 30).
 - [ ] InputDomainMatrix, ChangeRisk, DependencyDecision, LicenseAssessment, RefactorReport records rather than prompt-only obligations (§10.1, §12.2).
-- [x] ComplianceAudit: full sources, both ledgers, and integrated result; independent audit verification and requirements_complete gate (§6.6, scenarios 27-29).
+- [x] ComplianceAudit: full sources, requirements and task evidence, and integrated result; independent audit verification and requirements_complete gate (§6.6, scenarios 27-29).
 - [ ] Runtime tests rather than prompts alone for acceptance scenarios 11, 19-23, 34-40 (§18).
 - [ ] Evidence invalidation graph and QualityGate (required_check_ids, input_hashes, invalidation_dependencies) (§10.1).
 
 TUI (§8):
 
 - [ ] Agent detail tabs: Overview (merged with Session), Artifacts, Findings, Messages, Evidence, Checks. Artifacts, Findings, Evidence are missing as separate tabs (§8.4).
-- [x] Requirements and Plan items from chat/palette; sources, criteria, tasks, evidence, history; manual forms, impact preview, diff approval, draft preservation (§6.6, §8.4).
+- [x] Requirements from chat/palette; sources, criteria, tasks, evidence, history; manual forms, impact preview, diff approval, draft preservation (§6.6, §8.4).
 - [ ] Remaining run views: Options, Risks, Quality gates (§8.4).
 - [ ] Graph relationship filters (supervises, depends_on, verifies, communicates_with) and communication-edge highlights with time/count (§8.3).
 - [ ] All 12 node statuses (queued, starting, running, waiting_agent, waiting_user, verifying, changes_requested, paused, blocked, failed, completed, cancelled), with text/symbols and optional color (§8.3).

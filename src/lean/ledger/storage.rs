@@ -25,43 +25,38 @@ fn relations(
     Ok(db.prepare("SELECT target FROM ledger_relations WHERE run_id=?1 AND entry_id=?2 AND version=?3 AND kind=?4 ORDER BY target")?.query_map(params![run,id,version,kind], |r| r.get(0))?.collect::<std::result::Result<_,_>>()?)
 }
 fn entries(db: &Connection, run: &str, revision: i64) -> Result<Vec<LedgerEntry>> {
-    let mut stmt = db.prepare("SELECT v.entry_id,e.kind,v.version,v.spec_revision,v.source_id,v.start_byte,v.end_byte,v.original,v.interpretation,v.mandatory,v.position,v.technical_goal,v.execution_check,v.disposition
+    let mut stmt = db.prepare("SELECT v.entry_id,v.version,v.spec_revision,v.source_id,v.start_byte,v.end_byte,v.original,v.interpretation,v.mandatory,v.position,v.disposition
       FROM ledger_versions v JOIN ledger_entries e ON e.run_id=v.run_id AND e.id=v.entry_id
       WHERE v.run_id=?1 AND v.spec_revision<=?2 AND v.version=(SELECT max(w.version) FROM ledger_versions w WHERE w.run_id=v.run_id AND w.entry_id=v.entry_id AND w.spec_revision<=?2) ORDER BY v.position,v.entry_id")?;
     let rows = stmt
         .query_map(params![run, revision], |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
+                r.get::<_, i64>(1)?,
                 r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, String>(4)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)? as usize,
                 r.get::<_, i64>(5)? as usize,
-                r.get::<_, i64>(6)? as usize,
+                r.get::<_, String>(6)?,
                 r.get::<_, String>(7)?,
-                r.get::<_, String>(8)?,
-                r.get::<_, bool>(9)?,
-                r.get::<_, u32>(10)?,
-                r.get::<_, Option<String>>(11)?,
-                r.get::<_, Option<String>>(12)?,
-                r.get::<_, String>(13)?,
+                r.get::<_, bool>(8)?,
+                r.get::<_, u32>(9)?,
+                r.get::<_, String>(10)?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut sources = HashMap::<String, String>::new();
-    rows.into_iter().map(|(id,kind,version,spec_revision,source_id,start,end,_original,interpretation,mandatory,position,technical_goal,check,disposition)| {
+    rows.into_iter().map(|(id,version,spec_revision,source_id,start,end,_original,interpretation,mandatory,position,disposition)| {
         let criteria = db.prepare("SELECT id,text,mandatory,integration FROM ledger_criteria WHERE run_id=?1 AND entry_id=?2 AND version=?3 ORDER BY id")?.query_map(params![run,id,version], |r| Ok(Criterion{id:r.get(0)?,text:r.get(1)?,mandatory:r.get(2)?,integration:r.get(3)?}))?.collect::<std::result::Result<_,_>>()?;
         let state=std::path::Path::new(db.path().unwrap_or("")).parent().ok_or_else(||invalid("ledger database has no source directory"))?;
         if !sources.contains_key(&source_id) {sources.insert(source_id.clone(),source_text(db,run,&source_id,state)?);}
         let original=SourceSpan{source_id:source_id.clone(),start,end}.text(&sources[&source_id])?.to_owned();
         Ok(LedgerEntry{run_id:run.into(),version,spec_revision,original,status:"identified".into(),spec:EntrySpec{
-            kind:if kind=="requirement" {LedgerKind::Requirement} else {LedgerKind::PlanItem},
-            source:SourceSpan{source_id,start,end}, interpretation,mandatory,position,technical_goal,check,
+            source:SourceSpan{source_id,start,end}, interpretation,mandatory,position,
             disposition:serde_json::from_value(serde_json::Value::String(disposition))?, criteria,
             qualifiers:relations(db,run,&id,version,"qualifier")?,
             parent:relations(db,run,&id,version,"parent")?.into_iter().next(),
             depends_on:relations(db,run,&id,version,"dependency")?,
-            requirement_ids:relations(db,run,&id,version,"requirement")?,
             task_ids:relations(db,run,&id,version,"task")?,
             implementation_owners:relations(db,run,&id,version,"implementer")?,
             verification_owners:relations(db,run,&id,version,"verifier")?, id,
@@ -121,40 +116,18 @@ fn checked_graph(all: &[EntrySpec]) -> Result<()> {
             }),
             "criteria need unique identities and nonempty text",
         )?;
-        if e.kind == LedgerKind::PlanItem && e.disposition == Disposition::Active {
-            require(!e.task_ids.is_empty(), "plan item needs task assignments")?;
-            if e.requirement_ids.is_empty() {
-                require(
-                    e.technical_goal
-                        .as_ref()
-                        .is_some_and(|s| !s.trim().is_empty())
-                        && e.check.as_ref().is_some_and(|s| !s.trim().is_empty()),
-                    "technical plan item needs a goal and execution check",
-                )?;
-            }
-        }
         if let Some(parent) = &e.parent {
             require(
-                index.get(parent.as_str()).is_some_and(|p| p.kind == e.kind),
-                &format!(
-                    "entry {} has unknown or incompatible parent {parent}; parent must exist and have the same kind; link plan items to requirements using requirement_ids",
-                    e.id
-                ),
+                index.contains_key(parent.as_str()),
+                &format!("entry {} has unknown parent {parent}", e.id),
             )?;
         }
-        for id in e.depends_on.iter().chain(e.requirement_ids.iter()) {
+        for id in e.depends_on.iter() {
             require(index.contains_key(id.as_str()), "unknown ledger dependency")?;
-        }
-        for id in &e.requirement_ids {
-            require(
-                index[id.as_str()].kind == LedgerKind::Requirement,
-                "plan requirement link points to a plan item",
-            )?;
         }
         if all
             .iter()
             .any(|child| child.parent.as_deref() == Some(&e.id))
-            && e.kind == LedgerKind::Requirement
             && e.mandatory
         {
             require(
@@ -174,16 +147,6 @@ fn checked_graph(all: &[EntrySpec]) -> Result<()> {
                 todo.push(dep);
             }
         }
-        require(
-            match e.kind {
-                LedgerKind::Requirement => matches!(
-                    e.disposition,
-                    Disposition::Active | Disposition::SupersededByUser
-                ),
-                LedgerKind::PlanItem => e.disposition != Disposition::SupersededByUser,
-            },
-            "disposition is incompatible with ledger kind",
-        )?;
     }
     Ok(())
 }
@@ -199,7 +162,6 @@ fn impact(
         for e in all {
             if e.depends_on
                 .iter()
-                .chain(e.requirement_ids.iter())
                 .chain(e.parent.iter())
                 .any(|id| ids.contains(id))
                 || all
@@ -273,8 +235,7 @@ fn validate_change(
     let mut changed = HashSet::new();
     for e in &change.entries {
         require(changed.insert(e.id.clone()), "duplicate change identity")?;
-        if let Some(old) = after.get(&e.id) {
-            require(old.kind == e.kind, "ledger kind cannot change")?;
+        if after.contains_key(&e.id) {
             // A user decision is required for every semantic edit to an existing obligation.
             require(
                 user,
@@ -688,8 +649,8 @@ impl Store {
             // retain the span, never duplicate a repository document.
             let original = "";
             tx.execute(
-                "INSERT OR IGNORE INTO ledger_entries(run_id,id,kind) VALUES(?1,?2,?3)",
-                params![change.run_id, e.id, e.kind.name()],
+                "INSERT OR IGNORE INTO ledger_entries(run_id,id) VALUES(?1,?2)",
+                params![change.run_id, e.id],
             )?;
             let version:i64=tx.query_row("SELECT coalesce(max(version),0)+1 FROM ledger_versions WHERE run_id=?1 AND entry_id=?2",params![change.run_id,e.id],|r|r.get(0))?;
             changed_versions.push(serde_json::json!({"id":e.id,"version":version}));
@@ -697,7 +658,23 @@ impl Store {
                 .as_str()
                 .unwrap()
                 .to_owned();
-            tx.execute("INSERT INTO ledger_versions VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",params![change.run_id,e.id,version,diff.to_revision,e.source.source_id,e.source.start as i64,e.source.end as i64,original,e.interpretation,e.mandatory,e.position,e.technical_goal,e.check,disposition])?;
+            tx.execute(
+                "INSERT INTO ledger_versions VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                params![
+                    change.run_id,
+                    e.id,
+                    version,
+                    diff.to_revision,
+                    e.source.source_id,
+                    e.source.start as i64,
+                    e.source.end as i64,
+                    original,
+                    e.interpretation,
+                    e.mandatory,
+                    e.position,
+                    disposition
+                ],
+            )?;
             for c in &e.criteria {
                 tx.execute(
                     "INSERT INTO ledger_criteria VALUES(?1,?2,?3,?4,?5,?6,?7)",
@@ -715,7 +692,6 @@ impl Store {
             for (kind, values) in [
                 ("parent", e.parent.iter().cloned().collect()),
                 ("dependency", e.depends_on.clone()),
-                ("requirement", e.requirement_ids.clone()),
                 ("task", e.task_ids.clone()),
                 ("qualifier", e.qualifiers.clone()),
                 ("implementer", e.implementation_owners.clone()),
@@ -863,6 +839,8 @@ impl Store {
             "stale task generation; result retained in turn history",
         )?;
         let db = self.db();
+        let bound: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM task_inputs i JOIN task_ledger_inputs l ON l.task_id=i.task_id WHERE i.task_id=?1)", [&task.id], |r|r.get(0))?;
+        require(bound, "integrity error: task has no requirement inputs")?;
         let stale:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM task_ledger_inputs l JOIN task_inputs i ON i.task_id=l.task_id WHERE l.task_id=?1 AND l.version<>(SELECT max(v.version) FROM ledger_versions v WHERE v.run_id=i.run_id AND v.entry_id=l.entry_id))",[&task.id],|r|r.get(0))?;
         require(!stale, "task ledger inputs changed; replan before resuming")
     }
@@ -871,7 +849,6 @@ impl Store {
         let all = self.ledger_entries(conversation, run_id, None)?;
         let tasks = self.plan(plan)?;
         let mut covered = HashSet::new();
-        let mut assignments = HashSet::new();
         let prior = self.run_tasks(conversation, run_id)?;
         for task in prior
             .iter()
@@ -880,53 +857,15 @@ impl Store {
             if self.assert_task_inputs(task).is_ok() {
                 let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
                 covered.extend(spec.criterion_ids);
-                assignments.extend(spec.plan_item_ids);
             }
         }
         let mut db = self.db();
         let tx = db.transaction()?;
         for t in &tasks {
             let spec: TaskSpec = serde_json::from_value(t.spec.clone())?;
-            require(
-                !spec.requirement_ids.is_empty() || !spec.plan_item_ids.is_empty(),
-                "technical task needs a linked plan item with goal and execution check",
-            )?;
-            let ids: HashSet<_> = spec
-                .requirement_ids
-                .iter()
-                .chain(spec.plan_item_ids.iter())
-                .collect();
-            for id in &spec.requirement_ids {
-                require(
-                    all.iter().any(|e| {
-                        e.spec.id == *id
-                            && e.spec.kind == LedgerKind::Requirement
-                            && e.spec.disposition == Disposition::Active
-                    }),
-                    "unknown or inactive task requirement",
-                )?;
-            }
-            for id in &spec.plan_item_ids {
-                require(
-                    all.iter().any(|e| {
-                        e.spec.id == *id
-                            && e.spec.kind == LedgerKind::PlanItem
-                            && e.spec.disposition == Disposition::Active
-                    }),
-                    "unknown or inactive task plan item",
-                )?;
-                assignments.insert(id.clone());
-            }
-            for id in &spec.criterion_ids {
-                require(
-                    all.iter().any(|e| {
-                        spec.requirement_ids.contains(&e.spec.id)
-                            && e.spec.criteria.iter().any(|c| c.id == *id)
-                    }),
-                    "task criterion is not owned by a linked requirement",
-                )?;
-                covered.insert(id.clone());
-            }
+            super::validate_task_links(&spec, &all)?;
+            covered.extend(spec.criterion_ids.iter().cloned());
+            let ids: HashSet<_> = spec.requirement_ids.iter().collect();
             tx.execute("INSERT INTO task_inputs(task_id,run_id) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET run_id=excluded.run_id",params![t.id,run_id])?;
             tx.execute("DELETE FROM task_ledger_inputs WHERE task_id=?1", [&t.id])?;
             for id in ids {
@@ -951,12 +890,8 @@ impl Store {
                         .chain(prior.iter().filter(|t| t.status == "approved"))
                         .any(|t| {
                             (t.id == *assigned || t.spec["id"].as_str() == Some(assigned))
-                                && serde_json::from_value::<TaskSpec>(t.spec.clone()).is_ok_and(
-                                    |s| {
-                                        s.requirement_ids.contains(&e.spec.id)
-                                            || s.plan_item_ids.contains(&e.spec.id)
-                                    },
-                                )
+                                && serde_json::from_value::<TaskSpec>(t.spec.clone())
+                                    .is_ok_and(|s| s.requirement_ids.contains(&e.spec.id))
                         }),
                     &format!(
                         "ledger assignment {} -> {assigned} is not honored by the task plan",
@@ -964,28 +899,8 @@ impl Store {
                     ),
                 )?;
             }
-            if e.spec.kind == LedgerKind::Requirement && e.spec.mandatory {
-                require(
-                    e.spec.criteria.iter().any(|c| c.mandatory),
-                    &format!(
-                        "mandatory requirement {} needs clarification and acceptance criteria",
-                        e.spec.id
-                    ),
-                )?;
-                for c in e.spec.criteria.iter().filter(|c| c.mandatory) {
-                    require(
-                        covered.contains(&c.id),
-                        &format!("mandatory criterion {} has no task", c.id),
-                    )?;
-                }
-            }
-            if e.spec.kind == LedgerKind::PlanItem {
-                require(
-                    assignments.contains(&e.spec.id),
-                    &format!("plan item {} has no linked task", e.spec.id),
-                )?;
-            }
         }
+        super::validate_criterion_coverage(&all, &covered)?;
         tx.commit()?;
         Ok(())
     }
@@ -1126,7 +1041,7 @@ impl Store {
         )?;
         let linked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM task_ledger_inputs WHERE task_id=?1 AND entry_id=?2 AND version=?3)",params![p.task_id,p.entry_id,p.entry_version],|r|r.get(0))?;
         require(linked, "evidence task does not implement this obligation")?;
-        if e.spec.kind == LedgerKind::Requirement {
+        {
             let spec: String =
                 tx.query_row("SELECT spec FROM tasks WHERE id=?1", [&p.task_id], |r| {
                     r.get(0)
@@ -1188,10 +1103,8 @@ impl Store {
             let mut linked: Vec<_> = task_rows
                 .iter()
                 .filter(|(_, s, _, _, _, _)| {
-                    serde_json::from_str::<TaskSpec>(s).is_ok_and(|s| {
-                        s.requirement_ids.contains(&e.spec.id)
-                            || s.plan_item_ids.contains(&e.spec.id)
-                    })
+                    serde_json::from_str::<TaskSpec>(s)
+                        .is_ok_and(|s| s.requirement_ids.contains(&e.spec.id))
                 })
                 .collect();
             if let Some(latest_plan) = linked.first().map(|t| t.5.clone()) {
@@ -1225,11 +1138,7 @@ impl Store {
                 "stale"
             } else if !linked.is_empty() && linked.iter().all(|(_, _, s, _, _, _)| s == "approved")
             {
-                if e.spec.kind == LedgerKind::Requirement {
-                    "implemented"
-                } else {
-                    "executed"
-                }
+                "implemented"
             } else if linked
                 .iter()
                 .any(|(_, _, s, _, _, _)| matches!(s.as_str(), "working" | "verifying"))
@@ -1244,10 +1153,8 @@ impl Store {
                 "blocked"
             } else if !linked.is_empty() {
                 "planned"
-            } else if e.spec.criteria.is_empty() && e.spec.kind == LedgerKind::Requirement {
+            } else if e.spec.criteria.is_empty() {
                 "clarification_needed"
-            } else if e.spec.kind == LedgerKind::PlanItem {
-                "pending"
             } else {
                 "identified"
             }
@@ -1263,8 +1170,7 @@ impl Store {
                             c.spec.disposition == Disposition::Active
                                 && ((c.spec.mandatory
                                     && c.spec.parent.as_deref() == Some(&e.spec.id))
-                                    || e.spec.depends_on.contains(&c.spec.id)
-                                    || e.spec.requirement_ids.contains(&c.spec.id))
+                                    || e.spec.depends_on.contains(&c.spec.id))
                                 && c.status != "verified"
                         })
                 })
@@ -1275,23 +1181,13 @@ impl Store {
             }
             for e in &mut all {
                 if invalid.contains(&e.spec.id) {
-                    e.status = if e.spec.kind == LedgerKind::Requirement {
-                        "implemented"
-                    } else {
-                        "executed"
-                    }
-                    .into();
+                    e.status = "implemented".into();
                 }
             }
         }
         Ok(all)
     }
-    pub fn list_ledger(
-        &self,
-        query: &LedgerQuery,
-        kind: LedgerKind,
-        fingerprint: &str,
-    ) -> Result<LedgerPage> {
+    pub fn list_ledger(&self, query: &LedgerQuery, fingerprint: &str) -> Result<LedgerPage> {
         let run = self.run(&query.conversation, &query.run_id)?;
         let linked_ids: Option<HashSet<String>> = if let Some(task) = &query.task {
             Some(self.db().prepare("SELECT l.entry_id FROM task_ledger_inputs l JOIN task_inputs i ON i.task_id=l.task_id JOIN tasks t ON t.id=i.task_id WHERE i.run_id=?1 AND (t.id=?2 OR json_extract(t.spec,'$.id')=?2)")?.query_map(params![query.run_id,task],|r|r.get(0))?.collect::<std::result::Result<_,_>>()?)
@@ -1307,16 +1203,9 @@ impl Store {
             )?
             .into_iter()
             .filter(|e| {
-                e.spec.kind == kind
-                    && query.status.as_ref().is_none_or(|s| *s == e.status)
+                query.status.as_ref().is_none_or(|s| *s == e.status)
                     && (!query.missing_coverage
-                        || !matches!(
-                            e.status.as_str(),
-                            "verified"
-                                | "superseded_by_user"
-                                | "replaced_by_user"
-                                | "withdrawn_by_user"
-                        ))
+                        || !matches!(e.status.as_str(), "verified" | "superseded_by_user"))
                     && linked_ids
                         .as_ref()
                         .is_none_or(|ids| ids.contains(&e.spec.id))
@@ -1351,7 +1240,7 @@ impl Store {
         }
         for e in &all {
             if e.spec.disposition == Disposition::Active
-                && (e.spec.mandatory || e.spec.kind == LedgerKind::PlanItem)
+                && e.spec.mandatory
                 && e.status != "verified"
             {
                 gaps.push(format!(

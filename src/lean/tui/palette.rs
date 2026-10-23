@@ -20,7 +20,6 @@ pub enum Command {
     InterviewQuestion,
     ApproveRequirements,
     Requirements,
-    PlanItems,
     Config,
     Accept,
     Reject,
@@ -47,7 +46,7 @@ pub enum Command {
     Projects,
 }
 
-const COMMANDS: [(Command, &str); 28] = [
+const COMMANDS: [(Command, &str); 27] = [
     (
         Command::InterviewQuestion,
         "Open pending interview question · /interview",
@@ -59,10 +58,6 @@ const COMMANDS: [(Command, &str); 28] = [
     (
         Command::Requirements,
         "Browse and edit requirements · /requirements",
-    ),
-    (
-        Command::PlanItems,
-        "Browse and edit plan items · /plan-items",
     ),
     (Command::Config, "Edit configuration live · /config"),
     (Command::Accept, "Accept proposed plan · Ctrl+A"),

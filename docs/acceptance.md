@@ -58,7 +58,7 @@ verification against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8` is in
 | 39 | Sham alternatives or unequal benchmark conditions | Options and performance obligations: real alternatives under the same conditions | prompt |
 | 40 | An experiment shows a better variant | Report the better variant or broken premise explicitly with evidence; the options selection remains binding unless a departure is explicitly justified. The verifier checks the implementation and departure evidence independently. No silent switch or automatic plan stop | prompt: options checklist and writer/verifier binding instructions; runtime with scripted CLIs: `lean_options::only_verifier_verdict_can_approve_worker_claims_and_departures` |
 
-RequirementLedger, PlanItemLedger and the requirements completion gate are
+Requirements, task evidence and the requirements completion gate are
 implemented as [versioned records](requirement-ledgers.md). The remaining
 models listed below still use the lean obligation approach.
 

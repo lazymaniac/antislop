@@ -117,9 +117,6 @@ pub enum Request {
     ListRequirements {
         query: super::ledger::LedgerQuery,
     },
-    ListPlanItems {
-        query: super::ledger::LedgerQuery,
-    },
     GetLedgerEntry {
         conversation: String,
         run_id: String,
@@ -408,9 +405,6 @@ enum WireRequest {
     ListRequirements {
         query: super::ledger::LedgerQuery,
     },
-    ListPlanItems {
-        query: super::ledger::LedgerQuery,
-    },
     GetLedgerEntry {
         conversation: String,
         run_id: String,
@@ -694,7 +688,6 @@ impl From<Request> for WireRequest {
             },
 
             Request::ListRequirements { query } => WireRequest::ListRequirements { query },
-            Request::ListPlanItems { query } => WireRequest::ListPlanItems { query },
             Request::GetLedgerEntry {
                 conversation,
                 run_id,
@@ -1109,7 +1102,6 @@ impl From<WireRequest> for Request {
             },
 
             WireRequest::ListRequirements { query } => Request::ListRequirements { query },
-            WireRequest::ListPlanItems { query } => Request::ListPlanItems { query },
             WireRequest::GetLedgerEntry {
                 conversation,
                 run_id,
@@ -1606,12 +1598,9 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         }
         Request::ListRequirements { query } => {
             validate_project_conversation(core, project, &query.conversation)?;
-            json!(core.ledger_query(query, super::ledger::LedgerKind::Requirement)?)
+            json!(core.ledger_query(query)?)
         }
-        Request::ListPlanItems { query } => {
-            validate_project_conversation(core, project, &query.conversation)?;
-            json!(core.ledger_query(query, super::ledger::LedgerKind::PlanItem)?)
-        }
+
         Request::GetLedgerEntry {
             conversation,
             run_id,
