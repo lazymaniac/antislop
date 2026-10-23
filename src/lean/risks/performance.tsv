@@ -2,9 +2,14 @@ R137	performance	The plan works only at a small data scale.	Assess growth in cos
 R071	performance	Poor algorithmic complexity.	Measure scaling with growing input.
 R072	performance	N+1, unnecessary I/O, and repeated network calls.	Profile and count operations.
 R073	performance	Unbounded allocations, leaks, and missing streaming.	Profile memory under realistic load.
-R074	performance	Race conditions, deadlocks, and starvation.	Run concurrency tests and inspect the lock graph.
+R074	performance	Contention, excessive serialization, deadlocks, or starvation prevent required throughput and latency.	Measure waiting and progress under concurrent load and inspect synchronization bottlenecks and the lock graph.
 R075	performance	Blocking the event loop or TUI thread.	Measure input latency and trace long operations.
-R076	performance	Incorrect retries and missing idempotency or cancellation.	Inject faults and interrupt execution.
+R076	performance	Retries amplify load or cancelled work continues consuming resources.	Inject dependency failures and cancel work under load and measure retry volume and resource use until the work stops.
 R077	performance	Incorrect caching and stale data.	Change inputs and check invalidation.
-R079	performance	An unrepresentative benchmark or missing baseline.	Review data, environment, and methodology.
+R079	performance	An unrepresentative benchmark or missing baseline omits relevant operating conditions, including cold start and warmed operation.	Review data, environment, and methodology and separately measure startup, first use, and steady operation with controlled cache state where relevant.
 R080	performance	Optimization breaks semantics or increases code complexity.	Run behavior tests and analyze trade-offs.
+R294	performance	Average results hide unacceptable latency for a subset of operations.	Inspect latency distributions and relevant percentiles for important scenarios against their requirements.
+R295	performance	Work arrives faster than it can be processed and the backlog keeps growing.	Increase arrival rate and measure queue lengths, waiting time, admission control, and recovery after overload.
+R296	performance	Short measurements miss performance degradation during sustained operation.	Run a sufficiently long workload and inspect trends in latency, resource use, and periodic maintenance costs.
+R297	performance	An optimization moves cost outside the measured section instead of reducing the full scenario's cost.	Compare end-to-end work including preparation, background processing, cleanup, and consumption of relevant resources.
+R298	performance	An apparent improvement is measurement noise or an environmental disturbance.	Repeat comparisons under controlled conditions and assess variability and effect size before attributing improvement to the change.

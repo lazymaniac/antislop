@@ -1601,7 +1601,16 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         }
         Performance => {
             "benchmark representative and compared to a baseline under the same \
-             conditions; semantics unchanged"
+             conditions; semantics unchanged; latency distributions checked \
+             against requirements rather than averages alone; queue growth, \
+             admission control and recovery under overload assessed where \
+             relevant; sustained operation covers degradation and periodic \
+             costs where relevant; cold start, first use and warmed operation \
+             measured separately where relevant; comparisons include the full \
+             scenario and relevant resource costs; claimed improvements exceed \
+             measurement noise with evidence from repeated comparisons; \
+             concurrency bottlenecks, retry amplification and resource use \
+             after cancellation assessed where relevant"
         }
         Integration => {
             "the combined change builds and passes checks as a whole; contracts \
