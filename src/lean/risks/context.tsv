@@ -24,3 +24,9 @@ R122	context	Losing qualifiers and provenance in summaries.	Compare summaries wi
 R123	context	A fact becomes outdated after a concurrent change.	Compare the fact's dependency hashes with current state.
 R124	context	Searching only for evidence supporting the first idea.	Inspect queries, rejected sources, and counterevidence.
 R125	context	Closing an unknown by inventing a convenient assumption.	Check how every unknown was resolved.
+R253	context	An empty search result is treated as proof that a mechanism does not exist.	Check search scope and exclusions and confirm absence through project structure and alternative queries.
+R254	context	Truncated tool output is treated as complete context.	Check output limits and pagination and read the remaining sections needed to support conclusions.
+R255	context	An inactive implementation is mistaken for the actual execution path.	Trace calls from the real entry point through dispatch and registration to the selected implementation.
+R256	context	Generated code is mistaken for the source that should be changed.	Inspect generators, templates, and build scripts and identify the authoritative source and regeneration procedure.
+R257	context	Instructions and convention exceptions scoped to the affected paths are not discovered.	Read instructions applicable to each affected path and check their scope and precedence.
+R258	context	Conflicting evidence is ignored or one source is selected without explanation.	Compare code, tests, documentation, and observed execution and explain discrepancies or retain them as unresolved.

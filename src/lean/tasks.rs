@@ -1502,7 +1502,13 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         }
         Context => {
             "every claim backed by files actually read; dependencies, contracts \
-             and conventions that matter are covered; open unknowns named"
+             and conventions that matter are covered; open unknowns named; \
+             search scope and exclusions checked before claiming absence; \
+             relevant reads complete despite output limits and pagination; \
+             active implementation traced from the real entry point; generated \
+             code distinguished from its authoritative source; instructions \
+             scoped to affected paths inspected; conflicting evidence explained \
+             or explicitly left unresolved"
         }
         Requirements => {
             "every requirement of the source found, including ones in the middle; \
