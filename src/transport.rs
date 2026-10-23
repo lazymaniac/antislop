@@ -1,5 +1,6 @@
 //! Bounded JSON frames. Reject duplicate keys before any intermediate Value
 //! can discard them, including keys inside internally tagged enum payloads.
+
 use crate::{Result, require};
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -10,6 +11,7 @@ use std::io::{BufRead, Read, Write};
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 
 struct Unique(Value);
+
 impl<'de> Deserialize<'de> for Unique {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         struct Json;
