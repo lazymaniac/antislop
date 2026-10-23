@@ -107,6 +107,19 @@ fn run_with_requirement(
         .unwrap();
     idle();
     let tasks = core.store.latest_plan(&conversation.id).unwrap();
+    for task in tasks.iter().filter(|task| task.spec["writes"] == true) {
+        let file = project.join(format!("result-{}.txt", task.spec["id"].as_str().unwrap()));
+        if task.status == "approved" {
+            let expected = if implementation == "selected" {
+                "A"
+            } else {
+                implementation
+            };
+            assert_eq!(std::fs::read_to_string(file).unwrap(), expected);
+        } else {
+            assert!(!file.exists(), "rejected implementation must not land");
+        }
+    }
     let calls = std::fs::read_to_string(dir.path().join("calls.jsonl"))
         .unwrap()
         .lines()
@@ -128,7 +141,13 @@ const REPORT: &str = "A: direct; B: index. Criteria: correctness, complexity. B 
 #[test]
 fn orchestrator_plan_is_completed_before_each_writer_runs() {
     for gates in [false, true] {
-        let (stored, calls, events) = run(json!({"tasks":[writer("w")]}), gates, REPORT, "A", "");
+        let (stored, calls, events) = run(
+            json!({"tasks":[writer("w")]}),
+            gates,
+            REPORT,
+            "selected",
+            "",
+        );
         let specs: Vec<TaskSpec> = stored
             .iter()
             .map(|t| serde_json::from_value(t.spec.clone()).unwrap())
@@ -157,13 +176,28 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
             let done = events
                 .iter()
                 .position(|e| e["task"] == option_row.id && e["status"] == "approved")
-                .unwrap();
+                .unwrap_or_else(|| {
+                    panic!(
+                        "options not approved: {:?}",
+                        stored
+                            .iter()
+                            .map(|t| (&t.spec["id"], &t.status, &t.report))
+                            .collect::<Vec<_>>()
+                    )
+                });
             let start = events
                 .iter()
                 .position(|e| e["task"] == writer_row.id && e["status"] == "working")
                 .unwrap();
             assert!(done < start);
             assert_eq!(writer_row.status, "approved");
+            // The generated gates are absent from the planner input. Check their
+            // own file bytes and verifier observations, not just prompt wording.
+            let written = calls.iter().find(|c| c["written"] == spec.id).unwrap();
+            assert_eq!(written["actual"], "A");
+            let verified = calls.iter().find(|c| c["verified"] == spec.title).unwrap();
+            assert_eq!(verified["files"][format!("result-{}.txt", spec.id)], "A");
+            assert_eq!(verified["approved"], true);
             let worker = calls
                 .iter()
                 .find(|c| c["worker"] == true && c["task"] == spec.id)
@@ -237,6 +271,16 @@ fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
         (departure, "B", true),
         // Same claim, different actual evidence: the verifier must reject it.
         (departure, "A", false),
+        (
+            r#"Departure: {"variant":"B","justification":"","evidence":"required-format.txt"}"#,
+            "B",
+            false,
+        ),
+        (
+            r#"Departure: {"variant":"B","justification":"A cannot satisfy the contract","evidence":"missing.txt"}"#,
+            "B",
+            false,
+        ),
         ("I prefer B", "A", false),
         ("", "A", false),
     ] {
@@ -250,6 +294,18 @@ fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
         );
         let task = stored.iter().find(|t| t.spec["id"] == "w").unwrap();
         assert_eq!(task.status == "approved", approved, "{task:?}");
+        assert_eq!(
+            calls.iter().find(|c| c["written"] == "w").unwrap()["actual"],
+            "B"
+        );
+        let checks: Vec<_> = calls.iter().filter(|c| c["verified"] == "w").collect();
+        assert!(!checks.is_empty());
+        for check in checks {
+            assert_eq!(check["files"]["result-w.txt"], "B");
+            assert_eq!(check["required"], required_format);
+            assert_eq!(check["approved"], approved);
+        }
+
         let worker = calls
             .iter()
             .find(|c| c["worker"] == true && c["task"] == "w")
@@ -271,6 +327,7 @@ fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
             .unwrap()["prompt"]
             .as_str()
             .unwrap();
+        assert!(verifier.contains(claim));
         for text in [
             "independently compare the actual implementation",
             "Check the evidence and justification",

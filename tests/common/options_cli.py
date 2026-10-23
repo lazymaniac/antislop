@@ -14,15 +14,22 @@ else:
     if worker:
         if task.endswith('-options') or task == 'shared':
             answer = settings['report']
-        elif any(t['id'] == task and not t.get('writes', False) for t in settings['plan']['tasks']):
+        elif ('Work read-only; do not modify anything.' in prompt
+              or any(t['id'] == task and not t.get('writes', False) for t in settings['plan']['tasks'])):
             answer = 'Inspected files read-only.'
         else:
-            open('result-'+task+'.txt','w').write(settings['implementation'])
+            implementation = settings['implementation']
+            if implementation == 'selected':
+                implementation = re.findall(r'^Selected: ([AB])$', prompt, re.M)[-1]
+            open('result-'+task+'.txt','w').write(implementation)
+            with open(os.path.join(root,'calls.jsonl'),'a') as log:
+                log.write(json.dumps({'written':task,'actual':open('result-'+task+'.txt').read()})+'\n')
             answer = 'APPROVED. I complied with the selected variant. '+settings['claim']
     else:
         # A deterministic oracle for these fixtures only. Real semantic assessment
         # of a contradiction or departure belongs to the real verifier.
-        actual = [open(path).read() for path in glob.glob('result-*.txt')]
+        files = {path:open(path).read() for path in glob.glob('result-*.txt')}
+        actual = list(files.values())
         approved = not actual or all(value == 'A' for value in actual)
         if actual and not approved:
             # Parse the worker report delivered by runtime, never settings['claim'].
@@ -37,6 +44,8 @@ else:
                     required = open(path).read().strip()
                     approved = (required != 'A' and evidence.get('variant') == required
                                 and all(value == required for value in actual))
+        with open(os.path.join(root,'calls.jsonl'),'a') as log:
+            log.write(json.dumps({'verified':task,'files':files,'required':open('required-format.txt').read().strip(),'approved':approved})+'\n')
         ids = re.findall(r'^- ([RCV][0-9]+): ', prompt, re.M)
         answer = '```verdict\n'+json.dumps({'approved':approved,'findings':[] if approved else [{'severity':'high','issue':'Implementation B contradicts Selected: A without evidence'}], 'coverage':{i:{'status':'ok','note':'fixture inspected'} for i in ids}})+'\n```'
 if os.path.basename(sys.argv[0]) == 'codex':
