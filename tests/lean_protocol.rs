@@ -461,6 +461,29 @@ fn test_sessions_structured_data() {
     assert_eq!(sess["role"], "orchestrator");
     assert!(sess["started_ms"].as_u64().unwrap() > 0);
     assert!(sess["finished_ms"].as_u64().unwrap() > 0);
+    let context = daemon
+        .client
+        .call(&Request::RunContext {
+            conversation: conv_id.into(),
+            turn: sess["turn_id"].as_str().unwrap().into(),
+        })
+        .unwrap();
+    assert_eq!(context["conversation"], conv_id);
+    assert_eq!(context["role"], "orchestrator");
+    assert_eq!(context["provider"], "codex");
+    assert_eq!(context["backend"], "cli");
+    assert_eq!(context["profile"], "orchestrator");
+    assert_eq!(context["cwd"], project.to_str().unwrap());
+    assert_eq!(context["access"], "read_only");
+    assert_eq!(context["provider_thread_id"], "orch");
+    assert!(context["provider_session_id"].is_null());
+    let other = daemon.call_raw(&json!({"op":"start"})).unwrap();
+    let hidden = daemon
+        .call_raw(&json!({
+            "op":"run_context", "conversation":other["id"], "turn":sess["turn_id"]
+        }))
+        .unwrap();
+    assert!(hidden.is_null());
 }
 
 #[test]

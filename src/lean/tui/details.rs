@@ -181,6 +181,10 @@ pub type Drafts = std::rc::Rc<std::cell::RefCell<HashMap<(String, String), Compo
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Details {
+    pub native: HashMap<String, super::native_view::Snapshot>,
+    pub native_focus: bool,
+    pub native_history: bool,
+    pub native_areas: [Rect; 2],
     /// Last rendered document viewport, excluding the scrollbar.
     pub text_area: Rect,
     /// None follows the current round; an explicit older round freezes selection.
@@ -313,6 +317,10 @@ impl Details {
         Details {
             text_area: Default::default(),
             selected_round: None,
+            native: HashMap::new(),
+            native_focus: false,
+            native_history: false,
+            native_areas: [Rect::new(0, 0, 80, 24); 2],
             available_rounds: Vec::new(),
             latest_observed: 0,
             active_panel: usize::from(key.starts_with("verifier:")),
@@ -411,7 +419,7 @@ impl Details {
         self.searching = false;
     }
 
-    fn composer_recipient(&self, key: &str) -> String {
+    pub(super) fn composer_recipient(&self, key: &str) -> String {
         match (key.split_once(':'), &self.task_uuid) {
             (Some((role, _)), Some(uuid)) => format!("{role}:{uuid}"),
             _ => key.to_owned(),
@@ -559,7 +567,7 @@ impl Details {
         )]
     }
 
-    fn session_keys(&self) -> Vec<String> {
+    pub(super) fn session_keys(&self) -> Vec<String> {
         match self.key.split_once(':') {
             Some(("worker" | "verifier", id)) => {
                 vec![format!("worker:{id}"), format!("verifier:{id}")]
@@ -1352,6 +1360,44 @@ impl Details {
             }
             let inner = block.inner(*area);
             frame.render_widget(block, *area);
+            self.native_areas[panel] = Rect::new(
+                inner.x,
+                inner.y,
+                inner.width,
+                inner.height.saturating_sub(1),
+            );
+            if self.selected_round.is_none()
+                && !self.native_history
+                && !self.editing
+                && let Some(snapshot) = self.native.get(key)
+                && let Some(screen) = &snapshot.screen
+            {
+                super::native_view::render(
+                    frame,
+                    self.native_areas[panel],
+                    screen,
+                    self.native_focus && active,
+                );
+                let status = snapshot
+                    .error
+                    .as_deref()
+                    .or(screen.error.as_deref())
+                    .unwrap_or(if self.native_focus && active {
+                        "Ctrl+] antislop"
+                    } else {
+                        "i terminal · a message · h JSON · r retry"
+                    });
+                frame.render_widget(
+                    Paragraph::new(theme.clean(status)).style(theme.dim()),
+                    Rect::new(
+                        inner.x,
+                        inner.bottom().saturating_sub(1),
+                        inner.width,
+                        1.min(inner.height),
+                    ),
+                );
+                continue;
+            }
             let [inner, composer_area] =
                 Layout::vertical([Constraint::Min(1), Constraint::Length(4.min(inner.height))])
                     .areas(inner);
@@ -1370,7 +1416,18 @@ impl Details {
             } else {
                 composer
                     .and_then(|composer| composer.delivery.as_deref())
-                    .unwrap_or("i message")
+                    .unwrap_or_else(|| {
+                        if self.native_history {
+                            "JSON history · h terminal · i message"
+                        } else if let Some(snapshot) = self.native.get(key) {
+                            snapshot
+                                .error
+                                .as_deref()
+                                .unwrap_or("Attaching native terminal… · h JSON")
+                        } else {
+                            "Native attachment unavailable · JSON history · i message"
+                        }
+                    })
             };
             let status_area = Rect::new(
                 composer_area.x,
@@ -1689,7 +1746,7 @@ impl Details {
             let hint = if self.searching {
                 format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
             } else {
-                "i message · Ctrl+W panel · Enter trace · m metadata · Left/Right rounds · Esc back"
+                "i terminal/message · a message · Ctrl+] release · Ctrl+W panel · h JSON · Esc back"
                     .into()
             };
             frame.render_widget(

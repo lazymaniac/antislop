@@ -222,7 +222,10 @@ pub struct ResolvedProfile {
     pub role: RoleKind,
 }
 
-fn resolve_command(provider: &ProviderConfig, profile: &Profile) -> Result<(PathBuf, Vec<String>)> {
+pub(crate) fn resolve_command(
+    provider: &ProviderConfig,
+    profile: &Profile,
+) -> Result<(PathBuf, Vec<String>)> {
     if let Some(cmd) = &profile.command {
         let Some((first, rest)) = cmd.0.split_first() else {
             return Err(Error::Invalid(

@@ -116,7 +116,7 @@ if any(marker in prompt for marker in REVIEW):
     answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```"
 elif "You verify" in prompt:
     session = "verifier"
-    approved = "Task: Storage" not in prompt
+    approved = "Task: Storage" not in prompt or "fixed report" in prompt
     answer = verdict(approved, [] if approved else [{"severity": "high", "issue": "wrong claim", "where": "src/a.rs:1"}])
 elif "Your verifier found problems" in prompt:
     session, answer = "worker", "fixed report"
@@ -371,18 +371,24 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
         .iter()
         .filter(|(bin, args)| bin == "agy" && is_verifier(args))
         .collect();
-    assert!(
-        workers
-            .iter()
-            .all(|(_, args)| !args.contains("r-storage") && !args.contains("r-tui"))
-    );
+    assert!(workers.iter().all(|(_, args)| {
+        if args.contains("Task: Storage") {
+            args.contains("r-storage") && !args.contains("r-tui")
+        } else {
+            args.contains("r-tui") && !args.contains("r-storage")
+        }
+    }));
     assert!(workers.iter().all(|(_, args)| args.contains("--mode plan")));
     let storage_verifier = &verifiers[0].1;
     assert!(storage_verifier.contains("r-storage") && !storage_verifier.contains("r-tui"));
     assert!(
-        verifiers[1].1.contains("--conversation verifier"),
-        "re-check resumes"
+        !verifiers[1].1.contains("--conversation verifier"),
+        "a verifier starts fresh in the next round"
     );
+    assert!(verifiers[1].1.contains("Task: Storage"));
+    assert!(verifiers[1].1.contains("fixed report"));
+    let first_round = core.store.task_round(&tasks[0].id, 1).unwrap();
+    assert_eq!(first_round["verdict"]["approved"], false);
     let reviews: Vec<_> = calls
         .iter()
         .filter(|(_, args)| is_reviewer(args))

@@ -57,6 +57,42 @@ pub fn build_identity(executable: &Path) -> Result<String> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
+    TerminalOpen {
+        conversation: String,
+        role: String,
+        columns: u16,
+        rows: u16,
+        retry: bool,
+    },
+    TerminalRead {
+        conversation: String,
+        role: String,
+        handle: String,
+        after: u64,
+    },
+    TerminalInput {
+        conversation: String,
+        role: String,
+        handle: String,
+        sequence: u64,
+        input: super::terminal::Input,
+    },
+    TerminalResize {
+        conversation: String,
+        role: String,
+        handle: String,
+        columns: u16,
+        rows: u16,
+    },
+    TerminalDetach {
+        conversation: String,
+        role: String,
+        handle: String,
+    },
+    RunContext {
+        conversation: String,
+        turn: String,
+    },
     CommentAt {
         conversation: String,
         plan: Option<String>,
@@ -343,6 +379,43 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 enum WireRequest {
+    TerminalOpen {
+        conversation: String,
+        role: String,
+        columns: u16,
+        rows: u16,
+        #[serde(default)]
+        retry: bool,
+    },
+    TerminalRead {
+        conversation: String,
+        role: String,
+        handle: String,
+        after: u64,
+    },
+    TerminalInput {
+        conversation: String,
+        role: String,
+        handle: String,
+        sequence: u64,
+        input: super::terminal::Input,
+    },
+    TerminalResize {
+        conversation: String,
+        role: String,
+        handle: String,
+        columns: u16,
+        rows: u16,
+    },
+    TerminalDetach {
+        conversation: String,
+        role: String,
+        handle: String,
+    },
+    RunContext {
+        conversation: String,
+        turn: String,
+    },
     CommentAt {
         conversation: String,
         plan: Option<String>,
@@ -634,6 +707,68 @@ impl From<Request> for WireRequest {
                 round,
                 references,
             },
+            Request::TerminalOpen {
+                conversation,
+                role,
+                columns,
+                rows,
+                retry,
+            } => WireRequest::TerminalOpen {
+                conversation,
+                role,
+                columns,
+                rows,
+                retry,
+            },
+            Request::TerminalRead {
+                conversation,
+                role,
+                handle,
+                after,
+            } => WireRequest::TerminalRead {
+                conversation,
+                role,
+                handle,
+                after,
+            },
+            Request::TerminalInput {
+                conversation,
+                role,
+                handle,
+                sequence,
+                input,
+            } => WireRequest::TerminalInput {
+                conversation,
+                role,
+                handle,
+                sequence,
+                input,
+            },
+            Request::TerminalResize {
+                conversation,
+                role,
+                handle,
+                columns,
+                rows,
+            } => WireRequest::TerminalResize {
+                conversation,
+                role,
+                handle,
+                columns,
+                rows,
+            },
+            Request::TerminalDetach {
+                conversation,
+                role,
+                handle,
+            } => WireRequest::TerminalDetach {
+                conversation,
+                role,
+                handle,
+            },
+            Request::RunContext { conversation, turn } => {
+                WireRequest::RunContext { conversation, turn }
+            }
             Request::SessionEvents {
                 conversation,
                 turn,
@@ -1048,6 +1183,68 @@ impl From<WireRequest> for Request {
                 round,
                 references,
             },
+            WireRequest::TerminalOpen {
+                conversation,
+                role,
+                columns,
+                rows,
+                retry,
+            } => Request::TerminalOpen {
+                conversation,
+                role,
+                columns,
+                rows,
+                retry,
+            },
+            WireRequest::TerminalRead {
+                conversation,
+                role,
+                handle,
+                after,
+            } => Request::TerminalRead {
+                conversation,
+                role,
+                handle,
+                after,
+            },
+            WireRequest::TerminalInput {
+                conversation,
+                role,
+                handle,
+                sequence,
+                input,
+            } => Request::TerminalInput {
+                conversation,
+                role,
+                handle,
+                sequence,
+                input,
+            },
+            WireRequest::TerminalResize {
+                conversation,
+                role,
+                handle,
+                columns,
+                rows,
+            } => Request::TerminalResize {
+                conversation,
+                role,
+                handle,
+                columns,
+                rows,
+            },
+            WireRequest::TerminalDetach {
+                conversation,
+                role,
+                handle,
+            } => Request::TerminalDetach {
+                conversation,
+                role,
+                handle,
+            },
+            WireRequest::RunContext { conversation, turn } => {
+                Request::RunContext { conversation, turn }
+            }
             WireRequest::SessionEvents {
                 conversation,
                 turn,
@@ -1537,6 +1734,7 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
             loop {
                 std::thread::sleep(Duration::from_secs(2));
                 if !(database.exists() && socket.exists()) && !core.busy() {
+                    let _ = core.native.shutdown();
                     std::process::exit(0);
                 }
             }
@@ -1762,6 +1960,7 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
                 "the daemon is executing work; use antislop stop --force to cancel it",
             )?;
             std::fs::write(core.state.join("stopped"), [])?;
+            core.native.shutdown()?;
             Value::Null
         }
         Request::ForceShutdown => {
@@ -1779,6 +1978,7 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
             }
             core.store.interrupt_running_turns()?;
             core.store.interrupt_unfinished_tasks()?;
+            core.native.shutdown()?;
             Value::Null
         }
         Request::Conversations => json!(core.conversations()?),
@@ -2078,6 +2278,57 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
             validate_plan_task(core, &plan, &id)?;
             core.store
                 .task_round_with_references(&id, round, references.unwrap_or(false))?
+        }
+        Request::TerminalOpen {
+            conversation,
+            role,
+            columns,
+            rows,
+            retry,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.terminal_open(&conversation, &role, columns, rows, retry)?)
+        }
+        Request::TerminalRead {
+            conversation,
+            role,
+            handle,
+            after,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.terminal_read(&conversation, &role, &handle, after)?)
+        }
+        Request::TerminalInput {
+            conversation,
+            role,
+            handle,
+            sequence,
+            input,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.terminal_input(&conversation, &role, &handle, sequence, input)?)
+        }
+        Request::TerminalResize {
+            conversation,
+            role,
+            handle,
+            columns,
+            rows,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.terminal_resize(&conversation, &role, &handle, columns, rows)?)
+        }
+        Request::TerminalDetach {
+            conversation,
+            role,
+            handle,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.terminal_detach(&conversation, &role, &handle)?)
+        }
+        Request::RunContext { conversation, turn } => {
+            validate_project_conversation(core, project, &conversation)?;
+            json!(core.store.run_context(&conversation, &turn)?)
         }
         Request::SessionEvents {
             conversation,

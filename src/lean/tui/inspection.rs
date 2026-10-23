@@ -334,6 +334,7 @@ pub(super) fn run_snapshot(
         .map(|run| run["turn_id"].clone())
         .unwrap_or_default();
     if let Some(run) = runs.get(index) {
+        snapshot["turns"] = serde_json::json!([run]);
         snapshot["_run"] = run["turn_id"].clone();
         let mut builder = document::Builder::new(client.state_dir())?;
         let events = append_session(

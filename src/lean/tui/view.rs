@@ -431,15 +431,6 @@ impl View {
         }
     }
 
-    /// The agent graph is hidden while the user is interviewed and while a
-    /// plan is written or reviewed, whichever panel has the focus.
-    pub fn graph_hidden(&self) -> bool {
-        matches!(
-            self.stage(),
-            Stage::Interview | Stage::Planning | Stage::Review
-        )
-    }
-
     /// Comments on the plan the user has written but not yet sent.
     pub fn draft_plan_comments(&self) -> Vec<&Comment> {
         self.open_plan_comments()
@@ -2382,7 +2373,6 @@ mod tests {
             json!({"phase":"interview","summary":""}),
         ));
         assert_eq!(view.stage(), Stage::Interview);
-        assert!(view.graph_hidden());
         view.apply(&event(
             2,
             None,
@@ -2399,7 +2389,6 @@ mod tests {
         assert!(view.requirements_summary.is_empty());
         view.apply(&event(4, None, "workflow", json!({"phase":"planning"})));
         assert_eq!(view.stage(), Stage::Planning);
-        assert!(view.graph_hidden());
     }
 
     fn staged(statuses: &[&str], activity: bool) -> View {
@@ -2703,15 +2692,14 @@ mod tests {
     }
 
     #[test]
-    fn the_stage_hides_the_graph_until_work_runs_and_again_when_replanning() {
+    fn workflow_stages_cover_planning_execution_and_replanning() {
         assert_eq!(View::default().stage(), Stage::Fresh);
-        assert!(!View::default().graph_hidden());
         for (statuses, activity, stage) in [
             (vec![], false, Stage::Interview),
             (vec![], true, Stage::Interview),
             (vec!["proposed"], false, Stage::Review),
             (vec!["working", "queued"], true, Stage::Executing),
-            // A rejected plan is revised: the graph goes away again.
+            // A rejected plan returns to planning.
             (vec!["cancelled"], true, Stage::Planning),
             (vec!["cancelled"], false, Stage::Blocked),
             (vec!["approved", "needs_user"], false, Stage::Blocked),
@@ -2721,10 +2709,6 @@ mod tests {
         ] {
             let view = staged(&statuses, activity);
             assert_eq!(view.stage(), stage, "{statuses:?} {activity}");
-            assert_eq!(
-                view.graph_hidden(),
-                matches!(stage, Stage::Interview | Stage::Planning | Stage::Review)
-            );
         }
     }
 

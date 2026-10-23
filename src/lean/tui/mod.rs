@@ -14,6 +14,7 @@ mod history;
 mod inspection;
 pub mod interview;
 pub mod ledger;
+mod native_view;
 pub mod palette;
 mod planhistory;
 pub mod planview;
@@ -215,6 +216,7 @@ pub struct ConversationState {
 }
 
 pub struct App {
+    native_views: std::collections::HashMap<String, native_view::View>,
     plan_history: Option<planhistory::Browser>,
     graph_layout_cache: graph::LayoutCache,
     pub text_selection: selection::TextSelection,
@@ -289,6 +291,7 @@ pub struct App {
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
     pub graph_area: Option<Rect>,
     pub phase_action_area: Option<Rect>,
+    pub chat_area: Rect,
     pub graph_viewport: Option<(u16, u16)>,
     pub trust_prompt: Option<String>,
     /// The way out for a stopped step, while the user picks one.
@@ -347,6 +350,7 @@ impl App {
             filter: Filter::All,
             offset: (0, 0),
             details: None,
+            native_views: std::collections::HashMap::new(),
             diff: None,
             plan_view: None,
             ledger_view: None,
@@ -385,6 +389,7 @@ impl App {
             graph_viewport: None,
             graph_area: None,
             phase_action_area: None,
+            chat_area: Rect::default(),
             trust_prompt: None,
             unblock: None,
             projects: Vec::new(),
@@ -2798,15 +2803,6 @@ impl App {
         }
     }
 
-    /// Returns false when the user quits.
-    /// The graph and task panels are not shown before work runs, so focus
-    /// cannot rest on them then.
-    fn settle_focus(&mut self) {
-        if self.view.graph_hidden() && self.focus != Focus::Chat {
-            self.focus = Focus::Chat;
-        }
-    }
-
     /// The header as drawn, which is also what a click on it is read from.
     pub fn header_line(&self, width: u16) -> Line<'static> {
         let panel_focus = match self.focus {
@@ -2965,6 +2961,16 @@ impl App {
     }
 
     fn key_inner(&mut self, key: event::KeyEvent) -> bool {
+        if self.native_focused() {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(']') {
+                if let Some(details) = &mut self.details {
+                    details.native_focus = false;
+                }
+            } else {
+                self.native_send(crate::lean::terminal::Input::Key { event: key });
+            }
+            return true;
+        }
         if let Some(browser) = self.plan_history.as_mut() {
             let was_loading = browser.loading;
             if !browser.key(key) {
@@ -3034,7 +3040,6 @@ impl App {
             }
             return true;
         }
-        self.settle_focus();
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         if self.picker.is_none() {
@@ -3740,7 +3745,29 @@ impl App {
                 details.scroll = 0;
                 return;
             }
-            KeyCode::Char('i') if details.tab == 0 && plain => {
+            KeyCode::Char('h') if details.tab == 0 && plain => {
+                details.native_history = !details.native_history;
+                details.native_focus = false;
+                return;
+            }
+            KeyCode::Char('r') if details.tab == 0 && plain && !details.native_history => {
+                self.native_retry();
+                return;
+            }
+            KeyCode::Char('i')
+                if details.tab == 0
+                    && plain
+                    && !details.native_history
+                    && details
+                        .native
+                        .get(&details.session_keys()[details.active_panel])
+                        .is_some_and(|s| s.screen.is_some()) =>
+            {
+                details.native_focus = true;
+                details.editing = false;
+                return;
+            }
+            KeyCode::Char('i' | 'a') if details.tab == 0 && plain => {
                 if details.selected_round.is_none()
                     && (details.task_id().is_none() || details.task_uuid.is_some())
                 {
@@ -3869,6 +3896,10 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if self.native_focused() {
+            self.native_send(crate::lean::terminal::Input::Paste { text: text.into() });
+            return;
+        }
         if self.plan_history.is_some() {
             return;
         }
@@ -3923,7 +3954,6 @@ impl App {
     pub fn draw(&mut self, frame: &mut Frame) {
         self.phase_action_area = None;
         self.sync_interview();
-        self.settle_focus();
         self.terminal_area = frame.area();
         self.graph_area = None;
         self.text_area = None;
@@ -3931,6 +3961,7 @@ impl App {
             self.text_selection = Default::default();
             return;
         }
+        self.sync_native_views();
         if let Some(browser) = self.plan_history.as_mut() {
             browser.draw(frame);
             return;
@@ -4057,7 +4088,7 @@ impl App {
             && self.interview_visible()
             && let Some(form) = self.interview_forms.get_mut(&self.conversation)
         {
-            form.draw(frame, &Theme::from_env());
+            form.draw(frame, self.chat_area, &Theme::from_env());
         }
         if let Some(picker) = &mut self.picker {
             picker.draw_with_cursor(
@@ -4290,9 +4321,7 @@ impl App {
             Focus::Graph => PanelFocus::Graph,
         };
 
-        if self.view.graph_hidden() && self.focus == Focus::Chat {
-            self.draw_chat(frame, body, &theme);
-        } else if area.width >= SIDE_BY_SIDE_BREAKPOINT {
+        if area.width >= SIDE_BY_SIDE_BREAKPOINT {
             let chat_width = (body.width / 3).max(34);
             let [chat, sep_col, team] = Layout::horizontal([
                 Constraint::Length(chat_width),
@@ -4300,6 +4329,7 @@ impl App {
                 Constraint::Min(1),
             ])
             .areas(body);
+            self.chat_area = chat;
             self.draw_chat(frame, chat, &theme);
             let separator = theme.glyphs().vertical;
             let buf = frame.buffer_mut();
@@ -4310,8 +4340,10 @@ impl App {
             }
             self.draw_graph(frame, team);
         } else if self.focus == Focus::Chat {
+            self.chat_area = body;
             self.draw_chat(frame, body, &theme);
         } else {
+            self.chat_area = body;
             self.draw_graph(frame, body);
         }
 
@@ -4349,7 +4381,10 @@ impl App {
         let input_height = (input_lines.len().clamp(1, 6) as u16 + 2).min(max_input_height);
         let activity = self.view.orchestrator_activity().or_else(|| {
             (!self.view.idle).then(|| {
-                if self.view.graph_hidden() {
+                if matches!(
+                    self.view.stage(),
+                    view::Stage::Interview | view::Stage::Planning | view::Stage::Review
+                ) {
                     "waiting for the orchestrator to start".to_owned()
                 } else {
                     "tasks in progress…".to_owned()
@@ -4949,7 +4984,18 @@ impl App {
         }
     }
 
-    pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+    pub fn mouse(&mut self, mut mouse: event::MouseEvent) -> bool {
+        if self.native_focused() {
+            if let Some(details) = &self.details {
+                let area = details.native_areas[details.active_panel];
+                if area.contains((mouse.column, mouse.row).into()) {
+                    mouse.column -= area.x;
+                    mouse.row -= area.y;
+                    self.native_send(crate::lean::terminal::Input::Mouse { event: mouse });
+                }
+            }
+            return true;
+        }
         if self.plan_history.is_some() {
             return true;
         }
@@ -4967,7 +5013,6 @@ impl App {
         if self.config_editor.as_ref().is_some_and(|e| e.visible) {
             return true;
         }
-        self.settle_focus();
         if self.trust_prompt.is_some() || self.project_trust.is_some() {
             return true;
         }
@@ -5101,7 +5146,6 @@ impl App {
                     }
                 } else if row > area.y
                     && row + 1 < area.bottom()
-                    && !self.view.graph_hidden()
                     && area.width >= SIDE_BY_SIDE_BREAKPOINT
                 {
                     let chat_width = (area.width / 3).max(34);
@@ -5267,6 +5311,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     let conversation = options.conversation(&client)?;
     let (updates, received) = mpsc::channel();
     let mut app = App {
+        chat_area: Rect::default(),
         plan_history: None,
         graph_layout_cache: graph::LayoutCache::default(),
         text_selection: Default::default(),
@@ -5300,6 +5345,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         filter: Filter::All,
         offset: (0, 0),
         details: None,
+        native_views: std::collections::HashMap::new(),
         diff: None,
         plan_view: None,
         ledger_view: None,
@@ -5751,6 +5797,61 @@ pub mod tests {
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
         let norm = text.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(norm.contains("Terminal too small (min. 12x5 required)"));
+    }
+
+    #[test]
+    fn interview_form_is_drawn_inside_the_chat_panel_beside_the_canvas() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut app = test_app();
+        app.conversation = "interview-a".into();
+        let question = serde_json::from_value(serde_json::json!({"id":"scope","context":"Scope affects timing.","question":"Which scope?","options":[{"label":"Small"},{"label":"Full"}]})).unwrap();
+        app.view.workflow_phase = Some("interview".into());
+        app.view.interview_question = Some((42, question));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+
+        let chat = app.chat_area;
+        let graph = app.graph_area.expect("canvas stays visible");
+        assert!(chat.width > 0 && chat.right() <= graph.x);
+        let buffer = terminal.backend().buffer();
+        let row = |y: u16, x0: u16, x1: u16| -> String {
+            (x0..x1).map(|x| buffer[(x, y)].symbol()).collect()
+        };
+        let title_row = (0..24)
+            .find(|&y| row(y, 0, 120).contains("Interview · choose an answer"))
+            .expect("form is drawn");
+        let line = row(title_row, 0, 120);
+        let col = line[..line.find("Interview").unwrap()].chars().count() as u16;
+        assert!(col < chat.right(), "form title must sit in the chat panel");
+        assert!(
+            (0..24).any(|y| row(y, graph.x, graph.right()).contains("orchestrator")),
+            "canvas must keep rendering next to the form"
+        );
+    }
+
+    #[test]
+    fn agent_canvas_remains_available_in_every_workflow_phase() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        for phase in ["interview", "planning", "review", "executing", "done"] {
+            for width in [84, 120] {
+                let mut app = test_app();
+                app.view.workflow_phase = Some(phase.into());
+                app.input.insert_str("unsent draft");
+                let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+                terminal.draw(|frame| app.draw(frame)).unwrap();
+                if width >= SIDE_BY_SIDE_BREAKPOINT {
+                    assert!(app.graph_area.is_some(), "{phase}");
+                    assert!(app.text_area.is_some(), "{phase}");
+                }
+                app.key(event::KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+                terminal.draw(|frame| app.draw(frame)).unwrap();
+                assert_eq!(app.focus, Focus::Graph, "{phase}");
+                assert!(app.graph_area.is_some(), "{phase}");
+                assert_eq!(app.input.text, "unsent draft");
+            }
+        }
     }
 
     #[test]

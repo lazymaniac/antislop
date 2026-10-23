@@ -80,6 +80,9 @@ pub enum Event {
         code: Option<i32>,
         signal: Option<i32>,
     },
+    ProviderTurn {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,7 +169,15 @@ fn run_once(
     cancel: &AtomicBool,
     on_event: &mut dyn FnMut(Event),
 ) -> Result<Outcome> {
-    let mut command = command(spec, prompt)?;
+    run_process(spec, cancel, on_event, command(spec, prompt)?)
+}
+
+pub(crate) fn run_process(
+    spec: &Spec,
+    cancel: &AtomicBool,
+    on_event: &mut dyn FnMut(Event),
+    mut command: Command,
+) -> Result<Outcome> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -205,7 +216,14 @@ fn run_once(
     let mut parser = Parser::new(spec.provider);
     let mut diagnostics = String::new();
     let mut exited: Option<std::time::Instant> = None;
+    let started = Instant::now();
     loop {
+        if started.elapsed() > Duration::from_secs(30 * 60) {
+            stop(&mut child);
+            return Err(Error::Invalid(
+                "agent turn timed out after 30 minutes".into(),
+            ));
+        }
         if cancel.load(Ordering::SeqCst) {
             stop(&mut child);
             return Err(Error::Invalid("cancelled".into()));
@@ -276,7 +294,7 @@ fn run_once(
     }
 }
 
-fn command(spec: &Spec, prompt: &str) -> Result<Command> {
+pub(crate) fn command(spec: &Spec, prompt: &str) -> Result<Command> {
     // A CLI's own subagents would be a team nobody verifies (design §9.5).
     const NO_CODEX_SUBAGENTS: &str = "features.multi_agent=false";
     const NO_CLAUDE_SUBAGENTS: &str = "Task,Agent";
@@ -988,6 +1006,9 @@ impl Parser {
         let part = &line["part"];
         match line["type"].as_str().unwrap_or_default() {
             "step_start" => {
+                if let Some(id) = part["messageID"].as_str() {
+                    events.push(Event::ProviderTurn { id: id.into() });
+                }
                 // Each model step can contain commentary before tool calls.
                 // Only the final step is the answer to the runtime protocol.
                 self.text.clear();

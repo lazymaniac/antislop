@@ -75,7 +75,9 @@ streams normalized events: `Session(id)`, `Text(delta)`, `Tool{name, detail}`,
 
 Extra scope directories go through `--add-dir` (gemini: `--include-directories`). Follow-up turns resume the
 CLI's own session (`codex exec resume <id>`, `agy --conversation <id>`,
-`claude --resume <id>`, `gemini --resume <id>`, `opencode run --session <id>`), so earlier context is never re-sent.
+`claude --resume <id>`, `gemini --resume <id>`, `opencode run --session <id>`).
+Task workers and verifiers only resume within one round. A new round gets fresh
+sessions and an explicit handoff from durable task history.
 
 OpenCode uses a dedicated primary agent in `OPENCODE_CONFIG_CONTENT`; other
 inline configuration is preserved. Native `task` subagents and interactive
@@ -131,7 +133,7 @@ Read-only modes are not a confinement: agy's plan mode was observed running
    items (`C1`…) are its numbered obligations. It reads the files itself and
    returns `{approved, findings, coverage}`, where `coverage` accounts for
    every obligation as `ok`, `issue` or `n/a`, each with a note. Findings
-   resume the worker's session. Supervised: after three rounds the task waits
+   start a new worker round with a fresh session and explicit context. Supervised: after three rounds the task waits
    for the user. Autonomous: rounds go on until approval; a verifier that
    repeats its findings word for word means the worker is not getting closer,
    and the task waits for the user.
@@ -243,6 +245,11 @@ the user's version recoverable.
 - `conversations(id, project, created_ms)`
 - `messages(seq, conversation_id, author, text, created_ms)`
 - `turns(id, conversation_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms)`
+- `run_contexts(turn_id, profile, cwd, add_dirs, access, backend, provider_thread_id,
+  provider_session_id, provider_turn_id)` — one compact execution context per new
+  turn, recorded before process launch. Conversation, role and provider come from
+  the owning turn. Codex resume IDs are thread IDs; other CLI resume IDs are
+  session IDs. Legacy turns have no inferred execution context.
 - `tasks(id, conversation_id, plan_id, position, spec, status, round, report, verdict, base, result, created_ms)`
 - `mail(id, conversation_id, sender, recipient, kind, text, created_ms, delivered_turn, delivered_ms)`
 - `comments(id, conversation_id, plan_id, target, label, text, status, message, created_ms, updated_ms)`
@@ -257,10 +264,14 @@ unmarked databases can open. Initialization is transactional. Older, newer or
 unmarked nonempty files are rejected before DDL or journal changes. Stop the
 daemon, manually archive `.antislop/`, then restart for a fresh state; the app
 never archives or deletes it automatically. Restart client and daemon together.
-History tables are created directly without backfills.
+History and execution context tables are created directly without backfills.
 Per-conversation reads include global config events while keeping private events
 scoped to their conversation. An agent's details show time when both ends are known.
 
+The daemon's `run_context` request takes `conversation` and `turn`, returning the
+context or `null` when none is recorded for that scope. The currently active
+backend remains `cli`; native server adapters and an embedded terminal are not
+implemented yet.
 
 Writer worktrees live in `<state>/worktrees/<task>`, removed after a clean
 integration. A real nine-task analysis of this repository (40 agent turns,
@@ -411,8 +422,8 @@ directory to run both. The socket is `<state>/core.sock`, or
 - A turn that fails because the CLI needs a login or hit a usage/rate limit
   leaves its task `waiting` (not `failed`), with the CLI's message.
 - `resume` (Ctrl+R, `/resume`) runs again every task of a plan that ended
-  without approval. Agents resume their own sessions and are told what
-  happened; a writer continues in its worktree (or from its last result); a
+  without approval. Agents start fresh round sessions with their last report,
+  findings and recorded change history; a writer continues in its worktree (or from its last result); a
   change that was approved but could not be integrated is integrated again
   without another worker turn.
 - Tasks whose dependencies are approved run up to `policy.max_parallel` at
@@ -543,7 +554,7 @@ kept per conversation, so switching back finds them as they were.
   instructions and by review, not by OS confinement: codex's
   `danger-full-access` writer mode does not impose OS filesystem confinement.
 - An interrupted verification is requeued with its task, so the worker
-  gets a turn before the verifier resumes its session.
+  gets a turn before the verifier starts a fresh session in the new round.
 - A read-only codex agent cannot run checks that write (tests that create
   temporary directories); the orchestrator plans such checks as `writes`
   tasks.
@@ -961,3 +972,25 @@ User decisions remain open: accept best-effort secret redaction; decide whether
 to introduce coordination across processes for external configuration-file writers
 (the daemon lock does not cover them); decide whether to require a performance
 benchmark. This gate makes no new guarantees for these three limitations.
+
+### Task rounds and provider sessions
+
+Each worker and task verifier starts a fresh provider session in each round.
+Mail follow-ups and verdict coverage corrections within that round reuse the
+role's session, provided its provider, profile, directory and access still match.
+The persisted `turn_scopes` and `run_contexts` enforce this after daemon restart;
+orchestrator, plan verifier and code review session policies are unchanged.
+Native session rotation retires the old gateway, terminal and provider process.
+Historical provider identifiers and transcripts remain available for inspection.
+
+Fresh task sessions receive the full task, latest complete worker report (without
+truncation), previous verifier findings and evidence, dependencies, current commit
+range and the sorted union of paths changed in earlier recorded round ranges.
+This includes deletions, both sides of renames and paths subsequently restored.
+Agents inspect the files and current diff themselves. An interrupted round with
+no report falls back to the latest earlier report and explicitly directs the
+agent to inspect uncommitted work. Completed worker reports are persisted before
+mail follow-ups. Missing first reports are normal; content and Git read failures
+are surfaced with their underlying cause. Integration repair uses the same
+handoff alongside its conflict instructions. No extra model call, configuration
+flag, database schema or report archive is required.

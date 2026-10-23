@@ -1319,7 +1319,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
     );
     app.picker = None;
 
-    // 4. Progress overlay collision avoidance
+    // 4. The agent canvas and its progress overlay remain visible before tasks run
     app.view.activity = Some("compiling tests".into());
     let mut term_overlay = Terminal::new(TestBackend::new(100, 30)).unwrap();
     term_overlay
@@ -1334,7 +1334,8 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(!text_overlay.contains(" now "));
+    assert!(text_overlay.contains("team · filter:"));
+    assert!(text_overlay.contains(" now "));
     assert!(text_overlay.contains("compiling tests"));
 
     // 5. ASCII conversion
@@ -3577,6 +3578,7 @@ fn overview_includes_the_terminal_transcript_without_database_mirrors() {
     details.tab = 0;
     details.history_unavailable = true;
     details.sessions.push(antislop::lean::store::SessionInfo {
+        backend: None,
         turn_id: "database-turn".into(),
         plan_id: None,
         role: "worker:t1".into(),

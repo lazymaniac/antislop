@@ -421,7 +421,24 @@ impl Graph {
         let pv_vis = matches_query(PLAN_VERIFIER);
         let orch_vis = matches_query(ORCHESTRATOR);
         let aud_vis = matches_query(AUDITOR);
-        let admin_vis = pv_vis || orch_vis || aud_vis;
+        let mut admin = vec![
+            (PLAN_VERIFIER, pv_vis),
+            (ORCHESTRATOR, orch_vis),
+            (AUDITOR, aud_vis),
+        ];
+        let mut extra_agents: Vec<_> = view
+            .agents
+            .keys()
+            .map(String::as_str)
+            .filter(|key| {
+                !matches!(*key, PLAN_VERIFIER | ORCHESTRATOR | AUDITOR)
+                    && !key.starts_with("worker:")
+                    && !key.starts_with("verifier:")
+            })
+            .collect();
+        extra_agents.sort_unstable();
+        admin.extend(extra_agents.iter().map(|&key| (key, matches_query(key))));
+        let admin_vis = admin.iter().any(|&(_, visible)| visible);
 
         // Determine which tasks are visible
         let mut visible_tasks: Vec<(usize, u16)> = Vec::new();
@@ -474,12 +491,7 @@ impl Graph {
                 });
             };
 
-            let admin = [
-                (PLAN_VERIFIER, pv_vis),
-                (ORCHESTRATOR, orch_vis),
-                (AUDITOR, aud_vis),
-            ];
-            let admin_rows = if max_cols >= 3 {
+            let admin_rows = if usize::from(max_cols) >= admin.len() {
                 for (slot, &(key, vis)) in admin.iter().enumerate() {
                     push(key, slot as u16, 0, vis);
                 }
@@ -536,9 +548,9 @@ impl Graph {
                     collapsed: false,
                 });
             };
-            place_admin(PLAN_VERIFIER, 0, 0, pv_vis);
-            place_admin(ORCHESTRATOR, 1, 0, orch_vis);
-            place_admin(AUDITOR, 2, 0, aud_vis);
+            for (slot, &(key, visible)) in admin.iter().enumerate() {
+                place_admin(key, slot as u16, 0, visible);
+            }
 
             for &rel_depth in &sorted_rel_depths {
                 let tasks_at_depth = rel_depth_tasks.get_mut(&rel_depth).unwrap();
@@ -622,6 +634,9 @@ impl Graph {
             Kind::Verifies,
             Some("V".into()),
         );
+        for key in extra_agents {
+            edge(ORCHESTRATOR.into(), key.into(), Kind::Supervises, None);
+        }
         for task in &view.tasks {
             let worker = format!("worker:{}", task.id);
             edge(ORCHESTRATOR.into(), worker.clone(), Kind::Supervises, None);
@@ -1582,6 +1597,40 @@ pub fn compute_progress_overlay_with_nodes(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn graph_includes_planning_agents_in_every_layout() {
+        let mut view = View::default();
+        for key in ["options-planner", "requirements-planner"] {
+            view.agents.insert(key.into(), Default::default());
+        }
+        for viewport in [None, Some((60, 30)), Some((180, 40))] {
+            let graph = Graph::new_with_viewport(
+                &view,
+                None,
+                &Default::default(),
+                GroupingMode::Dependency,
+                viewport,
+            );
+            for key in ["options-planner", "requirements-planner"] {
+                let node = graph.node(key).unwrap();
+                assert!(node.visible);
+                assert!(
+                    graph
+                        .edges
+                        .iter()
+                        .any(|edge| { edge.from == ORCHESTRATOR && edge.to == key })
+                );
+                assert!(
+                    graph
+                        .nodes
+                        .iter()
+                        .filter(|other| other.visible && other.key != key)
+                        .all(|other| other.x != node.x || other.y != node.y)
+                );
+            }
+        }
+    }
+
     #[test]
     fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
         let mut view = super::View::default();

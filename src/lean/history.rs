@@ -462,13 +462,23 @@ impl Store {
         result["checks"] = serde_json::to_value(self.checks(task, round)?)?;
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT t.id,t.role,t.status FROM turns t JOIN turn_scopes s ON s.turn_id=t.id
+            "SELECT t.id,t.role,t.status,(SELECT backend FROM run_contexts r WHERE r.turn_id=t.id) FROM turns t JOIN turn_scopes s ON s.turn_id=t.id
             WHERE s.task_id=?1 AND s.round=?2 ORDER BY t.started_ms,t.rowid",
         )?;
         let turns = statement.query_map(params![task,round], |row| Ok(serde_json::json!({
-            "turn_id": row.get::<_,String>(0)?, "role": row.get::<_,String>(1)?, "status": row.get::<_,String>(2)?
+            "turn_id": row.get::<_,String>(0)?, "role": row.get::<_,String>(1)?, "status": row.get::<_,String>(2)?, "backend":row.get::<_,Option<String>>(3)?
         })))?.collect::<std::result::Result<Vec<_>,_>>()?;
         result["turns"] = turns.into();
+        let mut native = db.prepare(
+            "SELECT t.role,r.backend FROM tasks k JOIN turns t
+            ON t.conversation_id=k.conversation_id AND t.role IN ('worker:'||k.id,'verifier:'||k.id)
+            JOIN run_contexts r ON r.turn_id=t.id
+            WHERE k.id=?1 AND k.round=?2 AND t.id=(SELECT p.id FROM turns p
+                WHERE p.conversation_id=t.conversation_id AND p.role=t.role
+                ORDER BY p.started_ms DESC,p.rowid DESC LIMIT 1)",
+        )?;
+        result["native_sessions"]=native.query_map(params![task,round],|row|Ok(serde_json::json!({"role":row.get::<_,String>(0)?,"backend":row.get::<_,String>(1)?})))?
+            .collect::<std::result::Result<Vec<_>,_>>()?.into();
         if !references {
             let mut statement = db.prepare("SELECT m.id,m.sender,m.recipient,m.text,m.delivered_turn FROM mail m LEFT JOIN mail_scopes s ON s.mail_id=m.id
             WHERE m.conversation_id=(SELECT conversation_id FROM tasks WHERE id=?1)
@@ -602,6 +612,92 @@ fn legacy_chunk(text: &str, offset: u64) -> Result<crate::lean::content::Chunk> 
         next_offset: end as u64,
         done: end == text.len(),
     })
+}
+
+impl Store {
+    /// Read compact round snapshots without loading transcripts, mailbox contents
+    /// or historical reports. Only selected handoff fields are resolved later.
+    pub(in crate::lean) fn handoff_rounds(
+        &self,
+        task: &str,
+        through: u32,
+    ) -> Result<Vec<(u32, Value)>> {
+        let rows = {
+            let db = self.db();
+            let mut statement = db.prepare(
+                "SELECT r.round,r.content,
+                    EXISTS(SELECT 1 FROM turn_scopes s JOIN turns t ON t.id=s.turn_id WHERE s.task_id=r.task_id AND s.round=r.round AND t.role='worker:'||r.task_id),
+                    EXISTS(SELECT 1 FROM turn_scopes s JOIN turns t ON t.id=s.turn_id WHERE s.task_id=r.task_id AND s.round=r.round AND t.role='worker:'||r.task_id AND t.status='done')
+                 FROM task_rounds r WHERE r.task_id=?1 AND r.round>0 AND r.round<=?2 ORDER BY r.round DESC",
+            )?;
+            statement
+                .query_map(params![task, through], |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, bool>(2)?,
+                        row.get::<_, bool>(3)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        rows.into_iter()
+            .map(|(round, encoded, started, completed)| {
+                let reference = serde_json::from_str(&encoded)?;
+                let snapshot: Value = serde_json::from_str(&self.content.read(&reference)?)?;
+                let value = serde_json::json!({
+                    "base":snapshot["base"], "result":snapshot["result"],
+                    "report":snapshot["report"], "verdict":snapshot["verdict"],
+                    "worker_started":started, "worker_completed":completed,
+                });
+                Ok((round, value))
+            })
+            .collect()
+    }
+
+    /// agent_final is durable before the scheduler updates its round snapshot.
+    /// Recover that window without consulting tool or conversation history.
+    pub(in crate::lean) fn completed_worker_report(
+        &self,
+        task: &str,
+        round: u32,
+    ) -> Result<Option<String>> {
+        let encoded: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT e.payload FROM events e JOIN turns t ON t.id=e.turn_id
+             JOIN turn_scopes s ON s.turn_id=t.id
+             WHERE s.task_id=?1 AND s.round=?2 AND t.role='worker:'||?1 AND e.kind='agent_final'
+             AND NOT EXISTS(SELECT 1 FROM events start WHERE start.turn_id=t.id AND start.kind='turn_started' AND json_extract(start.payload,'$.mail_only')=1)
+             ORDER BY e.seq DESC LIMIT 1",
+                params![task, round],
+                |row| row.get(0),
+            )
+            .optional()?;
+        encoded
+            .map(|encoded| {
+                let payload = self.hydrate_event_payload("agent_final", &encoded)?;
+                payload["text"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| Error::Invalid("worker final answer has no text".into()))
+            })
+            .transpose()
+    }
+
+    pub(in crate::lean) fn handoff_field(&self, value: &Value, json: bool) -> Result<Value> {
+        let Some(reference) = value.get("session_content") else {
+            return Ok(value.clone());
+        };
+        let text = self
+            .content
+            .read(&serde_json::from_value(reference.clone())?)?;
+        Ok(if json {
+            serde_json::from_str(&text)?
+        } else {
+            text.into()
+        })
+    }
 }
 
 #[cfg(test)]

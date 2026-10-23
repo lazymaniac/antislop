@@ -25,6 +25,9 @@ pub(super) fn lock_cancellable<'a>(
 }
 
 fn retryable(error: &str) -> bool {
+    if error.contains(super::native::EXECUTION_FAILED) {
+        return false;
+    }
     let error = error.to_ascii_lowercase();
     [
         "temporarily unavailable",
@@ -282,6 +285,16 @@ impl Core {
                 let mut completed = false;
                 for attempt in 0..DELIVERY_ATTEMPTS {
                     let setup = TurnSetup {
+                        session_policy: match task
+                            .as_ref()
+                            .filter(|_| task_role(&target.role).is_some())
+                        {
+                            Some(task) => SessionPolicy::TaskRound {
+                                task: task.id.clone(),
+                                round: task.round,
+                            },
+                            None => SessionPolicy::Role,
+                        },
                         conversation,
                         plan_id: target.plan_id.clone(),
                         role: target.role.clone(),
@@ -381,5 +394,21 @@ impl Core {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod native_retry_tests {
+    #[test]
+    fn an_accepted_native_turn_is_never_automatically_retried() {
+        assert!(super::retryable("connection reset"));
+        assert!(!super::retryable(&format!(
+            "{}connection reset after prompt submission",
+            crate::lean::native::EXECUTION_FAILED
+        )));
+        assert!(!super::retryable(&format!(
+            "{}timed out",
+            crate::lean::native::EXECUTION_FAILED
+        )));
     }
 }

@@ -1185,6 +1185,9 @@ fn a_receipt_turn_does_not_occupy_the_plan_scheduler_slot() {
     core.store
         .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
         .unwrap();
+    core.store
+        .bind_task_ledger(&conversation, &run.id, &tasks[0].plan_id)
+        .unwrap();
     let accepted = core.accept_plan(&conversation, &tasks[0].plan_id);
     // Always release the fixture, including when an assertion would fail.
     std::fs::write(release, "continue").unwrap();
@@ -1316,7 +1319,7 @@ fn direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns() {
         later[before..]
             .iter()
             .any(|(_, prompt)| prompt.contains("recheck correction")
-                && prompt.contains("account again for your obligations"))
+                && prompt.contains("Your obligations (the task's risks"))
     );
 }
 
@@ -1552,11 +1555,23 @@ fn direct_verifier_recheck_keeps_unchanged_dependents_and_rejection_recomputes_t
     let core = open(
         dir.path(),
         "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Source'),task('t2', 'Consumer', ['t1']))",
-        r#"    if "The worker's updated report:" in prompt:
+        r#"    if "The worker's updated report:" in prompt or "You verify another agent's work." in prompt:
         answer = verdict(False) if 'reject the old report' in prompt else verdict(True)
     else:
         answer = 'worker report'"#,
     );
+    // Let this fixture's task verifier decide both fresh and continued turns;
+    // plan reviewers still use the helper's automatic approval.
+    let binary = dir.path().join("agy");
+    let script = std::fs::read_to_string(&binary).unwrap();
+    std::fs::write(
+        &binary,
+        script.replace(
+            "\"You review a plan\", \"You audit\", \"You verify\"",
+            "\"You review a plan\", \"You audit\"",
+        ),
+    )
+    .unwrap();
     let conversation = run(&core, dir.path());
     wait_until("initial chain", || core.is_idle(&conversation));
     let initial = core.store.latest_plan(&conversation).unwrap();
@@ -1602,6 +1617,17 @@ fn direct_verifier_recheck_keeps_unchanged_dependents_and_rejection_recomputes_t
     assert_eq!(corrected[0].status, "approved");
     assert_eq!(corrected[1].status, "approved");
     assert!(corrected[1].input_generation > initial[1].input_generation);
+    let rejected_round = core
+        .store
+        .task_round(&initial[0].id, rechecked[0].round + 1)
+        .unwrap();
+    assert_eq!(rejected_round["verdict"]["approved"], false);
+    assert!(prompts(dir.path()).iter().any(|(_, prompt)| {
+        prompt.contains("Task id: t1")
+            && prompt.contains(&format!("Round: {}", rechecked[0].round + 2))
+            && prompt.contains("Latest worker report")
+            && prompt.contains("\"approved\":false")
+    }));
 }
 
 #[test]

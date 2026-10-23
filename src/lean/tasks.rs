@@ -1884,15 +1884,16 @@ pub fn worker_turn_prompt(
     user_edits: &str,
 ) -> String {
     let prompt = match continuation {
-        Some(text) if task.writes => format!("{text}\n\n{OPTIONS_BINDING}"),
-        Some(text) => text.to_owned(),
+        Some(text) => format!(
+            "{}\n\n{text}",
+            worker_prompt(project, task, team, autonomous)
+        ),
         None => worker_prompt(project, task, team, autonomous),
     };
     prompt + upstream + user_edits
 }
 
-/// For a worker resumed after its task stopped: its session still holds the
-/// task, so only what happened is said.
+/// The reason for resuming a task, alongside its explicit round handoff.
 pub fn worker_resume(findings: &[Value]) -> String {
     if findings.is_empty() {
         "Your work on this task was interrupted. Check the current state of the \
@@ -2264,6 +2265,31 @@ pub fn requirements_summary(answer: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Full context for a new provider session; reports are deliberately unabridged.
+pub(crate) fn round_handoff_prompt(handoff: &super::rounds::RoundHandoff) -> String {
+    let report = handoff.report.as_ref().map_or_else(
+        || "No completed worker report is available.".to_owned(),
+        |(round, report)| format!("Latest worker report (source round {round}):\n{report}"),
+    );
+    format!(
+        "\n\nRound handoff\nFull task and working rules: {}\nWorktree: {}\nRound: {}\nInterrupted before a report: {}\n{}\nPrevious verifier findings and evidence: {}\nBase commit: {:?}\nLatest result commit: {:?}\nFiles changed in earlier rounds: {}\nInspect the actual files, uncommitted changes and the Git diff between the base and latest result yourself. Preserve user changes and follow repository instructions. A verifier must assess every obligation and the complete task, including areas outside earlier findings.\n{}{}",
+        handoff.task,
+        handoff.worktree.display(),
+        handoff.round,
+        handoff.interrupted,
+        report,
+        handoff
+            .verdict
+            .as_ref()
+            .map_or("none".into(), ToString::to_string),
+        handoff.base,
+        handoff.result,
+        serde_json::json!(handoff.files),
+        handoff.upstream,
+        handoff.instructions,
+    )
 }
 
 #[cfg(test)]

@@ -23,10 +23,15 @@ libc = "0.2.189"
 toml = { version = "1.1.6", default-features = false, features = ["parse", "serde"] }
 
 ratatui = "0.30.2"
-crossterm = "0.29.0"
+crossterm = { version = "0.29.0", features = ["serde"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.13"
 toml_edit = "0.25.17"
+portable-pty = "0.9"
+wezterm-term = { package = "zeughaus-wezterm-term", version = "0.1" }
+tungstenite = "0.30"
+ureq = { version = "3.5", default-features = false, features = ["json"] }
+tiny_http = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

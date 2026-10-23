@@ -377,7 +377,7 @@ import re
 ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
-elif "You verify" in prompt:
+elif "You verify" in prompt and "fixed: converted" not in prompt:
     # The units check, as an issue: the rest is asked for again.
     lines = re.findall(r"^- ([RCV][0-9]+): (.*)$", prompt, re.M)
     uid = next(i for i, text in lines if "units and denominators" in text)
@@ -389,7 +389,7 @@ elif "does not account" in prompt:
     say("verifier", verdict(True))
 elif "found problems" in prompt:
     say("worker", "fixed: " + ("EUR added to PLN" in prompt and "converted" or "?"))
-elif "updated report" in prompt:
+elif "updated report" in prompt or ("You verify" in prompt and "fixed: converted" in prompt):
     say("verifier", verdict(True))
 else:
     say("worker", "report")

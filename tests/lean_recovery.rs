@@ -187,7 +187,7 @@ fn a_failure_keeps_every_dependent_task_pending_and_says_why() {
 }
 
 #[test]
-fn after_a_login_resuming_finishes_the_plan_in_the_same_sessions() {
+fn after_a_login_resuming_finishes_the_plan_in_fresh_round_sessions() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
@@ -203,14 +203,24 @@ fn after_a_login_resuming_finishes_the_plan_in_the_same_sessions() {
     core.resume_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
     assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
-    // The failed turn already had a session: the worker resumes it and is
-    // told what happened instead of being handed the task anew.
+    // A new round receives the full task and interruption context without
+    // resuming the provider session of the failed round.
     let log = std::fs::read_to_string(dir.path().join("agy.log")).unwrap();
     let resumed = log
         .lines()
         .find(|line| line.contains("was interrupted"))
         .expect("a resumed worker turn");
-    assert!(resumed.contains("--conversation"), "{resumed}");
+    assert!(!resumed.contains("--conversation"), "{resumed}");
+    assert!(resumed.contains("Task: Fail"), "{resumed}");
+    assert!(resumed.contains("Round: 2"), "{resumed}");
+    assert!(
+        resumed.contains("Interrupted before a report: true"),
+        "{resumed}"
+    );
+    assert!(
+        resumed.contains("No completed worker report is available"),
+        "{resumed}"
+    );
 }
 
 #[test]

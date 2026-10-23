@@ -11,10 +11,13 @@ pub mod git;
 pub mod interview;
 pub mod ledger;
 mod mail;
+pub mod native;
 pub mod projects;
 pub mod risks;
+mod rounds;
 pub mod store;
 pub mod tasks;
+pub mod terminal;
 pub mod trust;
 pub mod tui;
 
@@ -179,6 +182,8 @@ const MAIL_TURNS: usize = 2;
 
 pub struct Core {
     pub store: Store,
+    pub(crate) native: native::Registry,
+    pub(crate) weak: std::sync::OnceLock<std::sync::Weak<Core>>,
     /// One process owns a state directory at a time.
     _lock: std::fs::File,
     config: RwLock<Arc<Config>>,
@@ -215,7 +220,14 @@ struct PlanProposal<'a> {
     specs: &'a [TaskSpec],
 }
 
+#[derive(Clone, Debug)]
+enum SessionPolicy {
+    Role,
+    TaskRound { task: String, round: u32 },
+}
+
 struct TurnSetup<'a> {
+    session_policy: SessionPolicy,
     conversation: &'a str,
     plan_id: Option<String>,
     role: String,
@@ -272,6 +284,7 @@ impl Core {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let store = Store::open(&state.join("core.db"))?;
+        native::recover(&store)?;
         // A daemon that died leaves its agents' CLIs running; a resumed turn
         // must not work beside its own orphan.
         for (pid, started_ms, provider) in store.running_processes()? {
@@ -281,6 +294,8 @@ impl Core {
         let interrupted = store.interrupt_unfinished_tasks()?;
         let core = Arc::new(Self {
             store,
+            native: native::Registry::default(),
+            weak: std::sync::OnceLock::new(),
             _lock: lock,
             config: RwLock::new(Arc::new(config)),
             config_update: Mutex::new(()),
@@ -298,6 +313,17 @@ impl Core {
             reviews: Mutex::new(HashMap::new()),
             blocked_seen: Mutex::new(HashMap::new()),
             unblocked: Mutex::new(HashMap::new()),
+        });
+        let _ = core.weak.set(Arc::downgrade(&core));
+        let weak = Arc::downgrade(&core);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let Some(core) = weak.upgrade() else {
+                    break;
+                };
+                let _ = core.native.reap_idle();
+            }
         });
         core.store.recover_approved_requirements()?;
         core.store.recover_options_comparisons()?;
@@ -1115,6 +1141,7 @@ impl Core {
         std::thread::spawn(move || {
             let role = format!("code-review:{}", task.id);
             let setup = TurnSetup {
+                session_policy: SessionPolicy::Role,
                 conversation: &conversation,
                 plan_id: Some(plan_id.clone()),
                 role: role.clone(),
@@ -1281,7 +1308,7 @@ impl Core {
 
     /// Runs again every task of `plan_id` that ended without approval
     /// (interrupted, failed, waiting for a login, needing the user, skipped).
-    /// Agents resume their own sessions with what they already did; a change
+    /// Agents start a fresh round with their durable handoff; a change
     /// that was approved but could not be integrated is integrated again.
     pub fn resume_plan(self: &Arc<Self>, conversation: &str, plan_id: &str) -> Result<Vec<Task>> {
         require(
@@ -1521,8 +1548,17 @@ impl Core {
                 let stat = git::diff_stat(&project, &base, &snapshot)?;
                 let changes = tasks::changes_text(&base, &snapshot, &stat);
 
+                task.round += 1;
+                task.verdict = None;
+                task.base = Some(base.clone());
+                task.result = Some(snapshot.clone());
+                self.set_status(&req.conversation, &mut task, status::VERIFYING)?;
                 let verifier = format!("verifier:{}", task.id);
                 let setup = TurnSetup {
+                    session_policy: SessionPolicy::TaskRound {
+                        task: task.id.clone(),
+                        round: task.round,
+                    },
                     conversation: &req.conversation,
                     plan_id: Some(task.plan_id.clone()),
                     role: verifier.clone(),
@@ -1538,7 +1574,11 @@ impl Core {
                     tasks::verifier_turn_prompt(
                         &project.to_string_lossy(),
                         &spec,
-                        task.report.as_deref().unwrap_or(""),
+                        if fresh {
+                            ""
+                        } else {
+                            task.report.as_deref().unwrap_or("")
+                        },
                         Some(&changes),
                         fresh,
                         &upstream,
@@ -1554,7 +1594,6 @@ impl Core {
                 let mut verdict = tasks::parse_verdict(&answer);
                 let obligations = tasks::obligations(&spec);
                 tasks::settle(&mut verdict, &obligations, !spec.writes);
-                task.round += 1;
 
                 let mut v_val = serde_json::to_value(&verdict)?;
                 if let Some(obj) = v_val.as_object_mut() {
@@ -2242,6 +2281,7 @@ impl Core {
             .iter()
             .any(|message| message.text.starts_with(COMMENT_PREFIX));
         let setup = TurnSetup {
+            session_policy: SessionPolicy::Role,
             conversation,
             plan_id: None,
             role: if is_comment {
@@ -2842,6 +2882,7 @@ impl Core {
                 .join("\n\n")
         };
         let setup = TurnSetup {
+            session_policy: SessionPolicy::Role,
             conversation,
             plan_id: plan_id.map(str::to_string),
             role: role.into(),
@@ -2891,6 +2932,7 @@ impl Core {
             return Ok(None);
         };
         let TurnSetup {
+            session_policy,
             conversation,
             plan_id,
             role,
@@ -2918,7 +2960,16 @@ impl Core {
         let provider = profile
             .as_ref()
             .map_or("unconfigured", |profile| agent::name(profile.provider));
-        let resume = self.store.last_session(conversation, &role, provider)?;
+        let resume = self.session_for_turn(
+            conversation,
+            &role,
+            provider,
+            &session_policy,
+            profile.as_ref().ok(),
+            &cwd,
+            &add_dirs,
+            access,
+        )?;
         let mut inbox = self.store.pending_mail(conversation, &role)?;
         if mail_only && role == ORCHESTRATOR {
             inbox.retain(|mail| mail.kind != "agent_work");
@@ -2993,9 +3044,11 @@ impl Core {
                 "model": profile.as_ref().ok().and_then(|profile| profile.model.clone()),
                 "effort": profile.as_ref().ok().and_then(|profile| profile.native_effort.clone()),
                 "comments": comments,
+                "mail_only": mail_only,
             }),
         );
         let outcome = profile.and_then(|profile| {
+            let profile_name = profile.profile.clone();
             let spec = agent::Spec {
                 provider: profile.provider,
                 binary: profile.binary,
@@ -3007,6 +3060,46 @@ impl Core {
                 access,
                 resume: resume.clone(),
             };
+            let native = self.native.prepare_scoped(
+                self,
+                conversation,
+                &role,
+                &spec,
+                &match &session_policy {
+                    SessionPolicy::Role => String::new(),
+                    SessionPolicy::TaskRound { .. } => format!("{session_policy:?}:{profile_name}"),
+                },
+            )?;
+            let identity = native
+                .as_ref()
+                .map(|session| session.identity.clone())
+                .or_else(|| resume.clone());
+            self.store.record_run_context(&store::RunContext {
+                turn_id: turn.id.clone(),
+                conversation: conversation.into(),
+                role: role.clone(),
+                provider: provider.into(),
+                profile: profile_name,
+                cwd: spec.cwd.clone(),
+                add_dirs: spec.add_dirs.clone(),
+                access: match access {
+                    agent::Access::ReadOnly => store::RunAccess::ReadOnly,
+                    agent::Access::Write => store::RunAccess::Write,
+                },
+                backend: native
+                    .as_ref()
+                    .map_or(store::RunBackend::Cli, |session| session.backend_kind()),
+                provider_thread_id: (spec.provider == crate::config::ProviderKind::Codex)
+                    .then(|| identity.clone())
+                    .flatten(),
+                provider_session_id: (spec.provider != crate::config::ProviderKind::Codex)
+                    .then(|| identity.clone())
+                    .flatten(),
+                provider_turn_id: None,
+            })?;
+            if let Some(native) = &native {
+                self.store.set_session(&turn.id, &native.identity)?;
+            }
             let prompt_mail = inbox
                 .iter()
                 .filter(|mail| !(role == ORCHESTRATOR && mail.kind == "agent_work"))
@@ -3018,6 +3111,21 @@ impl Core {
                 tasks::inbox_text(&prompt_mail)
             };
             text.push_str(&prompt(resume.is_none()));
+            if resume.is_none()
+                && let SessionPolicy::TaskRound { task, round } = &session_policy
+            {
+                let handoff = self.round_handoff(task, *round, &spec.cwd)?;
+                let task_spec: TaskSpec = serde_json::from_value(handoff.task.clone())?;
+                if role.starts_with("verifier:") {
+                    text.push_str(&tasks::verifier_prompt(
+                        &spec.cwd.to_string_lossy(),
+                        &task_spec,
+                        "",
+                        None,
+                    ));
+                }
+                text.push_str(&tasks::round_handoff_prompt(&handoff));
+            }
             if let Some((id, _)) = task_role(&role)
                 && let Some(task) = self.store.task_by_id(id)?
                 && !mail_only
@@ -3039,10 +3147,19 @@ impl Core {
                 serde_json::to_value(agent::Event::Prompt { text: text.clone() })
                     .unwrap_or_default(),
             );
-            agent::run(&spec, &text, cancel, &mut |event| {
+            let mut on_event = |event| {
                 match &event {
+                    agent::Event::ProviderTurn { id } if native.is_some() => {
+                        if let Err(error) =
+                            self.store.bind_provider_turn(conversation, &turn.id, id)
+                        {
+                            persistence_error.borrow_mut().get_or_insert(error);
+                        }
+                    }
                     agent::Event::Session { id } => {
-                        let _ = self.store.set_session(&turn.id, id);
+                        if let Err(error) = self.store.set_session(&turn.id, id) {
+                            persistence_error.borrow_mut().get_or_insert(error);
+                        }
                     }
                     agent::Event::Process { pid } => {
                         let _ = self.store.set_turn_pid(&turn.id, *pid);
@@ -3080,7 +3197,12 @@ impl Core {
                 if let Ok(payload) = serde_json::to_value(&event) {
                     announce("agent", payload);
                 }
-            })
+            };
+            if let Some(native) = native.as_ref() {
+                native.run(&turn.id, &text, &inbox, cancel, &mut on_event)
+            } else {
+                agent::run(&spec, &text, cancel, &mut on_event)
+            }
         });
         flush_text(&log);
         record(progress.borrow_mut().finish());
@@ -3118,7 +3240,9 @@ impl Core {
                 Ok(Some(outcome.text))
             }
             Err(error) => {
-                let status = if cancel.load(Ordering::SeqCst) {
+                let status = if error.to_string().contains("native turn interrupted") {
+                    TurnStatus::Interrupted
+                } else if cancel.load(Ordering::SeqCst) {
                     TurnStatus::Cancelled
                 } else {
                     TurnStatus::Failed
@@ -3299,7 +3423,7 @@ impl Core {
                                 if let Err(error) =
                                     self.run_task(conversation, &mut task_clone, &task_cancel)
                                 {
-                                    task_clone.report = Some(error.to_string());
+                                    task_clone.report.get_or_insert_with(|| error.to_string());
                                     let _ = self.stop(
                                         conversation,
                                         &mut task_clone,
@@ -3339,7 +3463,7 @@ impl Core {
     }
 
     /// Worker and verifier take turns until the verifier approves or the
-    /// rounds run out; the worker resumes its own session with the findings.
+    /// rounds run out; each new round starts fresh sessions with a durable handoff.
     fn run_task(
         self: &Arc<Self>,
         conversation: &str,
@@ -3522,9 +3646,15 @@ impl Core {
                     status::WORKING
                 },
             )?;
+            let worker_task = task.id.clone();
+            let worker_plan = task.plan_id.clone();
             let worker_setup = || TurnSetup {
+                session_policy: SessionPolicy::TaskRound {
+                    task: worker_task.clone(),
+                    round,
+                },
                 conversation,
-                plan_id: Some(task.plan_id.clone()),
+                plan_id: Some(worker_plan.clone()),
                 role: worker.clone(),
                 profile: self
                     .config_snapshot()
@@ -3541,8 +3671,8 @@ impl Core {
             let report = if recheck {
                 task.report.clone()
             } else {
-                self.turn(worker_setup(), cancel, |first| {
-                    let continuation = if first || round == 1 {
+                self.turn(worker_setup(), cancel, |_first| {
+                    let continuation = if round == 1 {
                         None
                     } else if resumed && round == first_round {
                         Some(tasks::worker_resume(&findings))
@@ -3564,6 +3694,8 @@ impl Core {
                 return self.stop_task(conversation, task, &worker, cancel);
             };
             let mut report = self.post(conversation, Some(&task.plan_id), &spec.id, &report)?;
+            task.report = Some(report.clone());
+            self.store.update_task(task)?;
             // Approved tasks addressed by it answer now, so its next turn reads them.
             self.answer_waiting(conversation, &task.plan_id, cancel)?;
             // Messages that arrived while it worked get a turn of their own.
@@ -3590,6 +3722,8 @@ impl Core {
                     return self.stop_task(conversation, task, &worker, cancel);
                 };
                 report = self.post(conversation, Some(&task.plan_id), &spec.id, &next)?;
+                task.report = Some(report.clone());
+                self.store.update_task(task)?;
             }
             // The worker may have stated its own effect for the card in the
             // same answer. Keep that line for feedback and drop the block
@@ -3658,8 +3792,27 @@ impl Core {
                 }
                 _ => None,
             };
-            self.set_status(conversation, task, status::VERIFYING)?;
+            {
+                // Serialize the final mailbox check with send_to_agent. Mail
+                // accepted before this boundary must run before verification.
+                let _integration = self.integrating.lock().expect("integration mutex");
+                if self
+                    .store
+                    .pending_mail(conversation, &worker)?
+                    .iter()
+                    .any(|mail| mail.kind == "agent_work")
+                {
+                    task.verdict = None;
+                    self.set_status(conversation, task, status::QUEUED)?;
+                    return Ok(());
+                }
+                self.set_status(conversation, task, status::VERIFYING)?;
+            }
             let setup = TurnSetup {
+                session_policy: SessionPolicy::TaskRound {
+                    task: task.id.clone(),
+                    round: task.round,
+                },
                 conversation,
                 plan_id: Some(task.plan_id.clone()),
                 role: verifier.clone(),
@@ -3676,7 +3829,7 @@ impl Core {
                 let prompt = tasks::verifier_turn_prompt(
                     &project_text,
                     &spec,
-                    &report,
+                    if first { "" } else { &report },
                     changes.as_deref(),
                     first || round == 1,
                     &upstream,
@@ -3700,6 +3853,10 @@ impl Core {
                 // verifier gets one turn to account for it.
                 let prompt = tasks::coverage_followup(&missing);
                 let setup = TurnSetup {
+                    session_policy: SessionPolicy::TaskRound {
+                        task: task.id.clone(),
+                        round: task.round,
+                    },
                     conversation,
                     plan_id: Some(task.plan_id.clone()),
                     role: verifier.clone(),
@@ -3775,6 +3932,8 @@ impl Core {
                 task.feedback.as_mut().expect("round feedback")["integration_repairs"] =
                     json!(integration_repairs);
             }
+            // Preserve this verdict before the next round clears mutable fields.
+            self.store.update_task(task)?;
             if incomplete {
                 // The worker cannot fix a verifier that skips its checks.
                 return self.stop(
@@ -4397,6 +4556,10 @@ impl Core {
         self.set_status(conversation, task, status::WORKING)?;
         let worker = format!("worker:{}", task.id);
         let setup = TurnSetup {
+            session_policy: SessionPolicy::TaskRound {
+                task: task.id.clone(),
+                round: task.round,
+            },
             conversation,
             plan_id: Some(task.plan_id.clone()),
             role: worker.clone(),
@@ -5006,7 +5169,7 @@ fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
     }
     text.push_str(
         "\nWays out: `retry_with_guidance` (the message is the hint for the worker; it \
-         resumes its own session), `extend_rounds`. Never cancel, skip or approve an \
+         starts a fresh round with its report and findings), `extend_rounds`. Never cancel, skip or approve an \
          unperformed task to bypass a blocker. Preserve every remaining obligation. \
          The user can also use /unblock <task>. To unblock steps, end your answer with:\n\
          ```recover\n{\"actions\":[{\"task\":\"t2\",\"action\":\"retry_with_guidance\",\

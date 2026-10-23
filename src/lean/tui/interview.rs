@@ -126,8 +126,7 @@ impl Form {
         None
     }
 
-    pub fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
-        let screen = frame.area();
+    pub fn draw(&mut self, frame: &mut Frame, screen: Rect, theme: &Theme) {
         let width = screen.width.min(94);
         let area = Rect::new(
             screen.x + screen.width.saturating_sub(width) / 2,
@@ -314,7 +313,7 @@ mod tests {
         for (width, height) in [(94, 25), (40, 12), (12, 5)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
-                .draw(|frame| form.draw(frame, &Theme::new(false, true)))
+                .draw(|frame| form.draw(frame, frame.area(), &Theme::new(false, true)))
                 .unwrap();
             assert_eq!(
                 terminal.backend().buffer().content.len(),
@@ -341,7 +340,7 @@ mod tests {
             form.selected = form.question.options.len();
             form.paste("A long custom answer 👩‍💻".repeat(8).as_str());
             terminal
-                .draw(|frame| form.draw(frame, &Theme::new(false, true)))
+                .draw(|frame| form.draw(frame, frame.area(), &Theme::new(false, true)))
                 .unwrap();
         }
     }

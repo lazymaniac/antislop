@@ -5,9 +5,12 @@
 mod graph_edit;
 #[path = "history.rs"]
 mod history;
+#[path = "run_context.rs"]
+mod run_context;
 #[path = "workflow.rs"]
 mod workflow;
 pub use history::{AgentMessage, ContentOwner, HistoryScope};
+pub use run_context::{RunAccess, RunBackend, RunContext};
 pub use workflow::Workflow;
 
 use crate::{Error, Result};
@@ -105,6 +108,8 @@ fn default_mail_state() -> String {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
+    #[serde(default)]
+    pub backend: Option<String>,
     pub turn_id: String,
     #[serde(default)]
     pub plan_id: Option<String>,
@@ -371,6 +376,7 @@ impl Store {
         )?;
         transaction.execute_batch(include_str!("ledger/schema.sql"))?;
         Self::initialize_history(&transaction)?;
+        Self::initialize_run_context(&transaction)?;
         transaction.pragma_update(None, "user_version", SCHEMA)?;
         transaction.commit()?;
         Ok(())
@@ -632,10 +638,37 @@ impl Store {
     }
 
     pub fn set_session(&self, turn: &str, session: &str) -> Result<()> {
-        self.db().execute(
+        crate::require(!session.is_empty(), "provider session id is empty")?;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let conflicting: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM run_contexts r JOIN turns t ON t.id=r.turn_id
+                WHERE t.id=?1 AND r.backend!='cli' AND
+                ((t.provider='codex' AND r.provider_thread_id IS NOT NULL AND r.provider_thread_id!=?2)
+                 OR (t.provider!='codex' AND r.provider_session_id IS NOT NULL AND r.provider_session_id!=?2)))",
+            params![turn, session], |row| row.get(0),
+        )?;
+        crate::require(
+            !conflicting,
+            "native run is already bound to another provider session",
+        )?;
+        tx.execute(
             "UPDATE turns SET session_id=?2 WHERE id=?1",
             params![turn, session],
         )?;
+        // `codex exec` calls this a session, but its thread.started event
+        // actually contains a thread ID. Retain the legacy resume column and
+        // record the provider's precise identity separately.
+        tx.execute(
+            "UPDATE run_contexts SET
+                provider_thread_id=CASE WHEN (SELECT provider FROM turns WHERE id=?1)='codex'
+                    THEN ?2 ELSE provider_thread_id END,
+                provider_session_id=CASE WHEN (SELECT provider FROM turns WHERE id=?1)!='codex'
+                    THEN ?2 ELSE provider_session_id END
+             WHERE turn_id=?1",
+            params![turn, session],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1744,7 +1777,7 @@ impl Store {
         self.conversation(conversation)?;
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid
+            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid, (SELECT backend FROM run_contexts r WHERE r.turn_id=turns.id)
              FROM turns WHERE conversation_id=?1 ORDER BY started_ms ASC, rowid ASC",
         )?;
         let rows = statement.query_map([conversation], |row| {
@@ -1760,6 +1793,7 @@ impl Store {
                 started_ms: row.get(8)?,
                 finished_ms: row.get(9)?,
                 pid: row.get(10)?,
+                backend: row.get(11)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -2269,7 +2303,7 @@ impl Store {
         let task_ids: std::collections::HashSet<String> =
             tasks.iter().map(|t| t.id.clone()).collect();
         let mut turn_stmt = db.prepare(
-            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid
+            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid, (SELECT backend FROM run_contexts r WHERE r.turn_id=turns.id)
              FROM turns WHERE conversation_id=?1 ORDER BY started_ms ASC, rowid ASC",
         )?;
         let all_turns = turn_stmt
@@ -2286,6 +2320,7 @@ impl Store {
                     started_ms: row.get(8)?,
                     finished_ms: row.get(9)?,
                     pid: row.get(10)?,
+                    backend: row.get(11)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;

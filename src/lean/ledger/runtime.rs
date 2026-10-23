@@ -124,6 +124,7 @@ impl Core {
             if verifier { "verifier" } else { "analyst" }
         );
         let setup = TurnSetup {
+            session_policy: crate::lean::SessionPolicy::Role,
             conversation,
             plan_id: None,
             role: role.clone(),
