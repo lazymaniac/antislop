@@ -32,6 +32,9 @@ wezterm-term = { package = "zeughaus-wezterm-term", version = "0.1" }
 tungstenite = "0.30"
 ureq = { version = "3.5", default-features = false, features = ["json"] }
 tiny_http = "0.12"
+syn = { version = "2", features = ["full", "visit"] }
+quote = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 
 [dev-dependencies]
 tempfile = "3"
