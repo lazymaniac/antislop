@@ -26,7 +26,8 @@ def _ledger_block(tag, value):
 if _ledger_prompt.startswith('Act as requirements analyst before planning.'):
     entries = []
     if not _ledger_entries:
-        source = _ledger_sources[0]
+        # Plan revisions also include a rendered-plan document before user sources.
+        source = next(s for s in _ledger_sources if s['message'] is not None)
         marker = 'Full user source '+source['id']+':\n'
         full = _lr.split(r'\n(?:Full user source |Interview question context |Interview summary |Run and ledger inputs)', _ledger_prompt.split(marker,1)[1], maxsplit=1)[0].rstrip('\n')
         entries = [{'id':'fixture-requirement','kind':'requirement','source':{'source_id':source['id'],'start':0,'end':len(full.encode())},'interpretation':'Deliver the fixture user request','criteria':[{'id':'fixture.accept','text':'Independently inspect the actual fixture result','mandatory':True}]}]

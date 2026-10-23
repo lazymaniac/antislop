@@ -2310,12 +2310,9 @@ impl Core {
         if let Some(task) = latest.first() {
             self.answer_in_background(conversation, &task.plan_id);
         }
-        // The comment agent says which comments its plan took care of.
-        let (answer, addressed) = if is_comment {
-            feedback::split(&answer)
-        } else {
-            (answer, None)
-        };
+        // A regenerated plan can carry a fresh selective claim too, including
+        // after options deferred the original comment revision.
+        let (answer, addressed) = feedback::split(&answer);
         let (answer, unblocking) = tasks::parse_recoveries(&answer);
         let (mut text, mut plan) = tasks::parse_plan(&answer);
         if interviewing {
