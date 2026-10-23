@@ -4048,9 +4048,10 @@ impl Core {
         }
         let policy = &config.policy;
         if !policy.local_write {
+            let branch = worktree_branch(&self.state, task)?;
             let text = format!(
                 "local writes are not allowed; the change is on branch {}",
-                worktree_branch(&self.state, task)?
+                branch
             );
             note(task, text.clone());
             land(
@@ -4059,7 +4060,7 @@ impl Core {
                 "run",
                 &text,
                 None,
-                Some(&worktree_branch(&self.state, task)?),
+                Some(&branch),
                 &[],
             );
             return self.stop(conversation, task, status::NEEDS_USER, Some(&text));
@@ -4129,10 +4130,11 @@ impl Core {
                 )
             }
             git::Integration::Conflict(files) => {
+                let branch = worktree_branch(&self.state, task)?;
                 let text = format!(
                     "conflicts with the current branch in {}; the change is on branch {}",
                     files.join(", "),
-                    worktree_branch(&self.state, task)?
+                    branch
                 );
                 land(
                     task,
@@ -4140,16 +4142,17 @@ impl Core {
                     "run",
                     &text,
                     None,
-                    Some(&worktree_branch(&self.state, task)?),
+                    Some(&branch),
                     &files,
                 );
                 (status::NEEDS_USER, text)
             }
             git::Integration::UserEdits(files) => {
+                let branch = worktree_branch(&self.state, task)?;
                 let text = format!(
                     "you have uncommitted edits in {}; the change is on branch {}",
                     files.join(", "),
-                    worktree_branch(&self.state, task)?
+                    branch
                 );
                 land(
                     task,
@@ -4157,7 +4160,7 @@ impl Core {
                     "run",
                     &text,
                     None,
-                    Some(&worktree_branch(&self.state, task)?),
+                    Some(&branch),
                     &files,
                 );
                 (status::NEEDS_USER, text)
