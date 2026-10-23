@@ -2,16 +2,23 @@ use super::*;
 use base64::Engine;
 use std::io::BufRead;
 use std::io::Write;
+mod stream;
 
 fn http_agent(stream: bool) -> ureq::Agent {
     ureq::Agent::config_builder()
+        .http_status_as_error(false)
         .timeout_global(if stream {
             None
         } else {
             Some(Duration::from_secs(15))
         })
         .timeout_connect(Some(Duration::from_secs(2)))
-        .timeout_recv_body(Some(Duration::from_secs(20)))
+        .timeout_recv_response(Some(Duration::from_secs(5)))
+        .timeout_recv_body(if stream {
+            None
+        } else {
+            Some(Duration::from_secs(20))
+        })
         .max_redirects(0)
         .build()
         .into()
@@ -44,15 +51,26 @@ fn raw(
             .send_json(body.unwrap_or(json!({}))),
         _ => return Err(invalid("unsupported OpenCode request method")),
     };
-    response.map_err(|error| {
-        if path == "/session" && matches!(error, ureq::Error::StatusCode(404 | 405)) {
-            invalid(format!(
-                "{UNSUPPORTED_PROTOCOL}OpenCode {method} {path}: {error}"
-            ))
+    let mut response = response.map_err(invalid)?;
+    let status = response.status().as_u16();
+    if status >= 400 {
+        let mut bytes = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .take(8192)
+            .read_to_end(&mut bytes)?;
+        let body = String::from_utf8_lossy(&bytes);
+        let prefix = if path == "/session" && matches!(status, 404 | 405) {
+            UNSUPPORTED_PROTOCOL
         } else {
-            invalid(error)
-        }
-    })
+            ""
+        };
+        return Err(invalid(format!(
+            "{prefix}OpenCode {method} {path}: HTTP {status}: {body}"
+        )));
+    }
+    Ok(response)
 }
 
 pub(super) fn request(
@@ -144,64 +162,12 @@ pub(super) fn start(core: &Core, spec: &agent::Spec) -> Result<(Process, Backend
 
 pub(super) fn run(
     session: &Session,
-    _turn: &str,
+    turn: &str,
     prompt: &str,
     cancel: &AtomicBool,
     emit: &mut dyn FnMut(agent::Event),
 ) -> Result<agent::Outcome> {
-    let Backend::Opencode { endpoint, password } = &session.backend else {
-        unreachable!()
-    };
-    let mut spec = session.spec.clone();
-    spec.resume = Some(session.identity.clone());
-    let configured = agent::command(&spec, prompt)?;
-    let args: Vec<_> = configured.get_args().map(|arg| arg.to_owned()).collect();
-    let mut command = Command::new(&spec.binary);
-    command
-        .arg("run")
-        .arg("--attach")
-        .arg(endpoint)
-        .args(&args[1..])
-        .current_dir(&spec.cwd)
-        .envs(
-            configured
-                .get_envs()
-                .filter_map(|(key, value)| value.map(|value| (key, value))),
-        )
-        .env("OPENCODE_SERVER_PASSWORD", password)
-        .env("OPENCODE_SERVER_USERNAME", "opencode");
-    let mut bound = false;
-    let result = agent::run_process(
-        &spec,
-        cancel,
-        &mut |event| {
-            if matches!(event, agent::Event::ProviderTurn { .. }) {
-                if bound {
-                    return;
-                }
-                bound = true;
-            }
-            emit(event);
-        },
-        command,
-    );
-    if result.is_err() {
-        let _ = request(
-            session,
-            "POST",
-            &format!("/session/{}/abort", session.identity),
-            Some(json!({})),
-        );
-    }
-    if session.user_interrupted.load(Ordering::SeqCst) {
-        return Err(invalid("native turn interrupted"));
-    }
-    let result = result?;
-    require(
-        result.session.as_deref() == Some(&session.identity),
-        "OpenCode attached turn returned a different session",
-    )?;
-    Ok(result)
+    stream::run(session, turn, prompt, cancel, emit)
 }
 
 pub(super) fn gateway(session: &Arc<Session>) -> Result<()> {
@@ -496,6 +462,242 @@ impl Read for Events {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn http_session(
+        core: &Arc<Core>,
+        conversation: &str,
+        directory: &Path,
+        endpoint: String,
+    ) -> Arc<Session> {
+        let mut command = Command::new("sleep");
+        command.arg("60");
+        Arc::new(Session {
+            core: Arc::downgrade(core),
+            conversation: conversation.into(),
+            role: "orchestrator".into(),
+            spec: agent::Spec {
+                provider: ProviderKind::Opencode,
+                binary: "/bin/false".into(),
+                args: vec![],
+                model: None,
+                effort: None,
+                cwd: directory.into(),
+                add_dirs: vec![],
+                access: agent::Access::ReadOnly,
+                resume: None,
+            },
+            signature: "fixture".into(),
+            identity: "managed".into(),
+            endpoint: String::new(),
+            gateway_address: Mutex::new(None),
+            gateway_password: crate::id(),
+            backend: Backend::Opencode {
+                endpoint,
+                password: "private-server".into(),
+            },
+            stop: Arc::new(AtomicBool::new(false)),
+            active: Mutex::new(None),
+            completed: Mutex::new(std::collections::VecDeque::new()),
+            terminal: Mutex::new(None),
+            gateway_error: Mutex::new(None),
+            started: AtomicBool::new(false),
+            executing: AtomicBool::new(false),
+            user_interrupted: AtomicBool::new(false),
+            touched: Mutex::new(Instant::now()),
+            scope_round: None,
+            process: Process::spawn(command, None).unwrap(),
+        })
+    }
+    #[test]
+    fn a_failed_abort_stops_the_backend_and_preserves_its_failure_reason() {
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let config =
+            crate::config::Config::from_toml(include_str!("../../../examples/antislop.toml"))
+                .unwrap();
+        let core = Core::open(&directory.path().join(".antislop"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(directory.path().to_str().unwrap())
+            .unwrap();
+        core.store
+            .start_turn(&conversation.id, "orchestrator", "opencode", 0, None)
+            .unwrap();
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", server.server_addr());
+        let backend = std::thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            assert_eq!(request.url(), "/session/managed/abort");
+            request
+                .respond(
+                    tiny_http::Response::from_string("backend could not acknowledge abort")
+                        .with_status_code(503),
+                )
+                .unwrap();
+        });
+        let session = http_session(&core, &conversation.id, directory.path(), endpoint);
+        session.executing.store(true, Ordering::SeqCst);
+        let error = session.interrupt().unwrap_err().to_string();
+        assert!(
+            error.contains("503") && error.contains("backend could not acknowledge abort"),
+            "{error}"
+        );
+        assert!(session.stop.load(Ordering::SeqCst));
+        assert!(session.process.status().unwrap().is_some());
+        backend.join().unwrap();
+    }
+    #[test]
+    fn a_lost_accepted_stream_never_resubmits_the_opencode_prompt() {
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let config =
+            crate::config::Config::from_toml(include_str!("../../../examples/antislop.toml"))
+                .unwrap();
+        let core = Core::open(&directory.path().join(".antislop"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(directory.path().to_str().unwrap())
+            .unwrap();
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", server.server_addr());
+        let backend = std::thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .expect("expected backend request");
+            assert_eq!(request.url(), "/event");
+            let (accepted, submitted) = std::sync::mpsc::sync_channel(1);
+            let stream = std::thread::spawn(move || {
+                let mut writer = request.into_writer();
+                writer.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").unwrap();
+                let connected = "data: {\"type\":\"server.connected\",\"properties\":{}}\n\n";
+                write!(writer, "{:x}\r\n{connected}\r\n", connected.len()).unwrap();
+                writer.flush().unwrap();
+                submitted.recv_timeout(Duration::from_secs(5)).unwrap();
+                writer.write_all(b"0\r\n\r\n").unwrap();
+                writer.flush().unwrap();
+                // The prompt was accepted. Lose the event connection without
+                // producing a result; no new prompt request is permissible.
+            });
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .expect("expected backend request");
+            assert_eq!(request.url(), "/session/managed/prompt_async");
+            request.respond(tiny_http::Response::empty(204)).unwrap();
+            accepted.send(()).unwrap();
+            stream.join().unwrap();
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .expect("expected backend request");
+            assert_eq!(request.url(), "/session/managed/abort");
+            request
+                .respond(tiny_http::Response::from_string("true"))
+                .unwrap();
+            assert!(
+                server
+                    .recv_timeout(Duration::from_millis(100))
+                    .unwrap()
+                    .is_none()
+            );
+        });
+        let session = http_session(&core, &conversation.id, directory.path(), endpoint);
+        let error = session
+            .run("turn", "hello", &[], &AtomicBool::new(false), &mut |_| {})
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(EXECUTION_FAILED));
+        assert!(error.contains("event stream disconnected"));
+        assert!(session.stop.load(Ordering::SeqCst));
+        backend.join().unwrap();
+    }
+    #[test]
+    fn explicit_interrupt_keeps_the_opencode_backend_and_records_control() {
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let config =
+            crate::config::Config::from_toml(include_str!("../../../examples/antislop.toml"))
+                .unwrap();
+        let core = Core::open(&directory.path().join(".antislop"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(directory.path().to_str().unwrap())
+            .unwrap();
+        let turn = core
+            .store
+            .start_turn(&conversation.id, "orchestrator", "opencode", 0, None)
+            .unwrap();
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", server.server_addr());
+        let backend = std::thread::spawn(move || {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), "/event");
+            let (sent, submitted) = std::sync::mpsc::sync_channel::<String>(1);
+            let (aborted, abort) = std::sync::mpsc::sync_channel(1);
+            let stream = std::thread::spawn(move || {
+                let mut writer = request.into_writer();
+                writer.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"type\":\"server.connected\",\"properties\":{}}\n\n").unwrap();
+                writer.flush().unwrap();
+                let parent = submitted.recv_timeout(Duration::from_secs(5)).unwrap();
+                let event = json!({"type":"message.updated","properties":{"info":{"id":"answer","sessionID":"managed","role":"assistant","parentID":parent}}});
+                writeln!(writer, "data: {event}\n").unwrap();
+                writer.flush().unwrap();
+                abort.recv_timeout(Duration::from_secs(5)).unwrap();
+                // Closing the stream races with the user's abort response.
+            });
+            let mut request = server.recv().unwrap();
+            assert_eq!(request.url(), "/session/managed/prompt_async");
+            let body: Value = serde_json::from_reader(request.as_reader()).unwrap();
+            request.respond(tiny_http::Response::empty(204)).unwrap();
+            sent.send(body["messageID"].as_str().unwrap().into())
+                .unwrap();
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), "/session/managed/abort");
+            aborted.send(()).unwrap();
+            request
+                .respond(tiny_http::Response::from_string("true"))
+                .unwrap();
+            stream.join().unwrap();
+        });
+        let session = http_session(&core, &conversation.id, directory.path(), endpoint);
+        let running = session.clone();
+        let (began, ready) = std::sync::mpsc::sync_channel(1);
+        let run = std::thread::spawn(move || {
+            running.run(
+                &turn.id,
+                "hello",
+                &[],
+                &AtomicBool::new(false),
+                &mut |event| {
+                    if matches!(event, agent::Event::ProviderTurn { .. }) {
+                        began.send(()).unwrap();
+                    }
+                },
+            )
+        });
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        session.interrupt().unwrap();
+        assert!(
+            run.join()
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("native turn interrupted")
+        );
+        assert!(!session.stop.load(Ordering::SeqCst));
+        session.check_alive().unwrap();
+        let controls: u32 = core
+            .store
+            .db()
+            .query_row(
+                "SELECT count(*) FROM events WHERE kind='native_control'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(controls, 1);
+        backend.join().unwrap();
+    }
     #[test]
     fn global_sse_filters_foreign_sessions_and_preserves_managed_errors() {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
@@ -535,67 +737,149 @@ mod tests {
     }
     #[test]
     fn http_gateway_authenticates_and_limits_sessions_and_mutations() {
-        let directory = tempfile::tempdir_in("/private/tmp").unwrap();
-        let config =
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let mut config =
             crate::config::Config::from_toml(include_str!("../../../examples/antislop.toml"))
                 .unwrap();
+        let selected = config
+            .resolve(
+                crate::config::WorkKind::Orchestration,
+                crate::config::RoleKind::Orchestrator,
+            )
+            .unwrap()
+            .profile;
+        let profile = config.profiles.get_mut(&selected).unwrap();
+        profile.provider = ProviderKind::Opencode;
+        profile.binary = Some("/bin/false".into());
+        profile.model = None;
+        profile.args.clear();
+        profile.command = None;
+        config.providers.insert(
+            ProviderKind::Opencode,
+            crate::config::ProviderConfig {
+                binary: "/bin/false".into(),
+                args: vec![],
+                command: None,
+            },
+        );
         let core = Core::open(&directory.path().join(".antislop"), config).unwrap();
-        let script = directory.path().join("fake-opencode");
-        std::fs::write(&script,"#!/bin/sh\nprintf '%s\\n' \"$@\" > .antislop/attached-args\necho '{\"type\":\"step_start\",\"sessionID\":\"managed\",\"part\":{\"messageID\":\"native-message\"}}'\necho '{\"type\":\"text\",\"part\":{\"text\":\"attached answer\"}}'\necho '{\"type\":\"step_finish\",\"part\":{\"reason\":\"stop\"}}'\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let conversation = core
             .store
             .create_conversation(directory.path().to_str().unwrap())
             .unwrap();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}", server.server_addr());
-        std::thread::spawn(move || {
-            if let Ok(Some(request)) = server.recv_timeout(Duration::from_secs(5)) {
-                assert_eq!(request.url(), "/session/managed");
-                request
-                    .respond(tiny_http::Response::from_string("{\"id\":\"managed\"}"))
+        let (started, first_started) = std::sync::mpsc::sync_channel(1);
+        let (release, released) = std::sync::mpsc::sync_channel(1);
+        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let executed = executions.clone();
+        let backend = std::thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            assert_eq!(request.url(), "/session/managed");
+            request
+                .respond(tiny_http::Response::from_string("{\"id\":\"managed\"}"))
+                .unwrap();
+            let mut released = Some(released);
+            let mut previous = None;
+            for index in 1..=3 {
+                let request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
                     .unwrap();
+                assert_eq!(request.url(), "/event");
+                let (ready, start) = std::sync::mpsc::sync_channel::<String>(1);
+                let gate = if index == 1 { released.take() } else { None };
+                let started = started.clone();
+                let stream = std::thread::spawn(move || {
+                    let mut writer = request.into_writer();
+                    writer.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").unwrap();
+                    let write_event = |writer: &mut dyn Write, event: Value| {
+                        let frame = format!("data: {event}\n\n");
+                        write!(writer, "{:x}\r\n{frame}\r\n", frame.len()).unwrap();
+                        writer.flush().unwrap();
+                    };
+                    write_event(
+                        &mut writer,
+                        json!({"type":"server.connected","properties":{}}),
+                    );
+                    let user = start.recv_timeout(Duration::from_secs(5)).unwrap();
+                    let message = format!("native-message-{index}");
+                    write_event(
+                        &mut writer,
+                        json!({"type":"message.updated","properties":{"info":{"id":message,"sessionID":"managed","role":"assistant","parentID":user}}}),
+                    );
+                    write_event(
+                        &mut writer,
+                        json!({"type":"message.part.updated","properties":{"part":{"id":format!("start-{index}"),"sessionID":"managed","messageID":message,"type":"step-start"}}}),
+                    );
+                    write_event(
+                        &mut writer,
+                        json!({"type":"message.part.updated","properties":{"part":{"id":format!("text-{index}"),"sessionID":"managed","messageID":message,"type":"text","text":if index==1 {"attached answer"}else{"corrected answer"}}}}),
+                    );
+                    if let Some(gate) = gate {
+                        started.send(()).unwrap();
+                        gate.recv_timeout(Duration::from_secs(5)).unwrap();
+                    }
+                    write_event(
+                        &mut writer,
+                        json!({"type":"message.part.updated","properties":{"part":{"id":format!("finish-{index}"),"sessionID":"managed","messageID":message,"type":"step-finish","reason":"stop","tokens":{"input":3,"output":2}}}}),
+                    );
+                    writer.write_all(b"0\r\n\r\n").unwrap();
+                    writer.flush().unwrap();
+                });
+                let mut request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(request.url(), "/session/managed/prompt_async");
+                let body: Value = serde_json::from_reader(request.as_reader()).unwrap();
+                assert_eq!(body["agent"], "antislop");
+                let prompt = body["parts"][0]["text"].as_str().unwrap();
+                match index {
+                    1 => assert_eq!(prompt, "hello"),
+                    2 => {
+                        assert!(prompt.contains("native correction one"));
+                        assert!(
+                            !prompt.contains("native correction two"),
+                            "a stale request was silently expanded"
+                        );
+                    }
+                    _ => assert!(prompt.contains("native correction two")),
+                }
+                assert_ne!(previous.as_ref(), Some(&body["messageID"]));
+                previous = Some(body["messageID"].clone());
+                executed.fetch_add(1, Ordering::SeqCst);
+                request.respond(tiny_http::Response::empty(204)).unwrap();
+                ready
+                    .send(body["messageID"].as_str().unwrap().into())
+                    .unwrap();
+                stream.join().unwrap();
             }
+            assert!(
+                server
+                    .recv_timeout(Duration::from_millis(100))
+                    .unwrap()
+                    .is_none(),
+                "a repeated message caused an extra turn"
+            );
         });
-        let mut command = Command::new("sleep");
-        command.arg("60");
-        let session = Arc::new(Session {
-            core: Arc::downgrade(&core),
-            conversation: conversation.id,
-            role: "orchestrator".into(),
-            spec: agent::Spec {
-                provider: ProviderKind::Opencode,
-                binary: script,
-                args: vec![],
-                model: None,
-                effort: None,
-                cwd: directory.path().into(),
-                add_dirs: vec![],
-                access: agent::Access::ReadOnly,
-                resume: None,
-            },
-            signature: "fixture".into(),
-            identity: "managed".into(),
-            endpoint: String::new(),
-            gateway_address: Mutex::new(None),
-            gateway_password: crate::id(),
-            backend: Backend::Opencode {
-                endpoint,
-                password: "private-server".into(),
-            },
-            stop: Arc::new(AtomicBool::new(false)),
-            active: Mutex::new(None),
-            completed: Mutex::new(std::collections::VecDeque::new()),
-            terminal: Mutex::new(None),
-            gateway_error: Mutex::new(None),
-            started: AtomicBool::new(false),
-            executing: AtomicBool::new(false),
-            user_interrupted: AtomicBool::new(false),
-            touched: Mutex::new(Instant::now()),
-            scope_round: None,
-            process: Process::spawn(command, None).unwrap(),
-        });
+        let mut session = http_session(&core, &conversation.id, directory.path(), endpoint);
+        let profile = core.config_snapshot().resolve(
+            crate::config::WorkKind::Orchestration,
+            crate::config::RoleKind::Orchestrator,
+        );
+        {
+            let native = Arc::get_mut(&mut session).unwrap();
+            native.spec.effort = profile.as_ref().unwrap().native_effort.clone();
+            native.signature = format!("orchestrator:{:?}", native.spec);
+        }
+        core.native.sessions.lock().unwrap().insert(
+            (conversation.id.clone(), "orchestrator".into()),
+            session.clone(),
+        );
         gateway(&session).unwrap();
         let endpoint = session.gateway_address.lock().unwrap().clone().unwrap();
         assert!(ureq::get(format!("{endpoint}/session")).call().is_err());
@@ -632,27 +916,97 @@ mod tests {
             .unwrap();
         let value: Value = response.body_mut().read_json().unwrap();
         assert_eq!(value, json!([{"id":"managed"}]));
-        let mut events = vec![];
-        let result = session
-            .run(
-                "turn",
-                "hello",
-                &[],
+        let running = core.clone();
+        let owner = conversation.id.clone();
+        let cwd = directory.path().to_path_buf();
+        let first = std::thread::spawn(move || {
+            running.turn(
+                crate::lean::TurnSetup {
+                    conversation: &owner,
+                    plan_id: None,
+                    role: "orchestrator".into(),
+                    profile,
+                    cwd,
+                    add_dirs: vec![],
+                    access: agent::Access::ReadOnly,
+                    upto_message: 0,
+                    session_policy: crate::lean::SessionPolicy::Role,
+                },
                 &AtomicBool::new(false),
-                &mut |event| events.push(event),
+                |_| "hello".into(),
             )
-            .unwrap();
-        assert_eq!(result.text, "attached answer");
-        assert_eq!(result.session.as_deref(), Some("managed"));
-        assert!(
-            events.iter().any(
-                |event| matches!(event,agent::Event::ProviderTurn{id} if id=="native-message")
-            )
+        });
+        first_started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let role_lock = core.turn_lock(&conversation.id, "orchestrator");
+        for (id, text) in [
+            ("first", "native correction one"),
+            ("second", "native correction two"),
+            ("first", "native correction one"),
+        ] {
+            let response=ureq::post(format!("{endpoint}/session/managed/prompt_async")).header("Authorization",authorization(&session.gateway_password)).send_json(json!({"messageID":id,"agent":"antislop","parts":[{"type":"text","text":text}]})).unwrap();
+            assert_eq!(response.status().as_u16(), 204);
+            if id == "first" && core.store.mail(&conversation.id).unwrap().len() == 1 {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Arc::strong_count(&role_lock) < 3 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "orchestrator did not prepare its first request"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+        assert!(session.executing.load(Ordering::SeqCst));
+        let mail = core.store.mail(&conversation.id).unwrap();
+        assert_eq!(mail.len(), 2);
+        assert!(mail.iter().all(|message| message.delivered_turn.is_none()));
+        release.send(()).unwrap();
+        assert_eq!(
+            first.join().unwrap().unwrap().as_deref(),
+            Some("attached answer")
         );
-        let args =
-            std::fs::read_to_string(directory.path().join(".antislop/attached-args")).unwrap();
-        assert!(args.starts_with("run\n--attach\n"));
-        assert!(args.contains("--session\nmanaged\n"));
-        assert!(args.contains("--agent\nantislop\n"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !core.is_idle(&conversation.id) {
+            assert!(
+                Instant::now() < deadline,
+                "queued OpenCode corrections did not complete"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(executions.load(Ordering::SeqCst), 3);
+        let mail = core.store.mail(&conversation.id).unwrap();
+        assert_eq!(mail.len(), 2);
+        assert!(mail.iter().all(|message| message.delivered_turn.is_some()));
+        assert_ne!(mail[0].delivered_turn, mail[1].delivered_turn);
+        let sessions = core.store.sessions(&conversation.id).unwrap();
+        assert_eq!(sessions.len(), 3);
+        assert!(
+            sessions
+                .iter()
+                .all(|session| session.session_id.as_deref() == Some("managed")
+                    && session.backend.as_deref() == Some("opencode_server"))
+        );
+        let turn = core
+            .store
+            .last_turn(&conversation.id, "orchestrator")
+            .unwrap()
+            .unwrap();
+        assert_eq!(turn.status, store::TurnStatus::Done);
+        assert_eq!(turn.session_id.as_deref(), Some("managed"));
+        let context = core
+            .store
+            .run_context(&conversation.id, &turn.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(context.backend, store::RunBackend::OpencodeServer);
+        assert_eq!(context.provider_session_id.as_deref(), Some("managed"));
+        assert_eq!(
+            context.provider_turn_id.as_deref(),
+            Some("native-message-3")
+        );
+        let usage:u32=core.store.db().query_row("SELECT count(*) FROM events WHERE turn_id=?1 AND kind='agent' AND json_extract(payload,'$.type')='usage' AND json_extract(payload,'$.input')=3 AND json_extract(payload,'$.output')=2",[&turn.id],|row|row.get(0)).unwrap();
+        assert_eq!(usage, 1);
+        backend.join().unwrap();
     }
 }

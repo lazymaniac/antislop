@@ -176,11 +176,9 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
                     && !text.contains("RISK_END")
             );
             assert!(!text.contains("src/file.rs"));
-            // The long activity phrase is cut at the card edge; the state
-            // line alone holds state, and the running role's doing text
-            // has a line of its own.
-            assert!(!text.contains("exec cargo check"));
-            assert!(text.contains("doing: exec cargo"), "{text}");
+            // The state line alone holds state, and the running role's
+            // doing text has a line of its own.
+            assert!(text.contains("doing: exec cargo check"), "{text}");
             if key == "worker:t1" {
                 assert!(text.contains("Improve storage"), "{text}");
                 assert!(text.contains("👩‍💻") && text.contains("e\u{301}"), "{text}");
@@ -231,7 +229,7 @@ fn graph_scrolls_through_many_short_cards() {
         .collect();
     app.focus = Focus::Graph;
     app.selected = "worker:t0".into();
-    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(180, 32)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let start = app.offset.1;
     assert!(app.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)));
@@ -242,7 +240,7 @@ fn graph_scrolls_through_many_short_cards() {
     }
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(app.offset.1 > start);
-    assert_eq!(app.selected, "worker:t10");
+    assert_eq!(app.selected, "worker:t9");
     let text: String = terminal
         .backend()
         .buffer()
@@ -303,7 +301,7 @@ fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert_eq!(app.input_shown, MAX_PASTE_BYTES - 5);
     let cursor = terminal.get_cursor_position().unwrap();
-    assert_eq!(cursor.y, 9);
+    assert_eq!(cursor.y, 7);
     assert_eq!(terminal.backend().buffer()[(1, cursor.y)].symbol(), "f");
 
     app.editor = Some(Editor {
@@ -1219,7 +1217,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_wide.contains("autonomous"));
+    assert!(text_wide.contains("[?]"));
     assert!(!text_wide.contains("[Chat]"));
 
     // 80x24 (compact stacked)
@@ -1236,7 +1234,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_compact.contains("[Chat]"));
+    assert!(text_compact.contains("[?]"));
 
     // 11x4 (below minimum 12x5)
     let mut term_tiny = Terminal::new(TestBackend::new(11, 4)).unwrap();
@@ -2711,7 +2709,7 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
     assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
     assert!(app.help.is_none());
 
-    // 84 cols (< 85): Compact header badge
+    // 84 cols (< 85): Status stays behind the footer hint.
     let mut term_84 = Terminal::new(TestBackend::new(84, 20)).unwrap();
     term_84.draw(|f| app.draw(f)).unwrap();
     let text_84: String = term_84
@@ -2721,8 +2719,8 @@ fn tui_compact_minimal_terminals_from_12x5_to_84_and_split_at_85() {
         .iter()
         .map(|c| c.symbol())
         .collect();
+    assert!(text_84.contains("[?]"));
     assert!(text_84.contains("[Chat]"));
-    assert!(text_84.contains("Team"));
 
     // 85 cols (>= 85): Split side-by-side with vertical separator
     let mut term_85 = Terminal::new(TestBackend::new(85, 20)).unwrap();
@@ -4065,7 +4063,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
         None,
         &Default::default(),
         GroupingMode::Dependency,
-        Some((78, 20)),
+        Some((92, 20)),
     );
     assert!(adaptive_branch.nodes.iter().all(|n| n.visible));
 
@@ -4091,7 +4089,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
         None,
         &Default::default(),
         GroupingMode::Dependency,
-        Some((78, 20)),
+        Some((92, 20)),
     );
     assert_eq!(adaptive_cycle.nodes.len(), 3 + 2);
 
@@ -4103,7 +4101,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
         None,
         &collapsed,
         GroupingMode::Dependency,
-        Some((78, 20)),
+        Some((92, 20)),
     );
     let p1_w = collapsed_graph.node("worker:p1").unwrap();
     let p1_v = collapsed_graph.node("verifier:p1").unwrap();
@@ -4116,7 +4114,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
         Some("p1"),
         &Default::default(),
         GroupingMode::Dependency,
-        Some((78, 20)),
+        Some((92, 20)),
     );
     assert!(filtered_graph.node("worker:p1").unwrap().visible);
     assert!(!filtered_graph.node("worker:p2").unwrap().visible);
@@ -4322,7 +4320,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     term_small.draw(|f| app.draw(f)).unwrap();
 
     let initial_viewport = app.graph_viewport.expect("viewport set after draw");
-    assert_eq!(initial_viewport, (76, 13));
+    assert_eq!(initial_viewport, (76, 12));
 
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(
@@ -4362,7 +4360,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     let mut term_large = Terminal::new(TestBackend::new(160, 50)).unwrap();
     term_large.draw(|f| app.draw(f)).unwrap();
     let resized_viewport = app.graph_viewport.expect("viewport updated after resize");
-    assert_eq!(resized_viewport, (102, 38));
+    assert_eq!(resized_viewport, (102, 36));
 }
 
 #[test]
@@ -4393,7 +4391,7 @@ fn test_canvas_memory_bounded_for_large_graphs() {
         None,
         &Default::default(),
         GroupingMode::Dependency,
-        Some((77, 26)),
+        Some((92, 40)),
     );
 
     // Windowed canvas allocates strictly O(inner.width * inner.height) = 77 * 26 = 2002 cells
@@ -4431,7 +4429,7 @@ fn test_adaptive_graph_non_adjacent_same_column_bypass_routing() {
         None,
         &Default::default(),
         GroupingMode::Dependency,
-        Some((78, 20)),
+        Some((92, 20)),
     );
 
     let orch = graph.node(ORCHESTRATOR).expect("orchestrator present");
@@ -4512,7 +4510,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
         Some("task 1"),
         &Default::default(),
         GroupingMode::Dependency,
-        Some((78, 20)),
+        Some((92, 20)),
     );
 
     assert!(!filtered_graph.node(PLAN_VERIFIER).unwrap().visible);
@@ -4536,7 +4534,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
         Some("task 3"),
         &Default::default(),
         GroupingMode::Dependency,
-        Some((78, 20)),
+        Some((92, 20)),
     );
     let w3 = t3_graph.node("worker:t3").unwrap();
     assert!(w3.visible);
@@ -4557,7 +4555,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
         Some("approved"),
         &Default::default(),
         GroupingMode::Status,
-        Some((78, 20)),
+        Some((92, 20)),
     );
     let w2_status = status_graph.node("worker:t2").unwrap();
     assert!(w2_status.visible);
@@ -4618,26 +4616,26 @@ fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
         None,
         &Default::default(),
         GroupingMode::Dependency,
-        Some((78, 20)),
+        Some((92, 20)),
     );
     let g_mid = Graph::new_with_viewport(
         &view,
         None,
         &Default::default(),
         GroupingMode::Dependency,
-        Some((77, 26)),
+        Some((92, 40)),
     );
     let g_tall = Graph::new_with_viewport(
         &view,
         None,
         &Default::default(),
         GroupingMode::Dependency,
-        Some((104, 58)),
+        Some((140, 66)),
     );
 
-    let whole_short = count_whole_cards(&g_short, 78, 20);
-    let whole_mid = count_whole_cards(&g_mid, 77, 26);
-    let whole_tall = count_whole_cards(&g_tall, 104, 58);
+    let whole_short = count_whole_cards(&g_short, 92, 20);
+    let whole_mid = count_whole_cards(&g_mid, 92, 40);
+    let whole_tall = count_whole_cards(&g_tall, 140, 66);
 
     // Height utilization: larger panel height fits strictly more whole readable cards
     assert!(
@@ -4675,6 +4673,11 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
     ];
 
     for &(term_name, term_w, term_h, inner_w, inner_h) in &terminal_configs {
+        let inner_h = if term_w >= 85 && term_h >= 30 {
+            inner_h - 2
+        } else {
+            inner_h - 1
+        };
         let (mut app, _rx) =
             App::test_app_with_client(Client::at(std::path::Path::new("/dev/null")));
         app.focus = Focus::Graph;

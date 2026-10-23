@@ -39,6 +39,7 @@ pub(super) struct View {
     commands: SyncSender<Command>,
     stop: Arc<AtomicBool>,
     dimensions: (u16, u16),
+    identity: String,
 }
 impl View {
     fn start(
@@ -48,6 +49,7 @@ impl View {
         columns: u16,
         rows: u16,
         updates: mpsc::Sender<Update>,
+        identity: String,
     ) -> Self {
         let state = Arc::new(std::sync::Mutex::new(Snapshot::default()));
         let output = state.clone();
@@ -111,6 +113,9 @@ impl View {
                         continue;
                     }
                     Ok(command) => {
+                        if let Command::Resize(columns, rows) = &command {
+                            dimensions = (*columns, *rows);
+                        }
                         if let Command::Input(input) = &command
                             && let Some(error) = &blocked
                         {
@@ -131,16 +136,13 @@ impl View {
                                     sequence: sequence + 1,
                                     input,
                                 },
-                                Command::Resize(columns, rows) => {
-                                    dimensions = (columns, rows);
-                                    Request::TerminalResize {
-                                        conversation: conversation.clone(),
-                                        role: role.clone(),
-                                        handle: current.handle.clone(),
-                                        columns,
-                                        rows,
-                                    }
-                                }
+                                Command::Resize(columns, rows) => Request::TerminalResize {
+                                    conversation: conversation.clone(),
+                                    role: role.clone(),
+                                    handle: current.handle.clone(),
+                                    columns,
+                                    rows,
+                                },
                                 Command::Retry => unreachable!(),
                             };
                             let result = if matches!(request, Request::TerminalInput { .. }) {
@@ -218,6 +220,7 @@ impl View {
             commands,
             stop,
             dimensions: (columns, rows),
+            identity,
         }
     }
     fn send(&self, command: Command) -> Result<()> {
@@ -284,7 +287,7 @@ impl App {
         }) {
             for (panel, key) in details.session_keys().iter().enumerate() {
                 let role = details.composer_recipient(key);
-                let backend = details
+                let metadata = details
                     .task
                     .as_ref()
                     .and_then(|task| {
@@ -292,29 +295,61 @@ impl App {
                             .as_array()
                             .or_else(|| task["turns"].as_array())
                     })
-                    .and_then(|turns| turns.iter().rev().find(|turn| turn["role"] == role))
+                    .and_then(|turns| turns.iter().rev().find(|turn| turn["role"] == role));
+                let stored = details
+                    .sessions
+                    .iter()
+                    .rev()
+                    .find(|session| session.role == role)
+                    .filter(|_| details.task.is_none());
+                let backend = metadata
                     .and_then(|turn| turn["backend"].as_str())
-                    .or_else(|| {
-                        details
-                            .sessions
-                            .iter()
-                            .rev()
-                            .find(|session| session.role == role)
-                            .and_then(|session| session.backend.as_deref())
-                    });
+                    .or_else(|| stored.and_then(|session| session.backend.as_deref()));
                 if matches!(backend, Some("codex_app_server" | "opencode_server")) {
+                    let session = metadata
+                        .and_then(|turn| turn["session_id"].as_str())
+                        .or_else(|| stored.and_then(|session| session.session_id.as_deref()));
+                    let identity = format!(
+                        "{}:{}:{}",
+                        backend.unwrap(),
+                        session.unwrap_or("waiting"),
+                        details
+                            .task
+                            .as_ref()
+                            .filter(|_| crate::lean::task_role(&role).is_some())
+                            .map(|task| task["round"].to_string())
+                            .unwrap_or_default()
+                    );
                     let area = details.native_areas[panel];
-                    wanted.push((role, key.clone(), area.width.max(1), area.height.max(1)));
+                    if area.is_empty() {
+                        continue;
+                    }
+                    wanted.push((
+                        role,
+                        key.clone(),
+                        identity,
+                        area.width.max(1),
+                        area.height.max(1),
+                    ));
                 }
             }
         }
         let prefix = format!("{}:", self.conversation);
-        self.native_views.retain(|key, _| {
-            wanted
-                .iter()
-                .any(|(role, _, _, _)| *key == format!("{prefix}{role}"))
+        let mut retired = false;
+        self.native_views.retain(|key, view| {
+            let keep = wanted.iter().any(|(role, _, identity, _, _)| {
+                *key == format!("{prefix}{role}") && view.identity == *identity
+            });
+            retired |= !keep;
+            keep
         });
-        for (role, local_key, columns, rows) in wanted {
+        if let Some(details) = &mut self.details {
+            details.native.clear();
+            if retired {
+                details.native_focus = false;
+            }
+        }
+        for (role, local_key, identity, columns, rows) in wanted {
             let key = format!("{prefix}{role}");
             let controller = self.native_views.entry(key).or_insert_with(|| {
                 View::start(
@@ -324,6 +359,7 @@ impl App {
                     columns,
                     rows,
                     self.updates.clone(),
+                    identity,
                 )
             });
             controller.resize(columns, rows);
@@ -426,8 +462,159 @@ mod tests {
     use serde_json::json;
     use std::time::Instant;
     #[test]
+    fn resize_while_waiting_for_a_session_is_used_by_the_next_open() {
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
+                .unwrap();
+        let (arrived, first) = mpsc::sync_channel(1);
+        let (resume, ready) = mpsc::sync_channel(1);
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request: Request =
+                crate::transport::read(&mut std::io::BufReader::new(stream.try_clone().unwrap()))
+                    .unwrap()
+                    .unwrap();
+            assert!(matches!(
+                request,
+                Request::TerminalOpen {
+                    columns: 80,
+                    rows: 24,
+                    ..
+                }
+            ));
+            arrived.send(()).unwrap();
+            ready.recv_timeout(Duration::from_secs(3)).unwrap();
+            crate::transport::write(
+                &mut stream,
+                &json!({"error":"waiting for the first native turn","data":null}),
+            )
+            .unwrap();
+            drop(stream);
+            let mut opened = false;
+            loop {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request: Request = crate::transport::read(&mut std::io::BufReader::new(
+                    stream.try_clone().unwrap(),
+                ))
+                .unwrap()
+                .unwrap();
+                let detached = matches!(request, Request::TerminalDetach { .. });
+                let value = match request {
+                    Request::TerminalOpen { columns, rows, .. } => {
+                        assert_eq!((columns, rows), (40, 8));
+                        opened = true;
+                        let mut value = screen("ready");
+                        value.columns = columns;
+                        value.rows = rows;
+                        serde_json::to_value(value).unwrap()
+                    }
+                    _ => Value::Null,
+                };
+                crate::transport::write(&mut stream, &json!({"data":value,"error":null})).unwrap();
+                if detached {
+                    assert!(opened);
+                    break;
+                }
+            }
+        });
+        let mut view = View::start(
+            Client::at(directory.path()),
+            "conversation".into(),
+            "worker".into(),
+            80,
+            24,
+            mpsc::channel().0,
+            "fixture".into(),
+        );
+        first.recv_timeout(Duration::from_secs(3)).unwrap();
+        view.resize(40, 8);
+        resume.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(screen) = &view.state.lock().unwrap().screen {
+                assert_eq!((screen.columns, screen.rows), (40, 8));
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "session did not open after resize"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        drop(view);
+        server.join().unwrap();
+    }
+    #[test]
+    fn first_attachment_waits_for_the_actual_panel_dimensions() {
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let (mut app, _) = App::test_app_with_client(Client::at(directory.path()));
+        let mut details = Details::new("orchestrator".into());
+        details.task = Some(
+            json!({"turns":[{"role":"orchestrator","backend":"codex_app_server","session_id":"managed"}]}),
+        );
+        app.details = Some(details);
+        app.sync_native_views();
+        assert!(app.native_views.is_empty());
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let panel = app.details.as_ref().unwrap().native_areas[0];
+        let controller = &app.native_views[&format!("{}:orchestrator", app.conversation)];
+        assert_eq!(controller.dimensions, (panel.width, panel.height));
+        assert!(panel.width > 1 && panel.height > 1);
+    }
+    #[test]
+    fn overview_follows_session_rotation_without_reusing_a_stale_screen() {
+        let mut app = App::test_app();
+        let mut details = Details::new("orchestrator".into());
+        details.task = Some(
+            json!({"round":1,"native_sessions":[{"role":"orchestrator","backend":"codex_app_server","session_id":"old"}]}),
+        );
+        details.native_focus = true;
+        details.native_areas[0] = Rect::new(1, 1, 78, 20);
+        app.details = Some(details);
+        let (commands, _received) = mpsc::sync_channel(8);
+        let state = Arc::new(std::sync::Mutex::new(Snapshot {
+            screen: Some(screen("old-screen")),
+            error: None,
+        }));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let key = format!("{}:orchestrator", app.conversation);
+        app.native_views.insert(
+            key.clone(),
+            View {
+                state: state.clone(),
+                commands,
+                stop: stopped.clone(),
+                dimensions: (80, 24),
+                identity: "codex_app_server:old:".into(),
+            },
+        );
+        app.sync_native_views();
+        assert!(Arc::ptr_eq(&state, &app.native_views[&key].state));
+        assert!(app.details.as_ref().unwrap().native_focus);
+        app.details.as_mut().unwrap().task.as_mut().unwrap()["round"] = 2.into();
+        // Root-role run indices are history positions, not new sessions.
+        app.sync_native_views();
+        assert!(Arc::ptr_eq(&state, &app.native_views[&key].state));
+        assert!(app.details.as_ref().unwrap().native_focus);
+        app.details.as_mut().unwrap().task.as_mut().unwrap()["native_sessions"][0]["session_id"] =
+            "new".into();
+        app.sync_native_views();
+        assert!(stopped.load(Ordering::SeqCst));
+        assert_eq!(app.native_views[&key].identity, "codex_app_server:new:");
+        let details = app.details.as_ref().unwrap();
+        assert!(!details.native_focus);
+        assert!(details.native["orchestrator"].screen.is_none());
+        // A new round with no turn yet must not use stale session metadata.
+        app.details.as_mut().unwrap().task.as_mut().unwrap()["native_sessions"] = json!([]);
+        app.sync_native_views();
+        assert!(app.native_views.is_empty());
+        assert!(app.details.as_ref().unwrap().native.is_empty());
+    }
+    #[test]
     fn a_lost_input_acknowledgement_reuses_the_same_sequence() {
-        let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
         let listener =
             std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
                 .unwrap();
@@ -466,7 +653,7 @@ mod tests {
     }
     #[test]
     fn closing_a_view_delivers_accepted_input_before_detaching() {
-        let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
         let listener =
             std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
                 .unwrap();
@@ -503,6 +690,7 @@ mod tests {
             80,
             24,
             mpsc::channel().0,
+            "fixture".into(),
         );
         let deadline = Instant::now() + Duration::from_secs(3);
         while view.state.lock().unwrap().screen.is_none() {
@@ -550,6 +738,7 @@ mod tests {
                 commands,
                 stop: Arc::new(AtomicBool::new(false)),
                 dimensions: (80, 24),
+                identity: "fixture".into(),
             },
         );
         app.input.insert_str("background draft");

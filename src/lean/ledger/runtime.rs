@@ -91,7 +91,7 @@ impl Core {
             serde_json::to_string(&self.store.run(conversation, run_id)?)?,
             serde_json::to_string(&self.store.ledger_sources(conversation, run_id)?)?,
             serde_json::to_string(&self.store.ledger_entries(conversation, run_id, None)?.iter().map(|e|json!({"id":e.spec.id,"version":e.version,"spec_revision":e.spec_revision,"spec":e.spec})).collect::<Vec<_>>())?
-        ) + &self.store.solution_choice(conversation, run_id)?.map(|choice| format!("\nReviewed implementation options: {}\n", serde_json::to_string(&choice).unwrap_or_default())).unwrap_or_default())
+        ))
     }
     pub(super) fn requirements_turn(
         self: &Arc<Self>,
@@ -371,7 +371,7 @@ impl Core {
             && !cancel.load(Ordering::SeqCst)
             && self
                 .store
-                .count_since_user(conversation, "requirements-reviewer")?
+                .count_since_requirements_reset(conversation, "requirements-reviewer")?
                 == 0
         {
             self.store.add_message(conversation, "requirements-reviewer", &format!(

@@ -64,11 +64,11 @@ fn node_name(key: &str) -> String {
     }
 }
 
-pub const WIDTH: u16 = 26;
-const MAX_SUMMARY_LINES: usize = 4;
+pub const WIDTH: u16 = 32;
+const MAX_SUMMARY_LINES: usize = 5;
 const MAX_EFFECT_LINES: usize = 2;
 /// Fixed slots inside a card, counted from its top, each starting right
-/// where the previous block can end: title, work kind, phase, verifier state, one activity
+/// where the previous block can end: title, agent and work kind, phase, verifier state, one activity
 /// line, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
 /// effect lines and the meta line at the bottom. The height is that same
 /// arithmetic's end, so frame and slots are one rule that cannot drift
@@ -79,7 +79,7 @@ const BODY_ROW: u16 = ACTIVITY_ROW + 1;
 const EFFECT_ROW: u16 = BODY_ROW + MAX_SUMMARY_LINES as u16;
 pub const HEIGHT: u16 = EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1;
 const GAP_X: u16 = 6;
-const GAP_Y: u16 = 2;
+const GAP_Y: u16 = 3;
 /// Room left of the first column for edges entering it.
 const MARGIN: u16 = 3;
 /// How long a message keeps its edge highlighted.
@@ -226,9 +226,28 @@ struct Edge {
     label: Option<String>,
 }
 
+/// A stretch of the plan (planning, implementation, verification) that
+/// starts at the card row `y`; a dashed line above it tells them apart.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Phase {
+    pub label: &'static str,
+    pub y: u16,
+}
+
+/// The phase a work kind belongs to, in plan order.
+fn phase_of(kind: &str) -> (u8, &'static str) {
+    match kind {
+        "orchestration" | "context" | "requirements" | "options" | "planning" | "architecture"
+        | "dependencies" | "research" | "analysis" | "test_design" => (0, "planning"),
+        "static_analysis" | "testing" | "security" | "performance" => (2, "verification"),
+        _ => (1, "implementation"),
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Graph {
     pub nodes: Vec<Node>,
+    pub phases: Vec<Phase>,
     edges: Vec<Edge>,
     pub width: u16,
     pub height: u16,
@@ -357,6 +376,7 @@ impl Graph {
     ) -> Self {
         let mut graph = Graph {
             nodes: Vec::new(),
+            phases: Vec::new(),
             edges: Vec::new(),
             width: 0,
             height: 0,
@@ -577,7 +597,7 @@ impl Graph {
                 shown.div_ceil(max_cols)
             };
 
-            let ordered: Vec<usize> = sorted_rel_depths
+            let mut ordered: Vec<usize> = sorted_rel_depths
                 .iter()
                 .flat_map(|depth| {
                     let tasks = rel_depth_tasks.get_mut(depth).unwrap();
@@ -585,9 +605,25 @@ impl Graph {
                     tasks.clone()
                 })
                 .collect();
+            // Phases follow plan order; inside one, dependency depth decides.
+            ordered.sort_by_key(|&idx| phase_of(&view.tasks[idx].kind).0);
             let worker_base = admin_rows;
+            // Each phase starts on a fresh row; `slot` counts cards, with
+            // the unfinished row of the previous phase padded away.
+            let mut slot = 0usize;
+            let mut phase_starts: Vec<(&'static str, u16)> = Vec::new();
+            let mut last_phase = None;
 
-            for (slot, &task_idx) in ordered.iter().enumerate() {
+            for &task_idx in &ordered {
+                let (rank, label) = phase_of(&view.tasks[task_idx].kind);
+                if last_phase != Some(rank) {
+                    last_phase = Some(rank);
+                    slot = slot.div_ceil(usize::from(max_cols)) * usize::from(max_cols);
+                    phase_starts.push((label, row_y(worker_base + (slot as u16 / max_cols))));
+                }
+                let this = slot;
+                slot += 1;
+                let slot = this;
                 placed_tasks.insert(task_idx);
                 let id = &view.tasks[task_idx].id;
                 let is_task_collapsed =
@@ -604,6 +640,10 @@ impl Graph {
                 worker.visible = worker_vis || verifier_vis;
                 graph.nodes.push(worker);
             }
+            graph.phases = phase_starts
+                .into_iter()
+                .map(|(label, y)| Phase { label, y })
+                .collect();
         } else {
             let mut place_admin = |key: &str, col: u16, row: u16, vis: bool| {
                 graph.nodes.push(Node {
@@ -677,6 +717,13 @@ impl Graph {
             .collect();
         for node in graph.nodes.iter_mut().filter(|node| node.visible) {
             node.y = stack[&node.y];
+        }
+        for phase in &mut graph.phases {
+            phase.y = stack.get(&phase.y).copied().unwrap_or(phase.y);
+        }
+        // One phase needs no divider.
+        if graph.phases.len() < 2 {
+            graph.phases.clear();
         }
 
         let mut edge = |from: String, to: String, kind: Kind, label: Option<String>| {
@@ -958,6 +1005,17 @@ impl Graph {
                 canvas.text(lx, ly, label, edge.kind.style());
             }
         }
+        // A dashed line in the gap above each phase, under the edges.
+        for phase in &self.phases {
+            let Some(y) = phase.y.checked_sub(GAP_Y - 1) else {
+                continue;
+            };
+            let dash = theme.glyphs().dashed_horizontal;
+            for x in canvas.origin_x..canvas.origin_x.saturating_add(canvas.width) {
+                canvas.dash(x, y, dash, theme.faint());
+            }
+            canvas.text(MARGIN, y, &format!(" {} ", phase.label), theme.dim());
+        }
         let selected = task_node_key(selected);
         for node in self.nodes.iter().filter(|n| n.visible) {
             draw_node(view, canvas, node, node.key == selected, theme, tick);
@@ -1029,6 +1087,28 @@ pub fn health(view: &View, key: &str) -> Health {
 /// task cards this is the state word, its round and the provider, read
 /// through the shared interpretation (taskinfo); what the agent is doing
 /// and why it waits have their own line and never crowd the state out.
+/// The CLI that runs this card's agent: the verifier's while a task is
+/// verified, else the worker's, else whichever ran before.
+fn provider_of<'a>(view: &'a View, key: &str) -> Option<&'a str> {
+    let provider = |key: &str| {
+        view.agents
+            .get(key)
+            .map(|agent| agent.provider.trim())
+            .filter(|provider| !provider.is_empty())
+    };
+    if let Some((_, id)) = key.split_once(':') {
+        let task = view.tasks.iter().find(|task| task.id == id)?;
+        let (first, second) = if task.status == "verifying" {
+            ("verifier", "worker")
+        } else {
+            ("worker", "verifier")
+        };
+        return provider(&format!("{first}:{id}")).or_else(|| provider(&format!("{second}:{id}")));
+    }
+    let members = card_members(view, key);
+    provider(current_round(view, &members).unwrap_or(key))
+}
+
 fn describe(view: &View, key: &str) -> String {
     let members = card_members(view, key);
     let round = current_round(view, &members);
@@ -1285,7 +1365,10 @@ fn draw_node(
     canvas.text(
         x + 2,
         y + 1,
-        &truncate(&format!("kind: {kind}"), inner),
+        &truncate(
+            &format!("{} - {kind}", provider_of(view, &node.key).unwrap_or("-")),
+            inner,
+        ),
         fill.patch(accent),
     );
     canvas.text(x + 2, y + 2, icon, fill.patch(tone));
@@ -1478,6 +1561,17 @@ impl Canvas {
     fn put(&mut self, x: u16, y: u16, ch: char, style: Style) {
         if let Some(cell) = self.cell(x, y) {
             cell.ch = Some(ch.to_string());
+            cell.style = style;
+        }
+    }
+
+    /// Fills an empty cell only, so a line never hides an edge or a label.
+    fn dash(&mut self, x: u16, y: u16, glyph: &str, style: Style) {
+        if let Some(cell) = self.cell(x, y)
+            && cell.ch.is_none()
+            && cell.lines == 0
+        {
+            cell.ch = Some(glyph.to_owned());
             cell.style = style;
         }
     }
@@ -1899,9 +1993,9 @@ mod tests {
                 let rows = canvas.lines();
                 if node.key == "worker:t1" {
                     assert!(rows[0].contains("Repair storage"), "{rows:?}");
-                    assert!(rows[1].contains("kind: implementation"), "{rows:?}");
+                    assert!(rows[1].contains("- implementation"), "{rows:?}");
                 } else {
-                    assert!(rows[1].contains("kind: orchestration"), "{rows:?}");
+                    assert!(rows[1].contains("- orchestration"), "{rows:?}");
                 }
             }
         }
@@ -2119,14 +2213,19 @@ mod tests {
         assert!(rows[2].contains("working r1"), "{}", rows[2]);
         assert!(!rows[2].contains("cargo check"), "state alone: {}", rows[2]);
         assert!(
-            !rows[3].contains("codex"),
+            rows[1].contains("codex - "),
+            "the provider has its own row: {}",
+            rows[1]
+        );
+        assert!(
+            !rows[usize::from(ACTIVITY_ROW)].contains("codex"),
             "the activity line is independent of the provider: {}",
-            rows[3]
+            rows[usize::from(ACTIVITY_ROW)]
         );
         assert!(
             rows[usize::from(ACTIVITY_ROW)].contains("doing: cargo check"),
             "{}",
-            rows[3]
+            rows[usize::from(ACTIVITY_ROW)]
         );
 
         // Effect and verdict: the round's card data changes no geometry and
@@ -2282,6 +2381,37 @@ mod tests {
         // A message between them is counted beside the source.
         assert!(lines[usize::from(worker.mid_y() - 1)].contains("✉2"));
         assert!(lines[usize::from(worker.y + 2)].contains("proposed"));
+    }
+
+    #[test]
+    fn phases_start_on_their_own_rows_below_a_dashed_line() {
+        let mut tasks = vec![task("t1", &[]), task("t2", &[]), task("t3", &[])];
+        tasks[0].kind = "implementation".into();
+        tasks[1].kind = "context".into();
+        tasks[2].kind = "testing".into();
+        let view = view(tasks);
+        let graph = Graph::new_with_viewport(
+            &view,
+            None,
+            &Default::default(),
+            GroupingMode::Dependency,
+            Some((200, 60)),
+        );
+        let labels: Vec<_> = graph.phases.iter().map(|phase| phase.label).collect();
+        assert_eq!(labels, ["planning", "implementation", "verification"]);
+        let y = |id: &str| graph.node(&format!("worker:{id}")).unwrap().y;
+        assert!(y("t2") < y("t1") && y("t1") < y("t3"));
+        for (phase, id) in graph.phases.iter().zip(["t2", "t1", "t3"]) {
+            assert_eq!(phase.y, y(id));
+        }
+        let mut canvas = Canvas::new(graph.width.max(120), graph.height);
+        graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+        let lines = canvas.lines();
+        let divider = &lines[usize::from(graph.phases[1].y - (GAP_Y - 1))];
+        assert!(
+            divider.contains("implementation") && divider.contains('┄'),
+            "{divider}"
+        );
     }
 
     #[test]

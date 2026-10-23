@@ -320,7 +320,7 @@ impl Details {
             native: HashMap::new(),
             native_focus: false,
             native_history: false,
-            native_areas: [Rect::new(0, 0, 80, 24); 2],
+            native_areas: [Rect::default(); 2],
             available_rounds: Vec::new(),
             latest_observed: 0,
             active_panel: usize::from(key.starts_with("verifier:")),

@@ -1139,3 +1139,59 @@ fn process_failure_does_not_persist_credentials_from_cli_files() {
                 && event.payload["code"] == 1)
     );
 }
+
+#[test]
+fn the_orchestrator_restarts_without_a_plan_and_preserves_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = Core::open(
+        &dir.path().join("state"),
+        config(&comment_codex(dir.path())),
+    )
+    .unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    core.send(&conversation.id, "Original request").unwrap();
+    wait_idle(&core, &conversation.id);
+    let first = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    core.send(&conversation.id, "slow-comment").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let turn = core
+            .store
+            .last_turn(&conversation.id, "orchestrator")
+            .unwrap()
+            .unwrap();
+        if turn.id != first.id && turn.status == TurnStatus::Running {
+            break;
+        }
+        assert!(Instant::now() < deadline, "second turn did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    core.restart_orchestrator(&conversation.id).unwrap();
+    wait_idle(&core, &conversation.id);
+    let restarted = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    assert_eq!(restarted.status, TurnStatus::Done);
+    assert_ne!(restarted.session_id, first.session_id);
+    assert!(core.store.latest_plan(&conversation.id).unwrap().is_empty());
+    let calls = std::fs::read_to_string(dir.path().join("comment-calls.log")).unwrap();
+    let last = calls.rsplit("---").nth(1).unwrap();
+    assert!(last.contains("Original request"));
+    assert!(!last.contains("resume"));
+    core.restart_orchestrator(&conversation.id).unwrap();
+    wait_idle(&core, &conversation.id);
+    assert_eq!(
+        core.store
+            .last_turn(&conversation.id, "orchestrator")
+            .unwrap()
+            .unwrap()
+            .status,
+        TurnStatus::Done
+    );
+}

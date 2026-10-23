@@ -249,6 +249,9 @@ pub enum Request {
         plan: String,
         scope_hash: Option<String>,
     },
+    RestartOrchestrator {
+        conversation: String,
+    },
     Cancel {
         conversation: String,
     },
@@ -571,6 +574,9 @@ enum WireRequest {
         freshness_token: String,
         #[serde(default)]
         message: Option<String>,
+    },
+    RestartOrchestrator {
+        conversation: String,
     },
     Cancel {
         conversation: String,
@@ -977,6 +983,9 @@ impl From<Request> for WireRequest {
                 freshness_token: req.freshness_token,
                 message: req.message,
             },
+            Request::RestartOrchestrator { conversation } => {
+                WireRequest::RestartOrchestrator { conversation }
+            }
             Request::Cancel { conversation } => WireRequest::Cancel {
                 conversation,
                 scope_hash: None,
@@ -1464,6 +1473,9 @@ impl From<WireRequest> for Request {
                 freshness_token,
                 message,
             }),
+            WireRequest::RestartOrchestrator { conversation } => {
+                Request::RestartOrchestrator { conversation }
+            }
             WireRequest::Cancel {
                 conversation,
                 scope_hash,
@@ -2093,6 +2105,11 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
             }
             validate_conversation_plan(core, &conversation, &plan)?;
             json!(core.resume_plan(&conversation, &plan)?.len())
+        }
+        Request::RestartOrchestrator { conversation } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.restart_orchestrator(&conversation)?;
+            json!("restarting the orchestrator in a fresh session")
         }
         Request::Cancel { conversation } => {
             validate_project_conversation(core, project, &conversation)?;

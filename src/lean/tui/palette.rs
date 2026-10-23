@@ -399,6 +399,9 @@ impl Help {
                 "Ctrl+N / O / G    new / switch conversation / project",
                 "Ctrl+F / Ctrl+L  search conversation / open plan",
                 "Ctrl+P           command palette",
+                "F1 / [?]         help",
+                "/interview       open the current interview question",
+                "/planning        proceed after reviewing the requirements summary",
                 "Esc              back/clear draft (daemon runs)",
                 "Ctrl+C / q       quit (q when not editing text)",
             ],
@@ -407,7 +410,7 @@ impl Help {
                 "Enter            agent details",
                 "/                find agent",
                 "d                task diff",
-                "u                unblock the selected stopped step (or the first one)",
+                "u                agent actions: restart orchestrator/worker or unblock",
                 "c                comment on selected element",
                 "z, Space         collapse / expand task",
                 "g                toggle grouping (dependencies / state)",
@@ -416,11 +419,17 @@ impl Help {
                 SELECTION_HELP,
                 "Ctrl+D / Ctrl+U  half page down / up",
                 "Ctrl+P           command palette",
+                "Ctrl+A / Ctrl+R  accept / resume plan when available",
+                "F1 / ? / [?]     help",
                 "Tab, Esc         chat",
                 "q                quit (work continues in daemon)",
             ],
             Help::Details => &[
-                "1–6, Tab/Shift+Tab  tabs; Left/Right select round",
+                "1–7, Tab/Shift+Tab  tabs; Left/Right select round",
+                "i / a            native CLI focus / message composer",
+                "Ctrl+]           return from native CLI to antislop",
+                "Ctrl+W           switch worker / verifier panel",
+                "h / r            JSON history / retry native attachment",
                 "↑/↓ PgUp/PgDn    scroll; on Comments select",
                 "gg / G           first / last entry; G follows live session",
                 "m                task info / session (Overview)",
@@ -841,15 +850,22 @@ mod tests {
         assert!(rendered.contains("accept/resume"));
         assert!(rendered.contains("delete to start / end"));
 
-        // 2. Scrolled page: verify subsequent shortcuts and descriptions
-        terminal
-            .draw(|frame| {
-                Help::Chat.draw_scroll(frame, usize::MAX);
-            })
-            .unwrap();
-
-        let buffer2 = terminal.backend().buffer();
-        let rendered2: String = buffer2.content.iter().map(|c| c.symbol()).collect();
+        // Verify every scroll position so new help entries cannot make an
+        // earlier shortcut disappear from the coverage of the final page.
+        let mut rendered2 = String::new();
+        for scroll in 0..=Help::Chat.max_scroll(Rect::new(0, 0, 60, 12)) {
+            terminal
+                .draw(|frame| Help::Chat.draw_scroll(frame, scroll))
+                .unwrap();
+            rendered2.extend(
+                terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol()),
+            );
+        }
 
         assert!(rendered2.contains("cancel running work"));
         assert!(rendered2.contains("pause new steps / continue"));

@@ -2,6 +2,7 @@ use super::*;
 use std::collections::VecDeque;
 use std::os::unix::net::{UnixListener, UnixStream};
 use tungstenite::{Message, WebSocket};
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn websocket_config() -> tungstenite::protocol::WebSocketConfig {
     // Startup catalogs may exceed tungstenite's default 16 MiB frame size.
@@ -23,8 +24,8 @@ fn timed_out(error: &tungstenite::Error) -> bool {
 impl Rpc {
     fn raw(path: &Path) -> Result<Self> {
         let stream = UnixStream::connect(path)?;
-        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
+        stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
         let (socket, _) = tungstenite::client::client_with_config(
             "ws://localhost/",
             stream,
@@ -34,6 +35,9 @@ impl Rpc {
         socket
             .get_ref()
             .set_read_timeout(Some(Duration::from_millis(50)))?;
+        socket
+            .get_ref()
+            .set_write_timeout(Some(Duration::from_secs(2)))?;
         Ok(Self {
             socket,
             next: 1,
@@ -101,7 +105,7 @@ impl Rpc {
 
 pub(super) fn thread_params(spec: &agent::Spec, id: Option<&str>) -> Value {
     let mut params = json!({"cwd":spec.cwd,"approvalPolicy":"never",
-        "sandbox":if spec.access == agent::Access::ReadOnly {"read-only"} else {"workspace-write"},
+        "sandbox":agent::codex_sandbox(spec.access == agent::Access::ReadOnly),
         "config":{"features.multi_agent":false}});
     if let Some(model) = &spec.model {
         params["model"] = model.clone().into();
@@ -140,8 +144,14 @@ pub(super) fn start(
     process.register(core, "codex")?;
     let until = Instant::now() + Duration::from_secs(10);
     let mut rpc = loop {
-        if socket.exists() {
-            break Rpc::connect(&socket)?;
+        match Rpc::connect(&socket) {
+            Ok(rpc) => break rpc,
+            Err(Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) => {}
+            Err(error) => return Err(error),
         }
         require(
             Instant::now() < until,
@@ -150,7 +160,7 @@ pub(super) fn start(
                 process.diagnostics()
             ),
         )?;
-        if let Some(status) = process.child.lock().map_err(invalid)?.try_wait()? {
+        if let Some(status) = process.status()? {
             return Err(invalid(format!(
                 "Codex app-server exited ({status}): {}",
                 process.diagnostics()
@@ -200,7 +210,7 @@ pub(super) fn run(
         "cwd":session.spec.cwd,"approvalPolicy":"never", "model":session.spec.model,
         "effort":session.spec.effort,
         "sandboxPolicy":if session.spec.access == agent::Access::ReadOnly {json!({"type":"readOnly"})}
-            else {json!({"type":"workspaceWrite","writableRoots":[session.spec.cwd],"networkAccess":false})}}))?;
+            else {json!({"type":"dangerFullAccess"})}}))?;
     let native_turn = response["turn"]["id"]
         .as_str()
         .ok_or_else(|| invalid("Codex did not return a turn id"))?
@@ -381,21 +391,98 @@ fn client_send(client: &mut WebSocket<UnixStream>, value: Value) -> Result<()> {
     }
 }
 
+pub(super) fn delivered_turn(session: &Session, upstream: &mut Rpc, turn: &str) -> Result<Value> {
+    let core = session
+        .core
+        .upgrade()
+        .ok_or_else(|| invalid("daemon stopped"))?;
+    let context = core
+        .store
+        .run_context(&session.conversation, turn)?
+        .ok_or_else(|| invalid("delivered native message has no run context"))?;
+    require(
+        context.provider_thread_id.as_deref() == Some(&session.identity),
+        "delivered message belongs to another native thread; inspect JSON history",
+    )?;
+    let native = context
+        .provider_turn_id
+        .ok_or_else(|| invalid("delivered message has no native turn identifier"))?;
+    let mut cursor = Value::Null;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        require(
+            Instant::now() < deadline,
+            "native receipt history lookup timed out; retry or inspect JSON history",
+        )?;
+        let page=upstream.call("thread/turns/list",json!({"threadId":session.identity,"cursor":cursor,"limit":10,"sortDirection":"desc","itemsView":"full"}))?;
+        if let Some(turn) = page["data"]
+            .as_array()
+            .and_then(|turns| turns.iter().find(|turn| turn["id"] == native))
+        {
+            return Ok(turn.clone());
+        }
+        let next = page["nextCursor"].clone();
+        require(
+            !next.is_null() && next != cursor,
+            "delivered turn is not available in native history; retry or inspect JSON history",
+        )?;
+        cursor = next;
+    }
+}
+
+fn check_steer_target(session: &Session, expected: &Value) -> Result<()> {
+    let active = session
+        .active
+        .lock()
+        .map_err(invalid)?
+        .as_ref()
+        .map(|active| active.turn["id"].clone());
+    if let Some(active) = active {
+        return require(
+            active == *expected,
+            "native steer target is no longer the active turn",
+        );
+    }
+    // The interactive CLI can still show the just-completed turn as active
+    // while its completion notification is in transit. Queue that correction
+    // against the latest run; never mutate or restart the completed execution.
+    let core = session
+        .core
+        .upgrade()
+        .ok_or_else(|| invalid("daemon stopped"))?;
+    let latest = core
+        .store
+        .last_turn(&session.conversation, &session.role)?
+        .ok_or_else(|| invalid("native steer has no target turn"))?;
+    let context = core.store.run_context(&session.conversation, &latest.id)?;
+    require(
+        context.is_some_and(|context| {
+            context.provider_thread_id.as_deref() == Some(&session.identity)
+                && context.provider_turn_id.as_deref() == expected.as_str()
+                && expected.is_string()
+        }),
+        "native steer target is not the latest turn in this session",
+    )
+}
+
 fn connection(weak: Weak<Session>, stream: UnixStream) -> Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
+    stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
     let mut client = tungstenite::accept_with_config(stream, Some(websocket_config()))
         .map_err(|e| invalid(format!("Codex gateway handshake: {e}")))?;
     client
         .get_mut()
         .set_read_timeout(Some(Duration::from_millis(25)))?;
+    client
+        .get_ref()
+        .set_write_timeout(Some(Duration::from_secs(2)))?;
     let session = weak.upgrade().ok_or_else(|| invalid("session closed"))?;
     let Backend::Codex { socket, .. } = &session.backend else {
         unreachable!()
     };
     let mut upstream = Rpc::raw(socket)?;
     let connection_id = crate::id();
-    let mut queued: Vec<(Value, u64)> = vec![];
+    let mut queued: Vec<(Value, u64, bool)> = vec![];
     drop(session);
     loop {
         let session = weak.upgrade().ok_or_else(|| invalid("session closed"))?;
@@ -419,21 +506,57 @@ fn connection(weak: Weak<Session>, stream: UnixStream) -> Result<()> {
                     match method.as_str() {
                         "turn/start" | "turn/steer" => {
                             text_input(&params["input"]).and_then(|text| {
+                                let steer = method == "turn/steer";
+                                if steer {
+                                    check_steer_target(&session, &params["expectedTurnId"])?;
+                                }
                                 require(queued.len() < 32, "too many queued terminal requests")?;
-                                let receipt = session
-                                    .enqueue(&format!("native:{connection_id}:{id}"), &text)?;
-                                if !queued.iter().any(|(pending, _)| pending == &id) {
-                                    queued.push((
-                                        id.clone(),
-                                        receipt["mail"]
-                                            .as_u64()
-                                            .ok_or_else(|| invalid("missing mail receipt"))?,
-                                    ));
+                                let operation = if let Some(message) = params["clientUserMessageId"]
+                                    .as_str()
+                                    .filter(|id| !id.is_empty())
+                                {
+                                    require(
+                                        message.len() <= 256,
+                                        "native client message identifier exceeds 256 bytes",
+                                    )?;
+                                    format!("native:message:{message}")
+                                } else {
+                                    format!("native:{connection_id}:{id}")
+                                };
+                                let receipt = session.enqueue(&operation, &text)?;
+                                let mail = receipt["mail"]
+                                    .as_u64()
+                                    .ok_or_else(|| invalid("missing mail receipt"))?;
+                                let cached = session
+                                    .completed
+                                    .lock()
+                                    .map_err(invalid)?
+                                    .iter()
+                                    .any(|(id, _)| *id == mail);
+                                if let Some(turn) = receipt["delivered_turn"].as_str()
+                                    && !cached
+                                {
+                                    // A daemon restart or the bounded in-memory
+                                    // cache expiring must not lose a durable ack.
+                                    let turn = delivered_turn(&session, &mut upstream, turn)?;
+                                    let mut completed =
+                                        session.completed.lock().map_err(invalid)?;
+                                    completed.push_back((mail, turn));
+                                    while completed.len() > 128 {
+                                        completed.pop_front();
+                                    }
+                                }
+                                if !queued.iter().any(|(pending, _, _)| pending == &id) {
+                                    queued.push((id.clone(), mail, steer));
                                 }
                                 Ok(false)
                             })
                         }
-                        "turn/interrupt" => session.interrupt().map(|()| true),
+                        "turn/interrupt" => params["turnId"]
+                            .as_str()
+                            .ok_or_else(|| invalid("native interrupt requires a turnId"))
+                            .and_then(|id| session.interrupt_turn(Some(id)))
+                            .map(|()| true),
                         "thread/resume" => {
                             message["params"] =
                                 thread_params(&session.spec, Some(&session.identity));
@@ -483,14 +606,17 @@ fn connection(weak: Weak<Session>, stream: UnixStream) -> Result<()> {
                 };
                 match result {
                     Ok(true) => {
-                        client
-                            .send(Message::Text(
-                                json!({"id":id,"result":{}}).to_string().into(),
-                            ))
-                            .map_err(invalid)?;
+                        client_send(&mut client, json!({"id":id,"result":{}}))?;
                     }
                     Err(error) if !id.is_null() => {
-                        client.send(Message::Text(json!({"id":id,"error":{"code":-32602,"message":error.to_string()}}).to_string().into())).map_err(invalid)?;
+                        #[cfg(test)]
+                        if std::env::var_os("ANTISLOP_NATIVE_DEBUG").is_some() {
+                            eprintln!("Codex gateway rejected {method}: {error}");
+                        }
+                        client_send(
+                            &mut client,
+                            json!({"id":id,"error":{"code":-32602,"message":error.to_string()}}),
+                        )?;
                     }
                     _ => {}
                 }
@@ -504,7 +630,7 @@ fn connection(weak: Weak<Session>, stream: UnixStream) -> Result<()> {
             let active = session.active.lock().map_err(invalid)?;
             let completed = session.completed.lock().map_err(invalid)?;
             let mut remaining = vec![];
-            for (id, mail) in queued.drain(..) {
+            for (id, mail, steer) in queued.drain(..) {
                 let turn = active
                     .as_ref()
                     .filter(|a| a.mail.contains(&mail))
@@ -516,16 +642,20 @@ fn connection(weak: Weak<Session>, stream: UnixStream) -> Result<()> {
                             .map(|(_, turn)| turn)
                     });
                 if let Some(turn) = turn {
-                    client
-                        .send(Message::Text(
-                            json!({"id":id,"result":{"turn":turn}}).to_string().into(),
-                        ))
-                        .map_err(invalid)?;
+                    let result = if steer {
+                        json!({"turnId":turn["id"]})
+                    } else {
+                        json!({"turn":turn})
+                    };
+                    client_send(&mut client, json!({"id":id,"result":result}))?;
                     if turn["status"] != "inProgress" {
-                        client.send(Message::Text(json!({"method":"turn/completed","params":{"threadId":session.identity,"turn":turn}}).to_string().into())).map_err(invalid)?;
+                        client_send(
+                            &mut client,
+                            json!({"method":"turn/completed","params":{"threadId":session.identity,"turn":turn}}),
+                        )?;
                     }
                 } else {
-                    remaining.push((id, mail));
+                    remaining.push((id, mail, steer));
                 }
             }
             queued = remaining;
@@ -546,7 +676,7 @@ mod tests {
     use super::*;
     #[test]
     fn startup_catalog_can_exceed_sixteen_megabytes() {
-        let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
         let path = directory.path().join("catalog.sock");
         let listener = UnixListener::bind(&path).unwrap();
         let length = 17 * 1024 * 1024;
@@ -584,7 +714,7 @@ mod tests {
         }
     }
     fn fixture(fail: bool) -> Fixture {
-        let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
         let state = directory.path().join(".antislop");
         let mut config =
             crate::config::Config::from_toml(include_str!("../../../examples/antislop.toml"))
@@ -620,10 +750,12 @@ mod tests {
                 let stopped = stopped.clone();
                 let interrupted = interrupted.clone();
                 std::thread::spawn(move || {
-                    stream
+                    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT)).unwrap();
+                    let mut connection = tungstenite::accept(stream).unwrap();
+                    connection
+                        .get_ref()
                         .set_read_timeout(Some(Duration::from_millis(20)))
                         .unwrap();
-                    let mut connection = tungstenite::accept(stream).unwrap();
                     let mut running: Option<(String, Instant)> = None;
                     while !stopped.load(Ordering::SeqCst) {
                         if let Some((id, at)) = &running
@@ -658,6 +790,10 @@ mod tests {
                                     "initialized" => continue,
                                     "thread/start" | "thread/resume" => {
                                         json!({"thread":{"id":"thread_fixture","turns":[]}})
+                                    }
+                                    "thread/turns/list" => {
+                                        let turns:Vec<_>=(1..=executed.load(Ordering::SeqCst)).rev().map(|index|json!({"id":format!("turn_{index}"),"status":"completed","items":[{"id":format!("answer_{index}"),"type":"agentMessage","text":"answer"}],"error":null})).collect();
+                                        json!({"data":turns,"nextCursor":null})
                                     }
                                     "turn/start" => {
                                         assert_eq!(message["params"]["threadId"], "thread_fixture");
@@ -917,14 +1053,121 @@ mod tests {
         assert_eq!(fixture.executions.load(Ordering::SeqCst), 1);
     }
     #[test]
+    fn steering_at_completion_uses_only_the_latest_managed_turn() {
+        let fixture = fixture(false);
+        let id = turn(&fixture);
+        fixture
+            .core
+            .store
+            .bind_provider_turn(&fixture.session.conversation, &id, "completed")
+            .unwrap();
+        assert!(check_steer_target(&fixture.session, &json!("completed")).is_ok());
+        assert!(check_steer_target(&fixture.session, &Value::Null).is_err());
+        assert!(check_steer_target(&fixture.session, &json!("foreign")).is_err());
+        let _next = turn(&fixture);
+        assert!(check_steer_target(&fixture.session, &json!("completed")).is_err());
+    }
+    #[test]
+    fn gateway_controls_target_the_active_turn_and_queued_steering_has_its_rpc_shape() {
+        let fixture = fixture(false);
+        let _turn = turn(&fixture);
+        let conversation = fixture.session.conversation.clone();
+        let lock = fixture.core.turn_lock(&conversation, "orchestrator");
+        let _guard = lock.lock().unwrap();
+        fixture.session.executing.store(true, Ordering::SeqCst);
+        *fixture.session.active.lock().unwrap() = Some(Active {
+            turn: json!({"id":"current","status":"inProgress"}),
+            mail: vec![],
+        });
+        fixture.session.start_gateway().unwrap();
+        let mut client = Rpc::connect(Path::new(
+            fixture.session.endpoint.strip_prefix("unix://").unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            client
+                .call(
+                    "turn/interrupt",
+                    json!({"threadId":"thread_fixture","turnId":"old"})
+                )
+                .is_err()
+        );
+        assert!(client.call("turn/steer",json!({"threadId":"thread_fixture","expectedTurnId":"old","input":[{"type":"text","text":"stale"}]})).is_err());
+        assert!(!fixture.session.user_interrupted.load(Ordering::SeqCst));
+        assert!(fixture.core.store.mail(&conversation).unwrap().is_empty());
+        let controls: u32 = fixture
+            .core
+            .store
+            .db()
+            .query_row(
+                "SELECT count(*) FROM events WHERE kind='native_control'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(controls, 0);
+        client.send(json!({"id":"queued","method":"turn/steer","params":{"threadId":"thread_fixture","expectedTurnId":"current","clientUserMessageId":"correction","input":[{"type":"text","text":"next correction"}]}})).unwrap();
+        client.call("thread/loaded/list", json!({})).unwrap();
+        let mail = fixture.core.store.mail(&conversation).unwrap();
+        assert_eq!(mail.len(), 1);
+        assert_eq!(fixture.executions.load(Ordering::SeqCst), 0);
+        fixture.session.completed.lock().unwrap().push_back((
+            mail[0].id,
+            json!({"id":"next","status":"completed","items":[]}),
+        ));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "queued steering was not acknowledged"
+            );
+            if let Some(reply) = client.event().unwrap()
+                && reply["id"] == "queued"
+            {
+                assert_eq!(reply["result"]["turnId"], "next");
+                assert!(reply["result"].get("turn").is_none());
+                break;
+            }
+        }
+        fixture.core.cancel(&conversation);
+    }
+    #[test]
+    fn reconnecting_a_native_client_does_not_enqueue_its_message_twice() {
+        let fixture = fixture(false);
+        let _turn = turn(&fixture);
+        let conversation = fixture.session.conversation.clone();
+        let lock = fixture.core.turn_lock(&conversation, "orchestrator");
+        let _guard = lock.lock().unwrap();
+        fixture.session.start_gateway().unwrap();
+        let path = Path::new(fixture.session.endpoint.strip_prefix("unix://").unwrap());
+        for _ in 0..2 {
+            let mut client = Rpc::connect(path).unwrap();
+            client.send(json!({"id":"submit","method":"turn/start","params":{"threadId":"thread_fixture","clientUserMessageId":"stable-message","input":[{"type":"text","text":"one correction"}]}})).unwrap();
+            // A later response on the same connection proves submit reached
+            // the gateway before we simulate losing its turn acknowledgement.
+            client.call("thread/loaded/list", json!({})).unwrap();
+            client.socket.close(None).unwrap();
+        }
+        let messages = fixture.core.store.mail(&conversation).unwrap();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|mail| mail.sender == "user" && mail.text == "one correction")
+                .count(),
+            1
+        );
+        assert_eq!(fixture.executions.load(Ordering::SeqCst), 0);
+        let mut client = Rpc::connect(path).unwrap();
+        assert!(client.call("turn/start",json!({"threadId":"thread_fixture","clientUserMessageId":"stable-message","input":[{"type":"text","text":"different correction"}]})).is_err());
+        fixture.core.cancel(&conversation);
+    }
+    #[test]
     fn gateway_rejects_foreign_threads_and_unsupported_mutations() {
         let fixture = fixture(false);
         fixture.session.start_gateway().unwrap();
         let stream =
             UnixStream::connect(fixture.session.endpoint.strip_prefix("unix://").unwrap()).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT)).unwrap();
         let (mut client, _) = tungstenite::client("ws://localhost/", stream).unwrap();
         for (index, method, params) in [
             ("thread/resume", json!({"threadId":"foreign"})),
@@ -1110,7 +1353,7 @@ mod tests {
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(2));
         }
-        let result=client.call("turn/start",json!({"threadId":"thread_fixture","input":[{"type":"text","text":"queued correction"}]})).unwrap();
+        let result=client.call("turn/start",json!({"threadId":"thread_fixture","clientUserMessageId":"durable-correction","input":[{"type":"text","text":"queued correction"}]})).unwrap();
         assert_eq!(result["turn"]["id"], "turn_2");
         assert_eq!(first.join().unwrap(), Some("answer".into()));
         let until = Instant::now() + Duration::from_secs(5);
@@ -1131,6 +1374,29 @@ mod tests {
             sessions
                 .iter()
                 .all(|s| s.backend.as_deref() == Some("codex_app_server"))
+        );
+        fixture.session.completed.lock().unwrap().clear();
+        let mut reconnected = Rpc::connect(Path::new(
+            fixture.session.endpoint.strip_prefix("unix://").unwrap(),
+        ))
+        .unwrap();
+        reconnected
+            .call("thread/resume", json!({"threadId":"thread_fixture"}))
+            .unwrap();
+        let restored = reconnected.call("turn/start",json!({"threadId":"thread_fixture","clientUserMessageId":"durable-correction","input":[{"type":"text","text":"queued correction"}]})).unwrap();
+        assert_eq!(restored["turn"]["id"], "turn_2");
+        assert_eq!(restored["turn"]["items"][0]["text"], "answer");
+        assert_eq!(fixture.executions.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            fixture
+                .core
+                .store
+                .mail(&conversation)
+                .unwrap()
+                .iter()
+                .filter(|mail| mail.sender == "user" && mail.text == "queued correction")
+                .count(),
+            1
         );
     }
 }

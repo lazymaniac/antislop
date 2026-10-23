@@ -43,6 +43,11 @@ and `.verifier` select the worker and reviewer for that work kind, while
 be reused across work kinds and roles; each verifier still has its own session.
 All assignments must name existing profiles.
 
+The orchestrator plans from requirements without a global implementation-options
+comparison. During execution, read-only `options` workers compare approaches
+before their dependent writing tasks start. The runtime adds these dependencies
+even when required quality gates are disabled.
+
 Effort values are `low`, `medium`, `high` and `xhigh`, passed directly to the
 CLI. Support depends on the selected model; an unsupported level produces the
 CLI's error rather than silently lowering the effort.
@@ -67,6 +72,10 @@ Codex and OpenCode first probe for native attachment support. Supported direct
 executables use a daemon-owned app-server/serve backend; the interactive CLI
 and structured driver share its provider thread/session. Other providers,
 unsupported CLIs and custom launchers retain the JSON driver below.
+The native OpenCode driver submits `prompt_async` over HTTP and consumes the
+server's SSE stream directly, so attaching an interactive CLI cannot end its
+structured output reader. It normalizes incremental text, reasoning, tools,
+token usage, retry diagnostics and the final answer into the existing events.
 An unsupported server API also falls back before submitting a prompt. Once a
 native backend accepts a turn, a failure never resubmits it through another driver.
 

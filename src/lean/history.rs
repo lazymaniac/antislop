@@ -41,6 +41,9 @@ impl Store {
                 turn_id TEXT PRIMARY KEY REFERENCES turns(id),
                 task_id TEXT REFERENCES tasks(id), round INTEGER);
              CREATE INDEX IF NOT EXISTS events_by_session ON events(conversation_id,turn_id,seq);
+             CREATE INDEX IF NOT EXISTS events_by_mail_id
+                ON events(conversation_id,json_extract(payload,'$.id'))
+                WHERE kind='mail' AND turn_id IS NULL;
              CREATE INDEX IF NOT EXISTS turns_by_round ON turn_scopes(task_id,round,turn_id);
              CREATE TABLE IF NOT EXISTS mail_sources(mail_id INTEGER PRIMARY KEY REFERENCES mail(id),turn_id TEXT NOT NULL REFERENCES turns(id));
              CREATE TABLE IF NOT EXISTS mail_scopes(
@@ -59,6 +62,32 @@ impl Store {
                 PRIMARY KEY(task_id,round));",
         )?;
         Ok(())
+    }
+
+    pub(crate) fn agent_mail_user_message(
+        &self,
+        conversation: &str,
+        mail: u64,
+    ) -> Result<Option<u64>> {
+        let mail = i64::try_from(mail)
+            .map_err(|_| Error::Invalid("mail identifier exceeds SQLite range".into()))?;
+        let message: Option<i64> = self
+            .db()
+            .query_row(
+                "SELECT COALESCE(json_extract(e.payload,'$.user_message'),
+                (SELECT json_extract(n.payload,'$.seq') FROM events n
+                 WHERE n.seq=e.seq+1 AND n.conversation_id=e.conversation_id
+                 AND n.kind='message' AND json_extract(n.payload,'$.author')='user'))
+             FROM events e WHERE e.conversation_id=?1 AND e.turn_id IS NULL
+             AND e.kind='mail' AND json_extract(e.payload,'$.sender')='user'
+             AND json_extract(e.payload,'$.recipient')='orchestrator'
+             AND json_extract(e.payload,'$.id')=?2 ORDER BY e.seq DESC LIMIT 1",
+                params![conversation, mail],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(message.map(|seq| seq as u64))
     }
 
     /// Compare the expected scope and enqueue exactly once in one transaction.
@@ -144,11 +173,15 @@ impl Store {
             "INSERT INTO agent_operations VALUES(?1,?2,?3,?4)",
             params![request.conversation, request.operation_id, signature, mail],
         )?;
-        tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'mail',?3,?4)",
-            params![request.conversation,request.plan,serde_json::json!({"id":mail,"sender":"user","recipient":request.recipient,"text":stored_text,"kind":"agent_work","state":"queued","created_ms":now}).to_string(),now])?;
-        if request.recipient == "orchestrator" {
+        let user_message = if request.recipient == "orchestrator" {
             tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)",params![request.conversation,stored_text,now])?;
-            let seq = tx.last_insert_rowid();
+            Some(tx.last_insert_rowid())
+        } else {
+            None
+        };
+        tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'mail',?3,?4)",
+            params![request.conversation,request.plan,serde_json::json!({"id":mail,"sender":"user","recipient":request.recipient,"text":stored_text,"kind":"agent_work","state":"queued","created_ms":now,"user_message":user_message}).to_string(),now])?;
+        if let Some(seq) = user_message {
             tx.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'message',?2,?3)",params![request.conversation,serde_json::json!({"seq":seq,"author":"user","text":stored_text}).to_string(),now])?;
         }
         if let Some(task) = task {
@@ -462,15 +495,15 @@ impl Store {
         result["checks"] = serde_json::to_value(self.checks(task, round)?)?;
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT t.id,t.role,t.status,(SELECT backend FROM run_contexts r WHERE r.turn_id=t.id) FROM turns t JOIN turn_scopes s ON s.turn_id=t.id
+            "SELECT t.id,t.role,t.status,(SELECT backend FROM run_contexts r WHERE r.turn_id=t.id),t.session_id FROM turns t JOIN turn_scopes s ON s.turn_id=t.id
             WHERE s.task_id=?1 AND s.round=?2 ORDER BY t.started_ms,t.rowid",
         )?;
         let turns = statement.query_map(params![task,round], |row| Ok(serde_json::json!({
-            "turn_id": row.get::<_,String>(0)?, "role": row.get::<_,String>(1)?, "status": row.get::<_,String>(2)?, "backend":row.get::<_,Option<String>>(3)?
+            "turn_id": row.get::<_,String>(0)?, "role": row.get::<_,String>(1)?, "status": row.get::<_,String>(2)?, "backend":row.get::<_,Option<String>>(3)?, "session_id":row.get::<_,Option<String>>(4)?
         })))?.collect::<std::result::Result<Vec<_>,_>>()?;
         result["turns"] = turns.into();
         let mut native = db.prepare(
-            "SELECT t.role,r.backend FROM tasks k JOIN turns t
+            "SELECT t.role,r.backend,COALESCE(r.provider_thread_id,r.provider_session_id,t.session_id) FROM tasks k JOIN turns t
             ON t.conversation_id=k.conversation_id AND t.role IN ('worker:'||k.id,'verifier:'||k.id)
             JOIN run_contexts r ON r.turn_id=t.id
             JOIN turn_scopes current_scope ON current_scope.turn_id=t.id AND current_scope.round=k.round
@@ -478,7 +511,7 @@ impl Store {
                 WHERE p.conversation_id=t.conversation_id AND p.role=t.role
                 ORDER BY p.started_ms DESC,p.rowid DESC LIMIT 1)",
         )?;
-        result["native_sessions"]=native.query_map(params![task,round],|row|Ok(serde_json::json!({"role":row.get::<_,String>(0)?,"backend":row.get::<_,String>(1)?})))?
+        result["native_sessions"]=native.query_map(params![task,round],|row|Ok(serde_json::json!({"role":row.get::<_,String>(0)?,"backend":row.get::<_,String>(1)?,"session_id":row.get::<_,Option<String>>(2)?})))?
             .collect::<std::result::Result<Vec<_>,_>>()?.into();
         if !references {
             let mut statement = db.prepare("SELECT m.id,m.sender,m.recipient,m.text,m.delivered_turn FROM mail m LEFT JOIN mail_scopes s ON s.mail_id=m.id
@@ -704,6 +737,63 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orchestrator_mail_keeps_its_user_message_source_without_schema_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(&directory.path().join("core.db")).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        let other = store.create_conversation("other").unwrap();
+        let mut pairs = vec![];
+        for _ in 0..2 {
+            let receipt = store
+                .enqueue_agent_message(&AgentMessage {
+                    conversation: conversation.id.clone(),
+                    plan: None,
+                    recipient: "orchestrator".into(),
+                    operation_id: crate::id(),
+                    expected_round: None,
+                    expected_run: None,
+                    text: "same correction 👩‍💻".into(),
+                })
+                .unwrap();
+            let mail = receipt["mail"].as_u64().unwrap();
+            let message = store
+                .messages_by(&conversation.id, "user", 0)
+                .unwrap()
+                .last()
+                .unwrap()
+                .seq;
+            assert_eq!(
+                store
+                    .agent_mail_user_message(&conversation.id, mail)
+                    .unwrap(),
+                Some(message)
+            );
+            assert_eq!(
+                store.agent_mail_user_message(&other.id, mail).unwrap(),
+                None
+            );
+            pairs.push((mail, message));
+        }
+        assert_ne!(pairs[0].1, pairs[1].1);
+        // Schema 11 records made before source metadata was added retain
+        // their atomic mail/message event pair and need no migration.
+        store.db().execute("UPDATE events SET payload=json_remove(payload,'$.user_message') WHERE conversation_id=?1 AND kind='mail'",[&conversation.id]).unwrap();
+        for (mail, message) in pairs {
+            assert_eq!(
+                store
+                    .agent_mail_user_message(&conversation.id, mail)
+                    .unwrap(),
+                Some(message)
+            );
+        }
+        let schema: u32 = store
+            .db()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(schema, 11);
+    }
 
     #[test]
     fn session_events_page_references_and_enforce_ownership() {

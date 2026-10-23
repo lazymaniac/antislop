@@ -191,6 +191,34 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Protocol"), task(
 }
 
 #[test]
+fn the_orchestrator_reaches_a_task_by_its_plan_label_from_a_mail_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        r#"
+if "[runtime]" in prompt:
+    answer = "done"
+elif "from t1 (status)" in prompt:
+    answer = "noted" + message("t1", "answer", "use UTF-8")
+else:
+    answer = plan(task("t1", "Audit"))
+"#,
+        r#"    answer = "noted" if "Messages for you" in prompt else "audit report" + message("orchestrator", "status", "blocked on encoding")"#,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("plan finished", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .mail(&conversation)
+                .unwrap()
+                .iter()
+                .any(|mail| mail.sender == "orchestrator" && mail.text == "use UTF-8")
+    });
+    assert!(events(&core, &conversation, "mail_rejected").is_empty());
+}
+
+#[test]
 fn an_approved_task_answers_a_question_that_arrives_after_its_approval() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(

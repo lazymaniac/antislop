@@ -545,6 +545,28 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// A bounded context window for a fresh orchestration session.
+    pub fn recent_messages_through(
+        &self,
+        conversation: &str,
+        through: u64,
+    ) -> Result<Vec<Message>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT seq,author,text FROM messages WHERE conversation_id=?1 AND seq<=?2 ORDER BY seq DESC LIMIT 32",
+        )?;
+        let rows = statement.query_map(params![conversation, through as i64], |row| {
+            Ok(Message {
+                seq: row.get::<_, i64>(0)? as u64,
+                author: row.get(1)?,
+                text: self.content.sql_text(row, 2)?,
+            })
+        })?;
+        let mut messages = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+
     /// One author's messages after `after`.
     pub fn messages_by(
         &self,
@@ -573,6 +595,24 @@ impl Store {
             "SELECT COUNT(*) FROM messages WHERE conversation_id=?1 AND author=?2
                AND seq > COALESCE((SELECT MAX(seq) FROM messages
                                    WHERE conversation_id=?1 AND author='user'), 0)",
+            params![conversation, author],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// How many messages `author` wrote since the user last spoke or approved
+    /// a requirements change; either one renews the automatic-retry budget.
+    pub fn count_since_requirements_reset(
+        &self,
+        conversation: &str,
+        author: &str,
+    ) -> Result<usize> {
+        let count: i64 = self.db().query_row(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id=?1 AND author=?2
+               AND seq > COALESCE((SELECT MAX(seq) FROM messages
+                                   WHERE conversation_id=?1
+                                     AND author IN ('user','requirements-approval')), 0)",
             params![conversation, author],
             |row| row.get(0),
         )?;
@@ -768,8 +808,20 @@ impl Store {
             .max(self.last_answered(conversation, super::COMMENT_ORCHESTRATOR)?))
     }
 
-    /// Forgets the CLI sessions of a task's worker and verifier turns, so the
-    /// next turns start fresh instead of resuming a wedged conversation.
+    /// Starts subsequent orchestration turns without resuming the old sessions.
+    pub fn forget_orchestrator_sessions(&self, conversation: &str) -> Result<()> {
+        self.db().execute(
+            "UPDATE turns SET session_id=NULL WHERE conversation_id=?1 AND role IN (?2,?3)",
+            params![
+                conversation,
+                super::ORCHESTRATOR,
+                super::COMMENT_ORCHESTRATOR
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Forgets the CLI sessions of a task’s worker and verifier turns.
     pub fn forget_task_sessions(&self, task: &str) -> Result<()> {
         self.db().execute(
             "UPDATE turns SET session_id=NULL WHERE session_id IS NOT NULL AND id IN

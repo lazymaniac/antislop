@@ -64,6 +64,7 @@ pub enum RecoveryAction {
     VerifyManualSnapshot,
     RetryWithGuidance,
     ExtendRounds,
+    RestartAgent,
     ForceApprove,
     CancelTask,
 }
@@ -199,6 +200,8 @@ pub struct Core {
     /// Mail work must not occupy the plan scheduler's ownership slot.
     mail_jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
     task_cancels: Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,
+    task_restarts: Mutex<HashMap<String, TaskRecoveryRequest>>,
+    orchestrator_restarts: Mutex<std::collections::HashSet<String>>,
     mail_failures: Mutex<HashMap<(String, String), u64>>,
     turn_locks: Mutex<mail::TurnLocks>,
     /// Conversations with an orchestrator loop running, and its cancel flag.
@@ -312,6 +315,8 @@ impl Core {
             in_place: Mutex::new(()),
             mail_jobs: Mutex::new(HashMap::new()),
             task_cancels: Mutex::new(HashMap::new()),
+            task_restarts: Mutex::new(HashMap::new()),
+            orchestrator_restarts: Mutex::new(std::collections::HashSet::new()),
             mail_failures: Mutex::new(HashMap::new()),
             turn_locks: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
@@ -332,7 +337,6 @@ impl Core {
             }
         });
         core.store.recover_approved_requirements()?;
-        core.store.recover_options_comparisons()?;
         // Complete checkpoints left by an older daemon or a crash between turns.
         for conversation in core.store.conversations()? {
             if core.autonomous(&conversation.id)? {
@@ -901,6 +905,24 @@ impl Core {
         self.store.set_paused(conversation, paused)
     }
 
+    /// Cancels only orchestration; task workers keep their own cancellation flags.
+    pub fn restart_orchestrator(self: &Arc<Self>, conversation: &str) -> Result<()> {
+        self.store.conversation(conversation)?;
+        let running = self.running.lock().expect("running mutex");
+        self.store.add_message(conversation, RUNTIME,
+            "Restart the current orchestration round in a fresh session. Continue the user's request using the conversation history and durable project state.")?;
+        self.orchestrator_restarts
+            .lock()
+            .expect("orchestrator restart mutex")
+            .insert(conversation.into());
+        if let Some(cancel) = running.get(conversation) {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        drop(running);
+        self.wake(conversation);
+        Ok(())
+    }
+
     pub fn cancel(&self, conversation: &str) {
         for (owner, flag) in self
             .task_cancels
@@ -1372,24 +1394,49 @@ impl Core {
         req: TaskRecoveryRequest,
         actor: &str,
     ) -> Result<TaskRecoveryResponse> {
+        let _graph = self.graph_updates.lock().expect("graph update mutex");
         let config = self.config_snapshot();
         let conv = self.store.conversation(&req.conversation)?;
         let project = PathBuf::from(conv.project);
+        let _one_at_a_time = self.integrating.lock().expect("integration mutex");
         let mut task = self.task(&req.plan, &req.task)?;
         let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
-
-        let _one_at_a_time = self.integrating.lock().expect("integration mutex");
         self.store.assert_task_inputs(&task)?;
         let current_token = self.task_freshness_token(&req.conversation, &req.plan, &task.id)?;
         require(req.freshness_token == current_token, "stale_token")?;
         require(
-            task.status == status::NEEDS_USER
+            (req.action == RecoveryAction::RestartAgent
+                && matches!(
+                    task.status.as_str(),
+                    status::QUEUED | status::WORKING | status::VERIFYING
+                ))
+                || task.status == status::NEEDS_USER
                 || task.status == status::WAITING
                 || task.status == status::FAILED
                 || task.status == status::SKIPPED
                 || task.status == status::CANCELLED,
             "task is not waiting for recovery",
         )?;
+
+        if req.action == RecoveryAction::RestartAgent {
+            let active = self.task_cancels.lock().expect("task cancel mutex");
+            if let Some((_, cancel)) = active.get(&task.id) {
+                self.task_restarts
+                    .lock()
+                    .expect("task restart mutex")
+                    .insert(task.id.clone(), req);
+                cancel.store(true, Ordering::SeqCst);
+                return Ok(TaskRecoveryResponse {
+                    task: task.id,
+                    status: task.status,
+                    round: task.round,
+                    integrated_files: Vec::new(),
+                    preserved_branch: None,
+                    new_freshness_token: current_token,
+                    notice: "stopping the current round before restarting the agent".into(),
+                });
+            }
+        }
 
         let mut integrated_files = Vec::new();
         let mut preserved_branch = None;
@@ -1765,6 +1812,45 @@ impl Core {
                         "actor": actor,
                         "task": task.id,
                         "action": tasks::action::EXTEND_ROUNDS,
+                        "status": task.status
+                    }),
+                )?;
+                self.maybe_continue_plan(&req.conversation, &req.plan)?;
+            }
+            RecoveryAction::RestartAgent => {
+                // The next turns of this task start in fresh CLI sessions;
+                // its worktree, report and results stay as they are.
+                self.store.forget_task_sessions(&task.id)?;
+                if let Some(msg) = &req.message {
+                    let role = format!("worker:{}", task.id);
+                    let mail = Mail {
+                        id: 0,
+                        created_ms: 0,
+                        delivered_turn: None,
+                        delivered_ms: None,
+                        sender: RUNTIME.into(),
+                        recipient: role.clone(),
+                        kind: "guidance".into(),
+                        text: msg.clone(),
+                        state: "queued".into(),
+                    };
+                    self.store.add_mail(&req.conversation, &role, &mail)?;
+                }
+                task.status = status::QUEUED.to_string();
+                task.verdict = None;
+                task.feedback = None;
+                notice = "restarting the task's agent in a fresh session".to_string();
+                self.store.update_task(&task)?;
+                self.announce_task(&req.conversation, &task, None);
+                self.store.append_event(
+                    &req.conversation,
+                    None,
+                    Some(&req.plan),
+                    "task_recovery",
+                    &json!({
+                        "actor": actor,
+                        "task": task.id,
+                        "action": tasks::action::RESTART_AGENT,
                         "status": task.status
                     }),
                 )?;
@@ -2219,6 +2305,21 @@ impl Core {
             // here or finds no loop running and starts one.
             let upto = {
                 let mut running = self.running.lock().expect("running mutex");
+                if self
+                    .orchestrator_restarts
+                    .lock()
+                    .expect("orchestrator restart mutex")
+                    .remove(conversation)
+                    && let Err(error) = self.store.forget_orchestrator_sessions(conversation)
+                {
+                    self.notice(
+                        conversation,
+                        &format!("orchestrator restart failed: {error}"),
+                    );
+                    running.remove(conversation);
+                    return;
+                }
+                cancel.store(false, Ordering::SeqCst);
                 match self.unanswered(conversation) {
                     Ok(Some(upto)) => upto,
                     _ => {
@@ -2227,7 +2328,6 @@ impl Core {
                     }
                 }
             };
-            cancel.store(false, Ordering::SeqCst);
             if self.orchestrator_turn(conversation, upto, cancel).is_err() {
                 // The store itself failed; retrying would spin. The next
                 // message starts a new loop.
@@ -2390,8 +2490,15 @@ impl Core {
                 }));
         let graph_json =
             serde_json::to_string(&graph.iter().map(|task| &task.spec).collect::<Vec<_>>())?;
+        let history = self.store.recent_messages_through(conversation, answered)?;
         let Some(answer) = self.turn(setup, cancel, |first| {
             let mut prompt = orchestrator_prompt(&project, first || answered == 0, &asked, &open);
+            if first && answered > 0 {
+                prompt.push_str("\nPrevious conversation context (most recent messages):\n");
+                for message in &history {
+                    prompt.push_str(&format!("{}: {}\n", message.author, tasks::bound(&message.text, 2048)));
+                }
+            }
             prompt.push_str(&comment_context);
             if editable_graph && !interviewing {
                 prompt.push_str(&format!(
@@ -2425,7 +2532,7 @@ impl Core {
             self.answer_in_background(conversation, &task.plan_id);
         }
         // A regenerated plan can carry a fresh selective claim too, including
-        // after options deferred the original comment revision.
+        // after a deferred original comment revision.
         let (answer, addressed) = feedback::split(&answer);
         let (answer, unblocking) = tasks::parse_recoveries(&answer);
         let (mut text, mut plan) = tasks::parse_plan(&answer);
@@ -2567,7 +2674,7 @@ impl Core {
                     None,
                     None,
                     "plan_invalid",
-                    &json!({"error":error.to_string(),"retrying":retrying,"retry":if retrying {"Correcting the plan format automatically."} else {"The plan could not be decoded after two correction attempts. Send a message to retry; your requirements and options are preserved."}}),
+                    &json!({"error":error.to_string(),"retrying":retrying,"retry":if retrying {"Correcting the plan format automatically."} else {"The plan could not be decoded after two correction attempts. Send a message to retry; your requirements are preserved."}}),
                 )?;
             }
             None => {
@@ -2686,29 +2793,11 @@ impl Core {
             Err(error) => {
                 self.store.append_event(
                     conversation, None, None, "requirements_failed",
-                    &json!({"error": error.to_string(), "retry": "Send a message to retry planning. For a proposed scope change, open /requirements and press p to review it first."}),
+                    &json!({"error": error.to_string(), "retry": "Ask the orchestrator to regenerate the task plan; a bare approval does not rerun requirements preparation. For a proposed scope change, open /requirements and press p to review it first."}),
                 )?;
-                self.notice(
-                    conversation,
-                    &format!("requirements preparation failed: {error}"),
-                );
                 return Ok(());
             }
         };
-        match self.ensure_options(conversation, &run, cancel) {
-            Ok(true) => return Ok(()),
-            Ok(false) => {}
-            Err(error) => {
-                self.store.append_event(conversation,None,None,"plan_invalid",&json!({"error":format!("Implementation options comparison failed: {error}. Send a message to retry planning.")}))?;
-                return Ok(());
-            }
-        }
-        let choice = self
-            .store
-            .solution_choice(conversation, &run.id)?
-            .ok_or_else(|| {
-                Error::Invalid("reviewed implementation comparison is missing".into())
-            })?;
         let values = specs
             .iter()
             .map(serde_json::to_value)
@@ -2774,11 +2863,10 @@ impl Core {
                 } else {
                     tasks::plan_review_followup(request, specs)
                 };
-                let prompt = match &planning_gaps {
+                match &planning_gaps {
                     Some(gaps) => format!("{prompt}\n\n{gaps}"),
                     None => prompt,
-                };
-                format!("{prompt}\n\nImplementation options and their independent review:\n{}\nCheck that this complete plan resolves every review finding. A diagnosis-first plan must name the measurement, decision criteria and dependent implementation task, without claiming future results. Reject unresolved correctness or scope issues. Proposed test tolerances need justification; they do not redefine user requirements.",serde_json::to_string(&choice).unwrap_or_default())
+                }
             },
         )?;
         if cancel.load(Ordering::SeqCst) {
@@ -2977,6 +3065,23 @@ impl Core {
             access,
         )?;
         let mut inbox = self.store.pending_mail(conversation, &role)?;
+        let mut history_mail = std::collections::HashSet::new();
+        if role == ORCHESTRATOR && !mail_only {
+            let mut visible = Vec::with_capacity(inbox.len());
+            for mail in inbox {
+                if mail.kind == "agent_work"
+                    && let Some(message) =
+                        self.store.agent_mail_user_message(conversation, mail.id)?
+                {
+                    if message > upto_message {
+                        continue;
+                    }
+                    history_mail.insert(mail.id);
+                }
+                visible.push(mail);
+            }
+            inbox = visible;
+        }
         if mail_only && role == ORCHESTRATOR {
             inbox.retain(|mail| mail.kind != "agent_work");
         }
@@ -3115,7 +3220,7 @@ impl Core {
             }
             let prompt_mail = inbox
                 .iter()
-                .filter(|mail| !(role == ORCHESTRATOR && mail.kind == "agent_work"))
+                .filter(|mail| !history_mail.contains(&mail.id))
                 .cloned()
                 .collect::<Vec<_>>();
             let mut text = if prompt_mail.is_empty() {
@@ -3445,10 +3550,33 @@ impl Core {
                                 }
                                 let _ =
                                     self.answer_waiting(conversation, &task_clone.plan_id, cancel);
-                                self.task_cancels
-                                    .lock()
-                                    .expect("task cancel mutex")
-                                    .remove(&task_clone.id);
+                                let restart = {
+                                    let mut active =
+                                        self.task_cancels.lock().expect("task cancel mutex");
+                                    active.remove(&task_clone.id);
+                                    self.task_restarts
+                                        .lock()
+                                        .expect("task restart mutex")
+                                        .remove(&task_clone.id)
+                                };
+                                if let Some(mut request) = restart {
+                                    let result = self
+                                        .task_freshness_token(
+                                            conversation,
+                                            &request.plan,
+                                            &request.task,
+                                        )
+                                        .and_then(|token| {
+                                            request.freshness_token = token;
+                                            self.recover_task(request)
+                                        });
+                                    if let Err(error) = result {
+                                        self.notice(
+                                            conversation,
+                                            &format!("agent restart failed: {error}"),
+                                        );
+                                    }
+                                }
                                 let _ = tx.send(spec_id);
                             });
                         }
@@ -4019,6 +4147,21 @@ impl Core {
                     }
                 };
             }
+            if task
+                .report
+                .as_deref()
+                .is_some_and(tasks::environment_denied)
+            {
+                return self.stop(
+                    conversation,
+                    task,
+                    status::NEEDS_USER,
+                    Some(
+                        "the environment denied an operation (Operation not permitted); \
+                         more rounds cannot fix it. Change the permissions, then restart the agent",
+                    ),
+                );
+            }
             let text = tasks::findings_key(&verdict.findings);
             if previous.as_deref() == Some(text.as_str()) {
                 let report = task.report.take().unwrap_or_default();
@@ -4112,9 +4255,11 @@ impl Core {
         sender: &str,
         message: tasks::Outgoing,
     ) -> Result<()> {
+        // Mail turns of the orchestrator and auditors carry no plan; their
+        // task labels refer to the conversation's current plan.
         let plan = match plan_id {
             Some(plan_id) => self.store.plan(plan_id)?,
-            None => vec![],
+            None => self.store.latest_plan(conversation)?,
         };
         let own_task = sender.split('/').next().unwrap_or(sender);
         let targets: Vec<(String, String)> = match message.to.as_str() {

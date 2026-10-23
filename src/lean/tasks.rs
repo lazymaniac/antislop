@@ -1291,6 +1291,7 @@ pub mod action {
     pub const VERIFY_MANUAL_SNAPSHOT: &str = "verify_manual_snapshot";
     pub const RETRY_WITH_GUIDANCE: &str = "retry_with_guidance";
     pub const EXTEND_ROUNDS: &str = "extend_rounds";
+    pub const RESTART_AGENT: &str = "restart_agent";
     pub const FORCE_APPROVE: &str = "force_approve";
     pub const CANCEL_TASK: &str = "cancel_task";
     pub const UNBLOCK: &str = "unblock";
@@ -1476,7 +1477,7 @@ pub fn orchestrator_instructions() -> String {
         .map(|a| format!("`{}` ({}: {})", a.id, work_kind_name(a.kind), a.focus))
         .collect();
     format!(
-        "The runtime adds read-only options before every writer lacking a direct options dependency, after adding optional quality gates and even when required gates are disabled. Existing shared options must cover each dependent writer. The selected variant binds implementation; departures require explicit evidence and independent verification.\n\nFollow the runtime session phase in a three-phase workflow:\n\
+        "Do not compare implementation options during orchestration or before planning. Plan the work from the requirements; options are compared by worker tasks during execution, before their dependent writers begin. The runtime adds read-only options before every writer lacking a direct options dependency, after adding optional quality gates and even when required gates are disabled. Existing shared options must cover each dependent writer. The selected variant binds implementation; departures require explicit evidence and independent verification.\n\nFollow the runtime session phase in a three-phase workflow:\n\
          1. **Interview**: When the user's request has any ambiguity, missing constraints, \
          or architectural trade-offs, conduct a concise clarifying interview with the user \
          first (do not emit a ```plan block during the interview). Answer simple questions \
@@ -2210,7 +2211,26 @@ const COVERAGE_FORMAT: &str = "Your verdict must also account for every \
      marks one issue or blocked, does not approve the task. When the task is \
      read-only analysis, judge the report, not the code: ok means the report \
      covers the obligation correctly (including defects it rightly reports in \
-     the code); issue means the report is wrong, incomplete or unsupported.";
+     the code); issue means the report is wrong, incomplete or unsupported. A command the \
+     environment denied (`Operation not permitted`, `os error 1`, `PermissionDenied`) is \
+     blocked, never issue: the worker cannot fix the environment.";
+
+/// Markers of the environment refusing an operation (sandbox, file or socket
+/// permissions). More correction rounds cannot cure them.
+const ENVIRONMENT_DENIALS: [&str; 4] = [
+    "operation not permitted",
+    "os error 1)",
+    "permissiondenied",
+    "eperm",
+];
+
+/// Whether `report` records the environment denying an operation.
+pub fn environment_denied(report: &str) -> bool {
+    let report = report.to_ascii_lowercase();
+    ENVIRONMENT_DENIALS
+        .iter()
+        .any(|marker| report.contains(marker))
+}
 
 fn scope_text(scope: &[String]) -> String {
     if scope.is_empty() {
@@ -2365,6 +2385,15 @@ pub(crate) fn round_handoff_prompt(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn environment_denials_are_recognised() {
+        assert!(environment_denied(
+            "daemon failed: Operation not permitted (os error 1)"
+        ));
+        assert!(environment_denied("listener: PermissionDenied"));
+        assert!(!environment_denied("assertion failed: left == right"));
+    }
+
     #[test]
     fn requirements_reach_only_verifiers_as_readable_id_and_text() {
         let entry: crate::lean::ledger::LedgerEntry = serde_json::from_value(serde_json::json!({

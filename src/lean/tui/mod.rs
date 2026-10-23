@@ -64,8 +64,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use view::{
-    ORCHESTRATOR, PanelFocus, SIDE_BY_SIDE_BREAKPOINT, View, dim, draw_min_term_guard,
-    main_footer_hint, target_name, truncate, wrap,
+    ORCHESTRATOR, PanelFocus, SIDE_BY_SIDE_BREAKPOINT, View, dim, draw_min_term_guard, target_name,
+    truncate, wrap,
 };
 
 pub enum Update {
@@ -2337,11 +2337,17 @@ impl App {
         }
     }
 
-    /// Opens the way out for a stopped step: the named one, else the
-    /// selected one, else the first that is stopped.
+    /// Opens actions for the named or selected step, falling back to a
+    /// stopped step or an active task that can be restarted.
     pub fn open_unblock(&mut self, named: Option<String>) {
+        if named.as_deref() == Some(ORCHESTRATOR)
+            || (named.is_none() && self.selected == ORCHESTRATOR)
+            || self.view.plan.is_none()
+        {
+            self.unblock = Some(unblock::Unblock::orchestrator());
+            return;
+        }
         let Some(plan) = self.view.plan.clone() else {
-            self.notice = Some("✗ there is no plan, so nothing to unblock".into());
             return;
         };
         let selected = self.selected.split_once(':').map(|(_, id)| id.to_owned());
@@ -2349,7 +2355,10 @@ impl App {
         let task = wanted
             .as_deref()
             .and_then(|id| self.view.tasks.iter().find(|t| t.id == id))
-            .filter(|t| unblock::is_blocked(&t.status))
+            .filter(|t| {
+                unblock::is_blocked(&t.status)
+                    || matches!(t.status.as_str(), "queued" | "working" | "verifying")
+            })
             .or_else(|| {
                 self.view
                     .tasks
@@ -2361,6 +2370,12 @@ impl App {
                     .tasks
                     .iter()
                     .find(|t| unblock::is_blocked(&t.status))
+            })
+            .or_else(|| {
+                self.view
+                    .tasks
+                    .iter()
+                    .find(|t| matches!(t.status.as_str(), "working" | "verifying" | "queued"))
             });
         match task {
             Some(task) => self.unblock = Some(unblock::Unblock::new(&plan, task)),
@@ -2835,7 +2850,7 @@ impl App {
             Some(branch) => format!("{label} · branch: {branch}"),
             None => label,
         };
-        view::render_header_with(
+        let mut line = view::render_header_with(
             &label,
             &self.conversation,
             self.view.autonomous,
@@ -2843,7 +2858,17 @@ impl App {
             panel_focus,
             width,
             self.view.controls(),
-        )
+        );
+        if let Some(notice) = &self.notice {
+            line.spans.insert(
+                0,
+                Span::styled(
+                    format!(" {} · ", sanitize(notice)),
+                    Theme::from_env().title(),
+                ),
+            );
+        }
+        line
     }
 
     /// The header's status text: the stage, then what is going on.
@@ -2855,7 +2880,7 @@ impl App {
             view::Stage::Interview => format!("1/3 interview · {status}"),
             view::Stage::Planning => format!("2/3 planning · {status}"),
             view::Stage::Review => format!("2/3 plan review · {status}"),
-            view::Stage::Executing => format!("3/3 implementation · {status}"),
+            view::Stage::Executing => format!("3/3 implementation · {status} [Task actions]"),
             // The way out is one click away whenever something is stuck.
             view::Stage::Blocked => format!("{} · {status} [Unblock]", stage.label()),
             _ => format!("{} · {status}", stage.label()),
@@ -4015,6 +4040,9 @@ impl App {
             details.draw(frame, &self.view);
             self.text_area = Some(details.text_area);
             self.text_origin = details.scroll;
+            // First attachment needs the actual panel layout, not its initial
+            // empty rectangle. This also applies the resized viewport now.
+            self.sync_native_views();
         } else {
             self.draw_main(frame);
         }
@@ -4322,25 +4350,29 @@ impl App {
             || self.config_editor.as_ref().is_some_and(|e| e.visible)
     }
 
+    fn bar_height(area: Rect) -> u16 {
+        if area.width >= SIDE_BY_SIDE_BREAKPOINT && area.height >= 30 {
+            3
+        } else {
+            2
+        }
+    }
+
+    fn main_areas(area: Rect) -> [Rect; 3] {
+        Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(u16::from(area.height >= 6)),
+            Constraint::Length(Self::bar_height(area)),
+        ])
+        .areas(area)
+    }
+
     fn draw_main(&mut self, frame: &mut Frame) {
         let area = frame.area();
-        let [header, body, footer] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(3),
-            Constraint::Length(1),
-        ])
-        .areas(area);
+        let bar_height = Self::bar_height(area);
+        let [body, _, footer] = Self::main_areas(area);
 
         let theme = Theme::from_env();
-        frame.render_widget(
-            Paragraph::new(self.header_line(header.width)).style(theme.bar()),
-            header,
-        );
-        let panel_focus = match self.focus {
-            Focus::Chat => PanelFocus::Chat,
-            Focus::Graph => PanelFocus::Graph,
-        };
-
         if area.width >= SIDE_BY_SIDE_BREAKPOINT {
             let chat_width = (body.width / 3).max(34);
             let [chat, sep_col, team] = Layout::horizontal([
@@ -4367,26 +4399,20 @@ impl App {
             self.draw_graph(frame, body);
         }
 
-        let workflow_hint =
-            if self.notice.is_none() && self.view.workflow_phase.as_deref() == Some("interview") {
-                Some(if self.view.interview_question.is_some() {
-                    "/interview open question · Ctrl+P commands"
-                } else if self.view.requirements_summary.is_empty() {
-                    "Enter answer interview · Ctrl+P commands"
-                } else {
-                    "Review the summary · comment below or Ctrl+A to proceed to planning"
-                })
-            } else {
-                None
-            };
-        let hint = main_footer_hint(
-            panel_focus,
-            self.view.plan_proposed(),
-            self.view.plan_resumable(),
-            self.notice.as_deref().or(workflow_hint),
-            usize::from(footer.width),
+        frame.render_widget(Block::default().style(theme.bar()), footer);
+        let text_area = Rect::new(footer.x, footer.y + (bar_height - 1) / 2, footer.width, 1);
+        let content_width = footer.width.saturating_sub(4);
+        let [status, help] =
+            Layout::horizontal([Constraint::Length(content_width), Constraint::Length(4)])
+                .areas(text_area);
+        frame.render_widget(
+            Paragraph::new(self.header_line(content_width)).style(theme.bar()),
+            status,
         );
-        frame.render_widget(Paragraph::new(Span::styled(hint, dim())), footer);
+        frame.render_widget(
+            Paragraph::new(Span::styled(" [?]", theme.title())).style(theme.bar()),
+            help,
+        );
     }
 
     fn draw_chat(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
@@ -5068,6 +5094,14 @@ impl App {
                     }
                     return true;
                 }
+                let [body, _, bar] = Self::main_areas(area);
+                if row == bar.y + (Self::bar_height(area) - 1) / 2
+                    && col >= bar.right().saturating_sub(3)
+                    && bar.contains((col, row).into())
+                {
+                    self.show_help(self.help_here());
+                    return true;
+                }
                 if let Some(inner) = self.graph_area
                     && inner.contains((col, row).into())
                 {
@@ -5092,8 +5126,10 @@ impl App {
                     self.focus = Focus::Graph;
                     return true;
                 }
-                if row == area.y && area.width > 0 {
-                    let header_line = self.header_line(area.width);
+                if row == bar.y + (Self::bar_height(area) - 1) / 2
+                    && bar.contains((col, row).into())
+                {
+                    let header_line = self.header_line(bar.width.saturating_sub(4));
                     let controls = self.view.controls();
                     let header_text: String = header_line
                         .spans
@@ -5102,11 +5138,16 @@ impl App {
                         .collect();
                     // Find bracketed token at column
                     let mut cur_col = 0usize;
-                    let target_col = usize::from(col.saturating_sub(area.x));
-                    for (idx, ch) in header_text.char_indices() {
-                        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                    let target_col = usize::from(col.saturating_sub(bar.x));
+                    for (idx, grapheme) in
+                        unicode_segmentation::UnicodeSegmentation::grapheme_indices(
+                            header_text.as_str(),
+                            true,
+                        )
+                    {
+                        let w = unicode_width::UnicodeWidthStr::width(grapheme);
                         if target_col >= cur_col && target_col < cur_col + w {
-                            if let Some(open) = header_text[..=idx].rfind('[')
+                            if let Some(open) = header_text[..idx + grapheme.len()].rfind('[')
                                 && let Some(close_rel) = header_text[idx..].find(']')
                             {
                                 let token = &header_text[open..=idx + close_rel];
@@ -5130,7 +5171,7 @@ impl App {
                                         self.command("/cancel")
                                     }
                                     "[Plan]" => self.command("/plan"),
-                                    "[Unblock]" => self.command("/unblock"),
+                                    "[Unblock]" | "[Task actions]" => self.command("/unblock"),
                                     "[Chat]" => self.focus = Focus::Chat,
                                     "[Team]" => self.focus = Focus::Graph,
                                     _ => {}
@@ -5140,9 +5181,7 @@ impl App {
                         }
                         cur_col += w;
                     }
-                } else if row > area.y
-                    && row + 1 < area.bottom()
-                    && area.width >= SIDE_BY_SIDE_BREAKPOINT
+                } else if body.contains((col, row).into()) && area.width >= SIDE_BY_SIDE_BREAKPOINT
                 {
                     let chat_width = (area.width / 3).max(34);
                     if col < area.x + chat_width {
@@ -5279,6 +5318,19 @@ fn recover(
     action: crate::lean::RecoveryAction,
     message: Option<String>,
 ) -> std::result::Result<String, String> {
+    if task == ORCHESTRATOR && action == crate::lean::RecoveryAction::RestartAgent {
+        return client
+            .call(&Request::RestartOrchestrator {
+                conversation: conversation.into(),
+            })
+            .map(|reply| {
+                reply
+                    .as_str()
+                    .unwrap_or("restarting the orchestrator")
+                    .to_owned()
+            })
+            .map_err(|error| error.to_string());
+    }
     let stored = client
         .call(&Request::Task {
             plan: plan.to_owned(),
@@ -6095,7 +6147,20 @@ pub mod tests {
             .unwrap();
 
         let buffer2 = terminal.backend().buffer();
-        let text2: String = buffer2.content.iter().map(|c| c.symbol()).collect();
+        let mut text2: String = buffer2.content.iter().map(|c| c.symbol()).collect();
+        // Additional help entries may move a shortcut off the last page.
+        for _ in 0..bottom {
+            app.key(event::KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            text2.extend(
+                terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol()),
+            );
+        }
 
         assert!(text2.contains("cancel running work"));
         assert!(text2.contains("pause new steps / continue"));
@@ -6131,9 +6196,10 @@ pub mod tests {
                 app.draw(frame);
             })
             .unwrap();
-        assert_eq!(app.help_max_scroll(), 0);
+        assert!(app.help_max_scroll() < max_scroll);
         assert_eq!(
-            app.help_scroll, 0,
+            app.help_scroll,
+            app.help_max_scroll(),
             "Resizing must clamp stored scroll to new max_scroll"
         );
 
@@ -6455,6 +6521,7 @@ pub mod tests {
             ..view::TaskRow::default()
         };
         app.view.tasks = vec![task("t1", "approved")];
+        app.selected = "worker:t1".into();
         app.command("/unblock");
         assert!(app.unblock.is_none());
         assert!(
@@ -6501,6 +6568,45 @@ pub mod tests {
         assert!(!app.header_status().contains("[Unblock]"));
     }
 
+    #[test]
+    fn the_orchestrator_actions_open_without_a_plan_and_with_an_existing_plan() {
+        let mut app = test_app();
+        app.focus = Focus::Graph;
+        app.selected = ORCHESTRATOR.into();
+        for plan in [None, Some("p1".into())] {
+            app.view.plan = plan;
+            app.key(key_press(KeyCode::Char('u')));
+            let modal = app.unblock.take().unwrap();
+            assert_eq!(modal.task, ORCHESTRATOR);
+            assert_eq!(modal.choices.len(), 1);
+            assert_eq!(
+                modal.choices[0].action,
+                crate::lean::RecoveryAction::RestartAgent
+            );
+            assert!(!modal.choices[0].asks_text);
+        }
+    }
+
+    #[test]
+    fn an_active_step_can_be_restarted_from_the_actions_menu() {
+        let mut app = test_app();
+        app.view.plan = Some("p1".into());
+        app.view.tasks = vec![view::TaskRow {
+            id: "t1".into(),
+            status: "working".into(),
+            ..Default::default()
+        }];
+        app.selected = "worker:t1".into();
+        app.focus = Focus::Graph;
+        app.key(key_press(KeyCode::Char('u')));
+        assert_eq!(app.unblock.as_ref().unwrap().task, "t1");
+        app.key(key_press(KeyCode::Enter));
+        assert_eq!(
+            app.editor.as_ref().unwrap().target,
+            "unblock:restart_agent:p1:t1"
+        );
+    }
+
     fn header_text(app: &App, width: u16) -> String {
         app.header_line(width)
             .spans
@@ -6510,7 +6616,7 @@ pub mod tests {
     }
 
     fn click_header(app: &mut App, width: u16, token: &str) {
-        let text = header_text(app, width);
+        let text = header_text(app, width.saturating_sub(4));
         let at = text
             .find(token)
             .unwrap_or_else(|| panic!("{token} in {text}"));
@@ -6519,7 +6625,7 @@ pub mod tests {
         app.mouse(event::MouseEvent {
             kind: MouseEventKind::Down(event::MouseButton::Left),
             column: col,
-            row: 0,
+            row: App::main_areas(app.terminal_area)[2].y,
             modifiers: KeyModifiers::NONE,
         });
     }
@@ -6552,6 +6658,76 @@ pub mod tests {
         // Compact mode token at the narrowest widths.
         app.view.autonomous = Some(true);
         assert!(header_text(&app, 40).contains("[auto]"));
+    }
+
+    #[test]
+    fn footer_has_one_status_row_and_help_preserves_the_draft() {
+        let mut app = test_app();
+        app.paste("draft");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 50)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let row_text = |buffer: &ratatui::buffer::Buffer, y| -> String {
+            (0..120).map(|x| buffer[(x, y)].symbol()).collect()
+        };
+        let buffer = terminal.backend().buffer();
+        assert!(row_text(buffer, 47).trim().is_empty());
+        assert!(row_text(buffer, 48).ends_with("[?]"));
+        assert!(row_text(buffer, 49).trim().is_empty());
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 118,
+            row: 48,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.help, Some(Help::Chat));
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        app.key(key_press(KeyCode::Esc));
+        assert!(app.help.is_none());
+        assert_eq!(app.input.text, "draft");
+    }
+
+    #[test]
+    fn footer_clicks_follow_graphemes_and_the_rendered_row() {
+        let mut app = test_app();
+        app.project = "Zażółć 👩‍💻 e\u{301}".into();
+        for (width, height) in [(80, 24), (180, 50)] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+            let bar = App::main_areas(app.terminal_area)[2];
+            let row = bar.y + (App::bar_height(app.terminal_area) - 1) / 2;
+            let text = header_text(&app, width - 4);
+            // Clicking each displayed grapheme must be safe, including wide emoji.
+            let project_width = unicode_width::UnicodeWidthStr::width(app.project.as_str());
+            for column in 0..project_width as u16 + 1 {
+                app.mouse(event::MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                });
+            }
+            if width < SIDE_BY_SIDE_BREAKPOINT {
+                let at = text.find("[Team]").unwrap();
+                app.mouse(event::MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: unicode_width::UnicodeWidthStr::width(&text[..at]) as u16 + 1,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                });
+                assert_eq!(app.focus, Focus::Graph);
+                app.focus = Focus::Chat;
+            }
+            app.mouse(event::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: width - 2,
+                row,
+                modifiers: KeyModifiers::NONE,
+            });
+            assert_eq!(app.help, Some(Help::Chat));
+            app.key(key_press(KeyCode::Esc));
+        }
     }
 
     #[test]

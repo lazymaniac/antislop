@@ -2052,10 +2052,20 @@ pub fn render_header_with(
     width: u16,
     controls: Controls,
 ) -> Line<'static> {
+    let theme = super::theme::Theme::from_env();
+    let label_style = theme.text().add_modifier(Modifier::BOLD);
+    let secondary = theme.text();
+    let active_button = if theme.color {
+        theme.raised().fg(Color::Indexed(215))
+    } else {
+        theme.raised()
+    }
+    .add_modifier(Modifier::BOLD);
+
     if width < 25 {
         return Line::from(vec![Span::styled(
             format!(" {} ", clean_line(project)),
-            Style::default().add_modifier(Modifier::BOLD),
+            label_style,
         )]);
     }
 
@@ -2068,31 +2078,25 @@ pub fn render_header_with(
 
     let mut spans = vec![Span::styled(
         format!(" {} ", clean_line(project)),
-        Style::default().add_modifier(Modifier::BOLD),
+        label_style,
     )];
 
     if width < SIDE_BY_SIDE_BREAKPOINT {
-        let active = |color| {
-            super::theme::Theme::from_env()
-                .raised()
-                .fg(color)
-                .add_modifier(Modifier::BOLD)
-        };
         let (chat_style, graph_style) = match focus {
             PanelFocus::Chat => (
-                active(Color::Yellow),
-                super::theme::Theme::from_env().panel().patch(dim()),
+                active_button,
+                super::theme::Theme::from_env().panel().patch(secondary),
             ),
             PanelFocus::Graph => (
-                super::theme::Theme::from_env().panel().patch(dim()),
-                active(Color::Cyan),
+                super::theme::Theme::from_env().panel().patch(secondary),
+                active_button,
             ),
         };
         // Every panel is a button; the focused one is lit.
         spans.push(Span::styled(" [Chat] ", chat_style));
         spans.push(Span::styled("[Team] ", graph_style));
         if width >= 65 {
-            spans.push(Span::styled("(Tab: switch) ", dim()));
+            spans.push(Span::styled("(Tab: switch) ", secondary));
         }
     }
 
@@ -2102,20 +2106,17 @@ pub fn render_header_with(
         } else {
             format!(" · {mode_str}")
         };
-        spans.push(Span::styled(format!(" · {short}{mode} "), dim()));
+        spans.push(Span::styled(format!(" · {short}{mode} "), secondary));
     }
 
     if (50..95).contains(&width) {
         // The wide header lists it with the other buttons.
-        spans.push(Span::styled(
-            "[Plan] ",
-            super::theme::Theme::from_env().raised().fg(Color::Cyan),
-        ));
+        spans.push(Span::styled("[Plan] ", active_button));
     }
     if (35..50).contains(&width) {
         match mode {
-            Some(true) => spans.push(Span::styled("[auto] ", dim())),
-            Some(false) => spans.push(Span::styled("[sup] ", dim())),
+            Some(true) => spans.push(Span::styled("[auto] ", secondary)),
+            Some(false) => spans.push(Span::styled("[sup] ", secondary)),
             None => {}
         }
     }
@@ -2129,16 +2130,14 @@ pub fn render_header_with(
         Span::styled(
             label.to_owned(),
             if enabled {
-                super::theme::Theme::from_env()
-                    .raised()
-                    .patch(Style::default().fg(Color::Cyan))
+                active_button
             } else {
-                super::theme::Theme::from_env().panel().patch(dim())
+                super::theme::Theme::from_env().panel().patch(secondary)
             },
         )
     };
     if width >= 95 {
-        spans.push(Span::styled(" · ", Style::default().fg(Color::Cyan)));
+        spans.push(Span::styled(" · ", secondary));
         spans.push(button("[/pause]", controls.pause));
         spans.push(Span::raw(" "));
         spans.push(button("[/continue]", controls.resume_paused));
@@ -2146,10 +2145,7 @@ pub fn render_header_with(
         spans.push(button("[/resume]", controls.resume_plan));
         spans.push(Span::raw(" "));
         spans.push(button("[/cancel]", controls.cancel));
-        spans.push(Span::styled(
-            " [Plan]",
-            super::theme::Theme::from_env().raised().fg(Color::Cyan),
-        ));
+        spans.push(Span::styled(" [Plan]", active_button));
     } else if width >= 45 {
         // One button for pause or continue, whichever applies.
         let (label, enabled) = if controls.resume_paused {

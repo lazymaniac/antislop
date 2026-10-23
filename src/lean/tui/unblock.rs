@@ -35,6 +35,13 @@ pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
         label,
         asks_text,
     };
+    if matches!(task.status.as_str(), "queued" | "working" | "verifying") {
+        return vec![choice(
+            RecoveryAction::RestartAgent,
+            "Restart the agent in a fresh session",
+            true,
+        )];
+    }
     let mut choices = vec![choice(
         RecoveryAction::RetryWithGuidance,
         "Retry with a hint for the worker",
@@ -65,6 +72,11 @@ pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
         ));
     }
     choices.push(choice(
+        RecoveryAction::RestartAgent,
+        "Restart the agent in a fresh session",
+        true,
+    ));
+    choices.push(choice(
         RecoveryAction::ForceApprove,
         "Approve it as it is (skips verification)",
         true,
@@ -93,6 +105,25 @@ pub struct Unblock {
 }
 
 impl Unblock {
+    pub fn orchestrator() -> Self {
+        let mut modal = Self::new(
+            "",
+            &TaskRow {
+                id: super::super::ORCHESTRATOR.into(),
+                title: "Orchestrator".into(),
+                status: "working".into(),
+                reason: Some(
+                    "Restart orchestration while preserving conversation history and task work."
+                        .into(),
+                ),
+                ..TaskRow::default()
+            },
+        );
+        modal.choices[0].label = "Restart the orchestrator in a fresh session";
+        modal.choices[0].asks_text = false;
+        modal
+    }
+
     pub fn new(plan: &str, task: &TaskRow) -> Self {
         Self {
             plan: plan.to_owned(),
@@ -164,7 +195,7 @@ impl Unblock {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow))
             .title(format!(
-                " Unblock {} · {} ",
+                " Task actions {} · {} ",
                 clean(&self.task),
                 self.status.replace('_', " ")
             ));
@@ -253,18 +284,26 @@ mod tests {
                 IntegrateWithConsent,
                 KeepOnBranch,
                 VerifyManualSnapshot,
+                RestartAgent,
                 ForceApprove
             ]
         );
         assert_eq!(
             actions(&row("needs_user", false)),
-            [RetryWithGuidance, ExtendRounds, ForceApprove]
+            [RetryWithGuidance, ExtendRounds, RestartAgent, ForceApprove]
         );
         assert_eq!(
             actions(&row("waiting", true)),
-            [RetryWithGuidance, ForceApprove]
+            [RetryWithGuidance, RestartAgent, ForceApprove]
         );
         assert!(is_blocked("skipped") && !is_blocked("working") && !is_blocked("approved"));
+    }
+
+    #[test]
+    fn active_tasks_offer_only_restart() {
+        for status in ["queued", "working", "verifying"] {
+            assert_eq!(actions(&row(status, true)), [RecoveryAction::RestartAgent]);
+        }
     }
 
     #[test]
@@ -310,7 +349,7 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        assert!(text.contains("Unblock t1"));
+        assert!(text.contains("Task actions t1"));
         assert!(text.contains("the verifier repeated the same findings"));
         let rect = modal.rects[2];
         let Outcome::Choose(choice) = modal.click(rect.x + 2, rect.y) else {

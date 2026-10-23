@@ -295,9 +295,37 @@ impl Registry {
 }
 
 fn capable(spec: &agent::Spec) -> bool {
+    capable_in_path(spec, std::env::var_os("PATH").as_deref())
+}
+
+fn capable_in_path(spec: &agent::Spec, search: Option<&std::ffi::OsStr>) -> bool {
     // Shell/Python wrappers are custom launchers, even without prefix args.
     // Do not execute them speculatively: some launchers treat --help as work.
-    if let Ok(mut file) = std::fs::File::open(&spec.binary) {
+    let binary = if spec.binary.is_absolute() {
+        Some(spec.binary.clone())
+    } else if spec.binary.components().count() > 1 {
+        Some(spec.cwd.join(&spec.binary))
+    } else {
+        search.and_then(|search| {
+            std::env::split_paths(search)
+                .map(|directory| {
+                    let directory = if directory.is_absolute() {
+                        directory
+                    } else {
+                        spec.cwd.join(directory)
+                    };
+                    directory.join(&spec.binary)
+                })
+                .find(|path| {
+                    use std::os::unix::fs::PermissionsExt;
+                    path.metadata().is_ok_and(|metadata| {
+                        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                    })
+                })
+        })
+    };
+    let Some(binary) = binary else { return false };
+    if let Ok(mut file) = std::fs::File::open(binary) {
         let mut prefix = [0; 128];
         if let Ok(count) = file.read(&mut prefix) {
             let prefix = String::from_utf8_lossy(&prefix[..count]);
@@ -329,7 +357,7 @@ fn capable(spec: &agent::Spec) -> bool {
         };
         let until = Instant::now() + Duration::from_secs(2);
         loop {
-            if let Ok(Some(status)) = process.child.lock().expect("probe child").try_wait() {
+            if let Ok(Some(status)) = process.status() {
                 while process.readers.load(Ordering::SeqCst) != 0 && Instant::now() < until {
                     std::thread::sleep(Duration::from_millis(2));
                 }
@@ -409,7 +437,7 @@ impl Session {
             !self.stop.load(Ordering::SeqCst),
             "native backend stopped; retry requires a new session",
         )?;
-        if let Some(status) = self.process.child.lock().map_err(invalid)?.try_wait()? {
+        if let Some(status) = self.process.status()? {
             self.stop.store(true, Ordering::SeqCst);
             return Err(invalid(format!(
                 "native backend exited ({status}): {}",
@@ -532,11 +560,27 @@ impl Session {
     }
 
     pub(crate) fn interrupt(&self) -> Result<()> {
+        self.interrupt_turn(None)
+    }
+
+    pub(crate) fn interrupt_turn(&self, expected: Option<&str>) -> Result<()> {
         self.check_alive()?;
         require(
             self.executing.load(Ordering::SeqCst),
             "no active native turn to interrupt",
         )?;
+        let active = self.active.lock().map_err(invalid)?;
+        if matches!(self.backend, Backend::Codex { .. }) {
+            require(active.is_some(), "no active native turn")?;
+        }
+        if let Some(expected) = expected {
+            require(
+                active
+                    .as_ref()
+                    .is_some_and(|active| active.turn["id"] == expected),
+                "native interrupt target is no longer the active turn",
+            )?;
+        }
         let core = self
             .core
             .upgrade()
@@ -553,32 +597,40 @@ impl Session {
             &json!({"operation":"interrupt","role":self.role}),
         )?;
         self.user_interrupted.store(true, Ordering::SeqCst);
-        match &self.backend {
-            Backend::Codex { socket, .. } => {
-                let active = self.active.lock().map_err(invalid)?;
-                let active = active
-                    .as_ref()
-                    .ok_or_else(|| invalid("no active native turn"))?;
-                let mut rpc = codex::Rpc::connect(socket)?;
-                rpc.call(
-                    "thread/resume",
-                    codex::thread_params(&self.spec, Some(&self.identity)),
-                )?;
-                rpc.call(
-                    "turn/interrupt",
-                    json!({"threadId":self.identity,"turnId":active.turn["id"]}),
-                )?;
+        let result = (|| -> Result<()> {
+            match &self.backend {
+                Backend::Codex { socket, .. } => {
+                    let active = active
+                        .as_ref()
+                        .ok_or_else(|| invalid("no active native turn"))?;
+                    let mut rpc = codex::Rpc::connect(socket)?;
+                    rpc.call(
+                        "thread/resume",
+                        codex::thread_params(&self.spec, Some(&self.identity)),
+                    )?;
+                    rpc.call(
+                        "turn/interrupt",
+                        json!({"threadId":self.identity,"turnId":active.turn["id"]}),
+                    )?;
+                }
+                Backend::Opencode { .. } => {
+                    opencode::request(
+                        self,
+                        "POST",
+                        &format!("/session/{}/abort", self.identity),
+                        Some(json!({})),
+                    )?;
+                }
             }
-            Backend::Opencode { .. } => {
-                opencode::request(
-                    self,
-                    "POST",
-                    &format!("/session/{}/abort", self.identity),
-                    Some(json!({})),
-                )?;
-            }
+            Ok(())
+        })();
+        if result.is_err() {
+            // An unacknowledged abort cannot leave an executing backend
+            // behind while the role scheduler proceeds to its next turn.
+            self.stop.store(true, Ordering::SeqCst);
+            self.process.terminate();
         }
-        Ok(())
+        result
     }
 }
 
@@ -599,6 +651,7 @@ pub(crate) struct Process {
     diagnostic: Arc<Mutex<Vec<u8>>>,
     registered: Mutex<Option<(Weak<Core>, u32)>>,
     readers: Arc<std::sync::atomic::AtomicUsize>,
+    terminated: AtomicBool,
 }
 
 fn role_round(core: &Core, conversation: &str, role: &str) -> Result<Option<(String, u32)>> {
@@ -622,11 +675,22 @@ fn role_round(core: &Core, conversation: &str, role: &str) -> Result<Option<(Str
 }
 
 impl Process {
-    fn terminate(&self) {
-        if let Ok(mut child) = self.child.lock() {
-            if child.try_wait().ok().flatten().is_some() {
-                return;
+    fn status(&self) -> Result<Option<std::process::ExitStatus>> {
+        let mut child = self.child.lock().map_err(invalid)?;
+        let status = child.try_wait()?;
+        if status.is_some() && !self.terminated.swap(true, Ordering::SeqCst) {
+            // The leader exiting must not leave its tools/MCP children alive.
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
             }
+        }
+        Ok(status)
+    }
+    fn terminate(&self) {
+        if self.terminated.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if let Ok(mut child) = self.child.lock() {
             // The process is the leader of the group created at spawn.
             unsafe {
                 libc::kill(-(child.id() as i32), libc::SIGKILL);
@@ -696,6 +760,7 @@ impl Process {
             diagnostic,
             registered: Mutex::new(None),
             readers,
+            terminated: AtomicBool::new(false),
         })
     }
     fn diagnostics(&self) -> String {
@@ -720,20 +785,21 @@ impl Process {
 impl Drop for Process {
     fn drop(&mut self) {
         if let Ok(child) = self.child.get_mut() {
-            if child.try_wait().ok().flatten().is_none() {
+            if !self.terminated.swap(true, Ordering::SeqCst) {
                 // Give an idle provider time to flush its session recorder.
                 unsafe {
                     libc::kill(-(child.id() as i32), libc::SIGINT);
                 }
                 let until = Instant::now() + Duration::from_secs(1);
-                while Instant::now() < until && child.try_wait().ok().flatten().is_none() {
+                while Instant::now() < until {
+                    if child.try_wait().ok().flatten().is_some() {
+                        break;
+                    }
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 // SAFETY: the child was spawned as the leader of its own group.
-                if child.try_wait().ok().flatten().is_none() {
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
-                    }
+                unsafe {
+                    libc::kill(-(child.id() as i32), libc::SIGKILL);
                 }
             }
             let _ = child.wait();
@@ -829,6 +895,46 @@ pub(crate) fn text_input(input: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_custom_launcher_found_on_path_is_not_probed_or_executed() {
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let binary = directory.path().join("codex");
+        std::fs::write(&binary, "#!/bin/sh\ntouch launcher-was-executed\n").unwrap();
+        std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let spec = agent::Spec {
+            provider: ProviderKind::Codex,
+            binary: "codex".into(),
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: directory.path().into(),
+            add_dirs: vec![],
+            access: agent::Access::ReadOnly,
+            resume: None,
+        };
+        assert!(!capable_in_path(&spec, Some(directory.path().as_os_str())));
+        assert!(!directory.path().join("launcher-was-executed").exists());
+    }
+    #[test]
+    fn an_exited_backend_cannot_leave_descendants_holding_its_streams() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 60 & exit 0"]);
+        let process = Process::spawn(command, None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while process.status().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "backend did not exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        while process.readers.load(Ordering::SeqCst) != 0 {
+            assert!(
+                Instant::now() < deadline,
+                "backend descendant kept stdout/stderr alive"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(process.terminated.load(Ordering::SeqCst));
+    }
     fn restart_config(directory: &Path, provider: ProviderKind) -> crate::config::Config {
         let mut config =
             crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
@@ -927,7 +1033,7 @@ mod tests {
             std::process::exit(0);
         }
         for provider in [ProviderKind::Codex, ProviderKind::Opencode] {
-            let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+            let directory = tempfile::tempdir_in("/tmp").unwrap();
             let binary = directory.path().join(agent::name(provider));
             std::fs::write(&binary, include_str!("native/test_backend.py")).unwrap();
             std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
@@ -994,7 +1100,7 @@ mod tests {
     #[test]
     fn unsupported_server_protocol_falls_back_before_sending_a_prompt() {
         for provider in [ProviderKind::Codex, ProviderKind::Opencode] {
-            let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+            let directory = tempfile::tempdir_in("/tmp").unwrap();
             let binary = directory.path().join("native-fixture");
             std::fs::write(&binary, include_str!("native/test_backend.py")).unwrap();
             std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
@@ -1330,7 +1436,7 @@ mod tests {
     }
 
     fn attach_smoke(provider: ProviderKind, binary: &str) {
-        let directory = tempfile::tempdir_in("/private/tmp").unwrap();
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
         let config =
             crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
         let core = Core::open(&directory.path().join(".antislop"), config).unwrap();
@@ -1447,6 +1553,10 @@ mod tests {
         }
         assert!(!text.trim().is_empty(), "native CLI produced no screen");
         assert!(
+            text.contains("ANTISLOP_SMOKE"),
+            "native CLI did not display the live response: {text}"
+        );
+        assert!(
             !text.contains("not supported in an antislop") && !text.contains("ManagedSessionError"),
             "{text}"
         );
@@ -1455,6 +1565,16 @@ mod tests {
             let result = run.join().unwrap();
             assert!(result.is_ok(), "{result:?}; native screen: {text}");
             assert!(result.unwrap().text.contains("ANTISLOP_SMOKE"));
+        }
+        if let Backend::Codex { socket, .. } = &native.backend {
+            let mut rpc = codex::Rpc::connect(socket).unwrap();
+            let recorded = codex::delivered_turn(&native, &mut rpc, &turn.id).unwrap();
+            assert!(recorded["items"].as_array().unwrap().iter().any(|item| {
+                item["type"] == "agentMessage"
+                    && item["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("ANTISLOP_SMOKE"))
+            }));
         }
         {
             // Exercise the real TUI's submit route while holding the role

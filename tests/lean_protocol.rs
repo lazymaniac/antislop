@@ -894,6 +894,13 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
         }))
         .unwrap_err();
     assert!(error.contains("not waiting for recovery"), "{error}");
+    let error = daemon
+        .call_raw(&json!({
+            "op": "recover", "conversation": conv, "plan": plan, "task": "t1",
+            "action": "restart_agent", "freshness_token": token
+        }))
+        .unwrap_err();
+    assert!(error.contains("not waiting for recovery"), "{error}");
 
     // Unknown actions and fields are refused by the protocol.
     assert!(

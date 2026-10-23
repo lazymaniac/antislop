@@ -959,3 +959,137 @@ answer = cover(answer)"#,
     assert!(prompt.contains("Check the evidence and justification for any explicit departure"));
     assert!(prompt.contains("git diff"));
 }
+
+#[test]
+fn a_running_agent_can_be_restarted_without_blocking_the_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let script = dir.path().join("agy");
+    let source = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(
+        &script,
+        source.replace(
+            "worker = \"Task: Fail\" in prompt or \"was interrupted\" in prompt",
+            r#"if "Task: First plan" in prompt and "You verify" not in prompt:
+    marker = os.path.join(here, "restart-started")
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        import time
+        time.sleep(20)
+worker = "Task: Fail" in prompt or "was interrupted" in prompt"#,
+        ),
+    )
+    .unwrap();
+    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let message = core
+        .store
+        .add_message(&conversation, "user", "Check restart")
+        .unwrap();
+    let run = core
+        .store
+        .create_run(&conversation, "Check restart")
+        .unwrap();
+    let source = core
+        .store
+        .register_message_source(&conversation, &run.id, message.seq)
+        .unwrap();
+    let change = serde_json::from_value(json!({"conversation":conversation,"run_id":run.id,"expected_spec_revision":0,"operation_id":"restart-scope","reason":"test scope","entries":[{"id":"R1","source":{"source_id":source.id,"start":0,"end":message.text.len()},"interpretation":"Check restart","criteria":[{"id":"R1.accept","text":"Restart a running agent"}]}]})).unwrap();
+    core.store
+        .apply_ledger_change(&change, &dir.path().join("state"), true)
+        .unwrap();
+    let revision = core
+        .store
+        .run(&conversation, &run.id)
+        .unwrap()
+        .spec_revision;
+    let mut review_turns = Vec::new();
+    for role in [
+        "requirements-extraction-analyst",
+        "requirements-extraction-verifier",
+    ] {
+        let turn = core
+            .store
+            .start_turn(&conversation, role, "mock", 0, None)
+            .unwrap();
+        core.store.set_session(&turn.id, &antislop::id()).unwrap();
+        core.store
+            .finish_turn(&turn.id, antislop::lean::store::TurnStatus::Done, None)
+            .unwrap();
+        core.store
+            .bind_ledger_turn(
+                &conversation,
+                &run.id,
+                &turn.id,
+                revision,
+                "extraction",
+                std::slice::from_ref(&source.id),
+            )
+            .unwrap();
+        review_turns.push(turn.id);
+    }
+    core.store
+        .record_ledger_review(
+            &conversation,
+            &run.id,
+            revision,
+            "extraction",
+            &review_turns[0],
+            &review_turns[1],
+            "",
+            true,
+            "checked restart requirement",
+        )
+        .unwrap();
+    std::fs::write(dir.path().join("logged-in"), "").unwrap();
+    let tasks = core
+        .store
+        .add_plan(
+            &conversation,
+            &[json!({
+                "id": "a1", "title": "First plan", "goal": "Check restart", "kind": "analysis",
+                "scope": ["README"], "requirement_ids": ["R1"], "criterion_ids": ["R1.accept"],
+                "verifier": {"focus": "Check restart"}
+            })],
+        )
+        .unwrap();
+    let plan = tasks[0].plan_id.clone();
+    core.store
+        .link_plan_run(&conversation, &plan, &run.id)
+        .unwrap();
+    core.store
+        .bind_task_ledger(&conversation, &run.id, &plan)
+        .unwrap();
+    core.accept_plan(&conversation, &plan).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !dir.path().join("restart-started").exists() {
+        assert!(Instant::now() < deadline, "worker did not start");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let task = core
+        .store
+        .plan(&plan)
+        .unwrap()
+        .into_iter()
+        .find(|task| task.spec["id"] == "a1")
+        .unwrap();
+    assert_eq!(task.status, "working");
+    let reply = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: task.id.clone(),
+            action: RecoveryAction::RestartAgent,
+            consent_files: None,
+            freshness_token: core
+                .task_freshness_token(&conversation, &plan, &task.id)
+                .unwrap(),
+            message: Some("Continue after restart".into()),
+        })
+        .unwrap();
+    assert!(reply.notice.contains("stopping the current round"));
+    wait_idle(&core, &conversation);
+    let restarted = core.task_unscoped(&plan, &task.id).unwrap();
+    assert_eq!(restarted.status, "approved");
+    assert!(restarted.round > task.round);
+}

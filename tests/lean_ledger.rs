@@ -960,13 +960,13 @@ fn source_line_ranges_respect_exclusive_end_and_graphemes() {
 }
 
 #[test]
-fn approving_requirements_wakes_planning_uses_the_approved_set_and_compares_options() {
+fn approving_requirements_plans_without_orchestrator_options() {
     use antislop::{config::Config, lean::Core};
     use std::{
         os::unix::fs::PermissionsExt,
         time::{Duration, Instant},
     };
-    for (reject_options, reject_plan) in [(false, false), (true, false), (true, true)] {
+    for reject_plan in [false, true] {
         let f = Fixture::new();
         f.apply(&f.change(0, vec![f.entry("r1")]));
         let analyst = f.turn("extraction", false);
@@ -993,10 +993,7 @@ assert not prompt.startswith('Act as requirements analyst'), 'approved requireme
 answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'verifier':{'focus':'Check the observations'}}]})+'\n```'
 if 'You review a plan' in prompt or 'new plan:' in prompt:
     import os
-    if os.path.exists('reject-options'):
-        assert 'Choice lacks adequate evidence' in prompt
-        assert 'resolves every review finding' in prompt
-    answer='```verdict\n'+json.dumps({'approved':not os.path.exists('reject-final-plan'),'findings':[{'issue':'Plan does not resolve the options review'}] if os.path.exists('reject-final-plan') else []})+'\n```'
+    answer='```verdict\n'+json.dumps({'approved':not os.path.exists('reject-final-plan'),'findings':[{'issue':'Plan misses an acceptance criterion'}] if os.path.exists('reject-final-plan') else []})+'\n```'
 print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
 print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
 print(json.dumps({'type':'turn.completed','usage':{}}))
@@ -1012,9 +1009,6 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
             "[routing.options]\nexecutor = \"reasoning\"",
             "[routing.options]\nexecutor = \"options_test\"",
         ) + "\n[profiles.options_test]\nprovider = \"codex\"\nmodel = \"fixture-options\"\neffort = \"low\"\n";
-        if reject_options {
-            std::fs::write(f.dir.path().join("reject-options"), "").unwrap();
-        }
         if reject_plan {
             std::fs::write(f.dir.path().join("reject-final-plan"), "").unwrap();
         }
@@ -1038,25 +1032,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 e.kind == "turn_started" && e.payload["role"] == "requirements-options-analyst"
             })
             .collect::<Vec<_>>();
-        assert!(
-            option_turns
-                .iter()
-                .all(|event| event.payload["model"] == "fixture-options")
-        );
-        if reject_options {
-            let reviewed = core
-                .store
-                .solution_choice(&f.conversation, &f.run.id)
-                .unwrap()
-                .unwrap();
-            assert!(
-                reviewed
-                    .review_findings
-                    .iter()
-                    .any(|finding| finding.contains("Choice lacks adequate evidence"))
-            );
-        }
-        assert_eq!(option_turns.len(), 1);
+        assert!(option_turns.is_empty());
         if reject_plan {
             let events = core.store.events_since(&f.conversation, 0, 2000).unwrap();
             let visible = events
@@ -1114,25 +1090,23 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 .id,
             analyst
         );
-        let choice = core
-            .store
-            .solution_choice(&f.conversation, &f.run.id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(choice.spec_revision, 2);
-        assert_eq!(choice.alternatives.len(), 2);
         assert!(
             core.store
-                .last_turn(&f.conversation, "requirements-options-analyst")
+                .solution_choice(&f.conversation, &f.run.id)
                 .unwrap()
-                .is_some()
+                .is_none()
         );
-        assert!(
-            core.store
-                .last_turn(&f.conversation, "requirements-options-verifier")
-                .unwrap()
-                .is_some()
-        );
+        for role in [
+            "requirements-options-analyst",
+            "requirements-options-verifier",
+        ] {
+            assert!(
+                core.store
+                    .last_turn(&f.conversation, role)
+                    .unwrap()
+                    .is_none()
+            );
+        }
         let approval_count = core
             .store
             .messages_by(&f.conversation, "requirements-approval", 0)
@@ -1422,4 +1396,34 @@ fn initial_and_graph_plans_reject_the_same_invalid_requirement_links() {
     f.store
         .extend_running_graph(&f.conversation, &baseline, &specs)
         .unwrap();
+}
+
+#[test]
+fn requirements_approval_renews_the_automatic_retry_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store
+        .create_conversation(dir.path().to_str().unwrap())
+        .unwrap()
+        .id;
+    let count = || {
+        store
+            .count_since_requirements_reset(&conversation, "requirements-reviewer")
+            .unwrap()
+    };
+    store.add_message(&conversation, "user", "plan").unwrap();
+    store
+        .add_message(&conversation, "requirements-reviewer", "rejected")
+        .unwrap();
+    assert_eq!(count(), 1);
+    store
+        .add_message(&conversation, "requirements-approval", "approved")
+        .unwrap();
+    assert_eq!(count(), 0);
+    assert_eq!(
+        store
+            .count_since_user(&conversation, "requirements-reviewer")
+            .unwrap(),
+        1
+    );
 }

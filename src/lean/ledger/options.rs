@@ -1,23 +1,13 @@
 use super::{Run, parse_block};
 use crate::{
     Error, Result,
-    lean::{
-        Core,
-        store::{Store, now_ms},
-        tasks,
-    },
+    lean::store::{Store, now_ms},
     require,
 };
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{
-    collections::HashSet,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -222,82 +212,6 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
-    }
-}
-
-impl Core {
-    pub(in crate::lean) fn ensure_options(
-        self: &Arc<Self>,
-        conversation: &str,
-        run: &Run,
-        cancel: &AtomicBool,
-    ) -> Result<bool> {
-        require(
-            self.store.extraction_current(conversation, &run.id)?,
-            "verify requirements before comparing implementation options",
-        )?;
-        if self.store.solution_choice(conversation, &run.id)?.is_some() {
-            return Ok(false);
-        }
-        let sources = self.full_ledger_sources(conversation, &run.id)?;
-        let mut feedback = String::new();
-        let (mut choice, producer) = loop {
-            if cancel.load(Ordering::SeqCst) {
-                return Err(Error::Invalid("options comparison cancelled".into()));
-            }
-            let prompt = format!(
-                "Compare implementation options before task planning. Inspect the actual project read-only. Compare 2-4 genuinely different feasible approaches under the SAME explicit criteria, including requirement coverage, complexity, risk, validation and cost. Respect user-prescribed methods. State evidence and unknowns honestly; no implementation or fabricated measurements. This is input to a plan, not a completed implementation. When the best approach depends on future measurements, recommend a diagnostic-first strategy with concrete decision criteria; do not claim a measured winner. Propose tests for later execution rather than requiring their results now. Suggested numeric tolerances are proposals, not new user obligations. Return a ```options JSON block with run_id, spec_revision, criteria (nonempty string array), alternatives (2-4 objects: id, approach, evaluations [one assessment per criterion in the same order], risks, validation), selected (alternative id), rationale (text or named text sections explaining evidence, tradeoffs and what would reopen the choice). Run {} revision {}. Full sources:\n{sources}\nFormat correction:\n{feedback}",
-                run.id, run.spec_revision
-            );
-            let (answer, producer) =
-                self.requirements_turn(conversation, &run.id, "options", false, prompt, cancel)?;
-            let validated =
-                parse_block::<SolutionChoice>(&answer, "options").and_then(|mut choice| {
-                    choice.review_findings.clear();
-                    choice.validate(run)?;
-                    Ok(choice)
-                });
-            match validated {
-                Ok(choice) => break (choice, producer),
-                Err(error @ (Error::Invalid(_) | Error::Json(_))) if feedback.is_empty() => {
-                    feedback = format!(
-                        "{error}. Fix the schema without changing the comparison. Previous response:\n{answer}"
-                    );
-                }
-                Err(error) => return Err(error),
-            }
-        };
-        let (answer,verifier)=self.requirements_turn(conversation,&run.id,"options",true,format!("Independently verify implementation options before planning. Read the actual project and full sources. Check that the alternatives are real, cover the same requirements and criteria, and the selected solution follows from evidence rather than preference. Reject violated obligations, unsupported claims, fake alternatives and missing validation. User-prescribed methods remain binding. This review gives planning feedback, not implementation certification. Accept a sound measurement-first strategy when data needed to choose an optimization does not exist yet. Identify what the complete plan must resolve; do not require implementation results before a plan can exist. Return a ```verdict JSON block with approved (boolean) and findings (objects with issue). Proposed comparison:\n{}\nFull sources:\n{sources}",serde_json::to_string(&choice)?),cancel)?;
-        let verdict = tasks::parse_verdict(&answer);
-        self.store.record_ledger_review(
-            conversation,
-            &run.id,
-            run.spec_revision,
-            "options",
-            &producer,
-            &verifier,
-            "",
-            verdict.approved,
-            &answer,
-        )?;
-        if !verdict.approved {
-            choice.review_findings = verdict
-                .findings
-                .iter()
-                .map(|finding| tasks::findings_text(std::slice::from_ref(finding)))
-                .collect();
-            if choice.review_findings.is_empty() {
-                choice.review_findings.push("The options reviewer did not approve the recommendation. Establish the missing evidence before selecting the implementation approach.".into());
-            }
-        }
-        let _integration = self.integrating.lock().expect("integration mutex");
-        require(
-            !cancel.load(Ordering::SeqCst),
-            "options comparison cancelled",
-        )?;
-        self.store
-            .save_solution_choice(conversation, &choice, &producer, &verifier)?;
-        Ok(true)
     }
 }
 
