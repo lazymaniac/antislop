@@ -11,7 +11,7 @@ R156	implementation	Inconsistent error and result-handling conventions.	Trace er
 R160	implementation	Comments substitute for a correct model and readable code.	Compare comments with behavior and types.
 R161	implementation	Error handling returns apparent success or an empty result.	Force a dependency error and trace the result.
 R162	implementation	A fallback weakens the required contract.	Force the primary path to become unavailable.
-R163	implementation	Panic, unwrap, or exceptions occur on reachable invalid input.	Trace preconditions and a counterexample.
+R163	implementation	Reachable invalid input causes uncontrolled termination instead of the required error handling.	Trace input validation and failure paths and check that invalid input produces the specified error outcome.
 R164	implementation	Mutating input surprises the caller.	Check aliases, uses, and post-call state.
 R165	implementation	Poor ownership modeling causes unnecessary copies or allocations.	Trace the data lifecycle and memory profile.
 R166	implementation	An inappropriate abstraction level scatters a simple operation.	Reconstruct the reading path and the reason for each layer.
@@ -24,3 +24,9 @@ R212	implementation	Missing, null, and empty values are confused.	Check each cla
 R214	implementation	Overflow, NaN, or infinity breaks an invariant.	Supply extreme values of the relevant type.
 R215	implementation	Unicode, encoding, or normalization changes meaning.	Check equivalent representations and invalid bytes.
 R218	implementation	Fragmentation, EOF, or large input changes parser behavior.	Test fragment boundaries and sizes.
+R271	implementation	Conditions and branches do not implement the required rule.	Compare execution paths with a decision table and check cases that distinguish the conditions.
+R272	implementation	Processing boundaries cause elements to be skipped or processed unnecessarily.	Trace ranges for empty input, a single element, and the first and last positions.
+R273	implementation	Data conversion silently loses information or changes meaning.	Compare representation ranges, precision, and semantics and check reversibility where lossless conversion is required.
+R274	implementation	An operation reads or changes the wrong object or data scope.	Trace object identity from input to effect and check coexisting objects with similar data.
+R275	implementation	An exit path skips required effects or resource release.	Check postconditions on success, failure, interruption, and early termination paths.
+R276	implementation	An operation is treated as complete before its required effects are confirmed.	Trace work initiation, confirmation, and completion and check behavior under delay and failure.

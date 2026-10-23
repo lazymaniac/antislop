@@ -1547,6 +1547,12 @@ pub fn checklist(kind: WorkKind) -> &'static str {
              or needless layer; follows project conventions; edge cases and \
              combinations of inputs handled; tests exercise the change with \
              meaningful assertions; no refactoring the change needs left undone; \
+             invalid input produces the required error outcome; branches match \
+             decision rules; processing boundaries neither skip elements nor \
+             process extras; conversions preserve required information and \
+             meaning; operations preserve the intended object identity and data \
+             scope; every exit path satisfies required effects and resource \
+             release; completion requires confirmation of required effects; \
              inspect the worker's recorded checks and their coverage without running them"
         }
         Refactoring => {
