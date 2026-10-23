@@ -14,3 +14,9 @@ R207	architecture	Apparent modularity hides strong temporal coupling.	Change ini
 R208	architecture	Code introduces risk without assessing its impact.	Trace failures to data and consumers.
 R209	architecture	A numerical risk score replaces scenario analysis.	Check score justifications and safeguard effectiveness.
 R210	architecture	Maintenance or rollback risk is ignored.	Analyze migration failures and future contract changes.
+R247	architecture	A rule or invariant has no unambiguous owning component.	Assign each rule to the component that enforces it and trace every path that can change its state.
+R248	architecture	A component's public interface allows callers to bypass its invariants.	Try to violate each invariant through public operations without changing the implementation.
+R249	architecture	Stable domain rules depend on volatile implementation details.	Trace dependency direction and simulate replacing an external provider, transport, or storage mechanism.
+R250	architecture	Module boundaries split a cohesive responsibility across components.	Walk through representative rule changes and identify modules that must change together.
+R251	architecture	Component boundaries allow a failure to disable unrelated capabilities.	Trace the effects of each component becoming unavailable and compare them with required availability of other capabilities.
+R252	architecture	Domain rules cannot be verified independently of the full runtime or live external services.	Identify how to verify component contracts with controlled dependencies and justify any required integrations.

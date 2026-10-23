@@ -1517,7 +1517,13 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         Architecture => {
             "fits the project's existing structure and idioms; the simplest \
              adequate design; no pattern or layer without a present need; no \
-             policy duplicated across modules"
+             policy duplicated across modules; each invariant has an explicit \
+             owner and public interfaces enforce it; stable domain rules do not \
+             depend on volatile implementation details; module boundaries keep \
+             cohesive responsibilities together; failures stay within the \
+             required availability boundaries; component contracts can be \
+             verified with controlled dependencies and required integrations \
+             are justified"
         }
         Dependencies => {
             "an existing maintained library considered before custom code; \
