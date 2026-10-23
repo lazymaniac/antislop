@@ -585,3 +585,93 @@ fn repairing_json_after_options_reuses_requirements_and_the_comparison() {
         );
     }
 }
+
+#[test]
+fn orchestrator_extends_a_running_graph_before_the_pending_verification() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let release = dir.path().join("release-worker");
+    let started = dir.path().join("worker-started");
+    let worker = std::fs::read_to_string(&agy).unwrap().replace(
+        "else:\n    session, answer = \"worker\", \"first report for \"",
+        &format!("else:\n    import os, time\n    if 'Task: Storage' in prompt:\n        open({:?}, 'w').close()\n        while not os.path.exists({:?}): time.sleep(0.01)\n    session, answer = \"worker\", \"first report for \"", started.to_string_lossy(), release.to_string_lossy()),
+    );
+    std::fs::write(&agy, worker).unwrap();
+    let hook = r#"
+if 'insert-extra' in prompt and 'Editable graph snapshot' in prompt:
+    import re
+    base, snapshot = re.search(r'base_plan=([-\w]+):\n([^\n]+)', prompt).groups()
+    snapshot = json.loads(snapshot)
+    extra = dict(snapshot[0])
+    extra.update(id='extra', title='Extra', goal='Assess additional details', kind='analysis', writes=False, depends_on=['t1'])
+    gate = dict(next(task for task in snapshot if task['id'] == 't2'))
+    gate['depends_on'] = ['extra']
+    answer = 'Insert additional analysis before the downstream check.\n```graph\n' + json.dumps({'base_plan':base,'tasks':[extra,gate]}) + '\n```'
+    print(json.dumps({'type':'thread.started','thread_id':'orch'}))
+    print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
+    print(json.dumps({'type':'turn.completed','usage':{}}))
+    sys.exit(0)
+"#;
+    let orchestrator = std::fs::read_to_string(&codex).unwrap().replace(
+        "plan = {\"tasks\": [",
+        &format!("{hook}\nplan = {{\"tasks\": ["),
+    );
+    std::fs::write(&codex, orchestrator).unwrap();
+    let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
+    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+    core.send(&conversation.id, "Assess storage and TUI")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let before = core.store.latest_plan(&conversation.id).unwrap();
+    let plan = &before[0].plan_id;
+    core.accept_plan(&conversation.id, plan).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "worker did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    core.send(&conversation.id, "insert-extra").unwrap();
+    while core.store.plan(plan).unwrap().len() < 3 {
+        assert!(
+            Instant::now() < deadline,
+            "graph was not extended: {:?}",
+            core.store.events_since(&conversation.id, 0, 10000).unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let extended = core.store.plan(plan).unwrap();
+    assert_eq!(extended[0].id, before[0].id);
+    assert_eq!(extended[1].spec["id"], "extra");
+    assert_eq!(extended[2].id, before[1].id);
+    assert_eq!(extended[2].spec["depends_on"], serde_json::json!(["extra"]));
+    assert_eq!(extended[2].round, 0);
+    std::fs::write(release, "continue").unwrap();
+    wait_idle(&core, &conversation.id);
+    let finished = core.store.plan(plan).unwrap();
+    assert!(
+        finished.iter().all(|task| task.status == "approved"),
+        "{finished:?}"
+    );
+    let events = core.store.events_since(&conversation.id, 0, 10000).unwrap();
+    let starts = events
+        .iter()
+        .filter(|event| event.kind == "turn_started")
+        .filter_map(|event| event.payload["role"].as_str())
+        .collect::<Vec<_>>();
+    let extra = starts
+        .iter()
+        .position(|role| **role == format!("worker:{}", finished[1].id))
+        .unwrap();
+    let downstream = starts
+        .iter()
+        .position(|role| **role == format!("worker:{}", finished[2].id))
+        .unwrap();
+    assert!(extra < downstream);
+    assert_eq!(
+        core.store
+            .plans_page(&conversation.id, 0, 10)
+            .unwrap()
+            .total,
+        1
+    );
+}

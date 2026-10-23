@@ -25,6 +25,7 @@ pub enum Command {
     Accept,
     Reject,
     Plan,
+    Plans,
     Resume,
     Cancel,
     Pause,
@@ -46,7 +47,7 @@ pub enum Command {
     Projects,
 }
 
-const COMMANDS: [(Command, &str); 27] = [
+const COMMANDS: [(Command, &str); 28] = [
     (
         Command::InterviewQuestion,
         "Open pending interview question · /interview",
@@ -67,6 +68,10 @@ const COMMANDS: [(Command, &str); 27] = [
     (Command::Accept, "Accept proposed plan · Ctrl+A"),
     (Command::Reject, "Reject proposed plan · /reject"),
     (Command::Plan, "Open plan document viewer · Ctrl+L / /plan"),
+    (
+        Command::Plans,
+        "Browse historical plan graphs and reports · /plans",
+    ),
     (Command::Resume, "Resume plan · Ctrl+R"),
     (Command::Cancel, "Cancel running work · Ctrl+X"),
     (

@@ -188,6 +188,7 @@ pub struct Core {
     state: PathBuf,
     /// Writers land on the user's branch one at a time.
     integrating: Mutex<()>,
+    graph_updates: Mutex<()>,
     /// In-place writers work in the user's directory one at a time.
     in_place: Mutex<()>,
     /// Mail work must not occupy the plan scheduler's ownership slot.
@@ -286,6 +287,7 @@ impl Core {
             config_modified: std::sync::atomic::AtomicU64::new(0),
             state: state.canonicalize()?,
             integrating: Mutex::new(()),
+            graph_updates: Mutex::new(()),
             in_place: Mutex::new(()),
             mail_jobs: Mutex::new(HashMap::new()),
             task_cancels: Mutex::new(HashMap::new()),
@@ -2039,35 +2041,72 @@ impl Core {
         let plan_id = plan_id.to_owned();
         std::thread::spawn(move || {
             core.warn_of_uncommitted(&conversation, tasks_write);
-            core.run_plan(&conversation, &plan_id, &cancel);
-            if cancel.load(Ordering::SeqCst) {
-                core.plans
-                    .lock()
-                    .expect("plans mutex")
-                    .remove(&conversation);
-                return;
-            }
-            // If any tasks are blocked waiting for user action or recovery,
-            // do not run the premature audit or report; await recovery action.
-            let tasks = core.store.plan(&plan_id).unwrap_or_default();
-            let has_blocked = tasks.iter().any(|t| {
-                t.status == status::STALE
-                    || t.status == status::NEEDS_USER
-                    || t.status == status::WAITING
-                    || t.status == status::FAILED
-            });
-            if has_blocked {
-                let autonomous = core.autonomous(&conversation).unwrap_or(false);
-                // Held like the normal ending, so the conversation never looks
-                // idle between the report and the orchestrator starting on it.
+            loop {
+                core.run_plan(&conversation, &plan_id, &cancel);
+                let _graph_guard = core.graph_updates.lock().expect("graph update mutex");
+                if !cancel.load(Ordering::SeqCst)
+                    && core.store.plan(&plan_id).is_ok_and(|tasks| {
+                        tasks.iter().any(|task| {
+                            task.status == status::QUEUED
+                                && task.spec["depends_on"].as_array().is_some_and(|deps| {
+                                    deps.iter().all(|dep| {
+                                        tasks.iter().any(|upstream| {
+                                            upstream.spec["id"] == *dep
+                                                && upstream.status == status::APPROVED
+                                        })
+                                    })
+                                })
+                        })
+                    })
+                {
+                    continue;
+                }
+                if cancel.load(Ordering::SeqCst) {
+                    core.plans
+                        .lock()
+                        .expect("plans mutex")
+                        .remove(&conversation);
+                    return;
+                }
+                // If any tasks are blocked waiting for user action or recovery,
+                // do not run the premature audit or report; await recovery action.
+                let tasks = core.store.plan(&plan_id).unwrap_or_default();
+                let has_blocked = tasks.iter().any(|t| {
+                    t.status == status::STALE
+                        || t.status == status::NEEDS_USER
+                        || t.status == status::WAITING
+                        || t.status == status::FAILED
+                });
+                if has_blocked {
+                    let autonomous = core.autonomous(&conversation).unwrap_or(false);
+                    // Held like the normal ending, so the conversation never looks
+                    // idle between the report and the orchestrator starting on it.
+                    let mut plans = core.plans.lock().expect("plans mutex");
+                    let report = blocked_report(&tasks, autonomous);
+                    let told = core
+                        .blocked_seen
+                        .lock()
+                        .expect("blocked mutex")
+                        .insert(conversation.clone(), report.clone());
+                    if told.as_deref() != Some(report.as_str())
+                        && core
+                            .store
+                            .add_message(&conversation, RUNTIME, &report)
+                            .is_ok()
+                    {
+                        core.wake(&conversation);
+                    }
+                    plans.remove(&conversation);
+                    return;
+                }
+                // The audit still counts as the plan running: it can be cancelled
+                // and keeps the daemon busy.
+                let report = core.plan_report(&conversation, &plan_id, &cancel);
+                // The orchestrator starts on the results before the plan stops
+                // counting as running, so the conversation never looks idle in
+                // between; a plan it proposes waits for this lock.
                 let mut plans = core.plans.lock().expect("plans mutex");
-                let report = blocked_report(&tasks, autonomous);
-                let told = core
-                    .blocked_seen
-                    .lock()
-                    .expect("blocked mutex")
-                    .insert(conversation.clone(), report.clone());
-                if told.as_deref() != Some(report.as_str())
+                if let Ok(report) = report
                     && core
                         .store
                         .add_message(&conversation, RUNTIME, &report)
@@ -2076,24 +2115,8 @@ impl Core {
                     core.wake(&conversation);
                 }
                 plans.remove(&conversation);
-                return;
+                break;
             }
-            // The audit still counts as the plan running: it can be cancelled
-            // and keeps the daemon busy.
-            let report = core.plan_report(&conversation, &plan_id, &cancel);
-            // The orchestrator starts on the results before the plan stops
-            // counting as running, so the conversation never looks idle in
-            // between; a plan it proposes waits for this lock.
-            let mut plans = core.plans.lock().expect("plans mutex");
-            if let Ok(report) = report
-                && core
-                    .store
-                    .add_message(&conversation, RUNTIME, &report)
-                    .is_ok()
-            {
-                core.wake(&conversation);
-            }
-            plans.remove(&conversation);
         });
         Ok(tasks)
     }
@@ -2309,9 +2332,29 @@ impl Core {
                 &json!({"text": "Working on the plan draft"}),
             )?;
         }
+        let graph = self.store.latest_plan(conversation)?;
+        let editable_graph = !graph.is_empty()
+            && (graph
+                .iter()
+                .all(|task| matches!(task.status.as_str(), status::PROPOSED | status::REVISED))
+                || graph.iter().any(|task| {
+                    matches!(
+                        task.status.as_str(),
+                        status::QUEUED | status::WORKING | status::VERIFYING
+                    )
+                }));
+        let graph_json =
+            serde_json::to_string(&graph.iter().map(|task| &task.spec).collect::<Vec<_>>())?;
         let Some(answer) = self.turn(setup, cancel, |first| {
             let mut prompt = orchestrator_prompt(&project, first || answered == 0, &asked, &open);
             prompt.push_str(&comment_context);
+            if editable_graph && !interviewing {
+                prompt.push_str(&format!(
+                    "\nEditable graph snapshot, base_plan={}:\n{}\nTo insert tasks or change dependencies, return a fenced ```graph JSON block with base_plan and tasks (complete specs of only added or updated tasks). Omitted nodes are preserved. Keep existing IDs. For example, to insert implementation between A and security/performance gates, add B depending on A and update those gates to depend on B. The runtime merges and validates the entire DAG. Before execution it stores a new immutable plan revision for review and approval. During execution it independently reviews the additive edit and applies it atomically within the approved requirements, preserving existing agents and results. Return either graph or plan, never both. During execution, existing task updates may change only depends_on, and only before that task has started. Add a new task for other changes. Never rewrite running or completed tasks. Historical graphs remain accessible through /plans.\n",
+                    graph[0].plan_id,
+                    graph_json
+                ));
+            }
             if interviewing {
                 prompt.insert_str(0, "\nSESSION PHASE: INTERVIEW. This overrides any instruction to propose a plan. Ask concise concrete questions in the user's language to establish the goal, scope, constraints, exclusions and observable acceptance criteria. Use answers already given; do not repeat questions. Even a self-contained request needs a requirements checkpoint. Ask one question at a time using a fenced ```question JSON block: {\"id\":\"scope\",\"context\":\"Why this decision matters\",\"question\":\"What should we build?\",\"options\":[{\"label\":\"Option A\",\"description\":\"Tradeoff\"},{\"label\":\"Option B\",\"description\":\"Tradeoff\"}]}. Offer 2–6 concrete options, put the recommended option first, mark its label as recommended in the user's language and explain its tradeoff. Do not include an Other option: the UI always supplies a custom answer field. Do not combine a question with the requirements checkpoint in the same answer. When no more questions are needed, end with a fenced ```requirements Markdown summary containing those agreed requirements and any explicit assumptions. This completes the interview and automatically starts planning. Do not emit a plan block, schedule work or implement anything. Do not ask the user to approve the requirements or send /planning.\n");
             } else if let Some(workflow) = &workflow {
@@ -2341,6 +2384,33 @@ impl Core {
         let (answer, addressed) = feedback::split(&answer);
         let (answer, unblocking) = tasks::parse_recoveries(&answer);
         let (mut text, mut plan) = tasks::parse_plan(&answer);
+        let graph_revision = answer.contains("```graph");
+        let mut graph_baseline = None;
+        if graph_revision {
+            let graph = self.store.latest_plan(conversation)?;
+            let current = graph
+                .iter()
+                .map(|task| serde_json::from_value(task.spec.clone()))
+                .collect::<std::result::Result<Vec<TaskSpec>, _>>()?;
+            let (graph_text, graph_edit) = tasks::parse_graph_edit(
+                &answer,
+                graph.first().map_or("", |task| task.plan_id.as_str()),
+                &current,
+            );
+            if let Some(edit) = graph_edit {
+                text = graph_text;
+                plan = Some(if plan.is_some() {
+                    Err(Error::Invalid(
+                        "return either a graph edit or a full plan, never both".into(),
+                    ))
+                } else if graph.is_empty() {
+                    Err(Error::Invalid("no graph to edit".into()))
+                } else {
+                    edit
+                });
+            }
+            graph_baseline = Some(graph);
+        }
         if interviewing {
             match interview::parse(&text) {
                 Some(Ok(question)) => {
@@ -2386,6 +2456,43 @@ impl Core {
                 );
             }
         }
+        let running_baseline = graph_baseline.as_ref().unwrap_or(&graph);
+        let live_revision = graph_revision
+            && running_baseline
+                .iter()
+                .any(|task| !matches!(task.status.as_str(), status::PROPOSED | status::REVISED))
+            || workflow
+                .as_ref()
+                .is_some_and(|workflow| workflow.phase == "implementation")
+                && running_baseline.iter().any(|task| {
+                    matches!(
+                        task.status.as_str(),
+                        status::QUEUED | status::WORKING | status::VERIFYING
+                    )
+                });
+        if !interviewing
+            && live_revision
+            && let Some(Ok(specs)) = plan.as_ref()
+        {
+            if let Err(error) = self.revise_running_graph(
+                conversation,
+                &project,
+                &text,
+                running_baseline,
+                specs,
+                cancel,
+            ) {
+                self.store.append_event(
+                    conversation,
+                    None,
+                    running_baseline.first().map(|task| task.plan_id.as_str()),
+                    "plan_invalid",
+                    &json!({"error":error.to_string(),"retrying":false}),
+                )?;
+                self.notice(conversation, &format!("graph edit rejected: {error}"));
+            }
+            return Ok(());
+        }
         match plan {
             Some(Ok(specs)) => self.propose(
                 conversation,
@@ -2399,16 +2506,17 @@ impl Core {
                 cancel,
             )?,
             Some(Err(error)) => {
-                let retrying =
-                    if let Some(turn) = self.store.last_orchestration_turn(conversation)? {
-                        self.store.queue_plan_format_repair(
-                            conversation,
-                            &turn.id,
-                            &error.to_string(),
-                        )?
-                    } else {
-                        false
-                    };
+                let retrying = if !graph_revision
+                    && let Some(turn) = self.store.last_orchestration_turn(conversation)?
+                {
+                    self.store.queue_plan_format_repair(
+                        conversation,
+                        &turn.id,
+                        &error.to_string(),
+                    )?
+                } else {
+                    false
+                };
                 self.store.append_event(
                     conversation,
                     None,
@@ -2437,6 +2545,70 @@ impl Core {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn revise_running_graph(
+        self: &Arc<Self>,
+        conversation: &str,
+        project: &Path,
+        text: &str,
+        baseline: &[Task],
+        specs: &[TaskSpec],
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        require(
+            baseline.iter().any(|task| {
+                matches!(
+                    task.status.as_str(),
+                    status::QUEUED | status::WORKING | status::VERIFYING
+                )
+            }),
+            "this graph has finished; send a new request to start another interview",
+        )?;
+        let specs = finalize_plan(specs.to_vec(), self.config_snapshot().policy.required_gates);
+        let plan = &baseline[0].plan_id;
+        let review = self.review(conversation, PLAN_VERIFIER, Some(plan), project, cancel, |_, request| {
+            format!("{}\nThis is an additive edit of a running graph, explicitly authorized by the user. Existing tasks and execution history must remain. Only dependencies of unstarted tasks can change. Verify the new tasks are within the already agreed requirements and retain all necessary security, performance, test and integration gates after the new implementation. Reject scope expansion. Current tasks and execution states:\n{}", tasks::plan_review_prompt(&project.to_string_lossy(), request, &specs), serde_json::to_string(&baseline.iter().map(|task| json!({"id":task.spec["id"],"status":task.status,"round":task.round,"spec":task.spec})).collect::<Vec<_>>()).unwrap_or_default())
+        })?;
+        require(!cancel.load(Ordering::SeqCst), "graph review was cancelled")?;
+        let verdict = review.map_err(Error::Invalid)?;
+        require(
+            verdict.approved,
+            &format!(
+                "graph reviewer rejected the edit: {}",
+                serde_json::to_string(&verdict.findings)?
+            ),
+        )?;
+        let graph_guard = self.graph_updates.lock().expect("graph update mutex");
+        let _integration = self.integrating.lock().expect("integration mutex");
+        {
+            let active = self.task_cancels.lock().expect("task cancel mutex");
+            for task in baseline {
+                if specs.iter().any(|spec| {
+                    task.spec["id"].as_str() == Some(&spec.id)
+                        && serde_json::from_value::<TaskSpec>(task.spec.clone())
+                            .is_ok_and(|before| before != *spec)
+                }) {
+                    require(
+                        !active.contains_key(&task.id),
+                        "a task affected by this edit has already been scheduled; retry without changing that task",
+                    )?;
+                }
+            }
+        }
+        self.store
+            .extend_running_graph(conversation, baseline, &specs)?;
+        let scope_hash = self.plan_scope_hash(conversation, plan)?;
+        self.store.append_event(
+            conversation,
+            None,
+            Some(plan),
+            "graph_updated",
+            &json!({"plan":plan,"text":text,"scope_hash":scope_hash,"review":verdict,"order":specs.iter().map(|spec| &spec.id).collect::<Vec<_>>()}),
+        )?;
+        drop(graph_guard);
+        self.maybe_continue_plan(conversation, plan)?;
         Ok(())
     }
 
@@ -3056,6 +3228,7 @@ impl Core {
             let mut in_flight_writers: HashMap<String, Vec<String>> = HashMap::new();
 
             loop {
+                let graph_guard = self.graph_updates.lock().expect("graph update mutex");
                 let Ok(mut tasks) = self.store.plan(plan_id) else {
                     break;
                 };
@@ -3146,6 +3319,7 @@ impl Core {
                         }
                     }
                 }
+                drop(graph_guard);
                 if settled {
                     continue;
                 }

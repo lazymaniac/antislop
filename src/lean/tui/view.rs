@@ -1012,6 +1012,85 @@ impl View {
                     );
                 }
             }
+            "graph_task" => {
+                if payload["plan"].as_str() != self.plan.as_deref() {
+                    return;
+                }
+                let mut projection = Self::default();
+                projection.apply(
+                    &serde_json::json!({"seq":1,"kind":"plan_proposed","payload":{
+                        "plan":payload["plan"],"tasks":[payload["spec"]]
+                    }}),
+                );
+                if let Some(mut row) = projection.tasks.pop() {
+                    row.uuid = payload["id"].as_str().map(str::to_owned);
+                    row.status = text("status");
+                    row.round = payload["round"].as_u64().unwrap_or(0);
+                    if let Some(existing) =
+                        self.tasks.iter_mut().find(|existing| existing.id == row.id)
+                    {
+                        existing.depends_on = row.depends_on;
+                    } else {
+                        if let Some(uuid) = &row.uuid {
+                            self.task_rows.insert(uuid.clone(), self.tasks.len());
+                        }
+                        self.tasks.push(row);
+                    }
+                    let peers = super::super::tasks::peers_of(
+                        &self
+                            .tasks
+                            .iter()
+                            .map(|row| super::super::tasks::PeerNode {
+                                id: &row.id,
+                                depends_on: &row.depends_on,
+                                writes: row.writes,
+                                scope: &row.scope,
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                    for row in &mut self.tasks {
+                        row.parallel_with = peers.get(&row.id).cloned().unwrap_or_default();
+                    }
+                }
+            }
+            "graph_updated" => {
+                if payload["plan"].as_str() != self.plan.as_deref() {
+                    return;
+                }
+                if let Some(order) = payload["order"].as_array() {
+                    let positions: HashMap<_, _> = order
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, id)| id.as_str().map(|id| (id, index)))
+                        .collect();
+                    self.tasks.sort_by_key(|task| {
+                        positions
+                            .get(task.id.as_str())
+                            .copied()
+                            .unwrap_or(usize::MAX)
+                    });
+                    self.task_rows = self
+                        .tasks
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, task)| {
+                            task.uuid.as_ref().map(|uuid| (uuid.clone(), index))
+                        })
+                        .collect();
+                }
+                self.plan_scope_hash = payload["scope_hash"].as_str().map(str::to_owned);
+                self.conversation_scope_hash = self.plan_scope_hash.clone();
+                let description = text("text");
+                self.plan_doc
+                    .push_str(&format!("\n\n## Graph amendment\n{description}\n"));
+                self.cards.push(TranscriptCard::System {
+                    title: "Graph updated".into(),
+                    meta: String::new(),
+                    text: description.clone(),
+                    tone: super::theme::Tone::Active,
+                });
+                self.push(dim(), format!("Graph updated: {description}"));
+            }
             "plan_proposed" => {
                 self.requirements_progress = Some((
                     false,
@@ -2146,6 +2225,48 @@ mod tests {
 
     fn event(seq: u64, turn: Option<&str>, kind: &str, payload: Value) -> Value {
         json!({"seq": seq, "turn_id": turn, "kind": kind, "payload": payload})
+    }
+
+    #[test]
+    fn live_graph_edits_preserve_agent_history_and_existing_task_state() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "plan_proposed",
+            serde_json::json!({"plan":"p","tasks":[
+                {"id":"implementation","title":"Implement"},
+                {"id":"security","title":"Security","depends_on":["implementation"]}
+            ]}),
+        ));
+        view.tasks[0].status = "working".into();
+        view.tasks[0].round = 2;
+        view.agents.insert(
+            "worker:implementation".into(),
+            Agent {
+                session: vec!["historical change".into()],
+                ..Agent::default()
+            },
+        );
+        view.apply(&event(2,None,"graph_task",serde_json::json!({"plan":"p","id":"extra-uuid","status":"queued","round":0,"spec":{"id":"extra","title":"Extra","depends_on":["implementation"]}})));
+        view.apply(&event(3,None,"graph_task",serde_json::json!({"plan":"p","id":"security-uuid","status":"queued","round":0,"spec":{"id":"security","title":"Security","depends_on":["extra"]}})));
+        view.apply(&event(4,None,"graph_updated",serde_json::json!({"plan":"p","text":"Insert extra work before security","scope_hash":"new","order":["implementation","extra","security"]})));
+        assert_eq!(
+            view.tasks
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            ["implementation", "extra", "security"]
+        );
+        assert_eq!(view.tasks[0].status, "working");
+        assert_eq!(view.tasks[0].round, 2);
+        assert_eq!(view.tasks[2].depends_on, ["extra"]);
+        assert_eq!(
+            view.agents["worker:implementation"].session,
+            ["historical change"]
+        );
+        assert_eq!(view.task_rows["extra-uuid"], 1);
+        assert_eq!(view.plan_scope_hash.as_deref(), Some("new"));
     }
 
     #[test]

@@ -199,6 +199,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn completed_followup_restarts_interview_without_erasing_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("state.db")).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        store.begin_interview(&conversation.id).unwrap();
+        let first = store
+            .add_message(&conversation.id, "user", "First goal")
+            .unwrap();
+        store
+            .interview_summary(&conversation.id, "First scope", first.seq)
+            .unwrap();
+        store.finish_interview(&conversation.id).unwrap();
+        let run = store.create_run(&conversation.id, "First goal").unwrap();
+        store
+            .select_planning_run(&conversation.id, &run.id)
+            .unwrap();
+        let tasks = store
+            .add_plan(
+                &conversation.id,
+                &[serde_json::json!({"id":"implementation"})],
+            )
+            .unwrap();
+        let plan = &tasks[0].plan_id;
+        store.queue_plan(&conversation.id, plan).unwrap();
+        // A message while work remains must not reset its workflow.
+        store
+            .add_message(&conversation.id, "user", "More context")
+            .unwrap();
+        assert_eq!(
+            store.workflow(&conversation.id).unwrap().unwrap().phase,
+            "implementation"
+        );
+        store.set_plan_status(plan, "queued", "approved").unwrap();
+        store
+            .add_message(&conversation.id, "runtime", "Finished")
+            .unwrap();
+        assert_eq!(
+            store.workflow(&conversation.id).unwrap().unwrap().phase,
+            "implementation"
+        );
+        store
+            .add_message(&conversation.id, "user", "Next goal")
+            .unwrap();
+        let workflow = store.workflow(&conversation.id).unwrap().unwrap();
+        assert_eq!(workflow.phase, "interview");
+        assert!(workflow.summary.is_empty());
+        assert_eq!(workflow.upto_message, 0);
+        let next_run = store.planning_run(&conversation.id).unwrap().unwrap();
+        assert_ne!(next_run.id, run.id);
+        assert_eq!(next_run.goal, "Next goal");
+        assert!(store.run(&conversation.id, &run.id).is_ok());
+        assert_eq!(store.plan(plan).unwrap()[0].status, "approved");
+        store
+            .add_message(&conversation.id, "user", "Next constraint")
+            .unwrap();
+        assert_eq!(
+            store.workflow(&conversation.id).unwrap().unwrap().phase,
+            "interview"
+        );
+    }
+
+    #[test]
     fn acceptance_requires_current_summary_and_survives_reopening() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.db");

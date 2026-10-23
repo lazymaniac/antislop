@@ -1,6 +1,8 @@
 //! Small rows, each written on its own, plus an append-only event log. Nothing
 //! here grows with the size of the project the agents work on.
 
+#[path = "graph_edit.rs"]
+mod graph_edit;
 #[path = "history.rs"]
 mod history;
 #[path = "workflow.rs"]
@@ -553,6 +555,37 @@ impl Store {
                 serde_json::json!({"seq":seq,"author":author,"text":stored_text}).to_string()
             ],
         )?;
+        // A follow-up after completed implementation starts a new requirements
+        // checkpoint. Keep all plans, turns and ledger evidence as history.
+        if author == "user" && !text.starts_with(super::COMMENT_PREFIX) {
+            let restarted = tx.execute(
+                "UPDATE session_workflow SET phase='interview',summary='',upto_message=0
+                 WHERE conversation_id=?1 AND phase='implementation'
+                 AND EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1))
+                 AND NOT EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1) AND status<>'approved')
+                 AND NOT EXISTS(SELECT 1 FROM turns WHERE conversation_id=?1 AND status='running')",
+                [conversation],
+            )?;
+            if restarted > 0 {
+                let run_id = crate::id();
+                tx.execute(
+                    "INSERT INTO runs(id,conversation_id,goal,created_ms,start_message) VALUES(?1,?2,?3,?4,?5)",
+                    params![run_id, conversation, super::tasks::bound(text, 1000), now_ms(), seq as i64],
+                )?;
+                tx.execute(
+                    "INSERT INTO planning_runs VALUES(?1,?2) ON CONFLICT(conversation_id) DO UPDATE SET run_id=excluded.run_id",
+                    params![conversation, run_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'run_created',?2,?3)",
+                    params![conversation, serde_json::json!({"run":run_id}).to_string(), now_ms()],
+                )?;
+                tx.execute(
+                    "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'workflow',?2,?3)",
+                    params![conversation, serde_json::json!({"phase":"interview","summary":""}).to_string(), now_ms()],
+                )?;
+            }
+        }
         tx.commit()?;
         Ok(Message {
             seq,

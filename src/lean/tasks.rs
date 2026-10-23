@@ -289,6 +289,72 @@ pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskSpec>>>) {
     (text, Some(plan))
 }
 
+/// An additive graph revision. Omitted nodes retain their definitions and IDs;
+/// changed nodes carry complete specs, so dependency rewiring is explicit.
+/// The runtime checks that rewired nodes have not started before applying it.
+pub fn parse_graph_edit(
+    answer: &str,
+    base_plan: &str,
+    current: &[TaskSpec],
+) -> (String, Option<Result<Vec<TaskSpec>>>) {
+    let Some((text, body)) = fenced(answer, "graph") else {
+        return (answer.trim().to_owned(), None);
+    };
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Edit {
+        base_plan: String,
+        tasks: Vec<TaskSpec>,
+    }
+    let edited = serde_json::from_str::<Edit>(body)
+        .map_err(Error::from)
+        .and_then(|edit| {
+            crate::require(
+                edit.base_plan == base_plan,
+                "graph revision is stale; read the latest plan and retry",
+            )?;
+            crate::require(!edit.tasks.is_empty(), "graph revision has no changes")?;
+            let mut seen = BTreeSet::new();
+            let mut merged = current.to_vec();
+            for task in edit.tasks {
+                crate::require(
+                    seen.insert(task.id.clone()),
+                    "duplicate task in graph revision",
+                )?;
+                if let Some(existing) = merged.iter_mut().find(|existing| existing.id == task.id) {
+                    *existing = task;
+                } else {
+                    merged.push(task);
+                }
+            }
+            order_graph(merged)
+        });
+    (text, Some(edited))
+}
+
+/// Stable topological order for edits that insert nodes before existing gates.
+pub(crate) fn order_graph(mut remaining: Vec<TaskSpec>) -> Result<Vec<TaskSpec>> {
+    let mut ordered = Vec::with_capacity(remaining.len());
+    let mut done = BTreeSet::new();
+    while !remaining.is_empty() {
+        let position = remaining.iter().position(|task| {
+            task.depends_on
+                .iter()
+                .all(|dependency| done.contains(dependency))
+        });
+        let Some(position) = position else {
+            return Err(Error::Invalid(
+                "graph contains a cycle or an unknown dependency".into(),
+            ));
+        };
+        let task = remaining.remove(position);
+        crate::require(done.insert(task.id.clone()), "duplicate task in graph")?;
+        ordered.push(task);
+    }
+    validate(&ordered)?;
+    Ok(ordered)
+}
+
 /// Explicit run binding in a planner proposal. Runtime checks ownership.
 pub fn proposed_run(answer: &str) -> Option<String> {
     fenced(answer, "plan")
@@ -321,7 +387,7 @@ pub fn parse_recoveries(answer: &str) -> (String, Vec<Unblocking>) {
     (text, steps)
 }
 
-fn validate(tasks: &[TaskSpec]) -> Result<()> {
+pub(crate) fn validate(tasks: &[TaskSpec]) -> Result<()> {
     crate::require(!tasks.is_empty(), "the plan has no tasks")?;
     let mut seen = std::collections::BTreeSet::new();
     for task in tasks {
@@ -2211,6 +2277,48 @@ pub fn requirements_summary(answer: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn graph_edits_insert_between_existing_dependencies_without_removing_nodes() {
+        let spec = |id: &str, deps: &[&str]| {
+            serde_json::from_value::<TaskSpec>(serde_json::json!({
+                "id":id,"title":id,"goal":"deliver observable result","kind":"analysis",
+                "depends_on":deps,"verifier":{"focus":"correctness"}
+            }))
+            .unwrap()
+        };
+        let current = vec![
+            spec("implementation", &[]),
+            spec("security", &["implementation"]),
+            spec("performance", &["implementation"]),
+        ];
+        let patch = serde_json::json!({"base_plan":"p1","tasks":[spec("extra", &["implementation"]), spec("security", &["extra"]), spec("performance", &["extra"])]});
+        let answer = format!("Updated plan\n```graph\n{patch}\n```");
+        let (text, edited) = parse_graph_edit(&answer, "p1", &current);
+        let edited = edited.unwrap().unwrap();
+        assert_eq!(text, "Updated plan");
+        assert_eq!(edited.len(), 4);
+        assert_eq!(edited[0], current[0]);
+        assert_eq!(edited[1].id, "extra");
+        assert_eq!(edited[1].depends_on, ["implementation"]);
+        assert_eq!(edited[2].depends_on, ["extra"]);
+        assert_eq!(edited[3].depends_on, ["extra"]);
+        assert!(
+            parse_graph_edit(&answer, "p2", &current)
+                .1
+                .unwrap()
+                .is_err()
+        );
+        let cycle =
+            serde_json::json!({"base_plan":"p1","tasks":[spec("implementation", &["security"])]});
+        assert!(
+            parse_graph_edit(&format!("```graph\n{cycle}\n```"), "p1", &current)
+                .1
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(current[1].depends_on, ["implementation"]);
+    }
+
     #[test]
     fn interview_checkpoint_requires_a_complete_requirements_fence() {
         assert_eq!(super::requirements_summary("Question?"), None);

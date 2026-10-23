@@ -15,6 +15,7 @@ mod inspection;
 pub mod interview;
 pub mod ledger;
 pub mod palette;
+mod planhistory;
 pub mod planview;
 pub mod sanitize;
 pub mod selection;
@@ -68,6 +69,12 @@ use view::{
 };
 
 pub enum Update {
+    PlanHistory {
+        conversation: String,
+        generation: u64,
+        offset: usize,
+        reply: std::result::Result<super::store::PlansPage, String>,
+    },
     InterviewResult {
         conversation: String,
         question: u64,
@@ -208,6 +215,7 @@ pub struct ConversationState {
 }
 
 pub struct App {
+    plan_history: Option<planhistory::Browser>,
     graph_layout_cache: graph::LayoutCache,
     pub text_selection: selection::TextSelection,
     text_area: Option<Rect>,
@@ -308,6 +316,7 @@ impl App {
 
     pub fn test_app_with_client_and_updates(client: Client, updates: mpsc::Sender<Update>) -> App {
         App {
+            plan_history: None,
             graph_layout_cache: graph::LayoutCache::default(),
             text_selection: Default::default(),
             text_area: None,
@@ -509,6 +518,7 @@ impl App {
         self.generation += 1;
         self.conversation = conversation.clone();
         self.view = View::default();
+        self.plan_history = None;
         if let Some(state) = self.conversation_states.get(&conversation).cloned() {
             self.input = state.input;
             self.editor = state.editor;
@@ -1556,6 +1566,28 @@ impl App {
 
     fn apply_update_inner(&mut self, update: Update) {
         match update {
+            Update::PlanHistory {
+                conversation,
+                generation,
+                offset,
+                reply,
+            } => {
+                if conversation == self.conversation
+                    && generation == self.generation
+                    && let Some(browser) = self
+                        .plan_history
+                        .as_mut()
+                        .filter(|browser| browser.offset == offset)
+                {
+                    match reply {
+                        Ok(page) => browser.loaded(page),
+                        Err(error) => {
+                            browser.loading = false;
+                            browser.error = Some(error);
+                        }
+                    }
+                }
+            }
             Update::AgentMessage {
                 conversation,
                 recipient,
@@ -2159,6 +2191,10 @@ impl App {
                 }
             }
             "/plan-items" => self.open_ledger(super::ledger::LedgerKind::PlanItem),
+            "/plans" => {
+                self.plan_history = Some(planhistory::Browser::new());
+                self.load_plan_history(0);
+            }
             "/plan" => {
                 if self.view.plan.is_some()
                     || !self.view.tasks.is_empty()
@@ -2524,6 +2560,29 @@ impl App {
     }
 
     /// A command from a shortcut or the palette; the draft stays as it is.
+    fn load_plan_history(&self, offset: usize) {
+        let client = self.client.clone();
+        let conversation = self.conversation.clone();
+        let generation = self.generation;
+        let updates = self.updates.clone();
+        std::thread::spawn(move || {
+            let reply = client
+                .call(&Request::Plans {
+                    conversation: conversation.clone(),
+                    offset: Some(offset),
+                    limit: Some(1),
+                })
+                .and_then(|value| serde_json::from_value(value).map_err(Into::into))
+                .map_err(|error| error.to_string());
+            let _ = updates.send(Update::PlanHistory {
+                conversation,
+                generation,
+                offset,
+                reply,
+            });
+        });
+    }
+
     pub fn command(&mut self, command: &str) {
         self.dispatch(command);
     }
@@ -2648,6 +2707,7 @@ impl App {
             Command::Accept => self.command("/accept"),
             Command::Reject => self.command("/reject"),
             Command::Plan => self.command("/plan"),
+            Command::Plans => self.command("/plans"),
             Command::Resume => self.command("/resume"),
             Command::Cancel => self.command("/cancel"),
             Command::Pause => self.command("/pause"),
@@ -2908,6 +2968,16 @@ impl App {
     }
 
     fn key_inner(&mut self, key: event::KeyEvent) -> bool {
+        if let Some(browser) = self.plan_history.as_mut() {
+            let was_loading = browser.loading;
+            if !browser.key(key) {
+                self.plan_history = None;
+            } else if !was_loading && browser.loading {
+                let offset = browser.offset;
+                self.load_plan_history(offset);
+            }
+            return true;
+        }
         self.sync_interview();
         if self.ledger_view.as_ref().is_some_and(|v| v.visible) {
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
@@ -3802,6 +3872,9 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if self.plan_history.is_some() {
+            return;
+        }
         if self.ledger_view.as_ref().is_some_and(|v| v.visible) && self.picker.is_none() {
             self.ledger_view.as_mut().unwrap().paste(text);
             return;
@@ -3858,6 +3931,10 @@ impl App {
         self.text_area = None;
         if draw_min_term_guard(frame, frame.area()) {
             self.text_selection = Default::default();
+            return;
+        }
+        if let Some(browser) = self.plan_history.as_mut() {
+            browser.draw(frame);
             return;
         }
         if let Some(ledger) = self.ledger_view.as_mut().filter(|v| v.visible) {
@@ -4173,6 +4250,9 @@ impl App {
     }
 
     fn selection_blocked(&self) -> bool {
+        if self.plan_history.is_some() {
+            return true;
+        }
         if self.interview_visible() {
             return true;
         }
@@ -4853,6 +4933,9 @@ impl App {
     }
 
     pub fn mouse(&mut self, mouse: event::MouseEvent) -> bool {
+        if self.plan_history.is_some() {
+            return true;
+        }
         self.sync_interview();
         if let Some(view) = self.ledger_view.as_mut().filter(|v| v.visible) {
             let action = view.mouse(mouse);
@@ -5156,6 +5239,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     let conversation = options.conversation(&client)?;
     let (updates, received) = mpsc::channel();
     let mut app = App {
+        plan_history: None,
         graph_layout_cache: graph::LayoutCache::default(),
         text_selection: Default::default(),
         text_area: None,

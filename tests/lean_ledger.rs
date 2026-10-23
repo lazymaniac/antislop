@@ -1300,3 +1300,91 @@ fn old_options_rejection_recovers_as_plan_feedback_without_repeating_agents() {
             .unwrap()
     );
 }
+
+#[test]
+fn live_graph_inserts_work_before_gates_preserving_existing_task_identity() {
+    let f = Fixture::new();
+    f.apply(&f.change(0, vec![f.entry("R1")]));
+    f.review("extraction", "", true);
+    let tasks = f.plan(vec![
+        f.task("implementation", &["R1"], &[], &[]),
+        f.task("security", &["R1"], &[], &["implementation"]),
+        f.task("performance", &["R1"], &[], &["implementation"]),
+    ]);
+    let plan = &tasks[0].plan_id;
+    f.store.queue_plan(&f.conversation, plan).unwrap();
+    // A worker is active while two downstream checks remain unstarted.
+    let mut worker = f.store.plan(plan).unwrap()[0].clone();
+    worker.status = "working".into();
+    worker.round = 1;
+    worker.report = Some("Historical progress".into());
+    f.store.update_task(&worker).unwrap();
+    let baseline = f.store.plan(plan).unwrap();
+    let patch = json!({"base_plan":plan,"tasks":[
+        f.task("extra", &["R1"], &[], &["implementation"]),
+        f.task("security", &["R1"], &[], &["extra"]),
+        f.task("performance", &["R1"], &[], &["extra"])
+    ]});
+    let current = baseline
+        .iter()
+        .map(|task| serde_json::from_value(task.spec.clone()).unwrap())
+        .collect::<Vec<TaskSpec>>();
+    let specs =
+        antislop::lean::tasks::parse_graph_edit(&format!("```graph\n{patch}\n```"), plan, &current)
+            .1
+            .unwrap()
+            .unwrap();
+    f.store
+        .extend_running_graph(&f.conversation, &baseline, &specs)
+        .unwrap();
+    let edited = f.store.plan(plan).unwrap();
+    assert_eq!(edited.len(), 4);
+    assert_eq!(edited[0].id, tasks[0].id);
+    assert_eq!(edited[0].round, 1);
+    assert_eq!(edited[0].report.as_deref(), Some("Historical progress"));
+    assert_eq!(edited[1].spec["id"], "extra");
+    assert_eq!(edited[1].status, "queued");
+    assert_eq!(edited[2].id, tasks[1].id);
+    assert_eq!(edited[2].spec["depends_on"], json!(["extra"]));
+    assert_eq!(edited[3].id, tasks[2].id);
+    f.store.assert_task_inputs(&edited[1]).unwrap();
+    assert_eq!(f.store.plans_page(&f.conversation, 0, 10).unwrap().total, 1);
+    // The same reviewed baseline cannot overwrite a later graph revision.
+    assert!(
+        f.store
+            .extend_running_graph(&f.conversation, &baseline, &specs)
+            .is_err()
+    );
+}
+
+#[test]
+fn live_graph_rejects_started_gate_changes_atomically() {
+    let f = Fixture::new();
+    f.apply(&f.change(0, vec![f.entry("R1")]));
+    f.review("extraction", "", true);
+    let tasks = f.plan(vec![
+        f.task("implementation", &["R1"], &[], &[]),
+        f.task("security", &["R1"], &[], &["implementation"]),
+    ]);
+    let plan = &tasks[0].plan_id;
+    f.store.queue_plan(&f.conversation, plan).unwrap();
+    let baseline = f.store.plan(plan).unwrap();
+    let specs = vec![
+        serde_json::from_value(f.task("implementation", &["R1"], &[], &[])).unwrap(),
+        serde_json::from_value(f.task("extra", &["R1"], &[], &["implementation"])).unwrap(),
+        serde_json::from_value(f.task("security", &["R1"], &[], &["extra"])).unwrap(),
+    ];
+    let mut gate = baseline[1].clone();
+    gate.status = "verifying".into();
+    gate.round = 1;
+    f.store.update_task(&gate).unwrap();
+    let error = f
+        .store
+        .extend_running_graph(&f.conversation, &baseline, &specs)
+        .unwrap_err();
+    assert!(error.to_string().contains("already started"));
+    let unchanged = f.store.plan(plan).unwrap();
+    assert_eq!(unchanged.len(), 2);
+    assert_eq!(unchanged[1].spec["depends_on"], json!(["implementation"]));
+    assert_eq!(unchanged[1].status, "verifying");
+}
