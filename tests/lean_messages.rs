@@ -613,7 +613,14 @@ answer = "Revised.\n```comments\n" + json.dumps({"addressed": [{"id": int(ids[0]
     let source = std::fs::read_to_string(&codex).unwrap();
     let source = source.replace(
         "    with open(_ledger_cache) as cache: _ledger_payload=json.load(cache)",
-        "    open(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'next-plan-started'), 'w').close()\n    import time\n    deadline = time.monotonic() + 15\n    while not _lo.path.exists(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'release-next-plan')):\n        if time.monotonic() >= deadline:\n            raise RuntimeError('next plan was not released by test within 15 seconds')\n        time.sleep(0.01)\n    with open(_ledger_cache) as cache: _ledger_payload=json.load(cache)",
+        r#"    open(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'next-plan-started'), 'w').close()
+    import time
+    deadline = time.monotonic() + 15
+    while not _lo.path.exists(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'release-next-plan')):
+        if time.monotonic() >= deadline:
+            raise RuntimeError('next plan was not released by test within 15 seconds')
+        time.sleep(0.01)
+    with open(_ledger_cache) as cache: _ledger_payload=json.load(cache)"#,
     );
     std::fs::write(&codex, source).unwrap();
     let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
