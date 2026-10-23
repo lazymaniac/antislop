@@ -1508,8 +1508,14 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         Planning => {
             "dependencies complete and correctly ordered; no intermediate state \
              or ordering assumed that the system does not guarantee; unknowns \
-             established, not assumed; every requirement covered by a task; \
-             each task's goal says how to tell it is done"
+             established, not assumed; every requirement has a task delivering \
+             its result and a way to verify fulfillment; each task's goal names \
+             a recognizable result and says how to tell it is done; assigned \
+             scopes, work kinds and permissions allow task goals to be met; \
+             dependencies justified by required inputs without unnecessary \
+             ordering; consequential assumptions resolved before costly \
+             dependent commitments; external prerequisites have an explicit \
+             acquisition path and timing"
         }
         Context => {
             "every claim backed by files actually read; dependencies, contracts \
@@ -1576,7 +1582,18 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         }
         Refactoring => {
             "behaviour preserved, with evidence; structure actually improved; no \
-             speculative abstraction; when no change is needed, the report says \
+             speculative abstraction; relevant code smells inspected in touched \
+             code: long functions, oversized units, primitive obsession, long \
+             parameter lists, data clumps, inconsistent alternative interfaces, \
+             refused inherited contracts, repeated type or state branching, \
+             temporary fields, divergent change, parallel hierarchies, shotgun \
+             surgery, compensating comments, duplication, passive data holders, \
+             dead code, underweight units, speculative generality, feature envy, \
+             inappropriate intimacy, message chains, middle men and scattered \
+             workarounds for incomplete libraries; inheritance-specific smells \
+             assessed only where applicable; each transformation justified by \
+             a concrete maintenance benefit rather than a size threshold; \
+             when no change is needed, the report says \
              why instead of a cosmetic patch"
         }
         StaticAnalysis => {

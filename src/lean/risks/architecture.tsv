@@ -3,7 +3,7 @@ R023	architecture	Excessive abstractions and configuration.	Compare the number o
 R155	architecture	A public interface exposes unnecessary implementation details.	Check exports and actual consumers.
 R157	architecture	Hidden shared state complicates reasoning and tests.	Find mutable globals, singletons, and implicit dependencies.
 R158	architecture	An intermediate layer adds no contract or value.	Trace forwarding and consumer needs.
-R159	architecture	An oversized module combines independent reasons to change.	Compare responsibilities and change history.
+R159	architecture	An oversized class, module, or equivalent unit combines independent responsibilities or reasons to change.	Compare responsibility groups, cohesion, and change history, including unrelated changes repeatedly affecting the same unit.
 R201	architecture	A dependency cycle prevents independent module changes.	Build import and runtime dependency graphs.
 R202	architecture	Domain logic leaks into UI, transport, and persistence.	Trace where rules are implemented.
 R203	architecture	Missing patterns cause duplicated, unreliable mechanics.	Compare the problem with suitable patterns and idioms.

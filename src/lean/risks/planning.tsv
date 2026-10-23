@@ -20,3 +20,9 @@ R147	planning	No reverse mapping from model elements to goals.	Check the justifi
 R148	planning	An added feature expands scope in the name of completeness.	Compare the model with requirements and the Boy Scout Rule.
 R149	planning	An unproven assumption is critical to the simulation result.	Challenge the premises of every scenario.
 R150	planning	Implementation departs from the model without revising it.	Compare the patch with contracts and simulations.
+R299	planning	A requirement has no task that delivers its realization.	Map each requirement to a task that produces the required result and a way to verify its fulfillment, rather than investigation or verification alone.
+R300	planning	A task describes an activity without a recognizable result or completion criterion.	Check whether an independent recipient can determine completion from the task's output and stated criteria.
+R301	planning	A task's assigned scope or permissions cannot deliver its goal.	Compare the goal with required artifacts, assigned scope, work kind, and permitted actions and identify necessary supporting tasks.
+R302	planning	The task graph omits a real dependency or imposes unnecessary ordering.	Identify the result passed by each dependency and trace the source of every required task input.
+R303	planning	A consequential unresolved assumption is checked only after costly dependent work.	Identify assumptions that could invalidate the plan and schedule their resolution before dependent commitments.
+R304	planning	The plan assumes an external prerequisite will be available without arranging how to obtain it.	Check task entry conditions and identify how and when required access, data, environments, and user decisions will be secured.
