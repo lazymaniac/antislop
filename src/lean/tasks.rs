@@ -1534,7 +1534,13 @@ pub fn checklist(kind: WorkKind) -> &'static str {
         Dependencies => {
             "an existing maintained library considered before custom code; \
              licenses of the actual dependency graph (vendored files included) \
-             compatible; chosen license option and its obligations stated"
+             compatible; chosen license option and its obligations stated; \
+             resolved dependencies support required toolchains and platforms; \
+             enabled features and backends justified; native tools and system \
+             libraries needed for building and linking stated; technical cost \
+             of transitive dependencies assessed; assessed versions retrievable \
+             and reproducible; required patches and upgrades have a feasible \
+             maintenance path and explicit ownership"
         }
         Implementation => {
             "does exactly what the goal asks, nothing more; no duplicated module \

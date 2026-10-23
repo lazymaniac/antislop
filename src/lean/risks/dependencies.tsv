@@ -11,3 +11,9 @@ R227	dependencies	Notices, attribution, or required code are missing from delive
 R228	dependencies	Copied or vendored code bypasses license checks.	Compare fragment and file provenance.
 R229	dependencies	Version or feature changes do not reopen assessment.	Compare the graph and report input hashes.
 R230	dependencies	Package existence and no known CVEs create false trust.	Check provenance, maintenance, and scanner scope.
+R265	dependencies	A dependency does not support the required toolchain or target platforms.	Compare compiler and platform requirements of the resolved dependency graph with the project's supported environment matrix.
+R266	dependencies	Default or unified features enable unnecessary mechanisms and dependencies.	Inspect the resolved feature graph and justify enabled options and backends.
+R267	dependencies	A dependency requires undisclosed build tools or system libraries.	Inspect build scripts, native dependencies, and linking requirements and check that the build environment is fully specified.
+R268	dependencies	Technical assessment omits the cost of transitive dependencies.	Compare dependency graphs before and after the change for new packages, duplicate versions, native components, and maintenance requirements.
+R269	dependencies	The assessed dependency version cannot be reliably retrieved and reproduced.	Check source availability, pinned revisions, the lockfile, and required artifacts in a clean environment, including moving references and local paths.
+R270	dependencies	Required dependency patches or upgrades have no feasible maintenance path.	Check unresolved blockers, required patches, the upgrade path, and ownership of any fork or local deviations.
