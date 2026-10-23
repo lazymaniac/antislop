@@ -35,6 +35,26 @@ fn run_with_requirement(
     claim: &str,
     required_format: &str,
 ) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
+    run_scenario(
+        plan,
+        gates,
+        report,
+        implementation,
+        claim,
+        required_format,
+        "",
+    )
+}
+
+fn run_scenario(
+    plan: Value,
+    gates: bool,
+    report: &str,
+    implementation: &str,
+    claim: &str,
+    required_format: &str,
+    scenario: &str,
+) -> (Vec<antislop::lean::store::Task>, Vec<Value>, Vec<Value>) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -65,7 +85,7 @@ fn run_with_requirement(
     common::trust(&project);
     std::fs::write(
         dir.path().join("settings.json"),
-        json!({"plan":plan,"report":report,"implementation":implementation,"claim":claim})
+        json!({"plan":plan,"report":report,"implementation":implementation,"claim":claim,"scenario":scenario})
             .to_string(),
     )
     .unwrap();
@@ -105,7 +125,44 @@ fn run_with_requirement(
     assert!(!plan.is_empty());
     core.accept_plan(&conversation.id, &plan[0].plan_id)
         .unwrap();
+    if scenario.starts_with("mail-") {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !dir.path().join("mail-ready").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "worker never reached mail barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let task = core.task(&plan[0].plan_id, "w").unwrap();
+        let role = format!("worker:{}", task.id);
+        core.store
+            .add_mail(
+                &conversation.id,
+                &role,
+                &antislop::lean::store::Mail {
+                    id: 0,
+                    sender: "user".into(),
+                    recipient: "w".into(),
+                    kind: "message".into(),
+                    text: "MAIL-CYCLE-SENTINEL".into(),
+                    created_ms: 0,
+                    delivered_turn: None,
+                    delivered_ms: None,
+                    state: "queued".into(),
+                },
+            )
+            .unwrap();
+        std::fs::write(dir.path().join("mail-release"), "go").unwrap();
+    }
     idle();
+    if scenario.starts_with("resume-") {
+        let stopped = core.task(&plan[0].plan_id, "w").unwrap();
+        assert_eq!(stopped.status, "waiting", "{stopped:?}");
+        core.resume_plan(&conversation.id, &stopped.plan_id)
+            .unwrap();
+        idle();
+    }
     let tasks = core.store.latest_plan(&conversation.id).unwrap();
     for task in tasks.iter().filter(|task| task.spec["writes"] == true) {
         let file = project.join(format!("result-{}.txt", task.spec["id"].as_str().unwrap()));
@@ -232,6 +289,7 @@ fn shared_options_are_not_duplicated_and_bind_every_writer_even_with_ambiguous_r
     for report in [
         REPORT,
         "A and B are plausible; no selection.",
+        "Selected: A\nSelected: B",
         "For w: Selected: A\nFor x: Selected: B",
     ] {
         let mut w = writer("w");
@@ -258,6 +316,17 @@ fn shared_options_are_not_duplicated_and_bind_every_writer_even_with_ambiguous_r
             assert!(prompt.contains(
                 "If a shared options report does not cover this task, report that gap explicitly"
             ));
+        }
+        for title in ["w", "x"] {
+            let verifier = calls
+                .iter()
+                .find(|c| c["worker"] == false && c["task"] == title)
+                .unwrap()["prompt"]
+                .as_str()
+                .unwrap();
+            assert!(verifier.contains(report));
+            assert!(verifier.contains("Report a missing or ambiguous selection"));
+            assert!(verifier.contains("multiple decisions without a clear mapping to this task"));
         }
         // Approach A forwards reports verbatim: ambiguous/multiple decisions are
         // evidence gaps for the agents, not a structured runtime selection gate.
@@ -393,4 +462,129 @@ fn read_only_plan_runs_without_generated_options_or_quality_writers() {
                 .any(|event| event["task"] == stored[0].id && event["status"] == "approved")
         );
     }
+}
+
+fn assert_core_delivery(scenario: &str) {
+    let (stored, calls, _) = run_scenario(
+        json!({"tasks":[writer("w")]}),
+        false,
+        REPORT,
+        "selected",
+        "",
+        "A",
+        scenario,
+    );
+    println!(
+        "SCENARIO={scenario}\n{}",
+        serde_json::to_string_pretty(&calls).unwrap()
+    );
+    let task = stored.iter().find(|t| t.spec["id"] == "w").unwrap();
+    assert_eq!(task.status, "approved", "{scenario}: {task:?}");
+    let worker_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c["worker"] == true && c["task"] == "w")
+        .collect();
+    let verifier_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c["worker"] == false && c["task"] == "w")
+        .collect();
+    let continued = if scenario == "resume-verifier" {
+        &verifier_calls
+    } else {
+        &worker_calls
+    };
+    assert_eq!(continued.len(), 2, "{scenario}: expected two CLI processes");
+    assert_ne!(continued[0]["pid"], continued[1]["pid"]);
+    assert!(
+        !continued[0]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "--conversation")
+    );
+    if scenario.starts_with("mail-") {
+        assert_eq!(task.round, 1, "mail is handled within the same Core round");
+    } else {
+        assert_eq!(
+            task.round, 2,
+            "resume/rejection must advance the Core round"
+        );
+    }
+    if scenario == "resume-verifier" {
+        assert_eq!(
+            worker_calls.len(),
+            2,
+            "resume_plan reruns the worker before resuming the verifier"
+        );
+    }
+    let second = continued[1];
+    let prompt = second["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains(REPORT),
+        "{scenario}: missing dependency report"
+    );
+    let args = second["args"].as_array().unwrap();
+    assert_eq!(
+        args.iter().any(|v| v == "--conversation"),
+        scenario != "mail-new",
+        "{scenario}"
+    );
+    if scenario == "resume-verifier" {
+        assert!(prompt.contains("The worker's updated report:"));
+        assert!(prompt.contains("Report a missing or ambiguous selection"));
+    } else {
+        assert!(prompt.contains("options report is binding"));
+        assert!(prompt.contains("Never silently switch variants"));
+        let branch = match scenario {
+            "resume-worker" => "Your work on this task was interrupted",
+            "reject-once" => "Your verifier found problems:",
+            "mail-new" => "You are a worker on a team",
+            "mail-existing" => tasks::INBOX_FOLLOWUP,
+            _ => unreachable!(),
+        };
+        assert!(
+            prompt.contains(branch),
+            "{scenario}: wrong Core branch: {prompt}"
+        );
+    }
+    if scenario.starts_with("mail-") {
+        assert!(prompt.contains("MAIL-CYCLE-SENTINEL"));
+    }
+    if scenario == "reject-once" {
+        assert_eq!(verifier_calls.len(), 2);
+        let followup = verifier_calls[1]["prompt"].as_str().unwrap();
+        assert!(followup.contains("The worker's updated report:"));
+        assert!(followup.contains(REPORT));
+        assert!(followup.contains("Report a missing or ambiguous selection"));
+        let bytes: Vec<_> = calls
+            .iter()
+            .filter_map(|c| c["written"].as_str().map(|_| c["actual"].clone()))
+            .collect();
+        assert_eq!(bytes, vec![json!("B"), json!("A")]);
+    }
+}
+
+#[test]
+fn core_delivery_resumes_worker_session() {
+    assert_core_delivery("resume-worker");
+}
+
+#[test]
+fn core_delivery_resumes_verifier_session() {
+    assert_core_delivery("resume-verifier");
+}
+
+#[test]
+fn core_delivery_follows_rejection_in_both_roles() {
+    assert_core_delivery("reject-once");
+}
+
+#[test]
+fn core_delivery_mail_starts_new_worker_session() {
+    assert_core_delivery("mail-new");
+}
+
+#[test]
+fn core_delivery_mail_resumes_worker_session() {
+    assert_core_delivery("mail-existing");
 }

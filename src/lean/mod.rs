@@ -3338,17 +3338,22 @@ impl Core {
                 task.report.clone()
             } else {
                 self.turn(worker_setup(), cancel, |first| {
-                    if first || round == 1 {
-                        tasks::worker_prompt(&project_text, &spec, &team, autonomous)
-                            + &upstream
-                            + &tasks::user_edits_note(&user_edits)
+                    let continuation = if first || round == 1 {
+                        None
                     } else if resumed && round == first_round {
-                        tasks::worker_resume(&findings)
-                            + &upstream
-                            + &tasks::user_edits_note(&user_edits)
+                        Some(tasks::worker_resume(&findings))
                     } else {
-                        tasks::worker_followup(&findings)
-                    }
+                        Some(tasks::worker_followup(&findings))
+                    };
+                    tasks::worker_turn_prompt(
+                        &project_text,
+                        &spec,
+                        &team,
+                        autonomous,
+                        continuation.as_deref(),
+                        &upstream,
+                        &tasks::user_edits_note(&user_edits),
+                    )
                 })?
             };
             let Some(report) = report else {
@@ -3363,11 +3368,19 @@ impl Core {
                     break;
                 }
                 let next = self.turn(worker_setup(), cancel, |first| {
-                    if first {
-                        tasks::worker_prompt(&project_text, &spec, &team, autonomous)
-                    } else {
-                        tasks::INBOX_FOLLOWUP.into()
-                    }
+                    tasks::worker_turn_prompt(
+                        &project_text,
+                        &spec,
+                        &team,
+                        autonomous,
+                        if first {
+                            None
+                        } else {
+                            Some(tasks::INBOX_FOLLOWUP)
+                        },
+                        &upstream,
+                        &tasks::user_edits_note(&user_edits),
+                    )
                 })?;
                 let Some(next) = next else {
                     return self.stop_task(conversation, task, &worker, cancel);
@@ -3456,12 +3469,14 @@ impl Core {
             };
             let user_checks = self.check_comments(conversation, &task.plan_id, &spec.id);
             let answer = self.turn(setup, cancel, |first| {
-                let prompt = if first || round == 1 {
-                    tasks::verifier_prompt(&project_text, &spec, &report, changes.as_deref())
-                        + &upstream
-                } else {
-                    tasks::verifier_followup(&spec, &report, changes.as_deref())
-                };
+                let prompt = tasks::verifier_turn_prompt(
+                    &project_text,
+                    &spec,
+                    &report,
+                    changes.as_deref(),
+                    first || round == 1,
+                    &upstream,
+                );
                 format!("{user_checks}{prompt}")
             })?;
             let Some(answer) = answer else {

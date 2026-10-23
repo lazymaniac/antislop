@@ -6,11 +6,30 @@ settings = json.load(open(os.path.join(root, 'settings.json')))
 if os.path.basename(sys.argv[0]) == 'codex':
     answer = 'done' if '[runtime]' in prompt else '```plan\n'+json.dumps(settings['plan'])+'\n```'
 else:
-    worker = 'You are a worker' in prompt
+    scenario = settings.get('scenario', '')
+    previous = sys.argv[sys.argv.index('--conversation')+1] if '--conversation' in sys.argv else ''
+    worker = 'You are a worker' in prompt or previous.startswith('worker:')
     task = re.search(r'Task id: ([^\n]+)', prompt) if worker else re.search(r'Task: ([^\n]+)', prompt)
-    task = task.group(1) if task else 'followup'
+    task = task.group(1) if task else previous.split(':', 1)[-1]
+    session = ('worker:' if worker else 'verifier:') + task
+    count_file = os.path.join(root, session.replace(':', '-') + '-count')
+    count = int(open(count_file).read()) + 1 if os.path.exists(count_file) else 1
+    open(count_file, 'w').write(str(count))
     with open(os.path.join(root,'calls.jsonl'),'a') as log:
-        log.write(json.dumps({'worker':worker,'task':task,'prompt':prompt})+'\n')
+        log.write(json.dumps({'worker':worker,'task':task,'prompt':prompt,'args':sys.argv[1:-1],'pid':os.getpid(),'count':count})+'\n')
+    if task == 'w' and count == 1:
+        if scenario == ('resume-worker' if worker else 'resume-verifier'):
+            print(json.dumps({'event':'init','conversation_id':session}), flush=True)
+            print('login required: deliberate lifecycle fixture interruption', file=sys.stderr)
+            sys.exit(1)
+        if worker and scenario in ('mail-new', 'mail-existing'):
+            import time
+            open(os.path.join(root, 'mail-ready'), 'w').close()
+            deadline = time.monotonic() + 15
+            while not os.path.exists(os.path.join(root, 'mail-release')):
+                if time.monotonic() > deadline:
+                    raise RuntimeError('mail was not released by test')
+                time.sleep(0.01)
     if worker:
         if task.endswith('-options') or task == 'shared':
             answer = settings['report']
@@ -18,7 +37,7 @@ else:
               or any(t['id'] == task and not t.get('writes', False) for t in settings['plan']['tasks'])):
             answer = 'Inspected files read-only.'
         else:
-            implementation = settings['implementation']
+            implementation = 'B' if scenario == 'reject-once' and count == 1 else settings['implementation']
             if implementation == 'selected':
                 implementation = re.findall(r'^Selected: ([AB])$', prompt, re.M)[-1]
             open('result-'+task+'.txt','w').write(implementation)
@@ -53,5 +72,10 @@ if os.path.basename(sys.argv[0]) == 'codex':
     print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
     print(json.dumps({'type':'turn.completed','usage':{}}))
 else:
-    print(json.dumps({'event':'init','conversation_id':'fixture'}))
-    print(json.dumps({'event':'result','result':{'conversation_id':'fixture','status':'SUCCESS','response':answer,'usage':{}}}))
+    # A completed turn without a native session deliberately forces Core's
+    # next mail turn through first=true, rather than changing the store in tests.
+    result = {'status':'SUCCESS','response':answer,'usage':{}}
+    if not (scenario == 'mail-new' and worker and task == 'w' and count == 1):
+        print(json.dumps({'event':'init','conversation_id':session}))
+        result['conversation_id'] = session
+    print(json.dumps({'event':'result','result':result}))
