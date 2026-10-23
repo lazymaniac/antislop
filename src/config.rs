@@ -1,4 +1,7 @@
 //! Explicit routing and workspace policy for the lean runtime.
+
+mod validation;
+
 use crate::{Error, Result, require};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -28,25 +31,25 @@ pub enum Effort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkKind {
-    Orchestration,
-    Context,
-    Requirements,
-    Options,
-    Planning,
-    Architecture,
-    Dependencies,
-    Implementation,
-    Refactoring,
-    StaticAnalysis,
-    TestDesign,
-    Testing,
-    Security,
-    Performance,
-    Integration,
-    Research,
-    Writing,
-    Analysis,
-    Delivery,
+    Orchestration, // Coordinates agents, task dependencies, and progress toward the overall goal.
+    Context, // Inspects project files to establish relevant context, contracts, and conventions.
+    Requirements, // Extracts requirements, acceptance criteria, and contradictions from the brief.
+    Options, // Compares realistic alternatives against common criteria and selects an approach.
+    Planning, // Breaks the goal into actionable tasks with dependencies and completion criteria.
+    Architecture, // Designs how components and interfaces fit the existing project structure.
+    Dependencies, // Evaluates libraries, their maintenance, and dependency license obligations.
+    Implementation, // Implements the requested behavior in the project's source files.
+    Refactoring, // Improves code structure while preserving existing behavior.
+    StaticAnalysis, // Runs configured linters and analyzers and investigates their findings.
+    TestDesign, // Defines test scenarios covering requirements, likely failures, and interacting inputs.
+    Testing,    // Implements and runs tests that verify behavior through meaningful assertions.
+    Security,   // Assesses relevant threats and investigates security vulnerabilities and fixes.
+    Performance, // Measures performance against a baseline and evaluates optimizations.
+    Integration, // Checks that combined changes build, pass checks, and work across module boundaries.
+    Research,    // Gathers evidence from sources to answer questions and resolve unknowns.
+    Writing, // Produces documentation or other written content consistent with the brief and sources.
+    Analysis, // Examines data and assumptions to derive reproducible conclusions.
+    Delivery, // Summarizes delivered results, usage instructions, limitations, and remaining risks.
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -219,16 +222,6 @@ pub struct ResolvedProfile {
     pub role: RoleKind,
 }
 
-fn identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-fn nonempty_text(value: &str) -> bool {
-    !value.trim().is_empty() && !value.chars().any(char::is_control)
-}
-
 fn resolve_command(provider: &ProviderConfig, profile: &Profile) -> Result<(PathBuf, Vec<String>)> {
     if let Some(cmd) = &profile.command {
         let Some((first, rest)) = cmd.0.split_first() else {
@@ -261,125 +254,20 @@ fn resolve_command(provider: &ProviderConfig, profile: &Profile) -> Result<(Path
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
-        Self::from_toml(&std::fs::read_to_string(path)?)
+        Self::from_toml(&std::fs::read_to_string(path)?).map_err(|error| {
+            Error::Invalid(format!("configuration file {}: {error}", path.display()))
+        })
     }
 
     pub fn from_toml(source: &str) -> Result<Self> {
-        // TOML errors can render the input and expose accidental credentials.
-        let config: Self = toml::from_str(source).map_err(|error: toml::de::Error| {
-            let location = error
-                .span()
-                .map(|span| format!(" at bytes {}..{}", span.start, span.end))
-                .unwrap_or_default();
-            Error::Invalid(format!(
-                "invalid TOML configuration{location}: check schema, syntax and duplicate/unknown fields"
-            ))
-        })?;
+        let config: Self =
+            toml::from_str(source).map_err(|error| validation::toml_error(source, error))?;
         config.validate()?;
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<()> {
-        require(
-            self.schema_version == 1,
-            "unsupported configuration schema version",
-        )?;
-        require(
-            self.policy.max_parallel > 0,
-            "policy max_parallel must be at least 1",
-        )?;
-        require(
-            !self.providers.is_empty(),
-            "at least one explicit provider is required",
-        )?;
-        require(
-            !self.profiles.is_empty(),
-            "at least one explicit profile is required",
-        )?;
-        for provider in self.providers.values() {
-            if let Some(cmd) = &provider.command {
-                require(
-                    !cmd.0.is_empty() && cmd.0.iter().all(|arg| nonempty_text(arg)),
-                    "provider command tokens must be nonempty without control characters",
-                )?;
-            } else {
-                require(
-                    provider.binary.to_str().is_some_and(nonempty_text),
-                    "provider binary must be a nonempty Unicode path without control characters",
-                )?;
-            }
-            require(
-                provider.args.iter().all(|arg| nonempty_text(arg)),
-                "provider args must be nonempty and contain no control characters",
-            )?;
-        }
-        for (name, profile) in &self.profiles {
-            require(
-                identifier(name),
-                "profile name must contain only letters, digits, underscores or hyphens",
-            )?;
-            require(
-                profile
-                    .model
-                    .as_ref()
-                    .is_none_or(|model| nonempty_text(model)),
-                "model must be nonempty and contain no control characters",
-            )?;
-            if let Some(bin) = &profile.binary {
-                require(
-                    bin.to_str().is_some_and(nonempty_text),
-                    "profile binary must be a nonempty Unicode path without control characters",
-                )?;
-            }
-            if let Some(cmd) = &profile.command {
-                require(
-                    !cmd.0.is_empty() && cmd.0.iter().all(|arg| nonempty_text(arg)),
-                    "profile command tokens must be nonempty without control characters",
-                )?;
-            }
-            require(
-                profile.args.iter().all(|arg| nonempty_text(arg)),
-                "profile args must be nonempty and contain no control characters",
-            )?;
-            let provider = self.providers.get(&profile.provider).ok_or_else(|| {
-                Error::Invalid("profile refers to an unconfigured provider".into())
-            })?;
-            let (binary, _) = resolve_command(provider, profile)?;
-            require(
-                binary.to_str().is_some_and(nonempty_text),
-                "resolved profile binary must be a nonempty Unicode path without control characters",
-            )?;
-        }
-        self.profile(&self.orchestrator.profile)?;
-        for (kind, route) in &self.routing {
-            if *kind == WorkKind::Orchestration {
-                require(
-                    route.executor == self.orchestrator.profile,
-                    "orchestration routing must match the explicit orchestrator profile",
-                )?;
-            }
-            self.profile(&route.executor)?;
-            self.profile(&route.verifier)?;
-        }
-        require(
-            self.routing.contains_key(&WorkKind::Options),
-            "routing.options is required even when policy.required_gates = false; \
-             add an options route with executor and verifier profiles",
-        )?;
-        // The gates added to plans that change code need their routes now,
-        // not when a plan reaches them.
-        if self.policy.required_gates {
-            for kind in crate::lean::tasks::GATE_KINDS {
-                require(
-                    self.routing.contains_key(&kind),
-                    &format!(
-                        "policy.required_gates adds {kind:?} tasks to plans that change code, \
-                         but there is no route for that work: add one or set required_gates = false"
-                    ),
-                )?;
-            }
-        }
-        Ok(())
+        validation::validate(self)
     }
 
     fn profile(&self, name: &str) -> Result<&Profile> {
@@ -450,6 +338,38 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configuration_errors_explain_location_and_repair_without_values() {
+        let example = include_str!("../examples/antislop.toml");
+        for (source, expected, repair) in [
+            (
+                example.replace("effort = \"high\"", "effort = \"secret-value\""),
+                "unsupported value",
+                "allowed values",
+            ),
+            (
+                example.replace("[policy]", "[policy]\nunknown_setting = \"secret-value\""),
+                "unknown field `unknown_setting`",
+                "remove the unknown field",
+            ),
+            (
+                example.replace("max_parallel = 4", "max_parallel = 0"),
+                "policy.max_parallel",
+                "positive integer",
+            ),
+        ] {
+            let error = Config::from_toml(&source).unwrap_err().to_string();
+            assert!(error.contains(expected), "{error}");
+            assert!(error.contains(repair), "{error}");
+            assert!(!error.contains("secret-value"), "{error}");
+        }
+        let error = Config::from_toml("schema_version = [")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("line 1, column"), "{error}");
+        assert!(error.contains("to fix:"), "{error}");
+    }
 
     #[test]
     fn effort_levels_reach_the_cli() {
@@ -622,7 +542,7 @@ mod tests {
             .executor = "execution".into();
         let error = config.validate().unwrap_err().to_string();
         assert!(
-            error.contains("orchestration routing must match"),
+            error.contains("routing.orchestration.executor must match orchestrator.profile"),
             "{error}"
         );
     }
