@@ -433,12 +433,13 @@ impl Drop for Session {
         }
         let _ = self.child.wait();
         if let Some((core, pid)) = &self.registration
-            && let Some(core) = core.upgrade() {
-                let _ = core
-                    .store
-                    .db()
-                    .execute("DELETE FROM native_processes WHERE pid=?1", [*pid]);
-            }
+            && let Some(core) = core.upgrade()
+        {
+            let _ = core
+                .store
+                .db()
+                .execute("DELETE FROM native_processes WHERE pid=?1", [*pid]);
+        }
     }
 }
 

@@ -584,6 +584,34 @@ echo '{"type":"turn.completed"}'
         let config = (*core.config_snapshot()).clone();
         drop(core);
         let core = Core::open(&state, config).unwrap();
+        let receipt = core
+            .store
+            .start_turn(
+                &conversation,
+                &format!("worker:{}", task.id),
+                "codex",
+                0,
+                Some(&task.plan_id),
+            )
+            .unwrap();
+        core.store
+            .append_event(
+                &conversation,
+                Some(&receipt.id),
+                Some(&task.plan_id),
+                "turn_started",
+                &json!({"mail_only":true}),
+            )
+            .unwrap();
+        core.store
+            .append_event(
+                &conversation,
+                Some(&receipt.id),
+                Some(&task.plan_id),
+                "agent_final",
+                &json!({"text":"Mail receipt must not replace the report"}),
+            )
+            .unwrap();
         let handoff = core.round_handoff(&task.id, 2, &cwd).unwrap();
         assert_eq!(
             handoff.report,
