@@ -1,4 +1,4 @@
-# Local routing: Codex orchestrates; OpenCode via oMLX executes and verifies.
+# Local routing: Codex Sol 6.1 orchestrates; Codex Luna executes and verifies.
 schema_version = 1
 
 [workspace]
@@ -24,20 +24,24 @@ command = ["omlx", "launch", "opencode", "--model", "Qwen3.8-Flash-Next-Uncensor
 # Profiles select the provider, optional model and reasoning effort.
 # Effort: low, medium, high, xhigh (availability depends on the selected model).
 [profiles.orchestrator]
-provider = "claude"
-effort = "high"
+provider = "codex"
+model = "gpt-6.1-sol"
+effort = "low"
 
 [profiles.reasoning]
 provider = "codex"
-effort = "low"
+model = "gpt-6-luna"
+effort = "high"
 
 [profiles.execution]
 provider = "codex"
-effort = "low"
+model = "gpt-6-luna"
+effort = "high"
 
 [profiles.review]
-provider = "claude"
-effort = "low"
+provider = "codex"
+model = "gpt-6-luna"
+effort = "high"
 
 # Every task kind has a dedicated verifier assignment. Runtime creates separate
 # verifier agents/sessions; a shared profile never means a shared verifier agent.
