@@ -1135,6 +1135,10 @@ impl Details {
             }
             // No terminal to show: still attaching, failed, or an earlier
             // round whose session is only opened on request (it is resumed).
+            if active {
+                self.text_area = inner;
+                self.scroll = 0;
+            }
             let [_, composer_area] =
                 Layout::vertical([Constraint::Min(1), Constraint::Length(4.min(inner.height))])
                     .areas(inner);
