@@ -32,45 +32,9 @@ fn relations(
 ) -> Result<Vec<String>> {
     Ok(db.prepare("SELECT target FROM ledger_relations WHERE run_id=?1 AND entry_id=?2 AND version=?3 AND kind=?4 ORDER BY target")?.query_map(params![run,id,version,kind], |r| r.get(0))?.collect::<std::result::Result<_,_>>()?)
 }
-fn entries(db: &Connection, run: &str, revision: i64) -> Result<Vec<LedgerEntry>> {
-    let mut stmt = db.prepare("SELECT v.entry_id,v.version,v.spec_revision,v.source_id,v.start_byte,v.end_byte,v.original,v.interpretation,v.mandatory,v.position,v.disposition
-      FROM ledger_versions v JOIN ledger_entries e ON e.run_id=v.run_id AND e.id=v.entry_id
-      WHERE v.run_id=?1 AND v.spec_revision<=?2 AND v.version=(SELECT max(w.version) FROM ledger_versions w WHERE w.run_id=v.run_id AND w.entry_id=v.entry_id AND w.spec_revision<=?2) ORDER BY v.position,v.entry_id")?;
-    let rows = stmt
-        .query_map(params![run, revision], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, i64>(4)? as usize,
-                r.get::<_, i64>(5)? as usize,
-                r.get::<_, String>(6)?,
-                r.get::<_, String>(7)?,
-                r.get::<_, bool>(8)?,
-                r.get::<_, u32>(9)?,
-                r.get::<_, String>(10)?,
-            ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut sources = HashMap::<String, String>::new();
-    rows.into_iter().map(|(id,version,spec_revision,source_id,start,end,_original,interpretation,mandatory,position,disposition)| {
-        let criteria = db.prepare("SELECT id,text,mandatory,integration FROM ledger_criteria WHERE run_id=?1 AND entry_id=?2 AND version=?3 ORDER BY id")?.query_map(params![run,id,version], |r| Ok(Criterion{id:r.get(0)?,text:r.get(1)?,mandatory:r.get(2)?,integration:r.get(3)?}))?.collect::<std::result::Result<_,_>>()?;
-        let state=std::path::Path::new(db.path().unwrap_or("")).parent().ok_or_else(||invalid("ledger database has no source directory"))?;
-        if !sources.contains_key(&source_id) {sources.insert(source_id.clone(),source_text(db,run,&source_id,state)?);}
-        let original=SourceSpan{source_id:source_id.clone(),start,end}.text(&sources[&source_id])?.to_owned();
-        Ok(LedgerEntry{run_id:run.into(),version,spec_revision,original,status:"identified".into(),spec:EntrySpec{
-            source:SourceSpan{source_id,start,end}, interpretation,mandatory,position,
-            disposition:serde_json::from_value(serde_json::Value::String(disposition))?, criteria,
-            qualifiers:relations(db,run,&id,version,"qualifier")?,
-            parent:relations(db,run,&id,version,"parent")?.into_iter().next(),
-            depends_on:relations(db,run,&id,version,"dependency")?,
-            task_ids:relations(db,run,&id,version,"task")?,
-            implementation_owners:relations(db,run,&id,version,"implementer")?,
-            verification_owners:relations(db,run,&id,version,"verifier")?, id,
-        }})
-    }).collect()
-}
+mod entries;
+use entries::entries;
+
 fn source_text(
     db: &Connection,
     run: &str,
@@ -82,30 +46,40 @@ fn source_text(
         params![source, run],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
-    let text = if let Some(message) = message {
-        let encoded: String =
-            db.query_row("SELECT text FROM messages WHERE seq=?1", [message], |r| {
-                r.get(0)
-            })?;
-        crate::lean::content::Content::new(&state.join("core.db")).decode(&encoded)?
-    } else {
-        let locator = locator.ok_or_else(|| invalid("source has no locator"))?;
-        require(
-            locator == format!("sources/{hash}.txt"),
-            "invalid source artifact locator",
-        )?;
-        let path = state.join(locator);
-        require(
-            std::fs::symlink_metadata(&path)?.file_type().is_file(),
-            "source artifact must be a regular immutable file",
-        )?;
-        std::fs::read_to_string(path)?
+    let text = match message {
+        Some(seq) => message_source_text(db, seq, state)?,
+        None => document_source_text(state, locator, &hash)?,
     };
     require(
         crate::hash(text.as_bytes()) == hash,
         "source artifact hash mismatch",
     )?;
     Ok(text)
+}
+
+fn message_source_text(db: &Connection, seq: i64, state: &std::path::Path) -> Result<String> {
+    let encoded: String = db.query_row("SELECT text FROM messages WHERE seq=?1", [seq], |row| {
+        row.get(0)
+    })?;
+    crate::lean::content::Content::new(&state.join("core.db")).decode(&encoded)
+}
+
+fn document_source_text(
+    state: &std::path::Path,
+    locator: Option<String>,
+    hash: &str,
+) -> Result<String> {
+    let locator = locator.ok_or_else(|| invalid("source has no locator"))?;
+    require(
+        locator == format!("sources/{hash}.txt"),
+        "invalid source artifact locator",
+    )?;
+    let path = state.join(locator);
+    require(
+        std::fs::symlink_metadata(&path)?.file_type().is_file(),
+        "source artifact must be a regular immutable file",
+    )?;
+    Ok(std::fs::read_to_string(path)?)
 }
 
 fn event(
@@ -162,25 +136,40 @@ fn saved_proposal_diff(db: &Connection, id: &str, change: &LedgerChange) -> Resu
 }
 
 fn enqueue_requirements_resume(db: &Connection, change: &LedgerChange) -> Result<()> {
-    let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM requirements_resumptions WHERE operation_id=?1)",
-        [&change.operation_id],
-        |row| row.get(0),
-    )?;
-    if exists {
+    if requirements_resume_exists(db, change)? {
         return Ok(());
     }
     db.execute("INSERT INTO planning_runs VALUES(?1,?2) ON CONFLICT(conversation_id) DO UPDATE SET run_id=excluded.run_id", params![change.conversation,change.run_id])?;
-    let text = format!(
-        "The user approved the exact requirements change for run {}. Continue independent requirements verification and prepare the plan for review using this run. This approves requirements only; implementation still requires separate plan approval.",
-        change.run_id
-    );
-    db.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'requirements-approval',?2,?3)", params![change.conversation,text,now_ms()])?;
-    let seq = db.last_insert_rowid();
+    let text = resume_message(change);
+    let seq = insert_resume_message(db, change, &text)?;
     db.execute(
         "INSERT INTO requirements_resumptions VALUES(?1,?2)",
         params![change.operation_id, seq],
     )?;
+    emit_resume_events(db, change, seq, &text)
+}
+
+fn requirements_resume_exists(db: &Connection, change: &LedgerChange) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM requirements_resumptions WHERE operation_id=?1)",
+        [&change.operation_id],
+        |row| row.get(0),
+    )?)
+}
+
+fn resume_message(change: &LedgerChange) -> String {
+    format!(
+        "The user approved the exact requirements change for run {}. Continue independent requirements verification and prepare the plan for review using this run. This approves requirements only; implementation still requires separate plan approval.",
+        change.run_id
+    )
+}
+
+fn insert_resume_message(db: &Connection, change: &LedgerChange, text: &str) -> Result<i64> {
+    db.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'requirements-approval',?2,?3)", params![change.conversation,text,now_ms()])?;
+    Ok(db.last_insert_rowid())
+}
+
+fn emit_resume_events(db: &Connection, change: &LedgerChange, seq: i64, text: &str) -> Result<()> {
     event(
         db,
         &change.conversation,

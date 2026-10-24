@@ -1,4 +1,199 @@
 use super::*;
+use crate::lean::store::Task;
+
+struct LedgerReview<'a> {
+    conversation: &'a str,
+    run_id: &'a str,
+    revision: i64,
+    kind: &'a str,
+    producer: &'a str,
+    verifier: &'a str,
+    fingerprint: &'a str,
+    approved: bool,
+    note: &'a str,
+}
+
+fn prior_covered_criteria(store: &Store, prior: &[Task], plan: &str) -> Result<HashSet<String>> {
+    let mut covered = HashSet::new();
+    for task in prior
+        .iter()
+        .filter(|task| task.plan_id != plan && task.status == "approved")
+    {
+        if store.assert_task_inputs(task).is_ok() {
+            covered.extend(serde_json::from_value::<TaskSpec>(task.spec.clone())?.criterion_ids);
+        }
+    }
+    Ok(covered)
+}
+
+fn bind_current_tasks(
+    tx: &rusqlite::Transaction<'_>,
+    run: &str,
+    tasks: &[Task],
+    all: &[LedgerEntry],
+    covered: &mut HashSet<String>,
+) -> Result<()> {
+    for task in tasks {
+        bind_task_inputs(tx, run, task, all, covered)?;
+    }
+    Ok(())
+}
+
+fn bind_task_inputs(
+    tx: &rusqlite::Transaction<'_>,
+    run: &str,
+    task: &Task,
+    all: &[LedgerEntry],
+    covered: &mut HashSet<String>,
+) -> Result<()> {
+    let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
+    super::validate_task_links(&spec, all)?;
+    covered.extend(spec.criterion_ids.iter().cloned());
+    tx.execute("INSERT INTO task_inputs(task_id,run_id) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET run_id=excluded.run_id", params![task.id,run])?;
+    tx.execute(
+        "DELETE FROM task_ledger_inputs WHERE task_id=?1",
+        [&task.id],
+    )?;
+    bind_requirement_inputs(tx, &task.id, &spec.requirement_ids, all)
+}
+
+fn bind_requirement_inputs(
+    tx: &rusqlite::Transaction<'_>,
+    task: &str,
+    requirements: &[String],
+    all: &[LedgerEntry],
+) -> Result<()> {
+    for id in requirements.iter().collect::<HashSet<_>>() {
+        let entry = all
+            .iter()
+            .find(|entry| entry.spec.id == *id)
+            .ok_or_else(|| invalid("unknown ledger task input"))?;
+        tx.execute(
+            "INSERT INTO task_ledger_inputs VALUES(?1,?2,?3)",
+            params![task, id, entry.version],
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_assignments(all: &[LedgerEntry], current: &[Task], prior: &[Task]) -> Result<()> {
+    let approved: Vec<_> = prior
+        .iter()
+        .filter(|task| task.status == "approved")
+        .collect();
+    for entry in all
+        .iter()
+        .filter(|entry| entry.spec.disposition == Disposition::Active)
+    {
+        for assigned in &entry.spec.task_ids {
+            require(
+                assignment_is_present(assigned, &entry.spec.id, current, &approved),
+                &format!(
+                    "ledger assignment {} -> {assigned} is not honored by the task plan",
+                    entry.spec.id
+                ),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn assignment_is_present(
+    assigned: &str,
+    requirement: &str,
+    current: &[Task],
+    prior: &[&Task],
+) -> bool {
+    current.iter().chain(prior.iter().copied()).any(|task| {
+        (task.id == assigned || task.spec["id"].as_str() == Some(assigned))
+            && serde_json::from_value::<TaskSpec>(task.spec.clone())
+                .is_ok_and(|spec| spec.requirement_ids.iter().any(|id| id == requirement))
+    })
+}
+
+fn persist_review(tx: &rusqlite::Transaction<'_>, review: &LedgerReview<'_>) -> Result<()> {
+    validate_review(tx, review)?;
+    insert_review(tx, review)?;
+    event(
+        tx,
+        review.conversation,
+        "ledger_review",
+        &serde_json::json!({"run":review.run_id,"revision":review.revision,"kind":review.kind,"approved":review.approved}),
+    )
+}
+
+fn validate_review(tx: &rusqlite::Transaction<'_>, review: &LedgerReview<'_>) -> Result<()> {
+    validate_review_session(tx, review)?;
+    validate_review_coverage(tx, review)
+}
+
+fn validate_review_session(
+    tx: &rusqlite::Transaction<'_>,
+    review: &LedgerReview<'_>,
+) -> Result<()> {
+    let current = run(tx, review.conversation, review.run_id)?.spec_revision;
+    require(
+        current == review.revision,
+        "review refers to an old spec revision",
+    )?;
+    require(
+        matches!(review.kind, "extraction" | "audit" | "options"),
+        "unknown ledger review kind",
+    )?;
+    require(!review.note.trim().is_empty(), "review needs an assessment")?;
+    independent(tx, review.producer, review.verifier)?;
+    require(
+        review_turns_bound(tx, review)?,
+        "review sessions are not bound to this run revision and phase",
+    )
+}
+
+fn review_turns_bound(tx: &rusqlite::Transaction<'_>, review: &LedgerReview<'_>) -> Result<bool> {
+    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_turns p JOIN ledger_turns v ON p.run_id=v.run_id WHERE p.turn_id=?1 AND v.turn_id=?2 AND p.run_id=?3 AND v.spec_revision=?4 AND p.phase=?5 AND v.phase=?5)", params![review.producer,review.verifier,review.run_id,review.revision,review.kind], |row| row.get(0))?)
+}
+
+fn validate_review_coverage(
+    tx: &rusqlite::Transaction<'_>,
+    review: &LedgerReview<'_>,
+) -> Result<()> {
+    let uncovered = review_sources_uncovered(tx, review)?;
+    require(
+        !uncovered,
+        "source set changed during review; repeat against all sources",
+    )?;
+    let (producer_conversation, producer_role) = review_producer(tx, review.producer)?;
+    let verifier_role: String = tx.query_row(
+        "SELECT role FROM turns WHERE id=?1",
+        [review.verifier],
+        |row| row.get(0),
+    )?;
+    require(
+        producer_conversation == review.conversation
+            && producer_role == format!("requirements-{}-analyst", review.kind)
+            && verifier_role == format!("requirements-{}-verifier", review.kind),
+        "review author is not authorized for this run and phase",
+    )
+}
+
+fn review_sources_uncovered(
+    tx: &rusqlite::Transaction<'_>,
+    review: &LedgerReview<'_>,
+) -> Result<bool> {
+    Ok(tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_sources s WHERE s.run_id=?1 AND (NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=?2 AND c.source_id=s.id) OR NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=?3 AND c.source_id=s.id)))", params![review.run_id,review.producer,review.verifier], |row| row.get(0))?)
+}
+
+fn review_producer(tx: &rusqlite::Transaction<'_>, producer: &str) -> Result<(String, String)> {
+    Ok(tx.query_row(
+        "SELECT conversation_id,role FROM turns WHERE id=?1",
+        [producer],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?)
+}
+
+fn insert_review(tx: &rusqlite::Transaction<'_>, review: &LedgerReview<'_>) -> Result<()> {
+    tx.execute("INSERT INTO ledger_reviews(run_id,spec_revision,kind,producer_turn,verifier_turn,fingerprint,approved,note,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![review.run_id,review.revision,review.kind,review.producer,review.verifier,review.fingerprint,review.approved,review.note,now_ms()])?;
+    Ok(())
+}
 
 impl Store {
     pub fn task_generation(&self, task: &str) -> Result<i64> {
@@ -26,58 +221,12 @@ impl Store {
     pub fn bind_task_ledger(&self, conversation: &str, run_id: &str, plan: &str) -> Result<()> {
         let all = self.ledger_entries(conversation, run_id, None)?;
         let tasks = self.plan(plan)?;
-        let mut covered = HashSet::new();
         let prior = self.run_tasks(conversation, run_id)?;
-        for task in prior
-            .iter()
-            .filter(|t| t.plan_id != plan && t.status == "approved")
-        {
-            if self.assert_task_inputs(task).is_ok() {
-                let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
-                covered.extend(spec.criterion_ids);
-            }
-        }
+        let mut covered = prior_covered_criteria(self, &prior, plan)?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        for t in &tasks {
-            let spec: TaskSpec = serde_json::from_value(t.spec.clone())?;
-            super::validate_task_links(&spec, &all)?;
-            covered.extend(spec.criterion_ids.iter().cloned());
-            let ids: HashSet<_> = spec.requirement_ids.iter().collect();
-            tx.execute("INSERT INTO task_inputs(task_id,run_id) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET run_id=excluded.run_id",params![t.id,run_id])?;
-            tx.execute("DELETE FROM task_ledger_inputs WHERE task_id=?1", [&t.id])?;
-            for id in ids {
-                let e = all
-                    .iter()
-                    .find(|e| e.spec.id == *id)
-                    .ok_or_else(|| invalid("unknown ledger task input"))?;
-                tx.execute(
-                    "INSERT INTO task_ledger_inputs VALUES(?1,?2,?3)",
-                    params![t.id, id, e.version],
-                )?;
-            }
-        }
-        for e in &all {
-            if e.spec.disposition != Disposition::Active {
-                continue;
-            }
-            for assigned in &e.spec.task_ids {
-                require(
-                    tasks
-                        .iter()
-                        .chain(prior.iter().filter(|t| t.status == "approved"))
-                        .any(|t| {
-                            (t.id == *assigned || t.spec["id"].as_str() == Some(assigned))
-                                && serde_json::from_value::<TaskSpec>(t.spec.clone())
-                                    .is_ok_and(|s| s.requirement_ids.contains(&e.spec.id))
-                        }),
-                    &format!(
-                        "ledger assignment {} -> {assigned} is not honored by the task plan",
-                        e.spec.id
-                    ),
-                )?;
-            }
-        }
+        bind_current_tasks(&tx, run_id, &tasks, &all, &mut covered)?;
+        validate_assignments(&all, &tasks, &prior)?;
         super::validate_criterion_coverage(&all, &covered)?;
         tx.commit()?;
         Ok(())
@@ -97,63 +246,19 @@ impl Store {
     ) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let r = run(&tx, conversation, run_id)?;
-        require(
-            r.spec_revision == revision,
-            "review refers to an old spec revision",
-        )?;
-        require(
-            matches!(kind, "extraction" | "audit" | "options"),
-            "unknown ledger review kind",
-        )?;
-        require(!note.trim().is_empty(), "review needs an assessment")?;
-        independent(&tx, producer, verifier)?;
-        let bound: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_turns p JOIN ledger_turns v ON p.run_id=v.run_id WHERE p.turn_id=?1 AND v.turn_id=?2 AND p.run_id=?3 AND v.spec_revision=?4 AND p.phase=?5 AND v.phase=?5)",params![producer,verifier,run_id,revision,kind],|r|r.get(0))?;
-        require(
-            bound,
-            "review sessions are not bound to this run revision and phase",
-        )?;
-        let uncovered: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_sources s WHERE s.run_id=?1 AND (NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=?2 AND c.source_id=s.id) OR NOT EXISTS(SELECT 1 FROM ledger_source_coverage c WHERE c.turn_id=?3 AND c.source_id=s.id)))",params![run_id,producer,verifier],|r|r.get(0))?;
-        require(
-            !uncovered,
-            "source set changed during review; repeat against all sources",
-        )?;
-        let (pc, pr): (String, String) = tx.query_row(
-            "SELECT conversation_id,role FROM turns WHERE id=?1",
-            [producer],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        let vr: String = tx.query_row("SELECT role FROM turns WHERE id=?1", [verifier], |r| {
-            r.get(0)
-        })?;
-        require(
-            pc == conversation
-                && pr == format!("requirements-{kind}-analyst")
-                && vr == format!("requirements-{kind}-verifier"),
-            "review author is not authorized for this run and phase",
-        )?;
-        tx.execute(
-                "INSERT INTO ledger_reviews(run_id,spec_revision,kind,producer_turn,verifier_turn,fingerprint,approved,note,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                params![
-                    run_id,
-                    revision,
-                    kind,
-                    producer,
-                    verifier,
-                    fingerprint,
-                    approved,
-                    note,
-                    now_ms()
-                ],
-            )?;
-        event(
-            &tx,
+        let record = LedgerReview {
             conversation,
-            "ledger_review",
-            &serde_json::json!({"run":run_id,"revision":revision,"kind":kind,"approved":approved}),
-        )?;
-        tx.commit()?;
-        Ok(())
+            run_id,
+            revision,
+            kind,
+            producer,
+            verifier,
+            fingerprint,
+            approved,
+            note,
+        };
+        persist_review(&tx, &record)?;
+        tx.commit().map_err(Into::into)
     }
     pub fn extraction_current(&self, conversation: &str, run_id: &str) -> Result<bool> {
         let db = self.db();

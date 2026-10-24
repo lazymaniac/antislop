@@ -10,15 +10,7 @@ impl Store {
             goal: goal.into(),
             spec_revision: 0,
             state: "active".into(),
-            start_message: {
-                let db = self.db();
-                let exists: bool = db.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM runs WHERE conversation_id=?1)",
-                    [conversation],
-                    |r| r.get(0),
-                )?;
-                db.query_row(if exists {"SELECT coalesce(max(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'"} else {"SELECT coalesce(min(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'"},[conversation],|r|r.get::<_,i64>(0))? as u64
-            },
+            start_message: run_start_message(self, conversation)?,
         };
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -131,4 +123,19 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+fn run_start_message(store: &Store, conversation: &str) -> Result<u64> {
+    let db = store.db();
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM runs WHERE conversation_id=?1)",
+        [conversation],
+        |row| row.get(0),
+    )?;
+    let query = if exists {
+        "SELECT coalesce(max(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'"
+    } else {
+        "SELECT coalesce(min(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'"
+    };
+    Ok(db.query_row(query, [conversation], |row| row.get::<_, i64>(0))? as u64)
 }

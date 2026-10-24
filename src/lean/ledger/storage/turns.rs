@@ -44,36 +44,13 @@ impl Store {
     ) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let r = run(&tx, conversation, run_id)?;
-        require(
-            revision <= r.spec_revision && revision >= 0,
-            "invalid ledger turn revision",
-        )?;
-        let owner: String = tx.query_row(
-            "SELECT conversation_id FROM turns WHERE id=?1",
-            [turn],
-            |r| r.get(0),
-        )?;
-        require(
-            owner == conversation,
-            "turn belongs to another conversation",
-        )?;
+        validate_turn_revision(&tx, conversation, run_id, revision)?;
+        validate_turn_owner(&tx, conversation, turn)?;
         tx.execute(
             "INSERT INTO ledger_turns VALUES(?1,?2,?3,?4)",
             params![turn, run_id, revision, phase],
         )?;
-        for source in sources {
-            let belongs: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM ledger_sources WHERE id=?1 AND run_id=?2)",
-                params![source, run_id],
-                |r| r.get(0),
-            )?;
-            require(belongs, "source belongs to another run")?;
-            tx.execute(
-                "INSERT INTO ledger_source_coverage VALUES(?1,?2)",
-                params![turn, source],
-            )?;
-        }
+        record_source_coverage(&tx, turn, run_id, sources)?;
         tx.commit()?;
         Ok(())
     }
@@ -187,4 +164,54 @@ impl Store {
         run(&db, conversation, run_id)?;
         Ok(db.prepare("SELECT t.id,t.plan_id,json_extract(t.spec,'$.id'),json_extract(t.spec,'$.title'),t.status,i.generation,l.version FROM task_ledger_inputs l JOIN task_inputs i ON i.task_id=l.task_id JOIN tasks t ON t.id=i.task_id WHERE i.run_id=?1 AND l.entry_id=?2 ORDER BY t.created_ms DESC,t.rowid DESC")?.query_map(params![run_id,entry],|r|Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"plan":r.get::<_,String>(1)?,"task":r.get::<_,String>(2)?,"title":r.get::<_,String>(3)?,"status":r.get::<_,String>(4)?,"generation":r.get::<_,i64>(5)?,"entry_version":r.get::<_,i64>(6)?})))?.collect::<std::result::Result<_,_>>()?)
     }
+}
+
+fn validate_turn_revision(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    run_id: &str,
+    revision: i64,
+) -> Result<()> {
+    let current = run(tx, conversation, run_id)?.spec_revision;
+    require(
+        (0..=current).contains(&revision),
+        "invalid ledger turn revision",
+    )
+}
+
+fn validate_turn_owner(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    turn: &str,
+) -> Result<()> {
+    let owner: String = tx.query_row(
+        "SELECT conversation_id FROM turns WHERE id=?1",
+        [turn],
+        |row| row.get(0),
+    )?;
+    require(
+        owner == conversation,
+        "turn belongs to another conversation",
+    )
+}
+
+fn record_source_coverage(
+    tx: &rusqlite::Transaction<'_>,
+    turn: &str,
+    run: &str,
+    sources: &[String],
+) -> Result<()> {
+    for source in sources {
+        let belongs: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ledger_sources WHERE id=?1 AND run_id=?2)",
+            params![source, run],
+            |row| row.get(0),
+        )?;
+        require(belongs, "source belongs to another run")?;
+        tx.execute(
+            "INSERT INTO ledger_source_coverage VALUES(?1,?2)",
+            params![turn, source],
+        )?;
+    }
+    Ok(())
 }
