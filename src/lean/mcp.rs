@@ -297,7 +297,7 @@ fn call(shared: &Shared, params: &Value) -> Value {
         params["arguments"]["turn"].as_str(),
         params["arguments"]["text"].as_str(),
     ) else {
-        return refuse("turn and text are required");
+        return refuse("turn and text are required: call finish_turn(turn, text)");
     };
     let Ok(mut state) = shared.state.lock() else {
         return refuse("gateway failed");

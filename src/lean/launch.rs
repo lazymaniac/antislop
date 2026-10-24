@@ -29,6 +29,19 @@ const CLAUDE_READ_ONLY_SHELL: [&str; 12] = [
     "wc",
 ];
 
+/// Variables a parent Claude Code session leaves in its children's environment;
+/// an agent that inherited them would take itself for a child of that session
+/// (and, for one, would not keep its own transcript, so could not be resumed).
+const PARENT_SESSION_ENV: [&str; 7] = [
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+];
+
 pub(crate) struct Launch {
     pub command: CommandBuilder,
     /// The CLI's own session identifier when it is known before the process
@@ -123,6 +136,9 @@ fn claude(
     gateway: &Gateway,
     read_only: bool,
 ) -> Option<String> {
+    for variable in PARENT_SESSION_ENV {
+        command.env_remove(variable);
+    }
     let config = json!({"mcpServers": {SERVER: {
         "type": "http",
         "url": gateway.url(),
@@ -336,6 +352,15 @@ mod tests {
             args[args.iter().position(|a| a == "--session-id").unwrap() + 1],
             id
         );
+    }
+
+    #[test]
+    fn claude_does_not_inherit_a_parent_sessions_markers() {
+        // SAFETY: no other test reads this variable.
+        unsafe { std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1") };
+        let gateway = Gateway::start().unwrap();
+        let launch = command(&spec(ProviderKind::Claude, Access::Write, None), &gateway).unwrap();
+        assert!(launch.command.get_env("CLAUDE_CODE_CHILD_SESSION").is_none());
     }
 
     #[test]
