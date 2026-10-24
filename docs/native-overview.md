@@ -36,8 +36,9 @@ typed is never retried automatically.
 | Agy | stdio bridge (`antislop mcp-bridge`) registered once by `antislop setup agy` | the conversation, added by the bridge | `--conversation <id>` |
 
 Claude's plan mode refuses MCP tools, so read-only Claude runs in the default
-mode without editing tools, with a short list of read-only shell commands
-allowed and everything else put to the person in the terminal.
+mode without editing tools. Its shell is a normal one, but runs in the
+operating system's sandbox with the working and extra directories write-protected
+(checked: `touch` and `>` there fail with "Operation not permitted").
 
 ## Interaction
 

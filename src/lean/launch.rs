@@ -12,23 +12,6 @@ use serde_json::{Value, json};
 /// Environment variable that carries the gateway token to Codex.
 const TOKEN_ENV: &str = "ANTISLOP_MCP_TOKEN";
 
-/// Read-only roles may look around with these shell commands without being
-/// asked; anything else is put to the human in the terminal.
-const CLAUDE_READ_ONLY_SHELL: [&str; 12] = [
-    "git status",
-    "git diff",
-    "git log",
-    "git show",
-    "ls",
-    "cat",
-    "rg",
-    "grep",
-    "find",
-    "head",
-    "tail",
-    "wc",
-];
-
 /// Variables a parent Claude Code session leaves in its children's environment;
 /// an agent that inherited them would take itself for a child of that session
 /// (and, for one, would not keep its own transcript, so could not be resumed).
@@ -149,16 +132,29 @@ fn claude(
     // any editing tool. A CLI's own subagents would be a team nobody verifies.
     let mut allowed = vec![format!("mcp__{SERVER}__{TOOL}")];
     let mut denied = vec!["Task", "Agent"];
+    allowed.push("Bash".into());
     if read_only {
         denied.extend(["Edit", "Write", "NotebookEdit"]);
-        allowed.extend(
-            CLAUDE_READ_ONLY_SHELL
-                .iter()
-                .map(|shell| format!("Bash({shell}:*)")),
-        );
+        // The shell is a normal one, but the operating system's sandbox keeps
+        // it from writing where the agent works.
+        let mut protected = vec![spec.cwd.clone()];
+        protected.extend(spec.add_dirs.iter().cloned());
+        let protected: Vec<String> = protected
+            .iter()
+            .flat_map(|dir| {
+                let resolved = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+                [dir.clone(), resolved]
+            })
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .collect();
+        let settings = json!({"sandbox": {
+            "enabled": true,
+            "autoAllowBashIfSandboxed": true,
+            "filesystem": {"denyWrite": protected}
+        }});
+        command.args(["--settings", &settings.to_string()]);
     } else {
         command.args(["--permission-mode", "acceptEdits"]);
-        allowed.push("Bash".into());
     }
     command.args(["--allowedTools", &allowed.join(",")]);
     command.args(["--disallowedTools", &denied.join(",")]);
@@ -346,7 +342,15 @@ mod tests {
         assert!(denied.contains("Edit") && denied.contains("Write") && denied.contains("Task"));
         let allowed = &args[args.iter().position(|a| a == "--allowedTools").unwrap() + 1];
         assert!(allowed.contains("mcp__antislop__finish_turn"));
-        assert!(allowed.contains("Bash(git diff:*)") && !allowed.split(',').any(|a| a == "Bash"));
+        assert!(allowed.split(',').any(|a| a == "Bash"));
+        let settings = &args[args.iter().position(|a| a == "--settings").unwrap() + 1];
+        let settings: Value = serde_json::from_str(settings).unwrap();
+        assert_eq!(settings["sandbox"]["enabled"], true);
+        assert_eq!(settings["sandbox"]["filesystem"]["denyWrite"][0], "/work");
+        assert!(
+            !words(&command(&spec(ProviderKind::Claude, Access::Write, None), &gateway).unwrap())
+                .contains(&"--settings".to_owned())
+        );
         let id = launch.session.unwrap();
         assert_eq!(
             args[args.iter().position(|a| a == "--session-id").unwrap() + 1],

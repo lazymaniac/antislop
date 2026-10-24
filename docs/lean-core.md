@@ -88,13 +88,13 @@ permissions are passed on each launch (`launch.rs`):
 | | read-only (orchestrator, verifier, analysis) | write (worker) |
 |---|---|---|
 | cwd | project (or the worktree being reviewed) | task worktree |
-| claude | `--mcp-config … --strict-mcp-config`, default mode, `--disallowedTools Task,Agent,Edit,Write,NotebookEdit`, shell limited to `git status/diff/log/show`, `ls`, `cat`, `rg`, `grep`, `find`, `head`, `tail`, `wc` (anything else asks the person in the terminal) | `--permission-mode acceptEdits`, shell allowed |
+| claude | `--mcp-config … --strict-mcp-config`, default mode, `--disallowedTools Task,Agent,Edit,Write,NotebookEdit`, a normal shell inside the operating system's sandbox (`--settings` with `denyWrite` on the working and extra directories) | `--permission-mode acceptEdits`, shell allowed |
 | codex | `-c mcp_servers.antislop.url=… -s read-only -C <dir>` | `-s danger-full-access` |
 | opencode | `OPENCODE_CONFIG_CONTENT` with the `antislop` agent and MCP server; `*` denied except read/search/web and the gateway | `*` allowed |
 | agy | `--mode plan`, gateway through the stdio bridge below | `--mode accept-edits --sandbox` |
 
 Claude's plan mode refuses MCP tools, so read-only Claude uses the default mode
-without editing tools. Codex gets the token in the environment
+without editing tools and the sandbox keeps its shell from writing in the project. Codex gets the token in the environment
 (`ANTISLOP_MCP_TOKEN`), never in its arguments. Extra scope directories go
 through `--add-dir`. Launcher commands (`["omlx", "launch", "opencode", …]`)
 are kept as the prefix of the CLI's arguments.
