@@ -205,15 +205,14 @@ impl Core {
             if let Some(identity) = &identity {
                 self.store.set_session(&turn.id, identity)?;
             }
-            let prompt_mail = inbox
+            let mut prompt_mail = inbox
                 .iter()
                 .filter(|mail| !history_mail.contains(&mail.id))
-                .cloned()
-                .collect::<Vec<_>>();
-            let mut text = if prompt_mail.is_empty() {
+                .peekable();
+            let mut text = if prompt_mail.peek().is_none() {
                 String::new()
             } else {
-                tasks::inbox_text(&prompt_mail)
+                tasks::inbox_text_from(prompt_mail)
             };
             text.push_str(&prompt(resume.is_none()));
             if resume.is_none()
