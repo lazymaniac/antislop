@@ -1,7 +1,8 @@
-use super::core_prompt_helpers::orchestrator_prompt;
 use super::*;
 mod context;
+mod prompt;
 use context::comment_context;
+use prompt::{PromptContext, orchestrator_prompt_text};
 
 impl Core {
     pub(in crate::lean) fn orchestrator_turn(
@@ -75,31 +76,24 @@ impl Core {
             serde_json::to_string(&graph.iter().map(|task| &task.spec).collect::<Vec<_>>())?;
         let history = self.store.recent_messages_through(conversation, answered)?;
         let Some(answer) = self.turn(setup, cancel, |first| {
-            let mut prompt = orchestrator_prompt(&project, first || answered == 0, &asked, &open);
-            if first && answered > 0 {
-                prompt.push_str("\nPrevious conversation context (most recent messages):\n");
-                for message in &history {
-                    prompt.push_str(&format!("{}: {}\n", message.author, tasks::bound(&message.text, 2048)));
-                }
-            }
-            prompt.push_str(&comment_context);
-            if editable_graph && !interviewing {
-                prompt.push_str(&format!(
-                    "\nEditable graph snapshot, base_plan={}:\n{}\nTo insert tasks or change dependencies, return a fenced ```graph JSON block with base_plan and tasks (complete specs of only added or updated tasks). Omitted nodes are preserved. Keep existing IDs. For example, to insert implementation between A and security/performance gates, add B depending on A and update those gates to depend on B. The runtime merges and validates the entire DAG. Before execution it stores a new immutable plan revision for review and approval. During execution it independently reviews the additive edit and applies it atomically within the approved requirements, preserving existing agents and results. Return either graph or plan, never both. During execution, existing task updates may change only depends_on, and only before that task has started. Add a new task for other changes. Never rewrite running or completed tasks. Historical graphs remain accessible through /plans.\n",
-                    graph[0].plan_id,
-                    graph_json
-                ));
-            }
-            if interviewing {
-                prompt.insert_str(0, "\nSESSION PHASE: INTERVIEW. This overrides any instruction to propose a plan. Ask concise concrete questions in the user's language to establish the goal, scope, constraints, exclusions and observable acceptance criteria. Use answers already given; do not repeat questions. Even a self-contained request needs a requirements checkpoint. Ask one question at a time using a fenced ```question JSON block: {\"id\":\"scope\",\"context\":\"Why this decision matters\",\"question\":\"What should we build?\",\"options\":[{\"label\":\"Option A\",\"description\":\"Tradeoff\"},{\"label\":\"Option B\",\"description\":\"Tradeoff\"}]}. Offer 2–6 concrete options, put the recommended option first, mark its label as recommended in the user's language and explain its tradeoff. Do not include an Other option: the UI always supplies a custom answer field. Do not combine a question with the requirements checkpoint in the same answer. When no more questions are needed, end with a fenced ```requirements Markdown summary containing those agreed requirements and any explicit assumptions. This completes the interview. In supervised mode, wait for explicit user approval before planning; in autonomous mode planning starts automatically. Do not emit a plan block, schedule work or implement anything. The UI offers approval of the requirements summary; the user can comment before proceeding.\n");
-            } else if let Some(workflow) = &workflow {
-                prompt.insert_str(0, &format!("\nSESSION PHASE: {}. Collected requirements:\n{}\nPrepare or revise the complete plan for review and comments. Never start implementation yourself; separate user plan approval is required. During implementation, follow progress and respond to results or questions; propose revisions for approval if necessary.\n", workflow.phase, workflow.summary));
-            }
-            if let Ok(Some(run)) = self.store.planning_run(conversation) {
-                prompt.push_str(&self.ledger_context(conversation, &run.id).unwrap_or_default());
-                prompt.push_str("\nThe runtime binds this plan to the active requirements run. Each task must include requirement_ids and criterion_ids. Every task serves at least one active requirement. Cover every mandatory criterion across the tasks; supporting tasks need not cover every criterion themselves. Use the reviewed implementation comparison and resolve its findings in the plan. Do not ask the user to copy run or option identifiers.\n");
-            }
-            prompt
+            orchestrator_prompt_text(
+                self,
+                conversation,
+                PromptContext {
+                    project: &project,
+                    first,
+                    answered,
+                    asked: &asked,
+                    open: &open,
+                    history: &history,
+                    comment_context: &comment_context,
+                    editable_graph,
+                    graph: &graph,
+                    graph_json: &graph_json,
+                    interviewing,
+                    workflow: workflow.as_ref(),
+                },
+            )
         })?
         else {
             return Ok(());
