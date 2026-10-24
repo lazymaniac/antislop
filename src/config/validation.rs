@@ -37,46 +37,54 @@ fn toml_diagnostic(message: &str) -> (String, &'static str) {
     } else if message.starts_with("missing field ") {
         (message.to_owned(), "add the required field to this table")
     } else if message.starts_with("unknown variant ") {
-        (
-            format!(
-                "unsupported value; {}",
-                message.rsplit_once(", expected ").map_or(
-                    "check the allowed values".to_owned(),
-                    |(_, expected)| format!("expected {expected}")
-                )
-            ),
-            "replace the value with one of the allowed values",
-        )
+        unsupported_variant(message)
     } else if let Some((_, expected)) = message.split_once(", expected ") {
-        (
-            format!("incorrect value or type; expected {expected}"),
-            "use the expected TOML type or value",
-        )
+        expected_type(expected)
     } else if message.starts_with("duplicate ") {
         (
             "duplicate configuration key or table".to_owned(),
             "remove or merge the duplicate definition",
         )
     } else {
-        // Parser diagnostics may quote arbitrary input. Keep their
-        // structural explanation while hiding quoted input fragments.
-        let mut quoted = false;
-        let mut reason = String::new();
-        for character in message.chars() {
-            if character == '`' {
-                quoted = !quoted;
-                if quoted {
-                    reason.push_str("<token>");
-                }
-            } else if !quoted && !character.is_control() {
-                reason.push(character);
-            }
-        }
-        (
-            format!("invalid TOML syntax: {reason}"),
-            "check quotes, brackets, separators and key/value assignments at this location",
-        )
+        syntax_diagnostic(message)
     }
+}
+
+fn unsupported_variant(message: &str) -> (String, &'static str) {
+    let expectation = message.rsplit_once(", expected ").map_or_else(
+        || "check the allowed values".to_owned(),
+        |(_, expected)| format!("expected {expected}"),
+    );
+    (
+        format!("unsupported value; {expectation}"),
+        "replace the value with one of the allowed values",
+    )
+}
+
+fn expected_type(expected: &str) -> (String, &'static str) {
+    (
+        format!("incorrect value or type; expected {expected}"),
+        "use the expected TOML type or value",
+    )
+}
+
+fn syntax_diagnostic(message: &str) -> (String, &'static str) {
+    let mut quoted = false;
+    let mut reason = String::new();
+    for character in message.chars() {
+        if character == '`' {
+            quoted = !quoted;
+            if quoted {
+                reason.push_str("<token>");
+            }
+        } else if !quoted && !character.is_control() {
+            reason.push(character);
+        }
+    }
+    (
+        format!("invalid TOML syntax: {reason}"),
+        "check quotes, brackets, separators and key/value assignments at this location",
+    )
 }
 
 pub(super) fn validate(config: &Config) -> Result<()> {
@@ -130,53 +138,79 @@ fn validate_providers(config: &Config) -> Result<()> {
 
 fn validate_profiles(config: &Config) -> Result<()> {
     for (name, profile) in &config.profiles {
+        validate_profile(config, name, profile)?;
+    }
+    Ok(())
+}
+
+fn validate_profile(config: &Config, name: &str, profile: &super::Profile) -> Result<()> {
+    validate_profile_name(name)?;
+    validate_profile_values(name, profile)?;
+    let provider = config.providers.get(&profile.provider).ok_or_else(|| {
+        Error::Invalid(format!(
+            "profiles.{name:?}.provider: profile refers to an unconfigured provider; \
+             add the matching [providers.<name>] table or select a configured provider"
+        ))
+    })?;
+    let (binary, _) = resolve_command(provider, profile)?;
+    require(
+        binary.to_str().is_some_and(nonempty_text),
+        "resolved profile binary must be a nonempty Unicode path without control characters",
+    )
+}
+
+fn validate_profile_name(name: &str) -> Result<()> {
+    require(
+        identifier(name),
+        &format!(
+            "profiles.{name:?}: profile name is invalid; rename it using only letters, digits, underscores or hyphens"
+        ),
+    )
+}
+
+fn validate_profile_values(name: &str, profile: &super::Profile) -> Result<()> {
+    validate_model(name, profile)?;
+    validate_profile_binary(name, profile)?;
+    validate_profile_command(name, profile)?;
+    require(
+        profile.args.iter().all(|arg| nonempty_text(arg)),
+        &format!(
+            "profiles.{name:?}: args must be nonempty and contain no control characters; remove or replace invalid arguments"
+        ),
+    )
+}
+
+fn validate_model(name: &str, profile: &super::Profile) -> Result<()> {
+    require(
+        profile
+            .model
+            .as_ref()
+            .is_none_or(|model| nonempty_text(model)),
+        &format!(
+            "profiles.{name:?}: model must be nonempty and contain no control characters; set a valid model name or remove model"
+        ),
+    )
+}
+
+fn validate_profile_binary(name: &str, profile: &super::Profile) -> Result<()> {
+    if let Some(bin) = &profile.binary {
         require(
-            identifier(name),
+            bin.to_str().is_some_and(nonempty_text),
             &format!(
-                "profiles.{name:?}: profile name is invalid; rename it using only letters, digits, underscores or hyphens"
+                "profiles.{name:?}: binary must be a nonempty Unicode path without control characters; replace binary with a valid executable path"
             ),
         )?;
+    }
+    Ok(())
+}
+
+fn validate_profile_command(name: &str, profile: &super::Profile) -> Result<()> {
+    if let Some(cmd) = &profile.command {
         require(
-            profile
-                .model
-                .as_ref()
-                .is_none_or(|model| nonempty_text(model)),
+            !cmd.0.is_empty() && cmd.0.iter().all(|arg| nonempty_text(arg)),
             &format!(
-                "profiles.{name:?}: model must be nonempty and contain no control characters; set a valid model name or remove model"
+                "profiles.{name:?}: command tokens must be nonempty without control characters; provide an executable followed by valid arguments"
             ),
-        )?;
-        if let Some(bin) = &profile.binary {
-            require(
-                bin.to_str().is_some_and(nonempty_text),
-                &format!(
-                    "profiles.{name:?}: binary must be a nonempty Unicode path without control characters; replace binary with a valid executable path"
-                ),
-            )?;
-        }
-        if let Some(cmd) = &profile.command {
-            require(
-                !cmd.0.is_empty() && cmd.0.iter().all(|arg| nonempty_text(arg)),
-                &format!(
-                    "profiles.{name:?}: command tokens must be nonempty without control characters; provide an executable followed by valid arguments"
-                ),
-            )?;
-        }
-        require(
-            profile.args.iter().all(|arg| nonempty_text(arg)),
-            &format!(
-                "profiles.{name:?}: args must be nonempty and contain no control characters; remove or replace invalid arguments"
-            ),
-        )?;
-        let provider = config.providers.get(&profile.provider).ok_or_else(|| {
-            Error::Invalid(format!(
-                "profiles.{name:?}.provider: profile refers to an unconfigured provider; \
-                 add the matching [providers.<name>] table or select a configured provider"
-            ))
-        })?;
-        let (binary, _) = resolve_command(provider, profile)?;
-        require(
-            binary.to_str().is_some_and(nonempty_text),
-            "resolved profile binary must be a nonempty Unicode path without control characters",
         )?;
     }
     Ok(())
@@ -184,38 +218,56 @@ fn validate_profiles(config: &Config) -> Result<()> {
 
 fn validate_routing(config: &Config) -> Result<()> {
     require_profile(config, "orchestrator.profile", &config.orchestrator.profile)?;
-    for (kind, route) in &config.routing {
-        if *kind == WorkKind::Orchestration {
-            require(
-                route.executor == config.orchestrator.profile,
-                "routing.orchestration.executor must match orchestrator.profile; set both fields to the same configured profile",
-            )?;
-        }
-        for (role, name) in [("executor", &route.executor), ("verifier", &route.verifier)] {
-            let path = format!(
-                "routing.{}.{role}",
-                crate::lean::tasks::work_kind_name(*kind)
-            );
-            require_profile(config, &path, name)?;
-        }
-    }
+    validate_routes(config)?;
     require(
         config.routing.contains_key(&WorkKind::Options),
         "routing.options is required even when policy.required_gates = false; \
              add an options route with executor and verifier profiles",
     )?;
-    // The gates added to plans that change code need their routes now,
-    // not when a plan reaches them.
-    if config.policy.required_gates {
-        for kind in crate::lean::tasks::GATE_KINDS {
-            require(
-                config.routing.contains_key(&kind),
-                &format!(
-                    "policy.required_gates adds {kind:?} tasks to plans that change code, \
-                         but there is no route for that work: add one or set required_gates = false"
-                ),
-            )?;
-        }
+    require_gate_routes(config)
+}
+
+fn validate_routes(config: &Config) -> Result<()> {
+    for (kind, route) in &config.routing {
+        validate_orchestration_route(config, *kind, &route.executor)?;
+        validate_route_profiles(config, *kind, &route.executor, &route.verifier)?;
+    }
+    Ok(())
+}
+
+fn validate_orchestration_route(config: &Config, kind: WorkKind, executor: &str) -> Result<()> {
+    if kind == WorkKind::Orchestration {
+        require(
+            executor == config.orchestrator.profile,
+            "routing.orchestration.executor must match orchestrator.profile; set both fields to the same configured profile",
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_route_profiles(
+    config: &Config,
+    kind: WorkKind,
+    executor: &str,
+    verifier: &str,
+) -> Result<()> {
+    let kind = crate::lean::tasks::work_kind_name(kind);
+    require_profile(config, &format!("routing.{kind}.executor"), executor)?;
+    require_profile(config, &format!("routing.{kind}.verifier"), verifier)
+}
+
+fn require_gate_routes(config: &Config) -> Result<()> {
+    if !config.policy.required_gates {
+        return Ok(());
+    }
+    for kind in crate::lean::tasks::GATE_KINDS {
+        require(
+            config.routing.contains_key(&kind),
+            &format!(
+                "policy.required_gates adds {kind:?} tasks to plans that change code, \
+                     but there is no route for that work: add one or set required_gates = false"
+            ),
+        )?;
     }
     Ok(())
 }

@@ -1,210 +1,15 @@
 //! Explicit routing and workspace policy for the lean runtime.
 
+mod model;
+pub use model::*;
+#[cfg(test)]
+#[path = "config/tests.rs"]
+mod tests;
 mod validation;
 
 use crate::{Error, Result, require};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    Agy,
-    Codex,
-    Claude,
-    Gemini,
-    Opencode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Effort {
-    Low,
-    Medium,
-    High,
-    Xhigh,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkKind {
-    Orchestration, // Coordinates agents, task dependencies, and progress toward the overall goal.
-    Context, // Inspects project files to establish relevant context, contracts, and conventions.
-    Requirements, // Extracts requirements, acceptance criteria, and contradictions from the brief.
-    Options, // Compares realistic alternatives against common criteria and selects an approach.
-    Planning, // Breaks the goal into actionable tasks with dependencies and completion criteria.
-    Architecture, // Designs how components and interfaces fit the existing project structure.
-    Dependencies, // Evaluates libraries, their maintenance, and dependency license obligations.
-    Implementation, // Implements the requested behavior in the project's source files.
-    Refactoring, // Improves code structure while preserving existing behavior.
-    StaticAnalysis, // Runs configured linters and analyzers and investigates their findings.
-    TestDesign, // Defines test scenarios covering requirements, likely failures, and interacting inputs.
-    Testing,    // Implements and runs tests that verify behavior through meaningful assertions.
-    Security,   // Assesses relevant threats and investigates security vulnerabilities and fixes.
-    Performance, // Measures performance against a baseline and evaluates optimizations.
-    Integration, // Checks that combined changes build, pass checks, and work across module boundaries.
-    Research,    // Gathers evidence from sources to answer questions and resolve unknowns.
-    Writing, // Produces documentation or other written content consistent with the brief and sources.
-    Analysis, // Examines data and assumptions to derive reproducible conclusions.
-    Delivery, // Summarizes delivered results, usage instructions, limitations, and remaining risks.
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RoleKind {
-    Executor,
-    Verifier,
-    Orchestrator,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    Supervised,
-    Autonomous,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceMode {
-    InPlace,
-    /// Each writing task works in a private Git worktree stacked on its
-    /// dependencies' results; verified results are merged into the project.
-    TaskWorktrees,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkspaceConfig {
-    pub mode: WorkspaceMode,
-}
-
-impl Default for WorkspaceConfig {
-    fn default() -> Self {
-        Self {
-            mode: WorkspaceMode::TaskWorktrees,
-        }
-    }
-}
-
-impl ProviderKind {
-    /// Pass the requested effort to the CLI; model-specific support is checked
-    /// by the provider. Gemini has no native effort flag.
-    pub fn native_effort(self, effort: Effort) -> Option<&'static str> {
-        match self {
-            Self::Codex | Self::Agy | Self::Claude | Self::Opencode => Some(match effort {
-                Effort::Low => "low",
-                Effort::Medium => "medium",
-                Effort::High => "high",
-                Effort::Xhigh => "xhigh",
-            }),
-            Self::Gemini => None,
-        }
-    }
-}
-
-/// Command line tokens for launching an agent CLI, specified either as a
-/// whitespace-separated string (`"omlx launch codex"`) or an explicit array
-/// (`["omlx", "launch", "codex"]`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct CommandLine(pub Vec<String>);
-
-impl<'de> Deserialize<'de> for CommandLine {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Text(String),
-            Args(Vec<String>),
-        }
-        match Raw::deserialize(deserializer)? {
-            Raw::Text(text) => Ok(Self(text.split_whitespace().map(str::to_owned).collect())),
-            Raw::Args(args) => Ok(Self(args)),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProviderConfig {
-    #[serde(default)]
-    pub binary: PathBuf,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<CommandLine>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Profile {
-    pub provider: ProviderKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binary: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<CommandLine>,
-    pub model: Option<String>,
-    pub effort: Effort,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RoleRouting {
-    pub executor: String,
-    pub verifier: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OrchestratorConfig {
-    pub profile: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Policy {
-    pub mode: Mode,
-    pub local_write: bool,
-    pub local_commits: bool,
-    /// Every plan that changes code gets the required quality gates from the
-    /// predefined agent pool (refactoring, static analysis, testing, security and
-    /// performance audits, integration) it lacks.
-    #[serde(default = "default_required_gates")]
-    pub required_gates: bool,
-    /// Most tasks of a plan that run at the same time.
-    #[serde(default = "default_max_parallel")]
-    pub max_parallel: usize,
-}
-
-fn default_required_gates() -> bool {
-    true
-}
-
-fn default_max_parallel() -> usize {
-    4
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Config {
-    pub schema_version: u32,
-    #[serde(default)]
-    pub workspace: WorkspaceConfig,
-    pub providers: BTreeMap<ProviderKind, ProviderConfig>,
-    pub profiles: BTreeMap<String, Profile>,
-    pub orchestrator: OrchestratorConfig,
-    pub routing: BTreeMap<WorkKind, RoleRouting>,
-    pub policy: Policy,
-}
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -227,32 +32,34 @@ pub(crate) fn resolve_command(
     profile: &Profile,
 ) -> Result<(PathBuf, Vec<String>)> {
     if let Some(cmd) = &profile.command {
-        let Some((first, rest)) = cmd.0.split_first() else {
-            return Err(Error::Invalid(
-                "profile command must contain at least an executable".into(),
-            ));
-        };
-        let mut args = rest.to_vec();
-        args.extend(profile.args.iter().cloned());
-        return Ok((PathBuf::from(first), args));
+        return command_and_args(&cmd.0, &profile.args, "profile");
     }
     if let Some(bin) = &profile.binary {
         return Ok((bin.clone(), profile.args.clone()));
     }
     if let Some(cmd) = &provider.command {
-        let Some((first, rest)) = cmd.0.split_first() else {
-            return Err(Error::Invalid(
-                "provider command must contain at least an executable".into(),
-            ));
-        };
-        let mut args = rest.to_vec();
-        args.extend(provider.args.iter().cloned());
+        let (binary, mut args) = command_and_args(&cmd.0, &provider.args, "provider")?;
         args.extend(profile.args.iter().cloned());
-        return Ok((PathBuf::from(first), args));
+        return Ok((binary, args));
     }
     let mut args = provider.args.clone();
     args.extend(profile.args.iter().cloned());
     Ok((provider.binary.clone(), args))
+}
+
+fn command_and_args(
+    command: &[String],
+    extra_args: &[String],
+    source: &str,
+) -> Result<(PathBuf, Vec<String>)> {
+    let Some((binary, command_args)) = command.split_first() else {
+        return Err(Error::Invalid(format!(
+            "{source} command must contain at least an executable"
+        )));
+    };
+    let mut args = command_args.to_vec();
+    args.extend(extra_args.iter().cloned());
+    Ok((PathBuf::from(binary), args))
 }
 
 impl Config {
@@ -283,6 +90,30 @@ impl Config {
     /// session even when executor and verifier deliberately use the same CLI.
     pub fn resolve(&self, work_kind: WorkKind, role: RoleKind) -> Result<ResolvedProfile> {
         self.validate()?;
+        let name = self.profile_name(work_kind, role)?;
+        let profile = self.profile(name)?;
+        let provider = self
+            .providers
+            .get(&profile.provider)
+            .ok_or_else(|| Error::Invalid("unconfigured provider".into()))?;
+        let (binary, args) = resolve_command(provider, profile)?;
+        Ok(ResolvedProfile {
+            profile: name.into(),
+            provider: profile.provider,
+            binary,
+            args,
+            model: profile.model.clone(),
+            effort: profile.effort,
+            native_effort: profile
+                .provider
+                .native_effort(profile.effort)
+                .map(str::to_owned),
+            work_kind,
+            role,
+        })
+    }
+
+    fn profile_name(&self, work_kind: WorkKind, role: RoleKind) -> Result<&str> {
         let name = match role {
             RoleKind::Orchestrator => {
                 require(
@@ -308,26 +139,7 @@ impl Config {
             !(work_kind == WorkKind::Orchestration && role == RoleKind::Executor),
             "orchestration execution uses the explicit Orchestrator role",
         )?;
-        let profile = self.profile(name)?;
-        let provider = self
-            .providers
-            .get(&profile.provider)
-            .ok_or_else(|| Error::Invalid("unconfigured provider".into()))?;
-        let (binary, args) = resolve_command(provider, profile)?;
-        Ok(ResolvedProfile {
-            profile: name.clone(),
-            provider: profile.provider,
-            binary,
-            args,
-            model: profile.model.clone(),
-            effort: profile.effort,
-            native_effort: profile
-                .provider
-                .native_effort(profile.effort)
-                .map(str::to_owned),
-            work_kind,
-            role,
-        })
+        Ok(name)
     }
 }
 
@@ -335,311 +147,5 @@ impl Policy {
     /// Autonomous mode runs a checked plan without waiting for the user.
     pub fn automatic_progression(&self) -> bool {
         self.mode == Mode::Autonomous
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn configuration_errors_explain_location_and_repair_without_values() {
-        let example = include_str!("../examples/antislop.toml");
-        for (source, expected, repair) in [
-            (
-                example.replace("effort = \"high\"", "effort = \"secret-value\""),
-                "unsupported value",
-                "allowed values",
-            ),
-            (
-                example.replace("[policy]", "[policy]\nunknown_setting = \"secret-value\""),
-                "unknown field `unknown_setting`",
-                "remove the unknown field",
-            ),
-            (
-                example.replace("max_parallel = 4", "max_parallel = 0"),
-                "policy.max_parallel",
-                "positive integer",
-            ),
-        ] {
-            let error = Config::from_toml(&source).unwrap_err().to_string();
-            assert!(error.contains(expected), "{error}");
-            assert!(error.contains(repair), "{error}");
-            assert!(!error.contains("secret-value"), "{error}");
-        }
-        let error = Config::from_toml("schema_version = [")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("line 1, column"), "{error}");
-        assert!(error.contains("to fix:"), "{error}");
-    }
-
-    #[test]
-    fn effort_levels_reach_the_cli() {
-        let example = include_str!("../examples/antislop.toml");
-        for (name, expected) in [
-            ("low", "low"),
-            ("medium", "medium"),
-            ("high", "high"),
-            ("xhigh", "xhigh"),
-        ] {
-            let config = Config::from_toml(
-                &example.replace("effort = \"high\"", &format!("effort = \"{name}\"")),
-            )
-            .unwrap();
-            for provider in [
-                ProviderKind::Codex,
-                ProviderKind::Agy,
-                ProviderKind::Claude,
-                ProviderKind::Opencode,
-                ProviderKind::Gemini,
-            ] {
-                let mut config = config.clone();
-                let provider_config = config.providers[&ProviderKind::Codex].clone();
-                config.providers.insert(provider, provider_config);
-                config.profiles.get_mut("orchestrator").unwrap().provider = provider;
-                let resolved = config
-                    .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
-                    .unwrap();
-                assert_eq!(
-                    resolved.native_effort.as_deref(),
-                    (provider != ProviderKind::Gemini).then_some(expected)
-                );
-                assert_eq!(serde_json::to_value(resolved.effort).unwrap(), expected);
-            }
-        }
-        assert!(
-            Config::from_toml(&example.replace("effort = \"high\"", "effort = \"typo\"")).is_err()
-        );
-    }
-
-    #[test]
-    fn the_example_routes_every_kind_to_a_worker_and_a_verifier() {
-        let text = include_str!("../examples/antislop.toml");
-        let config = Config::from_toml(text).unwrap();
-        for kind in config
-            .routing
-            .keys()
-            .filter(|kind| **kind != WorkKind::Orchestration)
-        {
-            assert_eq!(
-                config.resolve(*kind, RoleKind::Executor).unwrap().work_kind,
-                *kind
-            );
-            let verifier = config.resolve(*kind, RoleKind::Verifier).unwrap();
-            assert_eq!(verifier.role, RoleKind::Verifier);
-        }
-        let orchestrator = config
-            .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
-            .unwrap();
-        assert_eq!(orchestrator.provider, ProviderKind::Codex);
-        assert_eq!(orchestrator.native_effort.as_deref(), Some("high"));
-    }
-
-    #[test]
-    fn profile_command_supports_platform_launchers_for_workers_and_verifiers() {
-        let text = include_str!("../examples/antislop.toml")
-            .replace(
-                "[profiles.execution]\nprovider = \"agy\"",
-                "[profiles.execution]\nprovider = \"codex\"\ncommand = \"omlx launch codex\"",
-            )
-            .replace(
-                "[profiles.review]\nprovider = \"agy\"",
-                "[profiles.review]\nprovider = \"codex\"\ncommand = [\"ollama\", \"launch\", \"codex\"]",
-            );
-        let config = Config::from_toml(&text).unwrap();
-        let orchestrator = config
-            .resolve(WorkKind::Orchestration, RoleKind::Orchestrator)
-            .unwrap();
-        assert_eq!(orchestrator.binary, PathBuf::from("codex"));
-        assert!(orchestrator.args.is_empty());
-
-        let worker = config
-            .resolve(WorkKind::Implementation, RoleKind::Executor)
-            .unwrap();
-        assert_eq!(worker.provider, ProviderKind::Codex);
-        assert_eq!(worker.binary, PathBuf::from("omlx"));
-        assert_eq!(worker.args, vec!["launch", "codex"]);
-        assert_eq!(worker.native_effort.as_deref(), Some("high"));
-
-        let verifier = config
-            .resolve(WorkKind::Implementation, RoleKind::Verifier)
-            .unwrap();
-        assert_eq!(verifier.provider, ProviderKind::Codex);
-        assert_eq!(verifier.binary, PathBuf::from("ollama"));
-        assert_eq!(verifier.args, vec!["launch", "codex"]);
-        assert_eq!(verifier.native_effort.as_deref(), Some("medium"));
-    }
-
-    #[test]
-    fn a_route_to_a_missing_profile_is_rejected() {
-        let mut config = Config::from_toml(include_str!("../examples/antislop.toml")).unwrap();
-        config.routing.get_mut(&WorkKind::Context).unwrap().executor = "nobody".into();
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn routing_assigns_a_shared_profile_to_different_work_kinds_and_roles() {
-        let mut config = Config::from_toml(include_str!("../examples/antislop.toml")).unwrap();
-        let shared = config.profiles["execution"].clone();
-        config.profiles = BTreeMap::from([("shared".into(), shared)]);
-        config.orchestrator.profile = "shared".into();
-        for route in config.routing.values_mut() {
-            route.executor = "shared".into();
-            route.verifier = "shared".into();
-        }
-        config.validate().unwrap();
-        for kind in config.routing.keys().copied() {
-            let worker_role = if kind == WorkKind::Orchestration {
-                RoleKind::Orchestrator
-            } else {
-                RoleKind::Executor
-            };
-            for role in [worker_role, RoleKind::Verifier] {
-                let resolved = config.resolve(kind, role).unwrap();
-                assert_eq!(resolved.profile, "shared");
-                assert_eq!(resolved.work_kind, kind);
-                assert_eq!(resolved.role, role);
-            }
-        }
-        // Profile reuse must not introduce implicit routes or invalid roles.
-        assert!(
-            config
-                .resolve(WorkKind::Implementation, RoleKind::Orchestrator)
-                .is_err()
-        );
-        assert!(
-            config
-                .resolve(WorkKind::Orchestration, RoleKind::Executor)
-                .is_err()
-        );
-        config.routing.remove(&WorkKind::Context);
-        assert!(
-            config
-                .resolve(WorkKind::Context, RoleKind::Executor)
-                .is_err()
-        );
-        assert!(
-            config
-                .resolve(WorkKind::Context, RoleKind::Verifier)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn assignments_still_require_existing_profiles_and_consistent_orchestration() {
-        let original = Config::from_toml(include_str!("../examples/antislop.toml")).unwrap();
-        let mut config = original.clone();
-        config.orchestrator.profile = "missing".into();
-        assert!(config.validate().is_err());
-
-        let mut config = original.clone();
-        config.routing.get_mut(&WorkKind::Context).unwrap().verifier = "missing".into();
-        assert!(config.validate().is_err());
-
-        let mut config = original;
-        config
-            .routing
-            .get_mut(&WorkKind::Orchestration)
-            .unwrap()
-            .executor = "execution".into();
-        let error = config.validate().unwrap_err().to_string();
-        assert!(
-            error.contains("routing.orchestration.executor must match orchestrator.profile"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn max_parallel_defaults_to_four_and_must_be_positive() {
-        let text = include_str!("../examples/antislop.toml");
-        let default = Config::from_toml(&text.replace("max_parallel = 4\n", "")).unwrap();
-        assert_eq!(default.policy.max_parallel, 4);
-        assert!(Config::from_toml(&text.replace("max_parallel = 4", "max_parallel = 0")).is_err());
-        let one = Config::from_toml(&text.replace("max_parallel = 4", "max_parallel = 1")).unwrap();
-        assert_eq!(one.policy.max_parallel, 1);
-    }
-
-    #[test]
-    fn obsolete_configuration_is_rejected_without_echoing_values() {
-        let example = include_str!("../examples/antislop.toml");
-        for (header, field) in [
-            ("[providers.codex]", "isolation = \"read_only\""),
-            ("[providers.codex]", "isolation_levels = [\"read_only\"]"),
-            ("[providers.codex]", "managed_home = \"/secret/home\""),
-            ("[providers.codex]", "effort_map = { high = \"secret\" }"),
-            ("[profiles.orchestrator]", "native_effort = \"secret\""),
-            (
-                "[profiles.orchestrator]",
-                "work_kinds = [\"orchestration\"]",
-            ),
-            ("[profiles.orchestrator]", "roles = [\"orchestrator\"]"),
-            ("[policy]", "revision = 1"),
-            ("[policy]", "local_checks = true"),
-            ("[orchestrator]", "review_checks_per_part = 24"),
-            ("", "role_providers = { executor = [\"agy\"] }"),
-        ] {
-            let source = if header.is_empty() {
-                format!("{field}\n{example}")
-            } else {
-                example.replace(header, &format!("{header}\n{field}"))
-            };
-            let error = Config::from_toml(&source).unwrap_err().to_string();
-            assert!(
-                error.contains("invalid TOML configuration"),
-                "{field}: {error}"
-            );
-            assert!(!error.contains("secret"), "{error}");
-        }
-        for effort in ["light", "standard", "deep"] {
-            assert!(
-                Config::from_toml(
-                    &example.replace("effort = \"high\"", &format!("effort = \"{effort}\""))
-                )
-                .is_err()
-            );
-        }
-        assert!(
-            Config::from_toml(&example.replace("mode = \"task-worktrees\"", "mode = \"worktree\""))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn options_route_is_required_even_without_required_gates() {
-        let text = include_str!("../examples/antislop.toml");
-        for required_gates in [true, false] {
-            let source = text.replace(
-                "required_gates = true",
-                &format!("required_gates = {required_gates}"),
-            );
-            let mut config = Config::from_toml(&source).unwrap();
-            let route = config.routing.remove(&WorkKind::Options).unwrap();
-            let error = config.validate().unwrap_err().to_string();
-            assert!(error.contains("routing.options is required"), "{error}");
-            config.routing.insert(WorkKind::Options, route);
-            assert!(config.validate().is_ok());
-        }
-    }
-
-    #[test]
-    fn required_gates_need_routes_for_the_work_they_add() {
-        let text = include_str!("../examples/antislop.toml");
-        assert!(Config::from_toml(text).is_ok());
-        // Find the first route table of a gate kind and take it away.
-        let header = text
-            .lines()
-            .find(|line| line.starts_with("[routing.") && line.contains("static_analysis"))
-            .expect("the example routes static analysis");
-        let start = text.find(header).unwrap();
-        let end = text[start + header.len()..]
-            .find("\n[")
-            .map_or(text.len(), |at| start + header.len() + at);
-        let without = format!("{}{}", &text[..start], &text[end..]);
-        let error = Config::from_toml(&without).unwrap_err().to_string();
-        assert!(error.contains("required_gates"), "{error}");
-        // With the gates off, the route is not needed.
-        let off = without.replace("required_gates = true", "required_gates = false");
-        assert!(Config::from_toml(&off).is_ok());
     }
 }

@@ -1,0 +1,38 @@
+use super::core_feedback_helpers::review_json;
+
+#[path = "core_plan_proposal/helpers.rs"]
+mod helpers;
+use super::core_plan_helpers::{finalize_plan, planning_gaps};
+use super::*;
+
+impl Core {
+    /// Stores the plan and has it checked. A plan the verifier sends back
+    /// goes back to the orchestrator (a bounded number of times); otherwise it
+    /// is shown to the user with the verdict, and in autonomous mode a checked
+    /// plan starts at once.
+    pub(in crate::lean) fn propose(
+        self: &Arc<Self>,
+        conversation: &str,
+        project: &Path,
+        text: &str,
+        proposal: PlanProposal<'_>,
+        addressed: Option<&[u64]>,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        let PlanProposal { config, specs } = proposal;
+        let specs = finalize_plan(specs.to_vec(), config.policy.required_gates);
+        let Some(plan) = self.prepare_plan(conversation, &specs, addressed, cancel)? else {
+            return Ok(());
+        };
+        let review = self.review_plan(conversation, project, &plan, &specs, config, cancel)?;
+        if cancel.load(Ordering::SeqCst) {
+            self.cancel_proposed_plan(&plan.id)?;
+            return Ok(());
+        }
+        if self.requeue_rejected_plan(conversation, &plan.id, &review)? {
+            return Ok(());
+        }
+        self.publish_plan(conversation, text, addressed, &plan, &specs, &review)?;
+        Ok(())
+    }
+}
