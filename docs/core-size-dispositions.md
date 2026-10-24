@@ -185,6 +185,18 @@ Compared the control flow and side effects in `recover_task_as`, `orchestrator_t
 
 The task-card scope lists `src/main.rs` and `src/transport.rs`, while the reviewed t2 ownership manifest assigns both to t5. Following the explicit instruction to follow that manifest, this worker left both paths untouched. The current diagnostic records the t5-owned transport violations `deserialize` (56 lines at line 16) and `read` (33 lines at line 119); main.rs has no current size violation.
 
+## Round 54: verifier follow-up
+
+Inspected the current worktree and the base-to-result change inventory. The worktree was clean before this follow-up. Re-ran `CARGO_TARGET_DIR=.antislop/target cargo test --locked --test lean_core`; all 21 tests passed. No production behavior or persistence change was made.
+
+The current diagnostic still records seven t4 Core size violations across four routines: `turn_inner` (366 lines, with `core_agent_turn.rs` at 370), `orchestrator_turn` (278), `run_task` (586, with `core_task_execution.rs` at 592), and `recover_task_as` (570, with `core_task_recovery.rs` at 576). These t4-owned decomposition tasks remain incomplete; no size exception is claimed.
+
+Read the linked checker entrypoint and implementation before running `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .`. It reproduced 261 repository violations with zero classification errors and the same seven t4 Core violations. The checker only reads source and prints its diagnostic; build output stayed under `.antislop/target`.
+
+The latest recorded `lean_plan`, `lean_recovery`, and `lean_writer` failures remain as characterized above. Their integration-test and support paths are verification-testing-owned under the t2 manifest. The recovery fixtures still fail during plan acceptance, before recovery dispatch. No evidence from these failures establishes a production defect, and no behavior fix or test-owned file change was made.
+
+The t2 V2 comparison does not cover per-turn allocation instrumentation. The allocator target/support and the required shared turn hook cross into verification-testing ownership; no sequential handoff is recorded. No allocation measurement is claimed. The current manual similarity notes do not establish completion of the full semantic-hardcoding, extraction-similarity, or dead-code/dependency audits. Those audits and the remaining size decomposition are outstanding.
+
 ## Behavioral fix record
 
 - During the Store task-row extraction, `task_by_id` deadlocked because the decoder reacquired the Store mutex while the query guard was live. Reproduced by `cargo test --locked --test lean_core`: the run stalled at `new_card_feedback_payloads_survive_storage_and_events` for over 60 seconds. The decoder now receives the held connection and reads `task_inputs` through it, preserving the original single-lock query behavior. Regression: `cargo test --locked --test lean_core new_card_feedback_payloads_survive_storage_and_events` passed (1 test). Intentional change: remove the accidental nested mutex acquisition introduced by this refactor; no API, row, event, serialization, transaction, or recovery contract changes.
