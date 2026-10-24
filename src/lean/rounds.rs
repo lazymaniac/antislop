@@ -552,6 +552,7 @@ echo '{"type":"turn.completed"}'
         .unwrap();
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        super::native::interactive_fixture(&script);
         let mut previous = HashMap::new();
         for round in 1..=2 {
             task.round = round;
@@ -828,6 +829,7 @@ echo '{"type":"turn.completed"}'
         .unwrap();
         std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        super::native::interactive_fixture(&binary);
         binary
     }
 
@@ -874,18 +876,15 @@ echo '{"type":"turn.completed"}'
         .unwrap()
     }
 
-    fn turn_prompt(core: &Core, conversation: &str, turn: &str) -> String {
-        core.store
-            .events_since(conversation, 0, 10000)
+    /// The prompt typed into the fixture CLI for `turn` (the fixture records
+    /// what it is given; the runtime keeps no copy).
+    fn turn_prompt(dir: &Path, turn: &str) -> String {
+        std::fs::read_to_string(dir.join("offline-codex.prompts"))
             .unwrap()
-            .into_iter()
-            .find(|event| {
-                event.turn_id.as_deref() == Some(turn)
-                    && event.kind == "agent"
-                    && event.payload["type"] == "prompt"
-            })
-            .unwrap()
-            .payload["text"]
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|record| record["turn"] == turn)
+            .unwrap()["prompt"]
             .as_str()
             .unwrap()
             .to_owned()
@@ -912,7 +911,7 @@ echo '{"type":"turn.completed"}'
         );
         let second = core.store.last_turn(&conversation, &role).unwrap().unwrap();
         assert_ne!(first.session_id, second.session_id);
-        let prompt = turn_prompt(&core, &conversation, &second.id);
+        let prompt = turn_prompt(dir.path(), &second.id);
         assert!(prompt.contains("Latest worker report (source round 1):\ncomplete report"));
         assert!(prompt.contains("Check everything"));
         assert_eq!(
@@ -982,7 +981,7 @@ echo '{"type":"turn.completed"}'
                 .unwrap()
                 .contains("context_length_exceeded: full handoff rejected by offline provider")
         );
-        assert!(turn_prompt(&core, &conversation, &turn.id).contains(&report));
+        assert!(turn_prompt(dir.path(), &turn.id).contains(&report));
         assert_eq!(
             core.store.task_round(&task.id, 1).unwrap()["report"],
             report
@@ -1065,7 +1064,7 @@ echo '{"type":"turn.completed"}'
                     latest.session_id.as_deref(),
                     Some("interrupted-round-two-session")
                 );
-                let prompt = turn_prompt(&core, &conversation, &latest.id);
+                let prompt = turn_prompt(dir.path(), &latest.id);
                 assert!(prompt.contains("Round: 3"));
                 assert!(prompt.contains("Check everything"));
                 if prefix == "worker" {
@@ -1211,7 +1210,7 @@ echo '{"type":"turn.completed"}'
                 execute(&core, &conversation, &task, profile.clone(), verifier).unwrap();
                 let next = core.store.last_turn(&conversation, &role).unwrap().unwrap();
                 assert_eq!(next.session_id, first.session_id);
-                assert!(!turn_prompt(&core, &conversation, &next.id).contains("Round handoff"));
+                assert!(!turn_prompt(dir.path(), &next.id).contains("Round handoff"));
             }
         }
     }

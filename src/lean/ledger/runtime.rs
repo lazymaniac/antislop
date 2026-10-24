@@ -531,6 +531,7 @@ print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':
 print(json.dumps({'type':'turn.completed','usage':{}}))
 "#).unwrap();
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::lean::native::interactive_fixture(&script);
             if repairs {
                 std::fs::write(dir.path().join("repair"), "").unwrap();
             }

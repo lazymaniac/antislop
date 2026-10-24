@@ -47,6 +47,10 @@ for i, arg in enumerate(args):
         sandbox = "danger-full-access" if args[i + 1] == "acceptEdits" else "read-only"
 
 
+# The launcher's own arguments come first, before the flags the daemon adds.
+markers = ("-c", "resume", "--mcp-config", "--agent")
+cut = min([args.index(m) for m in markers if m in args] or [len(args)])
+extra = args[:cut]
 model_args = []
 for i, arg in enumerate(args):
     if arg in ("-m", "--model") and i + 1 < len(args):
@@ -108,13 +112,13 @@ def turn_of(prompt):
 def run_legacy(prompt):
     # The earlier fixtures were called like the headless CLIs.
     if name.endswith("codex") or "codex" in name:
-        argv = [legacy, "exec"]
+        argv = [legacy] + extra + ["exec"]
         if resume:
             argv += ["resume", "-c", 'sandbox_mode="%s"' % sandbox] + model_args + [resume]
         else:
             argv += ["--json", "-C", os.getcwd(), "-s", sandbox] + model_args
     else:
-        argv = [legacy]
+        argv = [legacy] + extra
         if resume:
             argv += ["--resume", resume]
     argv.append(prompt)
@@ -141,6 +145,8 @@ def main():
         buffer = b""
         turn = turn_of(pasted)
         prompt = pasted.split("\n\n---\nWhen this turn is complete", 1)[0]
+        with open(here + ".prompts", "a") as record:
+            record.write(json.dumps({"turn": turn, "prompt": prompt}) + "\n")
         done = run_legacy(prompt)
         text, seen = answer_of(done.stdout)
         if done.returncode != 0 or text is None:
