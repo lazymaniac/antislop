@@ -40,8 +40,10 @@ mod feasibility;
 pub mod feedback;
 pub mod git;
 pub mod interview;
+mod launch;
 pub mod ledger;
 mod mail;
+pub mod mcp;
 pub mod native;
 #[cfg(test)]
 mod plan_tests;
@@ -191,31 +193,6 @@ const PLAN_VERIFIER: &str = "plan-verifier";
 const PLAN_LINT: &str = "plan-lint";
 /// Checks, after a plan ran, that the user's request was fully delivered.
 const AUDITOR: &str = "auditor";
-/// Diagnostic reasoning and tool output retained per turn; agent text is unlimited.
-const TURN_BUDGET: usize = 64 * 1024;
-
-/// What of a turn's stream is being recorded: fragments of text waiting to be
-/// stored as one block, and how much of the diagnostic budget is used.
-#[derive(Default)]
-struct TurnLog {
-    text: String,
-    stored_text: bool,
-    used: usize,
-    /// The notice that output is no longer stored was given.
-    marked: bool,
-}
-
-impl TurnLog {
-    /// Whether `weight` more bytes fit in the turn's budget.
-    fn admit(&mut self, weight: usize) -> bool {
-        if self.used + weight <= TURN_BUDGET {
-            self.used += weight;
-            return true;
-        }
-        false
-    }
-}
-
 const MAIL_TURNS: usize = 2;
 
 pub struct Core {

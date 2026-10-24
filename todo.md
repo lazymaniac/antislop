@@ -65,7 +65,7 @@ Runtime, daemon, adapters (§7, §9, §10, §13, §14):
 - [ ] request_id and idempotency keys for remaining state changes in daemon protocol (§9.3).
 - [ ] One active controlling client plus observer clients; control conflicts cannot use last-write-wins (§9.3).
 - [ ] Adapter contract: probe with capabilities, send with delivery_mode/receipt, interrupt with receipts distinguishing requests from confirmed termination (§9.4).
-- [ ] Codex app-server (JSON-RPC, steering) instead of exec --json (§9.5).
+- [x] Interactive CLIs in daemon terminals with one MCP return channel replace the headless JSON and app-server transports (§9.5).
 - [ ] Run/verify the gemini adapter against a real binary and complete the M0 version matrix (§16).
 - [ ] Permission profiles read-only, workspace-write, restricted-execution, extended-access; block sessions when restrictions cannot be enforced (§13).
 - [ ] Secret redaction in logs/artifacts, file permissions, retention policy (§13).

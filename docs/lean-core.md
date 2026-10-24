@@ -65,48 +65,58 @@ The runtime determines CLI access for each turn from its role and whether the
 task writes files, as shown below; `workspace.mode` determines where writers
 work.
 
-`lean::agent::run(spec, prompt, cancel, on_event)` starts one CLI turn and
-streams normalized events: `Session(id)`, `Text(delta)`, `Tool{name, detail}`,
-`Usage`, and finally `Done{text}` or a failure with the CLI's own message.
-Codex and OpenCode first probe for native attachment support. Supported direct
-executables use a daemon-owned app-server/serve backend; the interactive CLI
-and structured driver share its provider thread/session. Other providers,
-unsupported CLIs and custom launchers retain the JSON driver below.
-The native OpenCode driver submits `prompt_async` over HTTP and consumes the
-server's SSE stream directly, so attaching an interactive CLI cannot end its
-structured output reader. It normalizes incremental text, reasoning, tools,
-token usage, retry diagnostics and the final answer into the existing events.
-An unsupported server API also falls back before submitting a prompt. Once a
-native backend accepts a turn, a failure never resubmits it through another driver.
+Every agent is the provider's own interactive CLI running in a terminal (PTY)
+that the daemon owns (`native.rs`, `terminal.rs`). A turn is the prompt typed
+into that terminal (one bracketed paste, then Enter). There is one way back:
+each session has a loopback MCP gateway (`mcp.rs`, bearer token per session)
+with a single tool, `finish_turn(turn, text)`. The prompt ends with the turn's
+id and the instruction to call the tool with the complete final answer; the
+runtime hears nothing from the screen. A call for any turn but the open one is
+refused with a message the model can read, so a stale or repeated call cannot
+end a later turn. The gateway also tells the runtime that the CLI is up (it
+asks for the tool list while starting, before it takes a prompt), which is when
+the prompt is typed; a CLI that never connects (a trust question, a login) is
+reported with the last lines of its terminal after 60 s, and a turn that is
+not ended within 30 minutes (`ANTISLOP_TURN_TIMEOUT_SECS`) fails with the same
+screen excerpt. A failure after the prompt was typed is never retried
+automatically (the CLI may have acted); the raw reason stays visible and
+queued mail waits for the next wakeup.
+
+Nothing is configured in the CLIs' own files. The gateway and the per-role
+permissions are passed on each launch (`launch.rs`):
 
 | | read-only (orchestrator, verifier, analysis) | write (worker) |
 |---|---|---|
 | cwd | project (or the worktree being reviewed) | task worktree |
-| codex | `exec --json -s read-only -C <dir>` | `-s workspace-write` |
-| agy | `-p --output-format stream-json --mode plan` | `--mode accept-edits --sandbox` |
-| claude | `-p --output-format stream-json --permission-mode plan` | `acceptEdits` |
-| gemini | `-p --output-format stream-json --approval-mode plan` | `auto_edit` (no shell, no sandbox) |
-| opencode | `run --format json --agent antislop` (read/search/web tools, no edits or shell) | same transport, editing and shell enabled |
+| claude | `--mcp-config … --strict-mcp-config`, default mode, `--disallowedTools Task,Agent,Edit,Write,NotebookEdit`, shell limited to `git status/diff/log/show`, `ls`, `cat`, `rg`, `grep`, `find`, `head`, `tail`, `wc` (anything else asks the person in the terminal) | `--permission-mode acceptEdits`, shell allowed |
+| codex | `-c mcp_servers.antislop.url=… -s read-only -C <dir>` | `-s danger-full-access` |
+| opencode | `OPENCODE_CONFIG_CONTENT` with the `antislop` agent and MCP server; `*` denied except read/search/web and the gateway | `*` allowed |
+| agy | `--mode plan`, gateway through the stdio bridge below | `--mode accept-edits --sandbox` |
 
-Extra scope directories go through `--add-dir` (gemini: `--include-directories`). Follow-up turns resume the
-CLI's own session (`codex exec resume <id>`, `agy --conversation <id>`,
-`claude --resume <id>`, `gemini --resume <id>`, `opencode run --session <id>`).
-Task workers and verifiers only resume within one round. A new round gets fresh
-sessions and an explicit handoff from durable task history.
+Claude's plan mode refuses MCP tools, so read-only Claude uses the default mode
+without editing tools. Codex gets the token in the environment
+(`ANTISLOP_MCP_TOKEN`), never in its arguments. Extra scope directories go
+through `--add-dir`. Launcher commands (`["omlx", "launch", "opencode", …]`)
+are kept as the prefix of the CLI's arguments.
 
-OpenCode uses a dedicated primary agent in `OPENCODE_CONFIG_CONTENT`; other
-inline configuration is preserved. Native `task` subagents and interactive
-questions are denied. Additional scope paths are allowed through its
-`external_directory` permission; other external paths are denied. This is a
-CLI permission policy, not an OS sandbox. Effort maps to `--variant`
-(`low`/`medium`/`high`/`xhigh`), whose effect depends on the selected model/provider.
-The JSON parser records session IDs, completed tool calls and per-step token
-usage, and returns only the final model step's text after a `stop` finish.
-Tool-call steps alone, truncated responses and error events do not count as
-successful turns. Provider commands may prefix the transport, for example
-`["omlx", "launch", "opencode", "--model", "MODEL", "--"]`; the profile model
-should then be `omlx/MODEL`. Non-JSON launcher diagnostics are retained in a
-bounded tail so startup failures on stdout remain actionable.
+Agy accepts MCP servers only from its own list. `antislop setup agy` (run once
+by the user) registers `antislop mcp-bridge` there; each session passes its
+gateway to the bridge through `ANTISLOP_MCP_URL`/`ANTISLOP_MCP_TOKEN`, and the
+bridge forwards the CLI's JSON-RPC lines to it. Without that entry an Agy
+session fails at once with the instruction to run the setup. Gemini has no
+adapter yet and fails with a plain reason.
+
+The CLI's own session identifier is the only thing kept to resume it: Claude is
+given one (`--session-id`), Codex reports its thread in the call, Agy's bridge
+adds its conversation, and for OpenCode (which reports none) the session created
+in the directory since the process started and not owned by another live
+session is taken, never guessed among several. A live CLI keeps its own
+conversation across turns; a new round, a changed specification or a restart of
+the orchestrator starts a new one, and after a daemon restart the same role
+resumes with `--resume <id>` (`codex resume <id>`, `opencode --session <id>`,
+`agy --conversation <id>`). Task workers and verifiers only resume within one
+round. A new round gets fresh sessions and an explicit handoff from durable task
+history.
 
 Read-only modes are not a confinement: agy's plan mode was observed running
 `ls ..`. Writes are confined by the worktree and the CLI sandbox; reads are not.
@@ -284,16 +294,13 @@ Per-conversation reads include global config events while keeping private events
 scoped to their conversation. An agent's details show time when both ends are known.
 
 The daemon's `run_context` request takes `conversation` and `turn`, returning the
-context or `null` when none is recorded for that scope. Its backend is `cli`,
-`codex_app_server` or `opencode_server`. Provider thread, session and executing
-turn IDs are recorded separately. An executing backend failure disables
-automatic delivery retries; it never falls back and resubmits the prompt.
-
-Native CLIs connect through a managed gateway. Text submissions use the durable
-`send_to_agent` queue, role locks and round/run checks. Interrupts are recorded
-separately. Requests to change the managed thread, worktree, permissions or
-agent, and unsupported operations such as arbitrary CLI shell execution, return
-explicit errors. OpenCode events and session lists are restricted to its session.
+context or `null` when none is recorded for that scope. Its backend is `cli` (the
+interactive CLI; `codex_app_server` and `opencode_server` only appear in runs
+recorded before the terminal model). Provider thread and session IDs are recorded
+separately. A failure of an accepted turn disables automatic delivery retries; it
+never resubmits the prompt. User text for an agent still goes through the durable
+`send_to_agent` queue, role locks and round/run checks, and reaches the CLI as the
+next prompt; what a person types in the terminal itself goes straight to the CLI.
 The worker mailbox is checked under the integration lock before verification.
 
 `terminal_open`, `terminal_read`, `terminal_input`, `terminal_resize` and
@@ -307,10 +314,12 @@ draft with the raw error and a request to check the terminal before resending;
 subsequent queued text is recovered there as well. It is never submitted again
 automatically. Closing a view drains its accepted input before detaching.
 Detached or expired handles cannot send input. Detaching preserves the PTY and
-unfinished CLI input. Unopened idle backends are released and restored from
-provider history on demand; a missing worktree falls back to JSON inspection.
-Process tracking and sockets live under `.antislop/`; daemon restart interrupts
-in-flight turns and reaps its previous processes.
+unfinished CLI input. A session nobody uses or looks at for ten minutes is
+released and resumed on demand. The role `ROLE#rN` names the session of round N:
+opening it resumes that round's provider session read-only, which is the only way
+to look at a past session. There is no transcript or JSON view of a session; the
+provider keeps its own history. Process tracking lives under `.antislop/`; a
+daemon restart interrupts in-flight turns and reaps its previous processes.
 
 The emulator uses `portable-pty` and the published WezTerm terminal core. It has
 no scrollback, bounds dimensions to 500×200, and filters graphics/string controls
@@ -367,22 +376,19 @@ directory to run both. The socket is `<state>/core.sock`, or
   the single visible panel in compact mode); in the graph, arrows select the nearest node in that
   direction and Enter opens its details full screen. The tabs depend on the agent
   (`tabs_for` in `details.rs`): Overview (task, scope, goal, the verifier's focus and,
-  for a verifier, its risks, followed by both sessions' transcripts drawn like the CLI:
-  prompt, reasoning, commands with their output, answers; it follows the newest entry
-  until the user scrolls up, and `Enter` folds prompts), Messages (mail to and from it),
+  for a verifier, its risks, followed by each agent's own terminal), Messages (mail to and from it),
   Result (a worker's report and commits), Checks (each task obligation,
   risk and checklist item, with how the latest verdict accounted for it), Review (the
   plan verifier's and the auditor's latest verdict) and Comments. A dedicated conversation
-  inspector opens via `Ctrl+I` or palette (`Ctrl+P`). Within inspectors, `v` toggles between Readable
-  and Raw JSON view, `/` searches whole records (`DetailRecord`) with query highlighting, and per-tab
+  inspector opens via `Ctrl+I` or palette (`Ctrl+P`). Within inspectors, `/` searches whole records (`DetailRecord`) with query highlighting, and per-tab
   scroll and search memory is preserved across tab and conversation switches. Explicit notices state
   historical data gaps (`unavailable (CLI did not report them)`, `unknown`).
-  Current Codex/OpenCode Overview panels display their native terminal when
-  supported; older rounds retain their own JSON history. Two panels appear from
+  Every Overview panel displays its agent's terminal; an earlier round shows a
+  hint, and `o` resumes that round's session read-only. Two panels appear from
   80 columns; `Ctrl+W` changes the active panel outside terminal focus. `i` focuses
   the CLI and `Ctrl+]` returns to antislop. In terminal focus, Escape, Ctrl+C,
   paste and mouse events go to the CLI. Outside focus, `a` opens the existing
-  message composer, `h` switches to/from JSON history and `r` retries attachment.
+  message composer and `r` retries attachment.
   Existing drafts, search state, small-terminal guards, `NO_COLOR` and
   `ANTISLOP_ASCII` remain available.
   `/` in the graph finds an agent by role or task title; `@` on an empty draft or `Ctrl+P > Address a message`
@@ -629,9 +635,9 @@ kept per conversation, so switching back finds them as they were.
 
 ## Stages
 
-1. ✅ Store, agent adapters (codex, agy, claude; gemini added later from its
-   documented stream-json, both field spellings accepted, not yet run against
-   a real gemini binary), conversation with the
+1. ✅ Store, agent adapters (codex, claude, opencode and agy as interactive CLIs
+   in daemon terminals, ending turns through the MCP gateway; gemini has no
+   adapter), conversation with the
    orchestrator, `antislop chat` CLI. Accepted on a real run: the orchestrator
    answered "analyze the project architecture" by reading the project itself;
    a second message sent while the first ran was accepted at once and answered
@@ -681,7 +687,7 @@ kept per conversation, so switching back finds them as they were.
 
 | Design stage | Exit criterion | Where it is met |
 | --- | --- | --- |
-| M0: integration spike | Versions and limits documented; a transport chosen per CLI | [Agents](#agents) (one stream-JSON or `exec --json` transport per CLI, resume by the CLI's own session id). gemini is implemented from its documentation and has not run against a real binary. [m0/](m0/README.md) keeps the old runtime's first probes. |
+| M0: integration spike | Versions and limits documented; a transport chosen per CLI | [Agents](#agents) (one interactive terminal and one MCP return channel for every CLI, resume by the CLI's own session id). gemini has no adapter. [m0/](m0/README.md) keeps the old runtime's first probes. |
 | M1: local runtime | State recovered without losing approvals or doubling actions | Stages 1, 4 and 7; [acceptance](acceptance.md) scenarios 9, 10 and 16 |
 | M2: vertical slice | A task finished on evidence; a weak result rejected | Stages 2 and 3; scenarios 1 and 3 |
 | M2Q: quality contracts | A fake provider cannot close a task that skips a requirement, risk or gate | Stages 6 and 13 (verdict coverage of every obligation, final audit); scenarios 27–31 |
@@ -757,9 +763,8 @@ best effort for known inherited secrets and does not cover arbitrary transcript
 content.
 
 The t13 recheck finds task-scoped Checks invalidation and single-record task
-reads in this candidate. SessionCache reuses unchanged transcript records and
-LayoutCache avoids repeated JSON/search rendering and wrapping on idle redraws
-(covered by shared-record and wrapped-layout tests). Graph canvas and selection
+reads in this candidate. LayoutCache avoids repeated search rendering and wrapping
+on idle redraws (covered by wrapped-layout tests). Graph canvas and selection
 storage remain bounded by viewport area. Graph layout is still reconstructed,
 and the task endpoint still computes a Git freshness fingerprint; these are
 remaining baseline performance costs, not an assertion of a host-overload
@@ -916,7 +921,7 @@ Manual checks in a real terminal:
   OSC 52 depends on the terminal; silent rejection cannot be detected.
 - `/config`, editing, Ctrl+S, and reopening during an active session; new turns
   use changes without restarting the already working agent.
-- One task node during worker/verifier phases; both transcripts in Overview.
+- One task node during worker/verifier phases; both terminals in Overview.
 - Open Checks across rounds, same-round verdict changes, retry after read errors;
   old responses must not roll the view backward.
 
@@ -965,8 +970,6 @@ process-cleanup tests. Numbers identify lines in the new complete log.
 | `text_selection_integrates_chat_agent_details_plan_and_modal_isolation` | 556 | OK |
 | `tasks_sit_in_columns_by_dependency_depth_with_one_card_per_task` | 168 | OK |
 | `task_card_mouse_selection_uses_one_identity_for_both_phases` | 494 | OK |
-| `overview_includes_the_terminal_transcript_without_database_mirrors` | 489 | OK |
-| `overview_opens_at_latest_session_for_all_agent_roles` | 128 | OK |
 | `checks_three_rounds_ignore_reverse_ordered_old_replies` | 462 | OK |
 | `checks_refetch_on_task_verdict_in_the_same_round` | 463 | OK |
 | `checks_retry_failed_fetch_on_next_empty_event_batch` | 467 | OK |
@@ -1048,7 +1051,7 @@ whose recorded execution settings differ from the current profile.
 The persisted `turn_scopes`, `run_contexts` and execution event enforce this after daemon restart;
 orchestrator, plan verifier and code review session policies are unchanged.
 Native session rotation retires the old gateway, terminal and provider process.
-Historical provider identifiers and transcripts remain available for inspection.
+Historical provider identifiers remain available: the provider keeps the transcript, and an earlier round's session is opened by resuming it.
 
 Fresh task sessions receive the full task, latest complete worker report (without
 truncation), previous verifier findings and evidence, dependencies, current commit

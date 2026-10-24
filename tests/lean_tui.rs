@@ -1,3 +1,4 @@
+mod common;
 use antislop::lean::{
     comment_label,
     daemon::{Client, Request, socket},
@@ -3365,7 +3366,7 @@ fn test_inspector_conversation_switch_preserves_details_memory() {
 }
 
 #[test]
-fn test_inspector_whole_record_search_and_raw_view() {
+fn test_inspector_whole_record_search() {
     let mut details = Details::new("worker:t1".into());
     details.task = Some(json!({
         "id": "t1",
@@ -3408,215 +3409,6 @@ fn test_inspector_whole_record_search_and_raw_view() {
             .any(|(_, text)| text.contains("unique_key_12345")),
         "content must be included"
     );
-
-    // 3. Raw view toggle
-    details.raw = true;
-    details.query.clear();
-    let raw_lines = details.lines(&view);
-    assert!(
-        raw_lines
-            .iter()
-            .any(|(_, text)| text.contains('{') || text.contains('"')),
-        "raw view must render JSON structure"
-    );
-}
-
-#[test]
-fn test_inspector_explicit_missing_data_notices() {
-    let mut details = Details::new("worker:t1".into());
-    details.task = Some(json!({
-        "id": "t1",
-        "spec": {
-            "id": "t1",
-            "title": "Empty task",
-            "goal": "Testing checks",
-            "kind": "implementation",
-            "verifier": {
-                "focus": "correctness",
-                "risks": ["regression risk"]
-            }
-        },
-        "verdict": null
-    }));
-    let mut view = antislop::lean::tui::view::View::default();
-    view.tasks.push(antislop::lean::tui::view::TaskRow {
-        id: "t1".into(),
-        ..Default::default()
-    });
-
-    // Result -> explicit notices for missing report, artifacts, evidence
-    details.tab = antislop::lean::tui::details::RESULT;
-    let lines = details.lines(&view);
-    let all_text = lines
-        .iter()
-        .map(|(_, t)| t.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        all_text.contains("[no historical report data]"),
-        "must contain explicit missing report notice: {all_text}"
-    );
-    assert!(
-        all_text.contains("[historical data unavailable]"),
-        "must contain explicit missing artifacts notice: {all_text}"
-    );
-    assert!(
-        all_text.contains("[no attached evidence"),
-        "must contain explicit missing evidence notice: {all_text}"
-    );
-
-    // Checks -> explicit notices for missing controls data
-    details.tab = antislop::lean::tui::details::CHECKS;
-    let lines_checks = details.lines(&view);
-    let all_checks = lines_checks
-        .iter()
-        .map(|(_, t)| t.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        all_checks.contains("no historical data"),
-        "must contain controls text: {all_checks}"
-    );
-
-    // Comments -> explicit notice for missing comments
-    details.tab = antislop::lean::tui::details::COMMENTS;
-    let lines_comments = details.lines(&view);
-    let all_comments = lines_comments
-        .iter()
-        .map(|(_, t)| t.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        all_comments.contains("[no comments"),
-        "must contain explicit missing comments notice: {all_comments}"
-    );
-
-    // Overview: session history -> explicit notice when no sessions are retained
-    details.tab = 0;
-    let lines_sessions = details.lines(&view);
-    let all_sessions = lines_sessions
-        .iter()
-        .map(|(_, t)| t.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        all_sessions.contains("historical"),
-        "must contain explicit missing historical sessions notice: {all_sessions}"
-    );
-}
-
-#[test]
-fn overview_includes_the_terminal_transcript_without_database_mirrors() {
-    use antislop::lean::tui::session::Block;
-    use antislop::lean::tui::view::{Agent, View};
-    let mut details = Details::new("worker:t1".into());
-    details.tab = 0;
-    details.history_unavailable = true;
-    details.sessions.push(antislop::lean::store::SessionInfo {
-        backend: None,
-        turn_id: "database-turn".into(),
-        plan_id: None,
-        role: "worker:t1".into(),
-        provider: "codex".into(),
-        session_id: Some("database-session".into()),
-        status: "done".into(),
-        error: None,
-        upto_message: 1,
-        started_ms: 1000,
-        finished_ms: Some(1050),
-        pid: None,
-    });
-    let mut view = View::default();
-    view.agents.insert(
-        "worker:t1".into(),
-        Agent {
-            provider: "codex".into(),
-            feed: vec![
-                Block::Turn("codex · default model".into()),
-                Block::Tool {
-                    name: "shell".into(),
-                    detail: "exec cargo check".into(),
-                },
-                Block::Text("answer".into()),
-            ],
-            session: vec![
-                "── turn".into(),
-                "exec cargo check".into(),
-                "session mirror".into(),
-            ],
-            ..Default::default()
-        },
-    );
-    view.tasks.push(antislop::lean::tui::view::TaskRow {
-        id: "t1".into(),
-        goal: "Shared task overview".into(),
-        ..Default::default()
-    });
-    view.agents.insert(
-        "verifier:t1".into(),
-        Agent {
-            provider: "claude".into(),
-            feed: vec![Block::Text("Verifier evidence".into())],
-            ..Default::default()
-        },
-    );
-    let text = details
-        .lines(&view)
-        .into_iter()
-        .map(|(_, line)| line)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        !text.contains("Shared task overview"),
-        "metadata stays outside the transcript"
-    );
-    assert!(text.contains("Session · worker"));
-    assert!(text.contains("Session · verifier"));
-    assert!(text.contains("Verifier evidence"));
-    details.switch_key("verifier:t1".into());
-    let verifier_text = details
-        .lines(&view)
-        .into_iter()
-        .map(|(_, line)| line)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(!verifier_text.contains("Shared task overview"));
-    assert!(verifier_text.contains("• Ran exec cargo check"));
-    assert!(verifier_text.contains("Verifier evidence"));
-    details.query = "Verifier evidence".into();
-    details.raw = true;
-    let filtered = details
-        .lines(&view)
-        .into_iter()
-        .map(|(_, line)| line)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(filtered.contains("\"session\""));
-    assert!(filtered.contains("Verifier evidence"));
-    assert!(!filtered.contains("exec cargo check"));
-    details.query.clear();
-    details.raw = false;
-    details.switch_key("worker:t1".into());
-    assert!(text.contains("codex · idle"));
-    assert!(text.contains("• Ran exec cargo check"), "{text}");
-    assert_eq!(text.matches("exec cargo check").count(), 1);
-    assert!(!text.contains("session mirror"));
-    assert!(!text.contains("database-turn"));
-    assert!(!text.contains("database-session"));
-    assert!(!text.contains("Retained sessions"));
-    assert!(!text.contains("archive"));
-
-    // Older event logs without terminal data still have one transcript.
-    view.agents.get_mut("worker:t1").unwrap().feed.clear();
-    let text = details
-        .lines(&view)
-        .into_iter()
-        .map(|(_, line)| line)
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("codex · idle"));
-    assert_eq!(text.matches("exec cargo check").count(), 1);
-    assert!(text.contains("session mirror"));
 }
 
 #[test]
@@ -6395,6 +6187,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         std::fs::write(&binary, script).unwrap();
         std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        common::interactive(&binary);
         let path = project.join("antislop.toml");
         let mut initial = ConfigEditor::new(SOURCE, path.to_string_lossy().into_owned()).unwrap();
         for (field, text) in [
@@ -6584,16 +6377,12 @@ mod text_selection_acceptance {
                         title: "Selection in the session card".into(),
                         ..Default::default()
                     });
-                    app.view.agents.insert(
-                        "worker:t1".into(),
-                        antislop::lean::tui::view::Agent {
-                            feed: vec![antislop::lean::tui::session::Block::Text(
-                                "sample café 👩‍👩‍👧‍👦".into(),
-                            )],
-                            ..Default::default()
-                        },
-                    );
-                    app.details = Some(Details::new("worker:t1".into()));
+                    app.view
+                        .mailbox
+                        .insert("worker:t1".into(), vec!["sample café 👩‍👩‍👧‍👦".into()]);
+                    let mut details = Details::new("worker:t1".into());
+                    details.switch_tab(1);
+                    app.details = Some(details);
                 }
                 _ => {
                     app.view.plan_doc = "sample café 👩‍👩‍👧‍👦".into();
@@ -7069,138 +6858,21 @@ fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
 }
 
 #[test]
-fn session_card_keeps_summary_fixed_and_follows_until_manually_scrolled() {
-    use antislop::lean::tui::session::Block;
-    use antislop::lean::tui::view::{Agent, TaskRow};
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    let mut app = App::test_app();
-    app.view.tasks.push(TaskRow {
-        id: "t1".into(),
-        title: "Compact summary".into(),
-        status: "working".into(),
-        round: 1,
-        goal: "Full goal available on demand".into(),
-        ..Default::default()
-    });
-    app.view.agents.insert(
-        "worker:t1".into(),
-        Agent {
-            provider: "codex".into(),
-            running: true,
-            feed: (0..100)
-                .map(|i| Block::Text(format!("message {i:03}")))
-                .collect(),
-            ..Default::default()
-        },
-    );
-    app.details = Some(Details::new("worker:t1".into()));
-    app.details.as_mut().unwrap().panel_expanded[0] = true;
-    let mut terminal = Terminal::new(TestBackend::new(90, 18)).unwrap();
-    let screen = |terminal: &Terminal<TestBackend>| -> Vec<String> {
-        terminal
-            .backend()
-            .buffer()
-            .content
-            .chunks(90)
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
-            .collect()
-    };
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let first = screen(&terminal);
-    assert!(first[1].contains("Compact summary"));
-    assert!(first[2].contains("Round 1"));
-    assert!(first.iter().any(|line| line.contains("message 099")));
-    assert!(
-        first
-            .iter()
-            .any(|line| line.contains("Session") && line.contains("LIVE"))
-    );
-    assert!(app.details.as_ref().unwrap().text_area.y >= 4);
-    let area = app.details.as_ref().unwrap().text_area;
-    let thumb = antislop::lean::tui::theme::Theme::from_env().glyphs().thumb;
-    assert_eq!(
-        terminal.backend().buffer()[(area.right(), area.bottom() - 1)].symbol(),
-        thumb,
-        "the live scrollbar reaches the bottom"
-    );
-
-    for _ in 0..2 {
-        app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
-    }
-    terminal.draw(|f| app.draw(f)).unwrap();
-    let top = screen(&terminal);
-    assert_eq!(
-        &first[1..4],
-        &top[1..4],
-        "the summary never scrolls with the transcript"
-    );
-    assert!(top.iter().any(|line| line.contains("message 000")));
-    app.view
-        .agents
-        .get_mut("worker:t1")
-        .unwrap()
-        .feed
-        .push(Block::Text("newest message".into()));
-    terminal.draw(|f| app.draw(f)).unwrap();
-    assert_eq!(app.details.as_ref().unwrap().scroll, 0);
-    assert!(
-        !screen(&terminal)
-            .iter()
-            .any(|line| line.contains("newest message"))
-    );
-
-    app.key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT));
-    terminal.draw(|f| app.draw(f)).unwrap();
-    assert!(
-        screen(&terminal)
-            .iter()
-            .any(|line| line.contains("newest message"))
-    );
-    app.view
-        .agents
-        .get_mut("worker:t1")
-        .unwrap()
-        .feed
-        .push(Block::Text("live appended".into()));
-    terminal.draw(|f| app.draw(f)).unwrap();
-    assert!(
-        screen(&terminal)
-            .iter()
-            .any(|line| line.contains("live appended"))
-    );
-    app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert!(!app.details.as_ref().unwrap().follow);
-    app.key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
-    terminal.draw(|f| app.draw(f)).unwrap();
-    assert!(
-        screen(&terminal)
-            .iter()
-            .any(|line| line.contains("Full goal available on demand"))
-    );
-    app.key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
-    terminal.draw(|f| app.draw(f)).unwrap();
-    assert!(
-        screen(&terminal)
-            .iter()
-            .any(|line| line.contains("live appended"))
-    );
-}
-
-#[test]
 fn vim_details_navigation_isolated_from_search_and_other_commands() {
     let mut app = App::test_app();
     app.details = Some(Details::new("worker:t1".into()));
     app.details.as_mut().unwrap().scroll = 50;
     app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
     assert_eq!(app.details.as_ref().unwrap().scroll, 50);
-    app.key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
     app.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
     assert_eq!(
         app.details.as_ref().unwrap().scroll,
         50,
         "gg must be consecutive"
     );
+    // The session tab shows a terminal; records are searched on the others.
+    app.details.as_mut().unwrap().switch_tab(1);
     app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
     for c in ['g', 'g', 'G'] {
         app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));

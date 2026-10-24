@@ -180,6 +180,32 @@ pub fn ensure_trusted<R: BufRead, W: Write>(
     registry.trust(project)
 }
 
+/// One-time setup that an agent CLI needs and that only the user should do.
+/// `agy` registers the stdio MCP bridge in Agy's own MCP list: Agy has no
+/// per-launch MCP option, so its list names `antislop mcp-bridge` once and each
+/// session passes its gateway through the environment.
+pub fn setup(args: &[String]) -> Result<()> {
+    match args {
+        [target] if target == "agy" => {
+            let exe = std::env::current_exe()?;
+            let status = std::process::Command::new("agy")
+                .args(["mcp", "add", super::mcp::SERVER])
+                .arg(&exe)
+                .arg("mcp-bridge")
+                .status()
+                .map_err(|error| crate::Error::Invalid(format!("cannot run agy: {error}")))?;
+            crate::require(status.success(), "agy could not register the MCP bridge")?;
+            println!(
+                "agy now starts `{} mcp-bridge` for its `{}` MCP server",
+                exe.display(),
+                super::mcp::SERVER
+            );
+            Ok(())
+        }
+        _ => Err(crate::Error::Invalid("usage: antislop setup agy".into())),
+    }
+}
+
 /// Stops the existing daemon without starting one or loading configuration.
 pub fn stop(args: &[String]) -> Result<()> {
     let mut state = None;
@@ -428,9 +454,6 @@ pub fn describe(event: &Value) -> Option<String> {
                 None => String::new(),
             }
         ),
-        "agent" if payload["type"] == "tool" => {
-            format!("  ↳ {} {}", text("name"), text("detail"))
-        }
         "turn_finished" if payload["status"] != "done" => {
             format!("✗ {}: {}", text("status"), text("error"))
         }
