@@ -763,9 +763,8 @@ best effort for known inherited secrets and does not cover arbitrary transcript
 content.
 
 The t13 recheck finds task-scoped Checks invalidation and single-record task
-reads in this candidate. SessionCache reuses unchanged transcript records and
-LayoutCache avoids repeated JSON/search rendering and wrapping on idle redraws
-(covered by shared-record and wrapped-layout tests). Graph canvas and selection
+reads in this candidate. LayoutCache avoids repeated search rendering and wrapping
+on idle redraws (covered by wrapped-layout tests). Graph canvas and selection
 storage remain bounded by viewport area. Graph layout is still reconstructed,
 and the task endpoint still computes a Git freshness fingerprint; these are
 remaining baseline performance costs, not an assertion of a host-overload
@@ -922,7 +921,7 @@ Manual checks in a real terminal:
   OSC 52 depends on the terminal; silent rejection cannot be detected.
 - `/config`, editing, Ctrl+S, and reopening during an active session; new turns
   use changes without restarting the already working agent.
-- One task node during worker/verifier phases; both transcripts in Overview.
+- One task node during worker/verifier phases; both terminals in Overview.
 - Open Checks across rounds, same-round verdict changes, retry after read errors;
   old responses must not roll the view backward.
 
@@ -971,8 +970,6 @@ process-cleanup tests. Numbers identify lines in the new complete log.
 | `text_selection_integrates_chat_agent_details_plan_and_modal_isolation` | 556 | OK |
 | `tasks_sit_in_columns_by_dependency_depth_with_one_card_per_task` | 168 | OK |
 | `task_card_mouse_selection_uses_one_identity_for_both_phases` | 494 | OK |
-| `overview_includes_the_terminal_transcript_without_database_mirrors` | 489 | OK |
-| `overview_opens_at_latest_session_for_all_agent_roles` | 128 | OK |
 | `checks_three_rounds_ignore_reverse_ordered_old_replies` | 462 | OK |
 | `checks_refetch_on_task_verdict_in_the_same_round` | 463 | OK |
 | `checks_retry_failed_fetch_on_next_empty_event_batch` | 467 | OK |

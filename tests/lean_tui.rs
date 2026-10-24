@@ -3366,7 +3366,7 @@ fn test_inspector_conversation_switch_preserves_details_memory() {
 }
 
 #[test]
-fn test_inspector_whole_record_search_and_raw_view() {
+fn test_inspector_whole_record_search() {
     let mut details = Details::new("worker:t1".into());
     details.task = Some(json!({
         "id": "t1",
