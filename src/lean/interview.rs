@@ -41,45 +41,50 @@ pub fn parse(answer: &str) -> Option<Result<Question>> {
     let mut fenced = false;
     while let Some(line) = lines.next() {
         if !fenced && line.trim() == "```question" {
-            let mut body = Vec::new();
-            for line in lines.by_ref() {
-                if line.trim() == "```" {
-                    return Some((|| {
-                        let question: Question = serde_json::from_str(&body.join("\n"))?;
-                        require(
-                            !question.id.trim().is_empty(),
-                            "interview question needs an id",
-                        )?;
-                        require(
-                            !question.context.trim().is_empty()
-                                && !question.question.trim().is_empty(),
-                            "interview question needs context and a question",
-                        )?;
-                        require(
-                            (2..=6).contains(&question.options.len()),
-                            "interview question needs 2–6 options",
-                        )?;
-                        require(
-                            question
-                                .options
-                                .iter()
-                                .all(|option| !option.label.trim().is_empty()),
-                            "interview options need labels",
-                        )?;
-                        Ok(question)
-                    })());
-                }
-                body.push(line);
-            }
-            return Some(Err(crate::Error::Invalid(
-                "incomplete interview question block".into(),
-            )));
+            return Some(parse_question_block(&mut lines));
         }
         if line.trim().starts_with("```") {
             fenced = !fenced;
         }
     }
     None
+}
+
+fn parse_question_block<'a>(lines: &mut impl Iterator<Item = &'a str>) -> Result<Question> {
+    let mut body = Vec::new();
+    for line in lines {
+        if line.trim() == "```" {
+            return validate_question(&body.join("\n"));
+        }
+        body.push(line);
+    }
+    Err(crate::Error::Invalid(
+        "incomplete interview question block".into(),
+    ))
+}
+
+fn validate_question(body: &str) -> Result<Question> {
+    let question: Question = serde_json::from_str(body)?;
+    require(
+        !question.id.trim().is_empty(),
+        "interview question needs an id",
+    )?;
+    require(
+        !question.context.trim().is_empty() && !question.question.trim().is_empty(),
+        "interview question needs context and a question",
+    )?;
+    require(
+        (2..=6).contains(&question.options.len()),
+        "interview question needs 2–6 options",
+    )?;
+    require(
+        question
+            .options
+            .iter()
+            .all(|option| !option.label.trim().is_empty()),
+        "interview options need labels",
+    )?;
+    Ok(question)
 }
 
 #[cfg(test)]

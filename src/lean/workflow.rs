@@ -1,8 +1,16 @@
 //! Durable interview checkpoint. Missing rows preserve pre-workflow sessions.
 use super::{Message, Store, now_ms};
 use crate::{Result, require};
+use repair::{queue_plan_repair, repair_is_needed};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
+
+#[path = "workflow/repair.rs"]
+mod repair;
+
+#[cfg(test)]
+#[path = "workflow/tests.rs"]
+mod tests;
 
 #[derive(Debug, Serialize)]
 pub struct Workflow {
@@ -20,40 +28,10 @@ impl Store {
     ) -> Result<bool> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let upto:i64=tx.query_row("SELECT upto_message FROM turns WHERE id=?1 AND conversation_id=?2 AND role IN ('orchestrator','comment-orchestrator') AND status='done'",params![turn_id,conversation],|row|row.get(0))?;
-        let user: i64 = tx.query_row(
-            "SELECT coalesce(max(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'",
-            [conversation],
-            |row| row.get(0),
-        )?;
-        if user > upto {
+        if !repair_is_needed(&tx, conversation, turn_id)? {
             return Ok(false);
         }
-        let repairs:i64=tx.query_row("SELECT count(*) FROM messages WHERE conversation_id=?1 AND author='plan-format-repair' AND seq>?2",params![conversation,user],|row|row.get(0))?;
-        let queued:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND author='plan-format-repair' AND seq>?2)",params![conversation,upto],|row|row.get(0))?;
-        if repairs >= 2 || queued {
-            return Ok(false);
-        }
-        let text = format!(
-            "Repair the plan JSON in your previous response. Parser/validation error: {error}. Return the complete corrected ```plan JSON block for the SAME plan. Preserve the agreed requirements, selected strategy, tasks and dependencies. For JSON syntax errors, repair serialization only: escape ASCII double quotes inside string values, or use typographic quotes in prose. Do not repeat repository analysis, requirements extraction or options comparison, do not create another run, and do not ask the user to repair JSON. Your previous turn was {turn_id}."
-        );
-        tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'plan-format-repair',?2,?3)",params![conversation,text,now_ms()])?;
-        let seq = tx.last_insert_rowid();
-        for (kind, payload) in [
-            (
-                "message",
-                serde_json::json!({"seq":seq,"author":"plan-format-repair","text":text,"internal":true}),
-            ),
-            (
-                "planning_progress",
-                serde_json::json!({"text":"Correcting the plan format. Requirements and solution comparison are preserved."}),
-            ),
-        ] {
-            tx.execute(
-                "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4)",
-                params![conversation, kind, payload.to_string(), now_ms()],
-            )?;
-        }
+        queue_plan_repair(&tx, conversation, turn_id, error)?;
         tx.commit()?;
         Ok(true)
     }
@@ -122,29 +100,10 @@ impl Store {
     pub fn finish_interview(&self, conversation: &str) -> Result<bool> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let changed = tx.execute("UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1 AND phase='interview' AND summary<>'' AND upto_message >= COALESCE((SELECT MAX(seq) FROM messages WHERE conversation_id=?1 AND author='user'),0)", [conversation])?;
-        if changed == 0 {
+        if !promote_current_interview(&tx, conversation)? {
             return Ok(false);
         }
-        let text = "Interview complete. Prepare the plan from the collected requirements for review. Implementation requires separate user approval of the plan.";
-        tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'runtime',?2,?3)", params![conversation,text,now_ms()])?;
-        let seq = tx.last_insert_rowid();
-        for (kind, payload) in [
-            ("workflow", serde_json::json!({"phase":"planning"})),
-            (
-                "message",
-                serde_json::json!({"seq":seq,"author":"runtime","text":text,"internal":true}),
-            ),
-            (
-                "planning_progress",
-                serde_json::json!({"text":"Working on the plan draft"}),
-            ),
-        ] {
-            tx.execute(
-                "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4)",
-                params![conversation, kind, payload.to_string(), now_ms()],
-            )?;
-        }
+        queue_planning_message(&tx, conversation)?;
         tx.commit()?;
         Ok(true)
     }
@@ -154,37 +113,12 @@ impl Store {
     pub fn approve_requirements(&self, conversation: &str) -> Result<Message> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let changed = tx.execute("UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1 AND phase='interview' AND summary<>'' AND upto_message >= COALESCE((SELECT MAX(seq) FROM messages WHERE conversation_id=?1 AND author='user'),0)", [conversation])?;
-        require(
-            changed == 1,
-            "wait for an up-to-date requirements summary before approving with /planning",
-        )?;
-        let summary: String = tx.query_row(
-            "SELECT summary FROM session_workflow WHERE conversation_id=?1",
-            [conversation],
-            |row| row.get(0),
-        )?;
+        let summary = approve_current_requirements(&tx, conversation)?;
         let text = format!(
             "I approve the following requirements:\n\n{summary}\n\nPrepare the plan for my review; implementation requires separate plan approval."
         );
         let stored_text = self.content.encode(&text)?;
-        tx.execute(
-            "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)",
-            params![conversation, stored_text, now_ms()],
-        )?;
-        let seq = tx.last_insert_rowid() as u64;
-        for (kind, payload) in [
-            (
-                "message",
-                serde_json::json!({"seq":seq,"author":"user","text":stored_text}),
-            ),
-            ("workflow", serde_json::json!({"phase":"planning"})),
-        ] {
-            tx.execute(
-                "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4)",
-                params![conversation, kind, payload.to_string(), now_ms()],
-            )?;
-        }
+        let seq = store_approval_message(&tx, conversation, &stored_text)?;
         tx.commit()?;
         Ok(Message {
             seq,
@@ -194,169 +128,90 @@ impl Store {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn promote_current_interview(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<bool> {
+    let changed = tx.execute(
+        "UPDATE session_workflow SET phase='planning' WHERE conversation_id=?1 AND phase='interview' AND summary<>'' AND upto_message >= COALESCE((SELECT MAX(seq) FROM messages WHERE conversation_id=?1 AND author='user'),0)",
+        [conversation],
+    )?;
+    Ok(changed == 1)
+}
 
-    #[test]
-    fn completed_followup_restarts_interview_without_erasing_history() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("state.db")).unwrap();
-        let conversation = store.create_conversation("project").unwrap();
-        store.begin_interview(&conversation.id).unwrap();
-        let first = store
-            .add_message(&conversation.id, "user", "First goal")
-            .unwrap();
-        store
-            .interview_summary(&conversation.id, "First scope", first.seq)
-            .unwrap();
-        store.finish_interview(&conversation.id).unwrap();
-        let run = store.create_run(&conversation.id, "First goal").unwrap();
-        store
-            .select_planning_run(&conversation.id, &run.id)
-            .unwrap();
-        let tasks = store
-            .add_plan(
-                &conversation.id,
-                &[serde_json::json!({"id":"implementation"})],
-            )
-            .unwrap();
-        let plan = &tasks[0].plan_id;
-        store.queue_plan(&conversation.id, plan).unwrap();
-        // A message while work remains must not reset its workflow.
-        store
-            .add_message(&conversation.id, "user", "More context")
-            .unwrap();
-        assert_eq!(
-            store.workflow(&conversation.id).unwrap().unwrap().phase,
-            "implementation"
-        );
-        store.set_plan_status(plan, "queued", "approved").unwrap();
-        store
-            .add_message(&conversation.id, "runtime", "Finished")
-            .unwrap();
-        assert_eq!(
-            store.workflow(&conversation.id).unwrap().unwrap().phase,
-            "implementation"
-        );
-        store
-            .add_message(&conversation.id, "user", "Next goal")
-            .unwrap();
-        let workflow = store.workflow(&conversation.id).unwrap().unwrap();
-        assert_eq!(workflow.phase, "interview");
-        assert!(workflow.summary.is_empty());
-        assert_eq!(workflow.upto_message, 0);
-        let next_run = store.planning_run(&conversation.id).unwrap().unwrap();
-        assert_ne!(next_run.id, run.id);
-        assert_eq!(next_run.goal, "Next goal");
-        assert!(store.run(&conversation.id, &run.id).is_ok());
-        assert_eq!(store.plan(plan).unwrap()[0].status, "approved");
-        store
-            .add_message(&conversation.id, "user", "Next constraint")
-            .unwrap();
-        assert_eq!(
-            store.workflow(&conversation.id).unwrap().unwrap().phase,
-            "interview"
-        );
-    }
+fn queue_planning_message(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<()> {
+    let text = "Interview complete. Prepare the plan from the collected requirements for review. Implementation requires separate user approval of the plan.";
+    tx.execute(
+        "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'runtime',?2,?3)",
+        params![conversation, text, now_ms()],
+    )?;
+    let seq = tx.last_insert_rowid();
+    record_event(
+        tx,
+        conversation,
+        "workflow",
+        serde_json::json!({"phase":"planning"}),
+    )?;
+    record_event(
+        tx,
+        conversation,
+        "message",
+        serde_json::json!({"seq":seq,"author":"runtime","text":text,"internal":true}),
+    )?;
+    record_event(
+        tx,
+        conversation,
+        "planning_progress",
+        serde_json::json!({"text":"Working on the plan draft"}),
+    )
+}
 
-    #[test]
-    fn acceptance_requires_current_summary_and_survives_reopening() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("state.db");
-        let store = Store::open(&path).unwrap();
-        let conversation = store.create_conversation("project").unwrap();
-        store.begin_interview(&conversation.id).unwrap();
-        assert!(store.approve_requirements(&conversation.id).is_err());
-        let first = store
-            .add_message(&conversation.id, "user", "Goal 👩‍💻")
-            .unwrap();
-        store
-            .interview_summary(&conversation.id, "Scope and acceptance criteria", first.seq)
-            .unwrap();
-        let next = store
-            .add_message(&conversation.id, "user", "Also preserve drafts")
-            .unwrap();
-        assert!(store.approve_requirements(&conversation.id).is_err());
-        store
-            .interview_summary(
-                &conversation.id,
-                "Scope, draft preservation, criteria",
-                next.seq,
-            )
-            .unwrap();
-        let accepted = store.approve_requirements(&conversation.id).unwrap();
-        assert!(
-            accepted
-                .text
-                .contains("Scope, draft preservation, criteria")
-        );
-        assert!(
-            store
-                .messages_by(&conversation.id, "user", 0)
-                .unwrap()
-                .last()
-                .unwrap()
-                .text
-                .contains("Scope, draft preservation, criteria")
-        );
-        assert!(store.approve_requirements(&conversation.id).is_err());
-        drop(store);
-        let store = Store::open(&path).unwrap();
-        let workflow = store.workflow(&conversation.id).unwrap().unwrap();
-        assert_eq!(workflow.phase, "planning");
-        assert!(workflow.summary.contains("draft preservation"));
-        let events = store.events_since(&conversation.id, 0, 100).unwrap();
-        assert_eq!(events.last().unwrap().payload["phase"], "planning");
-    }
+fn approve_current_requirements(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+) -> Result<String> {
+    require(
+        promote_current_interview(tx, conversation)?,
+        "wait for an up-to-date requirements summary before approving with /planning",
+    )?;
+    Ok(tx.query_row(
+        "SELECT summary FROM session_workflow WHERE conversation_id=?1",
+        [conversation],
+        |row| row.get(0),
+    )?)
+}
 
-    #[test]
-    fn automatic_planning_is_fresh_idempotent_and_does_not_forge_user_approval() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("state.db")).unwrap();
-        let conversation = store.create_conversation("project").unwrap();
-        store.begin_interview(&conversation.id).unwrap();
-        assert!(!store.finish_interview(&conversation.id).unwrap());
-        let first = store
-            .add_message(&conversation.id, "user", "Inspect code")
-            .unwrap();
-        store
-            .interview_summary(&conversation.id, "Inspect source", first.seq)
-            .unwrap();
-        let newer = store
-            .add_message(&conversation.id, "user", "Also docs")
-            .unwrap();
-        assert!(!store.finish_interview(&conversation.id).unwrap());
-        store
-            .interview_summary(&conversation.id, "Inspect source and docs", newer.seq)
-            .unwrap();
-        assert!(store.finish_interview(&conversation.id).unwrap());
-        assert!(!store.finish_interview(&conversation.id).unwrap());
-        assert_eq!(
-            store.workflow(&conversation.id).unwrap().unwrap().phase,
-            "planning"
-        );
-        assert_eq!(
-            store
-                .messages_by(&conversation.id, "user", 0)
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            store
-                .messages_by(&conversation.id, "runtime", 0)
-                .unwrap()
-                .len(),
-            1
-        );
-    }
+fn store_approval_message(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    text: &str,
+) -> Result<u64> {
+    tx.execute(
+        "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'user',?2,?3)",
+        params![conversation, text, now_ms()],
+    )?;
+    let seq = tx.last_insert_rowid() as u64;
+    record_event(
+        tx,
+        conversation,
+        "message",
+        serde_json::json!({"seq":seq,"author":"user","text":text}),
+    )?;
+    record_event(
+        tx,
+        conversation,
+        "workflow",
+        serde_json::json!({"phase":"planning"}),
+    )?;
+    Ok(seq)
+}
 
-    #[test]
-    fn pre_workflow_sessions_keep_their_existing_flow() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(&dir.path().join("state.db")).unwrap();
-        let conversation = store.create_conversation("project").unwrap();
-        assert!(store.workflow(&conversation.id).unwrap().is_none());
-    }
+fn record_event(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    kind: &str,
+    payload: serde_json::Value,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4)",
+        params![conversation, kind, payload.to_string(), now_ms()],
+    )?;
+    Ok(())
 }
