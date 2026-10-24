@@ -110,28 +110,17 @@ impl Core {
                 persistence_error.borrow_mut().get_or_insert(error);
             }
         };
-        let log = std::cell::RefCell::new(TurnLog::default());
-        // A verifier reports its checks while it works; they are recorded as
-        // they come, so the user follows them before the verdict exists.
+        // A verifier reports its checks in its answer; they are recorded
+        // when the turn ends, before the verdict is read.
         let live = role
             .strip_prefix("verifier:")
             .and_then(|task| self.store.task_by_id(task).ok().flatten());
-        let progress = std::cell::RefCell::new(tasks::Progress::default());
         let record = |updates: Vec<tasks::CheckUpdate>| {
             if let Some(task) = &live {
                 for update in updates {
                     self.record_check(conversation, task, &update);
                 }
             }
-        };
-        let flush_text = |log: &std::cell::RefCell<TurnLog>| {
-            let mut log = log.borrow_mut();
-            let text = std::mem::take(&mut log.text);
-            if text.is_empty() {
-                return;
-            }
-            log.stored_text = true;
-            announce("agent", json!({"type": "text", "delta": text}));
         };
         // What ran, for the history and its export (design §15).
         announce(
@@ -173,10 +162,7 @@ impl Core {
                     ),
                 },
             )?;
-            let identity = native
-                .as_ref()
-                .map(|session| session.identity.clone())
-                .or_else(|| resume.clone());
+            let identity = native.identity().or_else(|| resume.clone());
             self.store.record_run_context(&store::RunContext {
                 turn_id: turn.id.clone(),
                 conversation: conversation.into(),
@@ -189,9 +175,7 @@ impl Core {
                     agent::Access::ReadOnly => store::RunAccess::ReadOnly,
                     agent::Access::Write => store::RunAccess::Write,
                 },
-                backend: native
-                    .as_ref()
-                    .map_or(store::RunBackend::Cli, |session| session.backend_kind()),
+                backend: store::RunBackend::Cli,
                 provider_thread_id: (spec.provider == crate::config::ProviderKind::Codex)
                     .then(|| identity.clone())
                     .flatten(),
@@ -234,79 +218,11 @@ impl Core {
                 )?;
                 self.store.assert_task_inputs(&task)?;
             }
-            for message in &inbox {
-                if message.sender == "user" {
-                    announce("agent", json!({"type":"user","text":message.text}));
-                }
-            }
-            // What the agent was asked, for its session view.
-            announce(
-                "agent",
-                serde_json::to_value(agent::Event::Prompt { text: text.clone() })
-                    .unwrap_or_default(),
-            );
-            let mut on_event = |event| {
-                match &event {
-                    agent::Event::ProviderTurn { id } if native.is_some() => {
-                        if let Err(error) =
-                            self.store.bind_provider_turn(conversation, &turn.id, id)
-                        {
-                            persistence_error.borrow_mut().get_or_insert(error);
-                        }
-                    }
-                    agent::Event::Session { id } => {
-                        if let Err(error) = self.store.set_session(&turn.id, id) {
-                            persistence_error.borrow_mut().get_or_insert(error);
-                        }
-                    }
-                    agent::Event::Process { pid } => {
-                        let _ = self.store.set_turn_pid(&turn.id, *pid);
-                    }
-                    // Streamed fragments are joined and stored as one block
-                    // when something else happens, not as a row each.
-                    agent::Event::Text { delta } => {
-                        log.borrow_mut().text.push_str(delta);
-                        record(progress.borrow_mut().push(delta));
-                        if log.borrow().text.len() >= content::CHUNK_BYTES {
-                            flush_text(&log);
-                        }
-                        return;
-                    }
-                    _ => {}
-                }
-                flush_text(&log);
-                // Reasoning and tool output are bounded per turn.
-                let weight = match &event {
-                    agent::Event::Reasoning { delta } => delta.len(),
-                    agent::Event::Output { text, .. } => text.len(),
-                    _ => 0,
-                };
-                if weight > 0 && !log.borrow_mut().admit(weight) {
-                    if !std::mem::replace(&mut log.borrow_mut().marked, true) {
-                        announce(
-                            "agent",
-                            json!({"type": "output", "name": "antislop",
-                                   "text": "[further output of this turn is not stored]",
-                                   "exit_code": null}),
-                        );
-                    }
-                    return;
-                }
-                if let Ok(payload) = serde_json::to_value(&event) {
-                    announce("agent", payload);
-                }
-            };
-            if let Some(native) = native.as_ref() {
-                native.run(&turn.id, &text, &inbox, cancel, &mut on_event)
-            } else {
-                agent::run(&spec, &text, cancel, &mut on_event)
-            }
+            native.run(&self.native, &turn.id, &text, cancel)
         });
-        flush_text(&log);
-        record(progress.borrow_mut().finish());
         match outcome {
             Ok(outcome) => {
-                // Some CLIs report the answer only at the end.
+                // The answer carries the verifier's check lines.
                 record(
                     outcome
                         .text
@@ -314,12 +230,8 @@ impl Core {
                         .filter_map(tasks::parse_progress)
                         .collect(),
                 );
-                // Some CLIs report the answer only at the end.
-                if !log.borrow().stored_text {
-                    let preview = &outcome.text;
-                    if !preview.is_empty() {
-                        announce("agent", json!({"type": "text", "delta": preview}));
-                    }
+                if let Some(session) = &outcome.session {
+                    self.store.set_session(&turn.id, session)?;
                 }
                 announce("agent_final", json!({"text": outcome.text}));
                 if let Some(error) = persistence_error.borrow_mut().take() {
@@ -338,9 +250,7 @@ impl Core {
                 Ok(Some(outcome.text))
             }
             Err(error) => {
-                let status = if error.to_string().contains("native turn interrupted") {
-                    TurnStatus::Interrupted
-                } else if cancel.load(Ordering::SeqCst) {
+                let status = if cancel.load(Ordering::SeqCst) {
                     TurnStatus::Cancelled
                 } else {
                     TurnStatus::Failed

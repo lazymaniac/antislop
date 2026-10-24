@@ -1,88 +1,79 @@
-# Native sessions in Overview
+# Agent sessions in Overview
 
-Codex uses a daemon-owned app-server, and OpenCode uses a dedicated serve
-process. Their interactive CLIs attach through a managed gateway. The structured
-driver and terminal therefore use the same provider identity and execution
-queue. Claude, Gemini, Agy, unsupported CLIs and custom launchers keep JSON
-history with an explicit attachment-unavailable notice.
-Orchestrator mail records its originating user message in the append-only
-event log. A turn only acknowledges mail within its prepared message boundary;
-later input remains queued for a subsequent turn. Existing schema 11 records
-retain their atomic mail/message event association and need no migration.
+Every agent is the provider's own interactive CLI, running in a terminal that
+the daemon owns. Overview shows that terminal; the person can use the CLI as
+usual (answer a question, change its model or mode, run a slash command) and the
+runtime keeps working through it. There is no JSON, transcript or event view of
+a session: the provider keeps its own history, and an earlier session is opened
+by resuming it.
 
-The database schema remains **11**. No migration is performed. Existing
-incompatible databases are rejected without modifying or deleting their data.
+## How a turn runs
+
+1. The daemon starts the CLI in a PTY with its gateway, permissions and
+   working directory passed on the command line or in the environment
+   (`src/lean/launch.rs`). Nothing is written to the CLIs' own configuration.
+2. When the CLI has asked the gateway for its tools (every supported CLI does
+   so while starting) and its screen is quiet, the prompt is typed into it as
+   one bracketed paste followed by Enter (`src/lean/native.rs`).
+3. The prompt names the turn and asks the agent to end it by calling
+   `finish_turn(turn, text)` on the session's MCP gateway (`src/lean/mcp.rs`)
+   with its complete final answer. That call is the only way back; the screen
+   is never read for results.
+
+A call for a turn that is not the open one is refused with a message the model
+can read. A CLI that does not connect within 60 s, exits, or does not end the
+turn within 30 minutes (`ANTISLOP_TURN_TIMEOUT_SECS`) fails the turn with the
+raw reason and the last lines of its terminal. A failure after the prompt was
+typed is never retried automatically.
+
+## Providers
+
+| CLI | Gateway | Session identity | Resume |
+|---|---|---|---|
+| Claude | `--mcp-config` (HTTP, bearer token) | given with `--session-id` | `--resume <id>` |
+| Codex | `-c mcp_servers.antislop.*`, token in the environment | `threadId` in the call | `codex resume <id>` |
+| OpenCode | `OPENCODE_CONFIG_CONTENT` | the one new session in the directory | `--session <id>` |
+| Agy | stdio bridge (`antislop mcp-bridge`) registered once by `antislop setup agy` | the conversation, added by the bridge | `--conversation <id>` |
+
+Claude's plan mode refuses MCP tools, so read-only Claude runs in the default
+mode without editing tools. Its shell is a normal one, but runs in the
+operating system's sandbox with the working and extra directories write-protected
+(checked: `touch` and `>` there fail with "Operation not permitted").
 
 ## Interaction
 
 Overview displays worker/verifier terminals side by side from 80 columns.
 `Ctrl+W` changes the active panel, `i` gives the CLI keyboard focus, and
 `Ctrl+]` returns focus to antislop. While focused, keys, paste and mouse events
-go to the CLI before global application shortcuts. Outside terminal focus,
-`a` opens the shared message composer, `h` switches to JSON history, and `r`
-retries attachment. Search and raw JSON views expose the JSON history.
+go to the CLI before global application shortcuts. Outside terminal focus, `a`
+opens the shared message composer and `r` retries attachment.
 
 Detaching or switching views keeps the daemon's PTY, including incomplete CLI
-input. Historical rounds display their own JSON records. A new task round uses
-its own managed session; an old terminal cannot enqueue work into the new round.
-
-The gateway accepts text messages through `send_to_agent`, with conversation,
-role, task, round and run validation. It queues them without steering an active
-execution. Explicit interrupts are logged separately. Unsupported mutations,
-foreign sessions and attempts to change the managed agent are rejected.
-Codex client message IDs remain idempotent across reconnects. Interrupts must
-target the active turn; stale controls cannot interrupt its successor. Steering
-also accepts the latest completed turn while its completion notification is
-still in transit and queues the correction as new work. Queued steering
-acknowledges the turn that actually consumes the message. Delivered receipts
-survive cache expiry and restart: their provider turn is read from durable run
-context and paged native history, without executing the prompt again.
-If abort cannot be confirmed, the backend is stopped before the
-role scheduler proceeds, and the server's failure reason remains visible.
+input. A session nobody uses or looks at for ten minutes is released; opening it
+again resumes the provider's session. An earlier round shows a hint instead of a
+terminal; `o` resumes that round's session read-only (role `ROLE#rN`). A new
+task round uses its own session; an old terminal cannot enqueue work into the
+new round.
 
 Input has per-view sequence numbers. Lost acknowledgements are retried with the
 same sequence; repeated delivery has no effect. When delivery cannot be
 confirmed, text is recovered into the role's composer for the user to inspect.
-It is not automatically replayed into a replacement terminal. Existing drafts
+It is never automatically replayed into a replacement terminal. Existing drafts
 in other conversations remain independent.
 
-## Acceptance coverage
+## Evidence
 
-| Requirement | Automated evidence |
+| Behavior | Test |
 |---|---|
-| Shared native/JSON identity, provider turn IDs, live output and token usage | `native::codex::tests::structured_turns_share_the_managed_thread_and_keep_provider_turn_ids`; OpenCode direct HTTP/SSE and stream normalizer tests |
-| Queued native correction executes once in the same session | `native::codex::tests::gateway_messages_join_the_core_queue_and_execute_in_the_same_session` |
-| Two OpenCode corrections arriving during work are delivered in order; repeated input is deduplicated and later mail is not acknowledged by an earlier prompt | `opencode::tests::http_gateway_authenticates_and_limits_sessions_and_mutations` |
-| Reconnects do not duplicate mail; stale controls are rejected; queued steering follows the RPC schema | Codex reconnect and gateway control tests |
-| Interrupt preserves the provider session | Codex interruption test; `opencode::tests::explicit_interrupt_keeps_the_opencode_backend_and_records_control` |
-| Failed abort stops the backend and preserves the raw cause | `opencode::tests::a_failed_abort_stops_the_backend_and_preserves_its_failure_reason` |
-| No automatic execution fallback after acceptance | Codex backend failure test; OpenCode lost accepted stream test; mail retry classification |
-| Old API falls back before a prompt | `native::tests::unsupported_server_protocol_falls_back_before_sending_a_prompt` |
-| Restart cleans processes, interrupts turns, preserves identity/history, rejects stale handles | `native::tests::daemon_restart_reaps_native_processes_and_restores_the_same_identity` for both providers |
-| Round/worktree/profile isolation | Native round rotation tests for both providers; gateway foreign-session tests |
-| Messages arriving during verification require another round | `lean_messages::worker_message_during_verification_requires_another_round_before_approval` and direct worker correction tests |
-| PTY draft survives detach; resize and handles are scoped | `native::codex::tests::pty_retains_unfinished_text_across_detach_and_scopes_handles` |
-| Resize while waiting for the first session is used when attaching | `tui::native_view::tests::resize_while_waiting_for_a_session_is_used_by_the_next_open` |
-| Focus precedes global shortcuts; two panels and historical JSON remain available | `tui::native_view::tests` |
-| Lost acknowledgement and permanent errors preserve input | Native view acknowledgement, recovery and close-drain tests |
-| Unicode/ZWJ, split ANSI, alternate screen, bounded buffers and terminal queries | `terminal::tests` |
-| NO_COLOR, ASCII, small screens and existing composer behavior | `lean_tui` and native cell rendering tests |
+| Gateway ends only the open turn, refuses wrong tokens and stale turns, reports the CLI's thread, cancels and notices a dead agent | `mcp::tests` |
+| Per-launch commands and permissions for each CLI, no token in arguments, no inherited parent-session markers | `launch::tests` |
+| A typed prompt reaches a bracketed-paste CLI byte for byte, however long | `terminal::tests::a_typed_prompt_arrives_exactly_as_written` |
+| Panels show the terminal, the raw attachment failure or the earlier-round hint | `tui::details::tests`, `tui::native_view::tests` |
+| Whole runs (plans, rounds, mail, restarts, recovery) on interactive fixtures | `tests/lean_*.rs` with `tests/support/pty_shim.py` |
 
-The ignored `installed_codex_attach_smoke` and
-`installed_opencode_attach_smoke` tests exercise installed native CLIs through
-real PTYs: they open the interface and submit a message into durable user mail.
-Each test begins attaching while one short model turn is executing and checks
-the reply from that session, including its presence on the rendered PTY screen.
-Submission is tested while holding the role
-lock, then cancelled, so it cannot trigger an additional model call. The
-ordinary adapter/runtime tests verify subsequent queued execution offline.
-The OpenCode test uses the current OpenCode provider configuration. For an oMLX
-configuration, its local server and selected model must be running first.
-`omlx launch opencode` configures that provider; a custom launcher configured
-as the antislop command deliberately keeps the legacy JSON driver.
-
-Required checks are `cargo fmt --check`, `cargo check`,
-`cargo clippy --all-targets -- -D warnings`, `cargo test --test lean_core`,
-`cargo test --test lean_tui`, and the native/terminal library tests. Integration
-tests require local Unix/TCP sockets, PTYs and permission to inspect their own
-process groups.
+The fixtures stand in for the CLIs: `pty_shim.py` runs in a terminal, connects
+to the gateway as the real CLIs do, takes the pasted prompt and ends the turn
+through `finish_turn`, while the test's own script computes the answer.
+Real Claude, Codex and OpenCode sessions were exercised by hand: a prompt
+typed into the daemon-owned terminal, the answer returned through the gateway,
+and the terminal rendered in the view.

@@ -45,9 +45,10 @@ Resolving a configuration creates nothing. The editor saves to the selected file
 when using a shared global file, saving also affects future starts of other projects.
 
 Each task has one graph node for its worker and verifier; their runtime sessions
-remain separate. Overview pins a compact task summary above a session card containing both transcripts.
-The card follows new output; `gg` goes to the start and `G` returns to live output.
-Use `i` for the complete task context.
+remain separate. Overview shows each agent's own terminal: the provider's CLI,
+running in the daemon, which you can use as usual (`i` gives it the keyboard,
+`Ctrl+]` returns to antislop). An earlier round's session is opened on request
+with `o`, by resuming it. Use `m` for the complete task context.
 Checks refresh after each round and verdict, and live check events refresh only the
 open task. Drag to select rendered text in chat, plan or agent details; double-click
 selects a word and Ctrl+Y copies up to 64 KiB through OSC 52. On an OSC 52 write

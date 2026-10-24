@@ -1,3 +1,4 @@
+mod common;
 use antislop::lean::tasks::{self, TaskSpec};
 use serde_json::json;
 

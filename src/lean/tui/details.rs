@@ -48,65 +48,6 @@ pub fn tabs_for(key: &str) -> Vec<usize> {
 pub struct DetailRecord {
     pub lines: Vec<(Style, String)>,
     pub search_text: String,
-    pub raw_value: Option<Value>,
-}
-
-/// Only the currently inspected agents are retained; unchanged blocks reuse
-/// their sanitized, formatted and searchable records between redraws.
-#[derive(Debug, Clone, PartialEq, Default)]
-struct SessionCache {
-    provider: String,
-    expanded: bool,
-    blocks: Vec<super::session::Block>,
-    records: Vec<Rc<DetailRecord>>,
-    revision: Option<u64>,
-}
-
-impl SessionCache {
-    fn records(
-        &mut self,
-        provider: &str,
-        blocks: &[super::session::Block],
-        expanded: bool,
-        revision: Option<u64>,
-    ) -> &[Rc<DetailRecord>] {
-        if revision.is_some()
-            && self.revision == revision
-            && self.provider == provider
-            && self.expanded == expanded
-        {
-            return &self.records;
-        }
-        self.revision = revision;
-        let shared = if self.provider == provider && self.expanded == expanded {
-            self.blocks
-                .iter()
-                .zip(blocks)
-                .take_while(|(a, b)| a == b)
-                .count()
-        } else {
-            0
-        };
-        self.provider = provider.to_owned();
-        self.expanded = expanded;
-        self.blocks.truncate(shared);
-        self.records.truncate(shared);
-        for block in &blocks[shared..] {
-            let lines = super::session::render(provider, std::slice::from_ref(block), true);
-            let search_text = lines
-                .iter()
-                .map(|(_, line)| line.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
-            self.records.push(Rc::new(DetailRecord {
-                raw_value: Some(serde_json::json!({ "session": search_text })),
-                lines,
-                search_text,
-            }));
-            self.blocks.push(block.clone());
-        }
-        &self.records
-    }
 }
 
 /// Wrapped output is rebuilt only when records or display options change.
@@ -115,7 +56,6 @@ impl SessionCache {
 struct LayoutCache {
     records: Vec<Rc<DetailRecord>>,
     query: String,
-    raw: bool,
     width: usize,
     lines: Vec<Line<'static>>,
 }
@@ -125,12 +65,10 @@ impl LayoutCache {
         &mut self,
         records: Vec<Rc<DetailRecord>>,
         query: &str,
-        raw: bool,
         width: usize,
     ) -> &[Line<'static>] {
         let unchanged = self.width == width
             && self.query == query
-            && self.raw == raw
             && self.records.len() == records.len()
             && self
                 .records
@@ -138,7 +76,7 @@ impl LayoutCache {
                 .zip(&records)
                 .all(|(a, b)| Rc::ptr_eq(a, b) || a == b);
         if !unchanged {
-            self.lines = Details::render_records(&records, query, raw)
+            self.lines = Details::render_records(&records, query)
                 .into_iter()
                 .flat_map(|(style, text)| {
                     wrap(&text, width)
@@ -148,19 +86,10 @@ impl LayoutCache {
                 .collect();
             self.records = records;
             self.query = query.to_owned();
-            self.raw = raw;
             self.width = width;
         }
         &self.lines
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct OverviewCache {
-    key: String,
-    revision: Option<u64>,
-    expanded: bool,
-    record: Rc<DetailRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -183,7 +112,8 @@ pub type Drafts = std::rc::Rc<std::cell::RefCell<HashMap<(String, String), Compo
 pub struct Details {
     pub native: HashMap<String, super::native_view::Snapshot>,
     pub native_focus: bool,
-    pub native_history: bool,
+    /// An earlier round was chosen and its session is being resumed to look at.
+    pub resume_round: bool,
     pub native_areas: [Rect; 2],
     /// Last rendered document viewport, excluding the scrollbar.
     pub text_area: Rect,
@@ -194,10 +124,9 @@ pub struct Details {
     pub active_panel: usize,
     pub panel_scroll: [usize; 2],
     pub panel_expanded: [bool; 2],
+    /// Disk-backed history documents of the fetched task: result, messages, review.
     pub documents: HashMap<String, super::document::Document>,
-    pub round_agents: HashMap<String, super::view::Agent>,
     panel_layout: [LayoutCache; 2],
-    overview_cache: [Option<OverviewCache>; 2],
     pub fetched_events: u64,
     pub fetch_in_flight: bool,
     pub task_uuid: Option<String>,
@@ -236,20 +165,15 @@ pub struct Details {
     pub query: String,
     /// Whether user is typing a query in search mode
     pub searching: bool,
-    /// Readable view (false) vs raw JSON (true)
-    pub raw: bool,
     /// Retained turn metadata returned by the daemon
     pub sessions: Vec<SessionInfo>,
     /// Explicit flag indicating missing/pruned historical data
     pub history_unavailable: bool,
-    /// Prompts of the Overview tab are shown whole instead of folded.
-    pub expand_prompts: bool,
     /// Follow new entries by default; scrolling up pauses, G/End resumes.
     pub follow: bool,
     /// Full task metadata, explicitly opened instead of the live transcript.
     pub show_info: bool,
     pub(super) pending_g: bool,
-    session_cache: HashMap<String, SessionCache>,
     layout_cache: LayoutCache,
 }
 
@@ -292,24 +216,6 @@ impl Details {
             })
             .unwrap_or_default();
         self.documents.clear();
-        self.round_agents.clear();
-        if let Some(transcripts) = task["_transcripts"].as_object() {
-            for (key, events) in transcripts {
-                let mut projection = View::session_history();
-                if let Some(events) = events.as_array() {
-                    for event in events {
-                        projection.apply(event);
-                    }
-                }
-                let mut agent = projection.agents.into_values().next().unwrap_or_default();
-                // The durable projection is already scoped to one round.
-                agent.feed_dropped = 0;
-                self.round_agents.insert(key.clone(), agent);
-            }
-        }
-        if self.task.as_ref().and_then(|old| old["round"].as_u64()) != task["round"].as_u64() {
-            self.overview_cache = Default::default();
-        }
         self.task = Some(task);
     }
 
@@ -319,7 +225,7 @@ impl Details {
             selected_round: None,
             native: HashMap::new(),
             native_focus: false,
-            native_history: false,
+            resume_round: false,
             native_areas: [Rect::default(); 2],
             available_rounds: Vec::new(),
             latest_observed: 0,
@@ -327,9 +233,7 @@ impl Details {
             panel_scroll: [0; 2],
             panel_expanded: [false; 2],
             documents: HashMap::new(),
-            round_agents: HashMap::new(),
             panel_layout: Default::default(),
-            overview_cache: Default::default(),
             fetched_events: 0,
             fetch_in_flight: false,
             task_uuid: None,
@@ -355,14 +259,11 @@ impl Details {
             query_memory: HashMap::new(),
             query: String::new(),
             searching: false,
-            raw: false,
             sessions: Vec::new(),
             history_unavailable: false,
-            expand_prompts: false,
             follow: true,
             show_info: false,
             pending_g: false,
-            session_cache: HashMap::new(),
             layout_cache: LayoutCache::default(),
         }
     }
@@ -397,15 +298,14 @@ impl Details {
         self.fetch_in_flight = false;
         self.show_info = false;
         self.selected_round = None;
+        self.resume_round = false;
         self.task_uuid = None;
         self.available_rounds.clear();
         self.documents.clear();
-        self.round_agents.clear();
-        self.overview_cache = Default::default();
+        self.resume_round = false;
         self.panel_scroll = [0; 2];
         self.panel_expanded = [false; 2];
         self.active_panel = usize::from(self.key.starts_with("verifier:"));
-        self.session_cache.clear();
         // A different element is a different task: its old record is gone.
         self.task = None;
         self.fetch_in_flight = false;
@@ -454,8 +354,7 @@ impl Details {
             self.editing = false;
             self.task = None;
             self.documents.clear();
-            self.round_agents.clear();
-            self.overview_cache = Default::default();
+            self.resume_round = false;
             self.scroll = 0;
             self.panel_scroll = [0; 2];
             self.follow = false;
@@ -530,7 +429,7 @@ impl Details {
 
     pub fn lines(&mut self, view: &View) -> Vec<(Style, String)> {
         let records = self.records(view);
-        Self::render_records(&records, &self.query, self.raw)
+        Self::render_records(&records, &self.query)
     }
 
     /// Compact header; source prompts remain in the session document.
@@ -540,10 +439,7 @@ impl Details {
             .get(self.active_panel)
             .cloned()
             .unwrap_or_else(|| self.key.clone());
-        let agent = self
-            .round_agents
-            .get(&key)
-            .or_else(|| view.agents.get(&key));
+        let agent = view.agents.get(&key);
         let mut summary = agent.map_or_else(String::new, |agent| {
             format!(
                 "{} · {} · {}",
@@ -576,11 +472,7 @@ impl Details {
         }
     }
 
-    fn render_records(
-        records: &[Rc<DetailRecord>],
-        query: &str,
-        raw: bool,
-    ) -> Vec<(Style, String)> {
+    fn render_records(records: &[Rc<DetailRecord>], query: &str) -> Vec<(Style, String)> {
         let mut out = vec![];
         let query_lower = query.trim().to_lowercase();
         if !query.is_empty() {
@@ -588,10 +480,7 @@ impl Details {
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
-                format!(
-                    "🔍 Record filter: \"{}\"  (v: toggle raw/readable view · Esc: clear)",
-                    query
-                ),
+                format!("🔍 Record filter: \"{}\"  (Esc: clear)", query),
             ));
             out.push((Style::default(), String::new()));
         }
@@ -601,21 +490,7 @@ impl Details {
                 query_lower.is_empty() || rec.search_text.to_lowercase().contains(&query_lower);
             if is_match {
                 matched_records += 1;
-                if raw {
-                    if let Some(val) = &rec.raw_value {
-                        let pretty = serde_json::to_string_pretty(val).unwrap_or_default();
-                        for line in pretty.lines() {
-                            out.push((Style::default().fg(Color::Green), line.to_owned()));
-                        }
-                    } else {
-                        for (style, line) in &rec.lines {
-                            out.push((*style, format!("[RAW] {line}")));
-                        }
-                    }
-                    out.push((Style::default(), String::new()));
-                } else {
-                    out.extend(rec.lines.iter().cloned());
-                }
+                out.extend(rec.lines.iter().cloned());
             }
         }
         if !query_lower.is_empty() && matched_records == 0 {
@@ -633,10 +508,7 @@ impl Details {
             )
         };
         let is_conv = self.key == "conversation";
-        let agent = self
-            .round_agents
-            .get(&self.key)
-            .or_else(|| view.agents.get(&self.key));
+        let agent = view.agents.get(&self.key);
         let task = self
             .task_id()
             .and_then(|id| view.tasks.iter().find(|task| task.id == id));
@@ -655,7 +527,7 @@ impl Details {
                 }
                 lines.push(plain("Open /requirements for sources, evidence and version history. Task approval alone does not verify requirements.".into()));
                 let text = lines.iter().map(|(_,text)|text.as_str()).collect::<Vec<_>>().join(" ");
-                records.push(Rc::new(DetailRecord {lines,search_text:text,raw_value:None}));
+                records.push(Rc::new(DetailRecord {lines,search_text:text}));
             }
             0 => {
                 if is_conv {
@@ -712,14 +584,6 @@ impl Details {
                     records.push(Rc::new(DetailRecord {
                         lines: conv_lines,
                         search_text: text,
-                        raw_value: Some(serde_json::json!({
-                            "plan": view.plan,
-                            "tasks_total": total_tasks,
-                            "tasks_done": done_tasks,
-                            "autonomous": view.autonomous,
-                            "paused": view.paused,
-                            "idle": view.idle,
-                        })),
                     }));
                 } else if self.show_info {
                     if let Some(agent) = agent.filter(|agent| !agent.provider.is_empty()) {
@@ -749,15 +613,6 @@ impl Details {
                         records.push(Rc::new(DetailRecord {
                             lines: cli_lines,
                             search_text: text,
-                            raw_value: Some(serde_json::json!({
-                                "provider": agent.provider,
-                                "model": agent.model,
-                                "effort": agent.effort,
-                                "turns": agent.turns,
-                                "tokens_in": agent.tokens_in,
-                                "tokens_out": agent.tokens_out,
-                                "busy_ms": agent.busy_ms,
-                            })),
                         }));
                     }
                     if let Some(task) = task {
@@ -830,7 +685,6 @@ impl Details {
                         records.push(Rc::new(DetailRecord {
                             lines: task_lines,
                             search_text: text,
-                            raw_value: self.task.clone(),
                         }));
                     }
                     if let Some(agent) = agent {
@@ -848,108 +702,23 @@ impl Details {
                         records.push(Rc::new(DetailRecord {
                             lines: act_lines,
                             search_text: text,
-                            raw_value: Some(serde_json::json!({
-                                "running": agent.running,
-                                "activity": agent.activity,
-                            })),
                         }));
                     } else if task.is_none() {
                         records.push(Rc::new(DetailRecord {
                             lines: vec![plain("This agent has not worked yet.".into())],
                             search_text: "This agent has not worked yet.".into(),
-                            raw_value: None,
                         }));
                     }
                 }
-                if !self.show_info && !is_conv {
-                    let mut keys = self.session_keys();
-                    let has_events = |key: &String| view.agents.get(key).is_some_and(|agent|
-                        !agent.feed.is_empty() || !agent.session.is_empty() || agent.pid.is_some());
-                    if keys.iter().any(has_events) {
-                        keys.retain(has_events);
-                    }
-                    // Keep the currently running role at the tail of the shared
-                    // transcript, including a worker repairing a verifier round.
-                    keys.sort_by_key(|key| view.agents.get(key).map(|a| (a.running, a.feed_revision)));
-                    for key in keys {
-                        let role = key.split_once(':').map_or(key.as_str(), |(role, _)| role);
-                        let heading = format!("Session · {role}");
-                        records.push(Rc::new(DetailRecord {
-                            lines: vec![plain(String::new()), label(&heading)],
-                            search_text: heading,
-                            raw_value: Some(serde_json::json!({ "agent": key })),
-                        }));
-                        let agent = self.round_agents.get(&key).or_else(|| self.selected_round.is_none().then(||view.agents.get(&key)).flatten());
-                        if let Some(agent) = agent
-                            && (!agent.feed.is_empty() || !agent.session.is_empty() || agent.pid.is_some())
-                        {
-                            let pid_label = agent
-                                .pid
-                                .map(|p| format!("PID {p}"))
-                                .unwrap_or_else(|| "no active PID".into());
-                            let state = if agent.running { "running" } else { "idle" };
-                            let provider = if agent.provider.is_empty() {
-                                "agent"
-                            } else {
-                                agent.provider.as_str()
-                            };
-                            let header = format!("{provider} · {state} · {pid_label}");
-                            records.push(Rc::new(DetailRecord {
-                                lines: vec![(
-                                    Style::default()
-                                        .fg(Color::Cyan)
-                                        .add_modifier(Modifier::BOLD),
-                                    header.clone(),
-                                )],
-                                search_text: format!("session {header}"),
-                                raw_value: Some(serde_json::json!({
-                                    "agent": key,
-                                    "status": state,
-                                    "pid": agent.pid,
-                                })),
-                            }));
-                            if agent.feed_dropped > 0 {
-                                records.push(Rc::new(DetailRecord {
-                                    lines: vec![(
-                                        dim(),
-                                        format!("… {} earlier entries are not shown", agent.feed_dropped),
-                                    )],
-                                    search_text: "earlier entries".into(),
-                                    raw_value: None,
-                                }));
-                            }
-                            if agent.feed.is_empty() {
-                                // Older event logs only kept the short summary lines.
-                                for line in &agent.session {
-                                    records.push(Rc::new(DetailRecord {
-                                        lines: vec![(Style::default(), line.clone())],
-                                        search_text: line.clone(),
-                                        raw_value: Some(serde_json::json!({ "session": line })),
-                                    }));
-                                }
-                            }
-                            records.extend(self.session_cache.entry(key.clone()).or_default()
-                                .records(provider, &agent.feed, self.expand_prompts, agent.feed_revision).iter().cloned());
-                        } else {
-                            records.push(Rc::new(DetailRecord {
-                                lines: vec![(
-                                    dim(),
-                                    "No session events for this agent. [historical data unavailable or agent has not worked yet]. Tool events will appear during work.".into(),
-                                )],
-                                search_text: "no session events historical data unavailable".into(),
-                                raw_value: None,
-                            }));
-                        }
-                    }
-                }
+
             }
             1 if self.task.as_ref().is_some_and(|task| task["messages"].is_array()) => {
                 for message in self.task.as_ref().unwrap()["messages"].as_array().unwrap() {
                     let text = format!("{} -> {} · {}\n{}",message["sender"].as_str().unwrap_or_default(),message["recipient"].as_str().unwrap_or_default(),
                         if message["delivered_turn"].is_string() {"delivered"} else {"queued"},message["text"].as_str().unwrap_or_default());
-                    records.push(Rc::new(DetailRecord {lines:vec![plain(text.clone())],search_text:text,raw_value:Some(message.clone())}));
+                    records.push(Rc::new(DetailRecord {lines:vec![plain(text.clone())],search_text:text}));
                 }
-                if records.is_empty() { records.push(Rc::new(DetailRecord{lines:vec![(dim(),"No messages in this round.".into())],search_text:String::new(),raw_value:None})); }
+                if records.is_empty() { records.push(Rc::new(DetailRecord{lines:vec![(dim(),"No messages in this round.".into())],search_text:String::new()})); }
             }
             1 => {
                 let mailbox_items = view.mailbox.get(&self.key);
@@ -959,7 +728,6 @@ impl Details {
                             records.push(Rc::new(DetailRecord {
                                 lines: vec![plain(item.clone())],
                                 search_text: item.clone(),
-                                raw_value: Some(serde_json::json!({ "mail": item })),
                             }));
                         }
                     }
@@ -971,23 +739,15 @@ impl Details {
                                 format!("No messages. [no recorded messages in history for this agent]. Use '@{id} message' in chat to write to this agent."),
                             )],
                             search_text: "no messages".into(),
-                            raw_value: None,
                         }));
                     }
                 }
-            }
-            REVIEW if self.round_agents.contains_key(&self.key) => {
-                let lines = self.round_agents[&self.key].feed.iter().filter_map(|block| match block {
-                    super::session::Block::Final(text) => Some(plain(text.clone())), _ => None,
-                }).collect::<Vec<_>>();
-                records.push(Rc::new(DetailRecord {search_text:lines.iter().map(|(_,text)| text.as_str()).collect::<Vec<_>>().join(" "),lines,raw_value:None}));
             }
             REVIEW => match view.reviews.get(&self.key) {
                 Some(review) if !review.is_empty() => {
                     records.push(Rc::new(DetailRecord {
                         lines: review.iter().cloned().map(plain).collect(),
                         search_text: review.join(" "),
-                        raw_value: Some(serde_json::json!({ "review": review })),
                     }));
                 }
                 _ => records.push(Rc::new(DetailRecord {
@@ -997,7 +757,6 @@ impl Details {
                             .into(),
                     )],
                     search_text: "no review".into(),
-                    raw_value: None,
                 })),
             },
             COMMENTS => {
@@ -1009,7 +768,6 @@ impl Details {
                             "No comments. [no comments in history for this element]. Press 'c' to add a comment to this element.".into(),
                         )],
                         search_text: "no comments".into(),
-                        raw_value: None,
                     }));
                 } else {
                     self.comment = self.comment.min(comments.len().saturating_sub(1));
@@ -1039,7 +797,6 @@ impl Details {
                         records.push(Rc::new(DetailRecord {
                             lines: vec![(style, header_str), (Style::default(), text_str)],
                             search_text,
-                            raw_value: Some(serde_json::to_value(comment).unwrap_or_default()),
                         }));
                     }
                 }
@@ -1051,12 +808,10 @@ impl Details {
                         "Tasks have checks: task risks and its kind's checklist, accounted for by the verifier. [no check data in history]".into(),
                     )],
                     search_text: "tasks have checks".into(),
-                    raw_value: None,
                 })),
                 (None, Some(_)) => records.push(Rc::new(DetailRecord {
                     lines: vec![(dim(), "Loading…".into())],
                     search_text: "loading".into(),
-                raw_value: None,
                 })),
                 (Some(stored), Some(_)) => {
                     let rows = check_rows(stored);
@@ -1100,7 +855,6 @@ impl Details {
                             .collect::<Vec<_>>()
                             .join(" "),
                         lines: head,
-                        raw_value: None,
                     }));
                     for (index, row) in rows.iter().enumerate() {
                         let selected = index == self.check;
@@ -1150,10 +904,6 @@ impl Details {
                                 .collect::<Vec<_>>()
                                 .join(" "),
                             lines,
-                            raw_value: Some(serde_json::json!({
-                                "id": row.id, "state": row.state,
-                                "status": row.status, "evidence": row.note,
-                            })),
                         }));
                     }
                 }
@@ -1165,12 +915,10 @@ impl Details {
                         "Task workers and verifiers have results; plan verifier and auditor results are in Overview. [no historical result data]".into(),
                     )],
                     search_text: "workers and verifiers have results".into(),
-                    raw_value: None,
                 })),
                 (None, Some(_)) => records.push(Rc::new(DetailRecord {
                     lines: vec![(dim(), "Loading…".into())],
                     search_text: "loading".into(),
-                    raw_value: None,
                 })),
                 (Some(stored), Some(_)) if verifier => match &stored["verdict"] {
                     Value::Null => records.push(Rc::new(DetailRecord {
@@ -1179,7 +927,6 @@ impl Details {
                             "Verifier has not evaluated the task yet (verdict will appear after verification). [no historical verdict data]".into(),
                         )],
                         search_text: "verifier has not evaluated".into(),
-                        raw_value: None,
                     })),
                     verdict => {
                         let mut lines = vec![];
@@ -1217,7 +964,6 @@ impl Details {
                         records.push(Rc::new(DetailRecord {
                             lines,
                             search_text: text,
-                            raw_value: Some(verdict.clone()),
                         }));
                     }
                 },
@@ -1246,10 +992,6 @@ impl Details {
                     records.push(Rc::new(DetailRecord {
                         lines: art_lines,
                         search_text: art_text,
-                        raw_value: Some(serde_json::json!({
-                            "base": stored["base"],
-                            "result": stored["result"],
-                        })),
                     }));
 
                     let mut rep_lines = vec![];
@@ -1273,9 +1015,6 @@ impl Details {
                     records.push(Rc::new(DetailRecord {
                         lines: rep_lines,
                         search_text: rep_text,
-                        raw_value: Some(serde_json::json!({
-                            "report": stored["report"],
-                        })),
                     }));
 
                     let mut ev_lines = vec![label("Evidence and findings")];
@@ -1302,7 +1041,6 @@ impl Details {
                     records.push(Rc::new(DetailRecord {
                         lines: ev_lines,
                         search_text: ev_text,
-                        raw_value: Some(stored["verdict"].clone()),
                     }));
                 }
             },
@@ -1328,11 +1066,7 @@ impl Details {
             };
             let key = &keys[panel];
             let active = panel == self.active_panel;
-            let running = self
-                .round_agents
-                .get(key)
-                .or_else(|| view.agents.get(key))
-                .is_some_and(|agent| agent.running);
+            let running = view.agents.get(key).is_some_and(|agent| agent.running);
             let mut block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(if active { theme.dim() } else { theme.faint() })
@@ -1340,10 +1074,10 @@ impl Details {
                     " {}Session · {} · {} ",
                     if active { "> " } else { "" },
                     key.split(':').next().unwrap_or(key),
-                    if running && self.selected_round.is_none() {
-                        "LIVE"
-                    } else {
-                        "history"
+                    match (self.selected_round, running) {
+                        (Some(round), _) => format!("round {round}"),
+                        (None, true) => "LIVE".to_owned(),
+                        (None, false) => "idle".to_owned(),
                     }
                 )));
             if theme.ascii {
@@ -1366,9 +1100,7 @@ impl Details {
                 inner.width,
                 inner.height.saturating_sub(1),
             );
-            if self.selected_round.is_none()
-                && !self.native_history
-                && !self.editing
+            if !self.editing
                 && let Some(snapshot) = self.native.get(key)
                 && let Some(screen) = &snapshot.screen
             {
@@ -1385,7 +1117,7 @@ impl Details {
                     .unwrap_or(if self.native_focus && active {
                         "Ctrl+] antislop"
                     } else {
-                        "i terminal · a message · h JSON · r retry"
+                        "i terminal · a message · r retry"
                     });
                 frame.render_widget(
                     Paragraph::new(theme.clean(status)).style(theme.dim()),
@@ -1398,46 +1130,48 @@ impl Details {
                 );
                 continue;
             }
-            let [inner, composer_area] =
+            // No terminal to show: still attaching, failed, or an earlier
+            // round whose session is only opened on request (it is resumed).
+            if active {
+                self.text_area = inner;
+                self.scroll = 0;
+            }
+            let [_, composer_area] =
                 Layout::vertical([Constraint::Min(1), Constraint::Length(4.min(inner.height))])
                     .areas(inner);
             let draft_key = (self.conversation.clone(), self.composer_recipient(key));
             let drafts = self.drafts.borrow();
             let composer = drafts.get(&draft_key);
             let input = composer.map(|composer| &composer.input);
-            let status = if self.selected_round.is_some() {
-                "Return to current round to send"
-            } else if composer.is_some_and(|composer| composer.sending) {
+            let status = if composer.is_some_and(|composer| composer.sending) {
                 "Sending..."
             } else if let Some(error) = composer.and_then(|composer| composer.error.as_deref()) {
                 error
             } else if active && self.editing {
                 "Enter send · Alt+Enter newline · Esc navigation"
+            } else if let Some(delivery) =
+                composer.and_then(|composer| composer.delivery.as_deref())
+            {
+                delivery
+            } else if let Some(error) = self
+                .native
+                .get(key)
+                .and_then(|snapshot| snapshot.error.as_deref())
+            {
+                error
+            } else if self.selected_round.is_some() {
+                "Earlier round · o resume this session (read-only)"
             } else {
-                composer
-                    .and_then(|composer| composer.delivery.as_deref())
-                    .unwrap_or_else(|| {
-                        if self.native_history {
-                            "JSON history · h terminal · i message"
-                        } else if let Some(snapshot) = self.native.get(key) {
-                            snapshot
-                                .error
-                                .as_deref()
-                                .unwrap_or("Attaching native terminal… · h JSON")
-                        } else {
-                            "Native attachment unavailable · JSON history · i message"
-                        }
-                    })
+                "Attaching terminal… · r retry"
             };
-            let status_area = Rect::new(
-                composer_area.x,
-                composer_area.y,
-                composer_area.width,
-                1.min(composer_area.height),
-            );
             frame.render_widget(
                 Paragraph::new(theme.clean(status)).style(theme.dim()),
-                status_area,
+                Rect::new(
+                    composer_area.x,
+                    composer_area.y,
+                    composer_area.width,
+                    1.min(composer_area.height),
+                ),
             );
             let input_area = Rect::new(
                 composer_area.x,
@@ -1474,179 +1208,6 @@ impl Details {
                     ));
                 }
             }
-            drop(drafts);
-            let document_area = Rect::new(
-                inner.x,
-                inner.y,
-                inner.width.saturating_sub(1),
-                inner.height,
-            );
-            if let Some(document) = self.documents.get(key) {
-                let requested = if active {
-                    self.scroll
-                } else {
-                    self.panel_scroll[panel]
-                };
-                match document.viewport_options(
-                    usize::from(document_area.width),
-                    usize::from(document_area.height),
-                    requested,
-                    active && self.follow && self.panel_expanded[panel],
-                    self.panel_expanded[panel] || !self.query.is_empty() || self.raw,
-                    &self.query,
-                    self.raw,
-                ) {
-                    Ok(Some(page)) => {
-                        self.panel_scroll[panel] = page.scroll;
-                        if active {
-                            self.scroll = page.scroll;
-                            self.text_area = document_area;
-                        }
-                        frame.render_widget(
-                            Paragraph::new(
-                                page.lines
-                                    .into_iter()
-                                    .map(|(dim, text)| {
-                                        Line::styled(
-                                            theme.clean(&text),
-                                            if dim { theme.dim() } else { Style::default() },
-                                        )
-                                    })
-                                    .collect::<Vec<_>>(),
-                            ),
-                            document_area,
-                        );
-                        if page.total > usize::from(document_area.height) && inner.width > 0 {
-                            let bottom =
-                                page.total.saturating_sub(usize::from(document_area.height));
-                            let mut state = ScrollbarState::new(bottom.saturating_add(1))
-                                .position(page.scroll)
-                                .viewport_content_length(usize::from(document_area.height));
-                            frame.render_stateful_widget(
-                                Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                                    .begin_symbol(None)
-                                    .end_symbol(None),
-                                inner,
-                                &mut state,
-                            );
-                        }
-                    }
-                    Ok(None) => {
-                        frame.render_widget(
-                            Paragraph::new("Preparing session view...").style(theme.dim()),
-                            document_area,
-                        );
-                    }
-                    Err(error) => {
-                        frame.render_widget(
-                            Paragraph::new(theme.clean(&error.to_string())).style(theme.dim()),
-                            document_area,
-                        );
-                    }
-                }
-                continue;
-            }
-            let agent = self.round_agents.get(key).or_else(|| {
-                (self.selected_round.is_none())
-                    .then(|| view.agents.get(key))
-                    .flatten()
-            });
-            let revision = agent.and_then(|agent| agent.feed_revision);
-            if revision.is_none()
-                || self.overview_cache[panel].as_ref().is_none_or(|cache| {
-                    cache.key != *key
-                        || cache.revision != revision
-                        || cache.expanded != self.panel_expanded[panel]
-                })
-            {
-                let lines = agent.map_or_else(
-                    || vec![(theme.dim(), "No session events for this agent.".into())],
-                    |agent| {
-                        super::session::overview(
-                            &agent.provider,
-                            &agent.feed,
-                            self.panel_expanded[panel],
-                        )
-                    },
-                );
-                self.overview_cache[panel] = Some(OverviewCache {
-                    key: key.clone(),
-                    revision,
-                    expanded: self.panel_expanded[panel],
-                    record: Rc::new(DetailRecord {
-                        search_text: String::new(),
-                        raw_value: None,
-                        lines,
-                    }),
-                });
-            }
-            let record = Rc::clone(
-                &self.overview_cache[panel]
-                    .as_ref()
-                    .expect("cached overview")
-                    .record,
-            );
-            let lines = self.panel_layout[panel].update(
-                vec![record],
-                "",
-                false,
-                usize::from(document_area.width),
-            );
-            let bottom = lines.len().saturating_sub(usize::from(inner.height));
-            let scroll = if active && self.follow && self.panel_expanded[panel] {
-                bottom
-            } else if active {
-                self.scroll.min(bottom)
-            } else {
-                self.panel_scroll[panel].min(bottom)
-            };
-            self.panel_scroll[panel] = scroll;
-            if active {
-                self.scroll = scroll;
-                self.text_area = document_area;
-            }
-            let end = scroll
-                .saturating_add(usize::from(inner.height))
-                .min(lines.len());
-            let visible = lines[scroll..end]
-                .iter()
-                .cloned()
-                .map(|line| {
-                    Line::from(
-                        line.spans
-                            .into_iter()
-                            .map(|span| {
-                                Span::styled(
-                                    theme.clean(&span.content),
-                                    if theme.color {
-                                        span.style
-                                    } else {
-                                        Style {
-                                            fg: None,
-                                            bg: None,
-                                            ..span.style
-                                        }
-                                    },
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            frame.render_widget(Paragraph::new(visible), document_area);
-            if lines.len() > usize::from(inner.height) && inner.width > 0 {
-                let mut state = ScrollbarState::new(bottom.saturating_add(1))
-                    .position(scroll)
-                    .viewport_content_length(usize::from(inner.height));
-                let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                    .begin_symbol(None)
-                    .end_symbol(None)
-                    .track_symbol(Some(theme.glyphs().track))
-                    .thumb_symbol(theme.glyphs().thumb)
-                    .track_style(theme.faint())
-                    .thumb_style(theme.dim());
-                frame.render_stateful_widget(scrollbar, inner, &mut state);
-            }
         }
     }
 
@@ -1675,14 +1236,6 @@ impl Details {
         .areas(area);
 
         let mut tabs_line = format_tabs(&self.key, self.tab, usize::from(header.width));
-        if self.raw {
-            tabs_line.spans.push(Span::styled(
-                " [RAW] ",
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        }
         if !self.query.is_empty() {
             tabs_line.spans.push(Span::styled(
                 format!(" [🔍 \"{}\"]", self.query),
@@ -1737,16 +1290,12 @@ impl Details {
             body.y = body.y.saturating_add(1);
             body.height = body.height.saturating_sub(1);
         }
-        if self.tab == 0
-            && !self.show_info
-            && self.key != "conversation"
-            && ((self.query.is_empty() && !self.raw) || !self.documents.is_empty())
-        {
+        if self.tab == 0 && !self.show_info && self.key != "conversation" && self.query.is_empty() {
             self.draw_overview(frame, view, body, &theme);
             let hint = if self.searching {
                 format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
             } else {
-                "i terminal/message · a message · Ctrl+] release · Ctrl+W panel · h JSON · Esc back"
+                "i terminal · a message · o resume earlier round · Ctrl+] release · Ctrl+W panel · Esc back"
                     .into()
             };
             frame.render_widget(
@@ -1790,14 +1339,12 @@ impl Details {
             _ => None,
         };
         if let Some(document) = document_key.and_then(|key| self.documents.get(key)) {
-            match document.viewport_options(
+            match document.viewport_filtered(
                 width,
                 usize::from(inner.height),
                 self.scroll,
                 false,
-                false,
                 &self.query,
-                self.raw,
             ) {
                 Ok(Some(page)) => {
                     self.scroll = page.scroll;
@@ -1849,9 +1396,7 @@ impl Details {
         }
 
         let records = self.records(view);
-        let lines = self
-            .layout_cache
-            .update(records, &self.query, self.raw, width);
+        let lines = self.layout_cache.update(records, &self.query, width);
         let height = usize::from(inner.height);
         let bottom = lines.len().saturating_sub(height);
         if self.tab == CHECKS
@@ -1926,7 +1471,7 @@ pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
         }
     } else if tab == CHECKS {
         if width >= 80 {
-            "Tab tabs · ←/→ rounds · ↑/↓ select check · c comment on check · / search · v raw · d diff · ? help · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ select check · c comment on check · / search · d diff · ? help · Esc back"
         } else if width >= 45 {
             "Tab tabs · ←/→ rounds · ↑/↓ select · c comment · Esc"
         } else {
@@ -1934,9 +1479,9 @@ pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
         }
     } else if tab == COMMENTS {
         if width >= 95 {
-            "Tab tabs · ←/→ rounds · ↑/↓ select · / search · v raw · c comment · r resolve · o reopen · x delete · d diff · ? help · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ select · / search · c comment · r resolve · o reopen · x delete · d diff · ? help · Esc back"
         } else if width >= 65 {
-            "Tab tabs · ←/→ rounds · ↑/↓ select · / search · v raw · c add · r/o/x status · d diff · Esc back"
+            "Tab tabs · ←/→ rounds · ↑/↓ select · / search · c add · r/o/x status · d diff · Esc back"
         } else if width >= 45 {
             "Tab tabs · ←/→ rounds · ↑/↓ select · c add · r/o/x · Esc"
         } else {
@@ -2129,103 +1674,79 @@ pub fn check_rows(stored: &Value) -> Vec<CheckRow> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn session_cache_reuses_records_and_invalidates_changed_inputs() {
-        use super::super::session::Block;
-        let mut cache = SessionCache::default();
-        let prompt = Block::Prompt((0..10).map(|n| format!("prompt {n}\n")).collect());
-        let blocks = vec![prompt.clone(), Block::Text("old".into())];
-        cache.records("codex", &blocks, false, None);
-        let allocation = cache.records[0].search_text.as_ptr();
-        cache.records("codex", &blocks, false, None);
-        assert_eq!(cache.records[0].search_text.as_ptr(), allocation);
-        let changed = vec![prompt, Block::Text("new".into())];
-        cache.records("codex", &changed, false, None);
-        assert_eq!(cache.records[0].search_text.as_ptr(), allocation);
-        assert!(cache.records[1].search_text.contains("new"));
-        cache.records("codex", &changed, true, None);
-        assert!(cache.records[0].search_text.contains("prompt 9"));
-        cache.records("claude", &changed, true, None);
-        assert!(cache.records[0].search_text.contains("> prompt 0"));
-        cache.records("claude", &changed[1..], true, None);
-        assert_eq!(cache.records.len(), 1);
-        assert!(cache.records[0].search_text.contains("new"));
+    fn screen(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
     }
 
     #[test]
-    fn runtime_revision_reuses_shared_records_and_updates_new_entries() {
-        use super::super::session::Block;
-        let mut cache = SessionCache::default();
-        let mut blocks = vec![Block::Text("worker output".into())];
-        let first = Rc::clone(&cache.records("codex", &blocks, false, Some(1))[0]);
-        let unchanged = Rc::clone(&cache.records("codex", &blocks, false, Some(1))[0]);
-        assert!(Rc::ptr_eq(&first, &unchanged));
-        blocks.push(Block::Text("new output".into()));
-        let updated = cache.records("codex", &blocks, false, Some(2));
-        assert!(Rc::ptr_eq(&first, &updated[0]));
-        assert!(updated[1].search_text.contains("new output"));
-        blocks.remove(0);
-        let trimmed = cache.records("codex", &blocks, false, Some(3));
-        assert_eq!(trimmed.len(), 1);
-        assert!(trimmed[0].search_text.contains("new output"));
-    }
-
-    #[test]
-    fn redraw_and_scroll_reuse_layout_but_content_and_display_changes_refresh_it() {
-        use super::super::session::Block;
-        let mut view = View::default();
-        view.agents.insert(
+    fn a_panel_without_a_terminal_says_what_it_waits_for() {
+        let view = View::default();
+        let mut details = Details::new("worker:t1".into());
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        assert!(screen(&terminal).contains("Attaching terminal"));
+        details.native.insert(
             "worker:t1".into(),
-            super::super::view::Agent {
-                provider: "codex".into(),
-                feed: vec![Block::Text("unique transcript entry".into())],
-                ..Default::default()
+            super::super::native_view::Snapshot {
+                screen: None,
+                error: Some("claude exited (exit status: 1): login required".into()),
             },
         );
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        let drawn = screen(&terminal);
+        assert!(drawn.contains("login required"), "the raw failure is shown");
+        details.native.clear();
+        details.selected_round = Some(1);
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        assert!(screen(&terminal).contains("o resume this session"));
+    }
+
+    #[test]
+    fn an_attached_terminal_fills_the_session_panel() {
+        let view = View::default();
         let mut details = Details::new("worker:t1".into());
-        details.panel_expanded[0] = true;
         let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
-        let screen = |terminal: &Terminal<TestBackend>| {
-            terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>()
-        };
+        // The first draw tells the panel how large its terminal may be.
         terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(screen(&terminal).contains("unique transcript entry"));
-        let original = details.layout_cache.lines.as_ptr();
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert_eq!(original, details.layout_cache.lines.as_ptr());
-        details.scroll = 1;
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert_eq!(original, details.layout_cache.lines.as_ptr());
-        details.scroll = 0;
-        details.query = "absent query".into();
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(screen(&terminal).contains("No records matching"));
-        assert!(!screen(&terminal).contains("unique transcript entry"));
-        details.query = "unique transcript".into();
-        details.raw = true;
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(screen(&terminal).contains("\"session\""));
-        details.query.clear();
-        details.raw = false;
-        view.agents.get_mut("worker:t1").unwrap().feed =
-            vec![Block::Text("replacement entry".into())];
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(screen(&terminal).contains("replacement entry"));
-        assert!(!screen(&terminal).contains("unique transcript entry"));
-        let mut narrow = Terminal::new(TestBackend::new(16, 30)).unwrap();
-        narrow.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(
-            details.panel_layout[0]
-                .lines
-                .iter()
-                .all(|line| line.width() <= 15)
+        let area = details.native_areas[0];
+        assert!(area.width > 0 && area.height > 0);
+        details.native.insert(
+            "worker:t1".into(),
+            super::super::native_view::Snapshot {
+                screen: Some(crate::lean::terminal::Screen {
+                    handle: "h".into(),
+                    revision: 1,
+                    columns: area.width,
+                    rows: area.height,
+                    cursor: None,
+                    cells: "agent says hello"
+                        .chars()
+                        .enumerate()
+                        .map(|(x, ch)| crate::lean::terminal::Cell {
+                            x: x as u16,
+                            y: 0,
+                            text: ch.to_string(),
+                            width: 1,
+                            foreground: None,
+                            background: None,
+                            modifiers: 0,
+                        })
+                        .collect(),
+                    error: None,
+                }),
+                error: None,
+            },
         );
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        let drawn = screen(&terminal);
+        assert!(drawn.contains("agent says hello"));
+        assert!(drawn.contains("i terminal"));
     }
 
     #[test]
@@ -2248,39 +1769,6 @@ mod tests {
                 }
                 assert!(!details_footer_hint_for(key, tab, 30).contains("1–"));
             }
-        }
-    }
-
-    #[test]
-    fn overview_opens_at_latest_session_for_all_agent_roles() {
-        use super::super::session::Block;
-        for key in ["worker:t1", "verifier:t1", "orchestrator", "auditor"] {
-            let mut view = View::default();
-            view.tasks.push(super::super::view::TaskRow {
-                id: "t1".into(),
-                goal: "Opening summary".into(),
-                ..Default::default()
-            });
-            view.agents.insert(
-                key.into(),
-                super::super::view::Agent {
-                    feed: (0..100)
-                        .map(|n| Block::Text(format!("entry {n}")))
-                        .collect(),
-                    ..Default::default()
-                },
-            );
-            let mut details = Details::new(key.into());
-            details.panel_expanded = [true; 2];
-            let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
-            terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-            assert!(details.scroll > 0, "{key}");
-            assert!(details.follow, "{key}");
-            details.switch_tab(1);
-            details.switch_tab(0);
-            terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-            assert!(details.scroll > 0, "{key} on returning");
-            assert!(details.follow, "{key} on returning");
         }
     }
 
@@ -2358,15 +1846,6 @@ mod tests {
     fn details_empty_states() {
         let view = View::default();
         let mut details = Details::new("worker:t1".into());
-
-        // Overview includes session empty states
-        details.tab = 0;
-        let lines = details.lines(&view);
-        assert!(
-            lines
-                .iter()
-                .any(|(_, text)| text.contains("No session events"))
-        );
 
         // Messages empty state
         details.tab = 1;

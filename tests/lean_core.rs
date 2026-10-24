@@ -30,6 +30,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    common::interactive(&script);
     script
 }
 
@@ -85,6 +86,7 @@ echo '{{"type":"turn.completed"}}'
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    common::interactive(&script);
     script
 }
 
@@ -1122,22 +1124,14 @@ fn process_failure_does_not_persist_credentials_from_cli_files() {
         .unwrap();
     assert_eq!(turn.status, TurnStatus::Failed);
     let stored = turn.error.unwrap();
-    assert!(stored.contains("codex ended without a result (exit status: 1): login required"));
-    assert!(stored.contains("[REDACTED]"));
+    assert!(stored.contains("codex exited"), "{stored}");
+    assert!(stored.contains("login required"), "{stored}");
+    assert!(stored.contains("[REDACTED]"), "{stored}");
     assert!(!stored.contains("file-only-secret"));
     let events =
         serde_json::to_string(&core.store.events_since(&conversation.id, 0, 500).unwrap()).unwrap();
     assert!(!events.contains("file-only-secret"));
     assert!(!events.contains("encoded-token"));
-    assert!(
-        core.store
-            .events_since(&conversation.id, 0, 500)
-            .unwrap()
-            .iter()
-            .any(|event| event.kind == "agent"
-                && event.payload["type"] == "process_exit"
-                && event.payload["code"] == 1)
-    );
 }
 
 #[test]

@@ -1,3 +1,4 @@
+mod common;
 mod support;
 use antislop::{config::Config, lean::Core};
 use serde_json::Value;
@@ -44,6 +45,7 @@ fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Co
         support::install_ledger_protocol(&path);
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        common::interactive(&path);
         path
     };
     let header =
@@ -78,7 +80,9 @@ fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Co
 }
 
 fn wait_idle(core: &Core, conversation: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // Every round starts fresh worker and verifier terminals, and a task runs
+    // up to a dozen rounds.
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !core.is_idle(conversation) {
         assert!(Instant::now() < deadline, "conversation never went idle");
         std::thread::sleep(Duration::from_millis(20));

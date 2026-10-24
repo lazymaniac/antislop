@@ -1,3 +1,4 @@
+mod common;
 use antislop::lean::{
     ledger::*,
     tui::{

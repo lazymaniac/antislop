@@ -20,7 +20,6 @@ mod planhistory;
 pub mod planview;
 pub mod sanitize;
 pub mod selection;
-pub mod session;
 pub mod taskinfo;
 pub mod theme;
 pub mod unblock;
@@ -3776,27 +3775,25 @@ impl App {
                 self.details = None;
                 return;
             }
-            KeyCode::Char('/') => {
-                details.native_history = true;
+            KeyCode::Char('/') if details.tab != 0 || details.show_info => {
                 details.searching = true;
                 details.follow = false;
                 details.query.clear();
                 details.scroll = 0;
                 return;
             }
-            KeyCode::Char('h') if details.tab == 0 && plain => {
-                details.native_history = !details.native_history;
-                details.native_focus = false;
+            KeyCode::Char('o') if details.tab == 0 && plain && details.selected_round.is_some() => {
+                // An earlier round's session is only looked at by resuming it.
+                details.resume_round = true;
                 return;
             }
-            KeyCode::Char('r') if details.tab == 0 && plain && !details.native_history => {
+            KeyCode::Char('r') if details.tab == 0 && plain => {
                 self.native_retry();
                 return;
             }
             KeyCode::Char('i')
                 if details.tab == 0
                     && plain
-                    && !details.native_history
                     && details
                         .native
                         .get(&details.session_keys()[details.active_panel])
@@ -3827,23 +3824,12 @@ impl App {
                 details.follow = !details.show_info;
                 return;
             }
-            KeyCode::Char('v') => {
-                details.native_history = true;
-                details.raw = !details.raw;
-                return;
-            }
             KeyCode::Char('w') if control => {
                 details.panel_scroll[details.active_panel] = details.scroll;
                 if details.task_id().is_some() {
                     details.active_panel = 1 - details.active_panel;
                 }
                 details.scroll = details.panel_scroll[details.active_panel];
-                return;
-            }
-            KeyCode::Enter if details.tab == 0 => {
-                details.expand_prompts = !details.expand_prompts;
-                details.panel_expanded[details.active_panel] =
-                    !details.panel_expanded[details.active_panel];
                 return;
             }
             KeyCode::Char(c @ '1'..='7') => {
@@ -4314,7 +4300,7 @@ impl App {
         let details = self.details.as_ref().map(|details| {
             let mut query = std::collections::hash_map::DefaultHasher::new();
             details.query.hash(&mut query);
-            (&details.key, details.tab, details.raw, query.finish())
+            (&details.key, details.tab, query.finish())
         });
         format!(
             "{}:{}:{}:{:?}:{:?}",
@@ -6362,105 +6348,6 @@ pub mod tests {
         );
         let text: String = wide.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text.matches("[Plan]").count(), 1);
-    }
-
-    #[test]
-    fn enter_folds_and_unfolds_prompts_on_overview_only() {
-        let mut app = test_app();
-        app.view.agents.insert(
-            "worker:t1".into(),
-            view::Agent {
-                provider: "codex".into(),
-                feed: vec![session::Block::Prompt(
-                    (0..20).map(|n| format!("p{n}\n")).collect::<String>(),
-                )],
-                ..view::Agent::default()
-            },
-        );
-        app.details = Some(details::Details::new("worker:t1".into()));
-        app.details.as_mut().unwrap().switch_tab(1);
-        app.key(key_press(KeyCode::Enter));
-        assert!(!app.details.as_ref().unwrap().expand_prompts, "Messages");
-        app.details.as_mut().unwrap().switch_tab(0);
-        app.key(key_press(KeyCode::Enter));
-        let details = app.details.as_mut().unwrap();
-        assert!(details.expand_prompts);
-        let shown: String = details
-            .lines(&app.view)
-            .into_iter()
-            .map(|(_, l)| l)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(shown.contains("p19"));
-        app.key(key_press(KeyCode::Enter));
-        assert!(!app.details.as_ref().unwrap().expand_prompts);
-    }
-
-    #[test]
-    fn the_session_follows_new_entries_until_the_user_scrolls_up() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let mut app = test_app();
-        let feed = |count: usize| {
-            (0..count)
-                .map(|n| session::Block::Text(format!("entry {n}")))
-                .collect::<Vec<_>>()
-        };
-        let agent = |count| view::Agent {
-            provider: "codex".into(),
-            feed: feed(count),
-            ..view::Agent::default()
-        };
-        app.view.agents.insert("worker:t1".into(), agent(40));
-        let mut details = details::Details::new("worker:t1".into());
-        details.panel_expanded[0] = true;
-        details.switch_tab(0);
-        app.details = Some(details);
-        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
-        let screen = |term: &Terminal<TestBackend>| -> String {
-            term.backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|c| c.symbol())
-                .collect()
-        };
-
-        term.draw(|f| app.draw(f)).unwrap();
-        assert!(
-            app.details.as_ref().unwrap().follow,
-            "sessions open at the tail"
-        );
-        assert!(screen(&term).contains("entry 39"));
-        app.details.as_mut().unwrap().switch_tab(1);
-        app.details.as_mut().unwrap().switch_tab(0);
-        term.draw(|f| app.draw(f)).unwrap();
-        assert!(screen(&term).contains("entry 39"));
-        app.key(key_press(KeyCode::End));
-        term.draw(|f| app.draw(f)).unwrap();
-        assert!(screen(&term).contains("entry 39"));
-
-        // New entries scroll into view by themselves.
-        app.view.agents.insert("worker:t1".into(), agent(55));
-        term.draw(|f| app.draw(f)).unwrap();
-        assert!(screen(&term).contains("entry 54"));
-
-        // Scrolling up stops following; the screen stays where the user is.
-        app.key(key_press(KeyCode::PageUp));
-        term.draw(|f| app.draw(f)).unwrap();
-        assert!(!app.details.as_ref().unwrap().follow);
-        app.view.agents.insert("worker:t1".into(), agent(70));
-        term.draw(|f| app.draw(f)).unwrap();
-        assert!(!screen(&term).contains("entry 69"));
-
-        // End goes back to the newest entry and follows again.
-        app.key(key_press(KeyCode::End));
-        term.draw(|f| app.draw(f)).unwrap();
-        assert!(app.details.as_ref().unwrap().follow);
-        assert!(screen(&term).contains("entry 69"));
-        app.view.agents.insert("worker:t1".into(), agent(80));
-        term.draw(|f| app.draw(f)).unwrap();
-        assert!(screen(&term).contains("entry 79"));
     }
 
     #[test]

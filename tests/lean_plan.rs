@@ -1,3 +1,4 @@
+mod common;
 mod support;
 use antislop::{config::Config, lean::Core};
 use serde_json::Value;
@@ -134,6 +135,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": session, "sta
         support::install_ledger_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        common::interactive(script);
     }
     (codex, agy)
 }

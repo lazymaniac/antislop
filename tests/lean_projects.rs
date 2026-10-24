@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 fn write_executable(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
     std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    common::interactive(path);
 }
 
 /// A project directory with its own configuration and fake CLIs.

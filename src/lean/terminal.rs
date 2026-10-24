@@ -53,10 +53,12 @@ impl TerminalConfiguration for Config {
         wezterm_term::UnicodeVersion::new(14)
     }
 }
-struct State {
+pub(crate) struct State {
     term: Terminal,
     revision: u64,
     error: Option<String>,
+    /// When the CLI last printed anything.
+    output: std::time::Instant,
 }
 struct Handle {
     sequence: u64,
@@ -108,45 +110,30 @@ fn pty_size(columns: u16, rows: u16) -> PtySize {
 }
 
 impl Session {
-    fn spawn(native: &native::Session, columns: u16, rows: u16) -> Result<Self> {
+    /// Starts `command` in a new terminal that the daemon owns for as long
+    /// as the session lives; views only attach to it.
+    pub(crate) fn spawn(
+        command: CommandBuilder,
+        core: &std::sync::Weak<Core>,
+        provider: &str,
+        columns: u16,
+        rows: u16,
+    ) -> Result<Self> {
         let dimensions = size(columns, rows)?;
         let pair = NativePtySystem::default()
             .openpty(pty_size(columns, rows))
             .map_err(invalid)?;
-        let mut command = CommandBuilder::new(&native.spec.binary);
-        command.cwd(&native.spec.cwd);
-        command.env("TERM", "xterm-256color");
-        match &native.backend {
-            native::Backend::Codex { .. } => {
-                command.args(["resume", &native.identity, "--remote", &native.endpoint]);
-            }
-            native::Backend::Opencode { .. } => {
-                let address = native
-                    .gateway_address
-                    .lock()
-                    .map_err(invalid)?
-                    .clone()
-                    .ok_or_else(|| invalid("OpenCode gateway is not ready"))?;
-                command.args(["attach", &address, "--session", &native.identity]);
-                command.env("OPENCODE_SERVER_PASSWORD", &native.gateway_password);
-                command.env("OPENCODE_SERVER_USERNAME", "opencode");
-            }
-        }
         let mut child = pair.slave.spawn_command(command).map_err(invalid)?;
-        let registration = child.process_id().map(|pid| (native.core.clone(), pid));
+        let registration = child.process_id().map(|pid| (core.clone(), pid));
         drop(pair.slave);
         if let Some(pid) = child.process_id() {
-            let Some(core) = native.core.upgrade() else {
+            let Some(core) = core.upgrade() else {
                 let _ = child.kill();
                 return Err(invalid("daemon stopped"));
             };
             if let Err(error) = core.store.db().execute(
                 "INSERT OR REPLACE INTO native_processes(pid,started_ms,provider) VALUES(?1,?2,?3)",
-                rusqlite::params![
-                    pid,
-                    super::store::now_ms(),
-                    super::agent::name(native.spec.provider)
-                ],
+                rusqlite::params![pid, super::store::now_ms(), provider],
             ) {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -166,6 +153,7 @@ impl Session {
             ),
             revision: 1,
             error: None,
+            output: std::time::Instant::now(),
         }));
         let weak = Arc::downgrade(&state);
         std::thread::spawn(move || {
@@ -206,6 +194,7 @@ impl Session {
                     break;
                 }
                 state.revision = state.revision.wrapping_add(1);
+                state.output = std::time::Instant::now();
             }
             if let Some(state) = weak.upgrade() {
                 let mut state = state.lock().expect("terminal");
@@ -458,6 +447,9 @@ impl Drop for Session {
 }
 
 impl Core {
+    /// Attaches a view to the role's terminal. A role without a running CLI
+    /// (idle and released, or from an earlier round) is started again with
+    /// `resume`; that is the only way to look at its past session.
     pub fn terminal_open(
         &self,
         conversation: &str,
@@ -472,63 +464,9 @@ impl Core {
             _ => self.native.restore(self, conversation, role)?,
         };
         native.check_alive()?;
-        require(
-            !matches!(native.backend, native::Backend::Codex { .. })
-                || native.started.load(std::sync::atomic::Ordering::SeqCst),
-            "waiting for the first native turn to create the Codex rollout",
-        )?;
+        native.touch();
         let mut terminal = native.terminal.lock().map_err(invalid)?;
-        if retry
-            && native
-                .gateway_error
-                .lock()
-                .map_err(invalid)?
-                .take()
-                .is_some()
-        {
-            *terminal = None;
-        }
-        if retry
-            && terminal
-                .as_ref()
-                .is_some_and(|t| t.state.lock().expect("terminal").error.is_some())
-        {
-            *terminal = None;
-        }
-        if terminal.is_none() {
-            *terminal = Some(Session::spawn(&native, columns, rows)?);
-        }
-        let terminal = terminal.as_mut().expect("terminal");
-        {
-            let mut state = terminal.state.lock().map_err(invalid)?;
-            let dimensions = size(columns, rows)?;
-            if state.term.get_size() != dimensions {
-                terminal
-                    .master
-                    .resize(pty_size(columns, rows))
-                    .map_err(invalid)?;
-                state.term.resize(dimensions);
-                state.revision = state.revision.wrapping_add(1);
-            }
-        }
-        terminal
-            .handles
-            .retain(|_, handle| handle.seen.elapsed() < std::time::Duration::from_secs(30));
-        require(
-            terminal.handles.len() < 8,
-            "too many attached terminal views; detach an existing view",
-        )?;
-        let handle = crate::id();
-        terminal.handles.insert(
-            handle.clone(),
-            Handle {
-                sequence: 0,
-                seen: std::time::Instant::now(),
-            },
-        );
-        terminal
-            .snapshot(&handle, None)?
-            .ok_or_else(|| invalid("terminal has no screen"))
+        terminal.attach(columns, rows)
     }
     pub fn terminal_read(
         &self,
@@ -541,14 +479,9 @@ impl Core {
             .native
             .get(conversation, role)?
             .ok_or_else(|| invalid("native session ended"))?;
-        if let Some(error) = native.gateway_error.lock().map_err(invalid)?.as_ref() {
-            return Err(invalid(format!("native attachment failed: {error}")));
-        }
+        native.touch();
         let mut terminal = native.terminal.lock().map_err(invalid)?;
-        terminal
-            .as_mut()
-            .ok_or_else(|| invalid("terminal is not open"))?
-            .snapshot(handle, Some(after))
+        terminal.snapshot(handle, Some(after))
     }
     pub fn terminal_input(
         &self,
@@ -562,11 +495,9 @@ impl Core {
             .native
             .get(conversation, role)?
             .ok_or_else(|| invalid("native session ended"))?;
+        native.touch();
         let mut terminal = native.terminal.lock().map_err(invalid)?;
-        terminal
-            .as_mut()
-            .ok_or_else(|| invalid("terminal is not open"))?
-            .input(handle, sequence, input)
+        terminal.input(handle, sequence, input)
     }
     pub fn terminal_resize(
         &self,
@@ -576,36 +507,154 @@ impl Core {
         columns: u16,
         rows: u16,
     ) -> Result<()> {
-        let dimensions = size(columns, rows)?;
+        size(columns, rows)?;
         let native = self
             .native
             .get(conversation, role)?
             .ok_or_else(|| invalid("native session ended"))?;
         let terminal = native.terminal.lock().map_err(invalid)?;
-        let terminal = terminal
-            .as_ref()
-            .ok_or_else(|| invalid("terminal is not open"))?;
         require(
             terminal.handles.contains_key(handle),
             "unknown or detached terminal handle",
         )?;
-        terminal
-            .master
-            .resize(pty_size(columns, rows))
-            .map_err(invalid)?;
-        let mut state = terminal.state.lock().map_err(invalid)?;
-        state.term.resize(dimensions);
-        state.revision = state.revision.wrapping_add(1);
-        Ok(())
+        terminal.resize(columns, rows)
     }
     pub fn terminal_detach(&self, conversation: &str, role: &str, handle: &str) -> Result<()> {
-        if let Some(native) = self.native.get(conversation, role)?
-            && let Some(terminal) = native.terminal.lock().map_err(invalid)?.as_mut()
-        {
-            terminal.handles.remove(handle);
+        if let Some(native) = self.native.get(conversation, role)? {
+            native
+                .terminal
+                .lock()
+                .map_err(invalid)?
+                .handles
+                .remove(handle);
+            native.touch();
         }
         Ok(())
     }
+}
+
+impl Session {
+    /// Adds a view handle and fits the terminal to the view.
+    fn attach(&mut self, columns: u16, rows: u16) -> Result<Screen> {
+        self.resize(columns, rows)?;
+        self.handles
+            .retain(|_, handle| handle.seen.elapsed() < std::time::Duration::from_secs(30));
+        require(
+            self.handles.len() < 8,
+            "too many attached terminal views; detach an existing view",
+        )?;
+        let handle = crate::id();
+        self.handles.insert(
+            handle.clone(),
+            Handle {
+                sequence: 0,
+                seen: std::time::Instant::now(),
+            },
+        );
+        self.snapshot(&handle, None)?
+            .ok_or_else(|| invalid("terminal has no screen"))
+    }
+
+    fn resize(&self, columns: u16, rows: u16) -> Result<()> {
+        let dimensions = size(columns, rows)?;
+        let mut state = self.state.lock().map_err(invalid)?;
+        if state.term.get_size() != dimensions {
+            self.master
+                .resize(pty_size(columns, rows))
+                .map_err(invalid)?;
+            state.term.resize(dimensions);
+            state.revision = state.revision.wrapping_add(1);
+        }
+        Ok(())
+    }
+
+    /// Whether any view is attached (views that stopped polling expire).
+    pub(crate) fn attached(&mut self) -> bool {
+        self.handles
+            .retain(|_, handle| handle.seen.elapsed() < std::time::Duration::from_secs(30));
+        !self.handles.is_empty()
+    }
+
+    /// Types `text` into the CLI as the user would: one bracketed paste, then
+    /// Enter. A pause lets the CLI take the paste in before it is submitted.
+    pub(crate) fn submit(state: &Arc<Mutex<State>>, text: &str) -> Result<()> {
+        use wezterm_term::{KeyCode as K, KeyModifiers as M};
+        {
+            let mut state = state.lock().map_err(invalid)?;
+            require(
+                state.error.is_none(),
+                state.error.as_deref().unwrap_or("terminal failed"),
+            )?;
+            state.term.send_paste(text).map_err(invalid)?;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let mut state = state.lock().map_err(invalid)?;
+        state.term.key_down(K::Enter, M::NONE).map_err(invalid)?;
+        state.term.key_up(K::Enter, M::NONE).map_err(invalid)?;
+        Ok(())
+    }
+
+    /// Asks the CLI to stop what it is doing (Escape, twice for CLIs that
+    /// want a confirming press).
+    pub(crate) fn interrupt(state: &Arc<Mutex<State>>) -> Result<()> {
+        use wezterm_term::{KeyCode as K, KeyModifiers as M};
+        for _ in 0..2 {
+            {
+                let mut state = state.lock().map_err(invalid)?;
+                state.term.key_down(K::Escape, M::NONE).map_err(invalid)?;
+                state.term.key_up(K::Escape, M::NONE).map_err(invalid)?;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn shared(&self) -> Arc<Mutex<State>> {
+        self.state.clone()
+    }
+
+    /// The CLI's exit status once it ended.
+    pub(crate) fn exited(&mut self) -> Option<String> {
+        self.child
+            .try_wait()
+            .ok()
+            .flatten()
+            .map(|status| status.to_string())
+    }
+}
+
+/// Time since the CLI last printed.
+pub(crate) fn quiet_for(state: &Arc<Mutex<State>>) -> std::time::Duration {
+    state
+        .lock()
+        .map_or(std::time::Duration::ZERO, |state| state.output.elapsed())
+}
+
+/// The last non-empty screen lines as plain text, for explaining why a turn
+/// did not end (an approval question, a login prompt, a crash).
+pub(crate) fn tail(state: &Arc<Mutex<State>>, count: usize) -> String {
+    let Ok(state) = state.lock() else {
+        return String::new();
+    };
+    let dimensions = state.term.get_size();
+    let top = state.term.screen().scrollback_or_visible_row(0);
+    let mut lines = state
+        .term
+        .screen()
+        .lines_in_phys_range(top..top + dimensions.rows)
+        .iter()
+        .map(|line| {
+            line.visible_cells()
+                .map(|cell| cell.str().to_owned())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let keep = lines.len().saturating_sub(count);
+    lines.drain(..keep);
+    lines.join("\n")
 }
 
 /// Drop string controls (including bitmap protocols) before the emulator can
@@ -935,6 +984,54 @@ impl Filter {
 
 #[cfg(test)]
 mod tests {
+    /// What a CLI that asked for bracketed paste receives for `text`.
+    fn typed_into_a_cli(text: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let received = dir.path().join("received");
+        let script = format!(
+            "import os,sys,tty\ntty.setraw(0)\nsys.stdout.write('\\x1b[?2004h');sys.stdout.flush()\n\
+             buf=b''\nwhile True:\n d=os.read(0,65536)\n if not d: break\n buf+=d\n \
+             if b'\\x1b[201~' in buf and b'\\r' in buf[buf.index(b'\\x1b[201~'):]:\n  \
+             open({received:?},'wb').write(buf);break\n",
+            received = received.to_string_lossy()
+        );
+        let config =
+            crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let mut command = CommandBuilder::new("python3");
+        command.args(["-c", &script]);
+        let mut terminal =
+            Session::spawn(command, core.weak.get().unwrap(), "python3", 120, 40).unwrap();
+        let screen = terminal.shared();
+        while quiet_for(&screen) < std::time::Duration::from_millis(600) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Session::submit(&screen, text).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !received.exists() {
+            assert!(std::time::Instant::now() < deadline, "nothing received");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let bytes = std::fs::read(&received).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        let start = text.find("\x1b[200~").unwrap() + 6;
+        let end = text.find("\x1b[201~").unwrap();
+        let _ = terminal.exited();
+        text[start..end].to_owned()
+    }
+
+    #[test]
+    fn a_typed_prompt_arrives_exactly_as_written() {
+        let line = "{\"k\": \"zażółć gęślą jaźń 🙂 \\u00e9 tab\\there\"}";
+        let big = format!(
+            "first\n{}\n\n  indented\ttab \"quoted\" 'single' `tick`\ntrailing\n",
+            line.repeat(2000)
+        );
+        let received = typed_into_a_cli(&big);
+        assert_eq!(received.replace('\r', "\n"), big);
+    }
+
     use super::*;
     #[test]
     fn split_palette_and_cursor_queries_receive_terminal_responses() {

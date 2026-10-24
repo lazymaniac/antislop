@@ -1,3 +1,4 @@
+mod common;
 mod support;
 use antislop::{config::Config, lean::Core};
 use serde_json::Value;
@@ -59,6 +60,7 @@ def message(to, kind, text):
         support::install_ledger_protocol(&path);
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        common::interactive(&path);
         path
     };
     let codex = write(
@@ -507,13 +509,11 @@ answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "conti
 }
 
 #[test]
-fn a_turn_stores_its_prompt_reasoning_output_and_whole_answer() {
+fn a_turn_stores_its_whole_answer_and_no_mirror_of_the_session() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
         r#"
-print(json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": "Weigh the options"}}))
-print(json.dumps({"type": "item.completed", "item": {"type": "command_execution", "command": "ls", "aggregated_output": "out-A\n" + "x" * 5000, "exit_code": 3}}))
 answer = "First sentence.\nSecond line of the answer that is kept whole."
 "#,
         "    answer = 'unused'",
@@ -523,29 +523,14 @@ answer = "First sentence.\nSecond line of the answer that is kept whole."
         .id;
     core.send(&conversation, "hello there").unwrap();
     wait_until("answered", || core.is_idle(&conversation));
-    let agent: Vec<Value> = events(&core, &conversation, "agent");
-    let of = |kind: &str| -> Vec<&Value> { agent.iter().filter(|e| e["type"] == kind).collect() };
-    assert!(
-        of("prompt")[0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("hello there")
+    let finals = events(&core, &conversation, "agent_final");
+    assert_eq!(finals.len(), 1);
+    assert_eq!(
+        finals[0]["text"],
+        "First sentence.\nSecond line of the answer that is kept whole."
     );
-    assert_eq!(of("reasoning")[0]["delta"], "Weigh the options");
-    let output = of("output")[0];
-    assert_eq!(output["exit_code"], 3);
-    let text = output["text"].as_str().unwrap();
-    assert!(text.starts_with("out-A") && text.ends_with("…[truncated]"));
-    assert!(text.len() < 2100);
-    // The answer is one event with all its lines, and not repeated.
-    let answers = of("text");
-    assert_eq!(answers.len(), 1);
-    assert!(
-        answers[0]["delta"]
-            .as_str()
-            .unwrap()
-            .contains("Second line of the answer that is kept whole.")
-    );
+    // What the agent read, thought and ran stays in its own session.
+    assert!(events(&core, &conversation, "agent").is_empty());
 }
 
 fn plan_with_two_draft_comments(core: &Arc<Core>, dir: &Path) -> (String, String, Vec<u64>) {
@@ -1039,7 +1024,7 @@ fn reviewers_receive_mail_before_a_plan_and_keep_their_review_context() {
 }
 
 #[test]
-fn transient_mail_delivery_failure_retries_without_losing_the_message() {
+fn a_failure_after_the_prompt_was_typed_is_never_retried_automatically() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("first-attempt");
     let agent = format!(
@@ -1057,19 +1042,20 @@ fn transient_mail_delivery_failure_retries_without_losing_the_message() {
         .id;
     core.submit(&conversation, "@auditor retry this message")
         .unwrap();
-    wait_until("mail retried and acknowledged", || {
+    wait_until("failure recorded", || {
         core.is_idle(&conversation)
-            && core
-                .store
-                .mail(&conversation)
-                .unwrap()
-                .iter()
-                .any(|mail| mail.recipient == "auditor" && mail.delivered_turn.is_some())
+            && !events(&core, &conversation, "mail_delivery_failed").is_empty()
     });
-    let retries = events(&core, &conversation, "mail_retry");
-    assert_eq!(retries.len(), 1);
-    assert_eq!(retries[0]["recipient"], "auditor");
-    assert!(events(&core, &conversation, "mail_delivery_failed").is_empty());
+    // The CLI had the prompt: it may have acted, so nothing is sent again by
+    // itself. The message waits for the next wakeup, and is not lost.
+    assert!(events(&core, &conversation, "mail_retry").is_empty());
+    assert!(
+        core.store
+            .mail(&conversation)
+            .unwrap()
+            .iter()
+            .any(|mail| mail.recipient == "auditor" && mail.delivered_turn.is_none())
+    );
 }
 
 #[test]
@@ -1400,13 +1386,11 @@ fn direct_worker_correction_invalidates_and_recomputes_the_dependency_chain() {
 }
 
 #[test]
-fn full_agent_text_survives_exhausted_diagnostic_budget_and_old_size_thresholds() {
+fn a_huge_answer_and_a_long_request_are_kept_whole() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
         r#"
-for _ in range(40):
-    print(json.dumps({"type":"item.completed","item":{"type":"reasoning","text":"x"*2000}}))
 answer = "ąe\u0301👩‍💻" * 300000
 "#,
         "    answer = 'unused'",
@@ -1429,25 +1413,6 @@ answer = "ąe\u0301👩‍💻" * 300000
         expected
     );
     let events = core.store.events_since(&conversation, 0, 500).unwrap();
-    assert!(events.iter().any(|event| {
-        event.payload["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("further output"))
-    }));
-    let prompt = events
-        .iter()
-        .find(|event| event.payload["type"] == "prompt")
-        .unwrap()
-        .payload["text"]
-        .as_str()
-        .unwrap();
-    assert!(prompt.contains(&request));
-    let streamed = events
-        .iter()
-        .filter(|event| event.payload["type"] == "text")
-        .filter_map(|event| event.payload["delta"].as_str())
-        .collect::<String>();
-    assert_eq!(streamed, expected);
     assert_eq!(
         events
             .iter()
@@ -1456,6 +1421,9 @@ answer = "ąe\u0301👩‍💻" * 300000
             .payload["text"],
         expected
     );
+    // The CLI was typed the whole request, whatever its size.
+    let typed = prompts(dir.path());
+    assert!(typed.iter().any(|(_, prompt)| prompt.contains(&request)));
 }
 
 #[test]

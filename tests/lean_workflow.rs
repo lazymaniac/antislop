@@ -1,3 +1,4 @@
+mod common;
 mod support;
 
 use antislop::{config::Config, lean::Core};
@@ -49,6 +50,7 @@ else:
         support::install_ledger_protocol(&script);
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        common::interactive(&script);
     }
     let source = include_str!("../examples/antislop.toml")
         .replace(

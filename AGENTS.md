@@ -11,7 +11,8 @@ This document specifies the rules, design constraints, and engineering practices
 - **Subsystems**:
   - `src/lean/`: The lean core runtime, SQLite event store, task DAG manager, daemon, and Git worktree coordinator.
   - `src/lean/tui/`: TUI implemented with `ratatui` and `crossterm`.
-  - `src/lean/agent.rs` & `src/lean/cli.rs`: Process wrappers and event streaming for agent CLIs (`codex`, `agy`, `claude`, `gemini`).
+  - `src/lean/native.rs`, `launch.rs`, `mcp.rs`, `terminal.rs`: every agent CLI (`claude`, `codex`, `opencode`, `agy`) runs interactively in a daemon-owned PTY; the prompt is typed into it and the answer comes back only through the session's MCP `finish_turn` tool. There is no JSON, event or transcript view of a session.
+  - `src/lean/agent.rs` & `src/lean/cli.rs`: Run specification and the command line frontend.
 
 ---
 
@@ -76,4 +77,4 @@ When modifying or adding UI components in `src/lean/tui/`:
 - **Working Directory**: The process working directory is the repository root supplied by the user. Do not hardcode absolute system paths.
 - **Runtime State**: All runtime state, database files, and socket locks belong in `.antislop/` (ignored in `.gitignore`). Do not write artifacts or logs into the source tree. The one exception is the user's list of trusted directories (`trusted.json` in `~/.config/antislop/`, see `src/lean/trust.rs`): it belongs to the user, not to a project, and nothing may be created in a directory before it is trusted.
 - **Git Worktree Isolation**: Task workers must only modify files inside their allocated task worktrees. Never mutate the user's primary working tree outside approved merges.
-- **External CLI Processes**: When spawning agent CLIs, always enforce timeout handling, stdout/stderr streaming, and explicit cancellation channels.
+- **External CLI Processes**: When spawning agent CLIs, always enforce timeout handling (including a CLI that never connects), show the raw failure with the last lines of its terminal, and honor explicit cancellation. Pass the gateway and permissions per launch; never write into a CLI's own configuration files (Agy's one-time bridge registration, `antislop setup agy`, is run by the user).

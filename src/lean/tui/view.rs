@@ -5,7 +5,6 @@ use super::super::tasks::{
     DETAIL_LIMIT, EFFECT_LIMIT, UNKNOWN_ID_BYTES, bound, feedback_is_current, recovery_outcome,
     resets_card, status,
 };
-use super::session::Block;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -37,10 +36,6 @@ pub enum ModalKind {
 pub const ORCHESTRATOR: &str = "orchestrator";
 pub const PLAN_VERIFIER: &str = "plan-verifier";
 pub const AUDITOR: &str = "auditor";
-/// Lines of session activity kept per agent.
-const SESSION_LINES: usize = 1500;
-/// Turns of one agent kept in its session view.
-const FEED_TURNS: usize = 12;
 /// Lines kept in a progress card before the oldest go.
 const PROGRESS_LINES: usize = 8;
 
@@ -174,15 +169,6 @@ pub struct Agent {
     pub pid: Option<u32>,
     /// The current tool call while running, else the last outcome.
     pub activity: String,
-    pub session: Vec<String>,
-    /// What the agent's CLI did and printed, drawn like that CLI does.
-    /// Runtime mutations go through `View::feed`; hand-built feeds leave
-    /// `feed_revision` unset to request exact cache comparison.
-    pub feed: Vec<Block>,
-    /// Entries dropped from the start of `feed` to keep it bounded.
-    pub feed_dropped: usize,
-    /// Updated with every runtime feed mutation; `None` means untracked data.
-    pub feed_revision: Option<u64>,
     /// Finished turns, and how many of them the CLI reported tokens for.
     pub turns: u32,
     pub reported: u32,
@@ -253,7 +239,6 @@ pub struct View {
     pub requirements_approval_run: Option<String>,
     pub requirements_progress: Option<(bool, String)>,
     latest_user_message: u64,
-    pub retain_session_history: bool,
     pub comment_scopes: HashMap<u64, (Option<u64>, Option<String>)>,
     /// Local projection revision; repeated frames do not rebuild graph layout.
     pub layout_revision: u64,
@@ -332,13 +317,6 @@ pub fn dim() -> Style {
 }
 
 impl View {
-    pub(super) fn session_history() -> Self {
-        Self {
-            retain_session_history: true,
-            ..Self::default()
-        }
-    }
-
     pub fn comment_state(&self, id: u64) -> &str {
         match self.comments.get(&id) {
             Some(comment) if comment.status != "open" => &comment.status,
@@ -495,41 +473,6 @@ impl View {
                 Some((task, _)) => format!("verifier:{task}"),
                 None => format!("worker:{name}"),
             },
-        }
-    }
-
-    fn session(&mut self, key: &str, line: String) {
-        let session = &mut self.agents.entry(key.to_owned()).or_default().session;
-        session.push(clean(&line));
-        if session.len() > SESSION_LINES {
-            session.drain(..session.len() - SESSION_LINES);
-        }
-    }
-
-    fn feed(&mut self, key: &str, block: Block) {
-        let agent = self.agents.entry(key.to_owned()).or_default();
-        agent.feed.push(block);
-        // Unique across views too: switching conversations can restore an old
-        // Details cache while replay builds a fresh View of that conversation.
-        static NEXT_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        agent.feed_revision =
-            Some(NEXT_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-        // Keep the latest turns whole: drop from the oldest turn's start.
-        let turns = |feed: &[Block]| feed.iter().filter(|b| matches!(b, Block::Turn(_))).count();
-        while !self.retain_session_history
-            && (agent.feed.len() > SESSION_LINES || turns(&agent.feed) > FEED_TURNS)
-        {
-            let end = agent
-                .feed
-                .iter()
-                .skip(1)
-                .position(|b| matches!(b, Block::Turn(_)))
-                .map_or(agent.feed.len().saturating_sub(1), |at| at + 1);
-            if end == 0 {
-                break;
-            }
-            agent.feed.drain(..end);
-            agent.feed_dropped += end;
         }
     }
 
@@ -755,7 +698,6 @@ impl View {
                     };
                     self.messages.push(msg.clone());
                     self.cards.push(TranscriptCard::Message(msg));
-                    self.feed(ORCHESTRATOR, Block::User(text("text")));
                     self.push(
                         Style::default()
                             .fg(Color::Cyan)
@@ -839,103 +781,7 @@ impl View {
                 agent.running = true;
                 agent.started_ms = event["created_ms"].as_i64().filter(|ms| *ms > 0);
                 agent.activity = "starting turn".into();
-                self.session(&key, "── turn".into());
-                self.feed(
-                    &key,
-                    Block::Turn(format!(
-                        "{provider} · {} · effort {}",
-                        model.as_deref().unwrap_or("default model"),
-                        effort.as_deref().unwrap_or("default")
-                    )),
-                );
                 self.roles.insert(turn.to_owned(), key);
-            }
-            "agent" if payload["type"] == "process" => {
-                if !key.is_empty()
-                    && let Some(pid) = payload["pid"].as_u64()
-                {
-                    self.agents.entry(key.clone()).or_default().pid = Some(pid as u32);
-                    self.feed(&key, Block::Note(format!("process {pid} started")));
-                }
-            }
-            "agent" if payload["type"] == "session" => {
-                if !key.is_empty() {
-                    let sid = text("id");
-                    self.feed(&key, Block::Note(format!("session {sid}")));
-                }
-            }
-            "agent" if payload["type"] == "user" => {
-                if !key.is_empty() {
-                    self.feed(&key, Block::User(text("text")));
-                }
-            }
-            "agent_final" => {
-                if !key.is_empty() {
-                    self.feed(&key, Block::Final(text("text")));
-                }
-            }
-            "agent" if payload["type"] == "text" => {
-                if !key.is_empty() && !text("delta").trim().is_empty() {
-                    self.feed(&key, Block::Text(text("delta")));
-                }
-            }
-            "agent" if payload["type"] == "reasoning" => {
-                if !key.is_empty() && !text("delta").trim().is_empty() {
-                    self.feed(&key, Block::Reasoning(text("delta")));
-                }
-            }
-            "agent" if payload["type"] == "prompt" => {
-                if !key.is_empty() {
-                    self.feed(&key, Block::Prompt(text("text")));
-                }
-            }
-            "agent" if payload["type"] == "output" => {
-                if !key.is_empty() {
-                    self.feed(
-                        &key,
-                        Block::Output {
-                            name: text("name"),
-                            text: text("text"),
-                            exit_code: payload["exit_code"].as_i64(),
-                        },
-                    );
-                }
-            }
-            "agent" if payload["type"] == "tool" => {
-                let detail = format!("{} {}", text("name"), text("detail"));
-                if key == ORCHESTRATOR {
-                    self.activity = Some(format!("orchestrator: {detail}"));
-                    self.push(dim(), format!("  ↳ {detail}"));
-                } else if let Some(row) = self.row_of(&key) {
-                    let who = key.split(':').next().unwrap_or_default().to_owned();
-                    row.activity = format!("{who}: {detail}");
-                }
-                if !key.is_empty() {
-                    self.agents.entry(key.clone()).or_default().activity = detail.clone();
-                    self.session(&key, format!("↳ {detail}"));
-                    self.feed(
-                        &key,
-                        Block::Tool {
-                            name: text("name"),
-                            detail: text("detail"),
-                        },
-                    );
-                }
-            }
-            "agent" if payload["type"] == "usage" => {
-                let (input, output) = (payload["input"].as_u64(), payload["output"].as_u64());
-                if !key.is_empty() && (input.is_some() || output.is_some()) {
-                    let agent = self.agents.entry(key.clone()).or_default();
-                    agent.reported += 1;
-                    let add = |sum: &mut Option<u64>, value: Option<u64>| {
-                        if let Some(value) = value {
-                            *sum = Some(sum.unwrap_or(0) + value);
-                        }
-                    };
-                    add(&mut agent.tokens_in, input);
-                    add(&mut agent.tokens_out, output);
-                    self.feed(&key, Block::Tokens { input, output });
-                }
             }
             "turn_finished" => {
                 let failed = payload["status"] != "done";
@@ -997,22 +843,6 @@ impl View {
                         agent.last_ms = Some(took);
                     }
                     agent.activity = outcome.clone();
-                    self.session(&key, outcome.clone());
-                    self.feed(
-                        &key,
-                        Block::End {
-                            ok: !failed,
-                            text: {
-                                let mut text =
-                                    outcome.trim_start_matches(['✓', '✗', ' ']).to_owned();
-                                let agent = &self.agents[&key];
-                                if let Some(last) = agent.last_ms.filter(|_| !failed) {
-                                    text.push_str(&format!(" · {}", duration(last)));
-                                }
-                                text
-                            },
-                        },
-                    );
                 }
             }
             "graph_task" => {
@@ -1549,7 +1379,6 @@ impl View {
                         .entry(key.clone())
                         .or_default()
                         .push(clean(&line));
-                    self.feed(key, Block::Mail(line.clone()));
                 }
                 let link = self.links.entry((from, to)).or_insert(Link {
                     count: 0,
@@ -2275,7 +2104,8 @@ mod tests {
         view.agents.insert(
             "worker:implementation".into(),
             Agent {
-                session: vec!["historical change".into()],
+                provider: "codex".into(),
+                turns: 3,
                 ..Agent::default()
             },
         );
@@ -2292,10 +2122,7 @@ mod tests {
         assert_eq!(view.tasks[0].status, "working");
         assert_eq!(view.tasks[0].round, 2);
         assert_eq!(view.tasks[2].depends_on, ["extra"]);
-        assert_eq!(
-            view.agents["worker:implementation"].session,
-            ["historical change"]
-        );
+        assert_eq!(view.agents["worker:implementation"].turns, 3);
         assert_eq!(view.task_rows["extra-uuid"], 1);
         assert_eq!(view.plan_scope_hash.as_deref(), Some("new"));
     }
@@ -2441,35 +2268,6 @@ mod tests {
             .collect();
         view.activity = activity.then(|| "working".to_owned());
         view
-    }
-
-    #[test]
-    fn the_session_keeps_the_latest_turns_whole_and_counts_what_it_dropped() {
-        let mut view = View::default();
-        for turn in 0..(FEED_TURNS + 3) {
-            view.feed("worker:t1", Block::Turn(format!("turn {turn}")));
-            view.feed("worker:t1", Block::Text(format!("answer {turn}")));
-        }
-        let revision = view.agents["worker:t1"].feed_revision.unwrap();
-        let mut other = View::default();
-        other.feed("worker:t1", Block::Text("independent view".into()));
-        assert_ne!(other.agents["worker:t1"].feed_revision, Some(revision));
-        let agent = &view.agents["worker:t1"];
-        assert_eq!(
-            agent
-                .feed
-                .iter()
-                .filter(|b| matches!(b, Block::Turn(_)))
-                .count(),
-            FEED_TURNS
-        );
-        // Whole turns go: the feed still starts with a turn header.
-        assert_eq!(agent.feed[0], Block::Turn("turn 3".into()));
-        assert_eq!(agent.feed_dropped, 6);
-        assert_eq!(
-            agent.feed.last(),
-            Some(&Block::Text(format!("answer {}", FEED_TURNS + 2)))
-        );
     }
 
     #[test]
@@ -2675,54 +2473,6 @@ mod tests {
     }
 
     #[test]
-    fn the_session_keeps_prompts_reasoning_output_and_whole_answers() {
-        let mut view = View::default();
-        let key = "orchestrator";
-        let turn = Some("t");
-        let answer = "line one\nline two\nline three\nline four\nline five\nline six\nline seven";
-        for (seq, kind, payload) in [
-            (1, "turn_started", json!({"role": key, "provider": "codex"})),
-            (2, "agent", json!({"type": "prompt", "text": "Do it"})),
-            (3, "agent", json!({"type": "reasoning", "delta": "Think"})),
-            (
-                4,
-                "agent",
-                json!({"type": "tool", "name": "shell", "detail": "ls"}),
-            ),
-            (
-                5,
-                "agent",
-                json!({"type": "output", "name": "shell", "text": "a.rs", "exit_code": 0}),
-            ),
-            (6, "agent", json!({"type": "text", "delta": answer})),
-            (7, "turn_finished", json!({"role": key, "status": "done"})),
-        ] {
-            view.apply(&event(
-                seq,
-                turn.map(str::to_owned).as_deref(),
-                kind,
-                payload,
-            ));
-        }
-        let feed = &view.agents[key].feed;
-        assert!(matches!(feed[0], Block::Turn(_)));
-        assert_eq!(feed[1], Block::Prompt("Do it".into()));
-        assert_eq!(feed[2], Block::Reasoning("Think".into()));
-        assert!(matches!(&feed[3], Block::Tool { name, .. } if name == "shell"));
-        assert_eq!(
-            feed[4],
-            Block::Output {
-                name: "shell".into(),
-                text: "a.rs".into(),
-                exit_code: Some(0)
-            }
-        );
-        // The answer is kept whole, not cut to its first lines.
-        assert_eq!(feed[5], Block::Text(answer.into()));
-        assert!(matches!(feed[6], Block::End { ok: true, .. }));
-    }
-
-    #[test]
     fn workflow_stages_cover_planning_execution_and_replanning() {
         assert_eq!(View::default().stage(), Stage::Fresh);
         for (statuses, activity, stage) in [
@@ -2798,12 +2548,6 @@ mod tests {
                 json!({"role": "orchestrator", "provider": "codex"}),
             ),
             event(
-                3,
-                Some("o1"),
-                "agent",
-                json!({"type": "tool", "name": "exec", "detail": "ls"}),
-            ),
-            event(
                 4,
                 None,
                 "plan_proposed",
@@ -2821,19 +2565,16 @@ mod tests {
                 "turn_started",
                 json!({"role": "worker:uuid1", "provider": "agy"}),
             ),
-            event(
-                7,
-                Some("w1"),
-                "agent",
-                json!({"type": "tool", "name": "view_file", "detail": "src/x.rs"}),
-            ),
         ] {
             view.apply(&event);
         }
-        assert_eq!(view.after, 7);
-        assert_eq!(view.activity.as_deref(), Some("orchestrator: exec ls"));
+        assert_eq!(view.after, 6);
+        assert_eq!(
+            view.activity.as_deref(),
+            Some("orchestrator (codex) is working…")
+        );
         assert_eq!(view.tasks[0].status, "working");
-        assert_eq!(view.tasks[0].activity, "worker: view_file src/x.rs");
+        assert_eq!(view.tasks[0].activity, "worker (agy)");
         assert!(!view.plan_proposed());
         view.apply(&event(
             8,
@@ -2983,12 +2724,6 @@ mod tests {
                 json!({"role": "verifier:u1", "provider": "agy"}),
             ),
             event(
-                4,
-                Some("v1"),
-                "agent",
-                json!({"type": "tool", "name": "read", "detail": "a.rs"}),
-            ),
-            event(
                 5,
                 None,
                 "mail",
@@ -3007,12 +2742,11 @@ mod tests {
         let verifier = &view.agents["verifier:t1"];
         assert!(verifier.running);
         assert_eq!(verifier.provider, "agy");
-        assert_eq!(verifier.session, ["── turn", "↳ read a.rs"]);
         let link = &view.links[&("verifier:t1".to_owned(), "worker:t2".to_owned())];
         assert_eq!(link.count, 1);
         assert_eq!(view.mailbox["worker:t2"], ["t1/verifier → t2 (finding): x"]);
         assert_eq!(view.reviews[AUDITOR], ["✓ auditor: no issues"]);
-        assert_eq!(view.progress(), ["t1 verifying: verifier: read a.rs"]);
+        assert_eq!(view.progress(), ["t1 verifying: verifier (agy)"]);
     }
 
     #[test]
@@ -3170,42 +2904,22 @@ mod tests {
     }
 
     #[test]
-    fn token_use_is_what_the_cli_reported_and_unknown_otherwise() {
+    fn token_use_is_unknown_because_an_interactive_cli_reports_none() {
         let mut view = View::default();
-        let turn = |seq, id: &str, input: Value| {
-            [
-                event(
-                    seq,
-                    Some(id),
-                    "turn_started",
-                    json!({"role": "worker:uuid1", "provider": "codex"}),
-                ),
-                event(
-                    seq + 1,
-                    Some(id),
-                    "agent",
-                    json!({"type": "usage", "input": input, "output": null}),
-                ),
-                event(
-                    seq + 2,
-                    Some(id),
-                    "turn_finished",
-                    json!({"status": "done"}),
-                ),
-            ]
-        };
-        for event in turn(1, "a", Value::Null) {
+        for event in [
+            event(
+                1,
+                Some("a"),
+                "turn_started",
+                json!({"role": "worker:uuid1", "provider": "codex"}),
+            ),
+            event(2, Some("a"), "turn_finished", json!({"status": "done"})),
+        ] {
             view.apply(&event);
         }
-        let agent = |view: &View| view.agents.values().next().unwrap().tokens();
-        assert_eq!(agent(&view), "unavailable (CLI did not report them)");
-        for event in turn(4, "b", json!(120)) {
-            view.apply(&event);
-        }
-        assert_eq!(
-            agent(&view),
-            "in 120 / out unknown · reported in 1 of 2 turns, rest unknown"
-        );
+        let agent = view.agents.values().next().unwrap();
+        assert_eq!(agent.turns, 1);
+        assert_eq!(agent.tokens(), "unavailable (CLI did not report them)");
     }
 
     #[test]

@@ -62,47 +62,10 @@ pub(super) fn task_snapshot(
         references: Some(true),
     })?;
     snapshot["_rounds"] = rounds;
-    let turns = snapshot["turns"].as_array().cloned().unwrap_or_default();
-    let mut transcripts = serde_json::Map::new();
-    let mut builders = std::collections::HashMap::new();
-    for turn in turns {
-        let Some(turn_id) = turn["turn_id"].as_str() else {
-            continue;
-        };
-        let Some(role) = turn["role"].as_str() else {
-            continue;
-        };
-        let local_role = role.split_once(':').map_or_else(
-            || role.to_owned(),
-            |(role, _)| format!("{role}:{}", snapshot["spec"]["id"].as_str().unwrap_or(id)),
-        );
-        if !builders.contains_key(&local_role) {
-            builders.insert(
-                local_role.clone(),
-                document::Builder::new(client.state_dir())?,
-            );
-        }
-        let events = append_session(
-            client,
-            conversation,
-            turn_id,
-            builders.get_mut(&local_role).expect("builder"),
-        )?;
-        transcripts
-            .entry(local_role)
-            .or_insert_with(|| Value::Array(Vec::new()))
-            .as_array_mut()
-            .expect("array")
-            .extend(events);
-    }
-    snapshot["_transcripts"] = transcripts.into();
-    let mut documents = builders
-        .into_iter()
-        .map(|(role, builder)| Ok((role, builder.finish()?)))
-        .collect::<Result<std::collections::HashMap<_, _>>>()?;
+    let mut documents = std::collections::HashMap::new();
     let mut result = document::Builder::new(client.state_dir())?;
     if snapshot["history_unavailable"] == true && selected > 0 {
-        result.append("plain","History incomplete\n",|sink|sink("Historical results may be unavailable and earlier text may have been truncated. Previously clipped content cannot be recovered."))?;
+        result.append("History incomplete\n",|sink|sink("Historical results may be unavailable and earlier text may have been truncated. Previously clipped content cannot be recovered."))?;
     }
     let summary = format!(
         "Status: {}\nBase: {}\nResult: {}\n",
@@ -110,7 +73,7 @@ pub(super) fn task_snapshot(
         snapshot["base"].as_str().unwrap_or("—"),
         snapshot["result"].as_str().unwrap_or("—")
     );
-    result.append("plain", "", |sink| sink(&summary))?;
+    result.append("", |sink| sink(&summary))?;
     for field in ["report", "verdict"] {
         if snapshot[field].is_null() {
             continue;
@@ -121,7 +84,6 @@ pub(super) fn task_snapshot(
             field: field.into(),
         };
         result.append(
-            "plain",
             if field == "report" {
                 "Worker report\n"
             } else {
@@ -200,7 +162,7 @@ fn message_document(
                 message["recipient"].as_str().unwrap_or_default(),
                 message["state"].as_str().unwrap_or_default()
             );
-            builder.append("plain", &header, |sink| {
+            builder.append(&header, |sink| {
                 read_content(
                     client,
                     conversation,
@@ -218,17 +180,17 @@ fn message_document(
         crate::require(next > after, "message cursor did not advance")?;
         after = next;
     }
-    builder.append("plain", "", |_| Ok(()))?;
     builder.finish()
 }
 
-fn append_session(
+/// Adds the final answers of `turn` to `builder`; the only part of a session
+/// kept as text, because the agent's report is what other agents build on.
+fn append_answers(
     client: &Client,
     conversation: &str,
     turn: &str,
     builder: &mut document::Builder,
-) -> Result<Vec<Value>> {
-    let mut metadata = Vec::new();
+) -> Result<()> {
     let mut after = 0;
     loop {
         let page = client.call(&Request::SessionEvents {
@@ -238,50 +200,19 @@ fn append_session(
             limit: Some(100),
             include_messages: Some(false),
         })?;
-        for mut event in page["events"].as_array().cloned().unwrap_or_default() {
-            event["turn_id"] = turn.into();
-            let kind = event["kind"].as_str().unwrap_or_default();
+        for event in page["events"].as_array().cloned().unwrap_or_default() {
+            if event["kind"] != "agent_final" {
+                continue;
+            }
             let payload = &event["payload"];
-            let (block, header, field) = match (kind, payload["type"].as_str().unwrap_or_default())
-            {
-                ("agent_final", _) => ("final", "Final answer\n", "text"),
-                ("agent", "prompt") => ("prompt", "Prompt\n", "text"),
-                ("agent", "user") => ("user", "User\n", "text"),
-                ("agent", "text") => ("text", "", "delta"),
-                ("agent", "tool") => {
-                    builder.append("tool", "Tool call\n", |sink| {
-                        sink(payload["name"].as_str().unwrap_or_default())?;
-                        sink(" ")?;
-                        sink(payload["detail"].as_str().unwrap_or_default())
-                    })?;
-                    continue;
-                }
-                ("turn_started", _) => {
-                    metadata.clear();
-                    metadata.push(event);
-                    continue;
-                }
-                ("turn_finished", _) => {
-                    if payload["status"] == "failed" || payload["status"] == "interrupted" {
-                        builder.append("failure", "Session failed: ", |sink| {
-                            sink(payload["error"].as_str().unwrap_or("interrupted"))
-                        })?;
-                    } else {
-                        builder.append("end", "", |_| Ok(()))?;
-                    }
-                    metadata.push(event);
-                    continue;
-                }
-                _ => continue,
-            };
-            builder.append(block, header, |sink| {
-                if payload[field].get("session_content").is_some() {
+            builder.append("Final answer\n", |sink| {
+                if payload["text"].get("session_content").is_some() {
                     let mut offset = 0;
                     loop {
                         let chunk = client.call(&Request::SessionContent {
                             conversation: conversation.into(),
                             event: event["seq"].as_u64().unwrap_or(0),
-                            field: field.into(),
+                            field: "text".into(),
                             offset,
                         })?;
                         sink(chunk["text"].as_str().unwrap_or_default())?;
@@ -293,7 +224,7 @@ fn append_session(
                         offset = next;
                     }
                 } else {
-                    sink(payload[field].as_str().unwrap_or_default())?;
+                    sink(payload["text"].as_str().unwrap_or_default())?;
                 }
                 Ok(())
             })?;
@@ -305,7 +236,7 @@ fn append_session(
         crate::require(next > after, "session event cursor did not advance")?;
         after = next;
     }
-    Ok(metadata)
+    Ok(())
 }
 
 pub(super) fn run_snapshot(
@@ -337,17 +268,14 @@ pub(super) fn run_snapshot(
         snapshot["turns"] = serde_json::json!([run]);
         snapshot["_run"] = run["turn_id"].clone();
         let mut builder = document::Builder::new(client.state_dir())?;
-        let events = append_session(
+        append_answers(
             client,
             conversation,
             run["turn_id"].as_str().unwrap_or_default(),
             &mut builder,
         )?;
-        snapshot["_transcripts"] = serde_json::json!({role:events});
         let mut documents = std::collections::HashMap::new();
-        let document = builder.finish()?;
-        documents.insert("review".into(), document.answer());
-        documents.insert(role.to_owned(), document);
+        documents.insert("review".into(), builder.finish()?);
         documents.insert(
             "messages".into(),
             message_document(
