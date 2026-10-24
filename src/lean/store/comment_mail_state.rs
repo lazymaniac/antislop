@@ -21,18 +21,7 @@ impl Store {
             "conversation_id=?1 AND status='open' AND message<=?2 AND (target='plan' OR target LIKE 'plan:%')",
             params![conversation, upto as i64],
         )?;
-        for mut comment in comments {
-            if only.is_some_and(|ids| !ids.contains(&comment.id)) {
-                continue;
-            }
-            tx.execute(
-                "UPDATE comments SET status='resolved',updated_ms=?1 WHERE id=?2",
-                params![now_ms(), comment.id as i64],
-            )?;
-            comment.status = "resolved".into();
-            tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'comment',?3,?4)",
-                params![conversation, comment.plan_id, serde_json::to_string(&comment)?, now_ms()])?;
-        }
+        resolve_comments(&tx, conversation, comments, only)?;
         tx.commit()?;
         Ok(())
     }
@@ -245,4 +234,36 @@ impl Store {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
+}
+
+fn resolve_comments(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    comments: Vec<Comment>,
+    only: Option<&[u64]>,
+) -> Result<()> {
+    for mut comment in comments {
+        if only.is_some_and(|ids| !ids.contains(&comment.id)) {
+            continue;
+        }
+        resolve_comment(tx, conversation, &mut comment)?;
+    }
+    Ok(())
+}
+
+fn resolve_comment(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    comment: &mut Comment,
+) -> Result<()> {
+    tx.execute(
+        "UPDATE comments SET status='resolved',updated_ms=?1 WHERE id=?2",
+        params![now_ms(), comment.id as i64],
+    )?;
+    comment.status = "resolved".into();
+    tx.execute(
+        "INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'comment',?3,?4)",
+        params![conversation, comment.plan_id, serde_json::to_string(comment)?, now_ms()],
+    )?;
+    Ok(())
 }

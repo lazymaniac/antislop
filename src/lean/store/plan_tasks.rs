@@ -1,5 +1,29 @@
 use super::*;
 
+type EncodedPlanTaskRow = (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn task_generation(db: &rusqlite::Connection, task: &str) -> Result<i64> {
+    Ok(db
+        .query_row(
+            "SELECT generation FROM task_inputs WHERE task_id=?1",
+            [task],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
 #[path = "plan_tasks/checks.rs"]
 mod checks;
 
@@ -47,89 +71,109 @@ impl Store {
         if dependencies.is_empty() {
             return Ok(vec![]);
         }
-        let rows = {
-            let db = self.db();
-            let mut query = db.prepare(
-                "SELECT json_extract(spec,'$.id'),coalesce(json_extract(spec,'$.title'),''),report
-                 FROM tasks WHERE plan_id=?1 AND status='approved' AND report IS NOT NULL
-                 AND json_extract(spec,'$.id') IN (SELECT value FROM json_each(?2)) ORDER BY position")?;
-            query
-                .query_map(params![plan, serde_json::to_string(dependencies)?], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        rows.into_iter()
-            .map(|(id, title, report)| {
-                Ok(crate::lean::tasks::DependencyReport {
-                    id,
-                    title,
-                    report: self.content.decode(&report)?,
-                })
-            })
+        let encoded = self.dependency_report_rows(plan, dependencies)?;
+        encoded
+            .into_iter()
+            .map(|row| self.decode_dependency_report(row))
             .collect()
     }
 
     /// Tasks of one plan, in the orchestrator's order.
     pub fn plan(&self, plan_id: &str) -> Result<Vec<Task>> {
         let db = self.db();
+        self.plan_task_rows(&db, plan_id)?
+            .into_iter()
+            .map(|row| self.decode_plan_task(&db, row))
+            .collect()
+    }
+
+    fn dependency_report_rows(
+        &self,
+        plan: &str,
+        dependencies: &[String],
+    ) -> Result<Vec<(String, String, String)>> {
+        let db = self.db();
+        let mut query = db.prepare(
+            "SELECT json_extract(spec,'$.id'),coalesce(json_extract(spec,'$.title'),''),report
+             FROM tasks WHERE plan_id=?1 AND status='approved' AND report IS NOT NULL
+             AND json_extract(spec,'$.id') IN (SELECT value FROM json_each(?2)) ORDER BY position",
+        )?;
+        Ok(query
+            .query_map(params![plan, serde_json::to_string(dependencies)?], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?)
+    }
+
+    fn decode_dependency_report(
+        &self,
+        (id, title, report): (String, String, String),
+    ) -> Result<crate::lean::tasks::DependencyReport> {
+        Ok(crate::lean::tasks::DependencyReport {
+            id,
+            title,
+            report: self.content.decode(&report)?,
+        })
+    }
+
+    fn plan_task_rows(
+        &self,
+        db: &rusqlite::Connection,
+        plan_id: &str,
+    ) -> Result<Vec<EncodedPlanTaskRow>> {
         let mut statement = db.prepare(
             "SELECT id,plan_id,spec,status,round,report,verdict,base,result,feedback FROM tasks
              WHERE plan_id=?1 ORDER BY position",
         )?;
-        let rows = statement.query_map([plan_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, Option<String>>(9)?,
-            ))
-        })?;
-        rows.map(|row| {
-            let (id, plan_id, spec, status, round, report, verdict, base, result, feedback) = row?;
-            Ok(Task {
-                input_generation: db
-                    .query_row(
-                        "SELECT generation FROM task_inputs WHERE task_id=?1",
-                        [&id],
-                        |r| r.get(0),
-                    )
-                    .optional()?
-                    .unwrap_or(0),
-                id,
-                plan_id,
-                spec: serde_json::from_str(&spec)?,
-                status,
-                round: round as u32,
-                report: report
-                    .as_deref()
-                    .map(|text| self.content.decode(text))
-                    .transpose()?,
-                verdict: verdict
-                    .map(|v| {
-                        self.content
-                            .decode(&v)
-                            .and_then(|text| Ok(serde_json::from_str(&text)?))
-                    })
-                    .transpose()?,
-                base,
-                result,
-                feedback: feedback.map(|v| serde_json::from_str(&v)).transpose()?,
-                freshness_token: None,
-                checks: None,
-            })
+        Ok(statement
+            .query_map([plan_id], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                ))
+            })?
+            .collect::<std::result::Result<_, _>>()?)
+    }
+
+    fn decode_plan_task(&self, db: &rusqlite::Connection, row: EncodedPlanTaskRow) -> Result<Task> {
+        let (id, plan_id, spec, status, round, report, verdict, base, result, feedback) = row;
+        Ok(Task {
+            input_generation: task_generation(db, &id)?,
+            id,
+            plan_id,
+            spec: serde_json::from_str(&spec)?,
+            status,
+            round: round as u32,
+            report: self.decode_optional_text(report)?,
+            verdict: self.decode_optional_json(verdict)?,
+            base,
+            result,
+            feedback: feedback
+                .map(|value| serde_json::from_str(&value))
+                .transpose()?,
+            freshness_token: None,
+            checks: None,
         })
-        .collect()
+    }
+
+    fn decode_optional_text(&self, text: Option<String>) -> Result<Option<String>> {
+        text.map(|value| self.content.decode(&value)).transpose()
+    }
+
+    fn decode_optional_json(&self, value: Option<String>) -> Result<Option<Value>> {
+        value
+            .map(|encoded| self.content.decode(&encoded))
+            .transpose()?
+            .map(|decoded| serde_json::from_str(&decoded).map_err(Into::into))
+            .transpose()
     }
 
     /// Records how far a verifier is with one check of a round: `checking`

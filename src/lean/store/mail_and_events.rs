@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "mail_and_events/event_encoding.rs"]
+mod event_encoding;
+
 impl Store {
     /// Plans with durable task mail that still needs a successful recipient turn.
     pub fn pending_mail_plans(&self) -> Result<Vec<(String, String)>> {
@@ -185,56 +188,6 @@ impl Store {
             params![conversation, turn, resolved_plan, kind, payload.to_string()],
         )?;
         Ok(db.last_insert_rowid() as u64)
-    }
-
-    fn encode_event_payload(&self, kind: &str, payload: &Value) -> Result<Value> {
-        let mut payload = payload.clone();
-        if matches!(kind, "agent" | "agent_final") {
-            for field in ["text", "delta"] {
-                if let Some(text) = payload[field].as_str() {
-                    payload[field] =
-                        serde_json::json!({"session_content": self.content.write(text)?});
-                }
-            }
-        }
-        Ok(payload)
-    }
-
-    fn resolve_event_plan(
-        &self,
-        db: &rusqlite::Connection,
-        turn: Option<&str>,
-        plan_id: Option<&str>,
-        payload: &Value,
-    ) -> Result<Option<String>> {
-        let resolved = match plan_id {
-            Some(pid) => Some(pid.to_string()),
-            None => {
-                if let Some(tid) = turn {
-                    db.query_row("SELECT plan_id FROM turns WHERE id=?1", [tid], |row| {
-                        row.get::<_, Option<String>>(0)
-                    })
-                    .optional()?
-                    .flatten()
-                } else if let Some(pid) = payload.get("plan").and_then(|v| v.as_str()) {
-                    Some(pid.to_string())
-                } else if let Some(task_uuid) = payload.get("task").and_then(|v| v.as_str()) {
-                    db.query_row(
-                        "SELECT plan_id FROM tasks WHERE id=?1",
-                        [task_uuid],
-                        |row| row.get::<_, Option<String>>(0),
-                    )
-                    .optional()?
-                    .flatten()
-                } else {
-                    payload
-                        .get("plan_id")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                }
-            }
-        };
-        Ok(resolved)
     }
 
     pub fn events_since(&self, conversation: &str, after: u64, limit: usize) -> Result<Vec<Event>> {

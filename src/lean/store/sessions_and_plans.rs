@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "sessions_and_plans/recovery.rs"]
+mod recovery;
+
 impl Store {
     /// The last user message a successful turn of `role` answered.
     pub fn last_answered(&self, conversation: &str, role: &str) -> Result<u64> {
@@ -67,40 +70,8 @@ impl Store {
     pub fn interrupt_running_turns(&self) -> Result<Vec<String>> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let conversations = {
-            let mut statement = tx.prepare(
-                "SELECT DISTINCT conversation_id FROM turns
-                 WHERE status='running' AND role IN ('orchestrator','comment-orchestrator')",
-            )?;
-            statement
-                .query_map([], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<String>, _>>()?
-        };
-        let interrupted = {
-            let mut statement = tx.prepare(
-                "SELECT id,conversation_id,plan_id,role FROM turns WHERE status='running'",
-            )?;
-            statement
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, String>(3)?,
-                    ))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        for (turn, conversation, plan, role) in interrupted {
-            tx.execute(
-                "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,?3,'turn_finished',?4,?5)",
-                params![conversation, turn, plan, serde_json::json!({"role": role, "status": "interrupted", "error": "the daemon stopped while this turn ran"}).to_string(), now_ms()],
-            )?;
-        }
-        tx.execute(
-            "UPDATE turns SET status='interrupted',finished_ms=?1 WHERE status='running'",
-            [now_ms()],
-        )?;
+        let conversations = recovery::running_orchestrators(&tx)?;
+        recovery::record_turn_interruptions(&tx)?;
         tx.commit()?;
         Ok(conversations)
     }
@@ -110,40 +81,8 @@ impl Store {
     pub fn interrupt_unfinished_tasks(&self) -> Result<Vec<(String, String)>> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let plans = {
-            let mut statement = tx.prepare(
-                "SELECT DISTINCT conversation_id, plan_id FROM tasks
-                 WHERE status IN ('queued','working','verifying')",
-            )?;
-            statement
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<std::result::Result<Vec<(String, String)>, _>>()?
-        };
-        let interrupted = {
-            let mut statement = tx.prepare(
-                "SELECT id,report FROM tasks WHERE status IN ('queued','working','verifying')",
-            )?;
-            statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        for (id, report) in interrupted {
-            let mut text = report
-                .as_deref()
-                .map(|text| self.content.decode(text))
-                .transpose()?
-                .unwrap_or_default();
-            if !text.is_empty() {
-                text.push_str("\n\n");
-            }
-            text.push_str("[interrupted] the daemon stopped while this task ran");
-            tx.execute(
-                "UPDATE tasks SET status='queued',report=?2 WHERE id=?1",
-                params![id, self.content.encode(&text)?],
-            )?;
-        }
+        let plans = recovery::unfinished_plans(&tx)?;
+        self.mark_tasks_interrupted(&tx)?;
         tx.commit()?;
         Ok(plans)
     }
@@ -206,37 +145,7 @@ impl Store {
             "INSERT INTO plans(id,conversation_id,created_ms) VALUES(?1,?2,?3)",
             params![plan_id, conversation, now],
         )?;
-        let mut tasks = vec![];
-        for (position, spec) in specs.iter().enumerate() {
-            let task = Task {
-                input_generation: 0,
-                id: crate::id(),
-                plan_id: plan_id.clone(),
-                spec: spec.clone(),
-                status: "proposed".into(),
-                round: 0,
-                report: None,
-                verdict: None,
-                base: None,
-                result: None,
-                feedback: None,
-                freshness_token: None,
-                checks: None,
-            };
-            tx.execute(
-                "INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms)
-                 VALUES(?1,?2,?3,?4,?5,'proposed',?6)",
-                params![
-                    task.id,
-                    conversation,
-                    plan_id,
-                    position as i64,
-                    spec.to_string(),
-                    now
-                ],
-            )?;
-            tasks.push(task);
-        }
+        let tasks = recovery::insert_proposed_tasks(&tx, conversation, &plan_id, specs, now)?;
         tx.commit()?;
         Ok(tasks)
     }

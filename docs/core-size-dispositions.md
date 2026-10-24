@@ -2,7 +2,7 @@
 
 Baseline: measured source snapshot `892e93d5c5b03a4da54a7c21c890acc6a0783192`, recorded in `tests/size_check/baseline-inventory.md`. The raw current repository diagnostic is retained in `core-size-diagnostic.txt`. The initial capture used `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .`; the latest refresh ran `cargo run --locked --quiet --bin diagnostic-size-check -- --root .` against current source. The expected exit code is 1 while violations remain.
 
-Current checker result after the follow-up Store, prompt, and report extractions: 283 repository violations, 0 classification errors; 27 violations in t4-owned `src/` paths. Four are file overages in extracted Core modules; the rest are callable overages in Core and Store. `src/lean/mod.rs` remains below the 299-line file limit. The initial t4 inventory contains 141 items. The required limits remain unmet. Exit code 1. This worker did not update t3-owned diagnostic artifacts; the 283/27 result is from a direct local checker invocation and is recorded here as worker evidence.
+Fresh checker run after this repair: 265 repository violations, 0 classification errors, and 11 violations in t4-owned `src/` paths (4 file overages and 7 callable overages). `src/lean/mod.rs` remains below the 299-line file limit. The initial t4 inventory contains 141 items. The required limits remain unmet. Exit code 1 is expected while violations remain. The exact raw run is retained in `core-size-diagnostic.txt`; it was produced by `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .` against the current source.
 
 ## Every initial t4 violation
 
@@ -70,32 +70,32 @@ Current checker result after the follow-up Store, prompt, and report extractions
 | callable | `src/lean/mod.rs::comment_at` | 50 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::comment_label` | 74 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::conversations` | 62 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/mod.rs::deliver` | 109 | unresolved: still over the 29-line limit at `src/lean/core_17_repeats_a_plan_that_ran.rs:60:` (109 lines) |
-| callable | `src/lean/mod.rs::dependency_tasks` | 32 | unresolved: still over the 29-line limit at `src/lean/core_17_repeats_a_plan_that_ran.rs:176:` (36 lines) |
+| callable | `src/lean/mod.rs::deliver` | 109 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/mod.rs::dependency_tasks` | 32 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::diff` | 38 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/mod.rs::finish_in_place` | 62 | unresolved: still over the 29-line limit at `src/lean/core_21_finish_in_place.rs:5:` (62 lines) |
+| callable | `src/lean/mod.rs::finish_in_place` | 62 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::freshness_for_task` | 38 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/mod.rs::in_place_user_edits` | 34 | unresolved: still over the 29-line limit at `src/lean/core_20_repair_integration.rs:131:` (38 lines) |
+| callable | `src/lean/mod.rs::in_place_user_edits` | 34 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::integrate` | 176 | unresolved: still over the 29-line limit at `src/lean/core_19_integrate.rs:6:` (176 lines) |
 | callable | `src/lean/mod.rs::land` | 41 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::open` | 128 | resolved: startup locking, recovery, Core construction, and checkpoint resumption are separate helpers in `core/open.rs` |
 | callable | `src/lean/mod.rs::orchestrate` | 40 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::orchestrator_prompt` | 50 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::orchestrator_turn` | 333 | unresolved: still over the 29-line limit at `src/lean/core_10_orchestrator_turn.rs:5:` (333 lines) |
-| callable | `src/lean/mod.rs::plan_report` | 122 | unresolved: still over the 29-line limit at `src/lean/core_22_plan_report.rs:5:` (122 lines) |
-| callable | `src/lean/mod.rs::propose` | 187 | unresolved: still over the 29-line limit at `src/lean/core_12_propose.rs:6:` (187 lines) |
-| callable | `src/lean/mod.rs::record_check` | 30 | unresolved: still over the 29-line limit at `src/lean/core_15_record_check.rs:4:` (35 lines) |
+| callable | `src/lean/mod.rs::plan_report` | 122 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/mod.rs::propose` | 187 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/mod.rs::record_check` | 30 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::recover_task_as` | 570 | unresolved: still over the 29-line limit at `src/lean/core_06_recover_task_as.rs:6:` (570 lines) |
 | callable | `src/lean/mod.rs::reject_plan` | 38 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::repair_integration` | 124 | unresolved: still over the 29-line limit at `src/lean/core_20_repair_integration.rs:6:` (124 lines) |
-| callable | `src/lean/mod.rs::repair_writer_base` | 63 | unresolved: still over the 29-line limit at `src/lean/core_18_writer_base.rs:35:` (63 lines) |
-| callable | `src/lean/mod.rs::review` | 50 | unresolved: still over the 29-line limit at `src/lean/core_13_review.rs:4:` (36 lines) |
+| callable | `src/lean/mod.rs::repair_writer_base` | 63 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/mod.rs::review` | 50 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::review_change` | 102 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/mod.rs::revise_running_graph` | 63 | unresolved: still over the 29-line limit at `src/lean/core_11_revise_running_graph.rs:5:` (33 lines) |
+| callable | `src/lean/mod.rs::revise_running_graph` | 63 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::run_plan` | 150 | unresolved: still over the 29-line limit at `src/lean/core_15_record_check.rs:88:` (155 lines) |
 | callable | `src/lean/mod.rs::run_task` | 586 | unresolved: still over the 29-line limit at `src/lean/core_16_run_task.rs:6:` (586 lines) |
 | callable | `src/lean/mod.rs::start_plan_with_scope_lock` | 122 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/mod.rs::stop_task` | 34 | unresolved: still over the 29-line limit at `src/lean/core_21_finish_in_place.rs:68:` (34 lines) |
+| callable | `src/lean/mod.rs::stop_task` | 34 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::submit_addressed` | 192 | resolved: address parsing and direct, broadcast, task, and rejection routes are separated in `core/messages.rs` |
 | callable | `src/lean/mod.rs::turn_inner` | 367 | unresolved: still over the 29-line limit at `src/lean/core_14_turn_inner.rs:4:` (367 lines) |
 | callable | `src/lean/mod.rs::unblock_by_orchestrator` | 74 | resolved: no current callable with this name exceeds the 29-line limit |
@@ -108,127 +108,67 @@ Current checker result after the follow-up Store, prompt, and report extractions
 | callable | `src/lean/store.rs::add_draft_comment` | 33 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/store.rs::add_mail_from` | 36 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/store.rs::add_message` | 55 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/store.rs::add_plan` | 43 | unresolved: still over the 29-line limit at `src/lean/store/sessions_and_plans.rs:200:` (43 lines) |
-| callable | `src/lean/store.rs::append_event` | 51 | unresolved: still over the 29-line limit at `src/lean/store/mail_and_events.rs:172:` (51 lines) |
-| callable | `src/lean/store.rs::dependency_reports` | 36 | unresolved: still over the 29-line limit at `src/lean/store/plan_tasks.rs:40:` (36 lines) |
-| callable | `src/lean/store.rs::events_since_budget` | 49 | unresolved: still over the 29-line limit at `src/lean/store/mail_and_events.rs:228:` (49 lines) |
+| callable | `src/lean/store.rs::add_plan` | 43 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/store.rs::append_event` | 51 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/store.rs::dependency_reports` | 36 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/store.rs::events_since_budget` | 49 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/store.rs::initialize` | 81 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/store.rs::interrupt_running_turns` | 44 | unresolved: still over the 29-line limit at `src/lean/store/sessions_and_plans.rs:63:` (44 lines) |
-| callable | `src/lean/store.rs::interrupt_unfinished_tasks` | 42 | unresolved: still over the 29-line limit at `src/lean/store/sessions_and_plans.rs:108:` (42 lines) |
-| callable | `src/lean/store.rs::last_turn_for_roles` | 37 | unresolved: still over the 29-line limit at `src/lean/store/messages_and_turns.rs:228:` (37 lines) |
-| callable | `src/lean/store.rs::plan` | 57 | unresolved: still over the 29-line limit at `src/lean/store/plan_tasks.rs:77:` (57 lines) |
+| callable | `src/lean/store.rs::interrupt_running_turns` | 44 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/store.rs::interrupt_unfinished_tasks` | 42 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/store.rs::last_turn_for_roles` | 37 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/store.rs::plan` | 57 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/store.rs::plan_history` | 164 | resolved: plan-history orchestration, timing, turn loading, aggregation, and report collection are separate helpers; every callable in `src/lean/store/plan_history.rs` is at or below 29 lines. Helpers share one held connection guard, preserving the original mutex boundary across all database reads. |
-| callable | `src/lean/store.rs::plans_page` | 45 | unresolved: still over the 29-line limit at `src/lean/store/history_queries.rs:235:` (45 lines) |
-| callable | `src/lean/store.rs::resolve_listed_plan_comments` | 30 | unresolved: still over the 29-line limit at `src/lean/store/comment_mail_state.rs:9:` (30 lines) |
+| callable | `src/lean/store.rs::plans_page` | 45 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/store.rs::resolve_listed_plan_comments` | 30 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/store.rs::send_draft_comments` | 59 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/store.rs::set_check` | 46 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/store.rs::set_comment_status` | 48 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/store.rs::set_session` | 34 | unresolved: still over the 29-line limit at `src/lean/store/messages_and_turns.rs:151:` (34 lines) |
-| callable | `src/lean/store.rs::start_turn` | 57 | unresolved: still over the 29-line limit at `src/lean/store/messages_and_turns.rs:93:` (57 lines) |
-| callable | `src/lean/store.rs::task_by_id` | 60 | unresolved: still over the 29-line limit at `src/lean/store/history_queries.rs:77:` (60 lines) |
+| callable | `src/lean/store.rs::set_session` | 34 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/store.rs::start_turn` | 57 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/store.rs::task_by_id` | 60 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/store.rs::update_task` | 74 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/tasks.rs::bound_cut` | 41 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/tasks.rs::checklist` | 200 | resolved: the dispatcher selects one short checklist helper per work kind; no callable in `src/lean/tasks/prompts/checklist.rs` exceeds 29 lines |
-| callable | `src/lean/tasks.rs::code_review_prompt` | 36 | unresolved: still over the 29-line limit at `src/lean/tasks/prompts/review.rs:71:` (36 lines) |
+| callable | `src/lean/tasks.rs::code_review_prompt` | 36 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/tasks.rs::coverage` | 40 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/tasks.rs::effect` | 35 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/tasks.rs::orchestrator_instructions` | 95 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/tasks.rs::parse_effect` | 52 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/tasks.rs::parse_graph_edit` | 42 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/tasks.rs::parse_progress` | 35 | unresolved: still over the 29-line limit at `src/lean/tasks/validation.rs:153:` (35 lines) |
+| callable | `src/lean/tasks.rs::parse_progress` | 35 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/tasks.rs::peers_of` | 43 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/tasks.rs::render_plan_document` | 54 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/tasks.rs::round_handoff_prompt` | 48 | unresolved: still over the 29-line limit at `src/lean/tasks/prompts/requirements.rs:175:` (48 lines) |
-| callable | `src/lean/tasks.rs::settle` | 47 | unresolved: still over the 29-line limit at `src/lean/tasks/validation.rs:86:` (47 lines) |
-| callable | `src/lean/tasks.rs::upstream_note` | 37 | unresolved: still over the 29-line limit at `src/lean/tasks/prompts/worker.rs:57:` (37 lines) |
+| callable | `src/lean/tasks.rs::round_handoff_prompt` | 48 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/tasks.rs::settle` | 47 | resolved: the extracted or simplified implementation is now within the current limit.
+| callable | `src/lean/tasks.rs::upstream_note` | 37 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/tasks.rs::validate` | 33 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/tasks.rs::verifier_prompt` | 34 | unresolved: still over the 29-line limit at `src/lean/tasks/prompts/review.rs:3:` (34 lines) |
+| callable | `src/lean/tasks.rs::verifier_prompt` | 34 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/tasks.rs::with_options` | 38 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/tasks.rs::with_required_agents` | 115 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/tasks.rs::worker_prompt` | 53 | unresolved: still over the 29-line limit at `src/lean/tasks/prompts/worker.rs:95:` (53 lines) |
+| callable | `src/lean/tasks.rs::worker_prompt` | 53 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/workflow.rs::approve_requirements` | 43 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/lean/workflow.rs::finish_interview` | 31 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/lean/workflow.rs::queue_plan_format_repair` | 45 | resolved: no callable with this name remains over 29 lines in its owned source area |
 
 ## Current violations at new paths
 
-The latest full diagnostic reports 39 t4-owned violations: four oversized Core files and 35 callable overages. The inventory below is the exact current checker output for t4-owned source paths; it includes extracted paths so complexity relocation is visible.
+The latest freshly built checker reports 11 t4-owned violations. These are the exact lines from the current raw diagnostic; no extracted file is omitted.
 
 ```text
 VIOLATION src/lean/core_06_recover_task_as.rs:1: file is 576 lines (limit 299)
 VIOLATION src/lean/core_06_recover_task_as.rs:6: callable recover_task_as is 570 lines (limit 29)
 VIOLATION src/lean/core_10_orchestrator_turn.rs:1: file is 338 lines (limit 299)
 VIOLATION src/lean/core_10_orchestrator_turn.rs:5: callable orchestrator_turn is 333 lines (limit 29)
-VIOLATION src/lean/core_12_propose.rs:6: callable propose is 187 lines (limit 29)
 VIOLATION src/lean/core_14_turn_inner.rs:1: file is 371 lines (limit 299)
 VIOLATION src/lean/core_14_turn_inner.rs:4: callable turn_inner is 367 lines (limit 29)
 VIOLATION src/lean/core_15_record_check.rs:98: callable run_plan is 155 lines (limit 29)
 VIOLATION src/lean/core_16_run_task.rs:1: file is 592 lines (limit 299)
 VIOLATION src/lean/core_16_run_task.rs:6: callable run_task is 586 lines (limit 29)
-VIOLATION src/lean/core_17_repeats_a_plan_that_ran.rs:60: callable deliver is 109 lines (limit 29)
-VIOLATION src/lean/core_18_writer_base.rs:35: callable repair_writer_base is 63 lines (limit 29)
 VIOLATION src/lean/core_19_integrate.rs:6: callable integrate is 176 lines (limit 29)
-VIOLATION src/lean/core_20_repair_integration.rs:131: callable in_place_user_edits is 38 lines (limit 29)
 VIOLATION src/lean/core_20_repair_integration.rs:6: callable repair_integration is 124 lines (limit 29)
-VIOLATION src/lean/core_21_finish_in_place.rs:5: callable finish_in_place is 62 lines (limit 29)
-VIOLATION src/lean/core_21_finish_in_place.rs:68: callable stop_task is 34 lines (limit 29)
-VIOLATION src/lean/core_22_plan_report.rs:5: callable plan_report is 122 lines (limit 29)
-VIOLATION src/lean/store/comment_mail_state.rs:9: callable resolve_listed_plan_comments is 30 lines (limit 29)
-VIOLATION src/lean/store/comments_and_mail/comments/insert.rs:38: callable persist_comment is 30 lines (limit 29)
-VIOLATION src/lean/store/history_queries.rs:235: callable plans_page is 45 lines (limit 29)
-VIOLATION src/lean/store/history_queries.rs:77: callable task_by_id is 60 lines (limit 29)
-VIOLATION src/lean/store/mail_and_events.rs:172: callable append_event is 51 lines (limit 29)
-VIOLATION src/lean/store/mail_and_events.rs:228: callable events_since_budget is 49 lines (limit 29)
-VIOLATION src/lean/store/messages_and_turns.rs:151: callable set_session is 34 lines (limit 29)
-VIOLATION src/lean/store/messages_and_turns.rs:228: callable last_turn_for_roles is 37 lines (limit 29)
-VIOLATION src/lean/store/messages_and_turns.rs:93: callable start_turn is 57 lines (limit 29)
-VIOLATION src/lean/store/plan_tasks.rs:40: callable dependency_reports is 36 lines (limit 29)
-VIOLATION src/lean/store/plan_tasks.rs:77: callable plan is 57 lines (limit 29)
-VIOLATION src/lean/store/sessions_and_plans.rs:108: callable interrupt_unfinished_tasks is 42 lines (limit 29)
-VIOLATION src/lean/store/sessions_and_plans.rs:200: callable add_plan is 43 lines (limit 29)
-VIOLATION src/lean/store/sessions_and_plans.rs:63: callable interrupt_running_turns is 44 lines (limit 29)
-VIOLATION src/lean/tasks/prompts/requirements.rs:175: callable round_handoff_prompt is 48 lines (limit 29)
-VIOLATION src/lean/tasks/prompts/review.rs:3: callable verifier_prompt is 34 lines (limit 29)
-VIOLATION src/lean/tasks/prompts/review.rs:71: callable code_review_prompt is 36 lines (limit 29)
-VIOLATION src/lean/tasks/prompts/worker.rs:57: callable upstream_note is 37 lines (limit 29)
-VIOLATION src/lean/tasks/prompts/worker.rs:95: callable worker_prompt is 53 lines (limit 29)
-VIOLATION src/lean/tasks/validation.rs:153: callable parse_progress is 35 lines (limit 29)
-VIOLATION src/lean/tasks/validation.rs:86: callable settle is 47 lines (limit 29)
 ```
 
-The follow-up Store, prompt, and report work reduced t4's latest count to 27. Current t4 violations from a direct checker invocation:
-
-```text
-VIOLATION src/lean/core_06_recover_task_as.rs:1: file is 576 lines (limit 299)
-VIOLATION src/lean/core_06_recover_task_as.rs:6: callable recover_task_as is 570 lines (limit 29)
-VIOLATION src/lean/core_10_orchestrator_turn.rs:1: file is 338 lines (limit 299)
-VIOLATION src/lean/core_10_orchestrator_turn.rs:5: callable orchestrator_turn is 333 lines (limit 29)
-VIOLATION src/lean/core_12_propose.rs:6: callable propose is 187 lines (limit 29)
-VIOLATION src/lean/core_14_turn_inner.rs:1: file is 371 lines (limit 299)
-VIOLATION src/lean/core_14_turn_inner.rs:4: callable turn_inner is 367 lines (limit 29)
-VIOLATION src/lean/core_15_record_check.rs:98: callable run_plan is 155 lines (limit 29)
-VIOLATION src/lean/core_16_run_task.rs:1: file is 592 lines (limit 299)
-VIOLATION src/lean/core_16_run_task.rs:6: callable run_task is 586 lines (limit 29)
-VIOLATION src/lean/core_17_repeats_a_plan_that_ran.rs:60: callable deliver is 109 lines (limit 29)
-VIOLATION src/lean/core_18_writer_base.rs:35: callable repair_writer_base is 63 lines (limit 29)
-VIOLATION src/lean/core_19_integrate.rs:6: callable integrate is 176 lines (limit 29)
-VIOLATION src/lean/core_20_repair_integration.rs:131: callable in_place_user_edits is 38 lines (limit 29)
-VIOLATION src/lean/core_20_repair_integration.rs:6: callable repair_integration is 124 lines (limit 29)
-VIOLATION src/lean/core_21_finish_in_place.rs:5: callable finish_in_place is 62 lines (limit 29)
-VIOLATION src/lean/core_21_finish_in_place.rs:68: callable stop_task is 34 lines (limit 29)
-VIOLATION src/lean/store/comment_mail_state.rs:9: callable resolve_listed_plan_comments is 30 lines (limit 29)
-VIOLATION src/lean/store/comments_and_mail/comments/insert.rs:38: callable persist_comment is 30 lines (limit 29)
-VIOLATION src/lean/store/history_queries.rs:116: callable decode_task_row is 30 lines (limit 29)
-VIOLATION src/lean/store/history_queries.rs:1: file is 321 lines (limit 299)
-VIOLATION src/lean/store/history_queries.rs:275: callable plan_page_rows is 35 lines (limit 29)
-VIOLATION src/lean/store/mail_and_events.rs:1: file is 320 lines (limit 299)
-VIOLATION src/lean/store/mail_and_events.rs:203: callable resolve_event_plan is 36 lines (limit 29)
-VIOLATION src/lean/store/plan_tasks.rs:40: callable dependency_reports is 36 lines (limit 29)
-VIOLATION src/lean/store/plan_tasks.rs:77: callable plan is 57 lines (limit 29)
-VIOLATION src/lean/store/sessions_and_plans.rs:108: callable interrupt_unfinished_tasks is 42 lines (limit 29)
-VIOLATION src/lean/store/sessions_and_plans.rs:200: callable add_plan is 43 lines (limit 29)
-VIOLATION src/lean/store/sessions_and_plans.rs:63: callable interrupt_running_turns is 44 lines (limit 29)
-```
+The remaining callable overages are concentrated in task recovery, orchestration turns, agent turn execution, plan scheduling, task rounds, integration and conflict repair. These routines still need responsibility-level decomposition. This V2 implementation is incomplete.
 
 ## Ownership note
 
@@ -264,3 +204,11 @@ Restored `tests/size_check/diagnostic-run.txt` and `tests/size_check/validation-
 Extracted task-report rendering and audit gating in `core_22_plan_report.rs`, divided prompt assembly and verdict parsing/settlement into named helpers, and separated Store turn-session persistence into `store/session.rs`. Task-row decoding now uses the already-held database connection. Store plan and event reads gained focused helpers. These changes preserve the existing public signatures, prompt text, row/event contents, and transaction ordering. The independent size diagnostic still exits 1: 283 repository violations, 0 classification errors, 27 t4-owned violations. The remaining exact t4 list is above; the Core recover, run, and orchestration routines remain over the limits, so V2 is incomplete.
 
 Checks rerun for this follow-up: `cargo fmt --check`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `git diff --check` passed. `cargo test --locked --test lean_core` passed (21), `cargo test --locked --test lean_ledger` passed (25), and `cargo test --locked --lib lean::tasks::` passed (48). The diagnostic command `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .` returned the expected nonzero exit while violations remain. T3-owned diagnostic artifacts and CI files were not edited.
+
+## Repair round 15
+
+The plan proposal path now separates requirements preparation, plan persistence, independent review, rejection, comment resolution, and publication. Store query helpers decode task rows with the existing connection, and plan history paging uses explicit count/page/active-plan queries. Event payload encoding and plan inference are separated from event insertion. Daemon interruption recovery retains one transaction for reading affected rows, writing interruption events/statuses, and committing. Message delivery separates recipient selection, origin attribution and persistence. In-place landing and writer-base repair use dedicated helpers. Public methods, serialized values, SQL rows, event kinds/payloads, task status behavior and transaction ordering are intended to remain unchanged.
+
+A delivery extraction regression changed ordinary worker message origins from the original sender label to a canonical worker role. The full `lean_messages` suite reproduced the changed sender/route assertions. `source_origin` now retains the original sender for ordinary messages and applies verifier/reviewer labels only where the prior code did; cross-plan messages still use the worker/verifier/reviewer role. Regression tests passed for `a_worker_tells_another_task_what_it_found`, `an_approved_task_answers_a_question_that_arrives_after_its_approval`, `a_failed_task_still_receives_and_answers_its_mail`, and `the_orchestrator_reaches_a_task_by_its_plan_label_from_a_mail_turn`.
+
+Validation after these changes: `cargo fmt`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked --test lean_ledger` passed. `cargo test --locked --test lean_plan` had 6 passed and the same 3 pre-existing failures recorded above. `cargo test --locked --test lean_messages` after the delivery-origin correction had 30 passed and the same 4 pre-existing failures (the three deferred-comment claim cases and `agent_mail_reaches_the_orchestrator_without_replanning`). The latest checker reports 265 repository violations, 0 classification errors and 11 t4 violations; its required size gate therefore still fails.

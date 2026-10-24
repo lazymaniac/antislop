@@ -42,49 +42,65 @@ impl Core {
         project: &Path,
         error: &Error,
     ) -> Result<String> {
-        let upstream = self.dependency_tasks(&task.plan_id, spec)?;
+        let inputs = self.expand_writer_repair_scope(task, spec)?;
+        self.queue_writer_repair(conversation, task, spec, error, &inputs)?;
+        let _integration = self.integrating.lock().expect("integration mutex");
+        git::snapshot(project, "User working tree before task")
+    }
+
+    fn expand_writer_repair_scope(&self, task: &Task, spec: &mut TaskSpec) -> Result<Vec<String>> {
+        let dependencies = self.dependency_tasks(&task.plan_id, spec)?;
         let mut inputs = Vec::new();
-        for dependency in upstream {
+        for dependency in dependencies {
             if let (Some(base), Some(result)) = (&dependency.base, &dependency.result) {
                 inputs.push(format!(
                     "{}: git diff {base} {result}",
                     dependency.spec["id"]
                 ));
-                let scope: Vec<String> =
-                    serde_json::from_value(dependency.spec["scope"].clone()).unwrap_or_default();
-                for path in scope {
-                    if !spec.scope.contains(&path) {
-                        spec.scope.push(path);
-                    }
-                }
+                add_dependency_scope(spec, &dependency.spec["scope"]);
             }
         }
-        let guidance = format!(
-            "Automatic composition failed: {error}\nResolve the upstream changes below in your allocated worktree first, preserving every dependency's behavior and local user edits, then complete your original goal. These upstream paths are included in your scope for this repair. Use Git's stored commits, never alter another task's worktree or the primary working tree.\n{}",
-            inputs.join("\n")
-        );
+        Ok(inputs)
+    }
+
+    fn queue_writer_repair(
+        &self,
+        conversation: &str,
+        task: &mut Task,
+        spec: &mut TaskSpec,
+        error: &Error,
+        inputs: &[String],
+    ) -> Result<()> {
         spec.goal = format!(
             "Integrate the required upstream results as described in the runtime guidance before this goal: {}",
             spec.goal
         );
-        task.spec = serde_json::to_value(&spec)?;
+        task.spec = serde_json::to_value(spec)?;
         self.store.update_task(task)?;
+        self.queue_writer_guidance(conversation, task, error, inputs)?;
+        self.record_writer_repair(conversation, task, error, inputs)
+    }
+
+    fn queue_writer_guidance(
+        &self,
+        conversation: &str,
+        task: &Task,
+        error: &Error,
+        inputs: &[String],
+    ) -> Result<()> {
         let role = format!("worker:{}", task.id);
-        self.store.add_mail(
-            conversation,
-            &role,
-            &Mail {
-                id: 0,
-                sender: RUNTIME.into(),
-                recipient: role.clone(),
-                kind: "guidance".into(),
-                text: guidance,
-                created_ms: 0,
-                delivered_turn: None,
-                delivered_ms: None,
-                state: "queued".into(),
-            },
-        )?;
+        self.store
+            .add_mail(conversation, &role, &writer_guidance(&role, error, inputs))?;
+        Ok(())
+    }
+
+    fn record_writer_repair(
+        &self,
+        conversation: &str,
+        task: &Task,
+        error: &Error,
+        inputs: &[String],
+    ) -> Result<()> {
         self.store.append_event(
             conversation,
             None,
@@ -92,8 +108,7 @@ impl Core {
             "base_repair",
             &json!({"task": task.id, "error": error.to_string(), "inputs": inputs}),
         )?;
-        let _integration = self.integrating.lock().expect("integration mutex");
-        git::snapshot(project, "User working tree before task")
+        Ok(())
     }
 
     pub(in crate::lean) fn defer_agent_work(
@@ -117,5 +132,31 @@ impl Core {
             self.set_status(conversation, task, status::QUEUED)?;
         }
         Ok(pending)
+    }
+}
+
+fn add_dependency_scope(spec: &mut TaskSpec, encoded_scope: &serde_json::Value) {
+    let scope: Vec<String> = serde_json::from_value(encoded_scope.clone()).unwrap_or_default();
+    for path in scope {
+        if !spec.scope.contains(&path) {
+            spec.scope.push(path);
+        }
+    }
+}
+
+fn writer_guidance(role: &str, error: &Error, inputs: &[String]) -> Mail {
+    Mail {
+        id: 0,
+        sender: RUNTIME.into(),
+        recipient: role.into(),
+        kind: "guidance".into(),
+        text: format!(
+            "Automatic composition failed: {error}\nResolve the upstream changes below in your allocated worktree first, preserving every dependency's behavior and local user edits, then complete your original goal. These upstream paths are included in your scope for this repair. Use Git's stored commits, never alter another task's worktree or the primary working tree.\n{}",
+            inputs.join("\n")
+        ),
+        created_ms: 0,
+        delivered_turn: None,
+        delivered_ms: None,
+        state: "queued".into(),
     }
 }

@@ -55,15 +55,24 @@ pub(in crate::lean::store::comments_and_mail) fn persist_comment(
         now,
         comment.plan_id.as_deref(),
     )?;
+    let saved = link_comment_message(tx, id, message, comment)?;
+    save_comment_metadata(store, tx, conversation, &saved, round, run)?;
+    Ok(saved)
+}
+
+fn link_comment_message(
+    tx: &rusqlite::Transaction<'_>,
+    id: u64,
+    message: u64,
+    comment: &Comment,
+) -> Result<Comment> {
     set_comment_message(tx, id, message)?;
-    let saved = Comment {
+    Ok(Comment {
         id,
         status: "open".into(),
         message,
         ..comment.clone()
-    };
-    save_comment_metadata(store, tx, conversation, &saved, round, run)?;
-    Ok(saved)
+    })
 }
 
 pub(in crate::lean::store::comments_and_mail) fn insert_comment_row(

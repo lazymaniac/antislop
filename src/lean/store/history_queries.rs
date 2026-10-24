@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "history_queries/plan_pages.rs"]
+mod plan_pages;
+
 type EncodedTaskRow = (
     String,
     String,
@@ -119,9 +122,6 @@ impl Store {
         (id, plan_id, spec, status, round, report, verdict, base, result, feedback): EncodedTaskRow,
     ) -> Result<Task> {
         let input_generation = Self::task_input_generation(db, &id)?;
-        let decoded_verdict = verdict
-            .map(|encoded| self.decode_content_json(&encoded))
-            .transpose()?;
         Ok(Task {
             input_generation,
             id,
@@ -133,7 +133,9 @@ impl Store {
                 .as_deref()
                 .map(|text| self.content.decode(text))
                 .transpose()?,
-            verdict: decoded_verdict,
+            verdict: verdict
+                .map(|encoded| self.decode_content_json(&encoded))
+                .transpose()?,
             base,
             result,
             feedback: feedback
@@ -270,52 +272,5 @@ impl Store {
             has_more,
             active_plan_id,
         })
-    }
-
-    fn plan_page_rows(
-        &self,
-        conversation: &str,
-        offset: usize,
-        limit: usize,
-    ) -> Result<(usize, Vec<String>, Option<String>)> {
-        let (total, plan_ids, active_plan_id) = {
-            let db = self.db();
-            let total: i64 = db.query_row(
-                "SELECT COUNT(*) FROM plans WHERE conversation_id=?1",
-                [conversation],
-                |row| row.get(0),
-            )?;
-            let total = total as usize;
-            let mut stmt = db.prepare(
-                "SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC, rowid DESC LIMIT ?2 OFFSET ?3",
-            )?;
-            let plan_ids = stmt
-                .query_map(params![conversation, limit as i64, offset as i64], |row| {
-                    row.get(0)
-                })?
-                .collect::<std::result::Result<Vec<String>, _>>()?;
-
-            let active_plan_id: Option<String> = db
-                .query_row(
-                    "SELECT plan_id FROM tasks WHERE conversation_id=?1 ORDER BY created_ms DESC, rowid DESC LIMIT 1",
-                    [conversation],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            (total, plan_ids, active_plan_id)
-        };
-
-        Ok((total, plan_ids, active_plan_id))
-    }
-
-    fn load_plan_histories(
-        &self,
-        conversation: &str,
-        plan_ids: &[String],
-    ) -> Result<Vec<PlanHistory>> {
-        plan_ids
-            .iter()
-            .map(|id| self.plan_history(conversation, id))
-            .collect()
     }
 }
