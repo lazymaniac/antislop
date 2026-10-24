@@ -2104,7 +2104,8 @@ mod tests {
         view.agents.insert(
             "worker:implementation".into(),
             Agent {
-                session: vec!["historical change".into()],
+                provider: "codex".into(),
+                turns: 3,
                 ..Agent::default()
             },
         );
@@ -2121,10 +2122,7 @@ mod tests {
         assert_eq!(view.tasks[0].status, "working");
         assert_eq!(view.tasks[0].round, 2);
         assert_eq!(view.tasks[2].depends_on, ["extra"]);
-        assert_eq!(
-            view.agents["worker:implementation"].session,
-            ["historical change"]
-        );
+        assert_eq!(view.agents["worker:implementation"].turns, 3);
         assert_eq!(view.task_rows["extra-uuid"], 1);
         assert_eq!(view.plan_scope_hash.as_deref(), Some("new"));
     }
@@ -2270,35 +2268,6 @@ mod tests {
             .collect();
         view.activity = activity.then(|| "working".to_owned());
         view
-    }
-
-    #[test]
-    fn the_session_keeps_the_latest_turns_whole_and_counts_what_it_dropped() {
-        let mut view = View::default();
-        for turn in 0..(FEED_TURNS + 3) {
-            view.feed("worker:t1", Block::Turn(format!("turn {turn}")));
-            view.feed("worker:t1", Block::Text(format!("answer {turn}")));
-        }
-        let revision = view.agents["worker:t1"].feed_revision.unwrap();
-        let mut other = View::default();
-        other.feed("worker:t1", Block::Text("independent view".into()));
-        assert_ne!(other.agents["worker:t1"].feed_revision, Some(revision));
-        let agent = &view.agents["worker:t1"];
-        assert_eq!(
-            agent
-                .feed
-                .iter()
-                .filter(|b| matches!(b, Block::Turn(_)))
-                .count(),
-            FEED_TURNS
-        );
-        // Whole turns go: the feed still starts with a turn header.
-        assert_eq!(agent.feed[0], Block::Turn("turn 3".into()));
-        assert_eq!(agent.feed_dropped, 6);
-        assert_eq!(
-            agent.feed.last(),
-            Some(&Block::Text(format!("answer {}", FEED_TURNS + 2)))
-        );
     }
 
     #[test]
@@ -2504,54 +2473,6 @@ mod tests {
     }
 
     #[test]
-    fn the_session_keeps_prompts_reasoning_output_and_whole_answers() {
-        let mut view = View::default();
-        let key = "orchestrator";
-        let turn = Some("t");
-        let answer = "line one\nline two\nline three\nline four\nline five\nline six\nline seven";
-        for (seq, kind, payload) in [
-            (1, "turn_started", json!({"role": key, "provider": "codex"})),
-            (2, "agent", json!({"type": "prompt", "text": "Do it"})),
-            (3, "agent", json!({"type": "reasoning", "delta": "Think"})),
-            (
-                4,
-                "agent",
-                json!({"type": "tool", "name": "shell", "detail": "ls"}),
-            ),
-            (
-                5,
-                "agent",
-                json!({"type": "output", "name": "shell", "text": "a.rs", "exit_code": 0}),
-            ),
-            (6, "agent", json!({"type": "text", "delta": answer})),
-            (7, "turn_finished", json!({"role": key, "status": "done"})),
-        ] {
-            view.apply(&event(
-                seq,
-                turn.map(str::to_owned).as_deref(),
-                kind,
-                payload,
-            ));
-        }
-        let feed = &view.agents[key].feed;
-        assert!(matches!(feed[0], Block::Turn(_)));
-        assert_eq!(feed[1], Block::Prompt("Do it".into()));
-        assert_eq!(feed[2], Block::Reasoning("Think".into()));
-        assert!(matches!(&feed[3], Block::Tool { name, .. } if name == "shell"));
-        assert_eq!(
-            feed[4],
-            Block::Output {
-                name: "shell".into(),
-                text: "a.rs".into(),
-                exit_code: Some(0)
-            }
-        );
-        // The answer is kept whole, not cut to its first lines.
-        assert_eq!(feed[5], Block::Text(answer.into()));
-        assert!(matches!(feed[6], Block::End { ok: true, .. }));
-    }
-
-    #[test]
     fn workflow_stages_cover_planning_execution_and_replanning() {
         assert_eq!(View::default().stage(), Stage::Fresh);
         for (statuses, activity, stage) in [
@@ -2627,12 +2548,6 @@ mod tests {
                 json!({"role": "orchestrator", "provider": "codex"}),
             ),
             event(
-                3,
-                Some("o1"),
-                "agent",
-                json!({"type": "tool", "name": "exec", "detail": "ls"}),
-            ),
-            event(
                 4,
                 None,
                 "plan_proposed",
@@ -2650,19 +2565,16 @@ mod tests {
                 "turn_started",
                 json!({"role": "worker:uuid1", "provider": "agy"}),
             ),
-            event(
-                7,
-                Some("w1"),
-                "agent",
-                json!({"type": "tool", "name": "view_file", "detail": "src/x.rs"}),
-            ),
         ] {
             view.apply(&event);
         }
-        assert_eq!(view.after, 7);
-        assert_eq!(view.activity.as_deref(), Some("orchestrator: exec ls"));
+        assert_eq!(view.after, 6);
+        assert_eq!(
+            view.activity.as_deref(),
+            Some("orchestrator (codex) is working…")
+        );
         assert_eq!(view.tasks[0].status, "working");
-        assert_eq!(view.tasks[0].activity, "worker: view_file src/x.rs");
+        assert_eq!(view.tasks[0].activity, "worker (agy)");
         assert!(!view.plan_proposed());
         view.apply(&event(
             8,
@@ -2812,12 +2724,6 @@ mod tests {
                 json!({"role": "verifier:u1", "provider": "agy"}),
             ),
             event(
-                4,
-                Some("v1"),
-                "agent",
-                json!({"type": "tool", "name": "read", "detail": "a.rs"}),
-            ),
-            event(
                 5,
                 None,
                 "mail",
@@ -2836,12 +2742,11 @@ mod tests {
         let verifier = &view.agents["verifier:t1"];
         assert!(verifier.running);
         assert_eq!(verifier.provider, "agy");
-        assert_eq!(verifier.session, ["── turn", "↳ read a.rs"]);
         let link = &view.links[&("verifier:t1".to_owned(), "worker:t2".to_owned())];
         assert_eq!(link.count, 1);
         assert_eq!(view.mailbox["worker:t2"], ["t1/verifier → t2 (finding): x"]);
         assert_eq!(view.reviews[AUDITOR], ["✓ auditor: no issues"]);
-        assert_eq!(view.progress(), ["t1 verifying: verifier: read a.rs"]);
+        assert_eq!(view.progress(), ["t1 verifying: verifier (agy)"]);
     }
 
     #[test]
@@ -2999,42 +2904,22 @@ mod tests {
     }
 
     #[test]
-    fn token_use_is_what_the_cli_reported_and_unknown_otherwise() {
+    fn token_use_is_unknown_because_an_interactive_cli_reports_none() {
         let mut view = View::default();
-        let turn = |seq, id: &str, input: Value| {
-            [
-                event(
-                    seq,
-                    Some(id),
-                    "turn_started",
-                    json!({"role": "worker:uuid1", "provider": "codex"}),
-                ),
-                event(
-                    seq + 1,
-                    Some(id),
-                    "agent",
-                    json!({"type": "usage", "input": input, "output": null}),
-                ),
-                event(
-                    seq + 2,
-                    Some(id),
-                    "turn_finished",
-                    json!({"status": "done"}),
-                ),
-            ]
-        };
-        for event in turn(1, "a", Value::Null) {
+        for event in [
+            event(
+                1,
+                Some("a"),
+                "turn_started",
+                json!({"role": "worker:uuid1", "provider": "codex"}),
+            ),
+            event(2, Some("a"), "turn_finished", json!({"status": "done"})),
+        ] {
             view.apply(&event);
         }
-        let agent = |view: &View| view.agents.values().next().unwrap().tokens();
-        assert_eq!(agent(&view), "unavailable (CLI did not report them)");
-        for event in turn(4, "b", json!(120)) {
-            view.apply(&event);
-        }
-        assert_eq!(
-            agent(&view),
-            "in 120 / out unknown · reported in 1 of 2 turns, rest unknown"
-        );
+        let agent = view.agents.values().next().unwrap();
+        assert_eq!(agent.turns, 1);
+        assert_eq!(agent.tokens(), "unavailable (CLI did not report them)");
     }
 
     #[test]

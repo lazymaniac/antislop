@@ -1678,103 +1678,79 @@ pub fn check_rows(stored: &Value) -> Vec<CheckRow> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn session_cache_reuses_records_and_invalidates_changed_inputs() {
-        use super::super::session::Block;
-        let mut cache = SessionCache::default();
-        let prompt = Block::Prompt((0..10).map(|n| format!("prompt {n}\n")).collect());
-        let blocks = vec![prompt.clone(), Block::Text("old".into())];
-        cache.records("codex", &blocks, false, None);
-        let allocation = cache.records[0].search_text.as_ptr();
-        cache.records("codex", &blocks, false, None);
-        assert_eq!(cache.records[0].search_text.as_ptr(), allocation);
-        let changed = vec![prompt, Block::Text("new".into())];
-        cache.records("codex", &changed, false, None);
-        assert_eq!(cache.records[0].search_text.as_ptr(), allocation);
-        assert!(cache.records[1].search_text.contains("new"));
-        cache.records("codex", &changed, true, None);
-        assert!(cache.records[0].search_text.contains("prompt 9"));
-        cache.records("claude", &changed, true, None);
-        assert!(cache.records[0].search_text.contains("> prompt 0"));
-        cache.records("claude", &changed[1..], true, None);
-        assert_eq!(cache.records.len(), 1);
-        assert!(cache.records[0].search_text.contains("new"));
+    fn screen(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
     }
 
     #[test]
-    fn runtime_revision_reuses_shared_records_and_updates_new_entries() {
-        use super::super::session::Block;
-        let mut cache = SessionCache::default();
-        let mut blocks = vec![Block::Text("worker output".into())];
-        let first = Rc::clone(&cache.records("codex", &blocks, false, Some(1))[0]);
-        let unchanged = Rc::clone(&cache.records("codex", &blocks, false, Some(1))[0]);
-        assert!(Rc::ptr_eq(&first, &unchanged));
-        blocks.push(Block::Text("new output".into()));
-        let updated = cache.records("codex", &blocks, false, Some(2));
-        assert!(Rc::ptr_eq(&first, &updated[0]));
-        assert!(updated[1].search_text.contains("new output"));
-        blocks.remove(0);
-        let trimmed = cache.records("codex", &blocks, false, Some(3));
-        assert_eq!(trimmed.len(), 1);
-        assert!(trimmed[0].search_text.contains("new output"));
-    }
-
-    #[test]
-    fn redraw_and_scroll_reuse_layout_but_content_and_display_changes_refresh_it() {
-        use super::super::session::Block;
-        let mut view = View::default();
-        view.agents.insert(
+    fn a_panel_without_a_terminal_says_what_it_waits_for() {
+        let view = View::default();
+        let mut details = Details::new("worker:t1".into());
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        assert!(screen(&terminal).contains("Attaching terminal"));
+        details.native.insert(
             "worker:t1".into(),
-            super::super::view::Agent {
-                provider: "codex".into(),
-                feed: vec![Block::Text("unique transcript entry".into())],
-                ..Default::default()
+            super::super::native_view::Snapshot {
+                screen: None,
+                error: Some("claude exited (exit status: 1): login required".into()),
             },
         );
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        let drawn = screen(&terminal);
+        assert!(drawn.contains("login required"), "the raw failure is shown");
+        details.native.clear();
+        details.selected_round = Some(1);
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        assert!(screen(&terminal).contains("o resume this session"));
+    }
+
+    #[test]
+    fn an_attached_terminal_fills_the_session_panel() {
+        let view = View::default();
         let mut details = Details::new("worker:t1".into());
-        details.panel_expanded[0] = true;
         let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
-        let screen = |terminal: &Terminal<TestBackend>| {
-            terminal
-                .backend()
-                .buffer()
-                .content
-                .iter()
-                .map(|cell| cell.symbol())
-                .collect::<String>()
-        };
+        // The first draw tells the panel how large its terminal may be.
         terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(screen(&terminal).contains("unique transcript entry"));
-        let original = details.layout_cache.lines.as_ptr();
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert_eq!(original, details.layout_cache.lines.as_ptr());
-        details.scroll = 1;
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert_eq!(original, details.layout_cache.lines.as_ptr());
-        details.scroll = 0;
-        details.query = "absent query".into();
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(screen(&terminal).contains("No records matching"));
-        assert!(!screen(&terminal).contains("unique transcript entry"));
-        details.query = "unique transcript".into();
-        details.raw = true;
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(screen(&terminal).contains("\"session\""));
-        details.query.clear();
-        details.raw = false;
-        view.agents.get_mut("worker:t1").unwrap().feed =
-            vec![Block::Text("replacement entry".into())];
-        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(screen(&terminal).contains("replacement entry"));
-        assert!(!screen(&terminal).contains("unique transcript entry"));
-        let mut narrow = Terminal::new(TestBackend::new(16, 30)).unwrap();
-        narrow.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert!(
-            details.panel_layout[0]
-                .lines
-                .iter()
-                .all(|line| line.width() <= 15)
+        let area = details.native_areas[0];
+        assert!(area.width > 0 && area.height > 0);
+        details.native.insert(
+            "worker:t1".into(),
+            super::super::native_view::Snapshot {
+                screen: Some(crate::lean::terminal::Screen {
+                    handle: "h".into(),
+                    revision: 1,
+                    columns: area.width,
+                    rows: area.height,
+                    cursor: None,
+                    cells: "agent says hello"
+                        .chars()
+                        .enumerate()
+                        .map(|(x, ch)| crate::lean::terminal::Cell {
+                            x: x as u16,
+                            y: 0,
+                            text: ch.to_string(),
+                            width: 1,
+                            foreground: None,
+                            background: None,
+                            modifiers: 0,
+                        })
+                        .collect(),
+                    error: None,
+                }),
+                error: None,
+            },
         );
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        let drawn = screen(&terminal);
+        assert!(drawn.contains("agent says hello"));
+        assert!(drawn.contains("i terminal"));
     }
 
     #[test]
@@ -1797,39 +1773,6 @@ mod tests {
                 }
                 assert!(!details_footer_hint_for(key, tab, 30).contains("1–"));
             }
-        }
-    }
-
-    #[test]
-    fn overview_opens_at_latest_session_for_all_agent_roles() {
-        use super::super::session::Block;
-        for key in ["worker:t1", "verifier:t1", "orchestrator", "auditor"] {
-            let mut view = View::default();
-            view.tasks.push(super::super::view::TaskRow {
-                id: "t1".into(),
-                goal: "Opening summary".into(),
-                ..Default::default()
-            });
-            view.agents.insert(
-                key.into(),
-                super::super::view::Agent {
-                    feed: (0..100)
-                        .map(|n| Block::Text(format!("entry {n}")))
-                        .collect(),
-                    ..Default::default()
-                },
-            );
-            let mut details = Details::new(key.into());
-            details.panel_expanded = [true; 2];
-            let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
-            terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-            assert!(details.scroll > 0, "{key}");
-            assert!(details.follow, "{key}");
-            details.switch_tab(1);
-            details.switch_tab(0);
-            terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-            assert!(details.scroll > 0, "{key} on returning");
-            assert!(details.follow, "{key} on returning");
         }
     }
 
@@ -1907,15 +1850,6 @@ mod tests {
     fn details_empty_states() {
         let view = View::default();
         let mut details = Details::new("worker:t1".into());
-
-        // Overview includes session empty states
-        details.tab = 0;
-        let lines = details.lines(&view);
-        assert!(
-            lines
-                .iter()
-                .any(|(_, text)| text.contains("No session events"))
-        );
 
         // Messages empty state
         details.tab = 1;

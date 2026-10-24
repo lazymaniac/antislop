@@ -71,7 +71,10 @@ impl View {
                         .expect("native view")
                         .error
                         .as_deref()
-                        .is_none_or(|error| error.contains("waiting for the first native turn"))
+                        .is_none_or(|error| {
+                            error.contains("native session has not started")
+                                || error.contains("has not reported this session's identifier")
+                        })
                 {
                     match client
                         .call(&Request::TerminalOpen {
@@ -295,7 +298,35 @@ impl App {
                 }
                 let (role, identity) = match details.selected_round {
                     Some(round) => (format!("{role}#r{round}"), format!("round:{round}")),
-                    None => (role, "live".to_owned()),
+                    None => {
+                        // A new provider session (or a new task round) is a new
+                        // terminal: the view attaches to it afresh.
+                        let metadata = details
+                            .task
+                            .as_ref()
+                            .and_then(|task| {
+                                task["native_sessions"]
+                                    .as_array()
+                                    .or_else(|| task["turns"].as_array())
+                            })
+                            .and_then(|turns| turns.iter().rev().find(|turn| turn["role"] == role));
+                        let stored = details
+                            .sessions
+                            .iter()
+                            .rev()
+                            .find(|session| session.role == role)
+                            .filter(|_| details.task.is_none());
+                        let session = metadata
+                            .and_then(|turn| turn["session_id"].as_str())
+                            .or_else(|| stored.and_then(|session| session.session_id.as_deref()));
+                        let round = details
+                            .task
+                            .as_ref()
+                            .filter(|_| crate::lean::task_role(&role).is_some())
+                            .map(|task| task["round"].to_string())
+                            .unwrap_or_default();
+                        (role.clone(), format!("{}:{round}", session.unwrap_or("waiting")))
+                    }
                 };
                 wanted.push((
                     role,
@@ -459,7 +490,7 @@ mod tests {
             ready.recv_timeout(Duration::from_secs(3)).unwrap();
             crate::transport::write(
                 &mut stream,
-                &json!({"error":"waiting for the first native turn","data":null}),
+                &json!({"error":"native session has not started","data":null}),
             )
             .unwrap();
             drop(stream);
@@ -523,7 +554,7 @@ mod tests {
         let (mut app, _) = App::test_app_with_client(Client::at(directory.path()));
         let mut details = Details::new("orchestrator".into());
         details.task = Some(
-            json!({"turns":[{"role":"orchestrator","backend":"codex_app_server","session_id":"managed"}]}),
+            json!({"turns":[{"role":"orchestrator","session_id":"managed"}]}),
         );
         app.details = Some(details);
         app.sync_native_views();
@@ -540,7 +571,7 @@ mod tests {
         let mut app = App::test_app();
         let mut details = Details::new("orchestrator".into());
         details.task = Some(
-            json!({"round":1,"native_sessions":[{"role":"orchestrator","backend":"codex_app_server","session_id":"old"}]}),
+            json!({"round":1,"native_sessions":[{"role":"orchestrator","session_id":"old"}]}),
         );
         details.native_focus = true;
         details.native_areas[0] = Rect::new(1, 1, 78, 20);
@@ -559,7 +590,7 @@ mod tests {
                 commands,
                 stop: stopped.clone(),
                 dimensions: (80, 24),
-                identity: "codex_app_server:old:".into(),
+                identity: "old:".into(),
             },
         );
         app.sync_native_views();
@@ -574,15 +605,15 @@ mod tests {
             "new".into();
         app.sync_native_views();
         assert!(stopped.load(Ordering::SeqCst));
-        assert_eq!(app.native_views[&key].identity, "codex_app_server:new:");
+        assert_eq!(app.native_views[&key].identity, "new:");
         let details = app.details.as_ref().unwrap();
         assert!(!details.native_focus);
         assert!(details.native["orchestrator"].screen.is_none());
         // A new round with no turn yet must not use stale session metadata.
         app.details.as_mut().unwrap().task.as_mut().unwrap()["native_sessions"] = json!([]);
         app.sync_native_views();
-        assert!(app.native_views.is_empty());
-        assert!(app.details.as_ref().unwrap().native.is_empty());
+        assert_eq!(app.native_views[&key].identity, "waiting:");
+        assert!(app.details.as_ref().unwrap().native["orchestrator"].screen.is_none());
     }
     #[test]
     fn a_lost_input_acknowledgement_reuses_the_same_sequence() {
@@ -786,7 +817,7 @@ mod tests {
         assert_eq!(app.input.text, "main draft");
         let details = app.details.as_ref().unwrap();
         assert!(!details.native_focus);
-        assert!(details.editing && details.native_history);
+        assert!(details.editing);
     }
     #[test]
     fn native_cells_keep_graphemes_bounds_and_no_color_modifiers() {
@@ -807,7 +838,7 @@ mod tests {
         assert_eq!(terminal.backend().buffer()[(1, 1)].symbol(), " ");
     }
     #[test]
-    fn overview_splits_at_eighty_columns_and_old_rounds_keep_json_history() {
+    fn overview_splits_at_eighty_columns_and_old_rounds_resume_on_request() {
         let mut details = Details::new("worker:t1".into());
         let view = crate::lean::tui::view::View::default();
         for key in ["worker:t1", "verifier:t1"] {
@@ -823,7 +854,9 @@ mod tests {
         terminal.draw(|frame| details.draw(frame, &view)).unwrap();
         assert_ne!(details.native_areas[0].x, details.native_areas[1].x);
         assert!(details.native_areas[0].width < 40);
+        // An earlier round has no terminal until the user asks for it.
         details.selected_round = Some(1);
+        details.native.clear();
         terminal.draw(|frame| details.draw(frame, &view)).unwrap();
         let text = terminal
             .backend()
@@ -833,5 +866,6 @@ mod tests {
             .map(|c| c.symbol())
             .collect::<String>();
         assert!(!text.contains("native-marker"));
+        assert!(text.contains("o resume this session"));
     }
 }
