@@ -160,15 +160,49 @@ pub(crate) fn inbox_text_from<'a>(
     let mut text = String::from("Messages for you:\n");
     for message in mail {
         use std::fmt::Write as _;
-        let _ = write!(
+        let _ = writeln!(
             text,
-            "- from {} ({}): {}\n",
+            "- from {} ({}): {}",
             message.sender, message.kind, message.text
         );
     }
     text.push('\n');
     text
 }
+
+/// The prompt of a turn that answers messages for a task that is done.
+pub fn answer_prompt(title: &str, first: bool) -> String {
+    let head = if first {
+        format!(
+            "You have follow-up mail about task \"{title}\". This reply changes neither its status nor its approval. "
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{head}Messages arrived for you (above). Answer them read-only: change no \
+         files. Reply to each sender with a message block addressed to them \
+         (`{{\"to\": \"<sender>\", \"kind\": \"answer\", \"text\": \"...\"}}`); \
+         Do not reply to acknowledgements or answers unless they contain a new \
+         question or request. Say plainly when you have nothing to add."
+    )
+}
+
+pub const INBOX_FOLLOWUP: &str = "Messages arrived while you worked (above). \
+     Take them into account where they matter and give your complete, \
+     updated report.";
+
+/// How a worker may offer the one line its task card shows, from the same
+/// answer it reports in. The runtime keeps the worker's own line when it is
+/// there, falls back to the diffstat (writers) or the report's first text
+/// line (read-only) when it is not, and bounds what it keeps to
+/// `EFFECT_LIMIT` bytes, recording a cut in the card's `effect_cut` flag.
+pub const EFFECT_FORMAT: &str = "Optionally, end your report with the one line \
+     your task card shows, in a block like this:\n```effect\nwhat you changed or \
+     found, on one line, no backticks\n```\nWrite the effect as a single line \
+     (no backticks inside), keep it short, and let the closing ``` stand on its \
+     own line. Without the block the card falls back to the diff's summary or \
+     your first report line; a longer line is cut with a mark, never kept whole.";
 
 #[cfg(test)]
 mod tests {
@@ -209,37 +243,3 @@ mod tests {
         );
     }
 }
-
-/// The prompt of a turn that answers messages for a task that is done.
-pub fn answer_prompt(title: &str, first: bool) -> String {
-    let head = if first {
-        format!(
-            "You have follow-up mail about task \"{title}\". This reply changes neither its status nor its approval. "
-        )
-    } else {
-        String::new()
-    };
-    format!(
-        "{head}Messages arrived for you (above). Answer them read-only: change no \
-         files. Reply to each sender with a message block addressed to them \
-         (`{{\"to\": \"<sender>\", \"kind\": \"answer\", \"text\": \"...\"}}`); \
-         Do not reply to acknowledgements or answers unless they contain a new \
-         question or request. Say plainly when you have nothing to add."
-    )
-}
-
-pub const INBOX_FOLLOWUP: &str = "Messages arrived while you worked (above). \
-     Take them into account where they matter and give your complete, \
-     updated report.";
-
-/// How a worker may offer the one line its task card shows, from the same
-/// answer it reports in. The runtime keeps the worker's own line when it is
-/// there, falls back to the diffstat (writers) or the report's first text
-/// line (read-only) when it is not, and bounds what it keeps to
-/// `EFFECT_LIMIT` bytes, recording a cut in the card's `effect_cut` flag.
-pub const EFFECT_FORMAT: &str = "Optionally, end your report with the one line \
-     your task card shows, in a block like this:\n```effect\nwhat you changed or \
-     found, on one line, no backticks\n```\nWrite the effect as a single line \
-     (no backticks inside), keep it short, and let the closing ``` stand on its \
-     own line. Without the block the card falls back to the diff's summary or \
-     your first report line; a longer line is cut with a mark, never kept whole.";
