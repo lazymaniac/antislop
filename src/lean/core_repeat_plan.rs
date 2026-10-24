@@ -1,6 +1,6 @@
 use super::*;
 
-#[path = "core_17_repeats_a_plan_that_ran/delivery.rs"]
+#[path = "core_repeat_plan/delivery.rs"]
 mod delivery;
 
 impl Core {

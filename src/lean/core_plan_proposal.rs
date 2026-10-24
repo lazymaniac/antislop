@@ -1,6 +1,6 @@
 use super::core_feedback_helpers::review_json;
 
-#[path = "core_12_propose/helpers.rs"]
+#[path = "core_plan_proposal/helpers.rs"]
 mod helpers;
 use super::core_plan_helpers::{finalize_plan, planning_gaps};
 use super::*;

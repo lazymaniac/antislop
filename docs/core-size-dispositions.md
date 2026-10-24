@@ -2,7 +2,7 @@
 
 Baseline: measured source snapshot `892e93d5c5b03a4da54a7c21c890acc6a0783192`, recorded in `tests/size_check/baseline-inventory.md`. The raw current repository diagnostic is retained in `core-size-diagnostic.txt`. The initial capture used `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .`; the latest refresh ran `cargo run --locked --quiet --bin diagnostic-size-check -- --root .` against current source. The expected exit code is 1 while violations remain.
 
-Fresh checker run after this repair: 265 repository violations, 0 classification errors, and 11 violations in t4-owned `src/` paths (4 file overages and 7 callable overages). `src/lean/mod.rs` remains below the 299-line file limit. The initial t4 inventory contains 141 items. The required limits remain unmet. Exit code 1 is expected while violations remain. The exact raw run is retained in `core-size-diagnostic.txt`; it was produced by `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .` against the current source.
+Fresh checker run after repair round 16: 262 repository violations, 0 classification errors, and 8 violations in t4-owned `src/` paths (4 file overages and 4 callable overages). `src/lean/mod.rs` remains below the 299-line file limit. The initial t4 inventory contains 141 items. The required limits remain unmet. Exit code 1 is expected while violations remain. The numbered Core and test-group source filenames introduced by earlier extraction rounds were renamed to responsibility-based names per the naming decision; no `src/` Rust filename now contains a digit, and module paths were updated without changing public APIs. The exact raw run is retained in `core-size-diagnostic.txt`; it was produced by `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .` against the current source.
 
 ## Every initial t4 violation
 
@@ -76,28 +76,28 @@ Fresh checker run after this repair: 265 repository violations, 0 classification
 | callable | `src/lean/mod.rs::finish_in_place` | 62 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::freshness_for_task` | 38 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::in_place_user_edits` | 34 | resolved: the extracted or simplified implementation is now within the current limit.
-| callable | `src/lean/mod.rs::integrate` | 176 | unresolved: still over the 29-line limit at `src/lean/core_19_integrate.rs:6:` (176 lines) |
+| callable | `src/lean/mod.rs::integrate` | 176 | resolved: the entrypoint coordinates the integration lock and delegates landing, repair, and outcome recording to `src/lean/core_integration/flow.rs` |
 | callable | `src/lean/mod.rs::land` | 41 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::open` | 128 | resolved: startup locking, recovery, Core construction, and checkpoint resumption are separate helpers in `core/open.rs` |
 | callable | `src/lean/mod.rs::orchestrate` | 40 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::orchestrator_prompt` | 50 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/mod.rs::orchestrator_turn` | 333 | unresolved: still over the 29-line limit at `src/lean/core_10_orchestrator_turn.rs:5:` (333 lines) |
+| callable | `src/lean/mod.rs::orchestrator_turn` | 333 | unresolved: still over the 29-line limit at `src/lean/core_orchestrator_turn.rs:5:` (333 lines) |
 | callable | `src/lean/mod.rs::plan_report` | 122 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::propose` | 187 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::record_check` | 30 | resolved: the extracted or simplified implementation is now within the current limit.
-| callable | `src/lean/mod.rs::recover_task_as` | 570 | unresolved: still over the 29-line limit at `src/lean/core_06_recover_task_as.rs:6:` (570 lines) |
+| callable | `src/lean/mod.rs::recover_task_as` | 570 | unresolved: still over the 29-line limit at `src/lean/core_task_recovery.rs:6:` (570 lines) |
 | callable | `src/lean/mod.rs::reject_plan` | 38 | resolved: no current callable with this name exceeds the 29-line limit |
-| callable | `src/lean/mod.rs::repair_integration` | 124 | unresolved: still over the 29-line limit at `src/lean/core_20_repair_integration.rs:6:` (124 lines) |
+| callable | `src/lean/mod.rs::repair_integration` | 124 | resolved: worker repair, explicit user questions, persistence, and verifier enqueue are separate steps in `src/lean/core_integration_repair/repair.rs` |
 | callable | `src/lean/mod.rs::repair_writer_base` | 63 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::review` | 50 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::review_change` | 102 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::revise_running_graph` | 63 | resolved: the extracted or simplified implementation is now within the current limit.
-| callable | `src/lean/mod.rs::run_plan` | 150 | unresolved: still over the 29-line limit at `src/lean/core_15_record_check.rs:88:` (155 lines) |
-| callable | `src/lean/mod.rs::run_task` | 586 | unresolved: still over the 29-line limit at `src/lean/core_16_run_task.rs:6:` (586 lines) |
+| callable | `src/lean/mod.rs::run_plan` | 150 | resolved: queued-task selection, dependency readiness, writer exclusion, task completion, and restart handling are separated in `src/lean/core_task_checks/scheduler.rs` |
+| callable | `src/lean/mod.rs::run_task` | 586 | unresolved: still over the 29-line limit at `src/lean/core_task_execution.rs:6:` (586 lines) |
 | callable | `src/lean/mod.rs::start_plan_with_scope_lock` | 122 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::stop_task` | 34 | resolved: the extracted or simplified implementation is now within the current limit.
 | callable | `src/lean/mod.rs::submit_addressed` | 192 | resolved: address parsing and direct, broadcast, task, and rejection routes are separated in `core/messages.rs` |
-| callable | `src/lean/mod.rs::turn_inner` | 367 | unresolved: still over the 29-line limit at `src/lean/core_14_turn_inner.rs:4:` (367 lines) |
+| callable | `src/lean/mod.rs::turn_inner` | 367 | unresolved: still over the 29-line limit at `src/lean/core_agent_turn.rs:4:` (367 lines) |
 | callable | `src/lean/mod.rs::unblock_by_orchestrator` | 74 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::unblock_dependent_tasks` | 45 | resolved: no current callable with this name exceeds the 29-line limit |
 | callable | `src/lean/mod.rs::warn_of_uncommitted` | 34 | resolved: no current callable with this name exceeds the 29-line limit |
@@ -152,23 +152,20 @@ Fresh checker run after this repair: 265 repository violations, 0 classification
 
 ## Current violations at new paths
 
-The latest freshly built checker reports 11 t4-owned violations. These are the exact lines from the current raw diagnostic; no extracted file is omitted.
+The latest freshly built checker reports 8 t4-owned violations. These are the exact lines from the current raw diagnostic; no extracted file is omitted.
 
 ```text
-VIOLATION src/lean/core_06_recover_task_as.rs:1: file is 576 lines (limit 299)
-VIOLATION src/lean/core_06_recover_task_as.rs:6: callable recover_task_as is 570 lines (limit 29)
-VIOLATION src/lean/core_10_orchestrator_turn.rs:1: file is 338 lines (limit 299)
-VIOLATION src/lean/core_10_orchestrator_turn.rs:5: callable orchestrator_turn is 333 lines (limit 29)
-VIOLATION src/lean/core_14_turn_inner.rs:1: file is 371 lines (limit 299)
-VIOLATION src/lean/core_14_turn_inner.rs:4: callable turn_inner is 367 lines (limit 29)
-VIOLATION src/lean/core_15_record_check.rs:98: callable run_plan is 155 lines (limit 29)
-VIOLATION src/lean/core_16_run_task.rs:1: file is 592 lines (limit 299)
-VIOLATION src/lean/core_16_run_task.rs:6: callable run_task is 586 lines (limit 29)
-VIOLATION src/lean/core_19_integrate.rs:6: callable integrate is 176 lines (limit 29)
-VIOLATION src/lean/core_20_repair_integration.rs:6: callable repair_integration is 124 lines (limit 29)
+VIOLATION src/lean/core_task_recovery.rs:1: file is 576 lines (limit 299)
+VIOLATION src/lean/core_task_recovery.rs:6: callable recover_task_as is 570 lines (limit 29)
+VIOLATION src/lean/core_orchestrator_turn.rs:1: file is 338 lines (limit 299)
+VIOLATION src/lean/core_orchestrator_turn.rs:5: callable orchestrator_turn is 333 lines (limit 29)
+VIOLATION src/lean/core_agent_turn.rs:1: file is 371 lines (limit 299)
+VIOLATION src/lean/core_agent_turn.rs:4: callable turn_inner is 367 lines (limit 29)
+VIOLATION src/lean/core_task_execution.rs:1: file is 592 lines (limit 299)
+VIOLATION src/lean/core_task_execution.rs:6: callable run_task is 586 lines (limit 29)
 ```
 
-The remaining callable overages are concentrated in task recovery, orchestration turns, agent turn execution, plan scheduling, task rounds, integration and conflict repair. These routines still need responsibility-level decomposition. This V2 implementation is incomplete.
+The remaining four file and callable overages are in task recovery, orchestration turns, agent turn execution, and task rounds. Those routines still need responsibility-level decomposition. This V2 implementation is incomplete.
 
 ## Ownership note
 
@@ -182,7 +179,7 @@ The task-card scope lists `src/main.rs` and `src/transport.rs`, while the review
 ## Characterization and validation
 
 - Existing history unit tests were moved from inline `src/lean/history.rs` into `src/lean/history/tests.rs`, grouped as `mail_tests`, `round_tests`, and `recovery_tests`. They continue to cover user-message association and schema 11, session event/content paging and ownership, round attribution/idempotency, and rollback/restart recovery. Public-boundary integration tests remain in `tests/lean_core.rs`, `tests/lean_ledger.rs`, and `tests/lean_messages.rs`.
-- Store unit tests moved from inline `src/lean/store.rs` into `src/lean/store/tests/group_1.rs` through `group_3.rs`; they retain schema compatibility, initialization atomicity, comment-claim expiry, output ordering, row/event serialization, recovery, and trust coverage (12 passed). Task unit tests moved from inline `src/lean/tasks.rs` into `src/lean/tasks/tests/group_1.rs` through `group_7.rs`; they retain parser, planning, option binding, verifier obligations, grapheme bounds, and feedback coverage (48 passed). The requirements runtime tests in `src/lean/ledger/runtime/tests.rs` cover atomic invalid-parent repair and source/interview/summary content and ordering (2 passed). Existing public-boundary assertions remain in `tests/lean_core.rs` (21 passed) and `tests/lean_ledger.rs` (25 passed).
+- Store unit tests moved from inline `src/lean/store.rs` into `schema_and_comments.rs`, `rows_and_feedback.rs`, and `events_and_recovery.rs`; they retain schema compatibility, initialization atomicity, comment-claim expiry, output ordering, row/event serialization, recovery, and trust coverage (12 passed). Task unit tests moved from inline `src/lean/tasks.rs` into `requirements_and_graph.rs`, `parsing_and_validation.rs`, `options_and_gates.rs`, `plans_and_messages.rs`, `verdicts_and_bounds.rs`, `coverage.rs`, and `card_outcomes.rs`; they retain parser, planning, option binding, verifier obligations, grapheme bounds, and feedback coverage (48 passed). The requirements runtime tests in `src/lean/ledger/runtime/tests.rs` cover atomic invalid-parent repair and source/interview/summary content and ordering (2 passed). Existing public-boundary assertions remain in `tests/lean_core.rs` (21 passed) and `tests/lean_ledger.rs` (25 passed).
 - `cargo test --locked --lib history::tests`: 8 passed; `cargo test --locked --test lean_core`: 21 passed; `cargo test --locked --test lean_ledger`: 25 passed; `cargo test --locked --test lean_tui`: 110 passed. The focused `direct_orchestrator_message_uses_normal_workflow_and_validates_the_run` and `direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns` tests passed.
 - `cargo test --locked --test lean_messages` was characterized before changing mailbox code and repeated after the enqueue helper split; both runs had 30 passed and the same 4 failures: `agent_mail_reaches_the_orchestrator_without_replanning` (assertion expected 1, got 2), `deferred_options_comment_claim_expires_on_new_user_input`, `deferred_options_proposal_prefers_the_current_explicit_comment_list`, and `deferred_options_proposal_preserves_selective_comment_claim`. The initial characterization also repeated serially with the same failures. No changes were made to those behaviors or tests.
 - In this repair round, `Core::open` moved to `core/open.rs` and now delegates state locking, orphan recovery, Core construction, and checkpoint restoration to focused helpers. Cut-off conversations and interrupted plans are retained and resumed from the same recovery results. `Core::submit_addressed` moved to `core/messages.rs`, where recipient parsing and direct, broadcast, task, and rejection paths are separated; routing, mail fields, copies, events, and response JSON are preserved. No intended API or behavior changes were made. `cargo test --locked --test lean_core` passed (21) after the startup extraction. `cargo test --locked --test lean_messages` after message extraction had 30 passed and the same four failures listed above; the focused `direct_orchestrator_message_uses_normal_workflow_and_validates_the_run` test passed.
@@ -201,7 +198,7 @@ Restored `tests/size_check/diagnostic-run.txt` and `tests/size_check/validation-
 
 ## Follow-up repair
 
-Extracted task-report rendering and audit gating in `core_22_plan_report.rs`, divided prompt assembly and verdict parsing/settlement into named helpers, and separated Store turn-session persistence into `store/session.rs`. Task-row decoding now uses the already-held database connection. Store plan and event reads gained focused helpers. These changes preserve the existing public signatures, prompt text, row/event contents, and transaction ordering. The independent size diagnostic still exits 1: 283 repository violations, 0 classification errors, 27 t4-owned violations. The remaining exact t4 list is above; the Core recover, run, and orchestration routines remain over the limits, so V2 is incomplete.
+Extracted task-report rendering and audit gating in `core_plan_report.rs`, divided prompt assembly and verdict parsing/settlement into named helpers, and separated Store turn-session persistence into `store/session.rs`. Task-row decoding now uses the already-held database connection. Store plan and event reads gained focused helpers. These changes preserve the existing public signatures, prompt text, row/event contents, and transaction ordering. The independent size diagnostic still exits 1: 283 repository violations, 0 classification errors, 27 t4-owned violations. The remaining exact t4 list is above; the Core recover, run, and orchestration routines remain over the limits, so V2 is incomplete.
 
 Checks rerun for this follow-up: `cargo fmt --check`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `git diff --check` passed. `cargo test --locked --test lean_core` passed (21), `cargo test --locked --test lean_ledger` passed (25), and `cargo test --locked --lib lean::tasks::` passed (48). The diagnostic command `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .` returned the expected nonzero exit while violations remain. T3-owned diagnostic artifacts and CI files were not edited.
 
@@ -212,3 +209,17 @@ The plan proposal path now separates requirements preparation, plan persistence,
 A delivery extraction regression changed ordinary worker message origins from the original sender label to a canonical worker role. The full `lean_messages` suite reproduced the changed sender/route assertions. `source_origin` now retains the original sender for ordinary messages and applies verifier/reviewer labels only where the prior code did; cross-plan messages still use the worker/verifier/reviewer role. Regression tests passed for `a_worker_tells_another_task_what_it_found`, `an_approved_task_answers_a_question_that_arrives_after_its_approval`, `a_failed_task_still_receives_and_answers_its_mail`, and `the_orchestrator_reaches_a_task_by_its_plan_label_from_a_mail_turn`.
 
 Validation after these changes: `cargo fmt`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked --test lean_ledger` passed. `cargo test --locked --test lean_plan` had 6 passed and the same 3 pre-existing failures recorded above. `cargo test --locked --test lean_messages` after the delivery-origin correction had 30 passed and the same 4 pre-existing failures (the three deferred-comment claim cases and `agent_mail_reaches_the_orchestrator_without_replanning`). The latest checker reports 265 repository violations, 0 classification errors and 11 t4 violations; its required size gate therefore still fails.
+
+## Repair round 16
+
+The task scheduler now separates dependency-state construction, readiness checks, writer conflict checks, task launch, completion cleanup, and restart recovery in `core_task_checks/scheduler.rs`. Integration now separates change preparation, conflict repair, landing outcomes, and event/report updates in `core_integration/flow.rs`. Conflict repair separates worker execution, user-question handling, durable result replacement, and verifier-mail creation in `core_integration_repair/repair.rs`. The existing integration mutex boundary, task status/event order, retry counter, and verifier comparison prompt are preserved.
+
+The writer suite reproduced a missing requirements section in the conflict repair handoff. `worker_prompt` had called `round_handoff_prompt` with `verifier = false`, omitting the task requirements and acceptance criteria. It now requests the full handoff; `a_conflict_returns_to_the_writer_and_the_repair_is_verified_before_landing` passes and confirms the required section. This is an intentional prompt correction; it does not change task state or persistence. The local-edit test also exposed the existing `plan ledger mapping rejected` notice from the legacy fixture, which lacks active requirement inputs. The test now asserts that notice separately and counts only the local-edit notice it is intended to cover; runtime events remain unchanged.
+
+Characterization and validation: `cargo fmt`, `CARGO_TARGET_DIR=.antislop/target cargo check --locked`, and `cargo clippy --locked --all-targets -- -D warnings` passed. `cargo test --locked --test lean_core` passed (21); `cargo test --locked --lib lean::plan_tests` passed (2); `cargo test --locked --test lean_writer` passed (32). The refreshed built diagnostic exits 1 with 262 repository violations, 0 classification errors, and 8 t4 violations (4 files and 4 callables), retained in `core-size-diagnostic.txt`. The remaining violations are the paired file/callable overages in `core_task_recovery.rs`, `core_orchestrator_turn.rs`, `core_agent_turn.rs`, and `core_task_execution.rs`; the required size limits remain unmet. `tests/size_check/check.py` was not run because it writes t3-owned diagnostic artifacts. No CI configuration or t5/t6-owned sources were changed.
+
+The focused `cargo test --locked --test lean_writer integration` passed (2), covering integration repair's user-question path and recovery integration feedback. `cargo test --locked --test lean_recovery test_recover_task_integrate_with_consent_and_dag_cascade` failed during fixture setup at `accept_plan`, before reaching the refactored recovery action, with `integrity error: task has no requirement inputs`; no code change was made for that failure.
+
+## Round 17: descriptive source names
+
+Renamed all t4-owned numbered Core modules and numeric test-group modules to responsibility-based Rust source names, including nested extraction directories. Updated `src/lean/mod.rs`, helper path attributes, unit-test module declarations, and this inventory. A source-tree inventory using `rg --files src | rg '[0-9]'` returned no paths. `cargo fmt --check`, `CARGO_TARGET_DIR=.antislop/target cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `git diff --check` passed after the rename. `cargo test --locked --lib lean::store::tests` passed (12), `cargo test --locked --lib lean::tasks::tests` passed (48), `cargo test --locked --test lean_core` passed (21), `cargo test --locked --test lean_ledger` passed (25), and `cargo test --locked --test lean_writer` passed (32). The fresh built diagnostic exits 1 with 262 repository violations, 0 classification errors, and the same 8 t4 size violations; renaming did not resolve the four oversized callables/files listed above.
