@@ -412,17 +412,21 @@ impl Session {
         })
     }
 
-    /// Records the CLI's session identifier once it has shown one.
+    /// Records the CLI's session identifier once it has shown one. Nothing
+    /// is held while the others' identifiers are read.
     fn learn_identity(&self, registry: &Registry) {
-        let Ok(mut identity) = self.identity.lock() else {
+        if self.identity().is_some() {
             return;
-        };
-        if identity.is_none() {
-            *identity = self.gateway.session().or_else(|| {
-                (self.spec.provider == crate::config::ProviderKind::Opencode)
-                    .then(|| self.opencode_session(&registry.claimed()))
-                    .flatten()
-            });
+        }
+        let found = self.gateway.session().or_else(|| {
+            (self.spec.provider == crate::config::ProviderKind::Opencode)
+                .then(|| self.opencode_session(&registry.claimed()))
+                .flatten()
+        });
+        if let Some(id) = found
+            && let Ok(mut identity) = self.identity.lock()
+        {
+            identity.get_or_insert(id);
         }
     }
 
@@ -514,4 +518,121 @@ pub(crate) fn recover(store: &store::Store, _state: &Path) -> Result<()> {
             .execute("DELETE FROM native_processes WHERE pid=?1", [pid])?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// An OpenCode that lists one new session when asked and otherwise
+    /// behaves as an interactive CLI (through the fixture shim).
+    fn opencode(dir: &Path) -> std::path::PathBuf {
+        let script = dir.join("opencode");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import json, os, sys, time
+if "session" in sys.argv[1:] and "list" in sys.argv[1:]:
+    print(json.dumps([{"id": "ses_found", "created": int(time.time() * 1000),
+                       "directory": os.getcwd()}]))
+    sys.exit(0)
+print(json.dumps({"type": "text", "part": {"text": "opencode answer"}}))
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        fixture::interactive(&script);
+        script
+    }
+
+    fn core(dir: &Path) -> Arc<Core> {
+        let config =
+            crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        Core::open(&dir.join("state"), config).unwrap()
+    }
+
+    #[test]
+    fn opencode_learns_the_session_it_created_without_locking_itself() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let core = core(dir.path());
+        let spec = agent::Spec {
+            provider: crate::config::ProviderKind::Opencode,
+            binary: opencode(dir.path()),
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: project,
+            add_dirs: vec![],
+            access: agent::Access::ReadOnly,
+            resume: None,
+        };
+        let session = core
+            .native
+            .prepare_scoped(&core, "c", "orchestrator", &spec, "")
+            .unwrap();
+        let (finished, result) = std::sync::mpsc::channel();
+        let worker = session.clone();
+        let registry = core.clone();
+        std::thread::spawn(move || {
+            let outcome = worker.run(&registry.native, "turn-1", "hello", &AtomicBool::new(false));
+            let _ = finished.send(outcome);
+        });
+        let outcome = result
+            .recv_timeout(Duration::from_secs(30))
+            .expect("learning the identity must not deadlock")
+            .unwrap();
+        assert_eq!(outcome.text, "opencode answer");
+        assert_eq!(outcome.session.as_deref(), Some("ses_found"));
+        // Another live session in the same directory is not handed the same one.
+        assert_eq!(session.identity().as_deref(), Some("ses_found"));
+        assert_eq!(core.native.claimed(), ["ses_found"]);
+    }
+
+    #[test]
+    fn a_session_is_replaced_when_the_wanted_one_differs_from_the_live_one() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let core = core(dir.path());
+        let mut spec = agent::Spec {
+            provider: crate::config::ProviderKind::Opencode,
+            binary: opencode(dir.path()),
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: project,
+            add_dirs: vec![],
+            access: agent::Access::ReadOnly,
+            resume: None,
+        };
+        let first = core
+            .native
+            .prepare_scoped(&core, "c", "orchestrator", &spec, "")
+            .unwrap();
+        // Not yet used: the same terminal serves the next request.
+        let again = core
+            .native
+            .prepare_scoped(&core, "c", "orchestrator", &spec, "")
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+        first.primed.store(true, Ordering::SeqCst);
+        *first.identity.lock().unwrap() = Some("ses_old".into());
+        // A turn that resumes the live session keeps it; one that wants a
+        // fresh session (or another one) gets a new terminal.
+        spec.resume = Some("ses_old".into());
+        let kept = core
+            .native
+            .prepare_scoped(&core, "c", "orchestrator", &spec, "")
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &kept));
+        spec.resume = None;
+        let fresh = core
+            .native
+            .prepare_scoped(&core, "c", "orchestrator", &spec, "")
+            .unwrap();
+        assert!(!Arc::ptr_eq(&first, &fresh));
+    }
 }
