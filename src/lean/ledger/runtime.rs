@@ -100,29 +100,66 @@ impl Core {
         let mut out = String::new();
         let messages = self.store.messages_after(conversation, 0)?;
         for source in self.store.ledger_sources(conversation, run_id)? {
-            if let Some(seq) = source.message {
-                if let Some(index) = messages.iter().position(|message| message.seq == seq)
-                    && messages[index].text.starts_with("Interview answer (")
-                    && let Some(question) = messages[..index]
-                        .iter()
-                        .rev()
-                        .find(|message| message.author == "orchestrator")
-                {
-                    out.push_str(&format!(
-                        "\nInterview question context for source {} (interpret the selected answer using its option description; this is context, not a separate user obligation; byte ranges refer only to the user source):\n{}\n",
-                        source.id, question.text
-                    ));
-                }
-                out.push_str(&format!(
-                    "\nFull user source {}:\n{}\n",
-                    source.id,
-                    self.store
-                        .ledger_source_text(conversation, run_id, &source.id, &self.state)?
-                ));
-            } else {
-                out.push_str(&format!("\nRead the full immutable document {} at {}. Hash {}. Do not rely on excerpts.\n",source.id,self.state.join(source.locator.unwrap_or_default()).display(),source.hash));
-            }
+            self.append_ledger_source(&mut out, &messages, conversation, run_id, &source)?;
         }
+        self.append_interview_summary(&mut out, conversation)?;
+        Ok(out)
+    }
+
+    fn append_ledger_source(
+        &self,
+        out: &mut String,
+        messages: &[crate::lean::store::Message],
+        conversation: &str,
+        run_id: &str,
+        source: &Source,
+    ) -> Result<()> {
+        if let Some(seq) = source.message {
+            self.append_interview_question(out, messages, seq, &source.id);
+            let text =
+                self.store
+                    .ledger_source_text(conversation, run_id, &source.id, &self.state)?;
+            out.push_str(&format!("\nFull user source {}:\n{text}\n", source.id));
+        } else {
+            let path = self
+                .state
+                .join(source.locator.as_deref().unwrap_or_default());
+            out.push_str(&format!(
+                "\nRead the full immutable document {} at {}. Hash {}. Do not rely on excerpts.\n",
+                source.id,
+                path.display(),
+                source.hash
+            ));
+        }
+        Ok(())
+    }
+
+    fn append_interview_question(
+        &self,
+        out: &mut String,
+        messages: &[crate::lean::store::Message],
+        seq: u64,
+        source_id: &str,
+    ) {
+        let Some(index) = messages.iter().position(|message| message.seq == seq) else {
+            return;
+        };
+        if !messages[index].text.starts_with("Interview answer (") {
+            return;
+        }
+        if let Some(question) = messages[..index]
+            .iter()
+            .rev()
+            .find(|message| message.author == "orchestrator")
+        {
+            out.push_str(&format!(
+                "\nInterview question context for source {source_id} (interpret the selected answer using its option description; this is context, not a separate user obligation; byte ranges refer only to the user source):\n{}\n",
+                question.text
+            ));
+        }
+    }
+
+    fn append_interview_summary(&self, out: &mut String, conversation: &str) -> Result<()> {
         if let Some(workflow) = self.store.workflow(conversation)?
             && !workflow.summary.is_empty()
         {
@@ -131,7 +168,7 @@ impl Core {
                 workflow.summary
             ));
         }
-        Ok(out)
+        Ok(())
     }
     /// Extraction is separate from task planning and has a separate verifier session.
     pub(in crate::lean) fn validate_ledger_plan(
