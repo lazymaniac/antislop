@@ -16,6 +16,7 @@ use crate::{Result, require};
 /// third attempt is the user's decision.
 pub const ATTEMPTS: usize = 2;
 
+#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 pub const FORMAT: &str = "If the goal cannot be reached because something outside your task is \
      missing, do not repeat the shortfall in prose round after round. End your report with \
      this block, once:\n```blocker\n{\"kind\":\"missing_input|permission|unsatisfiable_requirement|too_large\",\
@@ -28,6 +29,7 @@ pub const FORMAT: &str = "If the goal cannot be reached because something outsid
      The runtime stops the task and hands the problem to the orchestrator, who fixes the plan. \
      Do not use it for work you can still do.\n\n";
 
+#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -37,6 +39,7 @@ pub enum Kind {
     TooLarge,
 }
 
+#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Blocker {
     pub kind: Kind,
@@ -46,6 +49,7 @@ pub struct Blocker {
     pub suggest: Option<String>,
 }
 
+#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 impl Blocker {
     /// What a card and the orchestrator read.
     pub fn summary(&self) -> String {
@@ -69,6 +73,7 @@ impl Blocker {
 
 /// The worker's blocker, when its report ends in a valid block. A damaged
 /// or empty block is ignored, so the report goes to the verifier as before.
+#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 pub fn parse(report: &str) -> Option<Blocker> {
     let (_, body) = fenced(report, "blocker")?;
     let blocker: Blocker = serde_json::from_str(body).ok()?;
@@ -76,6 +81,7 @@ pub fn parse(report: &str) -> Option<Blocker> {
 }
 
 /// What a worker is told about blockers, and about the one it clears.
+#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 pub fn worker_note(task: &TaskSpec) -> String {
     let part = task.part_of.as_deref().map(|whole| {
         format!(
@@ -98,6 +104,7 @@ pub fn worker_note(task: &TaskSpec) -> String {
 }
 
 /// The check the runtime adds to the verifier of a task that clears `blocked`.
+#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 pub fn obligation(blocked: &str) -> String {
     format!(
         "This task clears the blocker of {blocked}. Assess whether what its goal asks for is now \

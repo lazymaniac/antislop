@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
+pub(in crate::lean) fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
     let open = format!("```{tag}");
     let start = text.rfind(&open)?;
     let body_start = start + open.len();

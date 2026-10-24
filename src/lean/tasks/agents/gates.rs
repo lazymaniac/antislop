@@ -156,6 +156,8 @@ fn gate_task(
         writes: !description.audit,
         depends_on,
         kind: agent.kind,
+        resolves: None,
+        part_of: None,
         verifier: VerifierSpec {
             focus: agent.focus.to_owned(),
             summary: Some(description.verifier_summary.to_owned()),

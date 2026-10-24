@@ -194,6 +194,8 @@ fn options_task(task: &TaskSpec, ids: &mut BTreeSet<String>) -> TaskSpec {
         writes: false,
         depends_on: task.depends_on.clone(),
         kind: WorkKind::Options,
+        resolves: None,
+        part_of: None,
         verifier: VerifierSpec {
             focus: "Check alternatives, common criteria, exclusions, evidence and selection."
                 .into(),

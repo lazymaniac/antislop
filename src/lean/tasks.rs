@@ -120,6 +120,7 @@ pub const MAX_ROUNDS: u32 = 3;
 /// the user, whether or not the verifier keeps finding something new.
 pub const AUTONOMOUS_ROUNDS: u32 = 12;
 
+#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 const RESOLVES_IS_THE_RUNTIMES: &str = "`resolves` and `part_of` are set by the runtime when it inserts a task for a blocker or splits one; leave them out of plans and graph edits (use `add_task` or `split_task` in a ```recover block)";
 
 pub mod status {

@@ -188,6 +188,7 @@ const DIFF_LIMIT: usize = 2 * 1024 * 1024;
 pub const COMMENT_PREFIX: &str = "[user comment #";
 /// Checks each plan before the user sees it.
 const PLAN_VERIFIER: &str = "plan-verifier";
+#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 const PLAN_LINT: &str = "plan-lint";
 /// Checks, after a plan ran, that the user's request was fully delivered.
 const AUDITOR: &str = "auditor";
