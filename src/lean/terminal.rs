@@ -986,6 +986,50 @@ impl Filter {
 
 #[cfg(test)]
 mod tests {
+    /// What a CLI that asked for bracketed paste receives for `text`.
+    fn typed_into_a_cli(text: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let received = dir.path().join("received");
+        let script = format!(
+            "import os,sys,tty\ntty.setraw(0)\nsys.stdout.write('\\x1b[?2004h');sys.stdout.flush()\n\
+             buf=b''\nwhile True:\n d=os.read(0,65536)\n if not d: break\n buf+=d\n \
+             if b'\\x1b[201~' in buf and b'\\r' in buf[buf.index(b'\\x1b[201~'):]:\n  \
+             open({received:?},'wb').write(buf);break\n",
+            received = received.to_string_lossy()
+        );
+        let config = crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let mut command = CommandBuilder::new("python3");
+        command.args(["-c", &script]);
+        let mut terminal =
+            Session::spawn(command, core.weak.get().unwrap(), "python3", 120, 40).unwrap();
+        let screen = terminal.shared();
+        while quiet_for(&screen) < std::time::Duration::from_millis(600) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        Session::submit(&screen, text).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !received.exists() {
+            assert!(std::time::Instant::now() < deadline, "nothing received");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let bytes = std::fs::read(&received).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        let start = text.find("\x1b[200~").unwrap() + 6;
+        let end = text.find("\x1b[201~").unwrap();
+        let _ = terminal.exited();
+        text[start..end].to_owned()
+    }
+
+    #[test]
+    fn a_typed_prompt_arrives_exactly_as_written() {
+        let line = "{\"k\": \"zażółć gęślą jaźń 🙂 \\u00e9 tab\\there\"}";
+        let big = format!("first\n{}\n\n  indented\ttab \"quoted\" 'single' `tick`\ntrailing\n", line.repeat(2000));
+        let received = typed_into_a_cli(&big);
+        assert_eq!(received.replace('\r', "\n"), big);
+    }
+
     use super::*;
     #[test]
     fn split_palette_and_cursor_queries_receive_terminal_responses() {
