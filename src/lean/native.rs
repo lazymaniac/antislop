@@ -497,14 +497,11 @@ pub(crate) fn recover(store: &store::Store, _state: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Makes a headless-style test script answer as an interactive agent CLI (see
-/// `tests/support/pty_shim.py`); the script keeps computing the answer.
+/// Makes a headless-style test script answer as an interactive agent CLI too
+/// (see `tests/support/fixture_cli.rs`).
 #[cfg(test)]
-pub(crate) fn interactive_fixture(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let mut legacy = path.as_os_str().to_owned();
-    legacy.push(".legacy");
-    std::fs::rename(path, &legacy).unwrap();
-    std::fs::write(path, include_str!("../../tests/support/pty_shim.py")).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+mod fixture {
+    include!("../../tests/support/fixture_cli.rs");
 }
+#[cfg(test)]
+pub(crate) use fixture::interactive as interactive_fixture;

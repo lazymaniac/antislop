@@ -3,7 +3,7 @@
 # far as the daemon can tell: it runs in a terminal, takes a pasted prompt
 # followed by Enter, and ends the turn by calling `finish_turn` on the MCP
 # gateway it was launched with. The answer itself comes from the test's own
-# deterministic script, `<this file>.legacy`, which is run once per turn with
+# deterministic script (`argv[1]`), which is run once per turn with
 # the prompt as its last argument and may print the answer in any of the
 # line-oriented shapes the earlier headless fixtures used.
 import json
@@ -15,9 +15,9 @@ import termios
 import tty
 import urllib.request
 
-here = os.path.abspath(sys.argv[0])
-legacy = here + ".legacy"
-args = sys.argv[1:]
+here = os.path.abspath(sys.argv[1])
+legacy = here
+args = sys.argv[2:]
 name = os.path.basename(here)
 
 url = token = None
@@ -123,7 +123,8 @@ def run_legacy(prompt):
         if resume:
             argv += ["--resume", resume]
     argv.append(prompt)
-    return subprocess.run(argv, capture_output=True, text=True, cwd=os.getcwd())
+    env = dict(os.environ, FIXTURE_HEADLESS="1")
+    return subprocess.run(argv, capture_output=True, text=True, cwd=os.getcwd(), env=env)
 
 
 def main():

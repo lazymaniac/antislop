@@ -1108,12 +1108,11 @@ fn process_failure_does_not_persist_credentials_from_cli_files() {
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let script = fake_codex(dir.path());
-    let legacy = script.with_file_name("codex.legacy");
-    let source = std::fs::read_to_string(&legacy).unwrap().replace(
+    let source = std::fs::read_to_string(&script).unwrap().replace(
         "login required",
         "login required https://user:file-only-secret@host/encoded-token",
     );
-    std::fs::write(&legacy, source).unwrap();
+    std::fs::write(&script, source).unwrap();
     let core = Core::open(&dir.path().join("state"), config(&script)).unwrap();
     let conversation = core.start(&project).unwrap();
     core.send(&conversation.id, "fail please").unwrap();
