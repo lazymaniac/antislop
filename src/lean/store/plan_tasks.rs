@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "plan_tasks/checks.rs"]
+mod checks;
+
 impl Store {
     /// The latest plan of the conversation other than `except` that was
     /// accepted and ran (not only proposed or sent back).
@@ -133,49 +136,6 @@ impl Store {
     /// while it works on it, `settled` with its status and evidence. A check
     /// already settled does not go back to `checking`; a note stays unless a
     /// new one replaces it. Returns whether the row changed.
-    pub fn set_check(
-        &self,
-        task: &str,
-        round: u32,
-        check: &str,
-        state: &str,
-        status: Option<&str>,
-        note: &str,
-    ) -> Result<bool> {
-        let db = self.db();
-        let before: Option<(String, Option<String>, String)> = db
-            .query_row(
-                "SELECT state,status,note FROM checks WHERE task_id=?1 AND round=?2 AND check_id=?3",
-                params![task, round, check],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
-        let (state, status, note) = match before {
-            Some((old_state, ..)) if old_state == "settled" && state == "checking" => {
-                return Ok(false);
-            }
-            Some((_, old_status, old_note)) => (
-                state,
-                status.map(str::to_owned).or(old_status),
-                if note.is_empty() {
-                    old_note
-                } else {
-                    note.to_owned()
-                },
-            ),
-            None => (state, status.map(str::to_owned), note.to_owned()),
-        };
-        let changed = db.execute(
-            "INSERT INTO checks(task_id,round,check_id,state,status,note,updated_ms)
-             VALUES(?1,?2,?3,?4,?5,?6,?7)
-             ON CONFLICT(task_id,round,check_id) DO UPDATE SET
-               state=?4,status=?5,note=?6,updated_ms=?7
-             WHERE state IS NOT ?4 OR status IS NOT ?5 OR note IS NOT ?6",
-            params![task, round, check, state, status, note, now_ms()],
-        )?;
-        Ok(changed > 0)
-    }
-
     /// The checks of one round of a task, as JSON entries.
     pub fn checks(&self, task: &str, round: u32) -> Result<Vec<Value>> {
         let db = self.db();
@@ -190,80 +150,5 @@ impl Store {
             }))
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
-    }
-
-    pub fn update_task(&self, task: &Task) -> Result<()> {
-        let stored_report = task
-            .report
-            .as_deref()
-            .map(|text| self.content.encode(text))
-            .transpose()?;
-        let stored_verdict = task
-            .verdict
-            .as_ref()
-            .map(|value| self.content.encode(&value.to_string()))
-            .transpose()?;
-        let mut snapshot = serde_json::to_value(task)?;
-        for (field, encoded) in [("report", &stored_report), ("verdict", &stored_verdict)] {
-            if let Some(encoded) = encoded {
-                let reference: Value = serde_json::from_str(
-                    encoded
-                        .strip_prefix("\0antislop-content:")
-                        .expect("encoded content"),
-                )?;
-                snapshot[field] = serde_json::json!({"session_content":reference});
-            }
-        }
-        // A requeue may clear the task's mutable result before its next round
-        // starts. Keep the last durable report, verdict and Git range in that
-        // round's history, including when setup fails before another turn.
-        let previous: Option<String> = self
-            .db()
-            .query_row(
-                "SELECT content FROM task_rounds WHERE task_id=?1 AND round=?2",
-                params![task.id, task.round],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(previous) = previous {
-            let reference = serde_json::from_str(&previous)?;
-            let previous: Value = serde_json::from_str(&self.content.read(&reference)?)?;
-            for field in ["report", "verdict"] {
-                if snapshot[field].is_null() {
-                    snapshot[field] = previous[field].clone();
-                }
-            }
-            if snapshot["result"].is_null() && !previous["result"].is_null() {
-                snapshot["base"] = previous["base"].clone();
-                snapshot["result"] = previous["result"].clone();
-            }
-        }
-        let content = self.content.write(&serde_json::to_string(&snapshot)?)?;
-        let mut db = self.db();
-        let transaction = db.transaction()?;
-        transaction.execute("UPDATE task_rounds SET status='continued' WHERE task_id=?1 AND round=(SELECT round FROM tasks WHERE id=?1) AND round<?2 AND status IN ('working','verifying','queued')",params![task.id,task.round])?;
-        let changed = transaction.execute(
-            "UPDATE tasks SET status=?2,round=?3,report=?4,verdict=?5,base=?6,result=?7,feedback=?8 WHERE id=?1 AND coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)=?9",
-            params![
-                task.id,
-                task.status,
-                task.round as i64,
-                stored_report,
-                stored_verdict,
-                task.base,
-                task.result,
-                task.feedback.as_ref().map(Value::to_string),
-                task.input_generation
-            ],
-        )?;
-        crate::require(
-            changed == 1,
-            "stale task generation; result retained in turn history",
-        )?;
-        transaction.execute("INSERT INTO task_rounds(task_id,round,status,content) VALUES(?1,?2,?3,?4)
-            ON CONFLICT(task_id,round) DO UPDATE SET status=excluded.status,content=excluded.content",
-            params![task.id, task.round, task.status, serde_json::to_string(&content)?])?;
-        transaction.commit()?;
-        Ok(())
     }
 }

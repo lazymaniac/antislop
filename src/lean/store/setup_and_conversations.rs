@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "setup_and_conversations/schema.rs"]
+mod schema;
+use schema::{initialize_base_tables, initialize_plan_tables};
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         let connection = Connection::open(path)?;
@@ -31,78 +35,8 @@ impl Store {
 
     pub(super) fn initialize(connection: &Connection) -> Result<()> {
         let transaction = connection.unchecked_transaction()?;
-        transaction.execute_batch(
-            "CREATE TABLE IF NOT EXISTS conversations(
-               id TEXT PRIMARY KEY, project TEXT NOT NULL, created_ms INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS session_workflow(
-               conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
-               phase TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', upto_message INTEGER NOT NULL DEFAULT 0);
-             CREATE TABLE IF NOT EXISTS messages(
-               seq INTEGER PRIMARY KEY AUTOINCREMENT,
-               conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               author TEXT NOT NULL, text TEXT NOT NULL, created_ms INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS turns(
-               id TEXT PRIMARY KEY,
-               conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               plan_id TEXT,
-               role TEXT NOT NULL, provider TEXT NOT NULL, session_id TEXT,
-               status TEXT NOT NULL, error TEXT, upto_message INTEGER NOT NULL,
-               started_ms INTEGER NOT NULL, finished_ms INTEGER, pid INTEGER);
-             CREATE TABLE IF NOT EXISTS events(
-               seq INTEGER PRIMARY KEY AUTOINCREMENT,
-               conversation_id TEXT REFERENCES conversations(id),
-               turn_id TEXT, plan_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL,
-               created_ms INTEGER NOT NULL DEFAULT 0);
-             CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, seq);
-             CREATE INDEX IF NOT EXISTS turns_by_conversation ON turns(conversation_id, role, started_ms);
-             CREATE INDEX IF NOT EXISTS events_by_conversation ON events(conversation_id, seq);
-             CREATE TABLE IF NOT EXISTS tasks(
-                id TEXT PRIMARY KEY,
-                conversation_id TEXT NOT NULL REFERENCES conversations(id),
-                plan_id TEXT NOT NULL, position INTEGER NOT NULL, spec TEXT NOT NULL,
-                status TEXT NOT NULL, round INTEGER NOT NULL DEFAULT 0,
-                report TEXT, verdict TEXT, base TEXT, result TEXT, feedback TEXT,
-                created_ms INTEGER NOT NULL);
-             CREATE INDEX IF NOT EXISTS tasks_by_plan ON tasks(conversation_id, plan_id, position);
-             CREATE INDEX IF NOT EXISTS tasks_by_plan_position ON tasks(plan_id, position);
-             CREATE TABLE IF NOT EXISTS mail(
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               sender TEXT NOT NULL, recipient TEXT NOT NULL, kind TEXT NOT NULL,
-               text TEXT NOT NULL, created_ms INTEGER NOT NULL,
-               delivered_turn TEXT, delivered_ms INTEGER);
-             CREATE INDEX IF NOT EXISTS mail_by_recipient
-               ON mail(conversation_id, recipient, delivered_turn);
-             CREATE TABLE IF NOT EXISTS comments(
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               plan_id TEXT, target TEXT NOT NULL, label TEXT NOT NULL, text TEXT NOT NULL,
-               status TEXT NOT NULL, message INTEGER NOT NULL,
-               created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS checks(
-               task_id TEXT NOT NULL, round INTEGER NOT NULL, check_id TEXT NOT NULL,
-               state TEXT NOT NULL, status TEXT, note TEXT NOT NULL DEFAULT '',
-               updated_ms INTEGER NOT NULL,
-               PRIMARY KEY(task_id, round, check_id));
-             CREATE TABLE IF NOT EXISTS pauses(
-               conversation_id TEXT PRIMARY KEY REFERENCES conversations(id));
-             CREATE TABLE IF NOT EXISTS modes(
-               conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
-               autonomous INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS trusted_projects(
-               project TEXT PRIMARY KEY,
-               trusted_ms INTEGER NOT NULL);",
-        )?;
-        transaction.execute_batch(
-            "CREATE TABLE IF NOT EXISTS plans(
-               id TEXT PRIMARY KEY,
-               conversation_id TEXT NOT NULL REFERENCES conversations(id),
-               created_ms INTEGER NOT NULL);
-             CREATE INDEX IF NOT EXISTS plans_by_conversation ON plans(conversation_id, created_ms);
-             CREATE INDEX IF NOT EXISTS events_by_plan ON events(conversation_id, plan_id, seq);
-             CREATE INDEX IF NOT EXISTS turns_by_plan ON turns(conversation_id, plan_id, started_ms);
-             ",
-        )?;
+        initialize_base_tables(&transaction)?;
+        initialize_plan_tables(&transaction)?;
         transaction.execute_batch(include_str!("../ledger/schema.sql"))?;
         Self::initialize_history(&transaction)?;
         Self::initialize_run_context(&transaction)?;
@@ -208,49 +142,8 @@ impl Store {
         let stored_text = self.content.encode(text)?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        tx.execute(
-            "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,?2,?3,?4)",
-            params![conversation, author, stored_text, now_ms()],
-        )?;
-        let seq = tx.last_insert_rowid() as u64;
-        tx.execute(
-            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,NULL,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![
-                conversation,
-                serde_json::json!({"seq":seq,"author":author,"text":stored_text}).to_string()
-            ],
-        )?;
-        // A follow-up after completed implementation starts a new requirements
-        // checkpoint. Keep all plans, turns and ledger evidence as history.
-        if author == "user" && !text.starts_with(crate::lean::COMMENT_PREFIX) {
-            let restarted = tx.execute(
-                "UPDATE session_workflow SET phase='interview',summary='',upto_message=0
-                 WHERE conversation_id=?1 AND phase='implementation'
-                 AND EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1))
-                 AND NOT EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1) AND status<>'approved')
-                 AND NOT EXISTS(SELECT 1 FROM turns WHERE conversation_id=?1 AND status='running')",
-                [conversation],
-            )?;
-            if restarted > 0 {
-                let run_id = crate::id();
-                tx.execute(
-                    "INSERT INTO runs(id,conversation_id,goal,created_ms,start_message) VALUES(?1,?2,?3,?4,?5)",
-                    params![run_id, conversation, crate::lean::tasks::bound(text, 1000), now_ms(), seq as i64],
-                )?;
-                tx.execute(
-                    "INSERT INTO planning_runs VALUES(?1,?2) ON CONFLICT(conversation_id) DO UPDATE SET run_id=excluded.run_id",
-                    params![conversation, run_id],
-                )?;
-                tx.execute(
-                    "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'run_created',?2,?3)",
-                    params![conversation, serde_json::json!({"run":run_id}).to_string(), now_ms()],
-                )?;
-                tx.execute(
-                    "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'workflow',?2,?3)",
-                    params![conversation, serde_json::json!({"phase":"interview","summary":""}).to_string(), now_ms()],
-                )?;
-            }
-        }
+        let seq = insert_message(&tx, conversation, author, &stored_text)?;
+        maybe_start_requirements_checkpoint(&tx, conversation, author, text, seq)?;
         tx.commit()?;
         Ok(Message {
             seq,
@@ -258,4 +151,136 @@ impl Store {
             text: text.into(),
         })
     }
+}
+
+fn insert_message(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    author: &str,
+    stored_text: &str,
+) -> Result<u64> {
+    tx.execute(
+        "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,?2,?3,?4)",
+        params![conversation, author, stored_text, now_ms()],
+    )?;
+    let sequence = tx.last_insert_rowid() as u64;
+    insert_message_event(tx, conversation, author, stored_text, sequence)?;
+    Ok(sequence)
+}
+
+fn insert_message_event(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    author: &str,
+    text: &str,
+    sequence: u64,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,NULL,NULL,'message',?2,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+        params![conversation, serde_json::json!({"seq": sequence, "author": author, "text": text}).to_string()],
+    )?;
+    Ok(())
+}
+
+fn maybe_start_requirements_checkpoint(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    author: &str,
+    text: &str,
+    sequence: u64,
+) -> Result<()> {
+    if author != "user" || text.starts_with(crate::lean::COMMENT_PREFIX) {
+        return Ok(());
+    }
+    if restart_completed_workflow(tx, conversation)? > 0 {
+        create_requirements_run(tx, conversation, text, sequence)?;
+    }
+    Ok(())
+}
+
+fn restart_completed_workflow(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<usize> {
+    Ok(tx.execute(
+        "UPDATE session_workflow SET phase='interview',summary='',upto_message=0
+         WHERE conversation_id=?1 AND phase='implementation'
+         AND EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1))
+         AND NOT EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1) AND status<>'approved')
+         AND NOT EXISTS(SELECT 1 FROM turns WHERE conversation_id=?1 AND status='running')",
+        [conversation],
+    )?)
+}
+
+fn create_requirements_run(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    text: &str,
+    sequence: u64,
+) -> Result<()> {
+    let run_id = crate::id();
+    insert_requirements_run(tx, conversation, text, sequence, &run_id)?;
+    link_planning_run(tx, conversation, &run_id)?;
+    append_requirements_events(tx, conversation, &run_id)
+}
+
+fn insert_requirements_run(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    text: &str,
+    sequence: u64,
+    run_id: &str,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO runs(id,conversation_id,goal,created_ms,start_message) VALUES(?1,?2,?3,?4,?5)",
+        params![
+            run_id,
+            conversation,
+            crate::lean::tasks::bound(text, 1000),
+            now_ms(),
+            sequence as i64
+        ],
+    )?;
+    Ok(())
+}
+
+fn link_planning_run(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    run_id: &str,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO planning_runs VALUES(?1,?2) ON CONFLICT(conversation_id) DO UPDATE SET run_id=excluded.run_id",
+        params![conversation, run_id],
+    )?;
+    Ok(())
+}
+
+fn append_requirements_events(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    run_id: &str,
+) -> Result<()> {
+    append_run_event(
+        tx,
+        conversation,
+        "run_created",
+        serde_json::json!({"run": run_id}),
+    )?;
+    append_run_event(
+        tx,
+        conversation,
+        "workflow",
+        serde_json::json!({"phase": "interview", "summary": ""}),
+    )
+}
+
+fn append_run_event(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    kind: &str,
+    payload: serde_json::Value,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4)",
+        params![conversation, kind, payload.to_string(), now_ms()],
+    )?;
+    Ok(())
 }

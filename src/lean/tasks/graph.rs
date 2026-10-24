@@ -107,45 +107,72 @@ pub fn parallel_peers(tasks: &[TaskSpec]) -> std::collections::HashMap<String, V
 /// [`parallel_peers`] over plain nodes. Each task's dependency chain is walked
 /// once, so the cost is the plan's own size (tasks x edges), not a walk per pair.
 pub fn peers_of(nodes: &[PeerNode]) -> std::collections::HashMap<String, Vec<String>> {
-    let index: std::collections::HashMap<&str, usize> = nodes
+    let index = peer_index(nodes);
+    let reaches = dependency_reachability(nodes, &index);
+    nodes
+        .iter()
+        .enumerate()
+        .map(|(at, task)| (task.id.to_owned(), peer_ids(at, task, nodes, &reaches)))
+        .collect()
+}
+
+fn peer_index<'a>(nodes: &[PeerNode<'a>]) -> std::collections::HashMap<&'a str, usize> {
+    nodes
         .iter()
         .enumerate()
         .map(|(at, node)| (node.id, at))
-        .collect();
-    // reaches[i][j]: task i depends, through any chain, on task j.
-    let reaches: Vec<Vec<bool>> = (0..nodes.len())
-        .map(|from| {
-            let mut seen = vec![false; nodes.len()];
-            let mut stack: Vec<usize> = vec![from];
-            while let Some(at) = stack.pop() {
-                for dep in nodes[at].depends_on {
-                    if let Some(&to) = index.get(dep.as_str())
-                        && !std::mem::replace(&mut seen[to], true)
-                    {
-                        stack.push(to);
-                    }
-                }
+        .collect()
+}
+
+fn dependency_reachability(
+    nodes: &[PeerNode],
+    index: &std::collections::HashMap<&str, usize>,
+) -> Vec<Vec<bool>> {
+    (0..nodes.len())
+        .map(|from| reachable_nodes(from, nodes, index))
+        .collect()
+}
+
+fn reachable_nodes(
+    from: usize,
+    nodes: &[PeerNode],
+    index: &std::collections::HashMap<&str, usize>,
+) -> Vec<bool> {
+    let mut seen = vec![false; nodes.len()];
+    let mut stack = vec![from];
+    while let Some(at) = stack.pop() {
+        for dependency in nodes[at].depends_on {
+            if let Some(&to) = index.get(dependency.as_str())
+                && !std::mem::replace(&mut seen[to], true)
+            {
+                stack.push(to);
             }
-            seen
-        })
-        .collect();
-    let mut map = std::collections::HashMap::new();
-    for (i, task) in nodes.iter().enumerate() {
-        let peers = nodes
-            .iter()
-            .enumerate()
-            .filter(|&(j, other)| {
-                j != i
-                    && other.id != task.id
-                    && !reaches[i][j]
-                    && !reaches[j][i]
-                    && !(task.writes && other.writes && scopes_overlap(task.scope, other.scope))
-            })
-            .map(|(_, other)| other.id.to_owned())
-            .collect();
-        map.insert(task.id.to_owned(), peers);
+        }
     }
-    map
+    seen
+}
+
+fn peer_ids(at: usize, task: &PeerNode, nodes: &[PeerNode], reaches: &[Vec<bool>]) -> Vec<String> {
+    nodes
+        .iter()
+        .enumerate()
+        .filter(|&(other_at, other)| peers_can_run(at, task, other_at, other, reaches))
+        .map(|(_, other)| other.id.to_owned())
+        .collect()
+}
+
+fn peers_can_run(
+    at: usize,
+    task: &PeerNode,
+    other_at: usize,
+    other: &PeerNode,
+    reaches: &[Vec<bool>],
+) -> bool {
+    other_at != at
+        && other.id != task.id
+        && !reaches[at][other_at]
+        && !reaches[other_at][at]
+        && !(task.writes && other.writes && scopes_overlap(task.scope, other.scope))
 }
 
 /// Builds a structured Markdown plan document with sections assigned to tasks.
@@ -155,50 +182,90 @@ pub fn peers_of(nodes: &[PeerNode]) -> std::collections::HashMap<String, Vec<Str
 pub fn render_plan_document(markdown: &str, tasks: &[TaskSpec]) -> String {
     let peers = parallel_peers(tasks);
     let trimmed = markdown.trim();
-    let mut doc = String::new();
-    if !trimmed.is_empty() {
-        doc.push_str(trimmed);
-        doc.push_str("\n\n");
+    let mut document = plan_document_start(trimmed);
+    for (index, task) in tasks.iter().enumerate() {
+        append_plan_task(&mut document, trimmed, index, task, &peers);
+    }
+    document.trim_end().to_owned()
+}
+
+fn plan_document_start(markdown: &str) -> String {
+    let mut document = if markdown.is_empty() {
+        "# Execution Plan\n\n".to_owned()
     } else {
-        doc.push_str("# Execution Plan\n\n");
+        format!("{markdown}\n\n")
+    };
+    if !has_section_headers(markdown) {
+        document.push_str("## Plan Sections & Task Breakdown\n\n");
     }
-    let has_section_headers = trimmed.lines().any(|l| l.trim_start().starts_with('#'));
-    if !has_section_headers {
-        doc.push_str("## Plan Sections & Task Breakdown\n\n");
+    document
+}
+
+fn has_section_headers(markdown: &str) -> bool {
+    markdown
+        .lines()
+        .any(|line| line.trim_start().starts_with('#'))
+}
+
+fn append_plan_task(
+    document: &mut String,
+    markdown: &str,
+    index: usize,
+    task: &TaskSpec,
+    peers: &std::collections::HashMap<String, Vec<String>>,
+) {
+    if markdown.contains(&format!("[{}]", task.id)) {
+        return;
     }
-    for (idx, task) in tasks.iter().enumerate() {
-        let section_title = task
-            .section
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or(&task.title);
-        let heading_marker = format!("### {}. {} [{}]", idx + 1, section_title, task.id);
-        if !trimmed.contains(&format!("[{}]", task.id)) {
-            doc.push_str(&heading_marker);
-            doc.push('\n');
-            doc.push_str(&format!("- **Task**: `{}` — {}\n", task.id, task.title));
-            doc.push_str(&format!("- **Kind**: `{}`", work_kind_name(task.kind)));
-            if task.writes {
-                doc.push_str(" (writes)");
-            } else {
-                doc.push_str(" (read-only)");
-            }
-            doc.push('\n');
-            doc.push_str(&format!("- **Goal**: {}\n", task.goal));
-            doc.push_str(&format!("- **Scope**: {}\n", scope_text(&task.scope)));
-            let deps = if task.depends_on.is_empty() {
-                "none (can start immediately)".to_owned()
-            } else {
-                task.depends_on.join(", ")
-            };
-            doc.push_str(&format!("- **Depends on**: {deps}\n"));
-            let par = peers
-                .get(&task.id)
-                .filter(|p| !p.is_empty())
-                .map(|p| p.join(", "))
-                .unwrap_or_else(|| "sequential".to_owned());
-            doc.push_str(&format!("- **Parallel with**: {par}\n\n"));
-        }
+    append_task_heading(document, index, task);
+    append_task_details(document, task);
+    append_task_relationships(document, task, peers);
+}
+
+fn append_task_heading(document: &mut String, index: usize, task: &TaskSpec) {
+    let section = task
+        .section
+        .as_deref()
+        .filter(|section| !section.trim().is_empty())
+        .unwrap_or(&task.title);
+    document.push_str(&format!("### {}. {} [{}]\n", index + 1, section, task.id));
+}
+
+fn append_task_details(document: &mut String, task: &TaskSpec) {
+    document.push_str(&format!("- **Task**: `{}` — {}\n", task.id, task.title));
+    document.push_str(&format!("- **Kind**: `{}`", work_kind_name(task.kind)));
+    document.push_str(if task.writes {
+        " (writes)\n"
+    } else {
+        " (read-only)\n"
+    });
+    document.push_str(&format!("- **Goal**: {}\n", task.goal));
+    document.push_str(&format!("- **Scope**: {}\n", scope_text(&task.scope)));
+}
+
+fn append_task_relationships(
+    document: &mut String,
+    task: &TaskSpec,
+    peers: &std::collections::HashMap<String, Vec<String>>,
+) {
+    let dependencies = dependency_text(task);
+    let parallel = peer_text(task, peers);
+    document.push_str(&format!("- **Depends on**: {dependencies}\n"));
+    document.push_str(&format!("- **Parallel with**: {parallel}\n\n"));
+}
+
+fn dependency_text(task: &TaskSpec) -> String {
+    if task.depends_on.is_empty() {
+        "none (can start immediately)".into()
+    } else {
+        task.depends_on.join(", ")
     }
-    doc.trim_end().to_owned()
+}
+
+fn peer_text(task: &TaskSpec, peers: &std::collections::HashMap<String, Vec<String>>) -> String {
+    peers
+        .get(&task.id)
+        .filter(|peers| !peers.is_empty())
+        .map(|peers| peers.join(", "))
+        .unwrap_or_else(|| "sequential".to_owned())
 }

@@ -9,31 +9,41 @@ pub fn effect(stat: &str, files: &[String]) -> (String, bool) {
     if files.is_empty() {
         return ("no file changes".into(), false);
     }
-    let summary = stat
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| line.contains("changed") || line.contains("insertion"))
-        .map_or_else(|| format!("{} file(s) changed", files.len()), str::to_owned);
-    let mut shown = files.len().min(FILE_LIMIT);
-    loop {
-        let dropped = files.len() - shown;
-        let candidate = if shown == 0 {
-            format!("{summary} (+{dropped} more files)")
-        } else {
-            let names: Vec<&str> = files.iter().take(shown).map(String::as_str).collect();
-            let more = if dropped > 0 {
-                format!(" (+{dropped} more)")
-            } else {
-                String::new()
-            };
-            format!("{summary} — {}{more}", names.join(", "))
-        };
+    let summary = change_summary(stat, files.len());
+    for shown in (0..=files.len().min(FILE_LIMIT)).rev() {
+        let candidate = effect_candidate(&summary, files, shown);
         if shown == 0 || candidate.len() <= EFFECT_LIMIT {
             return bound_cut(&candidate, EFFECT_LIMIT);
         }
-        shown -= 1;
     }
+    bound_cut(&summary, EFFECT_LIMIT)
+}
+
+fn change_summary(stat: &str, file_count: usize) -> String {
+    stat.lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.contains("changed") || line.contains("insertion"))
+        .map_or_else(|| format!("{file_count} file(s) changed"), str::to_owned)
+}
+
+fn effect_candidate(summary: &str, files: &[String], shown: usize) -> String {
+    let dropped = files.len() - shown;
+    if shown == 0 {
+        return format!("{summary} (+{dropped} more files)");
+    }
+    let names = files
+        .iter()
+        .take(shown)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = if dropped > 0 {
+        format!(" (+{dropped} more)")
+    } else {
+        String::new()
+    };
+    format!("{summary} — {names}{more}")
 }
 
 /// The bounded effect a card shows for a read-only task: the first text

@@ -143,7 +143,21 @@ pub(super) fn counted_status(entry: &Value) -> &'static str {
 /// `unknown_more`; the verdict keeps every id whole, so nothing is lost to
 /// the preview's cut.
 pub fn coverage(verdict: &Verdict, obligations: &[(String, String)]) -> Value {
-    let mut counts: std::collections::BTreeMap<&str, u32> = std::collections::BTreeMap::new();
+    let counts = obligation_counts(verdict, obligations);
+    let unknown = unknown_ids(verdict, obligations);
+    let shown: Vec<String> = unknown
+        .iter()
+        .take(UNKNOWN_ID_LIMIT)
+        .map(|id| bound(id, UNKNOWN_ID_BYTES))
+        .collect();
+    coverage_value(obligations.len(), &counts, shown, unknown.len())
+}
+
+fn obligation_counts(
+    verdict: &Verdict,
+    obligations: &[(String, String)],
+) -> std::collections::BTreeMap<&'static str, u32> {
+    let mut counts = std::collections::BTreeMap::new();
     for (id, _) in obligations {
         let entry = verdict
             .coverage
@@ -152,26 +166,33 @@ pub fn coverage(verdict: &Verdict, obligations: &[(String, String)]) -> Value {
             .unwrap_or_default();
         *counts.entry(counted_status(&entry)).or_default() += 1;
     }
+    counts
+}
+
+fn unknown_ids<'a>(verdict: &'a Verdict, obligations: &[(String, String)]) -> Vec<&'a String> {
     let real: std::collections::HashSet<&str> =
         obligations.iter().map(|(id, _)| id.as_str()).collect();
-    let unknown: Vec<&String> = verdict
+    verdict
         .coverage
         .keys()
         .filter(|id| !real.contains(id.as_str()))
-        .collect();
-    let shown: Vec<String> = unknown
-        .iter()
-        .take(UNKNOWN_ID_LIMIT)
-        .map(|id| bound(id, UNKNOWN_ID_BYTES))
-        .collect();
+        .collect()
+}
+
+fn coverage_value(
+    total: usize,
+    counts: &std::collections::BTreeMap<&str, u32>,
+    shown: Vec<String>,
+    unknown_total: usize,
+) -> Value {
     serde_json::json!({
-        "total": obligations.len(),
+        "total": total,
         "ok": counts.get("ok").copied().unwrap_or_default(),
         "issue": counts.get("issue").copied().unwrap_or_default(),
         "blocked": counts.get("blocked").copied().unwrap_or_default(),
         "na": counts.get("na").copied().unwrap_or_default(),
         "missing": counts.get("missing").copied().unwrap_or_default(),
         "unknown": shown,
-        "unknown_more": unknown.len() - shown.len(),
+        "unknown_more": unknown_total - shown.len(),
     })
 }

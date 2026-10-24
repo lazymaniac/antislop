@@ -34,7 +34,16 @@ pub fn bound_cut(text: &str, limit: usize) -> (String, bool) {
         return (text.to_owned(), false);
     }
     let budget = limit.saturating_sub(CUT_MARK.len_utf8());
-    let mut end = 0usize;
+    let end = grapheme_prefix_end(text, budget);
+    let head = text[..end].trim_end();
+    if !head.is_empty() {
+        return (format!("{head}{CUT_MARK}"), true);
+    }
+    overflow_cluster(text, limit)
+}
+
+fn grapheme_prefix_end(text: &str, budget: usize) -> usize {
+    let mut end = 0;
     for (index, grapheme) in text.grapheme_indices(true) {
         let next = index + grapheme.len();
         if next > budget {
@@ -42,10 +51,10 @@ pub fn bound_cut(text: &str, limit: usize) -> (String, bool) {
         }
         end = next;
     }
-    let head = text[..end].trim_end();
-    if !head.is_empty() {
-        return (format!("{head}{CUT_MARK}"), true);
-    }
+    end
+}
+
+fn overflow_cluster(text: &str, limit: usize) -> (String, bool) {
     let first = text.graphemes(true).next().unwrap_or_default();
     if first.len() <= limit {
         return (first.to_owned(), true);

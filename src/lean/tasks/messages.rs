@@ -38,47 +38,62 @@ pub fn integration_question(answer: &str) -> Option<String> {
 /// to [`EFFECT_LIMIT`] with [`bound_cut`], which also says whether it cut;
 /// the caller stores that as the card's `effect_cut` metadata.
 pub fn parse_effect(answer: &str) -> (String, Option<(String, bool)>) {
-    let open = "```effect";
-    let Some(start) = answer.rfind(open) else {
+    let Some((start, close)) = effect_block_bounds(answer) else {
         return (answer.to_owned(), None);
     };
-    let rest = &answer[start + open.len()..];
-    if !rest.starts_with(['\n', '\r', ' ']) {
-        return (answer.to_owned(), None);
-    }
-    // The closing fence is a full line of exactly ```; anything else that
-    // looks like a fence is text and stays inside the body.
-    let mut offset = 0usize;
-    let mut close = None;
-    for line in rest.split_inclusive('\n') {
-        if line.trim_end_matches(['\n', '\r', ' ', '\t']) == "```" {
-            close = Some(offset);
-            break;
-        }
-        offset += line.len();
-    }
-    let Some(close) = close else {
-        return (answer.to_owned(), None);
-    };
+    let rest = &answer[start + "```effect".len()..];
     let body = rest[..close].trim();
     if body.is_empty() {
         return (answer.to_owned(), None);
     }
-    let one_line = body
-        .lines()
+    let effect = one_line_effect(body);
+    let remaining = effect_remainder(answer, start, close);
+    (remaining, Some(bound_cut(&effect, EFFECT_LIMIT)))
+}
+
+fn effect_block_bounds(answer: &str) -> Option<(usize, usize)> {
+    let start = answer.rfind("```effect")?;
+    let rest = &answer[start + "```effect".len()..];
+    if !rest.starts_with(['\n', '\r', ' ']) {
+        return None;
+    }
+    find_fence_line(rest).map(|close| (start, close))
+}
+
+fn find_fence_line(rest: &str) -> Option<usize> {
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end_matches(['\n', '\r', ' ', '\t']) == "```" {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
+
+fn one_line_effect(body: &str) -> String {
+    body.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" ")
+}
+
+fn effect_remainder(answer: &str, start: usize, close: usize) -> String {
+    let rest = &answer[start + "```effect".len()..];
     let mut remaining = answer[..start].trim_end().to_owned();
     let after = rest[close + 3..].trim();
     if !after.is_empty() {
-        if !remaining.is_empty() {
-            remaining.push_str("\n\n");
-        }
-        remaining.push_str(after);
+        append_after_block(&mut remaining, after);
     }
-    (remaining, Some(bound_cut(&one_line, EFFECT_LIMIT)))
+    remaining
+}
+
+fn append_after_block(remaining: &mut String, after: &str) {
+    if !remaining.is_empty() {
+        remaining.push_str("\n\n");
+    }
+    remaining.push_str(after);
 }
 
 /// A message an agent addresses to another agent in a ```message block.
