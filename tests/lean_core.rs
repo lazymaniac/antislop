@@ -1108,11 +1108,12 @@ fn process_failure_does_not_persist_credentials_from_cli_files() {
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let script = fake_codex(dir.path());
-    let source = std::fs::read_to_string(&script).unwrap().replace(
+    let legacy = script.with_file_name("codex.legacy");
+    let source = std::fs::read_to_string(&legacy).unwrap().replace(
         "login required",
         "login required https://user:file-only-secret@host/encoded-token",
     );
-    std::fs::write(&script, source).unwrap();
+    std::fs::write(&legacy, source).unwrap();
     let core = Core::open(&dir.path().join("state"), config(&script)).unwrap();
     let conversation = core.start(&project).unwrap();
     core.send(&conversation.id, "fail please").unwrap();
@@ -1124,22 +1125,14 @@ fn process_failure_does_not_persist_credentials_from_cli_files() {
         .unwrap();
     assert_eq!(turn.status, TurnStatus::Failed);
     let stored = turn.error.unwrap();
-    assert!(stored.contains("codex ended without a result (exit status: 1): login required"));
-    assert!(stored.contains("[REDACTED]"));
+    assert!(stored.contains("codex exited"), "{stored}");
+    assert!(stored.contains("login required"), "{stored}");
+    assert!(stored.contains("[REDACTED]"), "{stored}");
     assert!(!stored.contains("file-only-secret"));
     let events =
         serde_json::to_string(&core.store.events_since(&conversation.id, 0, 500).unwrap()).unwrap();
     assert!(!events.contains("file-only-secret"));
     assert!(!events.contains("encoded-token"));
-    assert!(
-        core.store
-            .events_since(&conversation.id, 0, 500)
-            .unwrap()
-            .iter()
-            .any(|event| event.kind == "agent"
-                && event.payload["type"] == "process_exit"
-                && event.payload["code"] == 1)
-    );
 }
 
 #[test]

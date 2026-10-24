@@ -47,6 +47,16 @@ for i, arg in enumerate(args):
         sandbox = "danger-full-access" if args[i + 1] == "acceptEdits" else "read-only"
 
 
+model_args = []
+for i, arg in enumerate(args):
+    if arg in ("-m", "--model") and i + 1 < len(args):
+        model_args += ["-m", args[i + 1]]
+    if arg.startswith("model_reasoning_effort="):
+        model_args += ["-c", arg]
+    if arg == "--effort" and i + 1 < len(args):
+        model_args += ["-c", 'model_reasoning_effort="%s"' % args[i + 1]]
+
+
 def answer_of(output):
     """The answer in the last line-oriented record that carries one."""
     text = None
@@ -100,9 +110,9 @@ def run_legacy(prompt):
     if name.endswith("codex") or "codex" in name:
         argv = [legacy, "exec"]
         if resume:
-            argv += ["resume", "-c", 'sandbox_mode="%s"' % sandbox, resume]
+            argv += ["resume", "-c", 'sandbox_mode="%s"' % sandbox] + model_args + [resume]
         else:
-            argv += ["--json", "-C", os.getcwd(), "-s", sandbox]
+            argv += ["--json", "-C", os.getcwd(), "-s", sandbox] + model_args
     else:
         argv = [legacy]
         if resume:

@@ -201,9 +201,12 @@ impl Registry {
         };
         let key = (conversation.to_owned(), role.to_owned());
         let mut sessions = self.sessions.lock().map_err(invalid)?;
+        // The live CLI continues its own conversation; a turn that wants a
+        // different session (or a fresh one after a restart) needs another CLI.
         if let Some(session) = sessions.get(&key)
             && session.signature == signature
             && !session.stop.load(Ordering::SeqCst)
+            && (spec.resume == session.identity() || !session.primed.load(Ordering::SeqCst))
             && session.check_alive().is_ok()
         {
             return Ok(session.clone());
