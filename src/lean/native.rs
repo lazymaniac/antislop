@@ -13,6 +13,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Makes a headless-style test script answer as an interactive agent CLI too
+/// (see `tests/support/fixture_cli.rs`).
+#[cfg(test)]
+pub(crate) mod fixture {
+    include!("../../tests/support/fixture_cli.rs");
+}
+
 pub(crate) const EXECUTION_FAILED: &str =
     "native backend execution failed (automatic retry disabled): ";
 /// A turn that has not ended after this long is reported as failed;
@@ -267,11 +274,7 @@ impl Registry {
 }
 
 impl Session {
-    fn start(
-        core: &Core,
-        spec: agent::Spec,
-        signature: String,
-    ) -> Result<Self> {
+    fn start(core: &Core, spec: agent::Spec, signature: String) -> Result<Self> {
         let gateway = mcp::Gateway::start()?;
         let launch = launch::command(&spec, &gateway)?;
         let weak = core.weak.get().expect("core weak").clone();
@@ -453,7 +456,6 @@ impl Session {
             .then(|| first["id"].as_str().map(str::to_owned))
             .flatten()
     }
-
 }
 
 /// What is typed into the CLI: the prompt and how to hand the answer back.
@@ -513,12 +515,3 @@ pub(crate) fn recover(store: &store::Store, _state: &Path) -> Result<()> {
     }
     Ok(())
 }
-
-/// Makes a headless-style test script answer as an interactive agent CLI too
-/// (see `tests/support/fixture_cli.rs`).
-#[cfg(test)]
-mod fixture {
-    include!("../../tests/support/fixture_cli.rs");
-}
-#[cfg(test)]
-pub(crate) use fixture::interactive as interactive_fixture;

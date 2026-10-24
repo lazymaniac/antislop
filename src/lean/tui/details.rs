@@ -480,10 +480,7 @@ impl Details {
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
-                format!(
-                    "🔍 Record filter: \"{}\"  (Esc: clear)",
-                    query
-                ),
+                format!("🔍 Record filter: \"{}\"  (Esc: clear)", query),
             ));
             out.push((Style::default(), String::new()));
         }
@@ -1152,7 +1149,8 @@ impl Details {
                 error
             } else if active && self.editing {
                 "Enter send · Alt+Enter newline · Esc navigation"
-            } else if let Some(delivery) = composer.and_then(|composer| composer.delivery.as_deref())
+            } else if let Some(delivery) =
+                composer.and_then(|composer| composer.delivery.as_deref())
             {
                 delivery
             } else if let Some(error) = self
@@ -1292,11 +1290,7 @@ impl Details {
             body.y = body.y.saturating_add(1);
             body.height = body.height.saturating_sub(1);
         }
-        if self.tab == 0
-            && !self.show_info
-            && self.key != "conversation"
-            && self.query.is_empty()
-        {
+        if self.tab == 0 && !self.show_info && self.key != "conversation" && self.query.is_empty() {
             self.draw_overview(frame, view, body, &theme);
             let hint = if self.searching {
                 format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
@@ -1402,9 +1396,7 @@ impl Details {
         }
 
         let records = self.records(view);
-        let lines = self
-            .layout_cache
-            .update(records, &self.query, width);
+        let lines = self.layout_cache.update(records, &self.query, width);
         let height = usize::from(inner.height);
         let bottom = lines.len().saturating_sub(height);
         if self.tab == CHECKS

@@ -60,7 +60,7 @@ def message(to, kind, text):
         support::install_ledger_protocol(&path);
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
-    common::interactive(&path);
+        common::interactive(&path);
         path
     };
     let codex = write(

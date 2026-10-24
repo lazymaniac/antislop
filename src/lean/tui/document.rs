@@ -424,9 +424,7 @@ mod tests {
                 sink("Ą👩‍💻needle\n")
             })
             .unwrap();
-        builder
-            .append("", |sink| sink("unrelated record"))
-            .unwrap();
+        builder.append("", |sink| sink("unrelated record")).unwrap();
         let document = builder.finish().unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let page = loop {

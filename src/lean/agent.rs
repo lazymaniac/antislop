@@ -200,7 +200,6 @@ pub fn clip_tail(text: &str, limit: usize) -> String {
     format!("[truncated]…\n{}", &text[start..])
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

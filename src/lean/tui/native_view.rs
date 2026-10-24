@@ -325,7 +325,10 @@ impl App {
                             .filter(|_| crate::lean::task_role(&role).is_some())
                             .map(|task| task["round"].to_string())
                             .unwrap_or_default();
-                        (role.clone(), format!("{}:{round}", session.unwrap_or("waiting")))
+                        (
+                            role.clone(),
+                            format!("{}:{round}", session.unwrap_or("waiting")),
+                        )
                     }
                 };
                 wanted.push((
@@ -373,10 +376,9 @@ impl App {
         }
     }
     fn native_key_role(&self) -> Option<String> {
-        let details = self
-            .details
-            .as_ref()
-            .filter(|d| d.tab == 0 && !d.show_info && (d.selected_round.is_none() || d.resume_round))?;
+        let details = self.details.as_ref().filter(|d| {
+            d.tab == 0 && !d.show_info && (d.selected_round.is_none() || d.resume_round)
+        })?;
         details
             .session_keys()
             .get(details.active_panel)
@@ -553,9 +555,7 @@ mod tests {
         let directory = tempfile::tempdir_in("/tmp").unwrap();
         let (mut app, _) = App::test_app_with_client(Client::at(directory.path()));
         let mut details = Details::new("orchestrator".into());
-        details.task = Some(
-            json!({"turns":[{"role":"orchestrator","session_id":"managed"}]}),
-        );
+        details.task = Some(json!({"turns":[{"role":"orchestrator","session_id":"managed"}]}));
         app.details = Some(details);
         app.sync_native_views();
         assert!(app.native_views.is_empty());
@@ -570,9 +570,8 @@ mod tests {
     fn overview_follows_session_rotation_without_reusing_a_stale_screen() {
         let mut app = App::test_app();
         let mut details = Details::new("orchestrator".into());
-        details.task = Some(
-            json!({"round":1,"native_sessions":[{"role":"orchestrator","session_id":"old"}]}),
-        );
+        details.task =
+            Some(json!({"round":1,"native_sessions":[{"role":"orchestrator","session_id":"old"}]}));
         details.native_focus = true;
         details.native_areas[0] = Rect::new(1, 1, 78, 20);
         app.details = Some(details);
@@ -613,7 +612,11 @@ mod tests {
         app.details.as_mut().unwrap().task.as_mut().unwrap()["native_sessions"] = json!([]);
         app.sync_native_views();
         assert_eq!(app.native_views[&key].identity, "waiting:");
-        assert!(app.details.as_ref().unwrap().native["orchestrator"].screen.is_none());
+        assert!(
+            app.details.as_ref().unwrap().native["orchestrator"]
+                .screen
+                .is_none()
+        );
     }
     #[test]
     fn a_lost_input_acknowledgement_reuses_the_same_sequence() {

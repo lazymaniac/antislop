@@ -161,8 +161,9 @@ impl Drop for Gateway {
 /// JSON-RPC line to the gateway named by the environment it inherited.
 pub fn bridge() -> Result<()> {
     use std::io::{BufRead, Write};
-    let url = std::env::var("ANTISLOP_MCP_URL")
-        .map_err(|_| invalid("ANTISLOP_MCP_URL is not set; mcp-bridge is started by an agent CLI"))?;
+    let url = std::env::var("ANTISLOP_MCP_URL").map_err(|_| {
+        invalid("ANTISLOP_MCP_URL is not set; mcp-bridge is started by an agent CLI")
+    })?;
     let token = std::env::var("ANTISLOP_MCP_TOKEN")
         .map_err(|_| invalid("ANTISLOP_MCP_TOKEN is not set"))?;
     let conversation = std::env::var("ANTIGRAVITY_CONVERSATION_ID").ok();
@@ -198,14 +199,12 @@ pub fn bridge() -> Result<()> {
 }
 
 fn respond(request: tiny_http::Request, status: u16, body: Option<Value>) -> Result<()> {
-    let mut response = tiny_http::Response::from_string(
-        body.map(|body| body.to_string()).unwrap_or_default(),
-    )
-    .with_status_code(status);
+    let mut response =
+        tiny_http::Response::from_string(body.map(|body| body.to_string()).unwrap_or_default())
+            .with_status_code(status);
     response.add_header(
-        tiny_http::Header::from_bytes("content-type", "application/json").map_err(|_| {
-            invalid("invalid content-type header")
-        })?,
+        tiny_http::Header::from_bytes("content-type", "application/json")
+            .map_err(|_| invalid("invalid content-type header"))?,
     );
     request.respond(response).map_err(Error::Io)
 }
@@ -282,7 +281,8 @@ fn tool() -> Value {
 
 /// Runs the tool; a refusal is a tool error the model can read and correct.
 fn call(shared: &Shared, params: &Value) -> Value {
-    let refuse = |message: &str| json!({"isError": true, "content": [{"type":"text","text":message}]});
+    let refuse =
+        |message: &str| json!({"isError": true, "content": [{"type":"text","text":message}]});
     for key in ["threadId", "sessionId"] {
         if let Some(id) = params["_meta"][key].as_str()
             && let Ok(mut state) = shared.state.lock()

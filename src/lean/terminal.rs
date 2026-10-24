@@ -559,7 +559,9 @@ impl Session {
         let dimensions = size(columns, rows)?;
         let mut state = self.state.lock().map_err(invalid)?;
         if state.term.get_size() != dimensions {
-            self.master.resize(pty_size(columns, rows)).map_err(invalid)?;
+            self.master
+                .resize(pty_size(columns, rows))
+                .map_err(invalid)?;
             state.term.resize(dimensions);
             state.revision = state.revision.wrapping_add(1);
         }
@@ -993,7 +995,8 @@ mod tests {
              open({received:?},'wb').write(buf);break\n",
             received = received.to_string_lossy()
         );
-        let config = crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let config =
+            crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
         let core = Core::open(&dir.path().join("state"), config).unwrap();
         let mut command = CommandBuilder::new("python3");
         command.args(["-c", &script]);
@@ -1021,7 +1024,10 @@ mod tests {
     #[test]
     fn a_typed_prompt_arrives_exactly_as_written() {
         let line = "{\"k\": \"zażółć gęślą jaźń 🙂 \\u00e9 tab\\there\"}";
-        let big = format!("first\n{}\n\n  indented\ttab \"quoted\" 'single' `tick`\ntrailing\n", line.repeat(2000));
+        let big = format!(
+            "first\n{}\n\n  indented\ttab \"quoted\" 'single' `tick`\ntrailing\n",
+            line.repeat(2000)
+        );
         let received = typed_into_a_cli(&big);
         assert_eq!(received.replace('\r', "\n"), big);
     }

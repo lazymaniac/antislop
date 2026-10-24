@@ -3409,7 +3409,6 @@ fn test_inspector_whole_record_search_and_raw_view() {
             .any(|(_, text)| text.contains("unique_key_12345")),
         "content must be included"
     );
-
 }
 
 #[test]
@@ -6188,7 +6187,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         std::fs::write(&binary, script).unwrap();
         std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
-    common::interactive(&binary);
+        common::interactive(&binary);
         let path = project.join("antislop.toml");
         let mut initial = ConfigEditor::new(SOURCE, path.to_string_lossy().into_owned()).unwrap();
         for (field, text) in [
@@ -6378,10 +6377,9 @@ mod text_selection_acceptance {
                         title: "Selection in the session card".into(),
                         ..Default::default()
                     });
-                    app.view.mailbox.insert(
-                        "worker:t1".into(),
-                        vec!["sample café 👩‍👩‍👧‍👦".into()],
-                    );
+                    app.view
+                        .mailbox
+                        .insert("worker:t1".into(), vec!["sample café 👩‍👩‍👧‍👦".into()]);
                     let mut details = Details::new("worker:t1".into());
                     details.switch_tab(1);
                     app.details = Some(details);

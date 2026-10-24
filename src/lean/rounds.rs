@@ -552,7 +552,7 @@ echo '{"type":"turn.completed"}'
         .unwrap();
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
-        super::native::interactive_fixture(&script);
+        super::native::fixture::interactive(&script);
         let mut previous = HashMap::new();
         for round in 1..=2 {
             task.round = round;
@@ -829,7 +829,7 @@ echo '{"type":"turn.completed"}'
         .unwrap();
         std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
-        super::native::interactive_fixture(&binary);
+        super::native::fixture::interactive(&binary);
         binary
     }
 

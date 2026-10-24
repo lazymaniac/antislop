@@ -15,8 +15,18 @@ const TOKEN_ENV: &str = "ANTISLOP_MCP_TOKEN";
 /// Read-only roles may look around with these shell commands without being
 /// asked; anything else is put to the human in the terminal.
 const CLAUDE_READ_ONLY_SHELL: [&str; 12] = [
-    "git status", "git diff", "git log", "git show", "ls", "cat", "rg", "grep", "find", "head",
-    "tail", "wc",
+    "git status",
+    "git diff",
+    "git log",
+    "git show",
+    "ls",
+    "cat",
+    "rg",
+    "grep",
+    "find",
+    "head",
+    "tail",
+    "wc",
 ];
 
 pub(crate) struct Launch {
@@ -64,7 +74,12 @@ pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
 /// Agy takes MCP servers only from its own list. `antislop setup agy` puts the
 /// stdio bridge there once; the gateway of each session travels in the
 /// environment the bridge inherits.
-fn agy(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway, read_only: bool) -> Result<()> {
+fn agy(
+    command: &mut CommandBuilder,
+    spec: &Spec,
+    gateway: &Gateway,
+    read_only: bool,
+) -> Result<()> {
     if std::env::var_os("ANTISLOP_SKIP_AGY_BRIDGE_CHECK").is_none() && !agy_bridge_registered() {
         return Err(Error::Invalid(format!(
             "agy cannot reach antislop yet: run `antislop setup agy` once to register the \
@@ -102,7 +117,12 @@ fn agy_bridge_registered() -> bool {
         .is_some_and(|config| config["mcpServers"][SERVER].is_object())
 }
 
-fn claude(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway, read_only: bool) -> Option<String> {
+fn claude(
+    command: &mut CommandBuilder,
+    spec: &Spec,
+    gateway: &Gateway,
+    read_only: bool,
+) -> Option<String> {
     let config = json!({"mcpServers": {SERVER: {
         "type": "http",
         "url": gateway.url(),
@@ -190,11 +210,7 @@ fn codex(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway, read_only
     }
     command.env(TOKEN_ENV, gateway.token());
     // Writers run unsandboxed: their isolation is the task worktree.
-    command.args([
-        "-s",
-        super::agent::codex_sandbox(read_only),
-        "-C",
-    ]);
+    command.args(["-s", super::agent::codex_sandbox(read_only), "-C"]);
     command.arg(&spec.cwd);
     for dir in &spec.add_dirs {
         command.arg("--add-dir");
@@ -204,7 +220,10 @@ fn codex(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway, read_only
         command.args(["-m", model]);
     }
     if let Some(effort) = &spec.effort {
-        command.args(["-c", &format!("model_reasoning_effort={}", toml_string(effort))]);
+        command.args([
+            "-c",
+            &format!("model_reasoning_effort={}", toml_string(effort)),
+        ]);
     }
 }
 
@@ -217,15 +236,14 @@ fn opencode(
     // Inline configuration of a launcher is kept; only the managed agent and
     // the gateway are added.
     let mut config = match std::env::var("OPENCODE_CONFIG_CONTENT") {
-        Ok(text) => serde_json::from_str::<Value>(&text).map_err(|error| {
-            Error::Invalid(format!("invalid OPENCODE_CONFIG_CONTENT: {error}"))
-        })?,
+        Ok(text) => serde_json::from_str::<Value>(&text)
+            .map_err(|error| Error::Invalid(format!("invalid OPENCODE_CONFIG_CONTENT: {error}")))?,
         Err(std::env::VarError::NotPresent) => json!({}),
         Err(error) => return Err(Error::Invalid(error.to_string())),
     };
-    let root = config.as_object_mut().ok_or_else(|| {
-        Error::Invalid("OPENCODE_CONFIG_CONTENT must be a JSON object".into())
-    })?;
+    let root = config
+        .as_object_mut()
+        .ok_or_else(|| Error::Invalid("OPENCODE_CONFIG_CONTENT must be a JSON object".into()))?;
     let mut permission = json!({
         "*": if read_only { "deny" } else { "allow" },
         "read": "allow", "glob": "allow", "grep": "allow",
@@ -300,7 +318,11 @@ mod tests {
     #[test]
     fn claude_read_only_has_no_editing_tools_and_a_known_session() {
         let gateway = Gateway::start().unwrap();
-        let launch = command(&spec(ProviderKind::Claude, Access::ReadOnly, None), &gateway).unwrap();
+        let launch = command(
+            &spec(ProviderKind::Claude, Access::ReadOnly, None),
+            &gateway,
+        )
+        .unwrap();
         let args = words(&launch);
         assert!(args.contains(&"--strict-mcp-config".to_owned()));
         assert!(!args.contains(&"plan".to_owned()));
@@ -310,15 +332,25 @@ mod tests {
         assert!(allowed.contains("mcp__antislop__finish_turn"));
         assert!(allowed.contains("Bash(git diff:*)") && !allowed.split(',').any(|a| a == "Bash"));
         let id = launch.session.unwrap();
-        assert_eq!(args[args.iter().position(|a| a == "--session-id").unwrap() + 1], id);
+        assert_eq!(
+            args[args.iter().position(|a| a == "--session-id").unwrap() + 1],
+            id
+        );
     }
 
     #[test]
     fn claude_writers_edit_and_resume_the_given_session() {
         let gateway = Gateway::start().unwrap();
-        let launch = command(&spec(ProviderKind::Claude, Access::Write, Some("s-1")), &gateway).unwrap();
+        let launch = command(
+            &spec(ProviderKind::Claude, Access::Write, Some("s-1")),
+            &gateway,
+        )
+        .unwrap();
         let args = words(&launch);
-        assert!(args.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--permission-mode", "acceptEdits"])
+        );
         assert!(args.windows(2).any(|w| w == ["--resume", "s-1"]));
         assert_eq!(launch.session.as_deref(), Some("s-1"));
     }
@@ -327,28 +359,46 @@ mod tests {
     fn codex_gets_the_gateway_per_launch_and_the_roles_sandbox() {
         let gateway = Gateway::start().unwrap();
         let mut codex = spec(ProviderKind::Codex, Access::ReadOnly, Some("t-9"));
-        codex.args = vec!["--sandbox".into(), "danger-full-access".into(), "--x".into()];
+        codex.args = vec![
+            "--sandbox".into(),
+            "danger-full-access".into(),
+            "--x".into(),
+        ];
         let launch = command(&codex, &gateway).unwrap();
         let args = words(&launch);
         assert_eq!(&args[1..3], ["--x", "resume"]);
         assert!(args.windows(2).any(|w| w == ["-s", "read-only"]));
         assert!(!args.contains(&"danger-full-access".to_owned()));
-        assert!(args.iter().any(|a| a == "check_for_update_on_startup=false"));
-        assert!(args.iter().any(|a| a.starts_with("mcp_servers.antislop.url=")));
+        assert!(
+            args.iter()
+                .any(|a| a == "check_for_update_on_startup=false")
+        );
+        assert!(
+            args.iter()
+                .any(|a| a.starts_with("mcp_servers.antislop.url="))
+        );
         assert!(
             !args.iter().any(|a| a.contains(gateway.token())),
             "the token travels in the environment, not in argv"
         );
         assert_eq!(launch.session.as_deref(), Some("t-9"));
         let writer = command(&spec(ProviderKind::Codex, Access::Write, None), &gateway).unwrap();
-        assert!(words(&writer).windows(2).any(|w| w == ["-s", "danger-full-access"]));
+        assert!(
+            words(&writer)
+                .windows(2)
+                .any(|w| w == ["-s", "danger-full-access"])
+        );
         assert_eq!(writer.session, None);
     }
 
     #[test]
     fn opencode_denies_everything_but_the_gateway_for_read_only_roles() {
         let gateway = Gateway::start().unwrap();
-        let launch = command(&spec(ProviderKind::Opencode, Access::ReadOnly, None), &gateway).unwrap();
+        let launch = command(
+            &spec(ProviderKind::Opencode, Access::ReadOnly, None),
+            &gateway,
+        )
+        .unwrap();
         let env = launch
             .command
             .get_env("OPENCODE_CONFIG_CONTENT")
@@ -360,7 +410,11 @@ mod tests {
         assert_eq!(permission["*"], "deny");
         assert_eq!(permission["antislop_finish_turn"], "allow");
         assert_eq!(config["mcp"]["antislop"]["url"], gateway.url());
-        assert!(words(&launch).windows(2).any(|w| w == ["--agent", "antislop"]));
+        assert!(
+            words(&launch)
+                .windows(2)
+                .any(|w| w == ["--agent", "antislop"])
+        );
     }
 
     #[test]
@@ -368,15 +422,24 @@ mod tests {
         // SAFETY: tests of this module do not read this variable concurrently.
         unsafe { std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1") };
         let gateway = Gateway::start().unwrap();
-        let launch = command(&spec(ProviderKind::Agy, Access::Write, Some("c-1")), &gateway).unwrap();
+        let launch = command(
+            &spec(ProviderKind::Agy, Access::Write, Some("c-1")),
+            &gateway,
+        )
+        .unwrap();
         let args = words(&launch);
         assert!(args.windows(2).any(|w| w == ["--mode", "accept-edits"]));
         assert!(args.windows(2).any(|w| w == ["--conversation", "c-1"]));
         assert!(!args.iter().any(|a| a.contains(gateway.token())));
         let token = launch.command.get_env("ANTISLOP_MCP_TOKEN").unwrap();
         assert_eq!(token.to_string_lossy(), gateway.token());
-        let read_only = command(&spec(ProviderKind::Agy, Access::ReadOnly, None), &gateway).unwrap();
-        assert!(words(&read_only).windows(2).any(|w| w == ["--mode", "plan"]));
+        let read_only =
+            command(&spec(ProviderKind::Agy, Access::ReadOnly, None), &gateway).unwrap();
+        assert!(
+            words(&read_only)
+                .windows(2)
+                .any(|w| w == ["--mode", "plan"])
+        );
     }
 
     #[test]
@@ -385,6 +448,10 @@ mod tests {
         let error = command(&spec(ProviderKind::Gemini, Access::Write, None), &gateway)
             .err()
             .unwrap();
-        assert!(error.to_string().contains("gemini has no interactive adapter"));
+        assert!(
+            error
+                .to_string()
+                .contains("gemini has no interactive adapter")
+        );
     }
 }

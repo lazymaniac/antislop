@@ -1003,7 +1003,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
 "#).unwrap();
         support::install_ledger_protocol(&script);
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    common::interactive(&script);
+        common::interactive(&script);
         let config = include_str!("../examples/antislop.toml")
             .replace("binary = \"codex\"", &format!("binary = {:?}", script))
             .replace("provider = \"agy\"", "provider = \"codex\"")
