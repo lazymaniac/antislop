@@ -1,93 +1,9 @@
 use super::*;
 
+#[path = "requirements/turn.rs"]
+mod turn;
+
 impl Core {
-    pub(super) fn requirements_turn(
-        self: &Arc<Self>,
-        conversation: &str,
-        run_id: &str,
-        phase: &str,
-        verifier: bool,
-        prompt: String,
-        cancel: &AtomicBool,
-    ) -> Result<(String, String)> {
-        let progress = match (phase, verifier) {
-            ("extraction", false) => {
-                "Preparing requirements from the interview and source documents."
-            }
-            ("extraction", true) => "Checking requirements independently before planning.",
-            ("options", false) => "Comparing implementation alternatives.",
-            ("options", true) => "Checking the solution comparison independently.",
-            (_, false) => "Auditing the integrated implementation against requirements.",
-            (_, true) => "Verifying the implementation audit independently.",
-        };
-        self.store.append_event(
-            conversation,
-            None,
-            None,
-            "planning_progress",
-            &json!({"text":progress}),
-        )?;
-        let role = format!(
-            "requirements-{phase}-{}",
-            if verifier { "verifier" } else { "analyst" }
-        );
-        let setup = TurnSetup {
-            session_policy: crate::lean::SessionPolicy::Role,
-            conversation,
-            plan_id: None,
-            role: role.clone(),
-            profile: self.config_snapshot().resolve(
-                if phase == "options" {
-                    WorkKind::Options
-                } else {
-                    WorkKind::Requirements
-                },
-                if verifier {
-                    RoleKind::Verifier
-                } else {
-                    RoleKind::Executor
-                },
-            ),
-            cwd: PathBuf::from(self.store.conversation(conversation)?.project),
-            add_dirs: vec![],
-            access: agent::Access::ReadOnly,
-            upto_message: 0,
-        };
-        let source_ids = self
-            .store
-            .ledger_sources(conversation, run_id)?
-            .into_iter()
-            .map(|s| s.id)
-            .collect::<Vec<_>>();
-        let revision = self.store.run(conversation, run_id)?.spec_revision;
-        let context = self.ledger_context(conversation, run_id)?;
-        let answer = self
-            .turn(setup, cancel, |_| format!("{prompt}\n{context}"))?
-            .ok_or_else(|| {
-                Error::Invalid(format!(
-                    "{role} failed: {}",
-                    self.store
-                        .last_turn(conversation, &role)
-                        .ok()
-                        .flatten()
-                        .and_then(|t| t.error)
-                        .unwrap_or_else(|| "no response".into())
-                ))
-            })?;
-        let turn = self
-            .store
-            .last_turn(conversation, &role)?
-            .ok_or_else(|| Error::Invalid("requirements turn missing".into()))?;
-        self.store.bind_ledger_turn(
-            conversation,
-            run_id,
-            &turn.id,
-            revision,
-            phase,
-            &source_ids,
-        )?;
-        Ok((answer, turn.id))
-    }
     pub(in crate::lean) fn ensure_requirements(
         self: &Arc<Self>,
         conversation: &str,
