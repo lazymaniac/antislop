@@ -39,3 +39,16 @@ pub fn install_probe_cli(path: &Path, source: &str) {
     std::fs::write(path, source).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+/// Makes the headless-style test script at `path` answer as an interactive
+/// agent CLI: the daemon starts it in a terminal, types the prompt into it and
+/// hears the answer through its MCP gateway. The script keeps computing the
+/// answer; it moves to `<path>.legacy`.
+pub fn interactive(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut legacy = path.as_os_str().to_owned();
+    legacy.push(".legacy");
+    std::fs::rename(path, &legacy).unwrap();
+    std::fs::write(path, include_str!("../support/pty_shim.py")).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}

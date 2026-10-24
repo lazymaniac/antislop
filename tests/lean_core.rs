@@ -30,6 +30,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    common::interactive(&script);
     script
 }
 
@@ -85,6 +86,7 @@ echo '{{"type":"turn.completed"}}'
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    common::interactive(&script);
     script
 }
 
