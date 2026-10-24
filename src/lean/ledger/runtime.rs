@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "runtime/ledger_change.rs"]
+mod ledger_change;
 #[path = "runtime/requirements.rs"]
 mod requirements;
 use crate::{
@@ -45,37 +47,10 @@ impl Core {
         change: &LedgerChange,
     ) -> Result<ChangeResult> {
         // The same mutex protects both scope publication and the last check before Git integration.
-        let _integration = self.integrating.lock().expect("integration mutex");
-        self.store
-            .check_ledger_proposal(proposal_id, diff_hash, change)?;
-        let result = match self.store.applied_ledger_change(change)? {
-            Some(saved) => saved,
-            None => {
-                let current = self.store.preview_ledger_change(change, &self.state)?;
-                require(
-                    super::diff_hash(&current)? == diff_hash,
-                    "ledger impact changed; preview the current diff before applying",
-                )?;
-                self.store.apply_ledger_change(change, &self.state, true)?
-            }
-        };
-        let flags = self.task_cancels.lock().expect("task cancel mutex");
-        for task in &result.affected_tasks {
-            if let Some((_, flag)) = flags.get(task) {
-                flag.store(true, Ordering::SeqCst);
-            }
-        }
-        drop(flags);
-        for id in &result.affected_tasks {
-            if let Some(task) = self.store.task_by_id(id)? {
-                self.announce_task(
-                    &change.conversation,
-                    &task,
-                    Some("scope changed; previous result requires reassessment"),
-                );
-            }
-        }
-        drop(_integration);
+        let integration = self.integrating.lock().expect("integration mutex");
+        let result = self.apply_checked_ledger_change(proposal_id, diff_hash, change)?;
+        self.announce_affected_ledger_tasks(change, &result)?;
+        drop(integration);
         if self
             .store
             .has_pending_requirements_approval(&change.conversation)?
@@ -84,6 +59,7 @@ impl Core {
         }
         Ok(result)
     }
+
     pub(in crate::lean) fn ledger_context(
         &self,
         conversation: &str,

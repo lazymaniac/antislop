@@ -3,6 +3,64 @@ use crate::config::Config;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
+fn full_sources_keep_source_question_and_summary_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/antislop.toml"
+    ))
+    .unwrap();
+    let core = Core::open(
+        &dir.path().join("state"),
+        Config::from_toml(&config).unwrap(),
+    )
+    .unwrap();
+    let conversation = core
+        .store
+        .create_conversation(dir.path().to_str().unwrap())
+        .unwrap()
+        .id;
+    let question = core
+        .store
+        .add_message(
+            &conversation,
+            "orchestrator",
+            "Which option should be used?",
+        )
+        .unwrap();
+    let answer = core
+        .store
+        .add_message(
+            &conversation,
+            "user",
+            "Interview answer (focus)\nUse option B",
+        )
+        .unwrap();
+    let run = core
+        .store
+        .create_run(&conversation, "Build the selected option")
+        .unwrap();
+    core.store
+        .register_message_source(&conversation, &run.id, answer.seq)
+        .unwrap();
+    core.store.begin_interview(&conversation).unwrap();
+    core.store
+        .interview_summary(&conversation, "The user selected option B.", answer.seq)
+        .unwrap();
+
+    let rendered = core.full_ledger_sources(&conversation, &run.id).unwrap();
+    let question_context = rendered
+        .find("Interview question context for source")
+        .unwrap();
+    let source = rendered.find("Full user source").unwrap();
+    let summary = rendered.find("Interview summary (derived context").unwrap();
+    assert!(question_context < source && source < summary);
+    assert!(rendered.contains(&question.text));
+    assert!(rendered.contains("Use option B"));
+    assert!(rendered.contains("The user selected option B."));
+}
+
+#[test]
 fn extraction_repairs_invalid_parent_once_and_preserves_atomicity() {
     for (repairs, reject_review) in [(true, false), (false, false), (true, true)] {
         let dir = tempfile::tempdir().unwrap();
