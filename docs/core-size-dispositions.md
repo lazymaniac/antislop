@@ -152,7 +152,7 @@ Fresh checker run after repair round 16: 261 repository violations, 0 classifica
 
 ## Current violations at new paths
 
-The latest freshly built checker reports 8 t4-owned violations. These are the exact lines from the current raw diagnostic; no extracted file is omitted.
+This section was captured before the repair rounds below and is historical. It is superseded by the round-35 diagnostic and status at the end of this document. At that capture, the checker reported 8 t4-owned violations.
 
 ```text
 VIOLATION src/lean/core_task_recovery.rs:1: file is 576 lines (limit 299)
@@ -165,7 +165,17 @@ VIOLATION src/lean/core_task_execution.rs:1: file is 592 lines (limit 299)
 VIOLATION src/lean/core_task_execution.rs:6: callable run_task is 586 lines (limit 29)
 ```
 
-The remaining four file and callable overages are in task recovery, orchestration turns, agent turn execution, and task rounds. Those routines still need responsibility-level decomposition. This V2 implementation is incomplete.
+At the historical capture, four file and callable overages were in task recovery, orchestration turns, agent turn execution, and task rounds. Subsequent extractions reduced this set; consult the current section at the end of this document for exact results.
+
+## Round 35: verifier findings recheck
+
+The current raw diagnostic at `core-size-diagnostic.txt` reports 261 repository violations, 0 classification errors, and 7 t4 violations: three oversized files and four oversized callables. The exact t4 entries are `core_agent_turn.rs` (370 lines) and `turn_inner` (366), `core_task_execution.rs` (592) and `run_task` (586), `core_task_recovery.rs` (576) and `recover_task_as` (570), plus `orchestrator_turn` (278). `core_orchestrator_turn.rs` is now 285 lines and under the file limit. The historical 262/8 records above describe earlier captures and are not current counts. The selected V2 implementation is still incomplete because these seven limits remain unmet.
+
+Re-ran the recorded public-boundary suites on the current checkout. `lean_plan` has 6 passed and 3 failed: the malformed-plan retry assertion (0 instead of 1), post-options repair marker missing, and graph-extension event count (2 instead of 1). `lean_recovery` has 5 passed and 13 failed: twelve fail during fixture acceptance with `integrity error: task has no requirement inputs`; the autonomous unblock case sees three `revised` statuses instead of three `approved`. `lean_writer` has 31 passed and 1 failed: `a_writer_integrates_over_the_local_changes_it_started_with` sees two notices instead of one. These rechecks reproduce the earlier failures; no behavior fix was attempted because their causes or recovery outcomes remain uncharacterized. All test files involved are verification-testing-owned, and no sequential ownership handoff is recorded.
+
+The previous whole-process RSS observation is not an allocation or per-turn measurement. No isolated measurement was run: the proposed integration target/support allocator is verification-testing-owned, while a turn hook would touch t4-owned production code and requires the verification task's fixture/instrumentation result and a sequential handoff. Thus the allocation finding remains unsettled; do not treat source inspection or RSS as its resolution.
+
+No source, API, serialization, transaction, event, or recovery behavior changed in this recheck. The four remaining callable extractions are t4-owned work and remain undone. Recovery and writer behavior characterization, plus isolated allocation instrumentation, require a verification-testing handoff before those findings can be settled.
 
 ## Similarity review of remaining Core routines
 
@@ -212,7 +222,7 @@ The plan proposal path now separates requirements preparation, plan persistence,
 
 A delivery extraction regression changed ordinary worker message origins from the original sender label to a canonical worker role. The full `lean_messages` suite reproduced the changed sender/route assertions. `source_origin` now retains the original sender for ordinary messages and applies verifier/reviewer labels only where the prior code did; cross-plan messages still use the worker/verifier/reviewer role. Regression tests passed for `a_worker_tells_another_task_what_it_found`, `an_approved_task_answers_a_question_that_arrives_after_its_approval`, `a_failed_task_still_receives_and_answers_its_mail`, and `the_orchestrator_reaches_a_task_by_its_plan_label_from_a_mail_turn`.
 
-Validation after these changes: `cargo fmt`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked --test lean_ledger` passed. `cargo test --locked --test lean_plan` had 6 passed and the same 3 pre-existing failures recorded above. `cargo test --locked --test lean_messages` after the delivery-origin correction had 30 passed and the same 4 pre-existing failures (the three deferred-comment claim cases and `agent_mail_reaches_the_orchestrator_without_replanning`). The latest checker reports 265 repository violations, 0 classification errors and 11 t4 violations; its required size gate therefore still fails.
+Validation at this historical capture: `cargo fmt`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked --test lean_ledger` passed. `cargo test --locked --test lean_plan` had 6 passed and the same 3 pre-existing failures recorded above. `cargo test --locked --test lean_messages` after the delivery-origin correction had 30 passed and the same 4 pre-existing failures (the three deferred-comment claim cases and `agent_mail_reaches_the_orchestrator_without_replanning`). That capture reported 265 repository violations, 0 classification errors and 11 t4 violations; it is superseded by the round-35 diagnostic.
 
 ## Repair round 16
 
@@ -220,7 +230,7 @@ The task scheduler now separates dependency-state construction, readiness checks
 
 The writer suite reproduced a missing requirements section in the conflict repair handoff. `worker_prompt` had called `round_handoff_prompt` with `verifier = false`, omitting the task requirements and acceptance criteria. It now requests the full handoff; `a_conflict_returns_to_the_writer_and_the_repair_is_verified_before_landing` passes and confirms the required section. This is an intentional prompt correction; it does not change task state or persistence. The local-edit test also exposed the existing `plan ledger mapping rejected` notice from the legacy fixture, which lacks active requirement inputs. The test now asserts that notice separately and counts only the local-edit notice it is intended to cover; runtime events remain unchanged.
 
-Characterization and validation: `cargo fmt`, `CARGO_TARGET_DIR=.antislop/target cargo check --locked`, and `cargo clippy --locked --all-targets -- -D warnings` passed. `cargo test --locked --test lean_core` passed (21); `cargo test --locked --lib lean::plan_tests` passed (2); `cargo test --locked --test lean_writer` passed (32). The refreshed built diagnostic exits 1 with 262 repository violations, 0 classification errors, and 8 t4 violations (4 files and 4 callables), retained in `core-size-diagnostic.txt`. The remaining violations are the paired file/callable overages in `core_task_recovery.rs`, `core_orchestrator_turn.rs`, `core_agent_turn.rs`, and `core_task_execution.rs`; the required size limits remain unmet. `tests/size_check/check.py` was not run because it writes t3-owned diagnostic artifacts. No CI configuration or t5/t6-owned sources were changed.
+Characterization and validation at this historical capture: `cargo fmt`, `CARGO_TARGET_DIR=.antislop/target cargo check --locked`, and `cargo clippy --locked --all-targets -- -D warnings` passed. `cargo test --locked --test lean_core` passed (21); `cargo test --locked --lib lean::plan_tests` passed (2); `cargo test --locked --test lean_writer` passed (32). The diagnostic then exited 1 with 262 repository violations, 0 classification errors, and 8 t4 violations. Its raw output has since been replaced by the current capture in `core-size-diagnostic.txt`; the round-35 section below gives the current counts. `tests/size_check/check.py` was not run because it writes t3-owned diagnostic artifacts. No CI configuration or t5/t6-owned sources were changed.
 
 The focused `cargo test --locked --test lean_writer integration` passed (2), covering integration repair's user-question path and recovery integration feedback. `cargo test --locked --test lean_recovery test_recover_task_integrate_with_consent_and_dag_cascade` failed during fixture setup at `accept_plan`, before reaching the refactored recovery action, with `integrity error: task has no requirement inputs`; no code change was made for that failure.
 
@@ -254,7 +264,7 @@ The `tests/lean_writer.rs` change that lacked a sequential handoff is removed fr
 
 ## Round 31 verification recheck
 
-No production source or test file changed in this round. The four paired Core size violations remain in `core_agent_turn.rs`, `core_orchestrator_turn.rs`, `core_task_execution.rs`, and `core_task_recovery.rs`; the checker still reports 262 repository violations and 0 classification errors. The checker exits 1 because those violations remain. This recheck does not satisfy the selected V2 decomposition requirement.
+No production source or test file changed in this historical round. At that time, the four paired Core size violations remained in `core_agent_turn.rs`, `core_orchestrator_turn.rs`, `core_task_execution.rs`, and `core_task_recovery.rs`; the checker reported 262 repository violations and 0 classification errors. The round-35 section below supersedes that snapshot and records the current diagnostic. This recheck did not satisfy the selected V2 decomposition requirement.
 
 Current focused test results: `CARGO_TARGET_DIR=.antislop/target cargo test --locked --test lean_core` passed (21). `CARGO_TARGET_DIR=.antislop/target cargo test --locked --test lean_recovery` passed 5 and failed 13: twelve stop at fixture `accept_plan` with `integrity error: task has no requirement inputs`, while `autonomous_orchestrator_unblocks_a_blocked_task_by_itself` observes three `revised` task statuses instead of three `approved`. `CARGO_TARGET_DIR=.antislop/target cargo test --locked --test lean_writer` passed 31 and failed `a_writer_integrates_over_the_local_changes_it_started_with`, which observes two notices instead of one. These failures reproduce on this worktree. No production behavior fix was attempted because the recovery behavior is not reached in the failed fixtures, the extra writer notice's cause is not identified, and the affected test files belong to verification-testing in the ownership manifest. A sequential handoff and independent review are required before editing those tests.
 
