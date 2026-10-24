@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "requirements/extraction.rs"]
+mod extraction;
 #[path = "requirements/turn.rs"]
 mod turn;
 
@@ -9,6 +11,16 @@ impl Core {
         conversation: &str,
         cancel: &AtomicBool,
     ) -> Result<Run> {
+        let (run, extraction) = self.prepare_requirements(conversation)?;
+        let Some((sources, new_source)) = extraction else {
+            return Ok(run);
+        };
+        let producer =
+            self.extract_requirements(conversation, &run, &sources, new_source, cancel)?;
+        self.verify_requirements(conversation, &run, &sources, &producer, cancel)
+    }
+
+    fn prepare_requirements(&self, conversation: &str) -> Result<(Run, Option<(String, bool)>)> {
         let user = self.store.messages_by(conversation, "user", 0)?;
         let r = match self.store.planning_run(conversation)? {
             Some(r) => r,
@@ -24,135 +36,213 @@ impl Core {
             )?,
         };
         self.store.select_planning_run(conversation, &r.id)?;
-        let mut new_source = false;
-        let known = self.store.ledger_sources(conversation, &r.id)?;
-        for message in user.iter().filter(|m| m.seq >= r.start_message) {
-            if !known.iter().any(|s| s.message == Some(message.seq)) {
-                self.store
-                    .register_message_source(conversation, &r.id, message.seq)?;
-                new_source = true;
-            }
-        }
+        let new_source = self.register_missing_sources(conversation, &r, &user)?;
         if self.store.extraction_current(conversation, &r.id)? && !new_source {
-            return Ok(r);
+            return Ok((r, None));
         }
         let sources = self.full_ledger_sources(conversation, &r.id)?;
-        let producer = if let Some(producer) = self
+        Ok((r, Some((sources, new_source))))
+    }
+
+    fn register_missing_sources(
+        &self,
+        conversation: &str,
+        run: &Run,
+        user: &[crate::lean::store::Message],
+    ) -> Result<bool> {
+        let known = self.store.ledger_sources(conversation, &run.id)?;
+        let mut added = false;
+        for message in user
+            .iter()
+            .filter(|message| message.seq >= run.start_message)
+        {
+            if !known
+                .iter()
+                .any(|source| source.message == Some(message.seq))
+            {
+                self.store
+                    .register_message_source(conversation, &run.id, message.seq)?;
+                added = true;
+            }
+        }
+        Ok(added)
+    }
+
+    fn extract_requirements(
+        self: &Arc<Self>,
+        conversation: &str,
+        run: &Run,
+        sources: &str,
+        new_source: bool,
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        if let Some(producer) = self
             .store
-            .approved_requirements_producer(conversation, &r.id, r.spec_revision)?
+            .approved_requirements_producer(conversation, &run.id, run.spec_revision)?
             .filter(|_| !new_source)
         {
-            producer
-        } else {
-            let existing = self.store.ledger_entries(conversation, &r.id, None)?;
-            let review_feedback =
-                self.store
-                    .messages_by(conversation, "requirements-reviewer", r.start_message)?;
-            let review_feedback = review_feedback
-                .last()
-                .map(|message| message.text.as_str())
-                .unwrap_or("");
-            let prompt = format!(
-                "Act as requirements analyst before planning. Read ALL sources, including middle sections. Preserve qualifiers, exceptions, negative obligations, original byte ranges, parents and dependencies. parent references another requirement or is null. All references must exist in the combined existing and proposed ledger. Split acceptance criteria with globally unique stable IDs; composite parents need mandatory integration criteria. Preserve every mandatory outcome, constraint, method and step prescribed by the user as a requirement with source and acceptance criteria. Suggestions and examples are not automatically obligations. Agent-selected technical steps remain tasks serving existing requirements; do not invent requirements merely to justify tasks. task_ids are proposed planner IDs. Return a ```ledger JSON block with {{\"run_id\":\"{}\",\"expected_spec_revision\":{},\"entries\":[EntrySpec...]}}. EntrySpec fields: id, source (source_id,start,end byte range on grapheme boundaries), interpretation, qualifiers, parent, depends_on, mandatory, implementation_owners, verification_owners, criteria (id,text,mandatory,integration), task_ids, position, disposition (active). Include only additions or proposed semantic changes. Existing obligations must retain stable IDs. Never silently supersede or weaken obligations. For a planning-only request, distinguish acceptance tests the plan must specify from results checked during later execution. Do not invent implementation tasks that have not been planned. Previous independent review feedback (correct omissions; semantic changes still require user approval): {review_feedback}. Sources:\n{sources}",
-                r.id, r.spec_revision
-            );
-            let mut feedback = String::new();
-            let (change, producer) = loop {
-                if cancel.load(Ordering::SeqCst) {
-                    return Err(Error::Invalid("requirements extraction cancelled".into()));
+            return Ok(producer);
+        }
+        let existing = self.store.ledger_entries(conversation, &run.id, None)?;
+        let feedback = self.requirements_feedback(conversation, run)?;
+        let prompt = extraction::extraction_prompt(run, &feedback, sources);
+        let (change, producer) =
+            self.analyze_requirements(conversation, run, &existing, &prompt, cancel)?;
+        self.apply_extracted_requirements(conversation, run, &existing, &change, &producer)?;
+        Ok(producer)
+    }
+
+    fn requirements_feedback(&self, conversation: &str, run: &Run) -> Result<String> {
+        Ok(self
+            .store
+            .messages_by(conversation, "requirements-reviewer", run.start_message)?
+            .last()
+            .map(|message| message.text.clone())
+            .unwrap_or_default())
+    }
+
+    fn analyze_requirements(
+        self: &Arc<Self>,
+        conversation: &str,
+        run: &Run,
+        existing: &[LedgerEntry],
+        prompt: &str,
+        cancel: &AtomicBool,
+    ) -> Result<(LedgerChange, String)> {
+        let mut feedback = String::new();
+        loop {
+            extraction::ensure_not_cancelled(cancel)?;
+            let (answer, producer) = self.requirements_turn(
+                conversation,
+                &run.id,
+                "extraction",
+                false,
+                format!("{prompt}{feedback}"),
+                cancel,
+            )?;
+            match self.validate_extraction(conversation, run, existing, &answer) {
+                Ok(change) => return Ok((change, producer)),
+                Err(error @ (Error::Invalid(_) | Error::Json(_))) if feedback.is_empty() => {
+                    self.record_extraction_correction(conversation, &error)?;
+                    feedback = extraction::correction_feedback(&error, &answer);
                 }
-                let (answer, producer) = self.requirements_turn(
-                    conversation,
-                    &r.id,
-                    "extraction",
-                    false,
-                    format!("{prompt}{feedback}"),
-                    cancel,
-                )?;
-                let validated = (|| -> Result<LedgerChange> {
-                    let mut extraction: Extraction = parse_block(&answer, "ledger")?;
-                    require(
-                        extraction.run_id == r.id
-                            && extraction.expected_spec_revision == r.spec_revision,
-                        "analyst returned wrong run or revision",
-                    )?;
-                    extraction
-                        .entries
-                        .retain(|entry| !existing.iter().any(|old| old.spec == *entry));
-                    require(
-                        !extraction.entries.is_empty() || !existing.is_empty(),
-                        "requirements extraction is empty",
-                    )?;
-                    let change = LedgerChange {
-                        conversation: conversation.into(),
-                        run_id: r.id.clone(),
-                        expected_spec_revision: r.spec_revision,
-                        operation_id: crate::id(),
-                        reason: "source extraction".into(),
-                        entries: extraction.entries,
-                    };
-                    if !change.entries.is_empty() {
-                        self.store.preview_ledger_change(&change, &self.state)?;
-                    }
-                    Ok(change)
-                })();
-                match validated {
-                    Ok(change) => break (change, producer),
-                    Err(error @ (Error::Invalid(_) | Error::Json(_))) if feedback.is_empty() => {
-                        self.store.append_event(
-                        conversation,
-                        None,
-                        None,
-                        "planning_progress",
-                        &json!({"text": format!("Correcting requirements extraction: {error}")}),
-                    )?;
-                        feedback = format!(
-                            "\nThe previous extraction was rejected: {error}. Correct the complete ledger JSON without dropping obligations or weakening criteria. Previous response:\n{answer}"
-                        );
-                    }
-                    Err(error) => return Err(error),
-                }
-            };
-            if !change.entries.is_empty() {
-                if change
-                    .entries
-                    .iter()
-                    .any(|e| existing.iter().any(|old| old.spec.id == e.id))
-                {
-                    let (proposal, diff) =
-                        self.store
-                            .propose_agent_ledger_change(&change, &self.state, &producer)?;
-                    self.store.append_event(conversation,None,None,"ledger_approval_required",&json!({"proposal":proposal,"run":r.id,"revision":r.spec_revision,"affected_tasks":diff.affected_tasks}))?;
-                    return Err(Error::Invalid("requirements analyst proposed a semantic scope change; open /requirements and press p to review the exact diff before planning".into()));
-                }
-                let _integration = self.integrating.lock().expect("integration mutex");
-                self.store
-                    .apply_analyst_ledger_change(&change, &self.state, &producer)?;
+                Err(error) => return Err(error),
             }
-            producer
-        };
-        let current = self.store.run(conversation, &r.id)?;
+        }
+    }
+
+    fn validate_extraction(
+        &self,
+        conversation: &str,
+        run: &Run,
+        existing: &[LedgerEntry],
+        answer: &str,
+    ) -> Result<LedgerChange> {
+        let mut extraction: Extraction = parse_block(answer, "ledger")?;
         require(
-            !self
-                .store
-                .ledger_entries(conversation, &r.id, None)?
-                .is_empty(),
+            extraction.run_id == run.id && extraction.expected_spec_revision == run.spec_revision,
+            "analyst returned wrong run or revision",
+        )?;
+        extraction
+            .entries
+            .retain(|entry| !existing.iter().any(|old| old.spec == *entry));
+        require(
+            !extraction.entries.is_empty() || !existing.is_empty(),
             "requirements extraction is empty",
         )?;
-        let (answer,verifier)=self.requirements_turn(conversation,&r.id,"extraction",true,format!(
+        let change = extraction::extracted_change(conversation, run, extraction.entries);
+        if !change.entries.is_empty() {
+            self.store.preview_ledger_change(&change, &self.state)?;
+        }
+        Ok(change)
+    }
+
+    fn record_extraction_correction(&self, conversation: &str, error: &Error) -> Result<()> {
+        self.store.append_event(
+            conversation,
+            None,
+            None,
+            "planning_progress",
+            &json!({"text": format!("Correcting requirements extraction: {error}")}),
+        )?;
+        Ok(())
+    }
+
+    fn apply_extracted_requirements(
+        &self,
+        conversation: &str,
+        run: &Run,
+        existing: &[LedgerEntry],
+        change: &LedgerChange,
+        producer: &str,
+    ) -> Result<()> {
+        if change.entries.is_empty() {
+            return Ok(());
+        }
+        if change
+            .entries
+            .iter()
+            .any(|entry| existing.iter().any(|old| old.spec.id == entry.id))
+        {
+            let (proposal, diff) =
+                self.store
+                    .propose_agent_ledger_change(change, &self.state, producer)?;
+            self.store.append_event(conversation, None, None, "ledger_approval_required",
+                &json!({"proposal":proposal,"run":run.id,"revision":run.spec_revision,"affected_tasks":diff.affected_tasks}))?;
+            return Err(Error::Invalid("requirements analyst proposed a semantic scope change; open /requirements and press p to review the exact diff before planning".into()));
+        }
+        let _integration = self.integrating.lock().expect("integration mutex");
+        self.store
+            .apply_analyst_ledger_change(change, &self.state, producer)?;
+        Ok(())
+    }
+
+    fn verify_requirements(
+        self: &Arc<Self>,
+        conversation: &str,
+        run: &Run,
+        sources: &str,
+        producer: &str,
+        cancel: &AtomicBool,
+    ) -> Result<Run> {
+        let current = self.store.run(conversation, &run.id)?;
+        self.require_extracted_entries(conversation, run)?;
+        let (answer,verifier)=self.requirements_turn(conversation,&run.id,"extraction",true,format!(
             "Independently compare the requirement entries to every full source and the interview context. This is extraction before task planning: tasks and execution evidence may legitimately be absent. Selected interview options include their descriptions; use that context before declaring ambiguity. For planning-only requests, completion criteria describe acceptance tests for later implementation, not a demand to implement now. Do not add obligations unsupported by user sources or project instructions. Find omitted obligations, lost qualifiers, ambiguous interpretation, missing plan steps, prescribed methods and missing composite integration criteria. Do not accept analyst assertions as evidence. Read full document artifacts. Return a ```verdict JSON block {{\"approved\":true|false,\"findings\":[{{\"issue\":\"...\"}}]}}. Full sources:\n{sources}"),cancel)?;
         let verdict = tasks::parse_verdict(&answer);
         self.store.record_ledger_review(
             conversation,
-            &r.id,
+            &run.id,
             current.spec_revision,
             "extraction",
-            &producer,
+            producer,
             &verifier,
             "",
             verdict.approved,
             &answer,
         )?;
+        self.finish_requirements_review(conversation, run, &current, &verdict, cancel)?;
+        Ok(current)
+    }
+
+    fn require_extracted_entries(&self, conversation: &str, run: &Run) -> Result<()> {
+        require(
+            !self
+                .store
+                .ledger_entries(conversation, &run.id, None)?
+                .is_empty(),
+            "requirements extraction is empty",
+        )
+    }
+
+    fn finish_requirements_review(
+        &self,
+        conversation: &str,
+        run: &Run,
+        current: &Run,
+        verdict: &tasks::Verdict,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
         if !verdict.approved
             && !cancel.load(Ordering::SeqCst)
             && self
@@ -160,10 +250,11 @@ impl Core {
                 .count_since_requirements_reset(conversation, "requirements-reviewer")?
                 == 0
         {
-            self.store.add_message(conversation, "requirements-reviewer", &format!(
-                "Independent requirements review rejected run {} revision {}. Revisit the extraction using this feedback and the full interview context, then regenerate the plan. Do not weaken obligations or bypass scope-change approval. Findings: {}",
-                r.id, current.spec_revision, tasks::findings_text(&verdict.findings)
-            ))?;
+            self.store.add_message(
+                conversation,
+                "requirements-reviewer",
+                &extraction::requirements_review_message(run, current, verdict),
+            )?;
         }
         require(
             verdict.approved,
@@ -171,7 +262,6 @@ impl Core {
                 "requirements source coverage rejected: {}",
                 tasks::findings_text(&verdict.findings)
             ),
-        )?;
-        Ok(current)
+        )
     }
 }
