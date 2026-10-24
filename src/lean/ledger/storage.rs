@@ -45,7 +45,13 @@ fn source_text(
         "SELECT message,locator,hash FROM ledger_sources WHERE id=?1 AND run_id=?2",
         params![source, run],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
+    )
+    .optional()?
+    .ok_or_else(|| {
+        Error::Invalid(format!(
+            "unknown requirements source {source:?} for run {run}; copy an exact source identity from the supplied ledger inputs"
+        ))
+    })?;
     let text = match message {
         Some(seq) => message_source_text(db, seq, state)?,
         None => document_source_text(state, locator, &hash)?,

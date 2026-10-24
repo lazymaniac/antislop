@@ -3885,10 +3885,10 @@ impl App {
                 self.fetch_task();
                 return;
             }
-            KeyCode::Tab => {
+            KeyCode::Tab | KeyCode::Char(']') => {
                 details.switch_tab(details.neighbour_tab(1));
             }
-            KeyCode::BackTab => {
+            KeyCode::BackTab | KeyCode::Char('[') => {
                 details.switch_tab(details.neighbour_tab(-1));
             }
             KeyCode::Down => details.scroll = details.scroll.saturating_add(1),

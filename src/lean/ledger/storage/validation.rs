@@ -61,7 +61,10 @@ fn validate_composite_requirement(entry: &EntrySpec, all: &[EntrySpec]) -> Resul
                 .criteria
                 .iter()
                 .any(|criterion| criterion.mandatory && criterion.integration),
-            "composite requirement needs its own integration criterion",
+            &format!(
+                "composite requirement {} needs its own integration criterion: add a criterion to this parent's criteria with mandatory=true and integration=true describing how its children work together; child criteria alone do not satisfy this check",
+                entry.id
+            ),
         )?;
     }
     Ok(())

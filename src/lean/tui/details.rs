@@ -519,11 +519,17 @@ impl Details {
             REQUIREMENTS => {
                 let mut lines = vec![label("Requirement ledger · shared across all rounds")];
                 if let Some(stored) = &self.task {
-                    for (field,name) in [("requirement_ids","Requirements"),("criterion_ids","Criteria")] {
-                        let ids = stored["spec"][field].as_array().map(|ids|ids.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
-                        lines.push(plain(format!("{name}: {ids}")));
+                    let requirements = stored["requirements"].as_array().map(Vec::as_slice).unwrap_or_default();
+                    if requirements.is_empty() {
+                        lines.push(plain("No requirements are assigned to this task.".into()));
                     }
-                    lines.push(plain(format!("Input generation: {}",stored["input_generation"])));
+                    for requirement in requirements {
+                        lines.push(plain(format!("• {}", requirement["text"].as_str().unwrap_or_default())));
+                        for criterion in requirement["criteria"].as_array().into_iter().flatten() {
+                            let optional = if criterion["mandatory"] == false { " (optional)" } else { "" };
+                            lines.push(plain(format!("    – {}{optional}", criterion["text"].as_str().unwrap_or_default())));
+                        }
+                    }
                 }
                 lines.push(plain("Open /requirements for sources, evidence and version history. Task approval alone does not verify requirements.".into()));
                 let text = lines.iter().map(|(_,text)|text.as_str()).collect::<Vec<_>>().join(" ");
@@ -1270,7 +1276,7 @@ impl Details {
                 );
             let selected = self.selected_round.unwrap_or(latest);
             let label = format!(
-                "Round {} · {}{} · Left/Right choose · Tab tabs",
+                "Round {} · {}{} · Left/Right choose · [] tabs",
                 selected,
                 if self.history_unavailable {
                     "incomplete history · "
@@ -1461,39 +1467,39 @@ pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
 pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
     if tab == 0 {
         if width >= 90 {
-            "Tab tabs · ←/→ rounds · ↑/↓ PgUp/PgDn · gg/G top/live · m info · / search · c comment · Esc back"
+            "[] tabs · ←/→ rounds · ↑/↓ PgUp/PgDn · gg/G top/live · m info · / search · c comment · Esc back"
         } else if width >= 65 {
-            "Tab tabs · ←/→ rounds · ↑/↓ scroll · gg/G top/live · m info · / search · Esc back"
+            "[] tabs · ←/→ rounds · ↑/↓ scroll · gg/G top/live · m info · / search · Esc back"
         } else if width >= 45 {
-            "Tab tabs · ←/→ rounds · gg/G top/live · m info · Esc"
+            "[] tabs · ←/→ rounds · gg/G top/live · m info · Esc"
         } else {
             "gg/G · m info · Esc back"
         }
     } else if tab == CHECKS {
         if width >= 80 {
-            "Tab tabs · ←/→ rounds · ↑/↓ select check · c comment on check · / search · d diff · ? help · Esc back"
+            "[] tabs · ←/→ rounds · ↑/↓ select check · c comment on check · / search · d diff · ? help · Esc back"
         } else if width >= 45 {
-            "Tab tabs · ←/→ rounds · ↑/↓ select · c comment · Esc"
+            "[] tabs · ←/→ rounds · ↑/↓ select · c comment · Esc"
         } else {
             "c com · Esc back"
         }
     } else if tab == COMMENTS {
         if width >= 95 {
-            "Tab tabs · ←/→ rounds · ↑/↓ select · / search · c comment · r resolve · o reopen · x delete · d diff · ? help · Esc back"
+            "[] tabs · ←/→ rounds · ↑/↓ select · / search · c comment · r resolve · o reopen · x delete · d diff · ? help · Esc back"
         } else if width >= 65 {
-            "Tab tabs · ←/→ rounds · ↑/↓ select · / search · c add · r/o/x status · d diff · Esc back"
+            "[] tabs · ←/→ rounds · ↑/↓ select · / search · c add · r/o/x status · d diff · Esc back"
         } else if width >= 45 {
-            "Tab tabs · ←/→ rounds · ↑/↓ select · c add · r/o/x · Esc"
+            "[] tabs · ←/→ rounds · ↑/↓ select · c add · r/o/x · Esc"
         } else {
             "c com · Esc back"
         }
     } else {
         if width >= 90 {
-            "Tab tabs · ←/→ rounds · ↑/↓ PgUp/PgDn · gg/G top/end · / search · c comment · d diff · Esc back"
+            "[] tabs · ←/→ rounds · ↑/↓ PgUp/PgDn · gg/G top/end · / search · c comment · d diff · Esc back"
         } else if width >= 65 {
-            "Tab tabs · ←/→ rounds · ↑/↓ scroll · gg/G top/end · / search · Esc back"
+            "[] tabs · ←/→ rounds · ↑/↓ scroll · gg/G top/end · / search · Esc back"
         } else if width >= 45 {
-            "Tab tabs · ←/→ rounds · gg/G top/end · Esc"
+            "[] tabs · ←/→ rounds · gg/G top/end · Esc"
         } else {
             "gg/G · ↑/↓ · Esc back"
         }

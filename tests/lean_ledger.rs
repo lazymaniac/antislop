@@ -15,6 +15,59 @@ struct Fixture {
     source: Source,
     text: String,
 }
+
+#[test]
+fn composite_validation_identifies_parent_and_required_flags() {
+    let f = Fixture::new();
+    let mut parent = f.entry("parent");
+    let mut child = f.entry("child");
+    child.parent = Some("parent".into());
+    child.criteria[0].integration = true;
+    for (mandatory, integration) in [(true, false), (false, true)] {
+        parent.criteria[0].mandatory = mandatory;
+        parent.criteria[0].integration = integration;
+        let change = f.change(0, vec![parent.clone(), child.clone()]);
+        let error = f
+            .store
+            .preview_ledger_change(&change, f.dir.path())
+            .unwrap_err();
+        assert!(matches!(error, antislop::Error::Invalid(_)));
+        assert!(error.to_string().contains("composite requirement parent"));
+        assert!(
+            error
+                .to_string()
+                .contains("mandatory=true and integration=true")
+        );
+    }
+    parent.criteria[0].mandatory = true;
+    parent.criteria[0].integration = true;
+    f.store
+        .preview_ledger_change(&f.change(0, vec![parent, child]), f.dir.path())
+        .unwrap();
+}
+
+#[test]
+fn unknown_requirement_source_is_a_correctable_validation_error() {
+    let fixture = Fixture::new();
+    let mut entry = fixture.entry("requirement");
+    entry.source.source_id = "mistyped-run:message:1".into();
+    let change = fixture.change(0, vec![entry]);
+    let error = fixture
+        .store
+        .preview_ledger_change(&change, fixture.dir.path())
+        .unwrap_err();
+    assert!(matches!(error, antislop::Error::Invalid(_)));
+    assert!(error.to_string().contains("mistyped-run:message:1"));
+    assert!(error.to_string().contains("copy an exact source identity"));
+    assert_eq!(
+        fixture
+            .store
+            .run(&fixture.conversation, &fixture.run.id)
+            .unwrap()
+            .spec_revision,
+        0
+    );
+}
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();

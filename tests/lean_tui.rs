@@ -1107,6 +1107,16 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     assert_eq!(app.details.as_ref().unwrap().tab, tab0);
 
+    app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE));
+    assert_ne!(app.details.as_ref().unwrap().tab, tab0);
+    app.key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE));
+    assert_eq!(app.details.as_ref().unwrap().tab, tab0);
+    // Brackets wrap through the same tabs as Tab and Shift+Tab.
+    app.key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE));
+    assert_ne!(app.details.as_ref().unwrap().tab, tab0);
+    app.key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE));
+    assert_eq!(app.details.as_ref().unwrap().tab, tab0);
+
     // Open Diff from Details
     app.key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
     assert!(app.diff.is_some());
