@@ -454,9 +454,6 @@ pub fn describe(event: &Value) -> Option<String> {
                 None => String::new(),
             }
         ),
-        "agent" if payload["type"] == "tool" => {
-            format!("  ↳ {} {}", text("name"), text("detail"))
-        }
         "turn_finished" if payload["status"] != "done" => {
             format!("✗ {}: {}", text("status"), text("error"))
         }
