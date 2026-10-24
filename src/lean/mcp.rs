@@ -160,39 +160,55 @@ impl Drop for Gateway {
 /// server (Agy): the CLI starts `antislop mcp-bridge`, which forwards each
 /// JSON-RPC line to the gateway named by the environment it inherited.
 pub fn bridge() -> Result<()> {
-    use std::io::{BufRead, Write};
     let url = std::env::var("ANTISLOP_MCP_URL").map_err(|_| {
         invalid("ANTISLOP_MCP_URL is not set; mcp-bridge is started by an agent CLI")
     })?;
-    let token = std::env::var("ANTISLOP_MCP_TOKEN")
-        .map_err(|_| invalid("ANTISLOP_MCP_TOKEN is not set"))?;
+    let token =
+        std::env::var("ANTISLOP_MCP_TOKEN").map_err(|_| invalid("ANTISLOP_MCP_TOKEN is not set"))?;
     let conversation = std::env::var("ANTIGRAVITY_CONVERSATION_ID").ok();
+    forward(
+        std::io::stdin().lock(),
+        std::io::stdout().lock(),
+        &url,
+        &token,
+        conversation.as_deref(),
+    )
+}
+
+/// Relays JSON-RPC lines from `input` to the gateway and its replies to
+/// `output`; a notification gets no reply. The CLI's conversation, where it is
+/// known, rides along on tool calls so the runtime can resume it.
+fn forward(
+    input: impl std::io::BufRead,
+    mut output: impl std::io::Write,
+    url: &str,
+    token: &str,
+    conversation: Option<&str>,
+) -> Result<()> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .build()
         .into();
-    let mut out = std::io::stdout().lock();
-    for line in std::io::stdin().lock().lines() {
+    for line in input.lines() {
         let line = line.map_err(Error::Io)?;
         if line.trim().is_empty() {
             continue;
         }
         let mut message: Value = serde_json::from_str(&line)?;
-        if let Some(conversation) = &conversation
+        if let Some(conversation) = conversation
             && message["method"] == "tools/call"
         {
-            message["params"]["_meta"]["sessionId"] = Value::String(conversation.clone());
+            message["params"]["_meta"]["sessionId"] = Value::String(conversation.into());
         }
         let mut response = agent
-            .post(&url)
+            .post(url)
             .header("authorization", format!("Bearer {token}"))
             .send_json(&message)
             .map_err(|error| invalid(format!("gateway unreachable: {error}")))?;
         let body = response.body_mut().read_to_string().map_err(invalid)?;
-        // Notifications are acknowledged with an empty body: nothing to relay.
         if let Ok(reply) = serde_json::from_str::<Value>(&body) {
-            writeln!(out, "{reply}").map_err(Error::Io)?;
-            out.flush().map_err(Error::Io)?;
+            writeln!(output, "{reply}").map_err(Error::Io)?;
+            output.flush().map_err(Error::Io)?;
         }
     }
     Ok(())
@@ -415,6 +431,45 @@ mod tests {
                 "_meta":{"threadId":"thread-7"}}}),
         );
         assert_eq!(gateway.session().as_deref(), Some("thread-7"));
+    }
+
+    #[test]
+    fn the_stdio_bridge_relays_a_whole_turn_for_agy() {
+        let gateway = Gateway::start().unwrap();
+        gateway.begin("t1").unwrap();
+        let input = [
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+                "name":TOOL,"arguments":{"turn":"t1","text":"from agy"}}}),
+        ]
+        .iter()
+        .map(|message| format!("{message}\n"))
+        .collect::<String>();
+        let mut output = Vec::new();
+        forward(
+            input.as_bytes(),
+            &mut output,
+            gateway.url(),
+            gateway.token(),
+            Some("conversation-9"),
+        )
+        .unwrap();
+        let replies = String::from_utf8(output).unwrap();
+        let replies: Vec<Value> = replies
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(replies.len(), 3, "the notification gets no reply");
+        assert_eq!(replies[1]["result"]["tools"][0]["name"], TOOL);
+        assert_eq!(replies[2]["result"]["content"][0]["text"], "turn recorded");
+        assert_eq!(gateway.session().as_deref(), Some("conversation-9"));
+        let cancel = AtomicBool::new(false);
+        let finish = gateway
+            .wait("t1", &cancel, Duration::from_secs(2), || Ok(()))
+            .unwrap();
+        assert_eq!(finish.text, "from agy");
     }
 
     #[test]
