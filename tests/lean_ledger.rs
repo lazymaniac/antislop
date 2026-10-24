@@ -1,3 +1,4 @@
+mod common;
 mod support;
 use antislop::lean::{
     ledger::*,
@@ -503,6 +504,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
 "#).unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::interactive(&script);
     let config = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/examples/antislop.toml"
@@ -621,6 +623,7 @@ print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':
 print(json.dumps({'type':'turn.completed','usage':{}}))
 "#).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::interactive(&script);
     std::fs::set_permissions(f.dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let config = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -1000,6 +1003,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
 "#).unwrap();
         support::install_ledger_protocol(&script);
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::interactive(&script);
         let config = include_str!("../examples/antislop.toml")
             .replace("binary = \"codex\"", &format!("binary = {:?}", script))
             .replace("provider = \"agy\"", "provider = \"codex\"")

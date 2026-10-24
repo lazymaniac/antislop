@@ -28,6 +28,7 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "outpu
     .unwrap();
     support::install_ledger_protocol(&script);
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    common::interactive(&script);
     script
 }
 
@@ -45,6 +46,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "worker-1", "
     .unwrap();
     support::install_ledger_protocol(&script);
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    common::interactive(&script);
     script
 }
 

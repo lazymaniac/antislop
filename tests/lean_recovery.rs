@@ -1,3 +1,4 @@
+mod common;
 mod support;
 use antislop::{
     config::Config,
@@ -91,6 +92,7 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status"
         support::install_task_options_protocol(script);
         std::fs::set_permissions(script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+    common::interactive(script);
     }
     (codex, agy)
 }

@@ -36,7 +36,9 @@ print(json.dumps({"event": "result", "result": {"conversation_id": "c1", "status
     )
     .unwrap();
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::interactive(&codex);
     std::fs::set_permissions(&agy, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::interactive(&agy);
     (codex, agy)
 }
 

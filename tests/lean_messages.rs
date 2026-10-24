@@ -1,3 +1,4 @@
+mod common;
 mod support;
 use antislop::{config::Config, lean::Core};
 use serde_json::Value;
@@ -59,6 +60,7 @@ def message(to, kind, text):
         support::install_ledger_protocol(&path);
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+    common::interactive(&path);
         path
     };
     let codex = write(

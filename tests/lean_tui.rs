@@ -1,3 +1,4 @@
+mod common;
 use antislop::lean::{
     comment_label,
     daemon::{Client, Request, socket},
@@ -6395,6 +6396,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         std::fs::write(&binary, script).unwrap();
         std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+    common::interactive(&binary);
         let path = project.join("antislop.toml");
         let mut initial = ConfigEditor::new(SOURCE, path.to_string_lossy().into_owned()).unwrap();
         for (field, text) in [
