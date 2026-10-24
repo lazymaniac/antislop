@@ -1,0 +1,20 @@
+Validation refreshed after the default-module ambiguity fix.
+
+$ cargo fmt --check
+exit: 0
+
+$ cargo check --locked --bin diagnostic-size-check
+exit: 0
+
+$ cargo clippy --locked --all-targets -- -D warnings
+exit: 0
+
+$ python3 tests/size_check/check.py
+exit: 0
+size checker fixtures passed
+
+The latest black-box run records 76 fixture cases with expected exit status,
+diagnostic text and location assertions where applicable, plus one repository
+diagnostic result (77 lines in validation-results.txt). The new default-module
+ambiguity case exits 1 at src/lib.rs:1. The repository diagnostic exits 1 with
+381 size violations and 0 classification errors; see diagnostic-run.txt.

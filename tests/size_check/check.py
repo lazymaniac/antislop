@@ -5,44 +5,87 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-BINARY = ROOT / "target" / "debug" / "diagnostic-size-check"
+ARTIFACTS = ROOT / ".antislop"
+BINARY = ROOT / ".antislop" / "target" / "debug" / "diagnostic-size-check"
 RESULTS = []
 
 
-def invoke(files):
-    with tempfile.TemporaryDirectory(prefix="antislop-size-check-") as temp:
+def invoke(files, relative_root=False, parent_relative_root=False):
+    with tempfile.TemporaryDirectory(prefix="size-check-", dir=ARTIFACTS) as temp:
         root = Path(temp)
+        assert root.resolve().parent == ARTIFACTS.resolve(), root
         for name, body in files.items():
-            target = root / name if name == "Cargo.toml" else root / "src" / name
+            if name == "Cargo.toml":
+                target = root / name
+            elif name.startswith("@root/"):
+                target = root / name.removeprefix("@root/")
+            else:
+                target = root / "src" / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(body, newline="")
-        return subprocess.run([str(BINARY), "--root", str(root)], text=True, capture_output=True)
+        if parent_relative_root:
+            (root / "src" / "bin").mkdir(parents=True, exist_ok=True)
+            root_argument = "../.."
+            cwd = root / "src" / "bin"
+        else:
+            root_argument = f"./{root.relative_to(ROOT)}" if relative_root else root
+            cwd = ROOT
+        result = subprocess.run(
+            [str(BINARY), "--root", str(root_argument)],
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+        )
+    assert not root.exists(), f"fixture tree was not cleaned up: {root}"
+    RESULTS.append((
+        "fixture-artifacts",
+        0,
+        "fixture tree contained in .antislop and removed; no external fixture tree",
+        str(root.relative_to(ROOT)),
+    ))
+    return result
 
 
-def ok(files, needle=""):
-    result = invoke(files)
+def ok(files, needle="", relative_root=False):
+    result = invoke(files, relative_root=relative_root)
     assert result.returncode == 0, result.stderr + result.stdout
     assert needle in result.stdout, result.stdout
     RESULTS.append(("pass", result.returncode, needle, (result.stderr + result.stdout).strip()))
 
 
-def bad(files, needle, line=None, path="src/lib.rs"):
-    result = invoke(files)
+def bad(files, needle, line=None, path="src/lib.rs", extra_needles=(), relative_root=False, parent_relative_root=False):
+    result = invoke(files, relative_root=relative_root, parent_relative_root=parent_relative_root)
     assert result.returncode != 0, result.stdout
     output = result.stderr + result.stdout
     assert needle in output, output
+    for extra in extra_needles:
+        assert extra in output, output
     if line is not None:
         assert f"{path}:{line}:" in output, output
     RESULTS.append(("fail", result.returncode, needle, output.strip()))
 
 
 def main():
-    subprocess.run(["cargo", "build", "--quiet", "--bin", "diagnostic-size-check"], cwd=ROOT, check=True)
+    subprocess.run(
+        [
+            "cargo",
+            "build",
+            "--locked",
+            "--quiet",
+            "--target-dir",
+            ".antislop/target",
+            "--bin",
+            "diagnostic-size-check",
+        ],
+        cwd=ROOT,
+        check=True,
+    )
 
     # Physical line boundaries, LF/CRLF, and final newline behavior.
     ok({"lib.rs": "\n".join(["// line"] * 299) + "\n"}, "no violations")
     bad({"lib.rs": "\n".join(["// line"] * 300)}, "file is 300 lines")
     ok({"lib.rs": "\r\n".join(["// line"] * 299) + "\r\n"}, "no violations")
+    bad({"lib.rs": "\r\n".join(["// line"] * 300) + "\r\n"}, "file is 300 lines")
 
     # Exactly 29 versus 30 physical lines in callable bodies.
     ok({"lib.rs": "fn small() {\n" + "\n".join("    let _ = 1;" for _ in range(27)) + "\n}"})
@@ -92,6 +135,10 @@ unsafe extern "C" { fn foreign(); }
         "        let _ = 1;" for _ in range(27)
     ) + "\n    }\n}\n"
     bad({"lib.rs": actual_block_before_nested}, "callable nested", 2)
+    multiline_prefix_block = "/* lead\n   block continuation\n*/\nfn block_prefixed() {\n" + "\n".join(
+        "    let _ = 1;" for _ in range(25)
+    ) + "\n}\n"
+    bad({"lib.rs": multiline_prefix_block}, "callable block_prefixed is 30 lines", 1)
     plain_block_before_nested = "fn outer() {\n    /* block\n    continuation without a star\n    */\n    fn nested() {\n" + "\n".join(
         "        let _ = 1;" for _ in range(27)
     ) + "\n    }\n}\n"
@@ -108,11 +155,27 @@ unsafe extern "C" { fn foreign(); }
         "src/lib.rs:4: callable nested is 30 lines",
         4,
     )
+    nested_test_code = "#[cfg(not(test))]\nfn outer() {\n    #[cfg(test)]\n    fn nested_test() {\n" + "\n".join(
+        "        let _ = 1;" for _ in range(24)
+    ) + "\n    }\n}\n"
+    nested_test_result = invoke({"lib.rs": nested_test_code})
+    nested_test_output = nested_test_result.stderr + nested_test_result.stdout
+    assert nested_test_result.returncode != 0 and "callable outer is 30 lines" in nested_test_output
+    assert "callable nested_test" not in nested_test_output, nested_test_output
+    RESULTS.append(("fail", nested_test_result.returncode, "nested test lines remain in outer span", nested_test_output.strip()))
     # Prefix line is the diagnostic start, and a blank-line separator stops attachment.
     prefixed = "// detached\n\nfn f() {\n" + "\n".join("    let _ = 0;" for _ in range(27)) + "\n}\n"
     bad({"lib.rs": prefixed}, "callable f is 31 lines", 1)
     separated = "// old comment\n\n\n// leading comment\nfn separated() {\n" + "\n".join("    let _ = 1;" for _ in range(27)) + "\n}\n"
     bad({"lib.rs": separated}, "callable separated is 30 lines", 4)
+    unrelated = "// unrelated\n\n\nfn independent() {\n" + "\n".join(
+        "    let _ = 1;" for _ in range(28)
+    ) + "\n}\n"
+    bad({"lib.rs": unrelated}, "callable independent is 30 lines", 4)
+    contiguous = "// leading\n/// docs\n#[inline]\nfn prefixed() {\n" + "\n".join(
+        "    let _ = 1;" for _ in range(25)
+    ) + "\n}\n"
+    bad({"lib.rs": contiguous}, "callable prefixed is 30 lines", 1)
     ok({"lib.rs": "//! inner docs\n\nfn f() {}\n"})
     inner_docs = "//! crate docs\n\nfn public_api() {\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}\n"
     bad({"lib.rs": inner_docs}, "callable public_api", 3)
@@ -183,6 +246,53 @@ unsafe extern "C" { fn foreign(); }
         1,
         "src/large.rs",
     )
+    linked_helper = "fn shared_helper() {\n" + "\n".join(
+        "    let _ = 1;" for _ in range(28)
+    ) + "\n}\n"
+    bad(
+        {
+            "lib.rs": '#[cfg(test)]\n#[path = "shared.rs"]\nmod test_shared;\n',
+            "bin/diagnostic.rs": '#[path = "../shared.rs"]\nmod production_shared;\n',
+            "shared.rs": linked_helper + "\n".join(["// shared source"] * 270) + "\n",
+        },
+        "src/shared.rs:1: callable shared_helper is 30 lines",
+        1,
+        "src/shared.rs",
+        extra_needles=("src/shared.rs:1: file is 300 lines", "0 classification errors"),
+        relative_root=True,
+    )
+    ok(
+        {
+            "lib.rs": '#[cfg(test)]\n#[path = "test_helper.rs"]\nmod test_helper;\n',
+            "test_helper.rs": "\n".join(["// test only"] * 350),
+        },
+        "1 maintained Rust files",
+        relative_root=True,
+    )
+    ok(
+        {
+            "lib.rs": '#[cfg(test)]\n#[path = "../test_helper.rs"]\nmod test_helper;\n',
+            "@root/test_helper.rs": "\n".join(["// test only"] * 350),
+        },
+        "1 maintained Rust files",
+    )
+    # Repeated leading parents in a relative root must retain their location.
+    # The helper is reached from both a test path and a production path.
+    bad(
+        {
+            "lib.rs": '#[cfg(test)]\n#[path = "../shared.rs"]\nmod test_shared;\n',
+            "bin/entry.rs": '#[path = "../../shared.rs"]\nmod production_shared;\n',
+            "@root/shared.rs": "fn reused_helper() {\n"
+            + "".join("    let _ = 1;\n" for _ in range(28))
+            + "}\n"
+            + "".join("// shared source\n" for _ in range(270)),
+        },
+        "shared.rs:1: callable reused_helper is 30 lines",
+        1,
+        "shared.rs",
+        extra_needles=("shared.rs:1: file is 300 lines", "0 classification errors"),
+        parent_relative_root=True,
+    )
 
     # cfg_attr is always unsupported, regardless of its predicate/result or location.
     cfg_attr_cases = [
@@ -232,11 +342,11 @@ unsafe extern "C" { fn foreign(); }
     assert missing_root.returncode != 0 and "--root requires" in missing_root.stderr
     RESULTS.append(("fail", missing_root.returncode, "--root requires", missing_root.stderr.strip()))
     repository_run = subprocess.run(
-        [str(BINARY), "--root", str(ROOT)], text=True, capture_output=True
+        [str(BINARY), "--root", "."], cwd=ROOT, text=True, capture_output=True
     )
     run_output = repository_run.stderr + repository_run.stdout
     (ROOT / "tests" / "size_check" / "diagnostic-run.txt").write_text(
-        f"command: {BINARY} --root {ROOT}\nexit: {repository_run.returncode}\n{run_output}"
+        f"command: {BINARY} --root . (cwd: repository root)\nexit: {repository_run.returncode}\n{run_output}"
     )
     RESULTS.append((
         "repository-diagnostic",

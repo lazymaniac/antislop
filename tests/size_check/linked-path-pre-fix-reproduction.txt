@@ -1,0 +1,21 @@
+Pre-fix linked-source coverage reproduction
+
+Executable: .antislop/target/debug/diagnostic-size-check, SHA-256 a4c3f945161be5da130921a14213cdedfb737d1afd6bf3c77bb9ca7ae31786c3
+Command: .antislop/target/debug/diagnostic-size-check --root .antislop/linked-path-repro
+
+Fixture source:
+
+src/bin/diagnostic.rs:
+#[path = "../../outside.rs"]
+mod outside;
+
+outside.rs:
+fn shared_helper() {
+    let _ = 1;  // repeat this statement 28 times total on lines 2 through 29
+}
+// external production file  // repeated 270 times on lines 31 through 300
+
+Observed pre-fix result (exit 0):
+size diagnostic: 1 maintained Rust files, no violations
+
+The production file reached by #[path] was outside src and absent from the scan. The post-fix regression in check.py expects both its 300-line file violation and 30-line callable violation.

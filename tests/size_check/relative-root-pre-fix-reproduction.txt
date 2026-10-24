@@ -1,0 +1,13 @@
+Relative-root classification bug, reproduced before the fix
+
+The pre-fix checker from `f85b4ac62e8e67f1ebaed46acbec73fc45f63fd0` was built into `.antislop/target` and invoked from the repository root with `--root ./.antislop/<fixture-directory>`. The fixture had a `src/lib.rs` containing a `#[cfg(test)]` path to a 350-line `src/test_helper.rs`, with no production reference.
+
+Observed pre-fix output:
+
+```text
+exit: 1
+VIOLATION src/test_helper.rs:1: file is 350 lines (limit 299)
+size diagnostic failed: 0 classification errors, 1 violations
+```
+
+This was incorrect: the helper had test-only reachability and should have been excluded. The old graph used normalized edge paths with unnormalized collected-file keys, so the test-only edge did not reach the collected node. The regression now expects a clean one-file result for this case; a companion relative-root fixture reaches one oversized helper through both test and production paths and expects it to remain production.

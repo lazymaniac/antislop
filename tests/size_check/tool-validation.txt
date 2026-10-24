@@ -1,20 +1,24 @@
-Validation refreshed after the default-module ambiguity fix.
+Current worktree validation (HEAD f85b4ac62e8e67f1ebaed46acbec73fc45f63fd0, checker extension working tree)
 
 $ cargo fmt --check
-exit: 0
-
-$ cargo check --locked --bin diagnostic-size-check
-exit: 0
-
-$ cargo clippy --locked --all-targets -- -D warnings
-exit: 0
+passed
 
 $ python3 tests/size_check/check.py
-exit: 0
-size checker fixtures passed
+passed: all fixture assertions and the repository diagnostic capture
+The repository diagnostic runs with the documented relative root (`--root .`) and exits 1 as expected: 0 classification errors, 395 size violations. The relative-root fixture also reaches the same oversized helper through test-only and production module paths; the helper remains production and both its file and callable violations are reported. See diagnostic-run.txt, validation-results.txt, and final-inventory.md.
 
-The latest black-box run records 76 fixture cases with expected exit status,
-diagnostic text and location assertions where applicable, plus one repository
-diagnostic result (77 lines in validation-results.txt). The new default-module
-ambiguity case exits 1 at src/lib.rs:1. The repository diagnostic exits 1 with
-381 size violations and 0 classification errors; see diagnostic-run.txt.
+$ CARGO_TARGET_DIR=.antislop/target cargo check --locked
+passed
+
+$ CARGO_TARGET_DIR=.antislop/target cargo clippy --locked --all-targets -- -D warnings
+passed
+
+After the relative-root graph fix, on current worktree HEAD `f85b4ac62e8e67f1ebaed46acbec73fc45f63fd0`:
+
+`CARGO_TARGET_DIR=.antislop/target cargo test --locked --test lean_core`
+passed: 21 passed, 0 failed, 0 ignored.
+
+`CARGO_TARGET_DIR=.antislop/target cargo test --locked --test lean_tui`
+passed: 110 passed, 0 failed, 0 ignored.
+
+All Cargo build artifacts were written under `.antislop/target`. The checker fixture runner uses temporary directories for isolated case inputs; relative-root fixture directories are created under `.antislop`. The two test suites above completed successfully after the latest checker graph fix; they validate the project integration against that tree.

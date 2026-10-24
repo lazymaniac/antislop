@@ -875,56 +875,79 @@ fn scan_file(
         w.visit_item(i);
     }
 }
-fn module_references(files: &[PathBuf], source_root: &Path) -> BTreeMap<PathBuf, (bool, bool)> {
-    struct RefWalker {
-        dir: PathBuf,
-        path_dir: PathBuf,
-        test: bool,
-        edges: Vec<(PathBuf, bool)>,
-    }
-    impl<'ast> Visit<'ast> for RefWalker {
-        fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-            let test = self.test || attrs_imply_test(&item.attrs).unwrap_or(false);
-            let old = self.test;
-            let old_dir = self.dir.clone();
-            let old_path_dir = self.path_dir.clone();
-            self.test = test;
-            if let Some((_, items)) = &item.content {
-                self.dir = self.dir.join(item.ident.to_string());
-                self.path_dir = self.path_dir.join(item.ident.to_string());
-                for item in items {
-                    self.visit_item(item);
-                }
-            } else {
-                let paths = module_paths(
-                    &item.attrs,
-                    &self.path_dir,
-                    &self.dir,
-                    &item.ident.to_string(),
-                );
-                // An invalid path creates no guessed edge. The source walker emits
-                // the user-facing classification error at the attribute location.
-                let paths = paths.unwrap_or_default();
-                for path in paths.into_iter().filter(|p| p.is_file()) {
-                    self.edges.push((path, test));
-                }
+struct RefWalker {
+    dir: PathBuf,
+    path_dir: PathBuf,
+    test: bool,
+    edges: Vec<(PathBuf, bool)>,
+}
+
+impl<'ast> Visit<'ast> for RefWalker {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        let test = self.test || attrs_imply_test(&item.attrs).unwrap_or(false);
+        let old = self.test;
+        let old_dir = self.dir.clone();
+        let old_path_dir = self.path_dir.clone();
+        self.test = test;
+        if let Some((_, items)) = &item.content {
+            self.dir = self.dir.join(item.ident.to_string());
+            self.path_dir = self.path_dir.join(item.ident.to_string());
+            for item in items {
+                self.visit_item(item);
             }
-            self.test = old;
-            self.dir = old_dir;
-            self.path_dir = old_path_dir;
+        } else {
+            let paths = module_paths(
+                &item.attrs,
+                &self.path_dir,
+                &self.dir,
+                &item.ident.to_string(),
+            );
+            // An invalid path creates no guessed edge. The source walker emits
+            // the user-facing classification error at the attribute location.
+            for path in paths
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|p| p.is_file())
+            {
+                self.edges.push((path, test));
+            }
         }
+        self.test = old;
+        self.dir = old_dir;
+        self.path_dir = old_path_dir;
     }
-    let mut graph: BTreeMap<PathBuf, Vec<(PathBuf, bool)>> = BTreeMap::new();
-    let mut incoming = BTreeSet::new();
-    for file in files {
-        let Ok(text) = fs::read_to_string(file) else {
+}
+
+fn module_references(
+    files: &mut Vec<PathBuf>,
+    source_root: &Path,
+) -> BTreeMap<PathBuf, (bool, bool)> {
+    let source_root = normalize_path(source_root);
+    let mut known: BTreeSet<_> = files.iter().map(|file| normalize_path(file)).collect();
+    let mut pending: Vec<_> = known.iter().cloned().collect();
+    let graph = collect_module_graph(&mut pending, &mut known);
+    *files = known.into_iter().collect();
+    let incoming: BTreeSet<_> = graph
+        .values()
+        .flat_map(|edges| edges.iter().map(|(child, _)| child.clone()))
+        .collect();
+    reachable_references(&graph, files, &source_root, &incoming)
+}
+
+fn collect_module_graph(
+    pending: &mut Vec<PathBuf>,
+    known: &mut BTreeSet<PathBuf>,
+) -> BTreeMap<PathBuf, Vec<(PathBuf, bool)>> {
+    let mut graph = BTreeMap::new();
+    while let Some(file) = pending.pop() {
+        let Ok(text) = fs::read_to_string(&file) else {
             continue;
         };
         let Ok(ast) = syn::parse_file(&text) else {
             continue;
         };
         let mut walker = RefWalker {
-            dir: module_directory(file),
+            dir: module_directory(&file),
             path_dir: file.parent().unwrap_or(Path::new(".")).to_path_buf(),
             test: false,
             edges: Vec::new(),
@@ -933,75 +956,105 @@ fn module_references(files: &[PathBuf], source_root: &Path) -> BTreeMap<PathBuf,
         for item in &ast.items {
             walker.visit_item(item);
         }
-        for (path, _) in &walker.edges {
-            incoming.insert(path.clone());
-        }
-        graph.insert(file.clone(), walker.edges);
+        let edges = normalize_edges(walker.edges, pending, known);
+        graph.insert(file, edges);
     }
-    let is_root = |p: &PathBuf| {
-        p == &source_root.join("lib.rs")
-            || p == &source_root.join("main.rs")
-            || p.parent()
-                .is_some_and(|parent| parent == source_root.join("bin"))
-    };
+    graph
+}
+
+fn normalize_edges(
+    edges: Vec<(PathBuf, bool)>,
+    pending: &mut Vec<PathBuf>,
+    known: &mut BTreeSet<PathBuf>,
+) -> Vec<(PathBuf, bool)> {
+    edges
+        .into_iter()
+        .map(|(path, test)| {
+            let path = normalize_path(&path);
+            if path.is_file() && known.insert(path.clone()) {
+                pending.push(path.clone());
+            }
+            (path, test)
+        })
+        .collect()
+}
+
+fn reachable_references(
+    graph: &BTreeMap<PathBuf, Vec<(PathBuf, bool)>>,
+    files: &[PathBuf],
+    source_root: &Path,
+    incoming: &BTreeSet<PathBuf>,
+) -> BTreeMap<PathBuf, (bool, bool)> {
+    let roots = files
+        .iter()
+        .filter(|path| is_crate_root(path, source_root) || !incoming.contains(*path))
+        .cloned()
+        .map(|path| (path, false));
     let mut refs = BTreeMap::new();
     let mut visited = BTreeSet::new();
-    let mut pending: Vec<(PathBuf, bool)> = files
-        .iter()
-        .filter(|p| is_root(p) || !incoming.contains(*p))
-        .cloned()
-        .map(|p| (p, false))
-        .collect();
-    while !pending.is_empty() {
-        let mut next = Vec::new();
-        for (file, test_context) in pending.drain(..) {
-            if !visited.insert((file.clone(), test_context)) {
-                continue;
-            }
-            let flags = refs.entry(file.clone()).or_insert((false, false));
-            if test_context {
-                flags.1 = true;
-            } else {
-                flags.0 = true;
-            }
-            if let Some(edges) = graph.get(&file) {
-                next.extend(
-                    edges
-                        .iter()
-                        .map(|(child, test_edge)| (child.clone(), test_context || *test_edge)),
-                );
-            }
-        }
-        pending = next;
-    }
-    // An unreferenced cycle has no zero-indegree seed, but remains production by default.
+    mark_reachable(graph, roots, &mut refs, &mut visited);
     let unvisited: Vec<_> = files
         .iter()
-        .filter(|p| !refs.contains_key(*p))
+        .filter(|path| !refs.contains_key(*path))
         .cloned()
         .collect();
-    for file in unvisited {
-        let mut pending = vec![(file, false)];
-        while let Some((file, test_context)) = pending.pop() {
-            if !visited.insert((file.clone(), test_context)) {
-                continue;
-            }
-            let flags = refs.entry(file.clone()).or_insert((false, false));
-            if test_context {
-                flags.1 = true;
-            } else {
-                flags.0 = true;
-            }
-            if let Some(edges) = graph.get(&file) {
-                pending.extend(
-                    edges
-                        .iter()
-                        .map(|(child, test_edge)| (child.clone(), test_context || *test_edge)),
-                );
-            }
-        }
+    for path in unvisited {
+        mark_reachable(graph, [(path, false)], &mut refs, &mut visited);
     }
     refs
+}
+
+fn is_crate_root(path: &Path, source_root: &Path) -> bool {
+    path == source_root.join("lib.rs")
+        || path == source_root.join("main.rs")
+        || path
+            .parent()
+            .is_some_and(|parent| parent == source_root.join("bin"))
+}
+
+fn mark_reachable(
+    graph: &BTreeMap<PathBuf, Vec<(PathBuf, bool)>>,
+    roots: impl IntoIterator<Item = (PathBuf, bool)>,
+    refs: &mut BTreeMap<PathBuf, (bool, bool)>,
+    visited: &mut BTreeSet<(PathBuf, bool)>,
+) {
+    let mut pending: Vec<_> = roots.into_iter().collect();
+    while let Some((file, test_context)) = pending.pop() {
+        if !visited.insert((file.clone(), test_context)) {
+            continue;
+        }
+        let flags = refs.entry(file.clone()).or_insert((false, false));
+        if test_context {
+            flags.1 = true;
+        } else {
+            flags.0 = true;
+        }
+        if let Some(edges) = graph.get(&file) {
+            pending.extend(
+                edges
+                    .iter()
+                    .map(|(child, test_edge)| (child.clone(), test_context || *test_edge)),
+            );
+        }
+    }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if normalized.file_name().is_some() {
+                    normalized.pop();
+                } else if !normalized.has_root() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 fn module_directory(file: &Path) -> PathBuf {
     let parent = file.parent().unwrap_or(Path::new("."));
@@ -1073,7 +1126,7 @@ pub fn run() {
     let mut r = Results::default();
     collect(&src, &mut files, &mut r.errors);
     files.sort();
-    let refs = module_references(&files, &src);
+    let refs = module_references(&mut files, &src);
     let mut maintained_files = 0usize;
     for p in &files {
         let root_file = p == &src.join("lib.rs")

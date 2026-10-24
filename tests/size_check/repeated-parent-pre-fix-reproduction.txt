@@ -1,0 +1,21 @@
+Pre-fix reproduction for repeated leading parent components
+
+The pre-fix checker was run from a nested fixture directory with a relative
+root argument containing two leading parents. The fixture directory and all
+fixture files were under .antislop. A 300-line shared helper was reachable from
+both a test module and a production module.
+
+Command: diagnostic-size-check --root ../..
+Working directory: <fixture-root>/src/bin
+Expected: discover the shared helper, report its 30-line callable and 300-line
+file, and report zero classification errors.
+Observed before the fix: module graph collection lost both Rust files after
+normalizing the leading `../..` root, then emitted read failures and zero size
+violations:
+
+ERROR src/bin/entry.rs:0: read failure: No such file or directory (os error 2)
+ERROR src/lib.rs:0: read failure: No such file or directory (os error 2)
+size diagnostic failed: 2 classification errors, 0 violations
+
+This is intentional new behavior: preserving unresolved leading parent
+components keeps relative paths anchored to the process working directory.

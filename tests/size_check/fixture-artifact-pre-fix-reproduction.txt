@@ -1,0 +1,19 @@
+Fixture artifact placement: pre-fix reproduction
+
+Pre-fix source (HEAD before the fixture path fix) selected the project-local
+parent only for relative-root cases:
+
+    temp_parent = ROOT / ".antislop" if relative_root or parent_relative_root else None
+    with tempfile.TemporaryDirectory(prefix="size-check-", dir=temp_parent) as temp:
+
+Ordinary cases therefore delegated to Python's system temporary directory. The
+pre-fix validation record captured that behavior in checker diagnostics:
+
+    048 ERROR src/lib.rs:1: unresolved module file /var/folders/d2/vtn09lpd2717th937yj7smhw0000gn/T/size-check-bqqw97xr/src/nope.rs
+    072 ERROR /var/folders/d2/vtn09lpd2717th937yj7smhw0000gn/T/size-check-o5yrilc_/src/lib.rs:1: parse error: cannot parse string into token stream
+
+Intentional change: every fixture now uses `.antislop` as its temporary parent.
+The runner asserts containment and confirms the temporary tree is removed after
+each checker invocation. The passing regression run is recorded in
+`validation-results.txt`; each `fixture-artifacts` record captures the in-project
+path and successful cleanup.
