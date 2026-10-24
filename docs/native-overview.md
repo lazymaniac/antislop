@@ -20,6 +20,13 @@ by resuming it.
    with its complete final answer. That call is the only way back; the screen
    is never read for results.
 
+A CLI that asks a question before it works (Claude and Agy ask whether to trust a
+new directory; Claude inherits the answer from a trusted parent, Agy asks for
+each directory) waits for the person: answer it in the terminal. Real runs of
+Claude, Codex, OpenCode and Agy (orchestrator turn, answer back, terminal view,
+resume after a daemon restart for the first three) are recorded in the evidence
+below.
+
 A call for a turn that is not the open one is refused with a message the model
 can read. A CLI that does not connect within 60 s, exits, or does not end the
 turn within 30 minutes (`ANTISLOP_TURN_TIMEOUT_SECS`) fails the turn with the
