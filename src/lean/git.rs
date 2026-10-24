@@ -260,6 +260,11 @@ pub fn remove_worktree(project: &Path, path: &Path, branch: &str) -> Result<()> 
     Ok(())
 }
 
+/// Renames a branch, so the work on it is kept when its name is needed again.
+pub fn rename_branch(project: &Path, from: &str, to: &str) -> Result<()> {
+    ok(project, &["branch", "-m", from, to]).map(|_| ())
+}
+
 pub fn remove_worktree_keep_branch(project: &Path, path: &Path) -> Result<()> {
     let target = path.to_string_lossy();
     let _ = git(project, &["worktree", "remove", "--force", &target]);
@@ -772,6 +777,32 @@ mod tests {
         commit_all(&worktree, "work").unwrap();
         let change = squash(&worktree, &base, "Task t1").unwrap();
         (trees, base, change)
+    }
+
+    #[test]
+    fn a_cut_up_writer_keeps_its_work_on_a_renamed_branch_and_starts_again() {
+        let project = repo();
+        let trees = tempfile::tempdir().unwrap();
+        let worktree = trees.path().join("t1");
+        let base = head(project.path()).unwrap();
+        add_worktree(project.path(), &worktree, "antislop/t1", &base).unwrap();
+        std::fs::write(worktree.join("partial.txt"), "half done\n").unwrap();
+        let partial = commit_all(&worktree, "partial").unwrap();
+
+        remove_worktree_keep_branch(project.path(), &worktree).unwrap();
+        rename_branch(project.path(), "antislop/t1", "antislop/t1-before-split").unwrap();
+
+        assert!(!worktree.exists());
+        let kept = ok(project.path(), &["rev-parse", "antislop/t1-before-split"]).unwrap();
+        assert_eq!(kept, partial, "the partial work is still reachable");
+        // The name is free for a fresh start from another base.
+        std::fs::write(project.path().join("parts.txt"), "from the parts\n").unwrap();
+        ok(project.path(), &["add", "-A"]).unwrap();
+        ok(project.path(), &["commit", "-q", "-m", "parts"]).unwrap();
+        let again = head(project.path()).unwrap();
+        add_worktree(project.path(), &worktree, "antislop/t1", &again).unwrap();
+        assert!(worktree.join("parts.txt").exists());
+        assert!(!worktree.join("partial.txt").exists());
     }
 
     #[test]

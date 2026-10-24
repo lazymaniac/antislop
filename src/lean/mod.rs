@@ -18,6 +18,7 @@ mod progress;
 pub mod projects;
 pub mod risks;
 mod rounds;
+mod split;
 pub mod store;
 pub mod tasks;
 pub mod terminal;
@@ -2034,6 +2035,9 @@ impl Core {
                 if step.action == tasks::action::ADD_TASK {
                     return self.add_unblocker(conversation, &plan, step);
                 }
+                if step.action == tasks::action::SPLIT_TASK {
+                    return self.split_blocked(conversation, &plan, step);
+                }
                 let action: RecoveryAction =
                     serde_json::from_value(json!(step.action)).map_err(|_| {
                         Error::Invalid(format!("unknown unblocking action {}", step.action))
@@ -3506,6 +3510,90 @@ impl Core {
             status::NEEDS_USER,
             Some(&blocker.summary()),
         )
+    }
+
+    /// Cuts a task that is too large into the parts the orchestrator wrote.
+    /// The task stays, to put them together; a writer's partial work is kept
+    /// on a branch of its own.
+    fn split_blocked(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan: &str,
+        step: &tasks::Unblocking,
+    ) -> Result<String> {
+        require(!step.parts.is_empty(), "split_task needs `parts`")?;
+        let _graph = self.graph_updates.lock().expect("graph update mutex");
+        let blocked = self.task_unscoped(plan, &step.task)?;
+        require(
+            !blocker_of(&blocked).is_some_and(|blocker| blocker.for_user()),
+            "a refused permission is left to the user; splitting the task does not lift it",
+        )?;
+        self.store.check_parts(&blocked, &step.parts)?;
+        let kept = self.keep_partial_work(conversation, &blocked)?;
+        let ids = self
+            .store
+            .insert_parts(conversation, &blocked, &step.parts)?;
+        let names: Vec<&str> = step.parts.iter().map(|part| part.id.as_str()).collect();
+        let kept_note = kept
+            .map(|branch| format!(" Your earlier attempt is kept on branch {branch}: read it, do not copy it blindly."))
+            .unwrap_or_default();
+        self.store.add_mail(
+            conversation,
+            &format!("worker:{}", blocked.id),
+            &Mail {
+                id: 0,
+                created_ms: 0,
+                delivered_turn: None,
+                delivered_ms: None,
+                sender: RUNTIME.into(),
+                recipient: format!("worker:{}", blocked.id),
+                kind: "guidance".into(),
+                text: format!(
+                    "Your task was cut into {}, which run and are verified before you resume. \
+                     Their results are in your workspace.{kept_note} Complete only what remains: \
+                     put the parts together and check the whole against your goal.",
+                    names.join(", ")
+                ),
+                state: "queued".into(),
+            },
+        )?;
+        self.store.append_event(
+            conversation,
+            None,
+            Some(plan),
+            "task_recovery",
+            &json!({"actor": ORCHESTRATOR, "task": blocked.id,
+                    "action": tasks::action::SPLIT_TASK, "status": status::QUEUED,
+                    "detail": format!("cut into {}", names.join(", "))}),
+        )?;
+        for spec_id in names.iter().copied().chain([step.task.as_str()]) {
+            self.announce_task(conversation, &self.task_unscoped(plan, spec_id)?, None);
+        }
+        self.maybe_continue_plan(conversation, plan)?;
+        Ok(format!(
+            "{} parts come first ({} inserted)",
+            ids.len(),
+            names.join(", ")
+        ))
+    }
+
+    /// A writer's worktree goes, its branch stays under a new name, so the
+    /// rounds that follow start from a base that holds the parts. Returns the
+    /// name it kept.
+    fn keep_partial_work(&self, conversation: &str, task: &Task) -> Result<Option<String>> {
+        let path = self
+            .state
+            .join("worktrees")
+            .join(task_path_component(&task.id)?);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let project = PathBuf::from(self.store.conversation(conversation)?.project);
+        let branch = worktree_branch(&self.state, task)?;
+        let kept = format!("{branch}-before-split");
+        git::remove_worktree_keep_branch(&project, &path)?;
+        git::rename_branch(&project, &branch, &kept)?;
+        Ok(Some(kept))
     }
 
     /// Inserts the task the orchestrator wrote before the blocked one; the
@@ -5497,6 +5585,19 @@ fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
          \"scope\":[\"src\"],\"verifier\":{\"focus\":\"...\"}}}]}\n```\n\
          Its requirements are the blocked task's own; it cannot write, and a blocker is \
          tried at most twice.",
+    );
+    text.push_str(
+        "\n\nA task whose blocker is `(TooLarge)` is cut up instead: `split_task` inserts 2 to 8 \
+         parts before it, and the task stays to put them together. A part works within the \
+         task's scope and requirements (it inherits them when left out); writers that share \
+         files must be ordered with `depends_on`, which may name earlier parts or tasks ahead of \
+         the task. A task is cut at most once, and a part is not cut:\n\
+         ```recover\n{\"actions\":[{\"task\":\"t2\",\"action\":\"split_task\",\"parts\":[\
+         {\"id\":\"t2-a\",\"title\":\"...\",\"goal\":\"...\",\"kind\":\"implementation\",\
+         \"writes\":true,\"scope\":[\"src/a\"],\"verifier\":{\"focus\":\"...\"}},\
+         {\"id\":\"t2-b\",\"title\":\"...\",\"goal\":\"...\",\"kind\":\"implementation\",\
+         \"writes\":true,\"scope\":[\"src/b\"],\"depends_on\":[\"t2-a\"],\
+         \"verifier\":{\"focus\":\"...\"}}]}]}\n```",
     );
     if !user_only.is_empty() {
         text.push_str(&format!(

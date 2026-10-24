@@ -242,6 +242,90 @@ else:
 }
 
 #[test]
+fn a_task_that_is_too_large_is_cut_into_parts_that_come_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"
+a = {"id": "a", "title": "Part A", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}}
+b = {"id": "b", "title": "Part B", "goal": "g", "kind": "analysis", "depends_on": ["a"], "verifier": {"focus": "f"}}
+if "blocked (TooLarge)" in prompt:
+    answer = "Cutting it.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "split_task", "parts": [a, b]}]}) + "\n```"
+elif "[runtime]" in prompt:
+    answer = "done"
+else:
+    answer = plan(task("t1", "Work"))
+"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "You verify" in prompt or "updated report" in prompt:
+    say("verifier", verdict(True))
+elif "Task id: t1" in prompt and bump("t1") == 1:
+    say("worker", "Too much.\n```blocker\n" + json.dumps({"kind": "too_large", "needs": "a smaller task", "why": "two areas", "suggest": "one part each"}) + "\n```")
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "work");
+
+    let plan = core.store.latest_plan(&conversation).unwrap();
+    let ids: Vec<_> = plan
+        .iter()
+        .map(|t| t.spec["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["a", "b", "t1"], "the parts come before the whole");
+    assert!(plan.iter().all(|t| t.status == "approved"), "{plan:#?}");
+    assert_eq!(plan[0].spec["part_of"], "t1");
+    assert_eq!(plan[1].spec["depends_on"][0], "a");
+    assert_eq!(plan[2].spec["depends_on"], serde_json::json!(["a", "b"]));
+    assert_eq!(plan[2].round, 2, "the whole resumed in a new round");
+    let recoveries = events(&core, &conversation, "task_recovery");
+    assert_eq!(recoveries[0]["action"], "split_task");
+}
+
+#[test]
+fn a_split_that_breaks_the_rules_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"
+a = {"id": "a", "title": "Part A", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}}
+b = {"id": "b", "title": "Part B", "goal": "g", "kind": "analysis", "depends_on": ["a"], "verifier": {"focus": "f"}}
+if "blocked (TooLarge)" in prompt:
+    answer = "Cutting it.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "split_task", "parts": [a]}]}) + "\n```"
+elif "[runtime]" in prompt:
+    answer = "done"
+else:
+    answer = plan(task("t1", "Work"))
+"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "You verify" in prompt or "updated report" in prompt:
+    say("verifier", verdict(True))
+elif "Task id: t1" in prompt and bump("t1") == 1:
+    say("worker", "Too much.\n```blocker\n" + json.dumps({"kind": "too_large", "needs": "a smaller task", "why": "two areas", "suggest": "one part each"}) + "\n```")
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "work");
+
+    let plan = core.store.latest_plan(&conversation).unwrap();
+    assert_eq!(plan.len(), 1, "nothing was inserted");
+    assert_eq!(plan[0].status, "needs_user");
+    let notices = events(&core, &conversation, "notice");
+    assert!(notices.iter().any(|n| {
+        n["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("2 to 8 parts"))
+    }));
+}
+
+#[test]
 fn a_refused_permission_is_left_to_the_user_not_to_another_agent() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(

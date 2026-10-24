@@ -18,11 +18,13 @@ pub const ATTEMPTS: usize = 2;
 
 pub const FORMAT: &str = "If the goal cannot be reached because something outside your task is \
      missing, do not repeat the shortfall in prose round after round. End your report with \
-     this block, once:\n```blocker\n{\"kind\":\"missing_input|permission|unsatisfiable_requirement\",\
+     this block, once:\n```blocker\n{\"kind\":\"missing_input|permission|unsatisfiable_requirement|too_large\",\
      \"needs\":\"what must exist or change\",\"why\":\"why you cannot supply it\",\
      \"suggest\":\"optional: a task or change that would supply it\"}\n```\nUse `permission` for \
      what your sandbox denies, `missing_input` for a result, file or decision that no task of the \
-     plan produces, `unsatisfiable_requirement` for a demand your task cannot meet as written. \
+     plan produces, `unsatisfiable_requirement` for a demand your task cannot meet as written, `too_large` when \
+     the task is more than you can finish well in one piece (say in `suggest` how you would cut \
+     it into parts that can be done and checked one by one). \
      The runtime stops the task and hands the problem to the orchestrator, who fixes the plan. \
      Do not use it for work you can still do.\n\n";
 
@@ -32,6 +34,7 @@ pub enum Kind {
     MissingInput,
     Permission,
     UnsatisfiableRequirement,
+    TooLarge,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,13 +77,24 @@ pub fn parse(report: &str) -> Option<Blocker> {
 
 /// What a worker is told about blockers, and about the one it clears.
 pub fn worker_note(task: &TaskSpec) -> String {
+    let part = task.part_of.as_deref().map(|whole| {
+        format!(
+            "You are one part of task {whole}, which was cut up because it was too large. Do \
+             only your own part; the other parts are done by other tasks, and {whole} puts the \
+             results together afterwards.\n\n"
+        )
+    });
     let clears = task.resolves.as_deref().map(|blocked| {
         format!(
             "This task exists to clear the blocker of task {blocked}. Its goal states what must be \
              true afterwards: report the evidence, in a form {blocked}'s worker can rely on.\n\n"
         )
     });
-    format!("{FORMAT}{}", clears.unwrap_or_default())
+    format!(
+        "{FORMAT}{}{}",
+        clears.unwrap_or_default(),
+        part.unwrap_or_default()
+    )
 }
 
 /// The check the runtime adds to the verifier of a task that clears `blocked`.
@@ -210,6 +224,7 @@ mod tests {
                 risks: Vec::new(),
             },
             resolves: None,
+            part_of: None,
         }
     }
 

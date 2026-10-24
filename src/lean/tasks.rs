@@ -37,6 +37,10 @@ pub struct TaskSpec {
     /// unblocking path sets it; a plan or a graph edit may not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolves: Option<String>,
+    /// The too large task this one was cut from. Set only by the runtime's
+    /// splitting path; a part is not split again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part_of: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,7 +71,7 @@ pub const MAX_ROUNDS: u32 = 3;
 /// the user, whether or not the verifier keeps finding something new.
 pub const AUTONOMOUS_ROUNDS: u32 = 12;
 
-const RESOLVES_IS_THE_RUNTIMES: &str = "`resolves` is set by the runtime when it inserts a task for a blocker; leave it out of plans and graph edits (use `add_task` in a ```recover block)";
+const RESOLVES_IS_THE_RUNTIMES: &str = "`resolves` and `part_of` are set by the runtime when it inserts a task for a blocker or splits one; leave them out of plans and graph edits (use `add_task` or `split_task` in a ```recover block)";
 
 pub mod status {
     pub const STALE: &str = "stale";
@@ -292,7 +296,9 @@ pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskSpec>>>) {
         .and_then(|plan| {
             let _ = (plan.run_id, plan.option_id, plan.options_revision);
             crate::require(
-                plan.tasks.iter().all(|task| task.resolves.is_none()),
+                plan.tasks
+                    .iter()
+                    .all(|task| task.resolves.is_none() && task.part_of.is_none()),
                 RESOLVES_IS_THE_RUNTIMES,
             )?;
             validate(&plan.tasks)?;
@@ -334,10 +340,12 @@ pub fn parse_graph_edit(
                     "duplicate task in graph revision",
                 )?;
                 crate::require(
-                    task.resolves.is_none()
-                        || current
-                            .iter()
-                            .any(|old| old.id == task.id && old.resolves == task.resolves),
+                    (task.resolves.is_none() && task.part_of.is_none())
+                        || current.iter().any(|old| {
+                            old.id == task.id
+                                && old.resolves == task.resolves
+                                && old.part_of == task.part_of
+                        }),
                     RESOLVES_IS_THE_RUNTIMES,
                 )?;
                 if let Some(existing) = merged.iter_mut().find(|existing| existing.id == task.id) {
@@ -391,6 +399,9 @@ pub struct Unblocking {
     /// The task `add_task` inserts before `task`.
     #[serde(default)]
     pub spec: Option<TaskSpec>,
+    /// The tasks `split_task` cuts `task` into.
+    #[serde(default)]
+    pub parts: Vec<TaskSpec>,
 }
 
 /// Splits the ```recover block off an orchestrator answer. Returns the answer
@@ -846,6 +857,7 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
         };
         tasks.push(TaskSpec {
             resolves: None,
+            part_of: None,
             requirement_ids: tasks
                 .iter()
                 .flat_map(|t| t.requirement_ids.clone())
@@ -908,6 +920,7 @@ pub fn with_options(tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
             let id = reserve_task_id(&format!("{}-options", task.id), &mut ids);
             result.push(TaskSpec {
                 resolves: None,
+                part_of: None,
                 id: id.clone(),
                 requirement_ids: task.requirement_ids.clone(),
                 criterion_ids: task.criterion_ids.clone(),
@@ -1327,6 +1340,7 @@ pub mod action {
     pub const CANCEL_TASK: &str = "cancel_task";
     pub const UNBLOCK: &str = "unblock";
     pub const ADD_TASK: &str = "add_task";
+    pub const SPLIT_TASK: &str = "split_task";
 }
 
 /// Actions that start the work over: whatever an earlier round showed on
@@ -1334,7 +1348,11 @@ pub mod action {
 pub fn resets_card(action: &str) -> bool {
     matches!(
         action,
-        action::RETRY_WITH_GUIDANCE | action::EXTEND_ROUNDS | action::UNBLOCK | action::ADD_TASK
+        action::RETRY_WITH_GUIDANCE
+            | action::EXTEND_ROUNDS
+            | action::UNBLOCK
+            | action::ADD_TASK
+            | action::SPLIT_TASK
     )
 }
 
@@ -2671,6 +2689,7 @@ mod tests {
             task.clone(),
             TaskSpec {
                 resolves: None,
+                part_of: None,
                 id: format!("{}-2", "x".repeat(254)),
                 ..task
             },
@@ -2925,6 +2944,7 @@ mod tests {
     fn parallel_peers_follow_long_dependency_chains() {
         let task = |at: usize, deps: Vec<String>| TaskSpec {
             resolves: None,
+            part_of: None,
             requirement_ids: vec![],
             criterion_ids: vec![],
             id: format!("t{at}"),

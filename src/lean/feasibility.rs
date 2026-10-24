@@ -223,6 +223,7 @@ mod tests {
                 risks: Vec::new(),
             },
             resolves: None,
+            part_of: None,
         }
     }
 
