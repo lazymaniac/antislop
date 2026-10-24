@@ -14,6 +14,7 @@ pub mod interview;
 pub mod ledger;
 mod mail;
 pub mod native;
+mod mcp;
 mod progress;
 pub mod projects;
 pub mod risks;
