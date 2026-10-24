@@ -6,6 +6,8 @@ use super::*;
 mod background;
 #[path = "mail/delivery.rs"]
 mod delivery;
+#[path = "mail/recipient.rs"]
+mod recipient;
 #[path = "mail/routing.rs"]
 mod routing;
 use std::sync::{MutexGuard, TryLockError, Weak};

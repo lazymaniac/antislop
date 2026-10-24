@@ -1,0 +1,260 @@
+use super::*;
+
+impl Store {
+    /// The last user message a successful turn of `role` answered.
+    pub fn last_answered(&self, conversation: &str, role: &str) -> Result<u64> {
+        Ok(self.db().query_row(
+            "SELECT COALESCE(MAX(upto_message),0) FROM turns
+             WHERE conversation_id=?1 AND role=?2 AND status='done'",
+            params![conversation, role],
+            |row| row.get::<_, i64>(0),
+        )? as u64)
+    }
+
+    pub fn last_orchestration_answered(&self, conversation: &str) -> Result<u64> {
+        Ok(self
+            .last_answered(conversation, crate::lean::ORCHESTRATOR)?
+            .max(self.last_answered(conversation, crate::lean::COMMENT_ORCHESTRATOR)?))
+    }
+
+    /// Starts subsequent orchestration turns without resuming the old sessions.
+    pub fn forget_orchestrator_sessions(&self, conversation: &str) -> Result<()> {
+        self.db().execute(
+            "UPDATE turns SET session_id=NULL WHERE conversation_id=?1 AND role IN (?2,?3)",
+            params![
+                conversation,
+                crate::lean::ORCHESTRATOR,
+                crate::lean::COMMENT_ORCHESTRATOR
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Forgets the CLI sessions of a task’s worker and verifier turns.
+    pub fn forget_task_sessions(&self, task: &str) -> Result<()> {
+        self.db().execute(
+            "UPDATE turns SET session_id=NULL WHERE session_id IS NOT NULL AND id IN
+             (SELECT turn_id FROM turn_scopes WHERE task_id=?1)",
+            [task],
+        )?;
+        Ok(())
+    }
+
+    /// The session of the latest turn of `role` with `provider` that got one,
+    /// even if that turn later failed: the CLI keeps what it already saw.
+    /// Another CLI's session id would mean nothing to it.
+    pub fn last_session(
+        &self,
+        conversation: &str,
+        role: &str,
+        provider: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT session_id FROM turns WHERE conversation_id=?1 AND role=?2 AND provider=?3
+                 AND session_id IS NOT NULL ORDER BY started_ms DESC, rowid DESC LIMIT 1",
+                params![conversation, role, provider],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Turns left running by a daemon that stopped become interrupted; nothing
+    /// else changes and nothing waits for a manual reconciliation.
+    /// Returns the conversations whose orchestrator was cut off, so its
+    /// unanswered messages can be taken up again.
+    pub fn interrupt_running_turns(&self) -> Result<Vec<String>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let conversations = {
+            let mut statement = tx.prepare(
+                "SELECT DISTINCT conversation_id FROM turns
+                 WHERE status='running' AND role IN ('orchestrator','comment-orchestrator')",
+            )?;
+            statement
+                .query_map([], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<String>, _>>()?
+        };
+        let interrupted = {
+            let mut statement = tx.prepare(
+                "SELECT id,conversation_id,plan_id,role FROM turns WHERE status='running'",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for (turn, conversation, plan, role) in interrupted {
+            tx.execute(
+                "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,?3,'turn_finished',?4,?5)",
+                params![conversation, turn, plan, serde_json::json!({"role": role, "status": "interrupted", "error": "the daemon stopped while this turn ran"}).to_string(), now_ms()],
+            )?;
+        }
+        tx.execute(
+            "UPDATE turns SET status='interrupted',finished_ms=?1 WHERE status='running'",
+            [now_ms()],
+        )?;
+        tx.commit()?;
+        Ok(conversations)
+    }
+
+    /// Unfinished tasks stay queued with the interruption reason. Returns each
+    /// affected (conversation, plan), so the plan can be resumed.
+    pub fn interrupt_unfinished_tasks(&self) -> Result<Vec<(String, String)>> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let plans = {
+            let mut statement = tx.prepare(
+                "SELECT DISTINCT conversation_id, plan_id FROM tasks
+                 WHERE status IN ('queued','working','verifying')",
+            )?;
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<std::result::Result<Vec<(String, String)>, _>>()?
+        };
+        let interrupted = {
+            let mut statement = tx.prepare(
+                "SELECT id,report FROM tasks WHERE status IN ('queued','working','verifying')",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for (id, report) in interrupted {
+            let mut text = report
+                .as_deref()
+                .map(|text| self.content.decode(text))
+                .transpose()?
+                .unwrap_or_default();
+            if !text.is_empty() {
+                text.push_str("\n\n");
+            }
+            text.push_str("[interrupted] the daemon stopped while this task ran");
+            tx.execute(
+                "UPDATE tasks SET status='queued',report=?2 WHERE id=?1",
+                params![id, self.content.encode(&text)?],
+            )?;
+        }
+        tx.commit()?;
+        Ok(plans)
+    }
+
+    /// Queues again every task of a plan that ended without approval, keeping
+    /// its rounds, report, verdict and work. Returns how many.
+    pub fn requeue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
+        Ok(self.db().execute(
+            "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2
+               AND (status IN ('cancelled','failed','needs_user','skipped','waiting','queued','working','verifying')
+                    OR (status='approved' AND round=0))",
+            params![conversation, plan_id],
+        )?)
+    }
+
+    /// Queues every task of a proposed plan, all or none.
+    pub fn queue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let proposed: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE conversation_id=?1 AND plan_id=?2 AND status='proposed'",
+            params![conversation, plan_id],
+            |row| row.get(0),
+        )?;
+        let all: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE conversation_id=?1 AND plan_id=?2",
+            params![conversation, plan_id],
+            |row| row.get(0),
+        )?;
+        crate::require(
+            all > 0 && proposed == all,
+            "this plan is not waiting for approval",
+        )?;
+        tx.execute(
+            "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2",
+            params![conversation, plan_id],
+        )?;
+        let changed = tx.execute("UPDATE session_workflow SET phase='implementation' WHERE conversation_id=?1 AND phase<>'interview'", [conversation])?;
+        if changed > 0 {
+            tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'workflow',?3,?4)", params![conversation,plan_id,serde_json::json!({"phase":"implementation"}).to_string(),now_ms()])?;
+        }
+        tx.commit()?;
+        Ok(all as usize)
+    }
+
+    /// Moves every task of a plan that is still `from` to `to`.
+    pub fn set_plan_status(&self, plan_id: &str, from: &str, to: &str) -> Result<usize> {
+        Ok(self.db().execute(
+            "UPDATE tasks SET status=?3 WHERE plan_id=?1 AND status=?2",
+            params![plan_id, from, to],
+        )?)
+    }
+
+    pub fn add_plan(&self, conversation: &str, specs: &[Value]) -> Result<Vec<Task>> {
+        let plan_id = crate::id();
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let now = now_ms();
+        tx.execute(
+            "INSERT INTO plans(id,conversation_id,created_ms) VALUES(?1,?2,?3)",
+            params![plan_id, conversation, now],
+        )?;
+        let mut tasks = vec![];
+        for (position, spec) in specs.iter().enumerate() {
+            let task = Task {
+                input_generation: 0,
+                id: crate::id(),
+                plan_id: plan_id.clone(),
+                spec: spec.clone(),
+                status: "proposed".into(),
+                round: 0,
+                report: None,
+                verdict: None,
+                base: None,
+                result: None,
+                feedback: None,
+                freshness_token: None,
+                checks: None,
+            };
+            tx.execute(
+                "INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms)
+                 VALUES(?1,?2,?3,?4,?5,'proposed',?6)",
+                params![
+                    task.id,
+                    conversation,
+                    plan_id,
+                    position as i64,
+                    spec.to_string(),
+                    now
+                ],
+            )?;
+            tasks.push(task);
+        }
+        tx.commit()?;
+        Ok(tasks)
+    }
+
+    /// Tasks of the conversation's latest plan, in the orchestrator's order.
+    pub fn latest_plan(&self, conversation: &str) -> Result<Vec<Task>> {
+        let latest: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT plan_id FROM tasks WHERE conversation_id=?1
+                 ORDER BY created_ms DESC, rowid DESC LIMIT 1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match latest {
+            Some(plan_id) => self.plan(&plan_id),
+            None => Ok(vec![]),
+        }
+    }
+}

@@ -2,7 +2,7 @@
 
 Baseline: measured source snapshot `892e93d5c5b03a4da54a7c21c890acc6a0783192`, recorded in `tests/size_check/baseline-inventory.md`. The raw current repository diagnostic is retained in `core-size-diagnostic.txt`. It was captured with `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .`; the expected exit code is 1 while violations remain.
 
-Current checker result: 362 repository violations, 0 classification errors; 108 violations in t4-owned `src/` paths. The initial t4 inventory contains 141 items; 33 are resolved and 108 remain unresolved. Exit code 1.
+Current checker result: 357 repository violations, 0 classification errors; 103 violations in t4-owned `src/` paths. The initial t4 inventory contains 141 items; 38 are resolved and 103 remain unresolved. Exit code 1.
 
 ## Every initial t4 violation
 
@@ -10,14 +10,14 @@ Current checker result: 362 repository violations, 0 classification errors; 108 
 |---|---|---:|---|
 | file | `src/config.rs` | 645 | resolved: original source file is now at or below 299 lines |
 | file | `src/lean/history.rs` | 1134 | resolved: original source file is now at or below 299 lines |
-| file | `src/lean/ledger/runtime.rs` | 628 | unresolved: current source has 628 lines at `src/lean/ledger/runtime.rs:1` (limit 299) |
+| file | `src/lean/ledger/runtime.rs` | 628 | resolved: requirements orchestration and its tests are in private `runtime/requirements.rs` and `runtime/tests.rs`; `runtime.rs` is 245 lines |
 | file | `src/lean/ledger/storage.rs` | 1517 | unresolved: current source has 1517 lines at `src/lean/ledger/storage.rs:1` (limit 299) |
 | file | `src/lean/mail.rs` | 414 | resolved: original source file is now at or below 299 lines |
 | file | `src/lean/mod.rs` | 5761 | unresolved: current source has 5761 lines at `src/lean/mod.rs:1` (limit 299) |
 | file | `src/lean/rounds.rs` | 1218 | resolved: original source file is now at or below 299 lines |
 | file | `src/lean/run_context.rs` | 384 | resolved: original source file is now at or below 299 lines |
-| file | `src/lean/store.rs` | 2986 | unresolved: current source has 2986 lines at `src/lean/store.rs:1` (limit 299) |
-| file | `src/lean/tasks.rs` | 3523 | unresolved: current source has 3523 lines at `src/lean/tasks.rs:1` (limit 299) |
+| file | `src/lean/store.rs` | 2986 | resolved: Store methods are split among focused private store modules; the facade is 295 lines |
+| file | `src/lean/tasks.rs` | 3523 | resolved: parsers, planning, validation, feedback, prompts and test groups are in private task modules; the facade is 142 lines |
 | file | `src/lean/workflow.rs` | 362 | resolved: original source file is now at or below 299 lines |
 | callable | `src/config.rs::resolve` | 50 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/config.rs::resolve_command` | 32 | resolved: no callable with this name remains over 29 lines in its owned source area |
@@ -38,122 +38,121 @@ Current checker result: 362 repository violations, 0 classification errors; 108 
 | callable | `src/lean/ledger/options.rs::recover_options_comparisons` | 37 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/lean/ledger/options.rs::save_solution_choice` | 55 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/lean/ledger/options.rs::validate` | 40 | resolved: no callable with this name remains over 29 lines in its owned source area |
-| callable | `src/lean/ledger/runtime.rs::apply_user_ledger_change` | 46 | unresolved: `src/lean/ledger/runtime.rs:38` still has callable `apply_user_ledger_change` at 46 lines (limit 29) |
-| callable | `src/lean/ledger/runtime.rs::compliance_audit` | 83 | unresolved: `src/lean/ledger/runtime.rs:412` still has callable `compliance_audit` at 83 lines (limit 29) |
-| callable | `src/lean/ledger/runtime.rs::ensure_requirements` | 171 | unresolved: `src/lean/ledger/runtime.rs:220` still has callable `ensure_requirements` at 171 lines (limit 29) |
-| callable | `src/lean/ledger/runtime.rs::full_ledger_sources` | 37 | unresolved: `src/lean/ledger/runtime.rs:183` still has callable `full_ledger_sources` at 37 lines (limit 29) |
-| callable | `src/lean/ledger/runtime.rs::requirements_turn` | 87 | unresolved: `src/lean/ledger/runtime.rs:96` still has callable `requirements_turn` at 87 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::add_ledger_evidence` | 89 | unresolved: `src/lean/ledger/storage.rs:985` still has callable `add_ledger_evidence` at 89 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::apply_ledger_change_as` | 136 | unresolved: `src/lean/ledger/storage.rs:619` still has callable `apply_ledger_change_as` at 136 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::bind_ledger_turn` | 44 | unresolved: `src/lean/ledger/storage.rs:1300` still has callable `bind_ledger_turn` at 44 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::bind_task_ledger` | 60 | unresolved: `src/lean/ledger/storage.rs:847` still has callable `bind_task_ledger` at 60 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::checked_graph` | 51 | unresolved: `src/lean/ledger/storage.rs:102` still has callable `checked_graph` at 51 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::create_run` | 34 | unresolved: `src/lean/ledger/storage.rs:275` still has callable `create_run` at 34 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::enqueue_requirements_resume` | 34 | unresolved: `src/lean/ledger/storage.rs:1484` still has callable `enqueue_requirements_resume` at 34 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::entries` | 39 | unresolved: `src/lean/ledger/storage.rs:27` still has callable `entries` at 39 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::impact` | 58 | unresolved: `src/lean/ledger/storage.rs:153` still has callable `impact` at 58 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::ledger_diff` | 35 | unresolved: `src/lean/ledger/storage.rs:755` still has callable `ledger_diff` at 35 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::ledger_statuses` | 106 | unresolved: `src/lean/ledger/storage.rs:1084` still has callable `ledger_statuses` at 106 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::list_ledger` | 34 | unresolved: `src/lean/ledger/storage.rs:1190` still has callable `list_ledger` at 34 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::propose_ledger_change_as` | 31 | unresolved: `src/lean/ledger/storage.rs:567` still has callable `propose_ledger_change_as` at 31 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::record_ledger_review` | 73 | unresolved: `src/lean/ledger/storage.rs:907` still has callable `record_ledger_review` at 73 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::register_document_source` | 55 | unresolved: `src/lean/ledger/storage.rs:448` still has callable `register_document_source` at 55 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::register_message_source` | 38 | unresolved: `src/lean/ledger/storage.rs:410` still has callable `register_message_source` at 38 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::requirements_gaps` | 38 | unresolved: `src/lean/ledger/storage.rs:1224` still has callable `requirements_gaps` at 38 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::source_text` | 36 | unresolved: `src/lean/ledger/storage.rs:66` still has callable `source_text` at 36 lines (limit 29) |
-| callable | `src/lean/ledger/storage.rs::validate_change` | 62 | unresolved: `src/lean/ledger/storage.rs:211` still has callable `validate_change` at 62 lines (limit 29) |
-| callable | `src/lean/mail.rs::answer_in_background` | 73 | unresolved: `src/lean/mail/background.rs:4` still has callable `answer_in_background` at 77 lines (limit 29) |
-| callable | `src/lean/mail.rs::answer_waiting` | 175 | unresolved: `src/lean/mail/delivery.rs:4` still has callable `answer_waiting` at 175 lines (limit 29) |
+| callable | `src/lean/ledger/runtime.rs::apply_user_ledger_change` | 46 | unresolved: `src/lean/ledger/runtime.rs:41` still has `apply_user_ledger_change` at 46 lines (limit 29) |
+| callable | `src/lean/ledger/runtime.rs::compliance_audit` | 83 | unresolved: `src/lean/ledger/runtime.rs:158` still has `compliance_audit` at 83 lines (limit 29) |
+| callable | `src/lean/ledger/runtime.rs::ensure_requirements` | 171 | unresolved: `src/lean/ledger/runtime/requirements.rs:91` still has `ensure_requirements` at 170 lines (limit 29) |
+| callable | `src/lean/ledger/runtime.rs::full_ledger_sources` | 37 | unresolved: `src/lean/ledger/runtime.rs:99` still has `full_ledger_sources` at 37 lines (limit 29) |
+| callable | `src/lean/ledger/runtime.rs::requirements_turn` | 87 | unresolved: `src/lean/ledger/runtime/requirements.rs:4` still has `requirements_turn` at 87 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::add_ledger_evidence` | 89 | unresolved: `src/lean/ledger/storage.rs:985` still has `add_ledger_evidence` at 89 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::apply_ledger_change_as` | 136 | unresolved: `src/lean/ledger/storage.rs:619` still has `apply_ledger_change_as` at 136 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::bind_ledger_turn` | 44 | unresolved: `src/lean/ledger/storage.rs:1300` still has `bind_ledger_turn` at 44 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::bind_task_ledger` | 60 | unresolved: `src/lean/ledger/storage.rs:847` still has `bind_task_ledger` at 60 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::checked_graph` | 51 | unresolved: `src/lean/ledger/storage.rs:102` still has `checked_graph` at 51 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::create_run` | 34 | unresolved: `src/lean/ledger/storage.rs:275` still has `create_run` at 34 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::enqueue_requirements_resume` | 34 | unresolved: `src/lean/ledger/storage.rs:1484` still has `enqueue_requirements_resume` at 34 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::entries` | 39 | unresolved: `src/lean/ledger/storage.rs:27` still has `entries` at 39 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::impact` | 58 | unresolved: `src/lean/ledger/storage.rs:153` still has `impact` at 58 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::ledger_diff` | 35 | unresolved: `src/lean/ledger/storage.rs:755` still has `ledger_diff` at 35 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::ledger_statuses` | 106 | unresolved: `src/lean/ledger/storage.rs:1084` still has `ledger_statuses` at 106 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::list_ledger` | 34 | unresolved: `src/lean/ledger/storage.rs:1190` still has `list_ledger` at 34 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::propose_ledger_change_as` | 31 | unresolved: `src/lean/ledger/storage.rs:567` still has `propose_ledger_change_as` at 31 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::record_ledger_review` | 73 | unresolved: `src/lean/ledger/storage.rs:907` still has `record_ledger_review` at 73 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::register_document_source` | 55 | unresolved: `src/lean/ledger/storage.rs:448` still has `register_document_source` at 55 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::register_message_source` | 38 | unresolved: `src/lean/ledger/storage.rs:410` still has `register_message_source` at 38 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::requirements_gaps` | 38 | unresolved: `src/lean/ledger/storage.rs:1224` still has `requirements_gaps` at 38 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::source_text` | 36 | unresolved: `src/lean/ledger/storage.rs:66` still has `source_text` at 36 lines (limit 29) |
+| callable | `src/lean/ledger/storage.rs::validate_change` | 62 | unresolved: `src/lean/ledger/storage.rs:211` still has `validate_change` at 62 lines (limit 29) |
+| callable | `src/lean/mail.rs::answer_in_background` | 73 | resolved: the entrypoint delegates the background drain to short private helpers; no callable overage remains for this behavior |
+| callable | `src/lean/mail.rs::answer_waiting` | 175 | resolved: delivery is divided into recipient selection, retry, context, and acknowledgement helpers; no callable overage remains for this behavior |
 | callable | `src/lean/mail.rs::mail_address_task` | 33 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/lean/mail.rs::ready_mail` | 39 | resolved: no callable with this name remains over 29 lines in its owned source area |
-| callable | `src/lean/mod.rs::blocked_report` | 56 | unresolved: `src/lean/mod.rs:5296` still has callable `blocked_report` at 56 lines (limit 29) |
-| callable | `src/lean/mod.rs::comment_at` | 50 | unresolved: `src/lean/mod.rs:793` still has callable `comment_at` at 50 lines (limit 29) |
-| callable | `src/lean/mod.rs::comment_label` | 74 | unresolved: `src/lean/mod.rs:5173` still has callable `comment_label` at 74 lines (limit 29) |
-| callable | `src/lean/mod.rs::conversations` | 62 | unresolved: `src/lean/mod.rs:693` still has callable `conversations` at 62 lines (limit 29) |
-| callable | `src/lean/mod.rs::deliver` | 109 | unresolved: `src/lean/mod.rs:4248` still has callable `deliver` at 109 lines (limit 29) |
-| callable | `src/lean/mod.rs::dependency_tasks` | 32 | unresolved: `src/lean/mod.rs:4364` still has callable `dependency_tasks` at 32 lines (limit 29) |
-| callable | `src/lean/mod.rs::diff` | 38 | unresolved: `src/lean/mod.rs:1094` still has callable `diff` at 38 lines (limit 29) |
-| callable | `src/lean/mod.rs::finish_in_place` | 62 | unresolved: `src/lean/mod.rs:4842` still has callable `finish_in_place` at 62 lines (limit 29) |
-| callable | `src/lean/mod.rs::freshness_for_task` | 38 | unresolved: `src/lean/mod.rs:990` still has callable `freshness_for_task` at 38 lines (limit 29) |
-| callable | `src/lean/mod.rs::in_place_user_edits` | 34 | unresolved: `src/lean/mod.rs:4807` still has callable `in_place_user_edits` at 34 lines (limit 29) |
-| callable | `src/lean/mod.rs::integrate` | 176 | unresolved: `src/lean/mod.rs:4505` still has callable `integrate` at 176 lines (limit 29) |
-| callable | `src/lean/mod.rs::land` | 41 | unresolved: `src/lean/mod.rs:5089` still has callable `land` at 41 lines (limit 29) |
-| callable | `src/lean/mod.rs::open` | 128 | unresolved: `src/lean/mod.rs:266` still has callable `open` at 128 lines (limit 29) |
-| callable | `src/lean/mod.rs::orchestrate` | 40 | unresolved: `src/lean/mod.rs:2302` still has callable `orchestrate` at 40 lines (limit 29) |
-| callable | `src/lean/mod.rs::orchestrator_prompt` | 50 | unresolved: `src/lean/mod.rs:5353` still has callable `orchestrator_prompt` at 50 lines (limit 29) |
-| callable | `src/lean/mod.rs::orchestrator_turn` | 333 | unresolved: `src/lean/mod.rs:2369` still has callable `orchestrator_turn` at 333 lines (limit 29) |
-| callable | `src/lean/mod.rs::plan_report` | 122 | unresolved: `src/lean/mod.rs:4940` still has callable `plan_report` at 122 lines (limit 29) |
-| callable | `src/lean/mod.rs::propose` | 187 | unresolved: `src/lean/mod.rs:2767` still has callable `propose` at 187 lines (limit 29) |
-| callable | `src/lean/mod.rs::record_check` | 30 | unresolved: `src/lean/mod.rs:3385` still has callable `record_check` at 30 lines (limit 29) |
-| callable | `src/lean/mod.rs::recover_task_as` | 570 | unresolved: `src/lean/mod.rs:1392` still has callable `recover_task_as` at 570 lines (limit 29) |
-| callable | `src/lean/mod.rs::reject_plan` | 38 | unresolved: `src/lean/mod.rs:1284` still has callable `reject_plan` at 38 lines (limit 29) |
-| callable | `src/lean/mod.rs::repair_integration` | 124 | unresolved: `src/lean/mod.rs:4682` still has callable `repair_integration` at 124 lines (limit 29) |
-| callable | `src/lean/mod.rs::repair_writer_base` | 63 | unresolved: `src/lean/mod.rs:4422` still has callable `repair_writer_base` at 63 lines (limit 29) |
-| callable | `src/lean/mod.rs::review` | 50 | unresolved: `src/lean/mod.rs:2955` still has callable `review` at 50 lines (limit 29) |
-| callable | `src/lean/mod.rs::review_change` | 102 | unresolved: `src/lean/mod.rs:1133` still has callable `review_change` at 102 lines (limit 29) |
-| callable | `src/lean/mod.rs::revise_running_graph` | 63 | unresolved: `src/lean/mod.rs:2703` still has callable `revise_running_graph` at 63 lines (limit 29) |
-| callable | `src/lean/mod.rs::run_plan` | 150 | unresolved: `src/lean/mod.rs:3454` still has callable `run_plan` at 150 lines (limit 29) |
-| callable | `src/lean/mod.rs::run_task` | 586 | unresolved: `src/lean/mod.rs:3605` still has callable `run_task` at 586 lines (limit 29) |
-| callable | `src/lean/mod.rs::start_plan_with_scope_lock` | 122 | unresolved: `src/lean/mod.rs:2131` still has callable `start_plan_with_scope_lock` at 122 lines (limit 29) |
-| callable | `src/lean/mod.rs::stop_task` | 34 | unresolved: `src/lean/mod.rs:4905` still has callable `stop_task` at 34 lines (limit 29) |
-| callable | `src/lean/mod.rs::submit_addressed` | 192 | unresolved: `src/lean/mod.rs:434` still has callable `submit_addressed` at 192 lines (limit 29) |
-| callable | `src/lean/mod.rs::turn_inner` | 367 | unresolved: `src/lean/mod.rs:3017` still has callable `turn_inner` at 367 lines (limit 29) |
-| callable | `src/lean/mod.rs::unblock_by_orchestrator` | 74 | unresolved: `src/lean/mod.rs:2009` still has callable `unblock_by_orchestrator` at 74 lines (limit 29) |
-| callable | `src/lean/mod.rs::unblock_dependent_tasks` | 45 | unresolved: `src/lean/mod.rs:1963` still has callable `unblock_dependent_tasks` at 45 lines (limit 29) |
-| callable | `src/lean/mod.rs::warn_of_uncommitted` | 34 | unresolved: `src/lean/mod.rs:2254` still has callable `warn_of_uncommitted` at 34 lines (limit 29) |
+| callable | `src/lean/mod.rs::blocked_report` | 56 | unresolved: `src/lean/mod.rs:5296` still has `blocked_report` at 56 lines (limit 29) |
+| callable | `src/lean/mod.rs::comment_at` | 50 | unresolved: `src/lean/mod.rs:793` still has `comment_at` at 50 lines (limit 29) |
+| callable | `src/lean/mod.rs::comment_label` | 74 | unresolved: `src/lean/mod.rs:5173` still has `comment_label` at 74 lines (limit 29) |
+| callable | `src/lean/mod.rs::conversations` | 62 | unresolved: `src/lean/mod.rs:693` still has `conversations` at 62 lines (limit 29) |
+| callable | `src/lean/mod.rs::deliver` | 109 | unresolved: `src/lean/mod.rs:4248` still has `deliver` at 109 lines (limit 29) |
+| callable | `src/lean/mod.rs::dependency_tasks` | 32 | unresolved: `src/lean/mod.rs:4364` still has `dependency_tasks` at 32 lines (limit 29) |
+| callable | `src/lean/mod.rs::diff` | 38 | unresolved: `src/lean/mod.rs:1094` still has `diff` at 38 lines (limit 29) |
+| callable | `src/lean/mod.rs::finish_in_place` | 62 | unresolved: `src/lean/mod.rs:4842` still has `finish_in_place` at 62 lines (limit 29) |
+| callable | `src/lean/mod.rs::freshness_for_task` | 38 | unresolved: `src/lean/mod.rs:990` still has `freshness_for_task` at 38 lines (limit 29) |
+| callable | `src/lean/mod.rs::in_place_user_edits` | 34 | unresolved: `src/lean/mod.rs:4807` still has `in_place_user_edits` at 34 lines (limit 29) |
+| callable | `src/lean/mod.rs::integrate` | 176 | unresolved: `src/lean/mod.rs:4505` still has `integrate` at 176 lines (limit 29) |
+| callable | `src/lean/mod.rs::land` | 41 | unresolved: `src/lean/mod.rs:5089` still has `land` at 41 lines (limit 29) |
+| callable | `src/lean/mod.rs::open` | 128 | unresolved: `src/lean/mod.rs:266` still has `open` at 128 lines (limit 29) |
+| callable | `src/lean/mod.rs::orchestrate` | 40 | unresolved: `src/lean/mod.rs:2302` still has `orchestrate` at 40 lines (limit 29) |
+| callable | `src/lean/mod.rs::orchestrator_prompt` | 50 | unresolved: `src/lean/mod.rs:5353` still has `orchestrator_prompt` at 50 lines (limit 29) |
+| callable | `src/lean/mod.rs::orchestrator_turn` | 333 | unresolved: `src/lean/mod.rs:2369` still has `orchestrator_turn` at 333 lines (limit 29) |
+| callable | `src/lean/mod.rs::plan_report` | 122 | unresolved: `src/lean/mod.rs:4940` still has `plan_report` at 122 lines (limit 29) |
+| callable | `src/lean/mod.rs::propose` | 187 | unresolved: `src/lean/mod.rs:2767` still has `propose` at 187 lines (limit 29) |
+| callable | `src/lean/mod.rs::record_check` | 30 | unresolved: `src/lean/mod.rs:3385` still has `record_check` at 30 lines (limit 29) |
+| callable | `src/lean/mod.rs::recover_task_as` | 570 | unresolved: `src/lean/mod.rs:1392` still has `recover_task_as` at 570 lines (limit 29) |
+| callable | `src/lean/mod.rs::reject_plan` | 38 | unresolved: `src/lean/mod.rs:1284` still has `reject_plan` at 38 lines (limit 29) |
+| callable | `src/lean/mod.rs::repair_integration` | 124 | unresolved: `src/lean/mod.rs:4682` still has `repair_integration` at 124 lines (limit 29) |
+| callable | `src/lean/mod.rs::repair_writer_base` | 63 | unresolved: `src/lean/mod.rs:4422` still has `repair_writer_base` at 63 lines (limit 29) |
+| callable | `src/lean/mod.rs::review` | 50 | unresolved: `src/lean/mod.rs:2955` still has `review` at 50 lines (limit 29) |
+| callable | `src/lean/mod.rs::review_change` | 102 | unresolved: `src/lean/mod.rs:1133` still has `review_change` at 102 lines (limit 29) |
+| callable | `src/lean/mod.rs::revise_running_graph` | 63 | unresolved: `src/lean/mod.rs:2703` still has `revise_running_graph` at 63 lines (limit 29) |
+| callable | `src/lean/mod.rs::run_plan` | 150 | unresolved: `src/lean/mod.rs:3454` still has `run_plan` at 150 lines (limit 29) |
+| callable | `src/lean/mod.rs::run_task` | 586 | unresolved: `src/lean/mod.rs:3605` still has `run_task` at 586 lines (limit 29) |
+| callable | `src/lean/mod.rs::start_plan_with_scope_lock` | 122 | unresolved: `src/lean/mod.rs:2131` still has `start_plan_with_scope_lock` at 122 lines (limit 29) |
+| callable | `src/lean/mod.rs::stop_task` | 34 | unresolved: `src/lean/mod.rs:4905` still has `stop_task` at 34 lines (limit 29) |
+| callable | `src/lean/mod.rs::submit_addressed` | 192 | unresolved: `src/lean/mod.rs:434` still has `submit_addressed` at 192 lines (limit 29) |
+| callable | `src/lean/mod.rs::turn_inner` | 367 | unresolved: `src/lean/mod.rs:3017` still has `turn_inner` at 367 lines (limit 29) |
+| callable | `src/lean/mod.rs::unblock_by_orchestrator` | 74 | unresolved: `src/lean/mod.rs:2009` still has `unblock_by_orchestrator` at 74 lines (limit 29) |
+| callable | `src/lean/mod.rs::unblock_dependent_tasks` | 45 | unresolved: `src/lean/mod.rs:1963` still has `unblock_dependent_tasks` at 45 lines (limit 29) |
+| callable | `src/lean/mod.rs::warn_of_uncommitted` | 34 | unresolved: `src/lean/mod.rs:2254` still has `warn_of_uncommitted` at 34 lines (limit 29) |
 | callable | `src/lean/rounds.rs::round_handoff` | 127 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/lean/rounds.rs::session_for_turn` | 52 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/lean/run_context.rs::record_run_context` | 65 | resolved: no callable with this name remains over 29 lines in its owned source area |
-| callable | `src/lean/store.rs::add_comment_at` | 65 | unresolved: `src/lean/store.rs:1389` still has callable `add_comment_at` at 65 lines (limit 29) |
-| callable | `src/lean/store.rs::add_draft_comment` | 33 | unresolved: `src/lean/store.rs:1455` still has callable `add_draft_comment` at 33 lines (limit 29) |
-| callable | `src/lean/store.rs::add_mail_from` | 36 | unresolved: `src/lean/store.rs:1341` still has callable `add_mail_from` at 36 lines (limit 29) |
-| callable | `src/lean/store.rs::add_message` | 55 | unresolved: `src/lean/store.rs:477` still has callable `add_message` at 55 lines (limit 29) |
-| callable | `src/lean/store.rs::add_plan` | 43 | unresolved: `src/lean/store.rs:991` still has callable `add_plan` at 43 lines (limit 29) |
-| callable | `src/lean/store.rs::append_event` | 51 | unresolved: `src/lean/store.rs:2011` still has callable `append_event` at 51 lines (limit 29) |
-| callable | `src/lean/store.rs::dependency_reports` | 36 | unresolved: `src/lean/store.rs:1085` still has callable `dependency_reports` at 36 lines (limit 29) |
-| callable | `src/lean/store.rs::events_since_budget` | 49 | unresolved: `src/lean/store.rs:2067` still has callable `events_since_budget` at 49 lines (limit 29) |
-| callable | `src/lean/store.rs::initialize` | 81 | unresolved: `src/lean/store.rs:303` still has callable `initialize` at 81 lines (limit 29) |
-| callable | `src/lean/store.rs::interrupt_running_turns` | 44 | unresolved: `src/lean/store.rs:854` still has callable `interrupt_running_turns` at 44 lines (limit 29) |
-| callable | `src/lean/store.rs::interrupt_unfinished_tasks` | 42 | unresolved: `src/lean/store.rs:899` still has callable `interrupt_unfinished_tasks` at 42 lines (limit 29) |
-| callable | `src/lean/store.rs::last_turn_for_roles` | 37 | unresolved: `src/lean/store.rs:757` still has callable `last_turn_for_roles` at 37 lines (limit 29) |
-| callable | `src/lean/store.rs::plan` | 57 | unresolved: `src/lean/store.rs:1122` still has callable `plan` at 57 lines (limit 29) |
-| callable | `src/lean/store.rs::plan_history` | 164 | unresolved: `src/lean/store.rs:2390` still has callable `plan_history` at 164 lines (limit 29) |
-| callable | `src/lean/store.rs::plans_page` | 45 | unresolved: `src/lean/store.rs:2344` still has callable `plans_page` at 45 lines (limit 29) |
-| callable | `src/lean/store.rs::resolve_listed_plan_comments` | 30 | unresolved: `src/lean/store.rs:1603` still has callable `resolve_listed_plan_comments` at 30 lines (limit 29) |
-| callable | `src/lean/store.rs::send_draft_comments` | 59 | unresolved: `src/lean/store.rs:1489` still has callable `send_draft_comments` at 59 lines (limit 29) |
-| callable | `src/lean/store.rs::set_check` | 46 | unresolved: `src/lean/store.rs:1180` still has callable `set_check` at 46 lines (limit 29) |
-| callable | `src/lean/store.rs::set_comment_status` | 48 | unresolved: `src/lean/store.rs:1549` still has callable `set_comment_status` at 48 lines (limit 29) |
-| callable | `src/lean/store.rs::set_session` | 34 | unresolved: `src/lean/store.rs:680` still has callable `set_session` at 34 lines (limit 29) |
-| callable | `src/lean/store.rs::start_turn` | 57 | unresolved: `src/lean/store.rs:622` still has callable `start_turn` at 57 lines (limit 29) |
-| callable | `src/lean/store.rs::task_by_id` | 60 | unresolved: `src/lean/store.rs:2186` still has callable `task_by_id` at 60 lines (limit 29) |
-| callable | `src/lean/store.rs::update_task` | 74 | unresolved: `src/lean/store.rs:1243` still has callable `update_task` at 74 lines (limit 29) |
-| callable | `src/lean/tasks.rs::bound_cut` | 41 | unresolved: `src/lean/tasks.rs:1162` still has callable `bound_cut` at 41 lines (limit 29) |
-| callable | `src/lean/tasks.rs::checklist` | 200 | unresolved: `src/lean/tasks.rs:1550` still has callable `checklist` at 200 lines (limit 29) |
-| callable | `src/lean/tasks.rs::code_review_prompt` | 36 | unresolved: `src/lean/tasks.rs:2042` still has callable `code_review_prompt` at 36 lines (limit 29) |
-| callable | `src/lean/tasks.rs::coverage` | 40 | unresolved: `src/lean/tasks.rs:1344` still has callable `coverage` at 40 lines (limit 29) |
-| callable | `src/lean/tasks.rs::effect` | 35 | unresolved: `src/lean/tasks.rs:1385` still has callable `effect` at 35 lines (limit 29) |
-| callable | `src/lean/tasks.rs::orchestrator_instructions` | 95 | unresolved: `src/lean/tasks.rs:1454` still has callable `orchestrator_instructions` at 95 lines (limit 29) |
-| callable | `src/lean/tasks.rs::parse_effect` | 52 | unresolved: `src/lean/tasks.rs:115` still has callable `parse_effect` at 52 lines (limit 29) |
-| callable | `src/lean/tasks.rs::parse_graph_edit` | 42 | unresolved: `src/lean/tasks.rs:290` still has callable `parse_graph_edit` at 42 lines (limit 29) |
-| callable | `src/lean/tasks.rs::parse_progress` | 35 | unresolved: `src/lean/tasks.rs:1067` still has callable `parse_progress` at 35 lines (limit 29) |
-| callable | `src/lean/tasks.rs::peers_of` | 43 | unresolved: `src/lean/tasks.rs:526` still has callable `peers_of` at 43 lines (limit 29) |
-| callable | `src/lean/tasks.rs::render_plan_document` | 54 | unresolved: `src/lean/tasks.rs:570` still has callable `render_plan_document` at 54 lines (limit 29) |
-| callable | `src/lean/tasks.rs::round_handoff_prompt` | 48 | unresolved: `src/lean/tasks.rs:2337` still has callable `round_handoff_prompt` at 48 lines (limit 29) |
-| callable | `src/lean/tasks.rs::settle` | 47 | unresolved: `src/lean/tasks.rs:1000` still has callable `settle` at 47 lines (limit 29) |
-| callable | `src/lean/tasks.rs::upstream_note` | 37 | unresolved: `src/lean/tasks.rs:1805` still has callable `upstream_note` at 37 lines (limit 29) |
-| callable | `src/lean/tasks.rs::validate` | 33 | unresolved: `src/lean/tasks.rs:388` still has callable `validate` at 33 lines (limit 29) |
-| callable | `src/lean/tasks.rs::verifier_prompt` | 34 | unresolved: `src/lean/tasks.rs:1974` still has callable `verifier_prompt` at 34 lines (limit 29) |
-| callable | `src/lean/tasks.rs::with_options` | 38 | unresolved: `src/lean/tasks.rs:870` still has callable `with_options` at 38 lines (limit 29) |
-| callable | `src/lean/tasks.rs::with_required_agents` | 115 | unresolved: `src/lean/tasks.rs:754` still has callable `with_required_agents` at 115 lines (limit 29) |
-| callable | `src/lean/tasks.rs::worker_prompt` | 53 | unresolved: `src/lean/tasks.rs:1843` still has callable `worker_prompt` at 53 lines (limit 29) |
+| callable | `src/lean/store.rs::add_comment_at` | 65 | unresolved: `src/lean/store/comments_and_mail.rs:75` still has `add_comment_at` at 65 lines (limit 29) |
+| callable | `src/lean/store.rs::add_draft_comment` | 33 | unresolved: `src/lean/store/comments_and_mail.rs:141` still has `add_draft_comment` at 33 lines (limit 29) |
+| callable | `src/lean/store.rs::add_mail_from` | 36 | unresolved: `src/lean/store/comments_and_mail.rs:27` still has `add_mail_from` at 36 lines (limit 29) |
+| callable | `src/lean/store.rs::add_message` | 55 | unresolved: `src/lean/store/setup_and_conversations.rs:206` still has `add_message` at 55 lines (limit 29) |
+| callable | `src/lean/store.rs::add_plan` | 43 | unresolved: `src/lean/store/sessions_and_plans.rs:200` still has `add_plan` at 43 lines (limit 29) |
+| callable | `src/lean/store.rs::append_event` | 51 | unresolved: `src/lean/store/mail_and_events.rs:172` still has `append_event` at 51 lines (limit 29) |
+| callable | `src/lean/store.rs::dependency_reports` | 36 | unresolved: `src/lean/store/plan_tasks.rs:37` still has `dependency_reports` at 36 lines (limit 29) |
+| callable | `src/lean/store.rs::events_since_budget` | 49 | unresolved: `src/lean/store/mail_and_events.rs:228` still has `events_since_budget` at 49 lines (limit 29) |
+| callable | `src/lean/store.rs::initialize` | 81 | unresolved: `src/lean/store/setup_and_conversations.rs:32` still has `initialize` at 81 lines (limit 29) |
+| callable | `src/lean/store.rs::interrupt_running_turns` | 44 | unresolved: `src/lean/store/sessions_and_plans.rs:63` still has `interrupt_running_turns` at 44 lines (limit 29) |
+| callable | `src/lean/store.rs::interrupt_unfinished_tasks` | 42 | unresolved: `src/lean/store/sessions_and_plans.rs:108` still has `interrupt_unfinished_tasks` at 42 lines (limit 29) |
+| callable | `src/lean/store.rs::last_turn_for_roles` | 37 | unresolved: `src/lean/store/messages_and_turns.rs:228` still has `last_turn_for_roles` at 37 lines (limit 29) |
+| callable | `src/lean/store.rs::plan` | 57 | unresolved: `src/lean/store/plan_tasks.rs:74` still has `plan` at 57 lines (limit 29) |
+| callable | `src/lean/store.rs::plan_history` | 164 | unresolved: `src/lean/store/plan_history.rs:4` still has `plan_history` at 164 lines (limit 29) |
+| callable | `src/lean/store.rs::plans_page` | 45 | unresolved: `src/lean/store/history_queries.rs:235` still has `plans_page` at 45 lines (limit 29) |
+| callable | `src/lean/store.rs::resolve_listed_plan_comments` | 30 | unresolved: `src/lean/store/comment_mail_state.rs:9` still has `resolve_listed_plan_comments` at 30 lines (limit 29) |
+| callable | `src/lean/store.rs::send_draft_comments` | 59 | unresolved: `src/lean/store/comments_and_mail.rs:175` still has `send_draft_comments` at 59 lines (limit 29) |
+| callable | `src/lean/store.rs::set_check` | 46 | unresolved: `src/lean/store/plan_tasks.rs:132` still has `set_check` at 46 lines (limit 29) |
+| callable | `src/lean/store.rs::set_comment_status` | 48 | unresolved: `src/lean/store/comments_and_mail.rs:235` still has `set_comment_status` at 48 lines (limit 29) |
+| callable | `src/lean/store.rs::set_session` | 34 | unresolved: `src/lean/store/messages_and_turns.rs:151` still has `set_session` at 34 lines (limit 29) |
+| callable | `src/lean/store.rs::start_turn` | 57 | unresolved: `src/lean/store/messages_and_turns.rs:93` still has `start_turn` at 57 lines (limit 29) |
+| callable | `src/lean/store.rs::task_by_id` | 60 | unresolved: `src/lean/store/history_queries.rs:77` still has `task_by_id` at 60 lines (limit 29) |
+| callable | `src/lean/store.rs::update_task` | 74 | unresolved: `src/lean/store/plan_tasks.rs:195` still has `update_task` at 74 lines (limit 29) |
+| callable | `src/lean/tasks.rs::bound_cut` | 41 | unresolved: `src/lean/tasks/bounds.rs:17` still has `bound_cut` at 41 lines (limit 29) |
+| callable | `src/lean/tasks.rs::checklist` | 200 | unresolved: `src/lean/tasks/prompts/checklist.rs:3` still has `checklist` at 200 lines (limit 29) |
+| callable | `src/lean/tasks.rs::code_review_prompt` | 36 | unresolved: `src/lean/tasks/prompts/review.rs:71` still has `code_review_prompt` at 36 lines (limit 29) |
+| callable | `src/lean/tasks.rs::coverage` | 40 | unresolved: `src/lean/tasks/feedback.rs:138` still has `coverage` at 40 lines (limit 29) |
+| callable | `src/lean/tasks.rs::effect` | 35 | unresolved: `src/lean/tasks/effect.rs:3` still has `effect` at 35 lines (limit 29) |
+| callable | `src/lean/tasks.rs::orchestrator_instructions` | 95 | unresolved: `src/lean/tasks/prompts/instructions.rs:3` still has `orchestrator_instructions` at 95 lines (limit 29) |
+| callable | `src/lean/tasks.rs::parse_effect` | 52 | unresolved: `src/lean/tasks/messages.rs:31` still has `parse_effect` at 52 lines (limit 29) |
+| callable | `src/lean/tasks.rs::parse_graph_edit` | 42 | unresolved: `src/lean/tasks/plan.rs:29` still has `parse_graph_edit` at 42 lines (limit 29) |
+| callable | `src/lean/tasks.rs::parse_progress` | 35 | unresolved: `src/lean/tasks/validation.rs:153` still has `parse_progress` at 35 lines (limit 29) |
+| callable | `src/lean/tasks.rs::peers_of` | 43 | unresolved: `src/lean/tasks/graph.rs:107` still has `peers_of` at 43 lines (limit 29) |
+| callable | `src/lean/tasks.rs::render_plan_document` | 54 | unresolved: `src/lean/tasks/graph.rs:151` still has `render_plan_document` at 54 lines (limit 29) |
+| callable | `src/lean/tasks.rs::round_handoff_prompt` | 48 | unresolved: `src/lean/tasks/prompts/requirements.rs:175` still has `round_handoff_prompt` at 48 lines (limit 29) |
+| callable | `src/lean/tasks.rs::settle` | 47 | unresolved: `src/lean/tasks/validation.rs:86` still has `settle` at 47 lines (limit 29) |
+| callable | `src/lean/tasks.rs::upstream_note` | 37 | unresolved: `src/lean/tasks/prompts/worker.rs:57` still has `upstream_note` at 37 lines (limit 29) |
+| callable | `src/lean/tasks.rs::validate` | 33 | unresolved: `src/lean/tasks/plan.rs:127` still has `validate` at 33 lines (limit 29) |
+| callable | `src/lean/tasks.rs::verifier_prompt` | 34 | unresolved: `src/lean/tasks/prompts/review.rs:3` still has `verifier_prompt` at 34 lines (limit 29) |
+| callable | `src/lean/tasks.rs::with_options` | 38 | unresolved: `src/lean/tasks/agents.rs:248` still has `with_options` at 38 lines (limit 29) |
+| callable | `src/lean/tasks.rs::with_required_agents` | 115 | unresolved: `src/lean/tasks/agents.rs:132` still has `with_required_agents` at 115 lines (limit 29) |
+| callable | `src/lean/tasks.rs::worker_prompt` | 53 | unresolved: `src/lean/tasks/prompts/worker.rs:95` still has `worker_prompt` at 53 lines (limit 29) |
 | callable | `src/lean/workflow.rs::approve_requirements` | 43 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/lean/workflow.rs::finish_interview` | 31 | resolved: no callable with this name remains over 29 lines in its owned source area |
 | callable | `src/lean/workflow.rs::queue_plan_format_repair` | 45 | resolved: no callable with this name remains over 29 lines in its owned source area |
 
 ## Current violations at new paths
 
-- `src/lean/mail/background.rs:4`: callable `answer_in_background` is 77 lines (limit 29).
-- `src/lean/mail/delivery.rs:4`: callable `answer_waiting` is 175 lines (limit 29).
+The latest diagnostic reports no current violations under `src/lean/mail/**`; newly split Store and Tasks paths are reflected in the updated per-item table.
 
 ## Ownership note
 
@@ -166,6 +165,7 @@ The task-card scope lists `src/main.rs` and `src/transport.rs`, while the review
 ## Characterization and validation
 
 - Existing history unit tests were moved from inline `src/lean/history.rs` into `src/lean/history/tests.rs`, grouped as `mail_tests`, `round_tests`, and `recovery_tests`. They continue to cover user-message association and schema 11, session event/content paging and ownership, round attribution/idempotency, and rollback/restart recovery. Public-boundary integration tests remain in `tests/lean_core.rs`, `tests/lean_ledger.rs`, and `tests/lean_messages.rs`.
+- Store unit tests moved from inline `src/lean/store.rs` into `src/lean/store/tests/group_1.rs` through `group_3.rs`; they retain schema compatibility, initialization atomicity, comment-claim expiry, output ordering, row/event serialization, recovery, and trust coverage (12 passed). Task unit tests moved from inline `src/lean/tasks.rs` into `src/lean/tasks/tests/group_1.rs` through `group_7.rs`; they retain parser, planning, option binding, verifier obligations, grapheme bounds, and feedback coverage (48 passed). The requirements extraction test moved from inline `src/lean/ledger/runtime.rs` to `src/lean/ledger/runtime/tests.rs`; the atomic invalid-parent repair scenario passed (1 passed). Existing public-boundary assertions remain in `tests/lean_core.rs` (21 passed) and `tests/lean_ledger.rs` (25 passed).
 - `cargo test --locked --lib history::tests`: 8 passed; `cargo test --locked --test lean_core`: 21 passed; `cargo test --locked --test lean_ledger`: 25 passed; `cargo test --locked --test lean_tui`: 110 passed. The focused `direct_orchestrator_message_uses_normal_workflow_and_validates_the_run` and `direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns` tests passed.
 - `cargo test --locked --test lean_messages` was characterized before changing mailbox code and repeated after the enqueue helper split; both runs had 30 passed and the same 4 failures: `agent_mail_reaches_the_orchestrator_without_replanning` (assertion expected 1, got 2), `deferred_options_comment_claim_expires_on_new_user_input`, `deferred_options_proposal_prefers_the_current_explicit_comment_list`, and `deferred_options_proposal_preserves_selective_comment_claim`. The initial characterization also repeated serially with the same failures. No changes were made to those behaviors or tests.
-- `cargo fmt --check`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `git diff --check` passed. The current size diagnostic is the separate retained artifact linked above and still exits 1 because 108 owned violations remain.
+- On the current worktree, `cargo fmt --check`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `git diff --check` passed. Targeted tests passed: task unit tests (48), Store unit tests (12), requirements runtime test (1), `lean_core` (21), `lean_ledger` (25), and `lean_tui` (110). `agent_mail_reaches_the_orchestrator_without_replanning` still fails with expected 1, got 2; the same failure was recorded before the mailbox refactor and after the earlier enqueue split. The current size diagnostic is the separate retained artifact linked above and still exits 1 because 103 owned violations remain.
