@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "runtime/compliance.rs"]
+mod compliance;
 #[path = "runtime/ledger_change.rs"]
 mod ledger_change;
 #[path = "runtime/requirements.rs"]
@@ -167,89 +169,6 @@ impl Core {
             self.store.assert_task_inputs(task)?;
         }
         Ok(())
-    }
-    /// Auditors inspect the primary integrated tree. Worktree approval is never imported.
-    pub(in crate::lean) fn compliance_audit(
-        self: &Arc<Self>,
-        conversation: &str,
-        plan: &str,
-        cancel: &AtomicBool,
-    ) -> Result<Vec<String>> {
-        let Some(run_id) = self.store.plan_run(plan)? else {
-            return Ok(vec!["integrity error: plan has no requirements run".into()]);
-        };
-        let revision = self.store.run(conversation, &run_id)?.spec_revision;
-        let fingerprint = self.ledger_fingerprint(conversation)?;
-        let sources = self.full_ledger_sources(conversation, &run_id)?;
-        let tasks = self.store.run_tasks(conversation, &run_id)?;
-        let (answer,producer)=self.requirements_turn(conversation,&run_id,"audit",false,format!(
-            "Audit the integrated project against every full source and the requirements and their task evidence. Search for obligations omitted in extraction. Inspect actual files and run relevant read-only checks. Do not change files. Integrated fingerprint: {fingerprint}. Task inputs and reports: {}. Return ```compliance JSON {{\"approved\":true|false,\"findings\":[...],\"evidence\":[EvidenceProposal...]}}. Each evidence proposal: entry_id,entry_version,criterion_id,task_id (UUID),generation,attempt (round),producer_turn (leave empty; runtime supplies),result (concrete checks and observed results, never just done),artifact (optional),integrated_fingerprint. Include user-prescribed methods and steps and composite integration criteria. Evidence must concern this integrated tree. Full sources:\n{sources}",serde_json::to_string(&tasks)?),cancel)?;
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Audit {
-            approved: bool,
-            findings: Vec<serde_json::Value>,
-            evidence: Vec<EvidenceProposal>,
-        }
-        let mut proposed: Audit = parse_block(&answer, "compliance")?;
-        for e in &mut proposed.evidence {
-            e.producer_turn = producer.clone();
-            require(
-                e.integrated_fingerprint == fingerprint,
-                "auditor inspected a different integrated result",
-            )?;
-        }
-        let (answer,verifier)=self.requirements_turn(conversation,&run_id,"audit",true,format!(
-            "Verify this audit independently against ALL full sources, the requirements and their task evidence and actual integrated files. Find omitted obligations. Independently reproduce/check every evidence result. Reject empty, stale, failed or worktree-only evidence. Read-only access. Integrated fingerprint: {fingerprint}. Analyst findings: {}. Proposed evidence: {}. Return ```compliance_verdict JSON {{\"approved\":true|false,\"note\":\"coverage and gaps\",\"assessments\":[{{\"evidence\":EvidenceProposal,\"approved\":true|false,\"note\":\"independent observation\"}}]}}. Preserve exact proposal fields; runtime owns session identity. Full sources:\n{sources}",serde_json::to_string(&proposed.findings)?,serde_json::to_string(&proposed.evidence)?),cancel)?;
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Review {
-            approved: bool,
-            note: String,
-            assessments: Vec<Assessment>,
-        }
-        let reviewed: Review = parse_block(&answer, "compliance_verdict")?;
-        let _integration = self.integrating.lock().expect("integration mutex");
-        require(
-            self.ledger_fingerprint(conversation)? == fingerprint,
-            "integrated files changed during compliance audit",
-        )?;
-        require(
-            self.store.run(conversation, &run_id)?.spec_revision == revision,
-            "scope changed during compliance audit",
-        )?;
-        for assessment in &reviewed.assessments {
-            require(
-                proposed.evidence.contains(&assessment.evidence),
-                "verifier assessed evidence not proposed by this audit",
-            )?;
-            self.store
-                .add_ledger_evidence(conversation, &run_id, &verifier, assessment)?;
-        }
-        self.store.record_ledger_review(
-            conversation,
-            &run_id,
-            revision,
-            "audit",
-            &producer,
-            &verifier,
-            &fingerprint,
-            proposed.approved && reviewed.approved,
-            &reviewed.note,
-        )?;
-        let gaps = self
-            .store
-            .requirements_gaps(conversation, &run_id, &fingerprint)?;
-        self.store
-            .set_run_completion(conversation, &run_id, revision, gaps.is_empty())?;
-        self.store.append_event(
-            conversation,
-            None,
-            Some(plan),
-            "requirements_complete",
-            &json!({"run":run_id,"spec_revision":revision,"approved":gaps.is_empty(),"gaps":gaps}),
-        )?;
-        Ok(gaps)
     }
 }
 

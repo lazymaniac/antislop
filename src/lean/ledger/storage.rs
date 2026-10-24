@@ -104,48 +104,81 @@ fn checked_graph(all: &[EntrySpec]) -> Result<()> {
     require(index.len() == all.len(), "duplicate ledger identity")?;
     let mut criterion_ids = HashSet::new();
     for e in all {
+        validate_entry(e, all, &index, &mut criterion_ids)?;
+    }
+    Ok(())
+}
+
+fn validate_entry<'a>(
+    entry: &'a EntrySpec,
+    all: &[EntrySpec],
+    index: &HashMap<&'a str, &'a EntrySpec>,
+    criterion_ids: &mut HashSet<&'a str>,
+) -> Result<()> {
+    require(
+        !entry.id.trim().is_empty() && !entry.interpretation.trim().is_empty(),
+        "ledger identity and interpretation are required",
+    )?;
+    validate_criteria(entry, criterion_ids)?;
+    validate_relations(entry, index)?;
+    validate_composite_requirement(entry, all)?;
+    validate_entry_cycle(entry, index)
+}
+
+fn validate_criteria<'a>(entry: &'a EntrySpec, criterion_ids: &mut HashSet<&'a str>) -> Result<()> {
+    require(
+        entry.criteria.iter().all(|criterion| {
+            !criterion.id.trim().is_empty()
+                && !criterion.text.trim().is_empty()
+                && criterion_ids.insert(criterion.id.as_str())
+        }),
+        "criteria need unique identities and nonempty text",
+    )
+}
+
+fn validate_relations(entry: &EntrySpec, index: &HashMap<&str, &EntrySpec>) -> Result<()> {
+    if let Some(parent) = &entry.parent {
         require(
-            !e.id.trim().is_empty() && !e.interpretation.trim().is_empty(),
-            "ledger identity and interpretation are required",
+            index.contains_key(parent.as_str()),
+            &format!("entry {} has unknown parent {parent}", entry.id),
         )?;
-        require(
-            e.criteria.iter().all(|c| {
-                !c.id.trim().is_empty()
-                    && !c.text.trim().is_empty()
-                    && criterion_ids.insert(c.id.as_str())
-            }),
-            "criteria need unique identities and nonempty text",
-        )?;
-        if let Some(parent) = &e.parent {
-            require(
-                index.contains_key(parent.as_str()),
-                &format!("entry {} has unknown parent {parent}", e.id),
-            )?;
-        }
-        for id in e.depends_on.iter() {
-            require(index.contains_key(id.as_str()), "unknown ledger dependency")?;
-        }
-        if all
+    }
+    for id in &entry.depends_on {
+        require(index.contains_key(id.as_str()), "unknown ledger dependency")?;
+    }
+    Ok(())
+}
+
+fn validate_composite_requirement(entry: &EntrySpec, all: &[EntrySpec]) -> Result<()> {
+    if entry.mandatory
+        && all
             .iter()
-            .any(|child| child.parent.as_deref() == Some(&e.id))
-            && e.mandatory
-        {
-            require(
-                e.criteria.iter().any(|c| c.mandatory && c.integration),
-                "composite requirement needs its own integration criterion",
-            )?;
+            .any(|child| child.parent.as_deref() == Some(&entry.id))
+    {
+        require(
+            entry
+                .criteria
+                .iter()
+                .any(|criterion| criterion.mandatory && criterion.integration),
+            "composite requirement needs its own integration criterion",
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_entry_cycle(entry: &EntrySpec, index: &HashMap<&str, &EntrySpec>) -> Result<()> {
+    let mut todo = vec![entry.id.as_str()];
+    let mut seen = HashSet::new();
+    while let Some(id) = todo.pop() {
+        if !seen.insert(id) {
+            continue;
         }
-        let mut todo = vec![e.id.as_str()];
-        let mut seen = HashSet::new();
-        while let Some(id) = todo.pop() {
-            if !seen.insert(id) {
-                continue;
-            }
-            let node = index[id];
-            for dep in node.depends_on.iter().chain(node.parent.iter()) {
-                require(dep != &e.id, "cyclic ledger dependency or hierarchy")?;
-                todo.push(dep);
-            }
+        for dependency in index[id].depends_on.iter().chain(index[id].parent.iter()) {
+            require(
+                dependency != &entry.id,
+                "cyclic ledger dependency or hierarchy",
+            )?;
+            todo.push(dependency);
         }
     }
     Ok(())
@@ -156,6 +189,15 @@ fn impact(
     changed: &HashSet<String>,
     all: &[EntrySpec],
 ) -> Result<Vec<String>> {
+    let ids = impacted_entries(changed, all);
+    let mut tasks = tasks_for_entries(db, run, &ids)?;
+    expand_dependent_tasks(db, run, &mut tasks)?;
+    let mut out: Vec<_> = tasks.into_iter().collect();
+    out.sort();
+    Ok(out)
+}
+
+fn impacted_entries(changed: &HashSet<String>, all: &[EntrySpec]) -> HashSet<String> {
     let mut ids = changed.clone();
     loop {
         let n = ids.len();
@@ -175,6 +217,10 @@ fn impact(
             break;
         }
     }
+    ids
+}
+
+fn tasks_for_entries(db: &Connection, run: &str, ids: &HashSet<String>) -> Result<HashSet<String>> {
     let mut tasks = HashSet::new();
     let mut stmt=db.prepare("SELECT i.task_id,l.entry_id FROM task_inputs i JOIN task_ledger_inputs l ON i.task_id=l.task_id WHERE i.run_id=?1")?;
     for row in stmt.query_map([run], |r| {
@@ -185,7 +231,11 @@ fn impact(
             tasks.insert(task);
         }
     }
-    let rows=db.prepare("SELECT t.id,t.plan_id,t.spec FROM tasks t JOIN plan_runs p ON p.plan_id=t.plan_id WHERE p.run_id=?1")?.query_map([run], |r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
+    Ok(tasks)
+}
+
+fn expand_dependent_tasks(db: &Connection, run: &str, tasks: &mut HashSet<String>) -> Result<()> {
+    let rows = plan_task_rows(db, run)?;
     loop {
         let n = tasks.len();
         for (id, plan, spec) in &rows {
@@ -204,9 +254,14 @@ fn impact(
             break;
         }
     }
-    let mut out: Vec<_> = tasks.into_iter().collect();
-    out.sort();
-    Ok(out)
+    Ok(())
+}
+
+fn plan_task_rows(db: &Connection, run: &str) -> Result<Vec<(String, String, String)>> {
+    Ok(db
+        .prepare("SELECT t.id,t.plan_id,t.spec FROM tasks t JOIN plan_runs p ON p.plan_id=t.plan_id WHERE p.run_id=?1")?
+        .query_map([run], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<std::result::Result<_, _>>()?)
 }
 fn validate_change(
     db: &Connection,
