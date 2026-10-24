@@ -146,6 +146,47 @@ impl Drop for Gateway {
     }
 }
 
+/// The stdio side of the gateway, for CLIs that can only be given a stdio MCP
+/// server (Agy): the CLI starts `antislop mcp-bridge`, which forwards each
+/// JSON-RPC line to the gateway named by the environment it inherited.
+pub fn bridge() -> Result<()> {
+    use std::io::{BufRead, Write};
+    let url = std::env::var("ANTISLOP_MCP_URL")
+        .map_err(|_| invalid("ANTISLOP_MCP_URL is not set; mcp-bridge is started by an agent CLI"))?;
+    let token = std::env::var("ANTISLOP_MCP_TOKEN")
+        .map_err(|_| invalid("ANTISLOP_MCP_TOKEN is not set"))?;
+    let conversation = std::env::var("ANTIGRAVITY_CONVERSATION_ID").ok();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let mut out = std::io::stdout().lock();
+    for line in std::io::stdin().lock().lines() {
+        let line = line.map_err(Error::Io)?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut message: Value = serde_json::from_str(&line)?;
+        if let Some(conversation) = &conversation
+            && message["method"] == "tools/call"
+        {
+            message["params"]["_meta"]["sessionId"] = Value::String(conversation.clone());
+        }
+        let mut response = agent
+            .post(&url)
+            .header("authorization", format!("Bearer {token}"))
+            .send_json(&message)
+            .map_err(|error| invalid(format!("gateway unreachable: {error}")))?;
+        let body = response.body_mut().read_to_string().map_err(invalid)?;
+        // Notifications are acknowledged with an empty body: nothing to relay.
+        if let Ok(reply) = serde_json::from_str::<Value>(&body) {
+            writeln!(out, "{reply}").map_err(Error::Io)?;
+            out.flush().map_err(Error::Io)?;
+        }
+    }
+    Ok(())
+}
+
 fn respond(request: tiny_http::Request, status: u16, body: Option<Value>) -> Result<()> {
     let mut response = tiny_http::Response::from_string(
         body.map(|body| body.to_string()).unwrap_or_default(),

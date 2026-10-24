@@ -26,13 +26,6 @@ pub(crate) struct Launch {
     pub session: Option<String>,
 }
 
-pub(crate) fn supported(provider: ProviderKind) -> bool {
-    matches!(
-        provider,
-        ProviderKind::Claude | ProviderKind::Codex | ProviderKind::Opencode
-    )
-}
-
 pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
     let mut command = CommandBuilder::new(&spec.binary);
     command.cwd(&spec.cwd);
@@ -53,14 +46,60 @@ pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
             opencode(&mut command, spec, gateway, read_only)?;
             spec.resume.clone()
         }
+        ProviderKind::Agy => {
+            command.args(&spec.args);
+            agy(&mut command, spec, gateway, read_only)?;
+            spec.resume.clone()
+        }
         provider => {
             return Err(Error::Invalid(format!(
-                "{} has no interactive adapter yet; choose Claude, Codex or OpenCode",
+                "{} has no interactive adapter yet; choose Claude, Codex, OpenCode or Agy",
                 super::agent::name(provider)
             )));
         }
     };
     Ok(Launch { command, session })
+}
+
+/// Agy takes MCP servers only from its own list. `antislop setup agy` puts the
+/// stdio bridge there once; the gateway of each session travels in the
+/// environment the bridge inherits.
+fn agy(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway, read_only: bool) -> Result<()> {
+    if std::env::var_os("ANTISLOP_SKIP_AGY_BRIDGE_CHECK").is_none() && !agy_bridge_registered() {
+        return Err(Error::Invalid(format!(
+            "agy cannot reach antislop yet: run `antislop setup agy` once to register the \
+             `{SERVER}` MCP bridge in Agy's MCP list"
+        )));
+    }
+    command.env("ANTISLOP_MCP_URL", gateway.url());
+    command.env("ANTISLOP_MCP_TOKEN", gateway.token());
+    command.args(["--disable-slash-commands", "--mode"]);
+    command.arg(if read_only { "plan" } else { "accept-edits" });
+    if !read_only {
+        command.arg("--sandbox");
+    }
+    for dir in &spec.add_dirs {
+        command.arg("--add-dir");
+        command.arg(dir);
+    }
+    if let Some(model) = &spec.model {
+        command.args(["--model", model]);
+    }
+    if let Some(effort) = &spec.effort {
+        command.args(["--effort", effort]);
+    }
+    if let Some(id) = &spec.resume {
+        command.args(["--conversation", id]);
+    }
+    Ok(())
+}
+
+fn agy_bridge_registered() -> bool {
+    std::env::var_os("HOME")
+        .map(|home| std::path::PathBuf::from(home).join(".gemini/config/mcp_config.json"))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|config| config["mcpServers"][SERVER].is_object())
 }
 
 fn claude(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway, read_only: bool) -> Option<String> {
@@ -325,11 +364,27 @@ mod tests {
     }
 
     #[test]
+    fn agy_gets_the_gateway_through_the_environment_of_its_bridge() {
+        // SAFETY: tests of this module do not read this variable concurrently.
+        unsafe { std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1") };
+        let gateway = Gateway::start().unwrap();
+        let launch = command(&spec(ProviderKind::Agy, Access::Write, Some("c-1")), &gateway).unwrap();
+        let args = words(&launch);
+        assert!(args.windows(2).any(|w| w == ["--mode", "accept-edits"]));
+        assert!(args.windows(2).any(|w| w == ["--conversation", "c-1"]));
+        assert!(!args.iter().any(|a| a.contains(gateway.token())));
+        let token = launch.command.get_env("ANTISLOP_MCP_TOKEN").unwrap();
+        assert_eq!(token.to_string_lossy(), gateway.token());
+        let read_only = command(&spec(ProviderKind::Agy, Access::ReadOnly, None), &gateway).unwrap();
+        assert!(words(&read_only).windows(2).any(|w| w == ["--mode", "plan"]));
+    }
+
+    #[test]
     fn providers_without_an_adapter_fail_with_a_plain_reason() {
         let gateway = Gateway::start().unwrap();
-        let error = command(&spec(ProviderKind::Agy, Access::Write, None), &gateway)
+        let error = command(&spec(ProviderKind::Gemini, Access::Write, None), &gateway)
             .err()
             .unwrap();
-        assert!(error.to_string().contains("agy has no interactive adapter"));
+        assert!(error.to_string().contains("gemini has no interactive adapter"));
     }
 }

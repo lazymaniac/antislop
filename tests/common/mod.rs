@@ -14,7 +14,13 @@ pub fn trust(project: &Path) {
     ONCE.call_once(|| {
         std::fs::create_dir_all(&dir).unwrap();
         // SAFETY: set once, before any test of this process starts a daemon.
-        unsafe { std::env::set_var("ANTISLOP_CONFIG_DIR", &dir) };
+        unsafe {
+            std::env::set_var("ANTISLOP_CONFIG_DIR", &dir);
+            // The fixtures stand in for Agy; they need no registered bridge.
+            std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1");
+            // A turn nobody ends would otherwise hold a test for half an hour.
+            std::env::set_var("ANTISLOP_TURN_TIMEOUT_SECS", "90");
+        }
     });
     // The tests of a process run on several threads; the list is rewritten whole.
     static WRITING: Mutex<()> = Mutex::new(());

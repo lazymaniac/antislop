@@ -7,6 +7,7 @@ usage:
   antislop [chat] [options] [message]
   antislop stop [--state DIR] [--force]
                               stop the daemon; --force cancels running work
+  antislop setup agy          register antislop's MCP bridge in Agy's own MCP list (once)
 
 With no message in a terminal it opens the TUI; with a message, or when
 input is not a terminal, it prints the conversation line by line.
@@ -49,6 +50,9 @@ fn run() -> Result<()> {
                 std::path::Path::new(&args[3]),
             )
         }
+        // Started by Agy as its stdio MCP server; see `antislop setup agy`.
+        Some("mcp-bridge") => antislop::lean::mcp::bridge(),
+        Some("setup") => antislop::lean::cli::setup(&args[1..]),
         Some("stop") => antislop::lean::cli::stop(&args[1..]),
         Some("chat") => antislop::lean::cli::chat(&args[1..]),
         _ => antislop::lean::cli::chat(&args),

@@ -15,7 +15,7 @@ pub mod ledger;
 mod mail;
 pub mod native;
 mod launch;
-mod mcp;
+pub mod mcp;
 mod progress;
 pub mod projects;
 pub mod risks;
