@@ -360,7 +360,12 @@ mod tests {
         unsafe { std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1") };
         let gateway = Gateway::start().unwrap();
         let launch = command(&spec(ProviderKind::Claude, Access::Write, None), &gateway).unwrap();
-        assert!(launch.command.get_env("CLAUDE_CODE_CHILD_SESSION").is_none());
+        assert!(
+            launch
+                .command
+                .get_env("CLAUDE_CODE_CHILD_SESSION")
+                .is_none()
+        );
     }
 
     #[test]

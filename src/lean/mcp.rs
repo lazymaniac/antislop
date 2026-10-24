@@ -163,8 +163,8 @@ pub fn bridge() -> Result<()> {
     let url = std::env::var("ANTISLOP_MCP_URL").map_err(|_| {
         invalid("ANTISLOP_MCP_URL is not set; mcp-bridge is started by an agent CLI")
     })?;
-    let token =
-        std::env::var("ANTISLOP_MCP_TOKEN").map_err(|_| invalid("ANTISLOP_MCP_TOKEN is not set"))?;
+    let token = std::env::var("ANTISLOP_MCP_TOKEN")
+        .map_err(|_| invalid("ANTISLOP_MCP_TOKEN is not set"))?;
     let conversation = std::env::var("ANTIGRAVITY_CONVERSATION_ID").ok();
     forward(
         std::io::stdin().lock(),
