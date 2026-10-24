@@ -1,8 +1,8 @@
-//! Disk-backed inspection documents. Source is transferred once in bounded
-//! chunks. Wrapping runs off the UI thread and its index lives on disk; drawing
-//! reads only the viewport, independently of the size of the transcript.
+//! Disk-backed inspection documents (a task's result, its messages). Source is
+//! transferred once in bounded chunks. Wrapping runs off the UI thread and its
+//! index lives on disk; drawing reads only the viewport, independently of the
+//! size of the text.
 use crate::Result;
-use rusqlite::{Connection, OptionalExtension, params};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -24,24 +24,22 @@ impl Drop for Files {
 #[derive(Debug, Clone)]
 pub struct Document {
     files: Arc<Files>,
-    answer_only: bool,
+    /// Byte ranges of the blocks in the text file, in order.
+    ranges: Arc<Vec<(u64, u64)>>,
     owner: Option<Arc<()>>,
     alive: Weak<()>,
     layouts: Arc<Mutex<Vec<(LayoutKey, LayoutState)>>>,
 }
 impl PartialEq for Document {
     fn eq(&self, other: &Self) -> bool {
-        self.files.0 == other.files.0 && self.answer_only == other.answer_only
+        self.files.0 == other.files.0
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LayoutKey {
     width: usize,
-    expanded: bool,
-    answer_only: bool,
     query: String,
-    raw: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -64,10 +62,8 @@ impl Drop for LayoutIndex {
 
 pub struct Builder {
     files: Arc<Files>,
-    db: Connection,
     text: File,
-    raw: File,
-    raw_offset: u64,
+    ranges: Vec<(u64, u64)>,
     offset: u64,
 }
 
@@ -86,183 +82,50 @@ impl Builder {
         let directory = state.join("inspection-cache").join(crate::id());
         crate::lean::daemon::private_directory(&directory)?;
         let files = Arc::new(Files(directory));
-        let index = files.0.join("blocks.db");
-        drop(private_file(&index)?);
-        let db = Connection::open(index)?;
-        db.execute_batch("PRAGMA cache_size=-256; PRAGMA temp_store=FILE;
-            CREATE TABLE blocks(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,header INTEGER NOT NULL,start INTEGER NOT NULL,end INTEGER NOT NULL,duplicate INTEGER NOT NULL DEFAULT 0,raw_start INTEGER NOT NULL,raw_end INTEGER NOT NULL);")?;
         let text = private_file(&files.0.join("text"))?;
-        let raw = private_file(&files.0.join("raw"))?;
-        let mut builder = Self {
+        Ok(Self {
             files,
-            db,
             text,
-            raw,
-            raw_offset: 0,
+            ranges: Vec::new(),
             offset: 0,
-        };
-        builder.append("collapsed", "", |sink| sink("Session trace [+]\n"))?;
-        builder.append("expanded", "", |sink| sink("Session trace [-]\n"))?;
-        builder.append("legacy", "", |sink| sink("Legacy history: final answer was not recorded separately; earlier text may have been truncated.\n"))?;
-        Ok(builder)
+        })
     }
 
-    /// `source` must deliver successive UTF-8 chunks, never a whole history.
+    /// Adds one block: `header`, then the chunks `source` delivers (successive
+    /// UTF-8 pieces, never a whole history).
     pub fn append(
         &mut self,
-        kind: &str,
         header: &str,
         source: impl FnOnce(&mut dyn FnMut(&str) -> Result<()>) -> Result<()>,
     ) -> Result<()> {
-        let raw_start = self.raw_offset;
-        let raw_header = format!("{{\"kind\":{},\"text\":\"", serde_json::to_string(kind)?);
-        self.raw.write_all(raw_header.as_bytes())?;
-        self.raw_offset += raw_header.len() as u64;
-        let header_offset = self.offset;
+        let start = self.offset;
         self.text.write_all(header.as_bytes())?;
         self.offset += header.len() as u64;
-        let start = self.offset;
         let mut sanitizer = super::sanitize::Sanitizer::default();
         source(&mut |chunk| {
             let clean = sanitizer.push(chunk);
             self.text.write_all(clean.as_bytes())?;
-            let encoded = serde_json::to_string(&clean)?;
-            let escaped = &encoded.as_bytes()[1..encoded.len() - 1];
-            self.raw.write_all(escaped)?;
-            self.raw_offset += escaped.len() as u64;
             self.offset += clean.len() as u64;
             Ok(())
         })?;
         let end = self.offset;
-        self.raw.write_all(b"\"}\n")?;
-        self.raw_offset += 3;
-        let raw_end = self.raw_offset - 1;
         self.text.write_all(b"\n")?;
         self.offset += 1;
-        self.db.execute(
-            "INSERT INTO blocks(kind,header,start,end,raw_start,raw_end) VALUES(?1,?2,?3,?4,?5,?6)",
-            params![
-                kind,
-                header_offset as i64,
-                start as i64,
-                end as i64,
-                raw_start as i64,
-                raw_end as i64
-            ],
-        )?;
-        if kind == "final" {
-            self.deduplicate(self.db.last_insert_rowid(), start, end)?;
-        }
-        Ok(())
-    }
-
-    fn deduplicate(&mut self, id: i64, start: u64, end: u64) -> Result<()> {
-        if start == end {
-            return Ok(());
-        }
-        self.text.flush()?;
-        let mut rows = self
-            .db
-            .prepare("SELECT id,kind,start,end FROM blocks WHERE id<?1 ORDER BY id DESC")?;
-        let mut remaining = end - start;
-        let mut first = None;
-        for row in rows.query_map([id], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)? as u64,
-                row.get::<_, i64>(3)? as u64,
-            ))
-        })? {
-            let (candidate, kind, a, b) = row?;
-            if kind != "text" || b - a > remaining {
-                break;
-            }
-            if !equal_ranges(
-                &self.files.0.join("text"),
-                a,
-                start + remaining - (b - a),
-                b - a,
-            )? {
-                break;
-            }
-            remaining -= b - a;
-            first = Some(candidate);
-            if remaining == 0 {
-                break;
-            }
-        }
-        drop(rows);
-        if remaining == 0
-            && let Some(first) = first
-        {
-            self.db.execute(
-                "UPDATE blocks SET duplicate=1 WHERE id>=?1 AND id<?2 AND kind='text'",
-                params![first, id],
-            )?;
-        }
+        self.ranges.push((start, end));
         Ok(())
     }
 
     pub fn finish(mut self) -> Result<Document> {
         self.text.flush()?;
-        let latest:Option<(i64,i64)>=self.db.query_row("SELECT start,end FROM blocks WHERE kind IN ('prompt','user','text','tool','mail','failure') AND duplicate=0 ORDER BY id DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-        if let Some((start, end)) = latest {
-            let mut file = File::open(self.files.0.join("text"))?;
-            file.seek(SeekFrom::Start(start as u64))?;
-            let mut bytes = vec![0; ((end - start) as usize).min(1024)];
-            file.read_exact(&mut bytes)?;
-            let valid = std::str::from_utf8(&bytes)
-                .map(str::len)
-                .unwrap_or_else(|e| e.valid_up_to());
-            let prefix = std::str::from_utf8(&bytes[..valid]).expect("UTF-8 prefix");
-            // A short preview never displays a cluster cut by the read bound.
-            let prefix = if (end - start) as usize > valid {
-                let keep = prefix
-                    .grapheme_indices(true)
-                    .next_back()
-                    .map_or(0, |(i, _)| i);
-                &prefix[..keep]
-            } else {
-                prefix
-            };
-            let summary = super::view::truncate(prefix.lines().next().unwrap_or_default(), 100);
-            self.db.execute(
-                "UPDATE blocks SET kind='retired' WHERE kind='collapsed'",
-                [],
-            )?;
-            self.append("collapsed", "Session trace [+] · ", |sink| sink(&summary))?;
-        }
-        self.text.flush()?;
-        self.raw.flush()?;
         let owner = Arc::new(());
         Ok(Document {
             alive: Arc::downgrade(&owner),
             owner: Some(owner),
             files: self.files,
-            answer_only: false,
+            ranges: Arc::new(self.ranges),
             layouts: Arc::new(Mutex::new(Vec::new())),
         })
     }
-}
-
-fn equal_ranges(path: &Path, a: u64, b: u64, mut length: u64) -> Result<bool> {
-    let mut left = File::open(path)?;
-    let mut right = File::open(path)?;
-    left.seek(SeekFrom::Start(a))?;
-    right.seek(SeekFrom::Start(b))?;
-    let mut x = [0u8; CHUNK];
-    let mut y = [0u8; CHUNK];
-    while length > 0 {
-        let n = length.min(CHUNK as u64) as usize;
-        left.read_exact(&mut x[..n])?;
-        right.read_exact(&mut y[..n])?;
-        if x[..n] != y[..n] {
-            return Ok(false);
-        }
-        length -= n as u64;
-    }
-    Ok(true)
 }
 
 pub struct Viewport {
@@ -271,11 +134,6 @@ pub struct Viewport {
     pub scroll: usize,
 }
 impl Document {
-    pub fn answer(&self) -> Self {
-        let mut answer = self.clone();
-        answer.answer_only = true;
-        answer
-    }
     /// None means the background index is still being built. At most four
     /// viewport layouts are cached; evicting a layout never removes source.
     pub fn viewport(
@@ -284,28 +142,23 @@ impl Document {
         height: usize,
         scroll: usize,
         follow: bool,
-        expanded: bool,
     ) -> Result<Option<Viewport>> {
-        self.viewport_options(width, height, scroll, follow, expanded, "", false)
+        self.viewport_filtered(width, height, scroll, follow, "")
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn viewport_options(
+    /// Like [`viewport`](Self::viewport), showing only the blocks that
+    /// contain `query` (case-insensitive).
+    pub fn viewport_filtered(
         &self,
         width: usize,
         height: usize,
         scroll: usize,
         follow: bool,
-        expanded: bool,
         query: &str,
-        raw: bool,
     ) -> Result<Option<Viewport>> {
         let key = LayoutKey {
             width: width.max(1),
-            expanded,
-            answer_only: self.answer_only,
             query: query.trim().to_lowercase(),
-            raw,
         };
         let mut layouts = self.layouts.lock().expect("document layouts");
         let state = layouts
@@ -375,124 +228,16 @@ impl Document {
 
     fn build_index(&self, key: &LayoutKey) -> Result<LayoutIndex> {
         crate::require(self.alive.strong_count() > 0, "inspection view was closed")?;
-        let LayoutKey {
-            width,
-            expanded,
-            answer_only,
-            query,
-            raw,
-        } = key;
-        let (width, expanded, answer_only, raw) = (*width, *expanded, *answer_only, *raw);
-        let text = self.files.0.join(if raw { "raw" } else { "text" });
-        let columns = if raw {
-            "raw_start,raw_end"
-        } else {
-            "header,end"
-        };
+        let LayoutKey { width, query } = key;
+        let text = self.files.0.join("text");
         let path = self.files.0.join(format!("layout-{}", crate::id()));
         let mut output = private_file(&path)?;
-        let db = Connection::open(self.files.0.join("blocks.db"))?;
-        db.execute_batch("PRAGMA cache_size=-256; PRAGMA temp_store=FILE;")?;
-        let plain: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM blocks WHERE kind='plain')",
-            [],
-            |r| r.get(0),
-        )?;
-        if plain {
-            let mut lines = 0;
-            let mut statement = db.prepare(&format!(
-                "SELECT {columns} FROM blocks WHERE kind='plain' ORDER BY id"
-            ))?;
-            for row in
-                statement.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
-            {
-                let (a, b) = row?;
-                if !range_matches(&text, a as u64, b as u64, query, &self.alive)? {
-                    continue;
-                }
-                lines += wrap_range(
-                    &text,
-                    &mut output,
-                    a as u64,
-                    b as u64,
-                    width,
-                    false,
-                    &self.alive,
-                )?;
-            }
-            output.flush()?;
-            return Ok(LayoutIndex { path, lines, text });
-        }
-        let first: Option<i64> =
-            db.query_row("SELECT min(id) FROM blocks WHERE kind='prompt'", [], |r| {
-                r.get(0)
-            })?;
-        let last: Option<i64> =
-            db.query_row("SELECT max(id) FROM blocks WHERE kind='final'", [], |r| {
-                r.get(0)
-            })?;
         let mut lines = 0;
-        let mut emit = |start, end, dim| -> Result<()> {
+        for &(start, end) in self.ranges.iter() {
             if !range_matches(&text, start, end, query, &self.alive)? {
-                return Ok(());
+                continue;
             }
-            lines += wrap_range(&text, &mut output, start, end, width, dim, &self.alive)?;
-            Ok(())
-        };
-        if !answer_only && let Some(id) = first {
-            let (a, b): (i64, i64) = db.query_row(
-                &format!("SELECT {columns} FROM blocks WHERE id=?1"),
-                [id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
-            emit(a as u64, b as u64, true)?;
-        }
-        let (a, b): (i64, i64) = db.query_row(
-            &format!("SELECT {columns} FROM blocks WHERE kind=?1"),
-            [if expanded { "expanded" } else { "collapsed" }],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
-        if !answer_only {
-            emit(a as u64, b as u64, true)?;
-        }
-        if expanded && !answer_only {
-            let mut statement = db.prepare(&format!("SELECT kind,{columns} FROM blocks WHERE kind IN ('prompt','user','text','final','tool','mail','failure') AND duplicate=0 AND id<>coalesce(?1,-1) AND id<>coalesce(?2,-1) ORDER BY id"))?;
-            for row in statement.query_map(params![first, last], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)?,
-                ))
-            })? {
-                let (kind, a, b) = row?;
-                emit(
-                    a as u64,
-                    b as u64,
-                    matches!(kind.as_str(), "prompt" | "tool"),
-                )?;
-            }
-        }
-        if let Some(id) = last {
-            let (a, b): (i64, i64) = db.query_row(
-                &format!("SELECT {columns} FROM blocks WHERE id=?1"),
-                [id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )?;
-            emit(a as u64, b as u64, false)?;
-        } else {
-            let ended: bool = db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM blocks WHERE kind='end')",
-                [],
-                |r| r.get(0),
-            )?;
-            if ended {
-                let (a, b): (i64, i64) = db.query_row(
-                    &format!("SELECT {columns} FROM blocks WHERE kind='legacy'"),
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )?;
-                emit(a as u64, b as u64, true)?;
-            }
+            lines += wrap_range(&text, &mut output, start, end, *width, false, &self.alive)?;
         }
         output.flush()?;
         Ok(LayoutIndex { path, lines, text })
@@ -632,19 +377,10 @@ fn wrap_range(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn page(
-        document: &Document,
-        width: usize,
-        height: usize,
-        scroll: usize,
-        expanded: bool,
-    ) -> Viewport {
+    fn page(document: &Document, width: usize, height: usize, scroll: usize) -> Viewport {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
-            if let Some(page) = document
-                .viewport(width, height, scroll, false, expanded)
-                .unwrap()
-            {
+            if let Some(page) = document.viewport(width, height, scroll, false).unwrap() {
                 return page;
             }
             assert!(std::time::Instant::now() < deadline, "layout timed out");
@@ -653,190 +389,73 @@ mod tests {
     }
 
     #[test]
-    fn large_history_renders_only_the_viewport_and_retains_every_byte_on_disk() {
+    fn large_text_renders_only_the_viewport_and_retains_every_byte_on_disk() {
         let dir = tempfile::tempdir().unwrap();
         let mut builder = Builder::new(dir.path()).unwrap();
         let chunk = "👩‍💻e\u{301} request\n".repeat(2000);
         builder
-            .append("prompt", "Prompt\n", |sink| {
-                for _ in 0..128 {
+            .append("Header\n", |sink| {
+                for _ in 0..64 {
                     sink(&chunk)?;
                 }
                 Ok(())
             })
             .unwrap();
-        builder
-            .append("user", "User\n", |sink| sink("fix this"))
-            .unwrap();
-        builder
-            .append("tool", "Tool call\n", |sink| sink("cargo check"))
-            .unwrap();
-        builder.append("text", "", |sink| sink("final ")).unwrap();
-        builder
-            .append("text", "", |sink| sink("answer 👩‍💻"))
-            .unwrap();
-        builder
-            .append("final", "Final answer\n", |sink| sink("final answer 👩‍💻"))
-            .unwrap();
         let document = builder.finish().unwrap();
         let cache = document.files.0.clone();
         let text = std::fs::metadata(cache.join("text")).unwrap().len();
-        assert!(text > 4 * 1024 * 1024);
-        let first = page(&document, 30, 8, 0, false);
-        assert_eq!(first.lines.len(), 8);
-        assert!(first.total > 200_000);
-        assert!(first.lines.iter().map(|(_, s)| s.len()).sum::<usize>() < 1024);
-        let last = page(&document, 30, 8, usize::MAX, true);
-        let tail = last
-            .lines
-            .iter()
-            .map(|(_, s)| s.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(tail.matches("final answer").count(), 1);
-        assert!(tail.contains("Final answer"));
-        let answer = page(&document.answer(), 30, 8, 0, false);
-        assert!(answer.total < 8);
-        assert_eq!(
-            answer
-                .lines
-                .iter()
-                .map(|(_, s)| s.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            "Final answer\nfinal answer 👩‍💻"
-        );
-        drop(document);
-        assert!(!cache.exists());
+        assert!(text > 1_000_000);
+        let first = page(&document, 40, 5, 0);
+        assert_eq!(first.lines.len(), 5);
+        assert_eq!(first.lines[0].1, "Header");
+        assert!(first.lines[1].1.contains("👩‍💻e\u{301} request"));
+        let last = page(&document, 40, 5, usize::MAX);
+        assert_eq!(last.lines.len(), 5);
+        assert!(last.scroll > 100_000);
     }
 
     #[test]
-    fn wrapping_and_escape_sanitization_cross_chunk_boundaries() {
+    fn search_reads_disk_backed_blocks_across_chunks() {
         let dir = tempfile::tempdir().unwrap();
         let mut builder = Builder::new(dir.path()).unwrap();
         builder
-            .append("plain", "", |sink| {
-                sink(&"x".repeat(CHUNK - 1))?;
-                sink("👩")?;
-                sink("\u{200d}")?;
-                sink("💻e")?;
-                sink("\u{301}\n")?;
-                sink("\x1b]52;c;secret")?;
-                sink("\x1b")?;
-                sink("\\visible")
-            })
-            .unwrap();
-        let document = builder.finish().unwrap();
-        let result = page(&document, 10, 10, usize::MAX, false);
-        let tail = result
-            .lines
-            .iter()
-            .map(|(_, s)| s.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(tail.contains("👩‍💻e\u{301}"));
-        assert!(tail.ends_with("visible"));
-        assert!(!tail.contains("secret"));
-        assert!(result.lines.iter().all(|(_, line)| line.width() <= 10));
-    }
-
-    #[test]
-    fn earlier_turns_stay_chronological_and_latest_answer_stays_outside_trace() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut builder = Builder::new(dir.path()).unwrap();
-        for (kind, text) in [
-            ("prompt", "first prompt"),
-            ("text", "first answer"),
-            ("final", "first answer"),
-            ("prompt", "second prompt"),
-            ("user", "follow up"),
-            ("text", "second answer"),
-            ("final", "second answer"),
-        ] {
-            builder
-                .append(
-                    kind,
-                    if kind == "final" {
-                        "Final answer\n"
-                    } else {
-                        ""
-                    },
-                    |sink| sink(text),
-                )
-                .unwrap();
-        }
-        let document = builder.finish().unwrap();
-        let expanded = page(&document, 80, 40, 0, true)
-            .lines
-            .into_iter()
-            .map(|(_, s)| s)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(expanded.matches("first answer").count(), 1);
-        assert_eq!(expanded.matches("second answer").count(), 1);
-        assert!(expanded.find("first answer").unwrap() < expanded.find("second prompt").unwrap());
-        let collapsed = page(&document, 80, 40, 0, false)
-            .lines
-            .into_iter()
-            .map(|(_, s)| s)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(!collapsed.contains("first answer"));
-        assert!(collapsed.contains("first prompt"));
-        assert!(collapsed.contains("second answer"));
-    }
-    #[test]
-    fn search_and_raw_views_read_disk_backed_blocks_across_chunks() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut builder = Builder::new(dir.path()).unwrap();
-        builder
-            .append("plain", "", |sink| {
+            .append("", |sink| {
                 sink(&"x".repeat(CHUNK - 1))?;
                 sink("Ą👩‍💻needle\n")
             })
             .unwrap();
         builder
-            .append("plain", "", |sink| sink("unrelated record"))
+            .append("", |sink| sink("unrelated record"))
             .unwrap();
         let document = builder.finish().unwrap();
-        for raw in [false, true] {
-            let key = LayoutKey {
-                width: 80,
-                expanded: false,
-                answer_only: false,
-                query: "ą👩‍💻needle".into(),
-                raw,
-            };
-            let index = document.build_index(&key).unwrap();
-            document
-                .layouts
-                .lock()
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let page = loop {
+            if let Some(page) = document
+                .viewport_filtered(80, 4, usize::MAX, false, "Ą👩‍💻needle")
                 .unwrap()
-                .push((key, LayoutState::Ready(Arc::new(index))));
-            let page = document
-                .viewport_options(80, 4, usize::MAX, false, false, "Ą👩‍💻needle", raw)
-                .unwrap()
-                .unwrap();
-            let text = page
-                .lines
-                .into_iter()
-                .map(|(_, s)| s)
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(text.contains("Ą👩‍💻needle"));
-            assert!(!text.contains("unrelated"));
-            if raw {
-                assert!(text.contains("\\n\"}"));
+            {
+                break page;
             }
-        }
+            assert!(std::time::Instant::now() < deadline, "layout timed out");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let text = page
+            .lines
+            .into_iter()
+            .map(|(_, s)| s)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Ą👩‍💻needle"));
+        assert!(!text.contains("unrelated"));
     }
+
     #[test]
     fn replacing_a_view_cancels_background_layouts_and_releases_the_cache() {
         let dir = tempfile::tempdir().unwrap();
         let mut builder = Builder::new(dir.path()).unwrap();
-        let chunk = "long transcript line\n".repeat(3000);
+        let chunk = "long line of text\n".repeat(3000);
         builder
-            .append("prompt", "Prompt\n", |sink| {
+            .append("Header\n", |sink| {
                 for _ in 0..64 {
                     sink(&chunk)?;
                 }
@@ -847,7 +466,7 @@ mod tests {
         let path = document.files.0.clone();
         let alive = document.alive.clone();
         for width in 1..20 {
-            let _ = document.viewport(width, 10, 0, false, true).unwrap();
+            let _ = document.viewport(width, 10, 0, false).unwrap();
         }
         assert!(document.layouts.lock().unwrap().len() <= 4);
         drop(document);

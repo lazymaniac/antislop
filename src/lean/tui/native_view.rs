@@ -282,56 +282,28 @@ pub(super) fn render(frame: &mut Frame, area: Rect, screen: &Screen, focused: bo
 impl App {
     pub(super) fn sync_native_views(&mut self) {
         let mut wanted = vec![];
+        // The current round's sessions are shown live; an earlier round's only
+        // when the user asks, and then by resuming it.
         if let Some(details) = self.details.as_ref().filter(|d| {
-            d.tab == 0 && d.selected_round.is_none() && !d.native_history && !d.show_info
+            d.tab == 0 && !d.show_info && (d.selected_round.is_none() || d.resume_round)
         }) {
             for (panel, key) in details.session_keys().iter().enumerate() {
                 let role = details.composer_recipient(key);
-                let metadata = details
-                    .task
-                    .as_ref()
-                    .and_then(|task| {
-                        task["native_sessions"]
-                            .as_array()
-                            .or_else(|| task["turns"].as_array())
-                    })
-                    .and_then(|turns| turns.iter().rev().find(|turn| turn["role"] == role));
-                let stored = details
-                    .sessions
-                    .iter()
-                    .rev()
-                    .find(|session| session.role == role)
-                    .filter(|_| details.task.is_none());
-                let backend = metadata
-                    .and_then(|turn| turn["backend"].as_str())
-                    .or_else(|| stored.and_then(|session| session.backend.as_deref()));
-                if matches!(backend, Some("codex_app_server" | "opencode_server")) {
-                    let session = metadata
-                        .and_then(|turn| turn["session_id"].as_str())
-                        .or_else(|| stored.and_then(|session| session.session_id.as_deref()));
-                    let identity = format!(
-                        "{}:{}:{}",
-                        backend.unwrap(),
-                        session.unwrap_or("waiting"),
-                        details
-                            .task
-                            .as_ref()
-                            .filter(|_| crate::lean::task_role(&role).is_some())
-                            .map(|task| task["round"].to_string())
-                            .unwrap_or_default()
-                    );
-                    let area = details.native_areas[panel];
-                    if area.is_empty() {
-                        continue;
-                    }
-                    wanted.push((
-                        role,
-                        key.clone(),
-                        identity,
-                        area.width.max(1),
-                        area.height.max(1),
-                    ));
+                let area = details.native_areas[panel];
+                if area.is_empty() {
+                    continue;
                 }
+                let (role, identity) = match details.selected_round {
+                    Some(round) => (format!("{role}#r{round}"), format!("round:{round}")),
+                    None => (role, "live".to_owned()),
+                };
+                wanted.push((
+                    role,
+                    key.clone(),
+                    identity,
+                    area.width.max(1),
+                    area.height.max(1),
+                ));
             }
         }
         let prefix = format!("{}:", self.conversation);
@@ -370,9 +342,10 @@ impl App {
         }
     }
     fn native_key_role(&self) -> Option<String> {
-        let details = self.details.as_ref().filter(|d| {
-            d.tab == 0 && d.selected_round.is_none() && !d.native_history && !d.show_info
-        })?;
+        let details = self
+            .details
+            .as_ref()
+            .filter(|d| d.tab == 0 && !d.show_info && (d.selected_round.is_none() || d.resume_round))?;
         details
             .session_keys()
             .get(details.active_panel)
@@ -439,7 +412,6 @@ impl App {
                     .any(|key| details.composer_recipient(key) == role)
             {
                 details.native_focus = false;
-                details.native_history = true;
                 details.editing = true;
             }
         }

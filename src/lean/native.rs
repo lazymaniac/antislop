@@ -10,7 +10,7 @@ use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub(crate) const EXECUTION_FAILED: &str =
@@ -42,9 +42,6 @@ pub struct Registry {
 }
 
 pub struct Session {
-    core: Weak<Core>,
-    pub(crate) conversation: String,
-    pub(crate) role: String,
     pub(crate) spec: agent::Spec,
     signature: String,
     gateway: mcp::Gateway,
@@ -86,20 +83,49 @@ impl Registry {
 
     /// Starts the role's CLI again from its recorded run, resuming the
     /// provider's own session. This is how an idle or earlier session is
-    /// looked at: the provider's history is the only history.
+    /// looked at: the provider's history is the only history. `role#rN` names
+    /// the session of round N, which is resumed read-only.
     pub(crate) fn restore(
         &self,
         core: &Core,
         conversation: &str,
-        role: &str,
+        role_key: &str,
     ) -> Result<Arc<Session>> {
-        let turn = core
-            .store
-            .last_turn(conversation, role)?
-            .ok_or_else(|| invalid("native session has not started"))?;
+        let (role, round) = match role_key.split_once("#r") {
+            Some((role, round)) => (
+                role,
+                Some(
+                    round
+                        .parse::<u32>()
+                        .map_err(|_| invalid("invalid round in the session name"))?,
+                ),
+            ),
+            None => (role_key, None),
+        };
+        let turn_id: String = match round {
+            Some(round) => core
+                .store
+                .db()
+                .query_row(
+                    "SELECT t.id FROM turns t JOIN turn_scopes s ON s.turn_id=t.id
+                     WHERE t.conversation_id=?1 AND t.role=?2 AND s.round=?3
+                       AND t.session_id IS NOT NULL
+                     ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",
+                    rusqlite::params![conversation, role, round],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| invalid("no session was recorded for that round"))?,
+            None => {
+                core.store
+                    .last_turn(conversation, role)?
+                    .ok_or_else(|| invalid("native session has not started"))?
+                    .id
+            }
+        };
         let context = core
             .store
-            .run_context(conversation, &turn.id)?
+            .run_context(conversation, &turn_id)?
             .ok_or_else(|| invalid("this run recorded no working directory to resume in"))?;
         require(
             context.cwd.is_dir(),
@@ -130,9 +156,9 @@ impl Registry {
                 .map(str::to_owned),
             cwd: context.cwd,
             add_dirs: context.add_dirs,
-            access: match context.access {
-                store::RunAccess::ReadOnly => agent::Access::ReadOnly,
-                store::RunAccess::Write => agent::Access::Write,
+            access: match (context.access, round) {
+                (store::RunAccess::Write, None) => agent::Access::Write,
+                _ => agent::Access::ReadOnly,
             },
             resume: context.provider_thread_id.or(context.provider_session_id),
         };
@@ -142,14 +168,14 @@ impl Registry {
         )?;
         let execution_signature =
             super::rounds::spec_signature(&context.profile, profile.effort, &spec)?;
-        if super::task_role(role).is_some() {
+        if round.is_none() && super::task_role(role).is_some() {
             let recorded: Option<String> = core
                 .store
                 .db()
                 .query_row(
                     "SELECT json_extract(payload,'$.execution_signature') FROM events
                  WHERE turn_id=?1 AND kind='turn_started' ORDER BY seq DESC LIMIT 1",
-                    [&turn.id],
+                    [&turn_id],
                     |row| row.get(0),
                 )
                 .optional()?
@@ -159,7 +185,7 @@ impl Registry {
                 "the execution profile changed; start a fresh task turn before attaching",
             )?;
         }
-        let scope = role_round(core, conversation, role)?
+        let scope = turn_scope(core, &turn_id)?
             .map(|(task, round)| {
                 format!(
                     "{:?}:{}:{}",
@@ -169,7 +195,7 @@ impl Registry {
                 )
             })
             .unwrap_or_default();
-        self.prepare_scoped(core, conversation, role, &spec, &scope)
+        self.prepare_scoped(core, conversation, role_key, &spec, &scope)
     }
 
     pub(crate) fn shutdown(&self) -> Result<()> {
@@ -212,13 +238,7 @@ impl Registry {
             return Ok(session.clone());
         }
         sessions.remove(&key);
-        let session = Arc::new(Session::start(
-            core,
-            conversation,
-            role,
-            spec.clone(),
-            signature,
-        )?);
+        let session = Arc::new(Session::start(core, spec.clone(), signature)?);
         sessions.insert(key, session.clone());
         Ok(session)
     }
@@ -249,8 +269,6 @@ impl Registry {
 impl Session {
     fn start(
         core: &Core,
-        conversation: &str,
-        role: &str,
         spec: agent::Spec,
         signature: String,
     ) -> Result<Self> {
@@ -261,9 +279,6 @@ impl Session {
             terminal::Session::spawn(launch.command, &weak, agent::name(spec.provider), 120, 40)?;
         let screen = terminal.shared();
         Ok(Self {
-            core: weak,
-            conversation: conversation.into(),
-            role: role.into(),
             spec,
             signature,
             gateway,
@@ -433,9 +448,6 @@ impl Session {
             .flatten()
     }
 
-    pub(crate) fn core(&self) -> Option<Arc<Core>> {
-        self.core.upgrade()
-    }
 }
 
 /// What is typed into the CLI: the prompt and how to hand the answer back.
@@ -449,15 +461,14 @@ fn turn_text(turn: &str, prompt: &str) -> String {
     )
 }
 
-fn role_round(core: &Core, conversation: &str, role: &str) -> Result<Option<(String, u32)>> {
+/// The task and round a turn belonged to, for a task's workers and verifiers.
+fn turn_scope(core: &Core, turn: &str) -> Result<Option<(String, u32)>> {
     let row = core
         .store
         .db()
         .query_row(
-            "SELECT s.task_id,s.round FROM turns t
-        LEFT JOIN turn_scopes s ON s.turn_id=t.id WHERE t.conversation_id=?1 AND t.role=?2
-        ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",
-            rusqlite::params![conversation, role],
+            "SELECT task_id,round FROM turn_scopes WHERE turn_id=?1",
+            [turn],
             |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,

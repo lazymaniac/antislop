@@ -20,7 +20,6 @@ mod planhistory;
 pub mod planview;
 pub mod sanitize;
 pub mod selection;
-pub mod session;
 pub mod taskinfo;
 pub mod theme;
 pub mod unblock;
@@ -3776,27 +3775,25 @@ impl App {
                 self.details = None;
                 return;
             }
-            KeyCode::Char('/') => {
-                details.native_history = true;
+            KeyCode::Char('/') if details.tab != 0 || details.show_info => {
                 details.searching = true;
                 details.follow = false;
                 details.query.clear();
                 details.scroll = 0;
                 return;
             }
-            KeyCode::Char('h') if details.tab == 0 && plain => {
-                details.native_history = !details.native_history;
-                details.native_focus = false;
+            KeyCode::Char('o') if details.tab == 0 && plain && details.selected_round.is_some() => {
+                // An earlier round's session is only looked at by resuming it.
+                details.resume_round = true;
                 return;
             }
-            KeyCode::Char('r') if details.tab == 0 && plain && !details.native_history => {
+            KeyCode::Char('r') if details.tab == 0 && plain => {
                 self.native_retry();
                 return;
             }
             KeyCode::Char('i')
                 if details.tab == 0
                     && plain
-                    && !details.native_history
                     && details
                         .native
                         .get(&details.session_keys()[details.active_panel])
@@ -3827,23 +3824,12 @@ impl App {
                 details.follow = !details.show_info;
                 return;
             }
-            KeyCode::Char('v') => {
-                details.native_history = true;
-                details.raw = !details.raw;
-                return;
-            }
             KeyCode::Char('w') if control => {
                 details.panel_scroll[details.active_panel] = details.scroll;
                 if details.task_id().is_some() {
                     details.active_panel = 1 - details.active_panel;
                 }
                 details.scroll = details.panel_scroll[details.active_panel];
-                return;
-            }
-            KeyCode::Enter if details.tab == 0 => {
-                details.expand_prompts = !details.expand_prompts;
-                details.panel_expanded[details.active_panel] =
-                    !details.panel_expanded[details.active_panel];
                 return;
             }
             KeyCode::Char(c @ '1'..='7') => {
@@ -4314,7 +4300,7 @@ impl App {
         let details = self.details.as_ref().map(|details| {
             let mut query = std::collections::hash_map::DefaultHasher::new();
             details.query.hash(&mut query);
-            (&details.key, details.tab, details.raw, query.finish())
+            (&details.key, details.tab, query.finish())
         });
         format!(
             "{}:{}:{}:{:?}:{:?}",

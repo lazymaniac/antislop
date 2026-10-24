@@ -619,10 +619,6 @@ impl Session {
             .flatten()
             .map(|status| status.to_string())
     }
-
-    pub(crate) fn error(&self) -> Option<String> {
-        self.state.lock().ok()?.error.clone()
-    }
 }
 
 /// Time since the CLI last printed.
