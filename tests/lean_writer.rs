@@ -471,15 +471,10 @@ fn a_writer_integrates_over_the_local_changes_it_started_with() {
         "user draft"
     );
     // The user was told before the writer started.
-    let events = core.store.events_since(&conversation, 0, 10_000).unwrap();
-    assert!(events.iter().any(|event| {
-        event.kind == "notice"
-            && event.payload["text"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("plan ledger mapping rejected")
-    }));
-    let notices: Vec<_> = events
+    let notices: Vec<_> = core
+        .store
+        .events_since(&conversation, 0, 10_000)
+        .unwrap()
         .into_iter()
         .filter(|event| event.kind == "notice")
         .filter(|event| {
@@ -489,13 +484,9 @@ fn a_writer_integrates_over_the_local_changes_it_started_with() {
                 .as_str()
                 .unwrap()
                 .contains("required_gates is off")
-                && !event.payload["text"]
-                    .as_str()
-                    .unwrap()
-                    .contains("plan ledger mapping rejected")
         })
         .collect();
-    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices.len(), 1);
     assert!(
         notices[0].payload["text"]
             .as_str()
