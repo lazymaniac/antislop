@@ -15,7 +15,7 @@ pub(crate) const TOOL: &str = "finish_turn";
 /// The error of a turn the runtime cancelled while it waited.
 pub(crate) const CANCELLED: &str = "agent turn cancelled";
 /// Largest request body accepted; an answer is text, not a repository.
-const BODY: u64 = 4 * 1024 * 1024;
+const BODY: u64 = 64 * 1024 * 1024;
 
 /// What the agent reported when it ended a turn.
 #[derive(Debug, Clone, PartialEq)]
