@@ -38,6 +38,7 @@ pub fn install_probe_cli(path: &Path, source: &str) {
     );
     std::fs::write(path, source).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    interactive(path);
 }
 
 include!("../support/fixture_cli.rs");

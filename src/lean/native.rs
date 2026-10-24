@@ -25,10 +25,10 @@ fn turn_timeout() -> Duration {
 }
 /// A session nobody uses or looks at is released; it resumes on demand.
 const IDLE: Duration = Duration::from_secs(10 * 60);
-/// How long the CLI must stay silent before a prompt is typed: right after
-/// the process starts it is still drawing its interface and drops input.
-const SETTLE_START: Duration = Duration::from_millis(1500);
-const SETTLE_NEXT: Duration = Duration::from_millis(500);
+/// How long the CLI must stay silent before a prompt is typed, once it has
+/// connected to the gateway: it may still be drawing its interface.
+const SETTLE: Duration = Duration::from_millis(400);
+/// How long a starting CLI may take to connect to the gateway.
 const READY_LIMIT: Duration = Duration::from_secs(60);
 const SCREEN_LINES: usize = 12;
 
@@ -319,19 +319,25 @@ impl Session {
         Ok(())
     }
 
-    /// Waits until the CLI has stopped drawing, so typed input is not lost.
+    /// Waits until the CLI is up (it has asked the gateway for its tools) and
+    /// has stopped drawing, so typed input is neither lost nor too early. A CLI
+    /// stuck before that point (a trust question, a login) is reported with
+    /// what its terminal shows.
     fn wait_ready(&self, cancel: &AtomicBool) -> Result<()> {
-        let settle = if self.primed.load(Ordering::SeqCst) {
-            SETTLE_NEXT
-        } else {
-            SETTLE_START
-        };
         let limit = Instant::now() + READY_LIMIT;
-        while terminal::quiet_for(&self.screen) < settle && Instant::now() < limit {
+        while !self.gateway.connected() || terminal::quiet_for(&self.screen) < SETTLE {
             if cancel.load(Ordering::SeqCst) {
-                return Err(invalid("native turn interrupted"));
+                return Err(invalid(mcp::CANCELLED));
             }
             self.check_alive()?;
+            if Instant::now() >= limit {
+                return Err(invalid(format!(
+                    "{} did not connect to the antislop MCP gateway within {} s; the terminal shows:\n{}",
+                    agent::name(self.spec.provider),
+                    READY_LIMIT.as_secs(),
+                    terminal::tail(&self.screen, SCREEN_LINES)
+                )));
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
         Ok(())
@@ -359,7 +365,7 @@ impl Session {
         // No failover after the CLI accepted a prompt: a failed session is
         // dropped so the next turn starts a clean one that resumes it.
         match result {
-            Err(error) if !error.to_string().contains("native turn interrupted") => {
+            Err(error) if error.to_string() != mcp::CANCELLED => {
                 self.stop.store(true, Ordering::SeqCst);
                 Err(invalid(format!("{EXECUTION_FAILED}{error}")))
             }
@@ -382,7 +388,7 @@ impl Session {
             .gateway
             .wait(turn, cancel, turn_timeout(), || self.check_alive())
             .inspect_err(|error| {
-                if error.to_string().contains("native turn interrupted") {
+                if error.to_string() == mcp::CANCELLED {
                     let _ = terminal::Session::interrupt(&self.screen);
                 }
             })

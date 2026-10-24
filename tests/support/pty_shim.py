@@ -95,7 +95,8 @@ def answer_of(output):
 def finish(turn, text, thread):
     params = {"name": "finish_turn", "arguments": {"turn": turn, "text": text}}
     if thread:
-        params["_meta"] = {"threadId": thread}
+        # Codex names its thread in the call; Agy's bridge adds the conversation.
+        params["_meta"] = {"sessionId" if "agy" in name else "threadId": thread}
     body = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": params})
     request = urllib.request.Request(
         url,
@@ -121,13 +122,31 @@ def run_legacy(prompt):
     else:
         argv = [legacy] + extra
         if resume:
-            argv += ["--resume", resume]
+            argv += ["--conversation" if "agy" in name else "--resume", resume]
     argv.append(prompt)
     env = dict(os.environ, FIXTURE_HEADLESS="1")
     return subprocess.run(argv, capture_output=True, text=True, cwd=os.getcwd(), env=env)
 
 
+def rpc(method, params=None, ident=None):
+    message = {"jsonrpc": "2.0", "method": method}
+    if ident is not None:
+        message["id"] = ident
+    if params is not None:
+        message["params"] = params
+    request = urllib.request.Request(
+        url,
+        json.dumps(message).encode(),
+        {"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(request, timeout=30).read()
+
+
 def main():
+    # Like the real CLIs, connect to the gateway while starting.
+    rpc("initialize", {"protocolVersion": "2025-06-18"}, 1)
+    rpc("notifications/initialized")
+    rpc("tools/list", None, 2)
     fd = sys.stdin.fileno()
     tty.setraw(fd)
     # Like the real CLIs, ask the terminal to bracket pastes.
@@ -157,8 +176,8 @@ def main():
             return done.returncode or 1
         # Like the real CLIs, the next prompt continues this session.
         global resume
-        resume = seen or resume or session
-        finish(turn, text, seen if name.endswith("codex") else None)
+        resume = seen or resume
+        finish(turn, text, seen)
 
 
 sys.exit(main())

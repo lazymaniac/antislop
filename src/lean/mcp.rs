@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 pub(crate) const SERVER: &str = "antislop";
 pub(crate) const TOOL: &str = "finish_turn";
+/// The error of a turn the runtime cancelled while it waited.
+pub(crate) const CANCELLED: &str = "agent turn cancelled";
 /// Largest request body accepted; an answer is text, not a repository.
 const BODY: u64 = 4 * 1024 * 1024;
 
@@ -28,6 +30,8 @@ struct State {
     finished: Option<Finish>,
     /// The CLI's own session identifier, where it announces one (Codex).
     session: Option<String>,
+    /// The CLI asked for the tool list: it is running and can use the tool.
+    listed: bool,
 }
 
 struct Shared {
@@ -93,6 +97,12 @@ impl Gateway {
         Ok(())
     }
 
+    /// Whether the CLI has connected and discovered the tool; every supported
+    /// CLI does so while starting, before it takes a prompt.
+    pub(crate) fn connected(&self) -> bool {
+        self.shared.state.lock().is_ok_and(|state| state.listed)
+    }
+
     /// The session identifier the CLI announced, if any.
     pub(crate) fn session(&self) -> Option<String> {
         self.shared.state.lock().ok()?.session.clone()
@@ -116,7 +126,7 @@ impl Gateway {
             }
             if cancel.load(Ordering::SeqCst) {
                 state.expected = None;
-                return Err(Error::Invalid("native turn interrupted".into()));
+                return Err(Error::Invalid(CANCELLED.into()));
             }
             if Instant::now() >= deadline {
                 state.expected = None;
@@ -242,7 +252,12 @@ fn serve(shared: &Shared, mut request: tiny_http::Request) -> Result<()> {
             }),
         ),
         "ping" => result(id, json!({})),
-        "tools/list" => result(id, json!({"tools": [tool()]})),
+        "tools/list" => {
+            if let Ok(mut state) = shared.state.lock() {
+                state.listed = true;
+            }
+            result(id, json!({"tools": [tool()]}))
+        }
         "tools/call" => result(id, call(shared, &message["params"])),
         other => error(id, -32601, &format!("method not supported: {other}")),
     };
@@ -383,12 +398,14 @@ mod tests {
             json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}),
         );
         assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+        assert!(!gateway.connected());
         let (_, tools) = post(
             &gateway,
             &token,
             json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
         );
         assert_eq!(tools["result"]["tools"][0]["name"], TOOL);
+        assert!(gateway.connected(), "listing the tool shows the CLI is up");
         gateway.begin("t1").unwrap();
         post(
             &gateway,
@@ -408,7 +425,7 @@ mod tests {
         let error = gateway
             .wait("t1", &cancel, Duration::from_secs(5), || Ok(()))
             .unwrap_err();
-        assert!(error.to_string().contains("native turn interrupted"));
+        assert_eq!(error.to_string(), CANCELLED);
         gateway.begin("t2").unwrap();
         let cancel = AtomicBool::new(false);
         let error = gateway

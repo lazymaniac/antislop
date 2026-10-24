@@ -3295,9 +3295,7 @@ impl Core {
                 Ok(Some(outcome.text))
             }
             Err(error) => {
-                let status = if error.to_string().contains("native turn interrupted") {
-                    TurnStatus::Interrupted
-                } else if cancel.load(Ordering::SeqCst) {
+                let status = if cancel.load(Ordering::SeqCst) {
                     TurnStatus::Cancelled
                 } else {
                     TurnStatus::Failed
