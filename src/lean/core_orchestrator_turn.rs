@@ -2,7 +2,7 @@ use super::*;
 mod context;
 mod prompt;
 use context::comment_context;
-use prompt::{PromptContext, orchestrator_prompt_text};
+use prompt::{PromptContext, orchestrator_prompt_text, planning_ledger_context};
 
 impl Core {
     pub(in crate::lean) fn orchestrator_turn(
@@ -75,25 +75,23 @@ impl Core {
         let graph_json =
             serde_json::to_string(&graph.iter().map(|task| &task.spec).collect::<Vec<_>>())?;
         let history = self.store.recent_messages_through(conversation, answered)?;
+        let ledger_context = planning_ledger_context(self, conversation)?;
         let Some(answer) = self.turn(setup, cancel, |first| {
-            orchestrator_prompt_text(
-                self,
-                conversation,
-                PromptContext {
-                    project: &project,
-                    first,
-                    answered,
-                    asked: &asked,
-                    open: &open,
-                    history: &history,
-                    comment_context: &comment_context,
-                    editable_graph,
-                    graph: &graph,
-                    graph_json: &graph_json,
-                    interviewing,
-                    workflow: workflow.as_ref(),
-                },
-            )
+            orchestrator_prompt_text(PromptContext {
+                project: &project,
+                first,
+                answered,
+                asked: &asked,
+                open: &open,
+                history: &history,
+                comment_context: &comment_context,
+                editable_graph,
+                graph: &graph,
+                graph_json: &graph_json,
+                interviewing,
+                workflow: workflow.as_ref(),
+                ledger_context: ledger_context.as_deref(),
+            })
         })?
         else {
             return Ok(());
