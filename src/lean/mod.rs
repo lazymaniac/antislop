@@ -2,16 +2,19 @@
 //! rows of state and an event log. See docs/lean-core.md.
 
 pub mod agent;
+mod blocker;
 pub mod cli;
 pub mod content;
 pub mod daemon;
 pub mod diff;
+mod feasibility;
 pub mod feedback;
 pub mod git;
 pub mod interview;
 pub mod ledger;
 mod mail;
 pub mod native;
+mod progress;
 pub mod projects;
 pub mod risks;
 mod rounds;
@@ -152,6 +155,7 @@ const DIFF_LIMIT: usize = 2 * 1024 * 1024;
 pub const COMMENT_PREFIX: &str = "[user comment #";
 /// Checks each plan before the user sees it.
 const PLAN_VERIFIER: &str = "plan-verifier";
+const PLAN_LINT: &str = "plan-lint";
 /// Checks, after a plan ran, that the user's request was fully delivered.
 const AUDITOR: &str = "auditor";
 /// Diagnostic reasoning and tool output retained per turn; agent text is unlimited.
@@ -2027,6 +2031,9 @@ impl Core {
         };
         for step in steps {
             let result = (|| -> Result<String> {
+                if step.action == tasks::action::ADD_TASK {
+                    return self.add_unblocker(conversation, &plan, step);
+                }
                 let action: RecoveryAction =
                     serde_json::from_value(json!(step.action)).map_err(|_| {
                         Error::Invalid(format!("unknown unblocking action {}", step.action))
@@ -2768,6 +2775,41 @@ impl Core {
     /// goes back to the orchestrator (a bounded number of times); otherwise it
     /// is shown to the user with the verdict, and in autonomous mode a checked
     /// plan starts at once.
+    /// Sends a plan back to the orchestrator when it asks a task for what the
+    /// task cannot do. Returns whether it did, and the findings the plan
+    /// verifier should weigh: the advisory ones, and the blocking ones once
+    /// the automatic corrections are spent.
+    fn lint_plan(&self, conversation: &str, specs: &[TaskSpec]) -> Result<(bool, Option<String>)> {
+        let findings = feasibility::check(specs);
+        let blocking: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.severity == feasibility::Severity::Block)
+            .collect();
+        if !blocking.is_empty()
+            && self.store.count_since_user(conversation, PLAN_LINT)? < tasks::MAX_ROUNDS as usize
+        {
+            let text = feasibility::message(&blocking);
+            self.store.append_event(
+                conversation,
+                None,
+                None,
+                "plan_invalid",
+                &json!({"error": text, "retrying": true, "retry": "Correcting a plan the agents cannot carry out."}),
+            )?;
+            self.store.add_message(conversation, PLAN_LINT, &text)?;
+            return Ok((true, None));
+        }
+        let remaining: Vec<_> = findings.iter().collect();
+        let advice = (!remaining.is_empty()).then(|| {
+            format!(
+                "Mechanical checks the runtime made on this plan; weigh them and reject the plan \
+                 if a task cannot be done as written:\n{}",
+                feasibility::message(&remaining)
+            )
+        });
+        Ok((false, advice))
+    }
+
     fn propose(
         self: &Arc<Self>,
         conversation: &str,
@@ -2778,6 +2820,10 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<()> {
         let PlanProposal { config, specs } = proposal;
+        let (sent_back, advice) = self.lint_plan(conversation, specs)?;
+        if sent_back {
+            return Ok(());
+        }
         // Every proposal, including format repairs and comment revisions, is
         // finalized before persistence, gap checks, review and graph rendering.
         let finalized = finalize_plan(specs.to_vec(), config.policy.required_gates);
@@ -2832,7 +2878,10 @@ impl Core {
         // added during either turn have not been incorporated in this plan.
         let answered = self.store.last_orchestration_answered(conversation)?;
         let project_text = project.to_string_lossy().into_owned();
-        let planning_gaps = planning_gaps(specs);
+        let planning_gaps = [planning_gaps(specs), advice]
+            .into_iter()
+            .flatten()
+            .reduce(|gaps, advice| format!("{gaps}\n\n{advice}"));
         if !config.policy.required_gates && !tasks::missing_quality_agents(specs).is_empty() {
             let _ = self.store.append_event(
                 conversation,
@@ -3151,6 +3200,7 @@ impl Core {
             "turn_started",
             json!({
                 "role": role,
+                "branch": git::session_branch(&cwd).ok(),
                 "provider": provider,
                 "model": profile.as_ref().ok().and_then(|profile| profile.model.clone()),
                 "effort": profile.as_ref().ok().and_then(|profile| profile.native_effort.clone()),
@@ -3438,6 +3488,81 @@ impl Core {
     }
 
     /// Sets a status the task stops in, saying why (design §8.4).
+    /// A worker said once what stops it: the rounds end here, with the
+    /// blocker on the card, and the orchestrator hears of it with the plan.
+    fn stop_blocked(
+        &self,
+        conversation: &str,
+        task: &mut Task,
+        report: String,
+        blocker: &blocker::Blocker,
+    ) -> Result<()> {
+        task.report = Some(report);
+        task.verdict = None;
+        task.feedback = Some(json!({"round": task.round, "blocker": blocker}));
+        self.stop(
+            conversation,
+            task,
+            status::NEEDS_USER,
+            Some(&blocker.summary()),
+        )
+    }
+
+    /// Inserts the task the orchestrator wrote before the blocked one; the
+    /// blocked task resumes when it is approved.
+    fn add_unblocker(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan: &str,
+        step: &tasks::Unblocking,
+    ) -> Result<String> {
+        let spec = step
+            .spec
+            .clone()
+            .ok_or_else(|| Error::Invalid("add_task needs a `spec`".into()))?;
+        let _graph = self.graph_updates.lock().expect("graph update mutex");
+        let blocked = self.task_unscoped(plan, &step.task)?;
+        require(
+            !blocker_of(&blocked).is_some_and(|blocker| blocker.for_user()),
+            "a refused permission is left to the user; another agent runs under the same sandbox",
+        )?;
+        let id = spec.id.clone();
+        self.store.insert_unblocker(conversation, &blocked, spec)?;
+        let note = format!(
+            "Your blocker was handed to task {id}, which runs and is verified before you \
+             resume. Its report is among your upstream data: continue from it."
+        );
+        self.store.add_mail(
+            conversation,
+            &format!("worker:{}", blocked.id),
+            &Mail {
+                id: 0,
+                created_ms: 0,
+                delivered_turn: None,
+                delivered_ms: None,
+                sender: RUNTIME.into(),
+                recipient: format!("worker:{}", blocked.id),
+                kind: "guidance".into(),
+                text: note,
+                state: "queued".into(),
+            },
+        )?;
+        self.store.append_event(
+            conversation,
+            None,
+            Some(plan),
+            "task_recovery",
+            &json!({"actor": ORCHESTRATOR, "task": blocked.id,
+                    "action": tasks::action::ADD_TASK, "status": status::QUEUED,
+                    "detail": format!("inserted {id} before {}", step.task)}),
+        )?;
+        for spec_id in [&id, &step.task] {
+            self.announce_task(conversation, &self.task_unscoped(plan, spec_id)?, None);
+        }
+        self.maybe_continue_plan(conversation, plan)?;
+        Ok(format!("{} waits for {id}", status::QUEUED))
+    }
+
     fn stop(
         &self,
         conversation: &str,
@@ -3748,14 +3873,18 @@ impl Core {
         let resumed = task.round > 0;
         let first_round = task.round + 1;
         // Supervised: a few rounds run on their own, then the user decides.
-        // Autonomous: rounds go on until approval or until the verifier
-        // repeats its findings, which means the worker is not getting closer.
-        let last_round = if autonomous {
-            u32::MAX
-        } else {
-            first_round + tasks::MAX_ROUNDS - 1
-        };
+        // Autonomous: more of them, and they end early when the verifier
+        // repeats its findings or keeps the same obligations open, which
+        // means the worker is not getting closer.
+        let last_round = first_round
+            + if autonomous {
+                tasks::AUTONOMOUS_ROUNDS
+            } else {
+                tasks::MAX_ROUNDS
+            }
+            - 1;
         let mut previous: Option<String> = None;
+        let mut progress = progress::Progress::default();
         for round in first_round..=last_round {
             let config = self.config_snapshot();
             task.round = round;
@@ -3882,6 +4011,9 @@ impl Core {
                 task.report = Some(report);
                 task.verdict = None;
                 return self.stop(conversation, task, status::NEEDS_USER, Some(&question));
+            }
+            if let Some(blocker) = blocker::parse(&report) {
+                return self.stop_blocked(conversation, task, report, &blocker);
             }
             let (report, stated) = tasks::parse_effect(&report);
             task.report = Some(report.clone());
@@ -4163,20 +4295,17 @@ impl Core {
                 );
             }
             let text = tasks::findings_key(&verdict.findings);
-            if previous.as_deref() == Some(text.as_str()) {
-                let report = task.report.take().unwrap_or_default();
-                task.report = Some(format!(
-                    "{report}\n\n[runtime] the verifier repeated the same findings; \
+            let repeated = previous.as_deref() == Some(text.as_str());
+            if repeated || progress.record(progress::open_obligations(&verdict)) {
+                let why = if repeated {
+                    "the verifier repeated the same findings; the worker is not getting closer"
+                } else {
+                    "the verifier left the same obligations open for several rounds; \
                      the worker is not getting closer"
-                ));
-                return self.stop(
-                    conversation,
-                    task,
-                    status::NEEDS_USER,
-                    Some(
-                        "the verifier repeated the same findings; the worker is not getting closer",
-                    ),
-                );
+                };
+                let report = task.report.take().unwrap_or_default();
+                task.report = Some(format!("{report}\n\n[runtime] {why}"));
+                return self.stop(conversation, task, status::NEEDS_USER, Some(why));
             }
             previous = Some(text);
             findings = verdict.findings;
@@ -5308,6 +5437,7 @@ fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
          user has answered, carry out their decision with a ```recover block (format below).\n"
     });
     let mut blocked_ids = Vec::new();
+    let mut user_only = Vec::new();
     for task in tasks.iter().filter(|task| {
         task.status == status::NEEDS_USER
             || task.status == status::WAITING
@@ -5315,11 +5445,20 @@ fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
     }) {
         let id = task.spec["id"].as_str().unwrap_or(&task.id);
         blocked_ids.push(id.to_owned());
-        let why = task
-            .report
-            .as_deref()
-            .and_then(|report| report.rsplit("\n\n").next())
-            .unwrap_or("no reason recorded");
+        let why = match blocker_of(task) {
+            Some(blocker) => {
+                if blocker.for_user() {
+                    user_only.push(id.to_owned());
+                }
+                blocker.summary()
+            }
+            None => task
+                .report
+                .as_deref()
+                .and_then(|report| report.rsplit("\n\n").next())
+                .unwrap_or("no reason recorded")
+                .to_owned(),
+        };
         let why: String = why.trim().chars().take(400).collect();
         text.push_str(&format!(
             "\n- {id} \"{}\" is {} after {} round(s): {why}",
@@ -5347,7 +5486,33 @@ fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
          ```recover\n{\"actions\":[{\"task\":\"t2\",\"action\":\"retry_with_guidance\",\
          \"message\":\"what to do differently\"}]}\n```",
     );
+    text.push_str(
+        "\n\nA task that reported a blocker (`blocked (MissingInput)` or \
+         `(UnsatisfiableRequirement)` above) is not helped by another try: its worker said \
+         what it lacks. Insert a read-only task before it with `add_task`; the runtime \
+         puts it first, and the blocked task resumes when it is approved:\n\
+         ```recover\n{\"actions\":[{\"task\":\"t2\",\"action\":\"add_task\",\"spec\":{\
+         \"id\":\"t2-inventory\",\"title\":\"...\",\"goal\":\"what must be true \
+         afterwards, with the evidence to give\",\"kind\":\"analysis\",\"depends_on\":[],\
+         \"scope\":[\"src\"],\"verifier\":{\"focus\":\"...\"}}}]}\n```\n\
+         Its requirements are the blocked task's own; it cannot write, and a blocker is \
+         tried at most twice.",
+    );
+    if !user_only.is_empty() {
+        text.push_str(&format!(
+            "\nOnly the user can lift the permission blocker of {}: another agent runs under \
+             the same sandbox. Tell the user what to change; do not add a task for it.",
+            user_only.join(", ")
+        ));
+    }
     text
+}
+
+/// The blocker a worker reported in the task's current round, if any.
+fn blocker_of(task: &Task) -> Option<blocker::Blocker> {
+    let feedback = task.feedback.as_ref()?;
+    tasks::feedback_is_current(feedback, u64::from(task.round))
+        .then(|| serde_json::from_value(feedback["blocker"].clone()).ok())?
 }
 
 fn orchestrator_prompt(

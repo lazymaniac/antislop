@@ -29,11 +29,47 @@ fn ok(dir: &Path, args: &[&str]) -> Result<String> {
     }
 }
 
+/// Keep generated commits to one Conventional Commits subject, without a body.
+fn commit_subject(message: &str) -> String {
+    let subject = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let conventional = subject
+        .split_once(": ")
+        .is_some_and(|(header, description)| {
+            let header = header.strip_suffix('!').unwrap_or(header);
+            let kind = if let Some((kind, scope)) = header.split_once('(') {
+                if !scope.ends_with(')')
+                    || scope.len() <= 1
+                    || scope
+                        .strip_suffix(')')
+                        .unwrap_or(scope)
+                        .contains(['(', ')', ' '])
+                {
+                    return false;
+                }
+                kind
+            } else {
+                header
+            };
+            !description.is_empty()
+                && !kind.is_empty()
+                && kind.bytes().all(|byte| byte.is_ascii_lowercase())
+        });
+    if conventional {
+        subject
+    } else if subject.is_empty() {
+        "chore: update task changes".to_owned()
+    } else {
+        format!("chore: {subject}")
+    }
+}
+
 /// The working tree as it is now (tracked and untracked files, ignored ones
 /// left out) recorded as a commit on top of HEAD, without touching the user's
 /// index, files or branch. A copy of the index keeps git from re-reading
 /// files that did not change, so the cost follows the changes, not the repo.
 pub fn snapshot(dir: &Path, message: &str) -> Result<String> {
+    let subject = commit_subject(message);
+    let message = subject.as_str();
     let index = PathBuf::from(ok(dir, &["rev-parse", "--git-path", "index"])?);
     let index = if index.is_absolute() {
         index
@@ -92,6 +128,8 @@ pub fn snapshot(dir: &Path, message: &str) -> Result<String> {
 /// Commits exactly `files` as they are in the working tree, whatever else
 /// the user has staged or changed.
 pub fn commit_paths(dir: &Path, files: &[String], message: &str) -> Result<String> {
+    let subject = commit_subject(message);
+    let message = subject.as_str();
     let mut add = vec!["--literal-pathspecs", "add", "--all", "--"];
     add.extend(files.iter().map(String::as_str));
     ok(dir, &add)?;
@@ -265,6 +303,8 @@ pub fn working_tree_fingerprint(project: &Path, scope: &[String]) -> String {
 /// Commits everything the worker changed. Returns the new HEAD (unchanged if
 /// the worker changed nothing).
 pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
+    let subject = commit_subject(message);
+    let message = subject.as_str();
     ok(worktree, &["add", "--all"])?;
     if !git(worktree, &["diff", "--cached", "--quiet"])?
         .status
@@ -431,6 +471,8 @@ fn changed_paths(
 
 /// One commit holding everything from `base` to `result`, titled `message`.
 pub fn squash(worktree: &Path, base: &str, message: &str) -> Result<String> {
+    let subject = commit_subject(message);
+    let message = subject.as_str();
     let tree = ok(worktree, &["rev-parse", "HEAD^{tree}"])?;
     ok(
         worktree,
@@ -668,6 +710,35 @@ fn write_files(project: &Path, rev: &str, files: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_commits_have_one_conventional_subject() {
+        let repo = repo();
+        let path = repo.path();
+        let base = head(path).unwrap();
+        std::fs::write(path.join("a.txt"), "changed").unwrap();
+        let commit = commit_paths(
+            path,
+            &["a.txt".into()],
+            "fix(core): repair task\n\nwith details",
+        )
+        .unwrap();
+        assert_eq!(
+            ok(path, &["show", "-s", "--format=%B", &commit]).unwrap(),
+            "fix(core): repair task with details"
+        );
+        let snapshot = snapshot(path, "Save state\nfor retry").unwrap();
+        assert_eq!(
+            ok(path, &["show", "-s", "--format=%B", &snapshot]).unwrap(),
+            "chore: Save state for retry"
+        );
+        let squashed = squash(path, &base, "feat(ui)!: show branch\n").unwrap();
+        assert_eq!(
+            ok(path, &["show", "-s", "--format=%B", &squashed]).unwrap(),
+            "feat(ui)!: show branch"
+        );
+        assert_eq!(commit_subject("  "), "chore: update task changes");
+    }
 
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

@@ -7,6 +7,8 @@ mod graph_edit;
 mod history;
 #[path = "run_context.rs"]
 mod run_context;
+#[path = "unblocker.rs"]
+mod unblocker;
 #[path = "workflow.rs"]
 mod workflow;
 pub use history::{AgentMessage, ContentOwner, HistoryScope};

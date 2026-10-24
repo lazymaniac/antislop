@@ -33,6 +33,10 @@ pub struct TaskSpec {
     pub depends_on: Vec<String>,
     pub kind: WorkKind,
     pub verifier: VerifierSpec,
+    /// The blocked task whose blocker this task clears. Only the runtime's
+    /// unblocking path sets it; a plan or a graph edit may not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolves: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,6 +63,12 @@ pub struct Verdict {
 
 pub const MAX_ROUNDS: u32 = 3;
 
+/// The most rounds an autonomous task runs on its own before it waits for
+/// the user, whether or not the verifier keeps finding something new.
+pub const AUTONOMOUS_ROUNDS: u32 = 12;
+
+const RESOLVES_IS_THE_RUNTIMES: &str = "`resolves` is set by the runtime when it inserts a task for a blocker; leave it out of plans and graph edits (use `add_task` in a ```recover block)";
+
 pub mod status {
     pub const STALE: &str = "stale";
     pub const PROPOSED: &str = "proposed";
@@ -84,7 +94,7 @@ pub mod status {
 }
 
 /// The last ```<tag> fenced block: its body, and the text with it removed.
-fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
+pub(crate) fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
     let open = format!("```{tag}");
     let start = text.rfind(&open)?;
     let body_start = start + open.len();
@@ -281,6 +291,10 @@ pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskSpec>>>) {
         .map_err(Error::from)
         .and_then(|plan| {
             let _ = (plan.run_id, plan.option_id, plan.options_revision);
+            crate::require(
+                plan.tasks.iter().all(|task| task.resolves.is_none()),
+                RESOLVES_IS_THE_RUNTIMES,
+            )?;
             validate(&plan.tasks)?;
             Ok(plan.tasks)
         });
@@ -318,6 +332,13 @@ pub fn parse_graph_edit(
                 crate::require(
                     seen.insert(task.id.clone()),
                     "duplicate task in graph revision",
+                )?;
+                crate::require(
+                    task.resolves.is_none()
+                        || current
+                            .iter()
+                            .any(|old| old.id == task.id && old.resolves == task.resolves),
+                    RESOLVES_IS_THE_RUNTIMES,
                 )?;
                 if let Some(existing) = merged.iter_mut().find(|existing| existing.id == task.id) {
                     *existing = task;
@@ -367,6 +388,9 @@ pub struct Unblocking {
     pub action: String,
     #[serde(default)]
     pub message: Option<String>,
+    /// The task `add_task` inserts before `task`.
+    #[serde(default)]
+    pub spec: Option<TaskSpec>,
 }
 
 /// Splits the ```recover block off an orchestrator answer. Returns the answer
@@ -821,6 +845,7 @@ pub fn with_required_agents(mut tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
             _ => (agent.title, agent.focus),
         };
         tasks.push(TaskSpec {
+            resolves: None,
             requirement_ids: tasks
                 .iter()
                 .flat_map(|t| t.requirement_ids.clone())
@@ -882,6 +907,7 @@ pub fn with_options(tasks: Vec<TaskSpec>) -> Vec<TaskSpec> {
         if task.writes && !task.depends_on.iter().any(|id| options.contains(id)) {
             let id = reserve_task_id(&format!("{}-options", task.id), &mut ids);
             result.push(TaskSpec {
+                resolves: None,
                 id: id.clone(),
                 requirement_ids: task.requirement_ids.clone(),
                 criterion_ids: task.criterion_ids.clone(),
@@ -962,7 +988,12 @@ pub fn obligations(task: &TaskSpec) -> Vec<(String, String)> {
             .enumerate()
             .map(move |(index, check)| (format!("{prefix}{}", index + 1), check.to_owned()))
     };
-    risks
+    let clears = task
+        .resolves
+        .iter()
+        .map(|blocked| ("B1".to_owned(), super::blocker::obligation(blocked)));
+    clears
+        .chain(risks)
         .chain(numbered("V", COMMON_CHECKS))
         .chain(numbered("C", checklist(task.kind)))
         .chain(super::risks::for_kind(task.kind))
@@ -1295,6 +1326,7 @@ pub mod action {
     pub const FORCE_APPROVE: &str = "force_approve";
     pub const CANCEL_TASK: &str = "cancel_task";
     pub const UNBLOCK: &str = "unblock";
+    pub const ADD_TASK: &str = "add_task";
 }
 
 /// Actions that start the work over: whatever an earlier round showed on
@@ -1302,7 +1334,7 @@ pub mod action {
 pub fn resets_card(action: &str) -> bool {
     matches!(
         action,
-        action::RETRY_WITH_GUIDANCE | action::EXTEND_ROUNDS | action::UNBLOCK
+        action::RETRY_WITH_GUIDANCE | action::EXTEND_ROUNDS | action::UNBLOCK | action::ADD_TASK
     )
 }
 
@@ -1327,7 +1359,7 @@ pub fn feedback_is_current(feedback: &Value, round: u64) -> bool {
 /// How one obligation of a verdict counts, on a card and in `unaccounted`
 /// alike: only a status the verdict format allows, with a note, is an
 /// answer; an entry with a valid status but no note counts as `missing`.
-fn counted_status(entry: &Value) -> &'static str {
+pub(crate) fn counted_status(entry: &Value) -> &'static str {
     let status = entry["status"].as_str().map(str::to_ascii_lowercase);
     let noted = entry["note"]
         .as_str()
@@ -1500,6 +1532,9 @@ pub fn orchestrator_instructions() -> String {
          3. **Implementation**: The runtime starts workers only after the user accepts \
          the reviewed plan. Respond to plan comments with revisions before approval; \
          during execution coordinate results and verification. You remain read-only.\n\n\
+         For writer tasks, use a single-line Conventional Commits title: type(scope): description, \
+         with an optional scope and a type matching the change (feat, fix, refactor, docs, test, build, ci, perf, chore). \
+         The runtime uses this title as the commit subject, without a body.\n\n\
          For tasks you author, write both `summary` fields in the user's language. \
          Standard descriptions of built-in roles and automatically added quality gates \
          may use the interface language. Each summary is one concise semantic sentence \
@@ -1847,6 +1882,7 @@ pub fn worker_prompt(
     autonomous: bool,
 ) -> String {
     let binding = if task.writes { OPTIONS_BINDING } else { "" };
+    let blocker_note = super::blocker::worker_note(task);
     let others: Vec<String> = team
         .iter()
         .filter(|other| other.id != task.id)
@@ -1867,7 +1903,7 @@ pub fn worker_prompt(
          Task: {}\nTask id: {}\nGoal: {}\nScope: {}\n\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          Stop and say so in your report when the goal cannot be reached without \
          something outside your task: a decision, access, or another task's \
-         result.\n\n{team}{EFFECT_FORMAT}\n\n\
+         result.\n\n{blocker_note}{team}{EFFECT_FORMAT}\n\n\
          End with a complete report of your result; an independent verifier \
          will check it against the files.",
         task.title,
@@ -2634,6 +2670,7 @@ mod tests {
         let generated = with_options(vec![
             task.clone(),
             TaskSpec {
+                resolves: None,
                 id: format!("{}-2", "x".repeat(254)),
                 ..task
             },
@@ -2887,6 +2924,7 @@ mod tests {
     #[test]
     fn parallel_peers_follow_long_dependency_chains() {
         let task = |at: usize, deps: Vec<String>| TaskSpec {
+            resolves: None,
             requirement_ids: vec![],
             criterion_ids: vec![],
             id: format!("t{at}"),

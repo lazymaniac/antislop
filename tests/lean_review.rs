@@ -12,9 +12,9 @@ def bump(name):
     n = int(open(path).read()) + 1 if os.path.exists(path) else 1
     open(path, "w").write(str(n))
     return n
+import re
 def cover(answer):
-    import re
-    ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([BRCV][0-9]+): ", prompt, re.M)
     if not ids or "```verdict" not in answer:
         return answer
     head, body = answer.rsplit("```verdict", 1)
@@ -152,6 +152,135 @@ if "You review a plan" in prompt or "new plan:" in prompt:
         "proposed",
         "the rejected plan cannot be accepted"
     );
+}
+
+#[test]
+fn a_plan_no_agent_can_carry_out_goes_back_before_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        false,
+        r#"
+broken = task("t1", "Change it")
+broken["kind"] = "implementation"
+if "checked the proposed plan" in prompt:
+    answer = plan(task("t1", "Change it, readable"))
+else:
+    answer = plan(broken)
+"#,
+        r#"
+if "You review a plan" in prompt or "new plan:" in prompt:
+    say("plan", verdict(True))
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "change the code");
+
+    let messages = core.store.messages_after(&conversation, 0).unwrap();
+    let sent_back = messages
+        .iter()
+        .find(|message| message.author == "plan-lint")
+        .expect("the orchestrator is told before any review");
+    assert!(
+        sent_back
+            .text
+            .contains("- t1 [implementation-is-read-only]")
+    );
+    let reviews = events(&core, &conversation, "plan_review");
+    assert!(reviews.is_empty(), "the verifier never saw the broken plan");
+    let proposed = events(&core, &conversation, "plan_proposed");
+    assert_eq!(proposed.len(), 1);
+    assert_eq!(proposed[0]["tasks"][0]["title"], "Change it, readable");
+}
+
+#[test]
+fn a_blocker_is_cleared_by_a_task_inserted_before_the_blocked_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"
+fix = {"id": "inv", "title": "Inventory", "goal": "Produce the inventory", "kind": "analysis",
+       "verifier": {"focus": "f"}}
+if "blocked (MissingInput)" in prompt:
+    answer = "Adding a task.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
+elif "[runtime]" in prompt:
+    answer = "done"
+else:
+    answer = plan(task("t1", "Work"))
+"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "You verify" in prompt or "updated report" in prompt:
+    say("verifier", verdict(True))
+elif "Task id: t1" in prompt and bump("t1") == 1:
+    say("worker", "Cannot go on.\n```blocker\n" + json.dumps({"kind": "missing_input", "needs": "an inventory", "why": "none exists"}) + "\n```")
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "work");
+
+    let plan = core.store.latest_plan(&conversation).unwrap();
+    let ids: Vec<_> = plan
+        .iter()
+        .map(|t| t.spec["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["inv", "t1"], "inserted before the blocked task");
+    assert!(plan.iter().all(|t| t.status == "approved"), "{plan:#?}");
+    assert_eq!(plan[0].spec["resolves"], "t1");
+    assert_eq!(plan[1].spec["depends_on"][0], "inv");
+    assert_eq!(plan[1].round, 2, "the blocked task resumed in a new round");
+    let recoveries = events(&core, &conversation, "task_recovery");
+    assert_eq!(recoveries[0]["action"], "add_task");
+    let messages = core.store.messages_after(&conversation, 0).unwrap();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.text.contains("blocked (MissingInput)"))
+    );
+}
+
+#[test]
+fn a_refused_permission_is_left_to_the_user_not_to_another_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"
+fix = {"id": "inv", "title": "Inventory", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}}
+if "blocked (Permission)" in prompt:
+    answer = "Trying.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
+elif "[runtime]" in prompt:
+    answer = "done"
+else:
+    answer = plan(task("t1", "Work"))
+"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "Task id: t1" in prompt:
+    say("worker", "Denied.\n```blocker\n" + json.dumps({"kind": "permission", "needs": "write access", "why": "sandbox"}) + "\n```")
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "work");
+
+    let plan = core.store.latest_plan(&conversation).unwrap();
+    assert_eq!(plan.len(), 1, "no task was inserted");
+    assert_eq!(plan[0].status, "needs_user");
+    let notices = events(&core, &conversation, "notice");
+    assert!(notices.iter().any(|n| {
+        n["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("left to the user"))
+    }));
+    let messages = core.store.messages_after(&conversation, 0).unwrap();
+    assert!(messages.iter().any(|m| {
+        m.text
+            .contains("Only the user can lift the permission blocker of t1")
+    }));
 }
 
 #[test]
@@ -293,6 +422,73 @@ else:
             .unwrap()
             .contains("not getting closer")
     );
+}
+
+#[test]
+fn the_same_obligations_open_round_after_round_stop_the_rounds_however_they_are_worded() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "found problems" in prompt:
+    say("worker", "report")
+elif "You verify" in prompt or "updated report" in prompt:
+    n = bump("verdicts")
+    ids = re.findall(r"^- ([BRCV][0-9]+): ", prompt, re.M)
+    cov = {i: {"status": "ok", "note": "checked"} for i in ids}
+    cov["V1"] = {"status": "issue", "note": "open %d" % n}
+    findings = [{"severity": "high", "issue": "case %d" % n, "where": "a"}]
+    say("verifier", "```verdict\n" + json.dumps({"approved": False, "findings": findings, "coverage": cov}) + "\n```", False)
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "fix");
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "needs_user");
+    assert_eq!(task.round, 4, "three rounds in a row without a new best");
+    let report = task.report.as_deref().unwrap();
+    assert!(
+        report.contains("left the same obligations open"),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_autonomous_task_stops_at_the_ceiling_even_when_the_problems_keep_changing() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "found problems" in prompt:
+    say("worker", "report")
+elif "You verify" in prompt or "updated report" in prompt:
+    n = bump("verdicts")
+    ids = re.findall(r"^- ([BRCV][0-9]+): ", prompt, re.M)
+    cov = {i: {"status": "ok", "note": "checked"} for i in ids}
+    cov["V1" if n % 2 else "V2"] = {"status": "issue", "note": "open %d" % n}
+    findings = [{"severity": "high", "issue": "case %d" % n, "where": "a"}]
+    say("verifier", "```verdict\n" + json.dumps({"approved": False, "findings": findings, "coverage": cov}) + "\n```", False)
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "fix");
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "needs_user");
+    assert_eq!(task.round, 12, "AUTONOMOUS_ROUNDS");
+    let last = events(&core, &conversation, "task").pop().unwrap();
+    assert!(last["reason"].as_str().unwrap().contains("are over"));
 }
 
 #[test]

@@ -69,13 +69,14 @@ const MAX_SUMMARY_LINES: usize = 5;
 const MAX_EFFECT_LINES: usize = 2;
 /// Fixed slots inside a card, counted from its top, each starting right
 /// where the previous block can end: title, agent and work kind, phase, verifier state, one activity
-/// line, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
+/// line, the working branch, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
 /// effect lines and the meta line at the bottom. The height is that same
 /// arithmetic's end, so frame and slots are one rule that cannot drift
 /// apart: heights and positions depend only on the plan's shape, filters
 /// and grouping — never on activity, an effect, a verdict or a retry.
 const ACTIVITY_ROW: u16 = 4;
-const BODY_ROW: u16 = ACTIVITY_ROW + 1;
+const BRANCH_ROW: u16 = ACTIVITY_ROW + 1;
+const BODY_ROW: u16 = BRANCH_ROW + 1;
 const EFFECT_ROW: u16 = BODY_ROW + MAX_SUMMARY_LINES as u16;
 pub const HEIGHT: u16 = EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1;
 const GAP_X: u16 = 6;
@@ -1419,6 +1420,34 @@ fn draw_node(
             fill.patch(style),
         );
     }
+    let branch_key = if let Some(task) = task {
+        format!(
+            "{}:{}",
+            if task.status == "verifying" {
+                "verifier"
+            } else {
+                "worker"
+            },
+            task.id
+        )
+    } else {
+        let members = card_members(view, &node.key);
+        current_round(view, &members)
+            .unwrap_or(&node.key)
+            .to_owned()
+    };
+    if let Some(branch) = view
+        .agents
+        .get(&branch_key)
+        .and_then(|agent| agent.branch.as_deref())
+    {
+        canvas.text(
+            x + 2,
+            y + BRANCH_ROW,
+            &truncate(&format!("branch: {branch}"), inner),
+            fill.patch(theme.dim()),
+        );
+    }
     let summary = if let Some(task) = task.filter(|task| {
         task.verifier_summary
             .as_ref()
@@ -1688,6 +1717,23 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_card_shows_recorded_branch() {
+        let mut view = View::default();
+        view.agents.insert(
+            ORCHESTRATOR.into(),
+            super::super::view::Agent {
+                branch: Some("feature/tasks".into()),
+                ..Default::default()
+            },
+        );
+        let graph = Graph::new(&view);
+        let node = graph.node(ORCHESTRATOR).unwrap();
+        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, HEIGHT);
+        graph.render(&view, &mut canvas, Filter::All, ORCHESTRATOR);
+        assert!(canvas.lines().join("\n").contains("branch: feature/tasks"));
+    }
+
     #[test]
     fn requirements_rounds_share_one_card_that_fits() {
         let mut view = View::default();
@@ -2275,7 +2321,8 @@ mod tests {
         use serde_json::json;
         // Slots follow one arithmetic: the height ends where the last
         // block ends, so no block can overrun the meta row.
-        assert_eq!(BODY_ROW, ACTIVITY_ROW + 1);
+        assert_eq!(BRANCH_ROW, ACTIVITY_ROW + 1);
+        assert_eq!(BODY_ROW, BRANCH_ROW + 1);
         assert_eq!(EFFECT_ROW, BODY_ROW + MAX_SUMMARY_LINES as u16);
         assert_eq!(HEIGHT, EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1);
         let mut row = task("t1", &["t0"]);

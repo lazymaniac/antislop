@@ -163,6 +163,8 @@ pub struct TaskRow {
 /// `plan-verifier`, `auditor`, `worker:t1`, `verifier:t1`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Agent {
+    /// Actual branch in the latest turn's working directory.
+    pub branch: Option<String>,
     pub provider: String,
     /// The model and native effort of its latest turn, when configured.
     pub model: Option<String>,
@@ -830,6 +832,7 @@ impl View {
                 let model = payload["model"].as_str().map(str::to_owned);
                 let effort = payload["effort"].as_str().map(str::to_owned);
                 let agent = self.agents.entry(key.clone()).or_default();
+                agent.branch = payload["branch"].as_str().map(clean_line);
                 agent.provider = provider.clone();
                 agent.model = model.clone();
                 agent.effort = effort.clone();
@@ -2228,6 +2231,28 @@ pub fn transcript_empty_state(width: usize) -> Vec<Line<'static>> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn turn_branch_is_replayed_and_cleared_when_unreported() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            Some("t"),
+            "turn_started",
+            json!({"role":"orchestrator", "branch":"feature/tasks"}),
+        ));
+        assert_eq!(
+            view.agents[ORCHESTRATOR].branch.as_deref(),
+            Some("feature/tasks")
+        );
+        view.apply(&event(
+            2,
+            Some("next"),
+            "turn_started",
+            json!({"role":"orchestrator"}),
+        ));
+        assert_eq!(view.agents[ORCHESTRATOR].branch, None);
+    }
 
     fn event(seq: u64, turn: Option<&str>, kind: &str, payload: Value) -> Value {
         json!({"seq": seq, "turn_id": turn, "kind": kind, "payload": payload})
