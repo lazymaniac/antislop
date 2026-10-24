@@ -177,21 +177,8 @@ pub(crate) fn round_handoff_prompt(
     handoff: &crate::lean::rounds::RoundHandoff,
     verifier: bool,
 ) -> String {
-    let protection = if handoff.in_place {
-        user_edits_note(&handoff.protected_paths)
-    } else if handoff.protected_paths.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\nChanges already present in the primary working tree at {}:\n{}\nPreserve these changes when integrating. Work only in the allocated worktree; never edit the primary tree during repair. These paths do not prohibit task changes inside your own worktree.\n",
-            handoff.primary.display(),
-            serde_json::json!(handoff.protected_paths)
-        )
-    };
-    let report = handoff.report.as_ref().map_or_else(
-        || "No completed worker report is available.".to_owned(),
-        |(round, report)| format!("Latest worker report (source round {round}):\n{report}"),
-    );
+    let protection = handoff_protection(handoff);
+    let report = latest_report(handoff);
     format!(
         "\n\nRound handoff\nFull task and working rules: {}\nWorktree: {}\nRound: {}\nInterrupted before a report: {}\n{}\nPrevious verifier findings and evidence: {}\nBase commit: {:?}\nLatest result commit: {:?}\nFiles changed in earlier rounds: {}\nInspect the actual files, uncommitted changes and the Git diff between the base and latest result yourself. Preserve user changes and follow repository instructions. A verifier must assess every obligation and the complete task, including areas outside earlier findings.\n{}{}",
         serde_json::json!(handoff.task),
@@ -207,16 +194,45 @@ pub(crate) fn round_handoff_prompt(
         handoff.result,
         serde_json::json!(handoff.files),
         dependency_reports_note(&handoff.dependencies),
-        format_args!(
-            "\nPrevious round interruptions (fresh session continues from files and the report):\n{}\n{}Current open comments:\n{}{}",
-            serde_json::json!(handoff.interruptions),
-            if verifier {
-                requirements_note(&handoff.requirements)
-            } else {
-                String::new()
-            },
-            serde_json::json!(handoff.comments),
-            protection
-        ),
+        format_args!("{}", handoff_tail(handoff, verifier, &protection)),
+    )
+}
+
+fn handoff_protection(handoff: &crate::lean::rounds::RoundHandoff) -> String {
+    if handoff.in_place {
+        return user_edits_note(&handoff.protected_paths);
+    }
+    if handoff.protected_paths.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\nChanges already present in the primary working tree at {}:\n{}\nPreserve these changes when integrating. Work only in the allocated worktree; never edit the primary tree during repair. These paths do not prohibit task changes inside your own worktree.\n",
+        handoff.primary.display(),
+        serde_json::json!(handoff.protected_paths)
+    )
+}
+
+fn latest_report(handoff: &crate::lean::rounds::RoundHandoff) -> String {
+    handoff.report.as_ref().map_or_else(
+        || "No completed worker report is available.".to_owned(),
+        |(round, report)| format!("Latest worker report (source round {round}):\n{report}"),
+    )
+}
+
+fn handoff_tail(
+    handoff: &crate::lean::rounds::RoundHandoff,
+    verifier: bool,
+    protection: &str,
+) -> String {
+    format!(
+        "\nPrevious round interruptions (fresh session continues from files and the report):\n{}\n{}Current open comments:\n{}{}",
+        serde_json::json!(handoff.interruptions),
+        if verifier {
+            requirements_note(&handoff.requirements)
+        } else {
+            String::new()
+        },
+        serde_json::json!(handoff.comments),
+        protection
     )
 }

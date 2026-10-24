@@ -1,5 +1,18 @@
 use super::*;
 
+type EncodedTaskRow = (
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 impl Store {
     pub fn turn_final_answer(&self, conversation: &str, turn: &str) -> Result<Option<String>> {
         let encoded:Option<String>=self.db().query_row("SELECT payload FROM events WHERE conversation_id=?1 AND turn_id=?2 AND kind='agent_final' ORDER BY seq DESC LIMIT 1",params![conversation,turn],|row|row.get(0)).optional()?;
@@ -97,42 +110,53 @@ impl Store {
                 ))
             })
             .optional()?;
-        task.map(
-            |(id, plan_id, spec, status, round, report, verdict, base, result, feedback)| {
-                Ok(Task {
-                    input_generation: db
-                        .query_row(
-                            "SELECT generation FROM task_inputs WHERE task_id=?1",
-                            [&id],
-                            |r| r.get(0),
-                        )
-                        .optional()?
-                        .unwrap_or(0),
-                    id,
-                    plan_id,
-                    spec: serde_json::from_str(&spec)?,
-                    status,
-                    round: round as u32,
-                    report: report
-                        .as_deref()
-                        .map(|text| self.content.decode(text))
-                        .transpose()?,
-                    verdict: verdict
-                        .map(|v| {
-                            self.content
-                                .decode(&v)
-                                .and_then(|text| Ok(serde_json::from_str(&text)?))
-                        })
-                        .transpose()?,
-                    base,
-                    result,
-                    feedback: feedback.map(|v| serde_json::from_str(&v)).transpose()?,
-                    freshness_token: None,
-                    checks: None,
-                })
-            },
-        )
-        .transpose()
+        task.map(|row| self.decode_task_row(&db, row)).transpose()
+    }
+
+    fn decode_task_row(
+        &self,
+        db: &rusqlite::Connection,
+        (id, plan_id, spec, status, round, report, verdict, base, result, feedback): EncodedTaskRow,
+    ) -> Result<Task> {
+        let input_generation = Self::task_input_generation(db, &id)?;
+        let decoded_verdict = verdict
+            .map(|encoded| self.decode_content_json(&encoded))
+            .transpose()?;
+        Ok(Task {
+            input_generation,
+            id,
+            plan_id,
+            spec: serde_json::from_str(&spec)?,
+            status,
+            round: round as u32,
+            report: report
+                .as_deref()
+                .map(|text| self.content.decode(text))
+                .transpose()?,
+            verdict: decoded_verdict,
+            base,
+            result,
+            feedback: feedback
+                .map(|encoded| serde_json::from_str(&encoded))
+                .transpose()?,
+            freshness_token: None,
+            checks: None,
+        })
+    }
+
+    fn task_input_generation(db: &rusqlite::Connection, task_id: &str) -> Result<i64> {
+        Ok(db
+            .query_row(
+                "SELECT generation FROM task_inputs WHERE task_id=?1",
+                [task_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
+    }
+
+    fn decode_content_json(&self, encoded: &str) -> Result<Value> {
+        Ok(serde_json::from_str(&self.content.decode(encoded)?)?)
     }
 
     /// Checks if a plan belongs to the conversation.
@@ -235,6 +259,25 @@ impl Store {
     /// Paginated list of all stored plans for a conversation.
     pub fn plans_page(&self, conversation: &str, offset: usize, limit: usize) -> Result<PlansPage> {
         self.conversation(conversation)?;
+        let (total, plan_ids, active_plan_id) = self.plan_page_rows(conversation, offset, limit)?;
+        let plans = self.load_plan_histories(conversation, &plan_ids)?;
+        let has_more = offset + plans.len() < total;
+        Ok(PlansPage {
+            plans,
+            offset,
+            limit,
+            total,
+            has_more,
+            active_plan_id,
+        })
+    }
+
+    fn plan_page_rows(
+        &self,
+        conversation: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(usize, Vec<String>, Option<String>)> {
         let (total, plan_ids, active_plan_id) = {
             let db = self.db();
             let total: i64 = db.query_row(
@@ -262,19 +305,17 @@ impl Store {
             (total, plan_ids, active_plan_id)
         };
 
-        let mut plans = Vec::with_capacity(plan_ids.len());
-        for pid in plan_ids {
-            plans.push(self.plan_history(conversation, &pid)?);
-        }
+        Ok((total, plan_ids, active_plan_id))
+    }
 
-        let has_more = offset + plans.len() < total;
-        Ok(PlansPage {
-            plans,
-            offset,
-            limit,
-            total,
-            has_more,
-            active_plan_id,
-        })
+    fn load_plan_histories(
+        &self,
+        conversation: &str,
+        plan_ids: &[String],
+    ) -> Result<Vec<PlanHistory>> {
+        plan_ids
+            .iter()
+            .map(|id| self.plan_history(conversation, id))
+            .collect()
     }
 }

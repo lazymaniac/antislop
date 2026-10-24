@@ -2,7 +2,7 @@
 
 Baseline: measured source snapshot `892e93d5c5b03a4da54a7c21c890acc6a0783192`, recorded in `tests/size_check/baseline-inventory.md`. The raw current repository diagnostic is retained in `core-size-diagnostic.txt`. The initial capture used `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .`; the latest refresh ran `cargo run --locked --quiet --bin diagnostic-size-check -- --root .` against current source. The expected exit code is 1 while violations remain.
 
-Current checker result after this repair: 293 repository violations, 0 classification errors; 39 violations in t4-owned `src/` paths. Four are file overages in extracted Core modules; the rest are callable overages in Core, Store, and Tasks. `src/lean/mod.rs` is now below the 299-line file limit. The initial t4 inventory contains 141 items. The 299-line file and 29-line callable limits remain unmet. Exit code 1. `core-size-diagnostic.txt` retains the exact raw full-repository output.
+Current checker result after the follow-up Store, prompt, and report extractions: 283 repository violations, 0 classification errors; 27 violations in t4-owned `src/` paths. Four are file overages in extracted Core modules; the rest are callable overages in Core and Store. `src/lean/mod.rs` remains below the 299-line file limit. The initial t4 inventory contains 141 items. The required limits remain unmet. Exit code 1. This worker did not update t3-owned diagnostic artifacts; the 283/27 result is from a direct local checker invocation and is recorded here as worker evidence.
 
 ## Every initial t4 violation
 
@@ -196,12 +196,47 @@ VIOLATION src/lean/tasks/validation.rs:153: callable parse_progress is 35 lines 
 VIOLATION src/lean/tasks/validation.rs:86: callable settle is 47 lines (limit 29)
 ```
 
+The follow-up Store, prompt, and report work reduced t4's latest count to 27. Current t4 violations from a direct checker invocation:
+
+```text
+VIOLATION src/lean/core_06_recover_task_as.rs:1: file is 576 lines (limit 299)
+VIOLATION src/lean/core_06_recover_task_as.rs:6: callable recover_task_as is 570 lines (limit 29)
+VIOLATION src/lean/core_10_orchestrator_turn.rs:1: file is 338 lines (limit 299)
+VIOLATION src/lean/core_10_orchestrator_turn.rs:5: callable orchestrator_turn is 333 lines (limit 29)
+VIOLATION src/lean/core_12_propose.rs:6: callable propose is 187 lines (limit 29)
+VIOLATION src/lean/core_14_turn_inner.rs:1: file is 371 lines (limit 299)
+VIOLATION src/lean/core_14_turn_inner.rs:4: callable turn_inner is 367 lines (limit 29)
+VIOLATION src/lean/core_15_record_check.rs:98: callable run_plan is 155 lines (limit 29)
+VIOLATION src/lean/core_16_run_task.rs:1: file is 592 lines (limit 299)
+VIOLATION src/lean/core_16_run_task.rs:6: callable run_task is 586 lines (limit 29)
+VIOLATION src/lean/core_17_repeats_a_plan_that_ran.rs:60: callable deliver is 109 lines (limit 29)
+VIOLATION src/lean/core_18_writer_base.rs:35: callable repair_writer_base is 63 lines (limit 29)
+VIOLATION src/lean/core_19_integrate.rs:6: callable integrate is 176 lines (limit 29)
+VIOLATION src/lean/core_20_repair_integration.rs:131: callable in_place_user_edits is 38 lines (limit 29)
+VIOLATION src/lean/core_20_repair_integration.rs:6: callable repair_integration is 124 lines (limit 29)
+VIOLATION src/lean/core_21_finish_in_place.rs:5: callable finish_in_place is 62 lines (limit 29)
+VIOLATION src/lean/core_21_finish_in_place.rs:68: callable stop_task is 34 lines (limit 29)
+VIOLATION src/lean/store/comment_mail_state.rs:9: callable resolve_listed_plan_comments is 30 lines (limit 29)
+VIOLATION src/lean/store/comments_and_mail/comments/insert.rs:38: callable persist_comment is 30 lines (limit 29)
+VIOLATION src/lean/store/history_queries.rs:116: callable decode_task_row is 30 lines (limit 29)
+VIOLATION src/lean/store/history_queries.rs:1: file is 321 lines (limit 299)
+VIOLATION src/lean/store/history_queries.rs:275: callable plan_page_rows is 35 lines (limit 29)
+VIOLATION src/lean/store/mail_and_events.rs:1: file is 320 lines (limit 299)
+VIOLATION src/lean/store/mail_and_events.rs:203: callable resolve_event_plan is 36 lines (limit 29)
+VIOLATION src/lean/store/plan_tasks.rs:40: callable dependency_reports is 36 lines (limit 29)
+VIOLATION src/lean/store/plan_tasks.rs:77: callable plan is 57 lines (limit 29)
+VIOLATION src/lean/store/sessions_and_plans.rs:108: callable interrupt_unfinished_tasks is 42 lines (limit 29)
+VIOLATION src/lean/store/sessions_and_plans.rs:200: callable add_plan is 43 lines (limit 29)
+VIOLATION src/lean/store/sessions_and_plans.rs:63: callable interrupt_running_turns is 44 lines (limit 29)
+```
+
 ## Ownership note
 
 The task-card scope lists `src/main.rs` and `src/transport.rs`, while the reviewed t2 ownership manifest assigns both to t5. Following the explicit instruction to follow that manifest, this worker left both paths untouched. The current diagnostic records the t5-owned transport violations `deserialize` (56 lines at line 16) and `read` (33 lines at line 119); main.rs has no current size violation.
 
 ## Behavioral fix record
 
+- During the Store task-row extraction, `task_by_id` deadlocked because the decoder reacquired the Store mutex while the query guard was live. Reproduced by `cargo test --locked --test lean_core`: the run stalled at `new_card_feedback_payloads_survive_storage_and_events` for over 60 seconds. The decoder now receives the held connection and reads `task_inputs` through it, preserving the original single-lock query behavior. Regression: `cargo test --locked --test lean_core new_card_feedback_payloads_survive_storage_and_events` passed (1 test). Intentional change: remove the accidental nested mutex acquisition introduced by this refactor; no API, row, event, serialization, transaction, or recovery contract changes.
 - During the `session_events_with_messages` helper extraction, the focused `session_events_page_references_and_enforce_ownership` test hung because scope validation tried to reacquire the Store mutex while a database guard was live. The refactor now validates scope before taking that guard, then drops the query guard before reading messages. The same regression test passes (1 passed). This is an implementation correction required to preserve the pre-existing behavior, not an intentional API or persistence contract change.
 
 ## Characterization and validation
@@ -223,3 +258,9 @@ The task-card scope lists `src/main.rs` and `src/transport.rs`, while the review
 ## Repair round 13
 
 Restored `tests/size_check/diagnostic-run.txt` and `tests/size_check/validation-results.txt` to the t3-owned versions present at the implementation baseline. These artifacts are outside t4 ownership; the prior t4 refresh had recorded a worktree-specific binary path and randomized fixture names there. The t4 source inventory is unchanged in this repair round, so the 39 listed violations remain unresolved and the selected V2 size requirement is still incomplete. No source behavior or persistence contract changed.
+
+## Follow-up repair
+
+Extracted task-report rendering and audit gating in `core_22_plan_report.rs`, divided prompt assembly and verdict parsing/settlement into named helpers, and separated Store turn-session persistence into `store/session.rs`. Task-row decoding now uses the already-held database connection. Store plan and event reads gained focused helpers. These changes preserve the existing public signatures, prompt text, row/event contents, and transaction ordering. The independent size diagnostic still exits 1: 283 repository violations, 0 classification errors, 27 t4-owned violations. The remaining exact t4 list is above; the Core recover, run, and orchestration routines remain over the limits, so V2 is incomplete.
+
+Checks rerun for this follow-up: `cargo fmt --check`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `git diff --check` passed. `cargo test --locked --test lean_core` passed (21), `cargo test --locked --test lean_ledger` passed (25), and `cargo test --locked --lib lean::tasks::` passed (48). The diagnostic command `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .` returned the expected nonzero exit while violations remain. T3-owned diagnostic artifacts and CI files were not edited.

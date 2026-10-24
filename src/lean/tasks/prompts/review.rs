@@ -6,6 +6,22 @@ pub fn verifier_prompt(
     report: &str,
     changes: Option<&str>,
 ) -> String {
+    let task_context = verifier_task_context(task);
+    let obligations = obligations_text(&obligations(task));
+    let (binding, risks) = verifier_prompt_notes(task);
+    format!(
+        "You verify another agent's work. The project is your current working \
+         directory: {project}. Check the worker's claims against the actual \
+         files yourself with your tools. Work read-only. {REVIEW_RULES} {PROJECT_RULES}\n\n\
+         {task_context}\n\n{binding}\n\n\
+         Your obligations (the task's risks, the checks of every verification, \
+         then those for this kind of work, then the catalog risks of this kind of work):\n{obligations}{risks}\n\n\
+         The worker's report:\n<<<\n{report}\n>>>\n\n{}{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
+        change_note(changes),
+    )
+}
+
+fn verifier_prompt_notes(task: &TaskSpec) -> (&'static str, &'static str) {
     let binding = if task.writes {
         OPTIONS_VERIFICATION
     } else {
@@ -16,22 +32,22 @@ pub fn verifier_prompt(
     } else {
         ""
     };
+    (binding, risks)
+}
+
+fn change_note(changes: Option<&str>) -> String {
+    changes
+        .map(|text| format!("{text}\n\n"))
+        .unwrap_or_default()
+}
+
+fn verifier_task_context(task: &TaskSpec) -> String {
     format!(
-        "You verify another agent's work. The project is your current working \
-         directory: {project}. Check the worker's claims against the actual \
-         files yourself with your tools. Work read-only. {REVIEW_RULES} {PROJECT_RULES}\n\n\
-         Task: {}\nGoal: {}\nScope: {}\nWorker validation to assess from its recorded evidence only: {}\n\n{binding}\n\n\
-         Your obligations (the task's risks, the checks of every verification, \
-         then those for this kind of work, then the catalog risks of this kind of work):\n{}{risks}\n\n\
-         The worker's report:\n<<<\n{report}\n>>>\n\n{}{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
+        "Task: {}\nGoal: {}\nScope: {}\nWorker validation to assess from its recorded evidence only: {}",
         task.title,
         task.goal,
         scope_text(&task.scope),
         task.verifier.focus,
-        obligations_text(&obligations(task)),
-        changes
-            .map(|text| format!("{text}\n\n"))
-            .unwrap_or_default(),
     )
 }
 
@@ -76,22 +92,8 @@ pub fn code_review_prompt(
     result: Option<&str>,
     comments: &[crate::lean::store::Comment],
 ) -> String {
-    let range = match result {
-        Some(result) => format!("`git diff {base} {result}`"),
-        None => format!("`git diff {base}` (the working tree is the change)"),
-    };
-    let comments = if comments.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "The user's comments on this change:\n{}\n\n",
-            comments
-                .iter()
-                .map(|comment| format!("- on {}: {}", comment.label, comment.text))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
+    let range = review_range(base, result);
+    let comments = review_comments(comments);
     format!(
         "You review a code change the user asked you to look at. The repository \
          is your current working directory: {dir}. Read the change with {range} \
@@ -102,6 +104,27 @@ pub fn code_review_prompt(
         scope_text(&task.scope),
         checklist(task.kind),
         VERDICT_FORMAT
+    )
+}
+
+fn review_range(base: &str, result: Option<&str>) -> String {
+    match result {
+        Some(result) => format!("`git diff {base} {result}`"),
+        None => format!("`git diff {base}` (the working tree is the change)"),
+    }
+}
+
+fn review_comments(comments: &[crate::lean::store::Comment]) -> String {
+    if comments.is_empty() {
+        return String::new();
+    }
+    format!(
+        "The user's comments on this change:\n{}\n\n",
+        comments
+            .iter()
+            .map(|comment| format!("- on {}: {}", comment.label, comment.text))
+            .collect::<Vec<_>>()
+            .join("\n")
     )
 }
 

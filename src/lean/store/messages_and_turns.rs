@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "session.rs"]
+mod session;
+
 impl Store {
     pub fn messages_after(&self, conversation: &str, after: u64) -> Result<Vec<Message>> {
         let db = self.db();
@@ -100,7 +103,25 @@ impl Store {
     ) -> Result<Turn> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let resolved_plan: Option<String> = match plan_id {
+        let resolved_plan = Self::resolve_turn_plan(&tx, role, plan_id)?;
+        let turn = Self::insert_turn(
+            &tx,
+            conversation,
+            role,
+            provider,
+            upto_message,
+            resolved_plan,
+        )?;
+        tx.commit()?;
+        Ok(turn)
+    }
+
+    fn resolve_turn_plan(
+        tx: &rusqlite::Transaction<'_>,
+        role: &str,
+        plan_id: Option<&str>,
+    ) -> Result<Option<String>> {
+        let resolved = match plan_id {
             Some(pid) => Some(pid.to_string()),
             None => {
                 if let Some(task_uuid) = crate::lean::task_role(role).map(|(id, _)| id) {
@@ -116,35 +137,20 @@ impl Store {
                 }
             }
         };
-        let turn = Turn {
-            id: crate::id(),
-            role: role.into(),
-            status: TurnStatus::Running,
-            session_id: None,
-            error: None,
-            upto_message,
-            plan_id: resolved_plan.clone(),
-        };
-        tx.execute(
-            "INSERT INTO turns(id,conversation_id,plan_id,role,provider,status,upto_message,started_ms)
-             VALUES(?1,?2,?3,?4,?5,'running',?6,?7)",
-            params![
-                turn.id,
-                conversation,
-                resolved_plan,
-                role,
-                provider,
-                upto_message as i64,
-                now_ms()
-            ],
-        )?;
-        let scope = crate::lean::task_role(role).map(|(task, _)| task);
-        tx.execute(
-            "INSERT INTO turn_scopes(turn_id,task_id,round)
-            SELECT ?1,id,round FROM tasks WHERE id=?2 AND conversation_id=?3 AND plan_id=?4",
-            params![turn.id, scope, conversation, resolved_plan],
-        )?;
-        tx.commit()?;
+        Ok(resolved)
+    }
+
+    fn insert_turn(
+        tx: &rusqlite::Transaction<'_>,
+        conversation: &str,
+        role: &str,
+        provider: &str,
+        upto_message: u64,
+        resolved_plan: Option<String>,
+    ) -> Result<Turn> {
+        let turn = new_turn(role, upto_message, resolved_plan);
+        persist_turn(tx, conversation, provider, &turn)?;
+        persist_turn_scope(tx, conversation, &turn)?;
         Ok(turn)
     }
 
@@ -152,33 +158,8 @@ impl Store {
         crate::require(!session.is_empty(), "provider session id is empty")?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        let conflicting: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM run_contexts r JOIN turns t ON t.id=r.turn_id
-                WHERE t.id=?1 AND r.backend!='cli' AND
-                ((t.provider='codex' AND r.provider_thread_id IS NOT NULL AND r.provider_thread_id!=?2)
-                 OR (t.provider!='codex' AND r.provider_session_id IS NOT NULL AND r.provider_session_id!=?2)))",
-            params![turn, session], |row| row.get(0),
-        )?;
-        crate::require(
-            !conflicting,
-            "native run is already bound to another provider session",
-        )?;
-        tx.execute(
-            "UPDATE turns SET session_id=?2 WHERE id=?1",
-            params![turn, session],
-        )?;
-        // `codex exec` calls this a session, but its thread.started event
-        // actually contains a thread ID. Retain the legacy resume column and
-        // record the provider's precise identity separately.
-        tx.execute(
-            "UPDATE run_contexts SET
-                provider_thread_id=CASE WHEN (SELECT provider FROM turns WHERE id=?1)='codex'
-                    THEN ?2 ELSE provider_thread_id END,
-                provider_session_id=CASE WHEN (SELECT provider FROM turns WHERE id=?1)!='codex'
-                    THEN ?2 ELSE provider_session_id END
-             WHERE turn_id=?1",
-            params![turn, session],
-        )?;
+        Self::validate_session_identity(&tx, turn, session)?;
+        Self::update_session_identity(&tx, turn, session)?;
         tx.commit()?;
         Ok(())
     }
@@ -224,42 +205,52 @@ impl Store {
             crate::lean::COMMENT_ORCHESTRATOR,
         )
     }
+}
 
-    pub(super) fn last_turn_for_roles(
-        &self,
-        conversation: &str,
-        role: &str,
-        other: &str,
-    ) -> Result<Option<Turn>> {
-        self.db()
-            .query_row(
-                "SELECT id,role,status,session_id,error,upto_message,plan_id FROM turns
-                 WHERE conversation_id=?1 AND role IN (?2,?3) ORDER BY started_ms DESC, rowid DESC LIMIT 1",
-                params![conversation, role, other],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                        row.get::<_, i64>(5)?,
-                        row.get::<_, Option<String>>(6)?,
-                    ))
-                },
-            )
-            .optional()?
-            .map(|(id, role, status, session_id, error, upto, plan_id)| {
-                Ok(Turn {
-                    id,
-                    role,
-                    status: TurnStatus::parse(&status)?,
-                    session_id,
-                    error,
-                    upto_message: upto as u64,
-                    plan_id,
-                })
-            })
-            .transpose()
+fn new_turn(role: &str, upto_message: u64, plan_id: Option<String>) -> Turn {
+    Turn {
+        id: crate::id(),
+        role: role.into(),
+        status: TurnStatus::Running,
+        session_id: None,
+        error: None,
+        upto_message,
+        plan_id,
     }
+}
+
+fn persist_turn(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    provider: &str,
+    turn: &Turn,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO turns(id,conversation_id,plan_id,role,provider,status,upto_message,started_ms)
+         VALUES(?1,?2,?3,?4,?5,'running',?6,?7)",
+        params![
+            turn.id,
+            conversation,
+            turn.plan_id,
+            turn.role,
+            provider,
+            turn.upto_message as i64,
+            now_ms()
+        ],
+    )?;
+    Ok(())
+}
+
+fn persist_turn_scope(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    turn: &Turn,
+) -> Result<()> {
+    let scope = crate::lean::task_role(&turn.role).map(|(task, _)| task);
+    tx.execute(
+        "INSERT INTO turn_scopes(turn_id,task_id,round)
+         SELECT ?1,id,round FROM tasks WHERE id=?2 AND conversation_id=?3 AND plan_id=?4",
+        params![turn.id, scope, conversation, turn.plan_id],
+    )?;
+    Ok(())
 }

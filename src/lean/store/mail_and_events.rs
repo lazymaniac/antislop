@@ -177,17 +177,37 @@ impl Store {
         kind: &str,
         payload: &Value,
     ) -> Result<u64> {
+        let payload = self.encode_event_payload(kind, payload)?;
+        let db = self.db();
+        let resolved_plan = self.resolve_event_plan(&db, turn, plan_id, &payload)?;
+        db.execute(
+            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4,?5,CAST(unixepoch('subsec')*1000 AS INTEGER))",
+            params![conversation, turn, resolved_plan, kind, payload.to_string()],
+        )?;
+        Ok(db.last_insert_rowid() as u64)
+    }
+
+    fn encode_event_payload(&self, kind: &str, payload: &Value) -> Result<Value> {
         let mut payload = payload.clone();
-        if kind == "agent" || kind == "agent_final" {
+        if matches!(kind, "agent" | "agent_final") {
             for field in ["text", "delta"] {
                 if let Some(text) = payload[field].as_str() {
-                    let reference = self.content.write(text)?;
-                    payload[field] = serde_json::json!({"session_content": reference});
+                    payload[field] =
+                        serde_json::json!({"session_content": self.content.write(text)?});
                 }
             }
         }
-        let db = self.db();
-        let resolved_plan: Option<String> = match plan_id {
+        Ok(payload)
+    }
+
+    fn resolve_event_plan(
+        &self,
+        db: &rusqlite::Connection,
+        turn: Option<&str>,
+        plan_id: Option<&str>,
+        payload: &Value,
+    ) -> Result<Option<String>> {
+        let resolved = match plan_id {
             Some(pid) => Some(pid.to_string()),
             None => {
                 if let Some(tid) = turn {
@@ -214,11 +234,7 @@ impl Store {
                 }
             }
         };
-        db.execute(
-            "INSERT INTO events(conversation_id,turn_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,?3,?4,?5,CAST(unixepoch('subsec')*1000 AS INTEGER))",
-            params![conversation, turn, resolved_plan, kind, payload.to_string()],
-        )?;
-        Ok(db.last_insert_rowid() as u64)
+        Ok(resolved)
     }
 
     pub fn events_since(&self, conversation: &str, after: u64, limit: usize) -> Result<Vec<Event>> {
@@ -250,28 +266,55 @@ impl Store {
                     row.get::<_, i64>(5)?,
                 ))
             })?;
+        self.collect_events(rows, budget)
+    }
+
+    fn collect_events(
+        &self,
+        rows: rusqlite::MappedRows<
+            '_,
+            impl FnMut(
+                &rusqlite::Row<'_>,
+            )
+                -> rusqlite::Result<(i64, Option<String>, Option<String>, String, String, i64)>,
+        >,
+        budget: usize,
+    ) -> Result<Vec<Event>> {
         let mut events = Vec::new();
         let mut bytes = 0usize;
         for row in rows {
-            let (seq, turn_id, plan_id, kind, payload, created_ms) = row?;
-            let payload = self.hydrate_event_payload(&kind, &payload)?;
-            let weight = payload.to_string().len();
+            let event = self.decode_event_row(row?)?;
+            let weight = event.payload.to_string().len();
             if !events.is_empty() && bytes.saturating_add(weight) > budget {
                 break;
             }
             bytes = bytes.saturating_add(weight);
-            events.push(Event {
-                seq: seq as u64,
-                turn_id,
-                plan_id,
-                kind,
-                payload,
-                created_ms,
-            });
+            events.push(event);
             if bytes >= budget {
                 break;
             }
         }
         Ok(events)
+    }
+
+    fn decode_event_row(
+        &self,
+        (seq, turn_id, plan_id, kind, encoded, created_ms): (
+            i64,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+            i64,
+        ),
+    ) -> Result<Event> {
+        Ok(Event {
+            seq: seq as u64,
+            turn_id,
+            plan_id,
+            payload: self.hydrate_event_payload(&kind, &encoded)?,
+            kind,
+            created_ms,
+        })
     }
 }

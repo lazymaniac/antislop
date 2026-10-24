@@ -91,21 +91,34 @@ pub fn unaccounted<'a>(
 /// verdict's coverage and does not reject the report.
 pub fn settle(verdict: &mut Verdict, obligations: &[(String, String)], read_only: bool) {
     let missing = unaccounted(verdict, obligations);
-    if !missing.is_empty() {
-        verdict.approved = false;
-        verdict.findings.push(serde_json::json!({
-            "severity": "high",
-            "issue": format!(
-                "the verifier's verdict does not account for {}",
-                missing
-                    .iter()
-                    .map(|(id, text)| format!("{id} ({text})"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            "where": "verdict",
-        }));
+    append_missing_finding(verdict, &missing);
+    append_unsettled_findings(verdict, obligations, read_only);
+}
+
+fn append_missing_finding(verdict: &mut Verdict, missing: &[&(String, String)]) {
+    if missing.is_empty() {
+        return;
     }
+    verdict.approved = false;
+    verdict.findings.push(serde_json::json!({
+        "severity": "high",
+        "issue": format!(
+            "the verifier's verdict does not account for {}",
+            missing
+                .iter()
+                .map(|(id, text)| format!("{id} ({text})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        "where": "verdict",
+    }));
+}
+
+fn append_unsettled_findings(
+    verdict: &mut Verdict,
+    obligations: &[(String, String)],
+    read_only: bool,
+) {
     for (id, text) in obligations {
         let entry = &verdict
             .coverage
@@ -157,14 +170,16 @@ pub fn parse_progress(line: &str) -> Option<CheckUpdate> {
     let (word, rest) = line.split_once(char::is_whitespace)?;
     let word = word.trim_matches(|c: char| !c.is_alphanumeric());
     let rest = rest.trim_start();
+    parse_progress_command(word, rest)
+}
+
+fn parse_progress_command(word: &str, rest: &str) -> Option<CheckUpdate> {
     let (id, rest) = match rest.split_once(char::is_whitespace) {
         Some((id, rest)) => (id, rest.trim()),
         None => (rest, ""),
     };
     let id = id.trim_matches(|c: char| !c.is_alphanumeric());
-    let mut chars = id.chars();
-    let valid = matches!(chars.next(), Some('R' | 'V' | 'C')) && chars.all(|c| c.is_ascii_digit());
-    if !valid || id.len() < 2 {
+    if !valid_check_id(id) {
         return None;
     }
     match word {
@@ -184,6 +199,13 @@ pub fn parse_progress(line: &str) -> Option<CheckUpdate> {
         }
         _ => None,
     }
+}
+
+fn valid_check_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    id.len() >= 2
+        && matches!(chars.next(), Some('R' | 'V' | 'C'))
+        && chars.all(|ch| ch.is_ascii_digit())
 }
 
 /// Splits streamed text into lines and reads the progress lines among them.
