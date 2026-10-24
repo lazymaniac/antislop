@@ -1,5 +1,7 @@
 use super::core_prompt_helpers::orchestrator_prompt;
 use super::*;
+mod context;
+use context::comment_context;
 
 impl Core {
     pub(in crate::lean) fn orchestrator_turn(
@@ -46,62 +48,7 @@ impl Core {
             .into_iter()
             .filter(|comment| comment.message <= answered)
             .collect();
-        let mut comment_context = String::new();
-        if !is_comment && self.store.last_answered(conversation, ORCHESTRATOR)? < answered {
-            comment_context.push_str("\n\nThe comment agent handled feedback since your previous turn. Continue from its current plan and answer:\n");
-            if let Some(reply) = self
-                .store
-                .messages_by(conversation, ORCHESTRATOR, 0)?
-                .last()
-            {
-                comment_context.push_str(&reply.text);
-                comment_context.push('\n');
-            }
-            if let Some(task) = self.store.latest_plan(conversation)?.first()
-                && let Some(document) = self.store.plan_document(conversation, &task.plan_id)?
-            {
-                comment_context.push_str(&document);
-                comment_context.push('\n');
-            }
-        }
-        if is_comment {
-            comment_context.push_str(
-                "\n\nAddress each new user comment explicitly by its #id now. For plan feedback, \
-                 produce a revised complete plan in the required plan format when changes are \
-                 needed; otherwise explain your decision or ask a concrete question. Do not \
-                 merely acknowledge or wait for plan acceptance. Only comments included in \
-                 this turn can be addressed.\n\n\
-                 End your answer with a ```comments block naming the comments your revised plan \
-                 took care of, for example \
-                 ```comments {\"addressed\":[{\"id\":3,\"how\":\"what changed\"}]}```. \
-                 A comment you only answered, or that needs the user's decision, stays out of \
-                 it and stays open.\n",
-            );
-            let comments = self.store.comments(conversation, "open")?;
-            let mut plans: std::collections::BTreeSet<_> = comments
-                .iter()
-                .filter(|comment| comment.message <= upto)
-                .filter_map(|comment| comment.plan_id.as_deref())
-                .collect();
-            let latest = self.store.latest_plan(conversation)?;
-            if let Some(task) = latest.first() {
-                plans.insert(&task.plan_id);
-                comment_context.push_str(&format!("\nCurrent plan: {}. Preserve changes from this version when revising historical feedback.\n", task.plan_id));
-            }
-            if let Some(request) = self
-                .store
-                .messages_by(conversation, "user", 0)?
-                .iter()
-                .find(|message| !message.text.starts_with(COMMENT_PREFIX))
-            {
-                comment_context.push_str(&format!("\nOriginal user request:\n{}\n", request.text));
-            }
-            for plan in plans {
-                if let Some(document) = self.store.plan_document(conversation, plan)? {
-                    comment_context.push_str(&format!("\nReferenced plan {plan}:\n{document}\n"));
-                }
-            }
-        }
+        let comment_context = comment_context(self, conversation, upto, answered, is_comment)?;
         let workflow = self.store.workflow(conversation)?;
         let interviewing = workflow.as_ref().is_some_and(|w| w.phase == "interview");
         if workflow.as_ref().is_some_and(|w| w.phase == "planning") {
