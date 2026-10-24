@@ -136,7 +136,6 @@ VIOLATION src/lean/store/mail_and_events.rs:228: callable events_since_budget is
 VIOLATION src/lean/store/messages_and_turns.rs:151: callable set_session is 34 lines (limit 29)
 VIOLATION src/lean/store/messages_and_turns.rs:228: callable last_turn_for_roles is 37 lines (limit 29)
 VIOLATION src/lean/store/messages_and_turns.rs:93: callable start_turn is 57 lines (limit 29)
-VIOLATION src/lean/store/plan_history.rs:4: callable plan_history is 164 lines (limit 29)
 VIOLATION src/lean/store/plan_tasks.rs:132: callable set_check is 46 lines (limit 29)
 VIOLATION src/lean/store/plan_tasks.rs:195: callable update_task is 74 lines (limit 29)
 VIOLATION src/lean/store/plan_tasks.rs:37: callable dependency_reports is 36 lines (limit 29)
@@ -156,7 +155,6 @@ VIOLATION src/lean/tasks/graph.rs:151: callable render_plan_document is 54 lines
 VIOLATION src/lean/tasks/messages.rs:31: callable parse_effect is 52 lines (limit 29)
 VIOLATION src/lean/tasks/plan.rs:127: callable validate is 33 lines (limit 29)
 VIOLATION src/lean/tasks/plan.rs:29: callable parse_graph_edit is 42 lines (limit 29)
-VIOLATION src/lean/tasks/prompts/checklist.rs:3: callable checklist is 200 lines (limit 29)
 VIOLATION src/lean/tasks/prompts/instructions.rs:3: callable orchestrator_instructions is 95 lines (limit 29)
 VIOLATION src/lean/tasks/prompts/requirements.rs:175: callable round_handoff_prompt is 48 lines (limit 29)
 VIOLATION src/lean/tasks/prompts/review.rs:3: callable verifier_prompt is 34 lines (limit 29)
@@ -355,4 +353,4 @@ VIOLATION tools/size_check/checker.rs:722: callable walk is 30 lines (limit 29)
 VIOLATION tools/size_check/checker.rs:75: callable prefix_line_kinds is 118 lines (limit 29)
 VIOLATION tools/size_check/checker.rs:827: callable scan_file is 51 lines (limit 29)
 VIOLATION tools/size_check/checker.rs:886: callable visit_item_mod is 33 lines (limit 29)
-size diagnostic failed: 0 classification errors, 357 violations
+size diagnostic failed: 0 classification errors, 355 violations

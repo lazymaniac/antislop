@@ -1,8 +1,8 @@
 # Core and persistence size dispositions
 
-Baseline: measured source snapshot `892e93d5c5b03a4da54a7c21c890acc6a0783192`, recorded in `tests/size_check/baseline-inventory.md`. The raw current repository diagnostic is retained in `core-size-diagnostic.txt`. It was captured with `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .`; the expected exit code is 1 while violations remain.
+Baseline: measured source snapshot `892e93d5c5b03a4da54a7c21c890acc6a0783192`, recorded in `tests/size_check/baseline-inventory.md`. The raw current repository diagnostic is retained in `core-size-diagnostic.txt`. The initial capture used `CARGO_TARGET_DIR=.antislop/target cargo run --locked --quiet --bin diagnostic-size-check -- --root .`; the latest refresh used the existing `.antislop/target/debug/diagnostic-size-check --root .` binary. The expected exit code is 1 while violations remain.
 
-Current checker result: 357 repository violations, 0 classification errors; 103 violations in t4-owned `src/` paths. The initial t4 inventory contains 141 items; 38 are resolved and 103 remain unresolved. Exit code 1.
+Current checker result after the latest t4 edits: 355 repository violations, 0 classification errors; 101 violations in t4-owned `src/` paths. The initial t4 inventory contains 141 items; 40 are resolved and 101 remain unresolved. Exit code 1. The raw diagnostic was refreshed from the existing checker binary and is retained in `core-size-diagnostic.txt`.
 
 ## Every initial t4 violation
 
@@ -117,7 +117,7 @@ Current checker result: 357 repository violations, 0 classification errors; 103 
 | callable | `src/lean/store.rs::interrupt_unfinished_tasks` | 42 | unresolved: `src/lean/store/sessions_and_plans.rs:108` still has `interrupt_unfinished_tasks` at 42 lines (limit 29) |
 | callable | `src/lean/store.rs::last_turn_for_roles` | 37 | unresolved: `src/lean/store/messages_and_turns.rs:228` still has `last_turn_for_roles` at 37 lines (limit 29) |
 | callable | `src/lean/store.rs::plan` | 57 | unresolved: `src/lean/store/plan_tasks.rs:74` still has `plan` at 57 lines (limit 29) |
-| callable | `src/lean/store.rs::plan_history` | 164 | unresolved: `src/lean/store/plan_history.rs:4` still has `plan_history` at 164 lines (limit 29) |
+| callable | `src/lean/store.rs::plan_history` | 164 | resolved: plan-history orchestration, timing, turn loading, aggregation, and report collection are separate helpers; every callable in `src/lean/store/plan_history.rs` is at or below 29 lines. Helpers share one held connection guard, preserving the original mutex boundary across all database reads. |
 | callable | `src/lean/store.rs::plans_page` | 45 | unresolved: `src/lean/store/history_queries.rs:235` still has `plans_page` at 45 lines (limit 29) |
 | callable | `src/lean/store.rs::resolve_listed_plan_comments` | 30 | unresolved: `src/lean/store/comment_mail_state.rs:9` still has `resolve_listed_plan_comments` at 30 lines (limit 29) |
 | callable | `src/lean/store.rs::send_draft_comments` | 59 | unresolved: `src/lean/store/comments_and_mail.rs:175` still has `send_draft_comments` at 59 lines (limit 29) |
@@ -128,7 +128,7 @@ Current checker result: 357 repository violations, 0 classification errors; 103 
 | callable | `src/lean/store.rs::task_by_id` | 60 | unresolved: `src/lean/store/history_queries.rs:77` still has `task_by_id` at 60 lines (limit 29) |
 | callable | `src/lean/store.rs::update_task` | 74 | unresolved: `src/lean/store/plan_tasks.rs:195` still has `update_task` at 74 lines (limit 29) |
 | callable | `src/lean/tasks.rs::bound_cut` | 41 | unresolved: `src/lean/tasks/bounds.rs:17` still has `bound_cut` at 41 lines (limit 29) |
-| callable | `src/lean/tasks.rs::checklist` | 200 | unresolved: `src/lean/tasks/prompts/checklist.rs:3` still has `checklist` at 200 lines (limit 29) |
+| callable | `src/lean/tasks.rs::checklist` | 200 | resolved: the dispatcher selects one short checklist helper per work kind; no callable in `src/lean/tasks/prompts/checklist.rs` exceeds 29 lines |
 | callable | `src/lean/tasks.rs::code_review_prompt` | 36 | unresolved: `src/lean/tasks/prompts/review.rs:71` still has `code_review_prompt` at 36 lines (limit 29) |
 | callable | `src/lean/tasks.rs::coverage` | 40 | unresolved: `src/lean/tasks/feedback.rs:138` still has `coverage` at 40 lines (limit 29) |
 | callable | `src/lean/tasks.rs::effect` | 35 | unresolved: `src/lean/tasks/effect.rs:3` still has `effect` at 35 lines (limit 29) |
@@ -152,7 +152,7 @@ Current checker result: 357 repository violations, 0 classification errors; 103 
 
 ## Current violations at new paths
 
-The latest diagnostic reports no current violations under `src/lean/mail/**`; newly split Store and Tasks paths are reflected in the updated per-item table.
+The latest diagnostic reports no current violations under `src/lean/mail/**`. Store and Tasks extraction paths remain represented in the 101 unresolved t4 violations above; the two resolved callables are plan history and the checklist dispatcher.
 
 ## Ownership note
 
@@ -169,3 +169,4 @@ The task-card scope lists `src/main.rs` and `src/transport.rs`, while the review
 - `cargo test --locked --lib history::tests`: 8 passed; `cargo test --locked --test lean_core`: 21 passed; `cargo test --locked --test lean_ledger`: 25 passed; `cargo test --locked --test lean_tui`: 110 passed. The focused `direct_orchestrator_message_uses_normal_workflow_and_validates_the_run` and `direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns` tests passed.
 - `cargo test --locked --test lean_messages` was characterized before changing mailbox code and repeated after the enqueue helper split; both runs had 30 passed and the same 4 failures: `agent_mail_reaches_the_orchestrator_without_replanning` (assertion expected 1, got 2), `deferred_options_comment_claim_expires_on_new_user_input`, `deferred_options_proposal_prefers_the_current_explicit_comment_list`, and `deferred_options_proposal_preserves_selective_comment_claim`. The initial characterization also repeated serially with the same failures. No changes were made to those behaviors or tests.
 - On the current worktree, `cargo fmt --check`, `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `git diff --check` passed. Targeted tests passed: task unit tests (48), Store unit tests (12), requirements runtime test (1), `lean_core` (21), `lean_ledger` (25), and `lean_tui` (110). `agent_mail_reaches_the_orchestrator_without_replanning` still fails with expected 1, got 2; the same failure was recorded before the mailbox refactor and after the earlier enqueue split. The current size diagnostic is the separate retained artifact linked above and still exits 1 because 103 owned violations remain.
+- In this repair round, `cargo test --locked --test lean_plan_history` passed (4 tests), and the focused task unit suite passed (48 tests). `cargo test --locked --test lean_plan` reproducibly failed serially in `malformed_plan_json_is_corrected_automatically_with_a_finite_retry_limit`, `orchestrator_extends_a_running_graph_before_the_pending_verification`, and `repairing_json_after_options_reuses_requirements_and_the_comparison`; these failures concern planner retry/graph behavior, outside the plan-history extraction. `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo fmt --check` passed after the edits. The refreshed diagnostic still exits 1 with 101 t4-owned violations; the remaining core and persistence size work is incomplete.
