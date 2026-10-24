@@ -167,6 +167,10 @@ VIOLATION src/lean/core_task_execution.rs:6: callable run_task is 586 lines (lim
 
 The remaining four file and callable overages are in task recovery, orchestration turns, agent turn execution, and task rounds. Those routines still need responsibility-level decomposition. This V2 implementation is incomplete.
 
+## Similarity review of remaining Core routines
+
+Compared the control flow and side effects in `recover_task_as`, `orchestrator_turn`, `turn_inner`, and `run_task`. They have no repeated semantic operation that can be extracted as a shared helper without adding a generic abstraction: recovery dispatches user-selected state transitions; orchestration assembles context and interprets a planning response; turn execution streams agent events and persists turn/mail state; task execution coordinates worker/verifier rounds and integration. Their common `Core` receiver and use of task/store APIs are architectural context, not duplicated behavior. The useful cleanup is responsibility-level decomposition within each routine, which remains outstanding. This resolves no size violation and does not treat line count alone as evidence of duplication.
+
 ## Ownership note
 
 The task-card scope lists `src/main.rs` and `src/transport.rs`, while the reviewed t2 ownership manifest assigns both to t5. Following the explicit instruction to follow that manifest, this worker left both paths untouched. The current diagnostic records the t5-owned transport violations `deserialize` (56 lines at line 16) and `read` (33 lines at line 119); main.rs has no current size violation.
