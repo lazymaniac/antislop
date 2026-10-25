@@ -204,3 +204,12 @@ fn bound_never_splits_a_cluster_and_always_fits_the_budget() {
         );
     }
 }
+
+#[test]
+fn verdict_json_label_renders_findings_as_text() {
+    let verdict = parse_verdict(
+        "```verdict JSON\n{\"approved\":false,\"findings\":[{\"issue\":\"Preserve Ctrl+O.\"}]}\n```",
+    );
+    assert!(!verdict.approved);
+    assert_eq!(findings_text(&verdict.findings), "- Preserve Ctrl+O.");
+}

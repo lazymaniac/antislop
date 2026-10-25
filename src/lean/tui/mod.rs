@@ -296,6 +296,7 @@ pub struct App {
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
     pub graph_area: Option<Rect>,
     pub phase_action_area: Option<Rect>,
+    pub phase_action_command: Option<&'static str>,
     pub chat_area: Rect,
     pub graph_viewport: Option<(u16, u16)>,
     pub trust_prompt: Option<String>,
@@ -394,6 +395,7 @@ impl App {
             graph_viewport: None,
             graph_area: None,
             phase_action_area: None,
+            phase_action_command: None,
             chat_area: Rect::default(),
             trust_prompt: None,
             unblock: None,
@@ -4164,6 +4166,7 @@ impl App {
 
     pub fn draw(&mut self, frame: &mut Frame) {
         self.phase_action_area = None;
+        self.phase_action_command = None;
         self.sync_interview();
         self.terminal_area = frame.area();
         self.graph_area = None;
@@ -4610,12 +4613,15 @@ impl App {
             Constraint::Length(input_height),
         ])
         .areas(area);
-        self.phase_action_area = phase_action.map(|_| action);
-        if let Some((label, _)) = phase_action {
-            frame.render_widget(
-                Paragraph::new(format!("[ {label} ]")).style(theme.bar()),
-                action,
-            );
+        self.phase_action_area = None;
+        self.phase_action_command = None;
+        if let Some((label, command)) = phase_action {
+            let text = format!("  {label} {}  ", if theme.ascii { ">" } else { "▶" });
+            let width = (text.chars().count() as u16).min(action.width);
+            let button = Rect::new(action.x + 1.min(action.width - width), action.y, width, 1);
+            self.phase_action_area = Some(button);
+            self.phase_action_command = Some(command);
+            frame.render_widget(Paragraph::new(text).style(theme.button()), button);
         }
         if status_height > 0 {
             frame.render_widget(
@@ -5253,10 +5259,8 @@ impl App {
                     .phase_action_area
                     .is_some_and(|area| area.contains((col, row).into()))
                 {
-                    if self.view.requirements_approval_run.is_some() {
-                        self.command("/requirements");
-                    } else {
-                        self.command("/accept");
+                    if let Some(command) = self.phase_action_command {
+                        self.command(command);
                     }
                     return true;
                 }
@@ -5598,6 +5602,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         graph_viewport: None,
         graph_area: None,
         phase_action_area: None,
+        phase_action_command: None,
         unblock: None,
         projects: Vec::new(),
         active_project: 0,

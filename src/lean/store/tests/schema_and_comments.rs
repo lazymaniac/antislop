@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn incompatible_databases_are_rejected_without_writes() {
-    for version in [0, 1, 5, 10, 12] {
+    for version in [0, 1, 5, 10, 11, SCHEMA + 1] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("core.db");
         let db = Connection::open(&path).unwrap();
@@ -26,6 +26,29 @@ fn incompatible_databases_are_rejected_without_writes() {
 }
 
 #[test]
+fn database_without_ledger_rejections_is_rejected_before_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("core.db");
+    let store = Store::open(&path).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    {
+        let db = store.db();
+        db.execute_batch("DROP TABLE ledger_rejections;").unwrap();
+        db.pragma_update(None, "user_version", 11).unwrap();
+    }
+    drop(store);
+    let bytes = std::fs::read(&path).unwrap();
+    let error = Store::open(&path).err().unwrap().to_string();
+    assert!(error.contains("incompatible schema 11"), "{error}");
+    assert_eq!(bytes, std::fs::read(&path).unwrap());
+    let db = Connection::open(&path).unwrap();
+    let id: String = db
+        .query_row("SELECT id FROM conversations", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(id, conversation.id);
+}
+
+#[test]
 fn current_schema_initializes_and_reopens_without_removed_columns() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("core.db");
@@ -40,6 +63,8 @@ fn current_schema_initializes_and_reopens_without_removed_columns() {
             .unwrap(),
         SCHEMA
     );
+    db.prepare("SELECT proposal_id, comment_message, resume_message, diff_hash, created_ms FROM ledger_rejections")
+        .unwrap();
     for (table, column) in [
         ("ledger_entries", "kind"),
         ("ledger_versions", "technical_goal"),

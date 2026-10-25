@@ -47,6 +47,7 @@ pub mod mcp;
 pub mod native;
 #[cfg(test)]
 mod plan_tests;
+mod progress;
 pub mod projects;
 #[cfg(test)]
 mod reliability_tests;

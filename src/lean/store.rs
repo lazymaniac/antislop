@@ -271,7 +271,7 @@ impl TurnStatus {
 
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Incompatible databases are never modified or migrated.
-const SCHEMA: u32 = 11;
+const SCHEMA: u32 = 12;
 
 #[path = "store/comment_mail_state.rs"]
 mod comment_mail_state;

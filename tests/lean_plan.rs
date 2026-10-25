@@ -490,18 +490,14 @@ if not os.path.exists('format-error-sent') or {persistent}:
         } else {
             assert!(!plan.is_empty());
             let turns = core.store.events_since(&conversation.id, 0, 2000).unwrap();
-            for role in [
-                "requirements-extraction-analyst",
-                "requirements-options-analyst",
-            ] {
-                assert_eq!(
-                    turns
-                        .iter()
-                        .filter(|e| e.kind == "turn_started" && e.payload["role"] == role)
-                        .count(),
-                    1
-                );
-            }
+            assert_eq!(
+                turns
+                    .iter()
+                    .filter(|e| e.kind == "turn_started"
+                        && e.payload["role"] == "requirements-extraction-analyst")
+                    .count(),
+                1
+            );
         }
     }
 }
@@ -550,15 +546,15 @@ fn restart_recovers_a_previously_failed_plan_json_without_a_new_user_message() {
 }
 
 #[test]
-fn repairing_json_after_options_reuses_requirements_and_the_comparison() {
+fn repairing_json_after_the_ledger_mapping_reuses_the_requirements() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let source = std::fs::read_to_string(&codex).unwrap();
     let marker = "def _ledger_answer(answer):";
     assert!(source.contains(marker));
     let hook = r#"def _ledger_answer(answer):
-    if 'Reviewed implementation options: ' in _ledger_prompt and '```plan' in answer and not _lo.path.exists('post-options-format-error'):
-        open('post-options-format-error','w').close()
+    if 'Regenerate the task plan from the verified ledger' in _ledger_prompt and '```plan' in answer and not _lo.path.exists('post-ledger-format-error'):
+        open('post-ledger-format-error','w').close()
         return '```plan\n{"tasks":[{unquoted: "bad"}]}\n```'
 "#;
     std::fs::write(&codex, source.replace(marker, hook)).unwrap();
@@ -567,7 +563,7 @@ fn repairing_json_after_options_reuses_requirements_and_the_comparison() {
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
     wait_idle(&core, &conversation.id);
-    assert!(dir.path().join("post-options-format-error").exists());
+    assert!(dir.path().join("post-ledger-format-error").exists());
     assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
     assert_eq!(
         core.store
@@ -580,8 +576,6 @@ fn repairing_json_after_options_reuses_requirements_and_the_comparison() {
     for role in [
         "requirements-extraction-analyst",
         "requirements-extraction-verifier",
-        "requirements-options-analyst",
-        "requirements-options-verifier",
     ] {
         assert_eq!(
             events
@@ -675,11 +669,13 @@ if 'insert-extra' in prompt and 'Editable graph snapshot' in prompt:
         .position(|role| **role == format!("worker:{}", finished[2].id))
         .unwrap();
     assert!(extra < downstream);
+    // The first draft is revised into the ledger-mapped plan; extending the
+    // running graph adds no further plan.
     assert_eq!(
         core.store
             .plans_page(&conversation.id, 0, 10)
             .unwrap()
             .total,
-        1
+        2
     );
 }

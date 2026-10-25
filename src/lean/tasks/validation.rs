@@ -2,7 +2,13 @@ use super::*;
 
 pub fn parse_verdict(answer: &str) -> Verdict {
     let mut verdict = fenced(answer, "verdict")
-        .and_then(|(_, body)| serde_json::from_str::<Verdict>(body).ok())
+        .and_then(|(_, body)| {
+            let body = body
+                .strip_prefix("JSON\n")
+                .or_else(|| body.strip_prefix("JSON\r\n"))
+                .unwrap_or(body);
+            serde_json::from_str::<Verdict>(body).ok()
+        })
         .unwrap_or_else(|| Verdict {
             approved: false,
             findings: vec![Value::String(answer.trim().to_owned())],

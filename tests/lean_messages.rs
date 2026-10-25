@@ -97,7 +97,25 @@ def message(to, kind, text):
     let text = replacements
         .iter()
         .fold(text, |text, (from, to)| text.replace(from, to));
-    std::fs::create_dir_all(dir.join("project")).unwrap();
+    let project = dir.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    // The requirements audit fingerprints the integrated tree, which needs a repository.
+    for args in [
+        &["init", "--quiet", "-b", "main"][..],
+        &["commit", "--quiet", "--allow-empty", "-m", "init"][..],
+    ] {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&project)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@test.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
     Core::open(&dir.join("state"), Config::from_toml(&text).unwrap()).unwrap()
 }
 
@@ -613,28 +631,42 @@ fn deferred_comment_revision(current_list: bool, new_user_input: bool) {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        r#"
+        &r#"
 import re
 ids = re.findall(r"user comment #(\d+) on", prompt)
-answer = "Revised.\n```comments\n" + json.dumps({"addressed": [{"id": int(ids[0]), "how": "changed"}]}) + "\n```\n" + plan(task("t1", "Revised parser")) if ids else "Noted."
-"#,
+regenerated = "Regenerate the task plan from the verified ledger" in _ledger_prompt
+def claim(n):
+    return "Revised.\n```comments\n" + json.dumps({"addressed": [{"id": int(ids[n]), "how": "changed"}]}) + "\n```\n" + plan(task("t1", "Revised parser"))
+if not ids:
+    answer = "Noted."
+elif regenerated:
+    # The regenerated plan restates the claim only when the agent lists comments again.
+    answer = claim(1) if CURRENT_LIST else plan(task("t1", "Revised parser"))
+else:
+    answer = claim(0)
+"#
+        .replace("CURRENT_LIST", if current_list { "True" } else { "False" }),
         "    answer = verdict(True)",
     );
     // The existing ledger fixture supplies real protocol responses. Only gate
-    // its next-plan response; requirements and options still run in production.
+    // the regenerated plan the ledger mapping asks for (the first proposal
+    // carries no requirement ids); requirements still run in production.
     let codex = dir.path().join("codex");
     let source = std::fs::read_to_string(&codex).unwrap();
     let source = source.replace(
-        "    with open(_ledger_cache) as cache: _ledger_payload=json.load(cache)",
-        r#"    open(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'next-plan-started'), 'w').close()
+        "if len(_ledger_context)==2:\n    prompt = _ledger_context[0].rstrip()",
+        r#"if 'Regenerate the task plan from the verified ledger' in _ledger_prompt:
+    open(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'next-plan-started'), 'w').close()
     import time
     deadline = time.monotonic() + 15
     while not _lo.path.exists(_lo.path.join(_lo.path.dirname(sys.argv[0]), 'release-next-plan')):
         if time.monotonic() >= deadline:
             raise RuntimeError('next plan was not released by test within 15 seconds')
         time.sleep(0.01)
-    with open(_ledger_cache) as cache: _ledger_payload=json.load(cache)"#,
+if len(_ledger_context)==2:
+    prompt = _ledger_context[0].rstrip()"#,
     );
+    assert!(source.contains("next-plan-started"));
     std::fs::write(&codex, source).unwrap();
     let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
         .unwrap()
@@ -668,23 +700,8 @@ answer = "Revised.\n```comments\n" + json.dumps({"addressed": [{"id": int(ids[0]
             .id
         })
         .collect();
-    if current_list {
-        let source = std::fs::read_to_string(&codex).unwrap();
-        let replacement = format!(
-            "_ledger_emit(_ledger_answer(_ledger_block('comments', {{'addressed':[{{'id':{},'how':'current revision'}}]}}) + chr(10) + _ledger_block('plan',_ledger_payload)))",
-            ids[1]
-        );
-        std::fs::write(
-            &codex,
-            source.replace(
-                "_ledger_emit(_ledger_answer(_ledger_block('plan',_ledger_payload)))",
-                &replacement,
-            ),
-        )
-        .unwrap();
-    }
     core.review_comments(&conversation, &original).unwrap();
-    wait_until("options must defer the comment proposal", || {
+    wait_until("the ledger mapping must defer the comment proposal", || {
         dir.path().join("next-plan-started").exists() || core.is_idle(&conversation)
     });
     assert!(
@@ -710,18 +727,25 @@ answer = "Revised.\n```comments\n" + json.dumps({"addressed": [{"id": int(ids[0]
         Some(vec![ids[0]])
     );
     assert!(events(&core, &conversation, "plan_proposed").is_empty());
-    assert_eq!(
-        core.store.latest_plan(&conversation).unwrap()[0].plan_id,
-        original
-    );
+    // The rejected first proposal stays as a revised row; no new plan is live.
+    let live: Vec<String> = core
+        .store
+        .plans_page(&conversation, 0, 20)
+        .unwrap()
+        .plans
+        .into_iter()
+        .filter(|plan| plan.status != "revised")
+        .map(|plan| plan.id)
+        .collect();
+    assert_eq!(live, std::slice::from_ref(&original));
     let options_messages = core
         .store
-        .messages_by(&conversation, "options-planner", 0)
+        .messages_by(&conversation, "requirements-planner", 0)
         .unwrap();
     assert_eq!(
         options_messages.len(),
         1,
-        "global ensure_options requested a fresh plan"
+        "the ledger mapping requested a fresh plan"
     );
     assert!(options_messages[0].seq > boundary);
     if new_user_input {
@@ -1122,9 +1146,11 @@ fn agent_mail_reaches_the_orchestrator_without_replanning() {
                 .iter()
                 .any(|mail| mail.text == "agent handoff" && mail.delivered_turn.is_some())
     });
+    // The orchestrator's first draft is revised into the ledger-mapped plan; the
+    // mail must not add a third one.
     assert_eq!(
         core.store.plans_page(&conversation, 0, 20).unwrap().total,
-        1
+        2
     );
     assert_eq!(
         core.store.latest_plan(&conversation).unwrap()[0].status,

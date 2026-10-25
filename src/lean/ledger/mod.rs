@@ -220,11 +220,31 @@ pub struct Extraction {
 
 /// Read-only agent output cannot name its own author/session.
 pub fn parse_block<T: serde::de::DeserializeOwned>(answer: &str, tag: &str) -> Result<T> {
-    let open = format!("```{tag}\n");
-    let body = answer
-        .rsplit_once(&open)
-        .and_then(|(_, tail)| tail.split_once("\n```").map(|(body, _)| body));
-    Ok(serde_json::from_str(body.ok_or_else(|| {
+    let open = format!("```{tag}");
+    let mut body = None;
+    let mut lines = answer.lines();
+    while let Some(line) = lines.next() {
+        let line = line.trim();
+        let matches = line == open
+            || line.strip_prefix(&open).is_some_and(|suffix| {
+                suffix.starts_with(char::is_whitespace)
+                    && suffix.trim().eq_ignore_ascii_case("json")
+            });
+        if !matches {
+            continue;
+        }
+        let mut candidate = Vec::new();
+        let mut closed = false;
+        for line in lines.by_ref() {
+            if line.trim() == "```" {
+                closed = true;
+                break;
+            }
+            candidate.push(line);
+        }
+        body = closed.then(|| candidate.join("\n"));
+    }
+    Ok(serde_json::from_str(&body.ok_or_else(|| {
         crate::Error::Invalid(format!("missing {tag} JSON block"))
     })?)?)
 }

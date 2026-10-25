@@ -30,6 +30,14 @@ plans = {
   "manual_fix": [task("m1", "Manual fix", writes=True)],
 }
 name = next((name for name in sorted(plans, key=len, reverse=True) if name in prompt.splitlines()[-1]), None)
+# A plan the ledger mapping sends back for regeneration names no scenario: repeat the last one.
+import os
+last = os.path.join(os.path.dirname(sys.argv[0]), "last-plan")
+if name:
+    with open(last, "w") as f:
+        f.write(name)
+elif "Regenerate the task plan from the verified ledger" in prompt and os.path.exists(last):
+    name = open(last).read()
 answer = "Plan.\n```plan\n" + json.dumps({"tasks": plans[name]}) + "\n```" if name else "ok"
 # The user has decided (supervised) or nobody watches (autonomous): unblock t1,
 # which only works once the agent is logged in.

@@ -149,14 +149,18 @@ impl Core {
         let resumed = task.round > 0;
         let first_round = task.round + 1;
         // Supervised: a few rounds run on their own, then the user decides.
-        // Autonomous: rounds go on until approval or until the verifier
-        // repeats its findings, which means the worker is not getting closer.
-        let last_round = if autonomous {
-            u32::MAX
-        } else {
-            first_round + tasks::MAX_ROUNDS - 1
-        };
+        // Autonomous: more of them, and they end early when the verifier
+        // repeats its findings or keeps the same obligations open, which
+        // means the worker is not getting closer.
+        let last_round = first_round
+            + if autonomous {
+                tasks::AUTONOMOUS_ROUNDS
+            } else {
+                tasks::MAX_ROUNDS
+            }
+            - 1;
         let mut previous: Option<String> = None;
+        let mut progress = super::progress::Progress::default();
         for round in first_round..=last_round {
             let config = self.config_snapshot();
             task.round = round;
@@ -586,20 +590,17 @@ impl Core {
                 );
             }
             let text = tasks::findings_key(&verdict.findings);
-            if previous.as_deref() == Some(text.as_str()) {
-                let report = task.report.take().unwrap_or_default();
-                task.report = Some(format!(
-                    "{report}\n\n[runtime] the verifier repeated the same findings; \
+            let repeated = previous.as_deref() == Some(text.as_str());
+            if repeated || progress.record(super::progress::open_obligations(&verdict)) {
+                let why = if repeated {
+                    "the verifier repeated the same findings; the worker is not getting closer"
+                } else {
+                    "the verifier left the same obligations open for several rounds; \
                      the worker is not getting closer"
-                ));
-                return self.stop(
-                    conversation,
-                    task,
-                    status::NEEDS_USER,
-                    Some(
-                        "the verifier repeated the same findings; the worker is not getting closer",
-                    ),
-                );
+                };
+                let report = task.report.take().unwrap_or_default();
+                task.report = Some(format!("{report}\n\n[runtime] {why}"));
+                return self.stop(conversation, task, status::NEEDS_USER, Some(why));
             }
             previous = Some(text);
             findings = verdict.findings;

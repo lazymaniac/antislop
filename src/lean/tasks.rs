@@ -39,7 +39,7 @@ pub use checklist::*;
 pub use effect::*;
 #[cfg(test)]
 use feedback::OUTCOMES;
-use feedback::counted_status;
+pub(crate) use feedback::counted_status;
 pub use feedback::*;
 pub use graph::*;
 pub use instructions::*;

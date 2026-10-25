@@ -283,6 +283,15 @@ impl Theme {
         .add_modifier(Modifier::BOLD)
     }
 
+    /// The primary phase action above the composer: a filled, bold button.
+    pub fn button(&self) -> Style {
+        self.pick(
+            card_style(30, 255),
+            Style::default().add_modifier(Modifier::REVERSED),
+        )
+        .add_modifier(Modifier::BOLD)
+    }
+
     pub fn separator(&self, focused: bool) -> Style {
         self.pick(fg(if focused { 74 } else { 238 }), Style::default())
     }

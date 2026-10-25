@@ -7,10 +7,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const AGENT: &str = r#"
-def bump(name):
+def bump(name, step=1):
     import os
     path = os.path.join(os.path.dirname(sys.argv[0]), name)
-    n = int(open(path).read()) + 1 if os.path.exists(path) else 1
+    n = (int(open(path).read()) if os.path.exists(path) else 0) + step
     open(path, "w").write(str(n))
     return n
 import re
@@ -420,7 +420,8 @@ fn autonomous_plans_go_on_until_one_repeats_a_plan_that_ran() {
     let core = open(
         dir.path(),
         true,
-        r#"answer = plan(task("t1", "Step " + str(min(bump("plans"), 4))))"#,
+        // A plan sent back for ledger mapping is regenerated, not a further step.
+        r#"answer = plan(task("t1", "Step " + str(min(bump("plans", 0 if "Regenerate the task plan" in prompt else 1), 4))))"#,
         r#"
 if "You verify" in prompt or "You review a plan" in prompt or "new plan:" in prompt \
         or "You audit" in prompt or "next plan:" in prompt:

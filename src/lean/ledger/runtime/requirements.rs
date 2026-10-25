@@ -233,7 +233,7 @@ impl Core {
             verdict.approved,
             &answer,
         )?;
-        self.finish_requirements_review(conversation, run, &current, &verdict, cancel)?;
+        self.finish_requirements_review(conversation, &current, &verdict, cancel)?;
         Ok(current)
     }
 
@@ -250,7 +250,6 @@ impl Core {
     fn finish_requirements_review(
         &self,
         conversation: &str,
-        run: &Run,
         current: &Run,
         verdict: &tasks::Verdict,
         cancel: &AtomicBool,
@@ -259,7 +258,7 @@ impl Core {
             self.store.add_message(
                 conversation,
                 "requirements-reviewer",
-                &extraction::requirements_review_message(run, current, verdict),
+                &extraction::requirements_review_message(current, verdict),
             )?;
         }
         require(

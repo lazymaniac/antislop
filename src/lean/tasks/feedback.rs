@@ -121,7 +121,7 @@ pub fn feedback_is_current(feedback: &Value, round: u64) -> bool {
 /// How one obligation of a verdict counts, on a card and in `unaccounted`
 /// alike: only a status the verdict format allows, with a note, is an
 /// answer; an entry with a valid status but no note counts as `missing`.
-pub(super) fn counted_status(entry: &Value) -> &'static str {
+pub(crate) fn counted_status(entry: &Value) -> &'static str {
     let status = entry["status"].as_str().map(str::to_ascii_lowercase);
     let noted = entry["note"]
         .as_str()

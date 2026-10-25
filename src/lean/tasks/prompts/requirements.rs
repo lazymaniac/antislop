@@ -112,12 +112,16 @@ pub fn findings_text(findings: &[Value]) -> String {
         .iter()
         .map(|finding| match finding {
             Value::String(text) => format!("- {text}"),
-            other => format!(
-                "- [{}] {} ({})",
-                other["severity"].as_str().unwrap_or("?"),
-                other["issue"].as_str().unwrap_or_default(),
-                other["where"].as_str().unwrap_or_default()
-            ),
+            other => {
+                let severity = other["severity"].as_str().filter(|s| !s.is_empty());
+                let location = other["where"].as_str().filter(|s| !s.is_empty());
+                format!(
+                    "- {}{}{}",
+                    severity.map(|s| format!("[{s}] ")).unwrap_or_default(),
+                    other["issue"].as_str().unwrap_or_default(),
+                    location.map(|s| format!(" ({s})")).unwrap_or_default(),
+                )
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")

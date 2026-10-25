@@ -58,7 +58,7 @@ mod mail_tests {
             .db()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(schema, 11);
+        assert_eq!(schema, crate::lean::store::SCHEMA);
     }
 
     #[test]

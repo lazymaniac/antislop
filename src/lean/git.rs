@@ -882,7 +882,7 @@ mod tests {
         );
         assert_eq!(
             ok(project.path(), &["log", "-1", "--format=%s"]).unwrap(),
-            "Task t1"
+            "chore: Task t1"
         );
     }
 
