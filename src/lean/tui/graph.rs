@@ -67,6 +67,9 @@ fn node_name(key: &str) -> String {
 pub const WIDTH: u16 = 32;
 const MAX_SUMMARY_LINES: usize = 5;
 const MAX_EFFECT_LINES: usize = 2;
+/// Smallest card a small screen shrinks to: the header slots, one summary
+/// line and the meta line; narrower than this the text has no room left.
+const MIN_WIDTH: u16 = 16;
 /// Fixed slots inside a card, counted from its top, each starting right
 /// where the previous block can end: title, agent and work kind, phase, verifier state, one activity
 /// line, the working branch, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
@@ -79,6 +82,7 @@ const BRANCH_ROW: u16 = ACTIVITY_ROW + 1;
 const BODY_ROW: u16 = BRANCH_ROW + 1;
 const EFFECT_ROW: u16 = BODY_ROW + MAX_SUMMARY_LINES as u16;
 pub const HEIGHT: u16 = EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1;
+const MIN_HEIGHT: u16 = BODY_ROW + 2;
 const GAP_X: u16 = 6;
 const GAP_Y: u16 = 3;
 /// Room left of the first column for edges entering it.
@@ -177,6 +181,7 @@ pub struct Node {
     pub key: String,
     pub x: u16,
     pub y: u16,
+    pub width: u16,
     pub height: u16,
     pub visible: bool,
     pub group: Option<String>,
@@ -189,6 +194,7 @@ impl Default for Node {
             key: String::new(),
             x: 0,
             y: 0,
+            width: WIDTH,
             height: HEIGHT,
             visible: true,
             group: None,
@@ -203,6 +209,7 @@ impl Node {
             key,
             x,
             y,
+            width: WIDTH,
             height: HEIGHT,
             visible: true,
             group: None,
@@ -215,7 +222,57 @@ impl Node {
     }
 
     fn right(&self) -> u16 {
-        self.x + WIDTH
+        self.x + self.width
+    }
+
+    /// Summary and effect lines that fit between the header slots and the
+    /// meta line of a card this tall.
+    fn body_lines(&self) -> (usize, usize) {
+        body_lines(self.height)
+    }
+}
+
+/// How a card's height is shared between summary and effect lines; the
+/// full-height card gets `MAX_SUMMARY_LINES` and `MAX_EFFECT_LINES`.
+fn body_lines(height: u16) -> (usize, usize) {
+    let body = usize::from(height.saturating_sub(BODY_ROW + 1)).max(1);
+    let effect = match body {
+        7.. => MAX_EFFECT_LINES,
+        3..=6 => 1,
+        _ => 0,
+    };
+    ((body - effect).min(MAX_SUMMARY_LINES), effect)
+}
+
+/// The card size of one layout: full size, or smaller so that two cards fit
+/// across and down the viewport.
+#[derive(Debug, Clone, Copy)]
+struct Size {
+    w: u16,
+    h: u16,
+}
+
+impl Size {
+    fn fit(viewport: Option<(u16, u16)>) -> Self {
+        let full = Self {
+            w: WIDTH,
+            h: HEIGHT,
+        };
+        let Some((vp_w, vp_h)) = viewport else {
+            return full;
+        };
+        Self {
+            w: (vp_w.saturating_sub(MARGIN + 2 * GAP_X) / 2).clamp(MIN_WIDTH, WIDTH),
+            h: (vp_h.saturating_sub(GAP_Y) / 2).clamp(MIN_HEIGHT, HEIGHT),
+        }
+    }
+
+    fn node(self, key: String, x: u16, y: u16) -> Node {
+        Node {
+            width: self.w,
+            height: self.h,
+            ..Node::new(key, x, y)
+        }
     }
 }
 
@@ -339,12 +396,12 @@ fn card_key(view: &View, key: &str) -> String {
     task_node_key(key)
 }
 
-fn column_x(column: u16) -> u16 {
-    MARGIN + column * (WIDTH + GAP_X)
+fn column_x(size: Size, column: u16) -> u16 {
+    MARGIN + column * (size.w + GAP_X)
 }
 
-fn row_y(row: u16) -> u16 {
-    row * (HEIGHT + GAP_Y)
+fn row_y(size: Size, row: u16) -> u16 {
+    row * (size.h + GAP_Y)
 }
 
 pub type EdgeRoute<'a> = (&'a str, &'a str, Vec<(u16, u16)>);
@@ -375,6 +432,7 @@ impl Graph {
         grouping: GroupingMode,
         viewport: Option<(u16, u16)>,
     ) -> Self {
+        let size = Size::fit(viewport);
         let mut graph = Graph {
             nodes: Vec::new(),
             phases: Vec::new(),
@@ -567,13 +625,14 @@ impl Graph {
             // Flow: the first row holds the orchestrator and its verifiers, the
             // tasks it spawns follow, wrapping at the viewport width.
             // Each task card contains both execution and verification.
-            let max_cols = ((vp_w.saturating_sub(MARGIN) + GAP_X) / (WIDTH + GAP_X)).max(1);
+            let max_cols = ((vp_w.saturating_sub(MARGIN) + GAP_X) / (size.w + GAP_X)).max(1);
             let mut push = |key: &str, col: u16, row: u16, vis: bool| {
                 graph.nodes.push(Node {
                     key: key.to_string(),
-                    x: if vis { column_x(col) } else { 0 },
-                    y: if vis { row_y(row) } else { 0 },
-                    height: HEIGHT,
+                    x: if vis { column_x(size, col) } else { 0 },
+                    y: if vis { row_y(size, row) } else { 0 },
+                    width: size.w,
+                    height: size.h,
                     visible: vis,
                     group: None,
                     collapsed: false,
@@ -620,7 +679,7 @@ impl Graph {
                 if last_phase != Some(rank) {
                     last_phase = Some(rank);
                     slot = slot.div_ceil(usize::from(max_cols)) * usize::from(max_cols);
-                    phase_starts.push((label, row_y(worker_base + (slot as u16 / max_cols))));
+                    phase_starts.push((label, row_y(size, worker_base + (slot as u16 / max_cols))));
                 }
                 let this = slot;
                 slot += 1;
@@ -635,7 +694,11 @@ impl Graph {
                 let worker_vis = matches_query(&worker_key);
                 let verifier_vis = matches_query(&verifier_key);
 
-                let mut worker = Node::new(worker_key, column_x(col), row_y(worker_base + offset));
+                let mut worker = size.node(
+                    worker_key,
+                    column_x(size, col),
+                    row_y(size, worker_base + offset),
+                );
                 worker.collapsed = is_task_collapsed;
                 worker.group = Some(format!("task:{id}"));
                 worker.visible = worker_vis || verifier_vis;
@@ -649,9 +712,10 @@ impl Graph {
             let mut place_admin = |key: &str, col: u16, row: u16, vis: bool| {
                 graph.nodes.push(Node {
                     key: key.to_string(),
-                    x: if vis { column_x(col) } else { 0 },
-                    y: if vis { row_y(row) } else { 0 },
-                    height: HEIGHT,
+                    x: if vis { column_x(size, col) } else { 0 },
+                    y: if vis { row_y(size, row) } else { 0 },
+                    width: size.w,
+                    height: size.h,
                     visible: vis,
                     group: None,
                     collapsed: false,
@@ -676,7 +740,11 @@ impl Graph {
                     let worker_vis = matches_query(&worker_key);
                     let verifier_vis = matches_query(&verifier_key);
 
-                    let mut worker = Node::new(worker_key, column_x(rel_depth), row_y(current_row));
+                    let mut worker = size.node(
+                        worker_key,
+                        column_x(size, rel_depth),
+                        row_y(size, current_row),
+                    );
                     worker.collapsed = is_task_collapsed;
                     worker.group = Some(format!("task:{id}"));
                     worker.visible = worker_vis || verifier_vis;
@@ -695,11 +763,25 @@ impl Graph {
                     key: format!("worker:{id}"),
                     x: 0,
                     y: 0,
-                    height: HEIGHT,
+                    width: size.w,
+                    height: size.h,
                     visible: false,
                     group: Some(format!("task:{id}")),
                     collapsed: is_task_collapsed,
                 });
+            }
+        }
+
+        // With room to spare on the sides the cards sit in the middle.
+        if let Some((vp_w, _)) = viewport {
+            let visible = || graph.nodes.iter().filter(|node| node.visible);
+            let left = visible().map(|node| node.x).min().unwrap_or(0);
+            let right = visible().map(Node::right).max().unwrap_or(0);
+            let shift = (vp_w.saturating_sub(right - left) / 2)
+                .saturating_sub(left)
+                .min(vp_w.saturating_sub(right + GAP_X));
+            for node in graph.nodes.iter_mut().filter(|node| node.visible) {
+                node.x += shift;
             }
         }
 
@@ -714,7 +796,7 @@ impl Graph {
         let stack: HashMap<_, _> = rows
             .into_iter()
             .enumerate()
-            .map(|(row, y)| (y, row_y(row as u16)))
+            .map(|(row, y)| (y, row_y(size, row as u16)))
             .collect();
         for node in graph.nodes.iter_mut().filter(|node| node.visible) {
             node.y = stack[&node.y];
@@ -815,7 +897,7 @@ impl Graph {
         let from = self.node(key)?;
         let center = |node: &Node| {
             (
-                i32::from(node.x) + i32::from(WIDTH) / 2,
+                i32::from(node.x) + i32::from(node.width) / 2,
                 i32::from(node.y) + i32::from(node.height) / 2,
             )
         };
@@ -853,7 +935,7 @@ impl Graph {
                 to.y.saturating_add(to.height).saturating_add(GAP_Y) == from.y
             };
             if is_adjacent {
-                let x = to.x + WIDTH / 2;
+                let x = to.x + to.width / 2;
                 if from.y > to.y {
                     return vec![(x, from.y - 1), (x, to.y.saturating_add(to.height))];
                 }
@@ -875,10 +957,10 @@ impl Graph {
         }
         // Neighbours on one row face each other.
         if from.y == to.y {
-            if from.x + WIDTH + GAP_X == to.x {
+            if from.right() + GAP_X == to.x {
                 return vec![(from.right(), from.mid_y()), (to.x - 1, to.mid_y())];
             }
-            if to.x + WIDTH + GAP_X == from.x {
+            if to.right() + GAP_X == from.x {
                 return vec![(from.x - 1, from.mid_y()), (to.right(), to.mid_y())];
             }
         }
@@ -934,7 +1016,7 @@ impl Graph {
             let y_min = p1.1.min(p2.1);
             let y_max = p1.1.max(p2.1);
             if x_max >= node.x
-                && x_min < node.x.saturating_add(WIDTH)
+                && x_min < node.x.saturating_add(node.width)
                 && y_max >= node.y
                 && y_min < node.y.saturating_add(node.height)
             {
@@ -1177,7 +1259,7 @@ fn activity_line(view: &View, key: &str) -> Option<String> {
 }
 
 /// The same bounded, grapheme-safe text drives both layout and rendering.
-fn card_lines(view: &View, key: &str) -> Vec<String> {
+fn card_lines(view: &View, key: &str, width: usize, max: usize) -> Vec<String> {
     let normalize = |text: &str| clean(text).split_whitespace().collect::<Vec<_>>().join(" ");
     let text = match key {
         ORCHESTRATOR => "Coordinates the plan.".to_owned(),
@@ -1191,7 +1273,7 @@ fn card_lines(view: &View, key: &str) -> Vec<String> {
                     .find(|task| task.id == id)
                     .map(|task| (role, task))
             }) else {
-                return fit_lines(&normalize(&node_name(key)), usize::from(WIDTH - 4), 1);
+                return fit_lines(&normalize(&node_name(key)), width, 1);
             };
             let summary = if role == "worker" {
                 &task.summary
@@ -1216,8 +1298,7 @@ fn card_lines(view: &View, key: &str) -> Vec<String> {
                 })
         }
     };
-    let width = usize::from(WIDTH - 4);
-    fit_lines(&text, width, MAX_SUMMARY_LINES)
+    fit_lines(&text, width, max)
 }
 
 /// The same bounded, grapheme-safe wrapping the summary uses: at most
@@ -1249,7 +1330,7 @@ fn fit_lines(text: &str, width: usize, max: usize) -> Vec<String> {
 /// shape of the shared reading (taskinfo) — text and fragment marker in
 /// front — wrapped to the slot; `None` keeps the slot empty until the
 /// round has something to report at all.
-fn effect_lines(view: &View, key: &str) -> Vec<String> {
+fn effect_lines(view: &View, key: &str, width: usize, max: usize) -> Vec<String> {
     let Some(row) = key.split_once(':').and_then(|(role, id)| {
         (role == "worker")
             .then(|| view.tasks.iter().find(|task| task.id == id))
@@ -1260,7 +1341,7 @@ fn effect_lines(view: &View, key: &str) -> Vec<String> {
     let Some(effect) = taskinfo::effect_front(row) else {
         return Vec::new();
     };
-    fit_lines(&effect, usize::from(WIDTH - 4), MAX_EFFECT_LINES)
+    fit_lines(&effect, width, max)
 }
 
 pub fn mark(status: &str) -> (&'static str, Color) {
@@ -1283,7 +1364,7 @@ fn draw_node(
     tick: u64,
 ) {
     if node.x >= canvas.origin_x.saturating_add(canvas.width)
-        || node.x.saturating_add(WIDTH) <= canvas.origin_x
+        || node.x.saturating_add(node.width) <= canvas.origin_x
         || node.y >= canvas.origin_y.saturating_add(canvas.height)
         || node.y.saturating_add(node.height) <= canvas.origin_y
     {
@@ -1314,7 +1395,7 @@ fn draw_node(
     }
     .add_modifier(Modifier::BOLD);
     let (x, y) = (node.x, node.y);
-    let right = x + WIDTH - 1;
+    let right = x + node.width - 1;
     let bottom = y.saturating_add(node.height).saturating_sub(1);
     // The card is its background; no frame is drawn around it.
     for cy in y..=bottom {
@@ -1326,7 +1407,8 @@ fn draw_node(
         let bar = if selected { '█' } else { '▌' };
         canvas.put(x, cy, bar, fill.patch(accent));
     }
-    let inner = usize::from(WIDTH - 4);
+    let inner = usize::from(node.width - 4);
+    let (summary_max, effect_max) = node.body_lines();
     let name = task
         .map(|task| clean(&task.title))
         .filter(|title| !title.trim().is_empty())
@@ -1464,7 +1546,7 @@ fn draw_node(
             .collect::<Vec<_>>()
             .join(" "),
             inner,
-            MAX_SUMMARY_LINES / 2,
+            (summary_max / 2).max(1),
         );
         lines.extend(fit_lines(
             &clean(task.verifier_summary.as_deref().unwrap_or_default())
@@ -1472,11 +1554,12 @@ fn draw_node(
                 .collect::<Vec<_>>()
                 .join(" "),
             inner,
-            MAX_SUMMARY_LINES / 2,
+            (summary_max / 2).max(1),
         ));
+        lines.truncate(summary_max);
         lines
     } else {
-        card_lines(view, &node.key)
+        card_lines(view, &node.key, inner, summary_max)
     };
     for (row, line) in summary.iter().enumerate() {
         canvas.text(
@@ -1488,10 +1571,13 @@ fn draw_node(
     }
     // The worker's effect keeps its own slot under the summary, so it
     // replaces no summary line and the card never changes height for it.
-    for (row, line) in effect_lines(view, &node.key).iter().enumerate() {
+    for (row, line) in effect_lines(view, &node.key, inner, effect_max)
+        .iter()
+        .enumerate()
+    {
         canvas.text(
             x + 2,
-            y + EFFECT_ROW + row as u16,
+            y + BODY_ROW + summary_max as u16 + row as u16,
             line,
             fill.patch(theme.text()),
         );
@@ -1717,6 +1803,36 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    const FULL: Size = Size {
+        w: WIDTH,
+        h: HEIGHT,
+    };
+
+    #[test]
+    fn small_viewports_shrink_cards_to_two_by_two_and_wide_ones_center_them() {
+        let tasks = (1..=6).map(|n| task(&format!("t{n}"), &[])).collect();
+        let view = view(tasks);
+        let layout = |vp| {
+            Graph::new_with_viewport(
+                &view,
+                None,
+                &Default::default(),
+                GroupingMode::Dependency,
+                Some(vp),
+            )
+        };
+        let small = layout((70, 24));
+        for node in small.nodes.iter().filter(|node| node.visible) {
+            assert!(node.width < WIDTH && node.height < HEIGHT, "{node:?}");
+        }
+        assert!(small.width <= 70, "{}", small.width);
+        assert!(2 * small.nodes[0].height + GAP_Y <= 24);
+        let wide = layout((300, 80));
+        let left = wide.nodes.iter().filter(|n| n.visible).map(|n| n.x).min();
+        assert!(left.unwrap() > MARGIN);
+        assert!(wide.width <= 300);
+    }
+
     #[test]
     fn agent_card_shows_recorded_branch() {
         let mut view = View::default();
@@ -1753,7 +1869,12 @@ mod tests {
             .filter(|node| node.visible && requirements_round(&node.key).is_some())
             .collect();
         assert_eq!(cards.len(), 1);
-        for line in card_lines(&view, &cards[0].key) {
+        for line in card_lines(
+            &view,
+            &cards[0].key,
+            usize::from(WIDTH - 4),
+            MAX_SUMMARY_LINES,
+        ) {
             assert!(line.width() <= usize::from(WIDTH - 4), "{line}");
         }
     }
@@ -2053,7 +2174,12 @@ mod tests {
         row.summary = Some("👩‍💻e\u{301}".repeat(100));
         row.verifier_summary = Some("Check the summary.".into());
         let view = view(vec![row]);
-        let lines = card_lines(&view, "worker:t1");
+        let lines = card_lines(
+            &view,
+            "worker:t1",
+            usize::from(WIDTH - 4),
+            MAX_SUMMARY_LINES,
+        );
         assert_eq!(lines.len(), MAX_SUMMARY_LINES);
         assert!(lines.last().unwrap().ends_with('…'));
         for line in &lines {
@@ -2089,8 +2215,24 @@ mod tests {
             row.summary = summary.map(str::to_owned);
             row.verifier_summary = summary.map(str::to_owned);
             let view = view(vec![row]);
-            assert_eq!(card_lines(&view, "worker:t1"), ["Storage"]);
-            assert_eq!(card_lines(&view, "verifier:t1"), ["Verify Storage."]);
+            assert_eq!(
+                card_lines(
+                    &view,
+                    "worker:t1",
+                    usize::from(WIDTH - 4),
+                    MAX_SUMMARY_LINES
+                ),
+                ["Storage"]
+            );
+            assert_eq!(
+                card_lines(
+                    &view,
+                    "verifier:t1",
+                    usize::from(WIDTH - 4),
+                    MAX_SUMMARY_LINES
+                ),
+                ["Verify Storage."]
+            );
             assert!(
                 Graph::new(&view)
                     .nodes
@@ -2102,11 +2244,24 @@ mod tests {
         row.title.clear();
         row.kind = "analysis".into();
         assert_eq!(
-            card_lines(&view(vec![row.clone()]), "worker:t1"),
+            card_lines(
+                &view(vec![row.clone()]),
+                "worker:t1",
+                usize::from(WIDTH - 4),
+                MAX_SUMMARY_LINES
+            ),
             ["analysis"]
         );
         row.kind.clear();
-        assert_eq!(card_lines(&view(vec![row]), "verifier:t1"), ["Verify t1."]);
+        assert_eq!(
+            card_lines(
+                &view(vec![row]),
+                "verifier:t1",
+                usize::from(WIDTH - 4),
+                MAX_SUMMARY_LINES
+            ),
+            ["Verify t1."]
+        );
     }
 
     #[test]
@@ -2142,7 +2297,10 @@ mod tests {
                     ..Default::default()
                 },
             );
-            assert_eq!(card_lines(&view, key), [description]);
+            assert_eq!(
+                card_lines(&view, key, usize::from(WIDTH - 4), MAX_SUMMARY_LINES),
+                [description]
+            );
         }
     }
 
@@ -2211,11 +2369,11 @@ mod tests {
             let node = graph.node(key).unwrap();
             (node.x, node.y)
         };
-        assert_eq!(at("worker:t1"), (column_x(0), row_y(1)));
+        assert_eq!(at("worker:t1"), (column_x(FULL, 0), row_y(FULL, 1)));
         assert_eq!(at("verifier:t1"), at("worker:t1"));
-        assert_eq!(at("worker:t3"), (column_x(0), row_y(2)));
-        assert_eq!(at("worker:t2"), (column_x(1), row_y(1)));
-        assert_eq!(at(ORCHESTRATOR), (column_x(1), 0));
+        assert_eq!(at("worker:t3"), (column_x(FULL, 0), row_y(FULL, 2)));
+        assert_eq!(at("worker:t2"), (column_x(FULL, 1), row_y(FULL, 1)));
+        assert_eq!(at(ORCHESTRATOR), (column_x(FULL, 1), 0));
     }
 
     #[test]
@@ -2372,7 +2530,7 @@ mod tests {
         view.tasks[1].integration = Some(json!({"outcome": "committed", "detail": "as abc12"}));
         let rows = render(&view);
         assert_eq!(
-            effect_lines(&view, "worker:t1").join(""),
+            effect_lines(&view, "worker:t1", usize::from(WIDTH - 4), MAX_EFFECT_LINES).join(""),
             "effect: [fragment] two files cut…",
             "one normalized line, marker in front"
         );

@@ -5079,8 +5079,8 @@ impl App {
             let (left, top) = &mut self.offset;
             if node.x < *left {
                 *left = node.x.saturating_sub(3);
-            } else if node.x + graph::WIDTH + 3 > *left + inner.width {
-                *left = (node.x + graph::WIDTH + 3).saturating_sub(inner.width);
+            } else if node.x + node.width + 3 > *left + inner.width {
+                *left = (node.x + node.width + 3).saturating_sub(inner.width);
             }
             if node.height > inner.height {
                 // A tall card can be read with PgUp/PgDn or the mouse wheel.
@@ -5283,7 +5283,7 @@ impl App {
                     if let Some(node) = graph.nodes.iter().find(|node| {
                         node.visible
                             && x >= node.x
-                            && x < node.x.saturating_add(graph::WIDTH)
+                            && x < node.x.saturating_add(node.width)
                             && y >= node.y
                             && y < node.y.saturating_add(node.height)
                     }) {
