@@ -4070,11 +4070,16 @@ fn task_card_mouse_selection_uses_one_identity_for_both_phases() {
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let details = app.details.as_ref().unwrap();
     assert_eq!(details.key, "worker:t2");
+    assert_eq!(
+        details.tab,
+        antislop::lean::tui::details::VERIFIER,
+        "a task under verification opens on its verifier"
+    );
     assert!(
         antislop::lean::tui::details::tabs_for(&details.key)
             .contains(&antislop::lean::tui::details::CHECKS)
     );
-    app.key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
     assert_eq!(
         app.details.as_ref().unwrap().tab,
         antislop::lean::tui::details::CHECKS
@@ -7374,7 +7379,12 @@ fn header_shows_repository_branch_for_old_sessions_and_has_no_empty_separators()
     assert!(!text.contains("feature/repo-branch"));
 }
 
-fn dashboard_screen(width: u16, height: u16, setup: impl FnOnce(&mut Details)) -> String {
+fn dashboard_screen(
+    width: u16,
+    height: u16,
+    tab: usize,
+    setup: impl FnOnce(&mut Details),
+) -> String {
     use antislop::lean::tui::view::{Agent, View};
     let ev = |seq: u64, kind: &str, payload: Value| json!({"seq": seq, "kind": kind, "payload": payload});
     let mut view = View::default();
@@ -7417,7 +7427,7 @@ fn dashboard_screen(width: u16, height: u16, setup: impl FnOnce(&mut Details)) -
         },
     );
     let mut details = Details::new("verifier:t1".into());
-    details.show_info = true;
+    details.tab = tab;
     details.task = Some(json!({
         "id": "u1", "round": 2, "report": "Wrapped writes in a transaction.",
         "spec": {"id": "t1", "title": "Store", "goal": "g", "kind": "implementation",
@@ -7448,36 +7458,61 @@ fn dashboard_screen(width: u16, height: u16, setup: impl FnOnce(&mut Details)) -
 
 #[test]
 fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
-    let wide = dashboard_screen(140, 40, |_| {});
-    println!("{wide}");
+    use antislop::lean::tui::details::VERIFIER;
+    // Verifier section: what it checks and what it found, beside its terminal.
+    let wide = dashboard_screen(140, 40, VERIFIER, |_| {});
     for needle in [
         "VERIFYING r2",
-        "Make the storage layer atomic",
-        "Findings",
-        "No fsync before rename",
-        "src/store.rs:42",
+        "[Verifier]",
+        "Verification",
         "Torn writes",
+        "Checks",
         "12.3k in / 4.0k out",
-        "checks",
-        "serves requirements Q1",
+        "Session · verifier",
     ] {
         assert!(wide.contains(needle), "{needle}\n{wide}");
     }
-    let narrow = dashboard_screen(70, 40, |details| details.dash_jump(true));
-    println!("{narrow}");
+    assert!(!wide.contains("Make the storage layer atomic"), "{wide}");
+    let findings = dashboard_screen(140, 40, VERIFIER, |details| details.dash_jump(true));
+    assert!(findings.contains("No fsync before rename"), "{findings}");
+    assert!(findings.contains("src/store.rs:42"), "{findings}");
+    // Worker section: the assignment, beside the worker's terminal.
+    let worker = dashboard_screen(140, 40, 0, |_| {});
+    for needle in [
+        "[Worker]",
+        "Goal",
+        "Make the storage layer atomic",
+        "serves requirements Q1",
+        "Wrapped writes in a transaction.",
+        "Session · worker",
+    ] {
+        assert!(worker.contains(needle), "{needle}\n{worker}");
+    }
+    assert!(!worker.contains("Torn writes"), "{worker}");
+    // Tall but narrow: info above the terminal. Enter folds the Goal card.
+    let stacked = dashboard_screen(100, 40, 0, |_| {});
     assert!(
-        narrow.contains("Agents"),
-        "the last card is revealed: {narrow}"
+        stacked.contains("Make the storage layer atomic"),
+        "{stacked}"
     );
-    // Focus moved to the Goal card and Enter expanded it; Enter again folds.
-    let folded = dashboard_screen(70, 40, |details| {
+    assert!(stacked.contains("Session · worker"), "{stacked}");
+    let folded = dashboard_screen(100, 40, 0, |details| {
         details.dash_move(1);
         details.dash_cycle();
         details.dash_cycle();
     });
     assert!(!folded.contains("Never lose a write"), "{folded}");
+    // Neither wide nor tall: `m` swaps terminal and info.
+    let small = dashboard_screen(100, 24, 0, |_| {});
+    assert!(small.contains("Attaching terminal"), "{small}");
+    let swapped = dashboard_screen(100, 24, 0, |details| details.show_info = true);
+    assert!(
+        swapped.contains("Make the storage layer atomic"),
+        "{swapped}"
+    );
     // Tiny terminals never panic.
     for (w, h) in [(12, 5), (24, 6), (40, 8)] {
-        dashboard_screen(w, h, |_| {});
+        dashboard_screen(w, h, 0, |_| {});
+        dashboard_screen(w, h, VERIFIER, |_| {});
     }
 }

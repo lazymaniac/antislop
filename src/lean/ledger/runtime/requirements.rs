@@ -36,6 +36,10 @@ impl Core {
             )?,
         };
         self.store.select_planning_run(conversation, &r.id)?;
+        require(
+            !self.store.has_pending_ledger_proposal(&r.id)?,
+            "requirements proposal awaits user approval",
+        )?;
         let new_source = self.register_missing_sources(conversation, &r, &user)?;
         if self.store.extraction_current(conversation, &r.id)? && !new_source {
             return Ok((r, None));
@@ -95,8 +99,13 @@ impl Core {
     fn requirements_feedback(&self, conversation: &str, run: &Run) -> Result<String> {
         Ok(self
             .store
-            .messages_by(conversation, "requirements-reviewer", run.start_message)?
-            .last()
+            .messages_after(conversation, run.start_message)?
+            .into_iter()
+            .rev()
+            .find(|message| {
+                message.author == "requirements-reviewer"
+                    || message.author == "requirements-approval"
+            })
             .map(|message| message.text.clone())
             .unwrap_or_default())
     }
@@ -179,17 +188,20 @@ impl Core {
         if change.entries.is_empty() {
             return Ok(());
         }
-        if change
-            .entries
-            .iter()
-            .any(|entry| existing.iter().any(|old| old.spec.id == entry.id))
+        if self.store.has_rejected_ledger_proposal(&run.id)?
+            || change
+                .entries
+                .iter()
+                .any(|entry| existing.iter().any(|old| old.spec.id == entry.id))
         {
             let (proposal, diff) =
                 self.store
                     .propose_agent_ledger_change(change, &self.state, producer)?;
             self.store.append_event(conversation, None, None, "ledger_approval_required",
                 &json!({"proposal":proposal,"run":run.id,"revision":run.spec_revision,"affected_tasks":diff.affected_tasks}))?;
-            return Err(Error::Invalid("requirements analyst proposed a semantic scope change; open /requirements and press p to review the exact diff before planning".into()));
+            return Err(Error::Invalid(
+                "requirements proposal awaits user approval".into(),
+            ));
         }
         let _integration = self.integrating.lock().expect("integration mutex");
         self.store
@@ -243,13 +255,7 @@ impl Core {
         verdict: &tasks::Verdict,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        if !verdict.approved
-            && !cancel.load(Ordering::SeqCst)
-            && self
-                .store
-                .count_since_requirements_reset(conversation, "requirements-reviewer")?
-                == 0
-        {
+        if !verdict.approved && !cancel.load(Ordering::SeqCst) {
             self.store.add_message(
                 conversation,
                 "requirements-reviewer",

@@ -145,6 +145,13 @@ pub enum Request {
     ListRuns {
         conversation: String,
     },
+    RejectLedgerProposal {
+        conversation: String,
+        run_id: String,
+        proposal_id: String,
+        diff_hash: String,
+        comment: String,
+    },
     GetLedgerProposal {
         conversation: String,
         run_id: String,
@@ -472,6 +479,13 @@ enum WireRequest {
 
     ListRuns {
         conversation: String,
+    },
+    RejectLedgerProposal {
+        conversation: String,
+        run_id: String,
+        proposal_id: String,
+        diff_hash: String,
+        comment: String,
     },
     GetLedgerProposal {
         conversation: String,
@@ -820,6 +834,19 @@ impl From<Request> for WireRequest {
                 offset,
             },
             Request::ListRuns { conversation } => WireRequest::ListRuns { conversation },
+            Request::RejectLedgerProposal {
+                conversation,
+                run_id,
+                proposal_id,
+                diff_hash,
+                comment,
+            } => WireRequest::RejectLedgerProposal {
+                conversation,
+                run_id,
+                proposal_id,
+                diff_hash,
+                comment,
+            },
             Request::GetLedgerProposal {
                 conversation,
                 run_id,
@@ -1299,6 +1326,19 @@ impl From<WireRequest> for Request {
                 offset,
             },
             WireRequest::ListRuns { conversation } => Request::ListRuns { conversation },
+            WireRequest::RejectLedgerProposal {
+                conversation,
+                run_id,
+                proposal_id,
+                diff_hash,
+                comment,
+            } => Request::RejectLedgerProposal {
+                conversation,
+                run_id,
+                proposal_id,
+                diff_hash,
+                comment,
+            },
             WireRequest::GetLedgerProposal {
                 conversation,
                 run_id,
@@ -1798,6 +1838,29 @@ fn handle(core: &Arc<Core>, project: &Path, config: &Path, request: Request) -> 
         Request::ListRuns { conversation } => {
             validate_project_conversation(core, project, &conversation)?;
             json!(core.store.list_runs(&conversation)?)
+        }
+        Request::RejectLedgerProposal {
+            conversation,
+            run_id,
+            proposal_id,
+            diff_hash,
+            comment,
+        } => {
+            validate_project_conversation(core, project, &conversation)?;
+            core.store.reject_ledger_proposal(
+                &conversation,
+                &run_id,
+                &proposal_id,
+                &diff_hash,
+                &comment,
+            )?;
+            if core
+                .store
+                .has_pending_requirements_approval(&conversation)?
+            {
+                core.wake(&conversation);
+            }
+            json!({"rejected":true})
         }
         Request::GetLedgerProposal {
             conversation,

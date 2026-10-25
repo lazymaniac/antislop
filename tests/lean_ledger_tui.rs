@@ -252,9 +252,9 @@ fn semantic_review_shows_before_after_and_keeps_failed_approval_actionable() {
     };
     view.reply("preview",Ok(json!({"change":change,"proposal":{"proposal_id":"p1","diff_hash":"h1","diff":{"before":[before],"after":[after],"affected_tasks":[]}}})));
     let rendered = screen(&mut view, 120, 30);
-    assert!(rendered.contains("Before: Keep the source"));
-    assert!(rendered.contains("After: Preserve every qualifier"));
-    assert!(rendered.contains("Approve changes & continue planning"));
+    assert!(rendered.contains("- Keep the source"));
+    assert!(rendered.contains("+ Preserve every qualifier"));
+    assert!(rendered.contains("Enter Approve"));
     assert!(!rendered.contains("\"interpretation\""));
     view.reply("applied", Err("connection lost".into()));
     assert!(screen(&mut view, 120, 30).contains("connection lost"));

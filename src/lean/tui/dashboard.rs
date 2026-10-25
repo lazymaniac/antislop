@@ -163,7 +163,10 @@ impl Details {
     /// The dashboard replaces the terminals while `m` is on and nothing
     /// narrows the text with a search.
     pub fn dashboard_visible(&self) -> bool {
-        self.tab == 0 && self.show_info && self.key != "conversation" && self.query.is_empty()
+        self.overview()
+            && (self.show_info || self.split)
+            && self.key != "conversation"
+            && self.query.is_empty()
     }
 
     /// Two lines that stay above both faces of the Overview: where the task
@@ -276,7 +279,7 @@ impl Details {
         }
         // The task spends tokens and time in both of its sessions.
         let agents: Vec<_> = self
-            .session_keys()
+            .role_keys()
             .iter()
             .filter_map(|key| view.agents.get(key))
             .collect();
@@ -307,7 +310,7 @@ impl Details {
                 theme.text(),
             ));
         }
-        vec![Line::from(head), join_chips(theme, chips)]
+        vec![Line::from(head), join_chips(theme, chips), Line::raw("")]
     }
 
     fn sections(&self, view: &View, theme: &Theme, width: usize) -> Vec<Section> {
@@ -680,7 +683,12 @@ impl Details {
             width,
             theme.text(),
         ));
-        if let Some(report) = self.task.as_ref().and_then(|t| t["report"].as_str()) {
+        if let Some(report) = self
+            .task
+            .as_ref()
+            .and_then(|t| t["report"].as_str())
+            .filter(|_| self.tab != super::details::VERIFIER)
+        {
             outcome.push(Line::raw(""));
             outcome.push(Line::styled(
                 "Worker report",
@@ -834,6 +842,14 @@ impl Details {
                 right: true,
             });
         }
+        // Each section shows what its role cares about: the worker its
+        // assignment and result, the verifier what it checks and finds.
+        let verifier = self.tab == super::details::VERIFIER;
+        out.retain(|section| match section.id {
+            "goal" | "scope" => !verifier,
+            "verify" | "risks" | "checks" | "findings" => verifier,
+            _ => true,
+        });
         out
     }
 
@@ -883,7 +899,7 @@ impl Details {
     }
 
     pub fn dash_scroll(&mut self, delta: isize) {
-        self.scroll = (self.scroll as isize + delta).max(0) as usize;
+        self.dash_scroll = (self.dash_scroll as isize + delta).max(0) as usize;
     }
 
     /// One card as lines: header, then the visible part of its body.
@@ -998,7 +1014,7 @@ impl Details {
             let section = &sections[index];
             let column = usize::from(two && section.right);
             if !columns[column].is_empty() {
-                columns[column].push(Line::raw(""));
+                columns[column].extend([Line::raw(""), Line::raw("")]);
             }
             let lines =
                 self.card_lines(theme, section, Some(section.id) == focused_id, column_width);
@@ -1011,13 +1027,13 @@ impl Details {
         if std::mem::take(&mut self.dash_reveal)
             && let Some(&(_, start, len)) = starts.get(self.dash_focus)
         {
-            if start < self.scroll {
-                self.scroll = start;
-            } else if start + len > self.scroll + height {
-                self.scroll = (start + len).saturating_sub(height).min(start);
+            if start < self.dash_scroll {
+                self.dash_scroll = start;
+            } else if start + len > self.dash_scroll + height {
+                self.dash_scroll = (start + len).saturating_sub(height).min(start);
             }
         }
-        self.scroll = self.scroll.min(bottom);
+        self.dash_scroll = self.dash_scroll.min(bottom);
 
         let areas: Vec<Rect> = if two {
             Layout::horizontal([
@@ -1045,13 +1061,13 @@ impl Details {
                 break;
             }
             let rect = areas[if column == 1 { 2 } else { 0 }];
-            let end = (self.scroll + height).min(lines.len());
-            let from = self.scroll.min(end);
+            let end = (self.dash_scroll + height).min(lines.len());
+            let from = self.dash_scroll.min(end);
             frame.render_widget(Paragraph::new(lines[from..end].to_vec()), rect);
         }
         if total > height && area.width > 0 {
             let mut state = ScrollbarState::new(bottom.saturating_add(1))
-                .position(self.scroll)
+                .position(self.dash_scroll)
                 .viewport_content_length(height);
             frame.render_stateful_widget(
                 Scrollbar::new(ScrollbarOrientation::VerticalRight)

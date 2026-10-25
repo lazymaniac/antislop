@@ -61,3 +61,9 @@ CREATE TABLE IF NOT EXISTS solution_choices(
  run_id TEXT NOT NULL REFERENCES runs(id), spec_revision INTEGER NOT NULL,
  producer_turn TEXT NOT NULL REFERENCES turns(id), verifier_turn TEXT NOT NULL REFERENCES turns(id),
  decision TEXT NOT NULL, PRIMARY KEY(run_id,spec_revision));
+
+CREATE TABLE IF NOT EXISTS ledger_rejections(
+ proposal_id TEXT PRIMARY KEY REFERENCES ledger_proposals(id),
+ comment_message INTEGER NOT NULL REFERENCES messages(seq),
+ resume_message INTEGER NOT NULL REFERENCES messages(seq),
+ diff_hash TEXT NOT NULL, created_ms INTEGER NOT NULL);

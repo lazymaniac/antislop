@@ -125,6 +125,10 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
             .add_message(&conversation, "user", "Interview answer (focus)\nKeep")
             .unwrap();
         let result = core.ensure_requirements(&conversation, &AtomicBool::new(false));
+        assert!(
+            dir.path().join("attempts").exists(),
+            "analyst did not run: {result:?}"
+        );
         assert_eq!(
             std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
             "2"
@@ -159,11 +163,23 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 core.store
                     .count_since_user(&conversation, "requirements-reviewer")
                     .unwrap(),
-                1
+                2
             );
             assert_eq!(
                 std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
                 "3"
+            );
+            for _ in 0..tasks::MAX_ROUNDS + 1 {
+                assert!(
+                    core.ensure_requirements(&conversation, &AtomicBool::new(false))
+                        .is_err()
+                );
+            }
+            assert_eq!(
+                core.store
+                    .count_since_requirements_reset(&conversation, "requirements-reviewer")
+                    .unwrap(),
+                tasks::MAX_ROUNDS as usize + 3
             );
         } else if repairs {
             result.unwrap();

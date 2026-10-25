@@ -91,6 +91,8 @@ impl Store {
         if let Some(result) = saved_decision(&tx, change, &request_hash)? {
             return Ok(result);
         }
+        let rejected: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_rejections x JOIN ledger_proposals p ON p.id=x.proposal_id WHERE json_extract(p.request,'$.operation_id')=?1)", [&change.operation_id], |r|r.get(0))?;
+        require(!rejected, "proposal already rejected")?;
         let diff = validate_change(&tx, change, state, user)?;
         let changed_versions = persist_entries(&tx, change, state, diff.to_revision)?;
         mark_affected_tasks(&tx, &diff.affected_tasks)?;

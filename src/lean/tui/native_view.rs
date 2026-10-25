@@ -287,9 +287,11 @@ impl App {
         let mut wanted = vec![];
         // The current round's sessions are shown live; an earlier round's only
         // when the user asks, and then by resuming it.
-        if let Some(details) = self.details.as_ref().filter(|d| {
-            d.tab == 0 && !d.show_info && (d.selected_round.is_none() || d.resume_round)
-        }) {
+        if let Some(details) = self
+            .details
+            .as_ref()
+            .filter(|d| d.terminal_visible() && (d.selected_round.is_none() || d.resume_round))
+        {
             for (panel, key) in details.session_keys().iter().enumerate() {
                 let role = details.composer_recipient(key);
                 let area = details.native_areas[panel];
@@ -376,16 +378,19 @@ impl App {
         }
     }
     fn native_key_role(&self) -> Option<String> {
-        let details = self.details.as_ref().filter(|d| {
-            d.tab == 0 && !d.show_info && (d.selected_round.is_none() || d.resume_round)
-        })?;
+        let details = self
+            .details
+            .as_ref()
+            .filter(|d| d.terminal_visible() && (d.selected_round.is_none() || d.resume_round))?;
         details
             .session_keys()
             .get(details.active_panel)
             .map(|key| details.composer_recipient(key))
     }
     pub(super) fn native_focused(&self) -> bool {
-        self.details.as_ref().is_some_and(|d| d.native_focus) && self.native_key_role().is_some()
+        !self.ledger_view.as_ref().is_some_and(|v| v.visible)
+            && self.details.as_ref().is_some_and(|d| d.native_focus)
+            && self.native_key_role().is_some()
     }
     pub(super) fn native_send(&mut self, input: Input) {
         if let Some(role) = self.native_key_role() {
@@ -841,12 +846,12 @@ mod tests {
         assert_eq!(terminal.backend().buffer()[(1, 1)].symbol(), " ");
     }
     #[test]
-    fn overview_splits_at_eighty_columns_and_old_rounds_resume_on_request() {
+    fn overview_shows_one_terminal_and_old_rounds_resume_on_request() {
         let mut details = Details::new("worker:t1".into());
         let view = crate::lean::tui::view::View::default();
-        for key in ["worker:t1", "verifier:t1"] {
+        {
             details.native.insert(
-                key.into(),
+                "worker:t1".into(),
                 Snapshot {
                     screen: Some(screen("native-marker")),
                     error: None,
@@ -855,8 +860,8 @@ mod tests {
         }
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| details.draw(frame, &view)).unwrap();
-        assert_ne!(details.native_areas[0].x, details.native_areas[1].x);
-        assert!(details.native_areas[0].width < 40);
+        // One agent per tab: the worker's terminal takes the whole panel.
+        assert!(details.native_areas[0].width >= 70);
         // An earlier round has no terminal until the user asks for it.
         details.selected_round = Some(1);
         details.native.clear();

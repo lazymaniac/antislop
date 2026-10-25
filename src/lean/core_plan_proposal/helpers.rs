@@ -13,10 +13,17 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<Option<PreparedPlan>> {
         record_addressed_comments(&self.store, conversation, addressed)?;
+        let feedback_before = self
+            .store
+            .count_since_requirements_reset(conversation, "requirements-reviewer")?;
         let run = match self.ensure_requirements(conversation, cancel) {
             Ok(run) => run,
             Err(error) => {
-                record_requirements_failure(&self.store, conversation, &error)?;
+                let retrying = self
+                    .store
+                    .count_since_requirements_reset(conversation, "requirements-reviewer")?
+                    > feedback_before;
+                record_requirements_failure(&self.store, conversation, &error, retrying)?;
                 return Ok(None);
             }
         };
@@ -272,13 +279,19 @@ fn record_requirements_failure(
     store: &Store,
     conversation: &str,
     error: &dyn std::fmt::Display,
+    retrying: bool,
 ) -> Result<()> {
+    let retry = if retrying {
+        "Requirements review feedback was sent to the orchestrator. Correcting requirements and regenerating the plan automatically."
+    } else {
+        "Requirements preparation stopped. Review the failure above; for a proposed scope change, open /requirements and press p to review the exact diff. Otherwise send a message to retry."
+    };
     store.append_event(
         conversation,
         None,
         None,
         "requirements_failed",
-        &json!({"error": error.to_string(), "retry": "Ask the orchestrator to regenerate the task plan; a bare approval does not rerun requirements preparation. For a proposed scope change, open /requirements and press p to review it first."}),
+        &json!({"error": error.to_string(), "retrying": retrying, "retry": retry}),
     )?;
     Ok(())
 }

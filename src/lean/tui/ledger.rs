@@ -224,6 +224,16 @@ pub struct LedgerView {
     pub runs: Vec<Run>,
     pub edit_scroll: usize,
     pub pending_kind: String,
+    pub review_run: Option<String>,
+    pub approval_event: u64,
+    pub stale: bool,
+    pub scope_epoch: u64,
+    pub pending_scope_epoch: u64,
+    pub pending_run: Option<String>,
+    pub pending_read: bool,
+    pub rejecting: bool,
+    pub rejection: InputBuffer,
+    pub rejection_drafts: HashMap<String, InputBuffer>,
     pub prepared_draft: Option<((String, String), Form)>,
     pub run_filters: HashMap<String, RunFilter>,
 }
@@ -252,9 +262,16 @@ pub enum Action {
         hash: String,
         change: LedgerChange,
     },
+    Reject {
+        proposal: String,
+        hash: String,
+        run: String,
+        comment: String,
+    },
     Create,
     Runs,
     Proposal,
+    Review(String),
 }
 impl Default for LedgerView {
     fn default() -> Self {
@@ -297,6 +314,16 @@ impl LedgerView {
             runs: vec![],
             edit_scroll: 0,
             pending_kind: String::new(),
+            review_run: None,
+            approval_event: 0,
+            stale: false,
+            scope_epoch: 0,
+            pending_scope_epoch: 0,
+            pending_run: None,
+            pending_read: false,
+            rejecting: false,
+            rejection: InputBuffer::new(),
+            rejection_drafts: HashMap::new(),
             prepared_draft: None,
             run_filters: HashMap::new(),
         }
@@ -349,7 +376,11 @@ impl LedgerView {
     }
     pub fn paste(&mut self, text: &str) {
         let text = super::sanitize_paste(text);
-        if let Some(form) = self.form_mut() {
+        if self.preview.is_some() {
+            if self.rejecting {
+                self.rejection.insert_str(&text);
+            }
+        } else if let Some(form) = self.form_mut() {
             let field = form.field;
             form.fields[field as usize].insert_str(&text);
         } else if self.searching {
@@ -432,19 +463,90 @@ impl LedgerView {
             }
             return Action::None;
         }
+        if self.pending && self.pending_read && key.code == KeyCode::Esc {
+            if let Some(p) = &self.preview {
+                self.rejection_drafts.insert(
+                    p["proposal_id"].as_str().unwrap_or_default().into(),
+                    self.rejection.clone(),
+                );
+            }
+            self.request_id = self.request_id.wrapping_add(1);
+            self.pending = false;
+            self.visible = false;
+            self.preview = None;
+            return Action::None;
+        }
         if self.preview.is_some() {
+            if self.pending {
+                return Action::None;
+            }
+            if ctrl
+                && key.code == KeyCode::Char('r')
+                && let Some(change) = &self.proposed_change
+            {
+                return Action::Review(change.run_id.clone());
+            }
+            if self.rejecting {
+                match key.code {
+                    KeyCode::Esc => self.rejecting = false,
+                    KeyCode::Enter if ctrl && !self.stale => {
+                        if self.rejection.text.trim().is_empty() {
+                            self.error = Some("Rejection requires a comment".into());
+                        } else if let (Some(p), Some(change)) =
+                            (&self.preview, &self.proposed_change)
+                        {
+                            return Action::Reject {
+                                proposal: p["proposal_id"].as_str().unwrap_or_default().into(),
+                                hash: p["diff_hash"].as_str().unwrap_or_default().into(),
+                                run: change.run_id.clone(),
+                                comment: self.rejection.text.clone(),
+                            };
+                        }
+                    }
+                    KeyCode::Enter => self.rejection.insert_char('\n'),
+                    KeyCode::Up => self
+                        .rejection
+                        .move_up(self.area.width.saturating_sub(2) as usize),
+                    KeyCode::Down => self
+                        .rejection
+                        .move_down(self.area.width.saturating_sub(2) as usize),
+                    _ => self.rejection.edit_key(key),
+                }
+                return Action::None;
+            }
             match key.code {
-                KeyCode::Esc => self.preview = None,
-                KeyCode::Enter if !self.pending => {
-                    let p = self.preview.as_ref().unwrap();
-                    return Action::Apply {
-                        proposal: p["proposal_id"].as_str().unwrap_or_default().into(),
-                        hash: p["diff_hash"].as_str().unwrap_or_default().into(),
-                        change: self.proposed_change.clone().unwrap(),
-                    };
+                KeyCode::Esc => {
+                    if let Some(p) = &self.preview {
+                        self.rejection_drafts.insert(
+                            p["proposal_id"].as_str().unwrap_or_default().into(),
+                            self.rejection.clone(),
+                        );
+                    }
+                    self.preview = None;
+                    self.visible = false;
+                }
+                KeyCode::Char('r') if !ctrl && !self.stale => self.rejecting = true,
+                KeyCode::Enter if !self.stale => {
+                    if let (Some(p), Some(change)) = (&self.preview, &self.proposed_change) {
+                        return Action::Apply {
+                            proposal: p["proposal_id"].as_str().unwrap_or_default().into(),
+                            hash: p["diff_hash"].as_str().unwrap_or_default().into(),
+                            change: change.clone(),
+                        };
+                    }
                 }
                 KeyCode::Down => self.scroll = self.scroll.saturating_add(1),
                 KeyCode::Up => self.scroll = self.scroll.saturating_sub(1),
+                KeyCode::PageDown => {
+                    self.scroll = self
+                        .scroll
+                        .saturating_add(self.area.height.saturating_sub(8) as usize)
+                }
+                KeyCode::PageUp => {
+                    self.scroll = self
+                        .scroll
+                        .saturating_sub(self.area.height.saturating_sub(8) as usize)
+                }
                 _ => {}
             }
             return Action::None;
@@ -624,6 +726,14 @@ impl LedgerView {
         Action::None
     }
     pub fn mouse(&mut self, mouse: MouseEvent) -> Action {
+        if self.preview.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_add(3),
+                MouseEventKind::ScrollUp => self.scroll = self.scroll.saturating_sub(3),
+                _ => {}
+            }
+            return Action::None;
+        }
         if self.editing.is_some() && self.preview.is_none() {
             let body = self.form_area();
             let visible = body.height as usize;
@@ -762,31 +872,58 @@ impl LedgerView {
                     "detail" => self.detail = Some(value),
                     "source" => self.source = value["text"].as_str().map(str::to_owned),
                     "preview" => {
+                        if self
+                            .pending_run
+                            .as_deref()
+                            .is_some_and(|run| value["change"]["run_id"].as_str() != Some(run))
+                        {
+                            self.error = Some("Proposal response belongs to another run".into());
+                            return;
+                        }
+                        if let Some(p) = &self.preview {
+                            self.rejection_drafts.insert(
+                                p["proposal_id"].as_str().unwrap_or_default().into(),
+                                self.rejection.clone(),
+                            );
+                        }
+                        let id = value["proposal"]["proposal_id"]
+                            .as_str()
+                            .unwrap_or_default();
+                        self.rejection = self.rejection_drafts.get(id).cloned().unwrap_or_default();
+                        self.rejecting = false;
+                        self.stale = self.scope_epoch != self.pending_scope_epoch;
+                        if self.stale {
+                            self.error = Some(
+                                "Scope changed during review. Ctrl+R reloads the proposal.".into(),
+                            );
+                        }
                         self.proposed_change = serde_json::from_value(value["change"].clone()).ok();
                         self.preview = Some(value["proposal"].clone());
                         self.scroll = 0;
                     }
+                    "rejected" => {
+                        self.visible = false;
+                        self.preview = None;
+                        self.proposed_change = None;
+                        self.rejecting = false;
+                    }
                     "applied" => {
+                        self.visible = false;
                         self.scroll = 0;
                         self.detail = None;
                         self.source = None;
                         self.notice = Some("Changes saved. Approved analyst proposals resume verification and planning automatically.".into());
                         self.preview = None;
-                        if let Some((key, snapshot)) = self.prepared_draft.take() {
-                            if self.drafts.get(&key) == Some(&snapshot) {
-                                self.drafts.remove(&key);
-                                if self.editing.as_ref() == Some(&key) {
-                                    self.editing = None;
-                                }
-                            } else if let Some(form) = self.drafts.get_mut(&key) {
-                                form.revision =
-                                    value["spec_revision"].as_i64().unwrap_or(form.revision);
-                                form.operation_id = crate::id();
-                                if let Some(change) = &self.proposed_change
-                                    && let Some(saved) = change.entries.first()
-                                {
-                                    form.base = saved.clone();
-                                }
+                        if let Some((key, _)) = self.prepared_draft.take()
+                            && let Some(form) = self.drafts.get_mut(&key)
+                        {
+                            form.revision =
+                                value["spec_revision"].as_i64().unwrap_or(form.revision);
+                            form.operation_id = crate::id();
+                            if let Some(change) = &self.proposed_change
+                                && let Some(saved) = change.entries.first()
+                            {
+                                form.base = saved.clone();
                             }
                         }
                         self.proposed_change = None;
@@ -1120,13 +1257,15 @@ impl LedgerView {
                         field.replace('_', " "),
                         theme.accent(),
                     )));
-                    if let Some(previous) = old.and_then(|o| o.get(field)) {
-                        for part in wrap(&format!("Before: {}", readable(previous)), width) {
-                            lines.push(Line::from(Span::styled(part, theme.dim())));
-                        }
-                    }
-                    for part in wrap(&format!("After: {}", readable(value)), width) {
-                        lines.push(Line::from(part));
+                    let previous = old
+                        .and_then(|o| o.get(field))
+                        .map(readable)
+                        .unwrap_or_default();
+                    let previous_value = old.and_then(|o| o.get(field));
+                    if value.is_array() {
+                        lines.extend(list_diff_lines(previous_value, value, theme, width));
+                    } else {
+                        lines.extend(text_diff_lines(&previous, &readable(value), theme, width));
                     }
                     lines.push(Line::from(""));
                 }
@@ -1248,22 +1387,50 @@ impl LedgerView {
         self.list_area = Rect::default();
         self.detail_area = Rect::default();
         if self.preview.is_some() {
-            let lines = self.preview_lines(&theme, body.width.saturating_sub(4) as usize);
-            self.scroll = self.scroll.min(
-                lines
-                    .len()
-                    .saturating_sub(body.height.saturating_sub(2) as usize),
-            );
+            if self.rejecting {
+                let block = panel(&theme, " Rejection comment ");
+                let inner = block.inner(body);
+                frame.render_widget(block, body);
+                if inner.width > 0 && inner.height > 0 {
+                    let (column, row) = self.rejection.visual_cursor(inner.width as usize);
+                    if row < self.edit_scroll {
+                        self.edit_scroll = row;
+                    } else if row >= self.edit_scroll + inner.height as usize {
+                        self.edit_scroll = row.saturating_sub(inner.height as usize - 1);
+                    }
+                    let lines =
+                        super::visual_text_lines(&self.rejection.text, inner.width as usize)
+                            .into_iter()
+                            .skip(self.edit_scroll)
+                            .take(inner.height as usize)
+                            .map(Line::from)
+                            .collect::<Vec<_>>();
+                    frame.render_widget(Paragraph::new(lines).style(theme.text()), inner);
+                    frame.set_cursor_position((
+                        inner.x.saturating_add(column).min(inner.right() - 1),
+                        inner.y + (row - self.edit_scroll) as u16,
+                    ));
+                }
+            } else {
+                let lines = self.preview_lines(&theme, body.width.saturating_sub(4) as usize);
+                self.scroll = self.scroll.min(
+                    lines
+                        .len()
+                        .saturating_sub(body.height.saturating_sub(2) as usize),
+                );
+                frame.render_widget(
+                    Paragraph::new(lines)
+                        .scroll((self.scroll.min(u16::MAX as usize) as u16, 0))
+                        .block(panel(&theme, " Exact changes ")),
+                    body,
+                );
+            }
             frame.render_widget(
-                Paragraph::new(lines)
-                    .scroll((self.scroll.min(u16::MAX as usize) as u16, 0))
-                    .block(panel(&theme, " Exact changes ")),
-                body,
-            );
-            frame.render_widget(
-                Paragraph::new(
-                    " Enter  Approve changes & continue planning    Esc  Return without applying",
-                )
+                Paragraph::new(if self.rejecting {
+                    " Ctrl+Enter Reject with comment | Esc Back to diff"
+                } else {
+                    " Enter Approve | r Reject with comment | Esc Close | Ctrl+R Reload"
+                })
                 .style(theme.selected()),
                 rows[4],
             );
@@ -1447,5 +1614,333 @@ fn readable(value: &Value) -> String {
             .collect::<Vec<_>>()
             .join("; "),
         Value::Number(value) => value.to_string(),
+    }
+}
+
+// Match lists independently; criterion identity survives edits to its text.
+fn list_diff_lines(
+    before: Option<&Value>,
+    after: &Value,
+    theme: &Theme,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let empty = Vec::new();
+    let old = before.and_then(Value::as_array).unwrap_or(&empty);
+    let new = after.as_array().unwrap_or(&empty);
+    let same_id = |a: &Value, b: &Value| {
+        if a.is_object() && b.is_object() {
+            a.get("id") == b.get("id")
+        } else {
+            a == b
+        }
+    };
+    let mut lines = Vec::new();
+    for item in old {
+        let next = new.iter().find(|candidate| same_id(item, candidate));
+        if next != Some(item) {
+            lines.extend(text_diff_lines(
+                &readable(item),
+                &next.map(readable).unwrap_or_default(),
+                theme,
+                width,
+            ));
+        }
+    }
+    for item in new {
+        if !old.iter().any(|candidate| same_id(item, candidate)) {
+            lines.extend(text_diff_lines("", &readable(item), theme, width));
+        }
+    }
+    lines
+}
+
+// Hirschberg LCS: rows use O(n) memory; no matrix proportional to both texts.
+fn lcs_pairs(a: &[&str], b: &[&str], ai: usize, bi: usize, out: &mut Vec<(usize, usize)>) {
+    if a.is_empty() || b.is_empty() {
+        return;
+    }
+    if a.len().saturating_mul(b.len()) > 1_000_000 {
+        let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+        out.extend((0..prefix).map(|i| (ai + i, bi + i)));
+        let suffix = a[prefix..]
+            .iter()
+            .rev()
+            .zip(b[prefix..].iter().rev())
+            .take_while(|(x, y)| x == y)
+            .count();
+        out.extend((0..suffix).map(|i| (ai + a.len() - suffix + i, bi + b.len() - suffix + i)));
+        return;
+    }
+    if a.len() == 1 {
+        if let Some(index) = b.iter().position(|v| *v == a[0]) {
+            out.push((ai, bi + index));
+        }
+        return;
+    }
+    let mid = a.len() / 2;
+    let row = |left: &[&str], reverse: bool| {
+        let mut values = vec![0usize; b.len() + 1];
+        for i in 0..left.len() {
+            let mut diagonal = 0;
+            for j in 0..b.len() {
+                let previous = values[j + 1];
+                let x = left[if reverse { left.len() - 1 - i } else { i }];
+                let y = b[if reverse { b.len() - 1 - j } else { j }];
+                values[j + 1] = if x == y {
+                    diagonal + 1
+                } else {
+                    values[j + 1].max(values[j])
+                };
+                diagonal = previous;
+            }
+        }
+        values
+    };
+    let left = row(&a[..mid], false);
+    let right = row(&a[mid..], true);
+    let split = (0..=b.len())
+        .max_by_key(|&i| left[i] + right[b.len() - i])
+        .unwrap_or(0);
+    drop(left);
+    drop(right);
+    lcs_pairs(&a[..mid], &b[..split], ai, bi, out);
+    lcs_pairs(&a[mid..], &b[split..], ai + mid, bi + split, out);
+}
+
+fn changed_graphemes(before: &str, after: &str) -> (Vec<bool>, Vec<bool>) {
+    use unicode_segmentation::UnicodeSegmentation;
+    let old: Vec<_> = before.graphemes(true).collect();
+    let new: Vec<_> = after.graphemes(true).collect();
+    let mut old_changed = vec![true; old.len()];
+    let mut new_changed = vec![true; new.len()];
+    let a: Vec<_> = before.split_word_bounds().collect();
+    let b: Vec<_> = after.split_word_bounds().collect();
+    let offsets = |tokens: &[&str]| {
+        let mut n = 0;
+        tokens
+            .iter()
+            .map(|t| {
+                let start = n;
+                n += t.graphemes(true).count();
+                (start, n)
+            })
+            .collect::<Vec<_>>()
+    };
+    let ao = offsets(&a);
+    let bo = offsets(&b);
+    let mut pairs = Vec::new();
+    lcs_pairs(&a, &b, 0, 0, &mut pairs);
+    let mut previous = (0, 0);
+    for (i, j) in pairs.into_iter().chain(std::iter::once((a.len(), b.len()))) {
+        let start_a = ao.get(i).map_or(old.len(), |x| x.0);
+        let start_b = bo.get(j).map_or(new.len(), |x| x.0);
+        let mut fine = Vec::new();
+        lcs_pairs(
+            &old[previous.0..start_a],
+            &new[previous.1..start_b],
+            previous.0,
+            previous.1,
+            &mut fine,
+        );
+        for (x, y) in fine {
+            old_changed[x] = false;
+            new_changed[y] = false;
+        }
+        if i < a.len() && j < b.len() {
+            old_changed[ao[i].0..ao[i].1].fill(false);
+            new_changed[bo[j].0..bo[j].1].fill(false);
+            previous = (ao[i].1, bo[j].1);
+        }
+    }
+    (old_changed, new_changed)
+}
+
+// Common context stays plain; changed graphemes are emphasized in both versions.
+fn text_diff_lines(before: &str, after: &str, theme: &Theme, width: usize) -> Vec<Line<'static>> {
+    use ratatui::style::Modifier;
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+    let old: Vec<_> = before.graphemes(true).collect();
+    let new: Vec<_> = after.graphemes(true).collect();
+    let (old_changed, new_changed) = changed_graphemes(before, after);
+    let mut lines = Vec::new();
+    for (label, graphemes, changes, style) in [
+        ("- ", &old, &old_changed, theme.error()),
+        ("+ ", &new, &new_changed, theme.status("approved")),
+    ] {
+        if graphemes.is_empty() {
+            continue;
+        }
+        let mut spans = vec![Span::styled(label, style)];
+        let mut used = 2;
+        for (index, grapheme) in graphemes.iter().enumerate() {
+            let size = grapheme.width();
+            if *grapheme == "\n" || (used + size > width.max(3) && used > 2) {
+                lines.push(Line::from(std::mem::take(&mut spans)));
+                spans.push(Span::styled(label, style));
+                used = 2;
+                if *grapheme == "\n" {
+                    continue;
+                }
+            }
+            let changed = changes[index];
+            spans.push(Span::styled(
+                (*grapheme).to_owned(),
+                if changed {
+                    style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    theme.dim()
+                },
+            ));
+            used += size;
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::*;
+    fn review() -> LedgerView {
+        let mut view = LedgerView::new();
+        view.preview = Some(serde_json::json!({"proposal_id":"p1","diff_hash":"hash"}));
+        view.proposed_change = Some(LedgerChange {
+            conversation: "c1".into(),
+            run_id: "r1".into(),
+            expected_spec_revision: 1,
+            operation_id: "op".into(),
+            reason: "fix".into(),
+            entries: vec![],
+        });
+        view
+    }
+    #[test]
+    fn rejection_comment_survives_errors_and_escape() {
+        let mut view = review();
+        view.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE), "c1");
+        assert!(view.rejecting);
+        assert!(matches!(
+            view.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL), "c1"),
+            Action::None
+        ));
+        view.paste("Keep 👩‍💻 é");
+        view.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), "c1");
+        assert!(view.preview.is_some());
+        view.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE), "c1");
+        assert!(matches!(
+            view.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL), "c1"),
+            Action::Reject { .. }
+        ));
+        view.pending = true;
+        assert!(matches!(
+            view.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL), "c1"),
+            Action::None
+        ));
+        view.reply("rejected", Err("socket closed".into()));
+        assert!(view.visible && view.preview.is_some() && view.rejecting);
+        assert_eq!(view.rejection.text, "Keep 👩‍💻 é");
+        assert_eq!(view.error.as_deref(), Some("socket closed"));
+        view.stale = true;
+        assert!(matches!(
+            view.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL), "c1"),
+            Action::None
+        ));
+        view.reply("rejected", Ok(serde_json::json!({})));
+        assert!(!view.visible);
+    }
+    #[test]
+    fn comparison_marks_separate_edits_and_single_graphemes() {
+        let (old, new) = changed_graphemes("red keep cat", "bed keep cap");
+        assert_eq!(old.iter().filter(|x| **x).count(), 2);
+        assert_eq!(new.iter().filter(|x| **x).count(), 2);
+        let (old, new) = changed_graphemes("👩‍💻 é", "👩‍🔬 è");
+        assert_eq!(old, vec![true, false, true]);
+        assert_eq!(new, vec![true, false, true]);
+        let (old, new) = changed_graphemes("keep tail", "keep new tail");
+        assert!(!old.iter().any(|x| *x));
+        assert_eq!(new.iter().filter(|x| **x).count(), 4);
+    }
+    #[test]
+    fn criterion_diff_keeps_other_criteria_out_of_changed_text() {
+        let old = serde_json::json!([{"id":"a","text":"old"},{"id":"b","text":"unchanged"}]);
+        let new = serde_json::json!([{"id":"a","text":"new"},{"id":"b","text":"unchanged"}]);
+        let lines = list_diff_lines(Some(&old), &new, &Theme::from_env(), 10);
+        let text: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(!text.contains("unchanged"));
+        assert!(text.contains("old") && text.contains("new"));
+    }
+    #[test]
+    fn closing_a_reload_preserves_the_comment_and_invalidates_its_response() {
+        let mut view = review();
+        view.rejection = InputBuffer::with_text("Keep my correction");
+        view.pending = true;
+        view.pending_read = true;
+        let request = view.request_id;
+        view.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), "c1");
+        assert!(!view.visible && !view.pending);
+        assert_ne!(view.request_id, request);
+        assert_eq!(view.rejection_drafts["p1"].text, "Keep my correction");
+    }
+    #[test]
+    fn comparison_keeps_prefixes_and_emphasis_without_color() {
+        use ratatui::style::Modifier;
+        let theme = Theme::new(false, true);
+        for (before, after, prefix) in [("", "added 👩‍💻 é", "+ "), ("removed", "", "- ")]
+        {
+            let lines = text_diff_lines(before, after, &theme, 12);
+            assert!(lines.iter().all(|line| line.width() <= 12));
+            assert!(lines.iter().all(|line| line.spans[0].content == prefix));
+            for span in lines.iter().flat_map(|line| &line.spans) {
+                assert!(span.style.fg.is_none() && span.style.bg.is_none());
+            }
+            assert!(lines.iter().flat_map(|line| &line.spans).any(|span| {
+                span.style
+                    .add_modifier
+                    .contains(Modifier::BOLD | Modifier::REVERSED)
+            }));
+        }
+        let mut pairs = Vec::new();
+        lcs_pairs(
+            &["start", "a", "end"],
+            &["start", "b", "end"],
+            0,
+            0,
+            &mut pairs,
+        );
+        assert_eq!(pairs, vec![(0, 0), (2, 2)]);
+    }
+    #[test]
+    fn large_comparison_bounds_work() {
+        let a = vec!["a"; 1100];
+        let b = vec!["b"; 1100];
+        let mut out = vec![];
+        lcs_pairs(&a, &b, 0, 0, &mut out);
+        assert!(out.is_empty());
+    }
+    #[test]
+    fn comparison_emphasizes_changes_without_splitting_graphemes() {
+        use ratatui::style::Modifier;
+        let lines = text_diff_lines("User 👩‍💻 old é", "User 👩‍💻 new é", &Theme::from_env(), 12);
+        let rendered: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(rendered.contains("👩‍💻"));
+        assert!(rendered.contains("é"));
+        let changed: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter(|span| span.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(changed, "oldnew");
+        assert!(rendered.contains("- "));
+        assert!(rendered.contains("+ "));
     }
 }

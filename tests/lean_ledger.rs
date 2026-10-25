@@ -1484,3 +1484,248 @@ fn requirements_approval_renews_the_automatic_retry_budget() {
         1
     );
 }
+
+#[test]
+fn rejection_is_durable_idempotent_and_keeps_scope_unchanged() {
+    let f = Fixture::new();
+    let change = f.change(0, vec![f.entry("r1")]);
+    let (proposal, diff) = f
+        .store
+        .propose_ledger_change(&change, f.dir.path())
+        .unwrap();
+    let hash = diff_hash(&diff).unwrap();
+    let reject = |comment: &str| {
+        f.store
+            .reject_ledger_proposal(&f.conversation, &f.run.id, &proposal, &hash, comment)
+    };
+    assert!(reject(" \n\t").is_err());
+    assert!(
+        f.store
+            .reject_ledger_proposal(&f.conversation, &f.run.id, &proposal, "wrong", "fix")
+            .is_err()
+    );
+    reject("Keep the offline exception 👩‍💻").unwrap();
+    let messages = f.store.messages_after(&f.conversation, 0).unwrap();
+    reject("Keep the offline exception 👩‍💻").unwrap();
+    assert_eq!(
+        f.store.messages_after(&f.conversation, 0).unwrap().len(),
+        messages.len()
+    );
+    assert!(reject("another correction").is_err());
+    assert!(
+        f.store
+            .apply_ledger_change(&change, f.dir.path(), true)
+            .is_err()
+    );
+    assert_eq!(
+        f.store
+            .run(&f.conversation, &f.run.id)
+            .unwrap()
+            .spec_revision,
+        0
+    );
+    assert!(
+        f.store
+            .ledger_entries(&f.conversation, &f.run.id, None)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        f.store
+            .latest_ledger_proposal(&f.conversation, &f.run.id)
+            .is_err()
+    );
+    let reopened = Store::open(&f.dir.path().join("core.db")).unwrap();
+    assert!(
+        reopened
+            .latest_ledger_proposal(&f.conversation, &f.run.id)
+            .is_err()
+    );
+    assert!(
+        reopened
+            .has_pending_requirements_approval(&f.conversation)
+            .unwrap()
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|m| m.author == "requirements-approval")
+            .count(),
+        1
+    );
+    let correction = messages
+        .iter()
+        .find(|m| m.text == "Keep the offline exception 👩‍💻")
+        .unwrap();
+    reopened
+        .register_message_source(&f.conversation, &f.run.id, correction.seq)
+        .unwrap();
+}
+
+#[test]
+fn concurrent_acceptance_and_rejection_have_one_winner() {
+    let f = Fixture::new();
+    let change = f.change(0, vec![f.entry("r1")]);
+    let (proposal, diff) = f
+        .store
+        .propose_ledger_change(&change, f.dir.path())
+        .unwrap();
+    let hash = diff_hash(&diff).unwrap();
+    std::thread::scope(|scope| {
+        let accepted = scope.spawn(|| f.store.apply_ledger_change(&change, f.dir.path(), true));
+        let rejected = scope.spawn(|| {
+            f.store.reject_ledger_proposal(
+                &f.conversation,
+                &f.run.id,
+                &proposal,
+                &hash,
+                "Revise this",
+            )
+        });
+        let a = accepted.join().unwrap();
+        let r = rejected.join().unwrap();
+        assert_ne!(a.is_ok(), r.is_ok());
+        if a.is_ok() {
+            assert_eq!(
+                f.store
+                    .run(&f.conversation, &f.run.id)
+                    .unwrap()
+                    .spec_revision,
+                1
+            );
+        } else {
+            assert_eq!(
+                f.store
+                    .run(&f.conversation, &f.run.id)
+                    .unwrap()
+                    .spec_revision,
+                0
+            );
+        }
+    });
+}
+
+#[test]
+fn rejected_requirements_resume_after_restart_as_a_new_unapproved_proposal() {
+    use antislop::{config::Config, lean::Core};
+    use std::{
+        os::unix::fs::PermissionsExt,
+        time::{Duration, Instant},
+    };
+    let f = Fixture::new();
+    f.store.begin_interview(&f.conversation).unwrap();
+    let user = f.store.messages_by(&f.conversation, "user", 0).unwrap()[0].seq;
+    f.store
+        .interview_summary(&f.conversation, "Keep scope", user)
+        .unwrap();
+    f.store.finish_interview(&f.conversation).unwrap();
+    f.apply(&f.change(0, vec![f.entry("r1")]));
+    let analyst = f.turn("extraction", false);
+    let mut edited = f.entry("r1");
+    edited.interpretation = "Unwanted proposal".into();
+    let change = f.change(1, vec![edited]);
+    let (proposal, diff) = f
+        .store
+        .propose_agent_ledger_change(&change, f.dir.path(), &analyst)
+        .unwrap();
+    let hash = diff_hash(&diff).unwrap();
+    for _ in 0..2 {
+        f.store
+            .reject_ledger_proposal(
+                &f.conversation,
+                &f.run.id,
+                &proposal,
+                &hash,
+                "Preserve the offline exception",
+            )
+            .unwrap();
+    }
+    let script = f.dir.path().join("codex");
+    std::fs::write(&script, r#"#!/usr/bin/env python3
+import sys,json,uuid,os
+prompt=sys.argv[-1]
+if prompt.startswith('Act as requirements analyst'):
+    assert 'User feedback on that rejected proposal:' in prompt, prompt
+    assert 'Preserve the offline exception' in prompt, prompt
+    lines=prompt.rsplit('Run and ledger inputs (stable identities; keep their versions):\n',1)[1].splitlines()
+    run=json.loads(lines[0])
+    sources=json.loads(lines[1].removeprefix('Sources: '))
+    assert len(sources)==2, sources
+    entry=json.loads(lines[2].removeprefix('Entries: '))[0]['spec']
+    entry['interpretation']='Revised wording preserving the offline exception'
+    with open('correction-attempts','a') as out: out.write('1\n')
+    answer='```ledger\n'+json.dumps({'run_id':run['id'],'expected_spec_revision':run['spec_revision'],'entries':[entry]})+'\n```'
+elif prompt.startswith('Independently compare') or 'You review a plan' in prompt or 'new plan:' in prompt:
+    answer='```verdict\n'+json.dumps({'approved':True,'findings':[]})+'\n```'
+else:
+    answer='```plan\n'+json.dumps({'tasks':[{'id':'inspect','title':'Inspect','goal':'Inspect the project','kind':'analysis','scope':['.'],'requirement_ids':['r1'],'criterion_ids':['r1.accept'],'verifier':{'focus':'Check the observations'}}]})+'\n```'
+print(json.dumps({'type':'thread.started','thread_id':str(uuid.uuid4())}))
+print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
+print(json.dumps({'type':'turn.completed','usage':{}}))
+"#).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::interactive(&script);
+    std::fs::set_permissions(f.dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = include_str!("../examples/antislop.toml")
+        .replace("binary = \"codex\"", &format!("binary = {:?}", script))
+        .replace("provider = \"agy\"", "provider = \"codex\"");
+    let core = Core::open(f.dir.path(), Config::from_toml(&config).unwrap()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !core.is_idle(&f.conversation) {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let events = core.store.events_since(&f.conversation, 0, 1000).unwrap();
+    let next = core
+        .store
+        .latest_ledger_proposal(&f.conversation, &f.run.id)
+        .unwrap_or_else(|error| panic!("{error}: {events:?}"));
+    assert_ne!(next["proposal"]["proposal_id"], proposal);
+    assert_eq!(
+        next["change"]["entries"][0]["interpretation"],
+        "Revised wording preserving the offline exception"
+    );
+    assert_eq!(
+        core.store
+            .run(&f.conversation, &f.run.id)
+            .unwrap()
+            .spec_revision,
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("correction-attempts")).unwrap(),
+        "1\n"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.kind == "ledger_approval_required")
+            .count(),
+        1
+    );
+    assert!(core.store.has_pending_ledger_proposal(&f.run.id).unwrap());
+    let revised_change: LedgerChange = serde_json::from_value(next["change"].clone()).unwrap();
+    core.apply_user_ledger_change(
+        next["proposal"]["proposal_id"].as_str().unwrap(),
+        next["proposal"]["diff_hash"].as_str().unwrap(),
+        &revised_change,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !core.is_idle(&f.conversation) {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        core.store
+            .run(&f.conversation, &f.run.id)
+            .unwrap()
+            .spec_revision,
+        2
+    );
+    assert!(!core.store.latest_plan(&f.conversation).unwrap().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("correction-attempts")).unwrap(),
+        "1\n"
+    );
+}

@@ -237,6 +237,7 @@ pub struct View {
     pub interview_question: Option<(u64, crate::lean::interview::Question)>,
     pub requirements_summary: String,
     pub requirements_approval_run: Option<String>,
+    pub requirements_approval_event: u64,
     pub requirements_progress: Option<(bool, String)>,
     latest_user_message: u64,
     pub comment_scopes: HashMap<u64, (Option<u64>, Option<String>)>,
@@ -585,11 +586,18 @@ impl View {
         let key = self.roles.get(turn).cloned().unwrap_or_default();
         match event["kind"].as_str().unwrap_or_default() {
             "ledger_approval_required" => {
+                self.requirements_approval_event = self.after;
                 self.requirements_approval_run = payload["run"].as_str().map(str::to_owned);
             }
-            "ledger_changed" => {
+            "ledger_changed" | "ledger_proposal_rejected" => {
                 if self.requirements_approval_run.as_deref() == payload["run"].as_str() {
                     self.requirements_approval_run = None;
+                }
+                if event["kind"] == "ledger_proposal_rejected" {
+                    self.requirements_progress = Some((
+                        false,
+                        "Requirements rejected. Preparing a revised proposal for review.".into(),
+                    ));
                 }
             }
             "interview_question" => {
@@ -1064,6 +1072,14 @@ impl View {
             }
             "plan_review" => self.review(PLAN_VERIFIER, payload),
             "requirements_failed" => {
+                if payload["retrying"] == true {
+                    self.requirements_progress = Some((false, text("retry").to_owned()));
+                    self.push(
+                        Style::default(),
+                        format!("{}\n{}", text("error"), text("retry")),
+                    );
+                    return;
+                }
                 self.requirements_progress =
                     Some((true, format!("{} — {}", text("error"), text("retry"))));
                 let message = format!("{}\n{}", text("error"), text("retry"));
@@ -2160,6 +2176,25 @@ mod tests {
                 if title == "Requirements preparation failed"
                     && text.contains("incompatible parent r")
                     && text.contains("Send a message to retry planning.")
+        )));
+    }
+
+    #[test]
+    fn requirements_rejection_keeps_automatic_repair_in_progress() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            None,
+            "requirements_failed",
+            json!({"error":"missing criterion", "retrying":true,
+                "retry":"Regenerating the plan automatically."}),
+        ));
+        assert_eq!(
+            view.requirements_progress,
+            Some((false, "Regenerating the plan automatically.".into()))
+        );
+        assert!(!view.cards.iter().any(|card| matches!(card,
+            TranscriptCard::System { title, .. } if title == "Requirements preparation failed"
         )));
     }
 

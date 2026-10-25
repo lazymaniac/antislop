@@ -20,7 +20,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-pub const TABS: [&str; 7] = [
+pub const TABS: [&str; 8] = [
     "Overview",
     "Messages",
     "Result",
@@ -28,17 +28,39 @@ pub const TABS: [&str; 7] = [
     "Comments",
     "Review",
     "Requirements",
+    "Verifier",
 ];
 pub const RESULT: usize = 2;
 pub const CHECKS: usize = 3;
 pub const COMMENTS: usize = 4;
 pub const REVIEW: usize = 5;
 pub const REQUIREMENTS: usize = 6;
+/// The verifier's own Overview: what it checks, and its terminal.
+pub const VERIFIER: usize = 7;
+
+/// The label of a tab for this address: the first tab of a task's worker
+/// section is the worker's Overview, the first of the verifier's is its own.
+pub fn tab_name(key: &str, tab: usize) -> &'static str {
+    match (tab, key.split_once(':').map(|(role, _)| role)) {
+        (0, Some("worker" | "verifier")) => "Worker",
+        _ => TABS[tab],
+    }
+}
+
+/// Whether a tab is an agent's Overview (its info beside its terminal).
+pub fn is_overview(tab: usize) -> bool {
+    tab == 0 || tab == VERIFIER
+}
+
+/// Where the verifier's section starts in a task's tab list.
+pub fn section_starts(key: &str, tab: usize) -> bool {
+    tab == VERIFIER && tabs_for(key).contains(&VERIFIER)
+}
 
 /// Task addresses share one set of tabs, including legacy verifier keys.
 pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
-        "worker" | "verifier" => vec![0, 1, RESULT, CHECKS, COMMENTS, REQUIREMENTS],
+        "worker" | "verifier" => vec![0, 1, RESULT, VERIFIER, CHECKS, COMMENTS, REQUIREMENTS],
         "plan-verifier" | "auditor" => vec![0, REVIEW, COMMENTS],
         _ => vec![0, 1, COMMENTS],
     }
@@ -122,6 +144,10 @@ pub struct Details {
     pub available_rounds: Vec<u64>,
     pub latest_observed: u64,
     pub active_panel: usize,
+    /// The last draw put the task info beside (or above) the terminal.
+    pub split: bool,
+    /// Lines the dashboard is scrolled down from its top.
+    pub dash_scroll: usize,
     pub panel_scroll: [usize; 2],
     pub panel_expanded: [bool; 2],
     /// Disk-backed history documents of the fetched task: result, messages, review.
@@ -235,7 +261,9 @@ impl Details {
             native_areas: [Rect::default(); 2],
             available_rounds: Vec::new(),
             latest_observed: 0,
-            active_panel: usize::from(key.starts_with("verifier:")),
+            active_panel: 0,
+            split: false,
+            dash_scroll: 0,
             panel_scroll: [0; 2],
             panel_expanded: [false; 2],
             documents: HashMap::new(),
@@ -315,7 +343,7 @@ impl Details {
         self.resume_round = false;
         self.panel_scroll = [0; 2];
         self.panel_expanded = [false; 2];
-        self.active_panel = usize::from(self.key.starts_with("verifier:"));
+        self.active_panel = 0;
         // A different element is a different task: its old record is gone.
         self.task = None;
         self.fetch_in_flight = false;
@@ -383,7 +411,7 @@ impl Details {
             .scroll_memory
             .get(&(self.key.clone(), self.tab))
             .unwrap_or(&0);
-        self.follow = self.tab == 0 && !self.show_info;
+        self.follow = self.overview() && !self.show_info;
         self.pending_g = false;
         self.query = self
             .query_memory
@@ -447,10 +475,35 @@ impl Details {
         self.hero(view, theme)
     }
 
-    pub(super) fn session_keys(&self) -> Vec<String> {
+    /// Both agents of this task, in the order they work: worker, verifier.
+    pub(super) fn role_keys(&self) -> Vec<String> {
         match self.key.split_once(':') {
             Some(("worker" | "verifier", id)) => {
                 vec![format!("worker:{id}"), format!("verifier:{id}")]
+            }
+            _ => vec![self.key.clone()],
+        }
+    }
+
+    pub fn overview(&self) -> bool {
+        is_overview(self.tab)
+    }
+
+    /// The terminal shows unless the info page took its place.
+    pub fn terminal_visible(&self) -> bool {
+        self.overview() && (!self.show_info || self.split)
+    }
+
+    /// The one agent the Overview in front shows: the worker's tab holds the
+    /// worker, the verifier's tab the verifier.
+    pub(super) fn session_keys(&self) -> Vec<String> {
+        match self.key.split_once(':') {
+            Some(("worker" | "verifier", id)) => {
+                vec![if self.tab == VERIFIER {
+                    format!("verifier:{id}")
+                } else {
+                    format!("worker:{id}")
+                }]
             }
             _ => vec![self.key.clone()],
         }
@@ -1212,7 +1265,7 @@ impl Details {
         let theme = Theme::from_env();
         let summary = self.summary(view, &theme);
         // Even a five-row terminal keeps room for session content.
-        let summary_height = if self.tab == 0 {
+        let summary_height = if self.overview() {
             (summary.len() as u16).min(area.height.saturating_sub(6))
         } else {
             0
@@ -1280,19 +1333,43 @@ impl Details {
             body.y = body.y.saturating_add(1);
             body.height = body.height.saturating_sub(1);
         }
-        if self.tab == 0 && !self.show_info && self.key != "conversation" && self.query.is_empty() {
-            self.draw_overview(frame, view, body, &theme);
-            let hint = if self.searching {
-                format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
-            } else {
-                "i terminal · a message · o resume earlier round · Ctrl+] release · Ctrl+W panel · Esc back"
-                    .into()
-            };
-            frame.render_widget(
-                Paragraph::new(theme.clean(&hint)).style(theme.dim()),
-                footer,
-            );
-            return;
+        self.split = false;
+        if self.overview() && self.key != "conversation" && self.query.is_empty() {
+            // The task's info and its terminal side by side when the screen
+            // is wide, one above the other when it is tall; else `m` swaps.
+            if self.task_id().is_some()
+                && let Some([info, terminal]) = overview_split(body)
+            {
+                self.split = true;
+                self.draw_dashboard(frame, view, info, &theme);
+                self.draw_overview(frame, view, terminal, &theme);
+                let hint = if self.searching {
+                    format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
+                } else if footer.width >= 100 {
+                    "↑/↓ card · Enter fold · e all · i terminal · a message · ←/→ rounds · Ctrl+W worker/verifier · [] tabs · Esc back".into()
+                } else {
+                    "↑/↓ card · Enter fold · i terminal · a message · Esc".into()
+                };
+                frame.render_widget(
+                    Paragraph::new(theme.clean(&hint)).style(theme.dim()),
+                    footer,
+                );
+                return;
+            }
+            if !self.show_info {
+                self.draw_overview(frame, view, body, &theme);
+                let hint = if self.searching {
+                    format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
+                } else {
+                    "i terminal · a message · m task info · o resume earlier round · Ctrl+] release · Esc back"
+                        .into()
+                };
+                frame.render_widget(
+                    Paragraph::new(theme.clean(&hint)).style(theme.dim()),
+                    footer,
+                );
+                return;
+            }
         }
 
         if self.dashboard_visible() && body.height >= 4 && body.width >= 24 {
@@ -1313,7 +1390,7 @@ impl Details {
             return;
         }
 
-        let block = if self.tab == 0 {
+        let block = if self.overview() {
             let title = if self.show_info {
                 " Task info · m session "
             } else if self.follow {
@@ -1419,12 +1496,12 @@ impl Details {
                 self.scroll = at + 1 - height;
             }
         }
-        if self.tab == 0 && !self.show_info && self.follow {
+        if is_overview(self.tab) && !self.show_info && self.follow {
             self.scroll = bottom;
         } else {
             self.scroll = self.scroll.min(bottom);
             // Scrolling back down to the end picks the tail up again.
-            self.follow = self.tab == 0 && !self.show_info && self.scroll >= bottom;
+            self.follow = is_overview(self.tab) && !self.show_info && self.scroll >= bottom;
         }
         let end = (self.scroll + height).min(lines.len());
         frame.render_widget(
@@ -1457,6 +1534,28 @@ impl Details {
     }
 }
 
+/// Info area and terminal area of an Overview, when the body is big enough
+/// for both: side by side from 130 columns, stacked from 34 rows.
+fn overview_split(body: Rect) -> Option<[Rect; 2]> {
+    if body.width >= 130 {
+        let info = (body.width * 2 / 5).clamp(56, 72);
+        let [info, _, terminal] = Layout::horizontal([
+            Constraint::Length(info),
+            Constraint::Length(2),
+            Constraint::Min(60),
+        ])
+        .areas(body);
+        Some([info, terminal])
+    } else if body.height >= 34 {
+        let info = (body.height * 9 / 20).max(14);
+        let [info, terminal] =
+            Layout::vertical([Constraint::Length(info), Constraint::Min(14)]).areas(body);
+        Some([info, terminal])
+    } else {
+        None
+    }
+}
+
 pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
     let controls = details_footer_hint(tab, width);
     if width >= 45 {
@@ -1467,7 +1566,7 @@ pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
 }
 
 pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
-    if tab == 0 {
+    if is_overview(tab) {
         if width >= 90 {
             "[] tabs · ←/→ rounds · ↑/↓ PgUp/PgDn · gg/G top/live · m dashboard · / search · c comment · Esc back"
         } else if width >= 65 {
@@ -1509,17 +1608,24 @@ pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
 }
 
 pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> Line<'a> {
-    let agent = format!(" {} ", agent_name(agent_key));
+    // A task's two sections carry its id; the sections say who is who.
+    let agent = match agent_key.split_once(':') {
+        Some(("worker" | "verifier", id)) => format!(" {id} "),
+        _ => format!(" {} ", agent_name(agent_key)),
+    };
     let agent_w = agent.len();
     let visible = tabs_for(agent_key);
-    let name = |slot: usize| TABS[visible[slot]];
+    let name = |slot: usize| tab_name(agent_key, visible[slot]);
+    let divider = |slot: usize| section_starts(agent_key, visible[slot]);
     let active = visible
         .iter()
         .position(|tab| *tab == active_tab)
         .unwrap_or(0);
     let full_tabs_len: usize = agent_w
         + (0..visible.len())
-            .map(|i| name(i).len() + if i == active { 4 } else { 3 })
+            .map(|i| {
+                name(i).len() + if i == active { 4 } else { 3 } + if divider(i) { 2 } else { 0 }
+            })
             .sum::<usize>();
 
     if full_tabs_len <= max_width {
@@ -1528,6 +1634,9 @@ pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> 
             Style::default().add_modifier(Modifier::BOLD),
         )];
         for index in 0..visible.len() {
+            if divider(index) {
+                spans.push(Span::styled(" │", dim()));
+            }
             spans.push(Span::raw(" "));
             spans.push(if index == active {
                 Span::styled(
@@ -1909,6 +2018,7 @@ mod tests {
                 "Overview",
                 "Messages",
                 "Result",
+                "Verifier",
                 "Checks",
                 "Comments",
                 "Requirements"
@@ -1920,6 +2030,7 @@ mod tests {
                 "Overview",
                 "Messages",
                 "Result",
+                "Verifier",
                 "Checks",
                 "Comments",
                 "Requirements"
@@ -1935,6 +2046,8 @@ mod tests {
         assert_eq!(details.tab, 1);
         details.switch_tab(RESULT);
         details.switch_tab(details.neighbour_tab(1));
+        assert_eq!(details.tab, VERIFIER);
+        details.switch_tab(details.neighbour_tab(1));
         assert_eq!(details.tab, CHECKS);
         details.switch_tab(details.neighbour_tab(1));
         assert_eq!(details.tab, COMMENTS);
@@ -1946,12 +2059,24 @@ mod tests {
         assert_eq!(details.tab, REQUIREMENTS);
         // Number keys count the visible tabs equally for both task roles.
         assert_eq!(details.nth_tab(2), Some(RESULT));
-        assert_eq!(details.nth_tab(3), Some(CHECKS));
-        assert_eq!(details.nth_tab(4), Some(COMMENTS));
-        assert_eq!(details.nth_tab(5), Some(REQUIREMENTS));
-        assert_eq!(details.nth_tab(6), None);
+        assert_eq!(details.nth_tab(3), Some(VERIFIER));
+        assert_eq!(details.nth_tab(4), Some(CHECKS));
+        assert_eq!(details.nth_tab(5), Some(COMMENTS));
+        assert_eq!(details.nth_tab(6), Some(REQUIREMENTS));
+        assert_eq!(details.nth_tab(7), None);
         let verifier = Details::new("verifier:t1".into());
-        assert_eq!(verifier.nth_tab(3), Some(CHECKS));
+        assert_eq!(verifier.nth_tab(4), Some(CHECKS));
+        // Each section opens on its own agent's terminal.
+        assert_eq!(details.session_keys(), ["worker:t1"]);
+        details.switch_tab(VERIFIER);
+        assert_eq!(details.session_keys(), ["verifier:t1"]);
+        // The sections are told apart by a divider and the first label.
+        let tabs = format_tabs("worker:t1", 0, 120)
+            .spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+        assert!(tabs.contains("Worker") && tabs.contains("│"), "{tabs}");
     }
 
     #[test]

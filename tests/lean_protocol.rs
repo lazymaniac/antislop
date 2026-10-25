@@ -1229,6 +1229,30 @@ fn ledger_protocol_preserves_exact_diff_approval_revision_and_idempotency() {
             )
             .is_err()
     );
+    let mut revised = change.clone();
+    revised["operation_id"] = json!("revise-and-reject-once");
+    revised["expected_spec_revision"] = json!(1);
+    revised["entries"][0]["interpretation"] = json!("Proposed changed wording");
+    let proposal = daemon
+        .call_raw(&json!({"op":"propose_ledger_change","change":revised}))
+        .unwrap();
+    let request = Request::RejectLedgerProposal {
+        conversation: conversation.clone(),
+        run_id: run_id.into(),
+        proposal_id: proposal["proposal_id"].as_str().unwrap().into(),
+        diff_hash: proposal["diff_hash"].as_str().unwrap().into(),
+        comment: "Keep every qualifier 👩‍💻".into(),
+    };
+    assert_eq!(daemon.client.call(&request).unwrap()["rejected"], true);
+    assert_eq!(daemon.call_raw(&json!({"op":"reject_ledger_proposal","conversation":conversation,"run_id":run_id,"proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"comment":"Keep every qualifier 👩‍💻"})).unwrap()["rejected"], true);
+    assert!(daemon.call_raw(&json!({"op":"apply_ledger_change","proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"change":revised})).is_err());
+    assert!(
+        daemon
+            .call_raw(
+                &json!({"op":"get_ledger_proposal","conversation":conversation,"run_id":run_id})
+            )
+            .is_err()
+    );
 }
 
 #[test]

@@ -713,7 +713,7 @@ impl App {
                     })
                     .unwrap_or(0);
                 let rounds_changed = latest != details.latest_observed;
-                let session = matches!(details.tab, 0 | 1 | details::REVIEW)
+                let session = matches!(details.tab, 0 | 1 | details::REVIEW | details::VERIFIER)
                     && details.selected_round.is_none()
                     && details.fetched_events != self.view.after;
                 fetched != Some(now) || checks || session || rounds_changed
@@ -882,6 +882,19 @@ impl App {
                 .task_id()
                 .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
                 .and_then(|task| task.uuid.clone());
+            // A task opens on whoever's turn it is: the verifier while it
+            // checks, the worker otherwise.
+            if let Some(row) = details
+                .task_id()
+                .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
+            {
+                let tab = if row.status == crate::lean::tasks::status::VERIFYING {
+                    details::VERIFIER
+                } else {
+                    0
+                };
+                details.switch_tab(tab);
+            }
         }
         self.fetch_task();
     }
@@ -1444,6 +1457,40 @@ impl App {
         });
     }
 
+    fn return_to_main(&mut self) {
+        if let Some(ledger) = &mut self.ledger_view {
+            ledger.visible = false;
+        }
+        if let Some(details) = self.details.take() {
+            self.details_scroll_memory
+                .insert((details.key.clone(), details.tab), details.scroll);
+            self.details_query_memory
+                .insert((details.key, details.tab), details.query);
+        }
+        self.diff = None;
+        self.plan_view = None;
+        self.plan_history = None;
+        self.help = None;
+        self.picker = None;
+        self.confirmation = None;
+        self.unblock = None;
+        if let Some(editor) = self.editor.take() {
+            let key = Self::comment_key(
+                &self.conversation,
+                self.view.plan.as_deref(),
+                &editor.target,
+            );
+            self.comment_draft_cursors.insert(
+                key.clone(),
+                (editor.input.cursor, editor.input.preferred_col),
+            );
+            self.comment_drafts.insert(key, editor.input.text);
+        }
+        if let Some(editor) = &mut self.config_editor {
+            editor.visible = false;
+        }
+    }
+
     fn open_ledger(&mut self) {
         let view = self.ledger_view.get_or_insert_with(ledger::LedgerView::new);
         view.visible = true;
@@ -1497,11 +1544,33 @@ impl App {
                     change: change.clone(),
                 }),
             ),
+            ledger::Action::Reject {
+                proposal,
+                hash,
+                run,
+                comment,
+            } => (
+                "rejected",
+                Some(Request::RejectLedgerProposal {
+                    conversation: conversation.clone(),
+                    run_id: run.clone(),
+                    proposal_id: proposal.clone(),
+                    diff_hash: hash.clone(),
+                    comment: comment.clone(),
+                }),
+            ),
             ledger::Action::Prepare { .. } => ("preview", None),
             ledger::Action::Runs => (
                 "runs",
                 Some(Request::ListRuns {
                     conversation: conversation.clone(),
+                }),
+            ),
+            ledger::Action::Review(run) => (
+                "preview",
+                Some(Request::GetLedgerProposal {
+                    conversation: conversation.clone(),
+                    run_id: run.clone(),
                 }),
             ),
             ledger::Action::Proposal => {
@@ -1525,9 +1594,18 @@ impl App {
             ),
             ledger::Action::None => return,
         };
+        view.pending_read = matches!(action, ledger::Action::Review(_) | ledger::Action::Proposal);
+        view.pending_scope_epoch = view.scope_epoch;
+        view.pending_run = match &action {
+            ledger::Action::Review(run) => Some(run.clone()),
+            ledger::Action::Proposal => view.page.as_ref().map(|p| p.run.id.clone()),
+            ledger::Action::Prepare { change, .. } => Some(change.run_id.clone()),
+            _ => None,
+        };
         view.pending_kind = kind.to_owned();
-        if matches!(action, ledger::Action::Proposal) {
+        if matches!(action, ledger::Action::Proposal | ledger::Action::Review(_)) {
             view.prepared_draft = None;
+            view.stale = view.preview.is_some();
         }
         if matches!(action, ledger::Action::Prepare { .. }) {
             view.prepared_draft = view
@@ -1569,6 +1647,16 @@ impl App {
 
     pub fn apply_update(&mut self, update: Update) {
         self.apply_update_inner(update);
+        if let Some(view) = self.ledger_view.as_mut()
+            && !view.pending
+            && let Some(run) = view.review_run.as_ref()
+            && self.view.requirements_approval_run.as_deref() == Some(run)
+        {
+            let run = view.review_run.take().expect("queued review");
+            self.return_to_main();
+            self.ledger_view.as_mut().unwrap().visible = true;
+            self.ledger_action(ledger::Action::Review(run));
+        }
         self.text_selection
             .invalidate_context(&self.selection_context());
     }
@@ -1673,9 +1761,36 @@ impl App {
                 if let Some(view) = view
                     && view.request_id == request_id
                 {
-                    let refresh =
-                        reply.is_ok() && matches!(kind.as_str(), "applied" | "created" | "runs");
+                    let decided = reply.is_ok() && matches!(kind.as_str(), "applied" | "rejected");
+                    let refresh = reply.is_ok() && matches!(kind.as_str(), "created" | "runs");
                     view.reply(&kind, reply);
+                    if decided && conversation == self.conversation {
+                        self.return_to_main();
+                    }
+                    if decided
+                        && conversation != self.conversation
+                        && let Some(state) = self.conversation_states.get_mut(&conversation)
+                    {
+                        state.diff = None;
+                        state.plan_view = None;
+                        state.confirmation = None;
+                        if let Some(details) = state.details.take() {
+                            state
+                                .details_scroll_memory
+                                .insert((details.key.clone(), details.tab), details.scroll);
+                            state
+                                .details_query_memory
+                                .insert((details.key, details.tab), details.query);
+                        }
+                        if let Some(editor) = state.editor.take() {
+                            let key = Self::comment_key(&conversation, None, &editor.target);
+                            state.comment_draft_cursors.insert(
+                                key.clone(),
+                                (editor.input.cursor, editor.input.preferred_col),
+                            );
+                            state.comment_drafts.insert(key, editor.input.text);
+                        }
+                    }
                     if refresh && conversation == self.conversation {
                         self.ledger_action(ledger::Action::Fetch);
                     }
@@ -1809,12 +1924,36 @@ impl App {
                 }
                 if conversation == self.conversation && generation == self.generation {
                     let mut saw_manual_plan = false;
+                    let mut saw_requirements_review = false;
                     for event in &events {
                         if event["kind"] == "plan_proposed" && event["payload"]["automatic"] != true
                         {
                             saw_manual_plan = true;
                         }
+                        if event["kind"] == "ledger_approval_required" {
+                            saw_requirements_review = true;
+                        }
                         self.view.apply(event);
+                    }
+                    if saw_requirements_review
+                        && let Some(run) = self.view.requirements_approval_run.clone()
+                    {
+                        let view = self.ledger_view.get_or_insert_with(ledger::LedgerView::new);
+                        if view.approval_event != self.view.requirements_approval_event {
+                            view.approval_event = self.view.requirements_approval_event;
+                            view.review_run = Some(run);
+                            // Invalidate reads, but let an in-flight write finish.
+                            if view.pending
+                                && (view.pending_read
+                                    || !matches!(
+                                        view.pending_kind.as_str(),
+                                        "applied" | "rejected" | "preview" | "created"
+                                    ))
+                            {
+                                view.request_id = view.request_id.wrapping_add(1);
+                                view.pending = false;
+                            }
+                        }
                     }
                     self.view.idle = idle;
                     self.view.autonomous = Some(autonomous);
@@ -1831,10 +1970,25 @@ impl App {
                         )
                     }) && let Some(ledger) = self.ledger_view.as_mut().filter(|v| v.visible)
                     {
+                        let review_run = ledger
+                            .pending_run
+                            .as_deref()
+                            .or_else(|| ledger.proposed_change.as_ref().map(|c| c.run_id.as_str()));
+                        let changed = events.iter().any(|e| {
+                            e["kind"] == "ledger_changed"
+                                && review_run
+                                    .is_none_or(|run| e["payload"]["run"].as_str() == Some(run))
+                        });
+                        if changed {
+                            ledger.scope_epoch = ledger.scope_epoch.wrapping_add(1);
+                            ledger.stale = ledger.preview.is_some();
+                            ledger.error = Some(
+                                "Scope changed; draft preserved. Ctrl+R reloads the proposal."
+                                    .into(),
+                            );
+                        }
                         if ledger.editing.is_none() && ledger.preview.is_none() {
                             self.ledger_action(ledger::Action::Fetch);
-                        } else if events.iter().any(|e| e["kind"] == "ledger_changed") {
-                            ledger.error=Some("Scope changed; draft preserved. Ctrl+R reloads the revision before a new preview.".into());
                         }
                     }
                     // Events run in batches, never per frame: if one started
@@ -3034,6 +3188,9 @@ impl App {
                 .as_mut()
                 .unwrap()
                 .key(key, &self.conversation);
+            if !self.ledger_view.as_ref().unwrap().visible {
+                self.return_to_main();
+            }
             self.ledger_action(action);
             return true;
         }
@@ -3779,24 +3936,26 @@ impl App {
                 self.details = None;
                 return;
             }
-            KeyCode::Char('/') if details.tab != 0 || details.show_info => {
+            KeyCode::Char('/') if !details.overview() || details.dashboard_visible() => {
                 details.searching = true;
                 details.follow = false;
                 details.query.clear();
                 details.scroll = 0;
                 return;
             }
-            KeyCode::Char('o') if details.tab == 0 && plain && details.selected_round.is_some() => {
+            KeyCode::Char('o')
+                if details.overview() && plain && details.selected_round.is_some() =>
+            {
                 // An earlier round's session is only looked at by resuming it.
                 details.resume_round = true;
                 return;
             }
-            KeyCode::Char('r') if details.tab == 0 && plain => {
+            KeyCode::Char('r') if details.overview() && plain => {
                 self.native_retry();
                 return;
             }
             KeyCode::Char('i')
-                if details.tab == 0
+                if details.overview()
                     && plain
                     && details
                         .native
@@ -3812,7 +3971,7 @@ impl App {
                 details.editing = false;
                 return;
             }
-            KeyCode::Char('i' | 'a') if details.tab == 0 && plain => {
+            KeyCode::Char('i' | 'a') if details.overview() && plain => {
                 if details.selected_round.is_none()
                     && (details.task_id().is_none() || details.task_uuid.is_some())
                 {
@@ -3832,18 +3991,22 @@ impl App {
             KeyCode::Char('e') if details.dashboard_visible() && plain => details.dash_expand_all(),
             KeyCode::PageDown if details.dashboard_visible() => details.dash_scroll(10),
             KeyCode::PageUp if details.dashboard_visible() => details.dash_scroll(-10),
-            KeyCode::Char('m') if details.tab == 0 && plain => {
+            KeyCode::Char('m') if details.overview() && plain && !details.split => {
                 details.show_info = !details.show_info;
                 details.scroll = 0;
                 details.follow = !details.show_info;
                 return;
             }
             KeyCode::Char('w') if control => {
-                details.panel_scroll[details.active_panel] = details.scroll;
+                // Worker and verifier are tabs now: jump to the other one.
                 if details.task_id().is_some() {
-                    details.active_panel = 1 - details.active_panel;
+                    let other = if details.tab == details::VERIFIER {
+                        0
+                    } else {
+                        details::VERIFIER
+                    };
+                    details.switch_tab(other);
                 }
-                details.scroll = details.panel_scroll[details.active_panel];
                 return;
             }
             KeyCode::Char(c @ '1'..='7') => {
@@ -3923,7 +4086,7 @@ impl App {
                 details.dash_jump(true);
             }
             KeyCode::End | KeyCode::Char('G') if plain => {
-                details.follow = details.tab == 0 && !details.show_info;
+                details.follow = details.overview() && !details.show_info;
                 details.scroll = usize::MAX;
                 if on_checks {
                     details.check = details.check_count().saturating_sub(1);
@@ -5734,6 +5897,178 @@ pub mod tests {
             result: Ok(()),
         });
         assert!(!app.interview_forms["interview-a"].sent);
+    }
+
+    fn requirements_event(app: &mut App, seq: u64, run: &str, resolved: bool) {
+        let mut events = vec![
+            serde_json::json!({"seq":seq,"kind":"ledger_approval_required","payload":{"run":run}}),
+        ];
+        if resolved {
+            events.push(serde_json::json!({"seq":seq+1,"kind":"ledger_proposal_rejected","payload":{"run":run}}));
+        }
+        app.apply_update(Update::Events {
+            conversation: app.conversation.clone(),
+            generation: app.generation,
+            events,
+            idle: true,
+            autonomous: false,
+        });
+    }
+    fn review_app() -> App {
+        let mut app = test_app();
+        app.input = InputBuffer::with_text("Unsent chat 👩‍💻");
+        let mut ledger = ledger::LedgerView::new();
+        ledger.preview = Some(serde_json::json!({"proposal_id":"p1","diff_hash":"hash"}));
+        ledger.proposed_change = Some(crate::lean::ledger::LedgerChange {
+            conversation: app.conversation.clone(),
+            run_id: "r1".into(),
+            operation_id: "op1".into(),
+            expected_spec_revision: 0,
+            reason: "fix".into(),
+            entries: vec![],
+        });
+        ledger.request_id = 12;
+        app.ledger_view = Some(ledger);
+        app
+    }
+    #[test]
+    fn requirements_decisions_return_to_main_only_after_success() {
+        for kind in ["applied", "rejected"] {
+            let mut app = review_app();
+            app.details = Some(Details::new("worker:t1".into()));
+            app.plan_view = Some(PlanView::new("plan".into()));
+            app.editor = Some(Editor {
+                target: "orchestrator".into(),
+                input: InputBuffer::with_text("Comment draft"),
+            });
+            app.ledger_view.as_mut().unwrap().rejection =
+                InputBuffer::with_text("Correction draft");
+            app.apply_update(Update::Ledger {
+                conversation: app.conversation.clone(),
+                request_id: 12,
+                kind: kind.into(),
+                reply: Err("raw failure".into()),
+            });
+            assert!(app.ledger_view.as_ref().unwrap().visible);
+            assert!(app.ledger_view.as_ref().unwrap().preview.is_some());
+            assert_eq!(
+                app.ledger_view.as_ref().unwrap().rejection.text,
+                "Correction draft"
+            );
+            app.apply_update(Update::Ledger {
+                conversation: app.conversation.clone(),
+                request_id: 12,
+                kind: kind.into(),
+                reply: Ok(serde_json::json!({"spec_revision":1})),
+            });
+            assert!(!app.ledger_view.as_ref().unwrap().visible);
+            assert!(app.details.is_none() && app.plan_view.is_none() && app.editor.is_none());
+            assert_eq!(app.input.text, "Unsent chat 👩‍💻");
+            assert!(
+                app.comment_drafts
+                    .values()
+                    .any(|text| text == "Comment draft")
+            );
+        }
+    }
+    #[test]
+    fn replay_opens_only_pending_reviews_and_respects_dismissal() {
+        let mut app = test_app();
+        requirements_event(&mut app, 1, "r1", true);
+        assert!(app.ledger_view.is_none());
+        requirements_event(&mut app, 3, "r1", false);
+        assert!(app.ledger_view.as_ref().unwrap().pending);
+        let mut view = ledger::LedgerView::new();
+        view.approval_event = 3;
+        view.visible = false;
+        app.ledger_view = Some(view);
+        requirements_event(&mut app, 3, "r1", false);
+        assert!(!app.ledger_view.as_ref().unwrap().visible);
+        requirements_event(&mut app, 4, "r1", false);
+        assert!(app.ledger_view.as_ref().unwrap().visible);
+    }
+    #[test]
+    fn queued_review_waits_for_write_and_late_reply_cannot_replace_it() {
+        let mut app = review_app();
+        app.ledger_view.as_mut().unwrap().pending = true;
+        app.ledger_view.as_mut().unwrap().pending_kind = "applied".into();
+        requirements_event(&mut app, 2, "r2", false);
+        assert_eq!(
+            app.ledger_view.as_ref().unwrap().review_run.as_deref(),
+            Some("r2")
+        );
+        app.apply_update(Update::Ledger {
+            conversation: app.conversation.clone(),
+            request_id: 12,
+            kind: "applied".into(),
+            reply: Ok(serde_json::json!({})),
+        });
+        let view = app.ledger_view.as_ref().unwrap();
+        assert!(view.visible && view.pending);
+        assert_eq!(view.pending_run.as_deref(), Some("r2"));
+        app.apply_update(Update::Ledger {
+            conversation: app.conversation.clone(),
+            request_id: 12,
+            kind: "preview".into(),
+            reply: Ok(serde_json::json!({"proposal":{"proposal_id":"old"}})),
+        });
+        assert!(app.ledger_view.as_ref().unwrap().preview.is_none());
+    }
+    #[test]
+    fn queued_review_survives_waiting_for_conversation_history() {
+        let mut app = review_app();
+        app.ledger_view.as_mut().unwrap().review_run = Some("r2".into());
+        app.apply_update(Update::Ledger {
+            conversation: app.conversation.clone(),
+            request_id: 11,
+            kind: "preview".into(),
+            reply: Err("late".into()),
+        });
+        assert_eq!(
+            app.ledger_view.as_ref().unwrap().review_run.as_deref(),
+            Some("r2")
+        );
+        requirements_event(&mut app, 2, "r2", false);
+        assert!(app.ledger_view.as_ref().unwrap().pending);
+        assert_eq!(
+            app.ledger_view.as_ref().unwrap().pending_run.as_deref(),
+            Some("r2")
+        );
+    }
+    #[test]
+    fn review_escape_closes_details_and_preserves_search_and_chat() {
+        let mut app = review_app();
+        app.ledger_view.as_mut().unwrap().query = InputBuffer::with_text("filter");
+        let mut details = Details::new("worker:t1".into());
+        details.native_focus = true;
+        app.details = Some(details);
+        assert!(!app.native_focused());
+        app.paste("must not edit chat");
+        assert_eq!(app.input.text, "Unsent chat 👩‍💻");
+        app.key(key_press(KeyCode::Esc));
+        assert!(app.details.is_none());
+        assert!(!app.ledger_view.as_ref().unwrap().visible);
+        assert_eq!(app.ledger_view.as_ref().unwrap().query.text, "filter");
+        assert_eq!(app.input.text, "Unsent chat 👩‍💻");
+    }
+    #[test]
+    fn requirements_approval_automatically_opens_comparison() {
+        let mut app = test_app();
+        app.input = InputBuffer::with_text("Draft 👩‍💻");
+        app.apply_update(Update::Events {
+            conversation: app.conversation.clone(),
+            generation: app.generation,
+            events: vec![serde_json::json!({
+                "seq": 1, "kind": "ledger_approval_required", "payload": {"run": "r1"}
+            })],
+            idle: true,
+            autonomous: false,
+        });
+        let ledger = app.ledger_view.as_ref().unwrap();
+        assert!(ledger.visible);
+        assert!(ledger.pending);
+        assert_eq!(ledger.pending_kind, "preview");
+        assert_eq!(app.input.text, "Draft 👩‍💻");
     }
 
     #[test]
