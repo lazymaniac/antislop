@@ -2,7 +2,17 @@ use super::*;
 
 /// What the orchestrator is told when tasks wait for the user.
 pub(super) fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
-    let mut text = blocked_intro(autonomous);
+    let repairable = tasks.iter().filter(|task| is_blocked(task)).all(|task| {
+        task.report
+            .as_deref()
+            .and_then(blocker::parse)
+            .is_some_and(|blocker| !blocker.for_user())
+    });
+    let mut text = if repairable {
+        "The plan needs a structural repair. Resolve the structured blockers with `add_task` or `split_task` in a ```recover block. These actions are checked by the runtime against the accepted scope and dependency graph. Preserve all obligations; do not ask the user to choose retries or more rounds.\n".into()
+    } else {
+        blocked_intro(autonomous)
+    };
     append_blocked_tasks(&mut text, tasks);
     append_pending_tasks(&mut text, tasks);
     text.push_str(BLOCKED_INSTRUCTIONS);
@@ -10,7 +20,10 @@ pub(super) fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
 }
 
 const BLOCKED_INSTRUCTIONS: &str = "\nWays out: `retry_with_guidance` (the message is the hint for the worker; it \
-starts a fresh round with its report and findings), `extend_rounds`. Never cancel, skip or approve an \
+starts a fresh round with its report and findings), `extend_rounds`. For a structured blocker, \
+use `add_task` with a `spec` supplying the missing input, or `split_task` with 2–8 `parts`. \
+The runtime inserts those tasks before the blocked one, rejects dependencies on it or its \
+descendants, and resumes it only after their verification. Never cancel, skip or approve an \
 unperformed task to bypass a blocker. Preserve every remaining obligation. \
 The user can also use /unblock <task>. To unblock steps, end your answer with:\n\
 ```recover\n{\"actions\":[{\"task\":\"t2\",\"action\":\"retry_with_guidance\",\
@@ -49,6 +62,18 @@ fn blocked_task_line(task: &Task) -> String {
     let id = task.spec["id"].as_str().unwrap_or(&task.id);
     let title = task.spec["title"].as_str().unwrap_or_default();
     let why = task.report.as_deref().and_then(last_report_reason);
+    if task
+        .report
+        .as_deref()
+        .and_then(blocker::parse)
+        .is_some_and(|blocker| blocker.for_user())
+    {
+        return format!(
+            "\n- {id} \"{title}\" is {}: {}. Only the user can lift the permission blocker of {id}; do not insert a task for it.",
+            task.status,
+            bounded_reason(why)
+        );
+    }
     format!(
         "\n- {id} \"{title}\" is {} after {} round(s): {}",
         task.status,

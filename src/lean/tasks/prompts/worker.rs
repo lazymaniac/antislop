@@ -107,15 +107,14 @@ pub fn worker_prompt(
 ) -> String {
     let team_note = worker_team_note(task, team);
     let change_rules = worker_change_rules(task, autonomous);
+    let blocker = crate::lean::blocker::worker_note(task);
     let binding = if task.writes { OPTIONS_BINDING } else { "" };
     format!(
         "You are a worker on a team of agents. The project is your current \
          working directory: {project}. Nothing is pasted for you: read the files \
          you need yourself with your tools.\n\n\
          Task: {}\nTask id: {}\nGoal: {}\nScope: {}\n\n{binding}\n\n{}{PROJECT_RULES}\n\n\
-         Stop and say so in your report when the goal cannot be reached without \
-         something outside your task: a decision, access, or another task's \
-         result.\n\n{team_note}{EFFECT_FORMAT}\n\n\
+         {blocker}\n\n{team_note}{EFFECT_FORMAT}\n\n\
          End with a complete report of your result; an independent verifier \
          will check it against the files.",
         task.title,

@@ -118,6 +118,10 @@ pub struct Unblocking {
     pub action: String,
     #[serde(default)]
     pub message: Option<String>,
+    #[serde(default)]
+    pub spec: Option<TaskSpec>,
+    #[serde(default)]
+    pub parts: Vec<TaskSpec>,
 }
 
 /// Splits the ```recover block off an orchestrator answer. Returns the answer
@@ -150,7 +154,7 @@ pub(crate) fn validate(tasks: &[TaskSpec]) -> Result<()> {
     Ok(())
 }
 
-fn validate_task_id(id: &str) -> Result<()> {
+pub(crate) fn validate_task_id(id: &str) -> Result<()> {
     crate::require(
         !id.is_empty()
             && id.len() <= 256

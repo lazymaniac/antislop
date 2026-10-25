@@ -807,3 +807,171 @@ else:
         .collect();
     assert_eq!(modes, [true, false]);
 }
+
+#[test]
+fn a_blocker_repair_cannot_wait_for_a_transitive_dependent() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"
+if "blocked (MissingInput)" in prompt:
+    fix = task("inv", "Inventory", ["t3"])
+    answer = "Repair.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
+elif "[runtime]" in prompt:
+    answer = "done"
+else:
+    answer = plan(task("t1", "Scout"), task("t2", "Writer", ["t1"]), task("t3", "Check", ["t2"]))
+"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "You verify" in prompt:
+    raise RuntimeError("a blocked worker must not reach verification")
+else:
+    say("worker", '```blocker\n{"kind":"missing_input","needs":"current scan","why":"scan is assigned downstream"}\n```')
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "inventory and verify");
+    let tasks = core.store.latest_plan(&conversation).unwrap();
+    assert_eq!(tasks.len(), 3);
+    assert_eq!(tasks[0].status, "needs_user");
+    assert_eq!(tasks[0].round, 1);
+    assert!(
+        tasks[1..]
+            .iter()
+            .all(|task| task.status == "queued" && task.round == 0)
+    );
+    assert!(events(&core, &conversation, "notice").iter().any(|notice| {
+        notice["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("would wait for the task it unblocks"))
+    }));
+    assert!(events(&core, &conversation, "task_recovery").is_empty());
+}
+
+#[test]
+fn supervised_runtime_repairs_missing_inputs_without_a_retry_decision() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        false,
+        r#"
+if "blocked (MissingInput)" in prompt:
+    fix = task("inv", "Inventory")
+    answer = "Repair.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
+elif "[runtime]" in prompt:
+    answer = "done"
+else:
+    answer = plan(task("t1", "Scout"), task("t2", "Uses inventory", ["t1"]))
+"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "You verify" in prompt or "updated report" in prompt:
+    say("verifier", verdict(True))
+elif "Task id: t1" in prompt and bump("scout") == 1:
+    say("worker", '```blocker\n{"kind":"missing_input","needs":"current scan","why":"no current evidence"}\n```')
+else:
+    say("worker", "inventory evidence")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "inventory and verify");
+    let plan = core.store.latest_plan(&conversation).unwrap()[0]
+        .plan_id
+        .clone();
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+    let tasks = core.store.plan(&plan).unwrap();
+    assert_eq!(
+        tasks
+            .iter()
+            .map(|task| task.spec["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["inv", "t1", "t2"]
+    );
+    assert!(tasks.iter().all(|task| task.status == "approved"));
+    assert_eq!(tasks[1].round, 2);
+    assert_eq!(
+        events(&core, &conversation, "task_recovery")[0]["action"],
+        "add_task"
+    );
+}
+
+#[test]
+fn a_verifiers_missing_input_is_repaired_before_another_worker_round() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"
+if "blocked (MissingInput)" in prompt:
+    fix = task("scan", "Current source scan")
+    answer = "Repair.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
+elif "[runtime]" in prompt:
+    answer = "done"
+else:
+    answer = plan(task("t1", "Scout"), task("t2", "Uses inventory", ["t1"]))
+"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "You verify" in prompt or "updated report" in prompt:
+    if "Task: Scout" in prompt and bump("scout-verifier") == 1:
+        say("verifier", '```blocker\n{"kind":"missing_input","needs":"current scan","why":"historical evidence cannot certify current sources"}\n```')
+    else:
+        say("verifier", verdict(True))
+else:
+    say("worker", "source inventory")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "inventory and verify");
+    let tasks = core.store.latest_plan(&conversation).unwrap();
+    assert_eq!(
+        tasks
+            .iter()
+            .map(|task| task.spec["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["scan", "t1", "t2"]
+    );
+    assert!(tasks.iter().all(|task| task.status == "approved"));
+    assert_eq!(tasks[0].round, 1);
+    assert_eq!(tasks[1].round, 2);
+    assert_eq!(tasks[1].spec["depends_on"], serde_json::json!(["scan"]));
+}
+
+#[test]
+fn runtime_refuses_a_cyclic_persisted_graph_before_starting_workers() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        false,
+        r#"answer = plan(task("t1", "Scout"), task("t2", "Consumer", ["t1"]))"#,
+        r#"
+if "You review a plan" in prompt:
+    say("reviewer", verdict(True))
+else:
+    raise RuntimeError("no worker may start for an invalid graph")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "inventory and verify");
+    let mut tasks = core.store.latest_plan(&conversation).unwrap();
+    tasks[0].spec["depends_on"] = serde_json::json!(["t2"]);
+    let db = rusqlite::Connection::open(dir.path().join("state/core.db")).unwrap();
+    db.execute(
+        "UPDATE tasks SET spec=?1 WHERE id=?2",
+        rusqlite::params![tasks[0].spec.to_string(), tasks[0].id],
+    )
+    .unwrap();
+    let error = core
+        .accept_plan(&conversation, &tasks[0].plan_id)
+        .unwrap_err();
+    assert!(error.to_string().contains("not an earlier task"), "{error}");
+    assert!(
+        core.store
+            .latest_plan(&conversation)
+            .unwrap()
+            .iter()
+            .all(|task| task.status == "proposed" && task.round == 0)
+    );
+}

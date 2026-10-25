@@ -5,6 +5,7 @@
 
 pub mod clipboard;
 pub mod config;
+mod dashboard;
 pub mod details;
 pub mod diffview;
 pub mod document;
@@ -3757,6 +3758,9 @@ impl App {
                 details.scroll = 0;
                 details.check = 0;
                 details.comment = 0;
+                if details.dashboard_visible() {
+                    details.dash_jump(false);
+                }
             } else {
                 details.pending_g = true;
             }
@@ -3818,6 +3822,16 @@ impl App {
                 }
                 return;
             }
+            KeyCode::Up if details.dashboard_visible() => details.dash_move(-1),
+            KeyCode::Down if details.dashboard_visible() => details.dash_move(1),
+            KeyCode::Char('k') if details.dashboard_visible() && plain => details.dash_move(-1),
+            KeyCode::Char('j') if details.dashboard_visible() && plain => details.dash_move(1),
+            KeyCode::Enter | KeyCode::Char(' ') if details.dashboard_visible() => {
+                details.dash_cycle()
+            }
+            KeyCode::Char('e') if details.dashboard_visible() && plain => details.dash_expand_all(),
+            KeyCode::PageDown if details.dashboard_visible() => details.dash_scroll(10),
+            KeyCode::PageUp if details.dashboard_visible() => details.dash_scroll(-10),
             KeyCode::Char('m') if details.tab == 0 && plain => {
                 details.show_info = !details.show_info;
                 details.scroll = 0;
@@ -3904,6 +3918,9 @@ impl App {
             KeyCode::Home => {
                 details.follow = false;
                 details.scroll = 0;
+            }
+            KeyCode::End | KeyCode::Char('G') if plain && details.dashboard_visible() => {
+                details.dash_jump(true);
             }
             KeyCode::End | KeyCode::Char('G') if plain => {
                 details.follow = details.tab == 0 && !details.show_info;

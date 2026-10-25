@@ -173,6 +173,12 @@ pub struct Details {
     pub follow: bool,
     /// Full task metadata, explicitly opened instead of the live transcript.
     pub show_info: bool,
+    /// Dashboard cards: how much of each is shown, which one has focus, and
+    /// the ids of the last draw (the focus walks them in screen order).
+    pub dash_fold: HashMap<&'static str, super::dashboard::Fold>,
+    pub dash_ids: Vec<&'static str>,
+    pub dash_focus: usize,
+    pub dash_reveal: bool,
     pub(super) pending_g: bool,
     layout_cache: LayoutCache,
 }
@@ -263,6 +269,10 @@ impl Details {
             history_unavailable: false,
             follow: true,
             show_info: false,
+            dash_fold: HashMap::new(),
+            dash_ids: Vec::new(),
+            dash_focus: 0,
+            dash_reveal: false,
             pending_g: false,
             layout_cache: LayoutCache::default(),
         }
@@ -382,7 +392,7 @@ impl Details {
             .unwrap_or_default();
     }
 
-    fn comments<'a>(&self, view: &'a View) -> Vec<&'a super::view::Comment> {
+    pub(super) fn comments<'a>(&self, view: &'a View) -> Vec<&'a super::view::Comment> {
         let round = self
             .selected_round
             .or_else(|| self.task.as_ref().and_then(|task| task["round"].as_u64()));
@@ -434,33 +444,7 @@ impl Details {
 
     /// Compact header; source prompts remain in the session document.
     fn summary(&self, view: &View, theme: &Theme) -> Vec<Line<'static>> {
-        let key = self
-            .session_keys()
-            .get(self.active_panel)
-            .cloned()
-            .unwrap_or_else(|| self.key.clone());
-        let agent = view.agents.get(&key);
-        let mut summary = agent.map_or_else(String::new, |agent| {
-            format!(
-                "{} · {} · {}",
-                agent.provider,
-                agent.model.as_deref().unwrap_or("default model"),
-                agent.effort.as_deref().unwrap_or("default effort")
-            )
-        });
-        if let Some(task) = self
-            .task_id()
-            .and_then(|id| view.tasks.iter().find(|task| task.id == id))
-        {
-            summary.push_str(&format!(
-                " · {}",
-                task.summary.as_deref().unwrap_or(&task.title)
-            ));
-        }
-        vec![Line::styled(
-            theme.clean(&summary).replace(['\n', '\r', '\t'], " "),
-            theme.dim(),
-        )]
+        self.hero(view, theme)
     }
 
     pub(super) fn session_keys(&self) -> Vec<String> {
@@ -1311,6 +1295,24 @@ impl Details {
             return;
         }
 
+        if self.dashboard_visible() && body.height >= 4 && body.width >= 24 {
+            self.draw_dashboard(frame, view, body, &theme);
+            let hint = if self.searching {
+                format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
+            } else if footer.width >= 90 {
+                "↑/↓ card · Enter fold/expand · e all · PgUp/PgDn scroll · ←/→ rounds · c comment · / search · m terminals · Esc back".into()
+            } else if footer.width >= 50 {
+                "↑/↓ card · Enter fold · e all · m terminals · Esc".into()
+            } else {
+                "↑/↓ · Enter · m · Esc".into()
+            };
+            frame.render_widget(
+                Paragraph::new(theme.clean(&hint)).style(theme.dim()),
+                footer,
+            );
+            return;
+        }
+
         let block = if self.tab == 0 {
             let title = if self.show_info {
                 " Task info · m session "
@@ -1467,11 +1469,11 @@ pub fn details_footer_hint_for(key: &str, tab: usize, width: usize) -> String {
 pub fn details_footer_hint(tab: usize, width: usize) -> &'static str {
     if tab == 0 {
         if width >= 90 {
-            "[] tabs · ←/→ rounds · ↑/↓ PgUp/PgDn · gg/G top/live · m info · / search · c comment · Esc back"
+            "[] tabs · ←/→ rounds · ↑/↓ PgUp/PgDn · gg/G top/live · m dashboard · / search · c comment · Esc back"
         } else if width >= 65 {
-            "[] tabs · ←/→ rounds · ↑/↓ scroll · gg/G top/live · m info · / search · Esc back"
+            "[] tabs · ←/→ rounds · ↑/↓ scroll · gg/G top/live · m dashboard · / search · Esc back"
         } else if width >= 45 {
-            "[] tabs · ←/→ rounds · gg/G top/live · m info · Esc"
+            "[] tabs · ←/→ rounds · gg/G top/live · m dashboard · Esc"
         } else {
             "gg/G · m info · Esc back"
         }

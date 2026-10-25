@@ -7373,3 +7373,111 @@ fn header_shows_repository_branch_for_old_sessions_and_has_no_empty_separators()
     assert!(text.contains("branch: feature/session-start"));
     assert!(!text.contains("feature/repo-branch"));
 }
+
+fn dashboard_screen(width: u16, height: u16, setup: impl FnOnce(&mut Details)) -> String {
+    use antislop::lean::tui::view::{Agent, View};
+    let ev = |seq: u64, kind: &str, payload: Value| json!({"seq": seq, "kind": kind, "payload": payload});
+    let mut view = View::default();
+    view.apply(&ev(
+        1,
+        "plan_proposed",
+        json!({"plan": "p1", "tasks": [
+            {"id": "t1", "title": "Store", "summary": "Fix the storage path.",
+             "goal": "Make the storage layer atomic.\nNever lose a write on crash.",
+             "verifier": {"summary": "Check it.", "focus": "Crash safety.",
+                          "risks": ["Torn writes", "Lock inversion"]}},
+            {"id": "t2", "title": "API", "depends_on": ["t1"]}
+        ]}),
+    ));
+    view.apply(&ev(
+        2,
+        "task",
+        json!({"id": "t1", "task": "u1", "status": "verifying", "round": 2, "feedback": null}),
+    ));
+    view.agents.insert(
+        "worker:t1".into(),
+        Agent {
+            provider: "codex".into(),
+            model: Some("gpt".into()),
+            turns: 2,
+            reported: 2,
+            tokens_in: Some(12_300),
+            tokens_out: Some(4_000),
+            busy_ms: 192_000,
+            ..Agent::default()
+        },
+    );
+    view.agents.insert(
+        "verifier:t1".into(),
+        Agent {
+            running: true,
+            provider: "claude".into(),
+            activity: "reading src/store.rs".into(),
+            ..Agent::default()
+        },
+    );
+    let mut details = Details::new("verifier:t1".into());
+    details.show_info = true;
+    details.task = Some(json!({
+        "id": "u1", "round": 2, "report": "Wrapped writes in a transaction.",
+        "spec": {"id": "t1", "title": "Store", "goal": "g", "kind": "implementation",
+                 "requirement_ids": ["Q1"],
+                 "verifier": {"focus": "Crash safety.", "risks": ["Torn writes", "Lock inversion"]}},
+        "checks": [{"id": "R1", "state": "settled", "status": "issue", "note": "fsync missing"},
+                   {"id": "R2", "state": "checking"}],
+        "verdict": {"findings": [{"severity": "high", "issue": "No fsync before rename",
+                                   "where": "src/store.rs:42"}]}
+    }));
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    // The first draw tells the dashboard which cards it has.
+    terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+    setup(&mut details);
+    terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
+    let wide = dashboard_screen(140, 40, |_| {});
+    println!("{wide}");
+    for needle in [
+        "VERIFYING r2",
+        "Make the storage layer atomic",
+        "Findings",
+        "No fsync before rename",
+        "src/store.rs:42",
+        "Torn writes",
+        "12.3k in / 4.0k out",
+        "checks",
+        "serves requirements Q1",
+    ] {
+        assert!(wide.contains(needle), "{needle}\n{wide}");
+    }
+    let narrow = dashboard_screen(70, 40, |details| details.dash_jump(true));
+    println!("{narrow}");
+    assert!(
+        narrow.contains("Agents"),
+        "the last card is revealed: {narrow}"
+    );
+    // Focus moved to the Goal card and Enter expanded it; Enter again folds.
+    let folded = dashboard_screen(70, 40, |details| {
+        details.dash_move(1);
+        details.dash_cycle();
+        details.dash_cycle();
+    });
+    assert!(!folded.contains("Never lose a write"), "{folded}");
+    // Tiny terminals never panic.
+    for (w, h) in [(12, 5), (24, 6), (40, 8)] {
+        dashboard_screen(w, h, |_| {});
+    }
+}

@@ -184,7 +184,6 @@ fn descendants(specs: &[TaskSpec]) -> BTreeMap<&str, BTreeSet<&str>> {
 }
 
 /// What the orchestrator is told when `findings` send the plan back.
-#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 pub fn message(findings: &[&Finding]) -> String {
     let lines: Vec<String> = findings
         .iter()

@@ -96,6 +96,16 @@ impl Core {
         record_plan_review_start(&self.store, conversation, &plan.id, config, specs)?;
         let project_text = project.to_string_lossy().into_owned();
         let gaps = planning_gaps(specs);
+        let dependency_findings = feasibility::check(specs);
+        let dependency_note = dependency_findings
+            .iter()
+            .map(|finding| {
+                format!(
+                    "\n- {} [{}]: {}",
+                    finding.task, finding.rule, finding.detail
+                )
+            })
+            .collect::<String>();
         self.review(
             conversation,
             PLAN_VERIFIER,
@@ -104,7 +114,7 @@ impl Core {
             cancel,
             |first, request| {
                 let prompt = plan_review_prompt(&project_text, request, specs, first);
-                append_planning_gaps(prompt, gaps.as_deref())
+                append_planning_gaps(prompt, gaps.as_deref()) + &dependency_note
             },
         )
     }

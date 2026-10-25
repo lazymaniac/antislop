@@ -85,6 +85,14 @@ impl Store {
         if spec.criterion_ids.is_empty() {
             spec.criterion_ids = before.criterion_ids.clone();
         }
+        if spec.scope.is_empty() {
+            spec.scope = before.scope.clone();
+        }
+        for dependency in &before.depends_on {
+            if !spec.depends_on.contains(dependency) {
+                spec.depends_on.push(dependency.clone());
+            }
+        }
         blocker::check_unblocker(&spec, &before, &self.plan_with_status(blocked)?)?;
         let mut after = before.clone();
         after.depends_on.push(spec.id.clone());

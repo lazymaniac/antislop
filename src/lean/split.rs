@@ -84,6 +84,7 @@ fn inherit(part: &TaskSpec, blocked: &TaskSpec) -> TaskSpec {
 fn names(parts: &[TaskSpec], plan: &[(TaskSpec, String)]) -> Result<()> {
     let mut seen: BTreeSet<&str> = plan.iter().map(|(task, _)| task.id.as_str()).collect();
     for part in parts {
+        crate::lean::tasks::validate_task_id(&part.id)?;
         require(part.resolves.is_none(), "a part does not clear a blocker")?;
         require(
             seen.insert(part.id.as_str()),
@@ -97,7 +98,7 @@ fn normal(path: &str) -> &str {
     path.trim().trim_start_matches("./").trim_end_matches('/')
 }
 
-fn contained(path: &str, allowed: &[String]) -> bool {
+pub(crate) fn contained(path: &str, allowed: &[String]) -> bool {
     let path = normal(path);
     allowed.is_empty()
         || allowed.iter().any(|root| {

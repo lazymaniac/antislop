@@ -16,20 +16,18 @@ use crate::{Result, require};
 /// third attempt is the user's decision.
 pub const ATTEMPTS: usize = 2;
 
-#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 pub const FORMAT: &str = "If the goal cannot be reached because something outside your task is \
      missing, do not repeat the shortfall in prose round after round. End your report with \
      this block, once:\n```blocker\n{\"kind\":\"missing_input|permission|unsatisfiable_requirement|too_large\",\
      \"needs\":\"what must exist or change\",\"why\":\"why you cannot supply it\",\
      \"suggest\":\"optional: a task or change that would supply it\"}\n```\nUse `permission` for \
-     what your sandbox denies, `missing_input` for a result, file or decision that no task of the \
-     plan produces, `unsatisfiable_requirement` for a demand your task cannot meet as written, `too_large` when \
+     what your sandbox denies, `missing_input` for a result, file or decision unavailable at this \
+     task's dependency boundary (including a result assigned to a downstream task), `unsatisfiable_requirement` for a demand your task cannot meet as written, `too_large` when \
      the task is more than you can finish well in one piece (say in `suggest` how you would cut \
      it into parts that can be done and checked one by one). \
      The runtime stops the task and hands the problem to the orchestrator, who fixes the plan. \
      Do not use it for work you can still do.\n\n";
 
-#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -39,7 +37,6 @@ pub enum Kind {
     TooLarge,
 }
 
-#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Blocker {
     pub kind: Kind,
@@ -49,7 +46,6 @@ pub struct Blocker {
     pub suggest: Option<String>,
 }
 
-#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 impl Blocker {
     /// What a card and the orchestrator read.
     pub fn summary(&self) -> String {
@@ -73,7 +69,6 @@ impl Blocker {
 
 /// The worker's blocker, when its report ends in a valid block. A damaged
 /// or empty block is ignored, so the report goes to the verifier as before.
-#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 pub fn parse(report: &str) -> Option<Blocker> {
     let (_, body) = fenced(report, "blocker")?;
     let blocker: Blocker = serde_json::from_str(body).ok()?;
@@ -81,7 +76,6 @@ pub fn parse(report: &str) -> Option<Blocker> {
 }
 
 /// What a worker is told about blockers, and about the one it clears.
-#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 pub fn worker_note(task: &TaskSpec) -> String {
     let part = task.part_of.as_deref().map(|whole| {
         format!(
@@ -104,7 +98,6 @@ pub fn worker_note(task: &TaskSpec) -> String {
 }
 
 /// The check the runtime adds to the verifier of a task that clears `blocked`.
-#[allow(dead_code)] // Reserved for runtime blocker and plan validation integration.
 pub fn obligation(blocked: &str) -> String {
     format!(
         "This task clears the blocker of {blocked}. Assess whether what its goal asks for is now \
@@ -120,6 +113,11 @@ pub fn check_unblocker(
     blocked: &TaskSpec,
     plan: &[(TaskSpec, String)],
 ) -> Result<()> {
+    crate::lean::tasks::validate_task_id(&spec.id)?;
+    require(
+        spec.part_of.is_none(),
+        "an unblocker cannot also be a split part",
+    )?;
     require(
         spec.resolves.as_deref() == Some(blocked.id.as_str()),
         "`resolves` must name the blocked task",
@@ -185,6 +183,15 @@ fn dependencies(spec: &TaskSpec, blocked: &TaskSpec, plan: &[(TaskSpec, String)]
 
 /// The requirements a clearing task serves are the blocked task's own.
 fn scope(spec: &TaskSpec, blocked: &TaskSpec) -> Result<()> {
+    for path in &spec.scope {
+        require(
+            crate::lean::split::contained(path, &blocked.scope),
+            &format!(
+                "unblocker scope {path} is outside the scope of {}",
+                blocked.id
+            ),
+        )?;
+    }
     for (what, mine, theirs) in [
         (
             "requirement",

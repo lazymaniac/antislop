@@ -279,6 +279,23 @@ impl Core {
             // from the stored report; an empty or damaged block stays in
             // the report whole and the round falls back to the diffstat
             // (writers) or the report's first text line (read-only).
+            if let Some(blocker) = blocker::parse(&report) {
+                let reason = blocker.summary();
+                if let Some(path) = &worktree {
+                    task.result = Some(git::commit_all(
+                        path,
+                        &format!("{} (blocked round {round})", spec.title),
+                    )?);
+                } else if in_place {
+                    task.result = Some(git::snapshot(
+                        &project,
+                        &format!("{} (blocked round {round})", spec.title),
+                    )?);
+                }
+                task.report = Some(format!("{report}\n\n[runtime] {reason}"));
+                task.verdict = None;
+                return self.stop(conversation, task, status::NEEDS_USER, Some(&reason));
+            }
             if let Some(question) = tasks::integration_question(&report) {
                 task.report = Some(report);
                 task.verdict = None;
@@ -394,6 +411,11 @@ impl Core {
                 &format!("{}/verifier", spec.id),
                 &answer,
             )?;
+            if let Some(blocker) = blocker::parse(&answer) {
+                let reason = blocker.summary();
+                task.report = Some(format!("{report}\n\n{answer}\n\n[runtime] {reason}"));
+                return self.stop(conversation, task, status::NEEDS_USER, Some(&reason));
+            }
             let mut verdict = tasks::parse_verdict(&answer);
             let obligations = tasks::obligations(&spec);
             let missing = tasks::unaccounted(&verdict, &obligations);

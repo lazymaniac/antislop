@@ -40,6 +40,13 @@ impl Core {
     }
 
     fn validate_plan_inputs(&self, conversation: &str, plan_id: &str) -> Result<()> {
+        let specs = self
+            .store
+            .plan_specs(plan_id)?
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<Vec<TaskSpec>, _>>()?;
+        tasks::validate(&specs)?;
         let run = self.store.plan_run(plan_id)?.ok_or_else(|| {
             Error::Invalid("integrity error: plan has no requirements run".into())
         })?;

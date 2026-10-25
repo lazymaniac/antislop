@@ -48,7 +48,10 @@ pub fn obligations(task: &TaskSpec) -> Vec<(String, String)> {
             .enumerate()
             .map(move |(index, check)| (format!("{prefix}{}", index + 1), check.to_owned()))
     };
-    risks
+    task.resolves
+        .iter()
+        .map(|blocked| ("B1".into(), crate::lean::blocker::obligation(blocked)))
+        .chain(risks)
         .chain(numbered("V", COMMON_CHECKS))
         .chain(numbered("C", checklist(task.kind)))
         .chain(crate::lean::risks::for_kind(task.kind))

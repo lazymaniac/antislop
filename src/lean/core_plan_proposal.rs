@@ -21,6 +21,20 @@ impl Core {
     ) -> Result<()> {
         let PlanProposal { config, specs } = proposal;
         let specs = finalize_plan(specs.to_vec(), config.policy.required_gates);
+        let findings = feasibility::check(&specs);
+        let blocking: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.severity == feasibility::Severity::Block)
+            .collect();
+        if !blocking.is_empty() {
+            let message = feasibility::message(&blocking);
+            if self.store.count_since_user(conversation, PLAN_LINT)? < tasks::MAX_ROUNDS as usize {
+                self.store.add_message(conversation, PLAN_LINT, &message)?;
+            } else {
+                self.notice(conversation, &message);
+            }
+            return Ok(());
+        }
         let Some(plan) = self.prepare_plan(conversation, &specs, addressed, cancel)? else {
             return Ok(());
         };

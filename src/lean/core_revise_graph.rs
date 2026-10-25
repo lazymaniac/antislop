@@ -13,6 +13,12 @@ impl Core {
     ) -> Result<()> {
         require_running_graph(baseline)?;
         let specs = finalize_plan(specs.to_vec(), self.config_snapshot().policy.required_gates);
+        let findings = feasibility::check(&specs);
+        let blocking: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.severity == feasibility::Severity::Block)
+            .collect();
+        require(blocking.is_empty(), &feasibility::message(&blocking))?;
         let plan = &baseline[0].plan_id;
         let review = self.review(
             conversation,

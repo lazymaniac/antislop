@@ -49,6 +49,9 @@ impl Core {
         step: &tasks::Unblocking,
         autonomous: bool,
     ) -> Result<String> {
+        if matches!(step.action.as_str(), "add_task" | "split_task") {
+            return self.repair_blocked_graph(conversation, plan, step);
+        }
         let action = unblocking_action(step)?;
         let task = self.task_unscoped(plan, &step.task)?;
         if autonomous {
@@ -68,6 +71,59 @@ impl Core {
             ORCHESTRATOR,
         )?;
         Ok(response.status)
+    }
+
+    fn repair_blocked_graph(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan: &str,
+        step: &tasks::Unblocking,
+    ) -> Result<String> {
+        {
+            let _graph = self.graph_updates.lock().expect("graph update mutex");
+            let _integration = self.integrating.lock().expect("integration mutex");
+            let task = self.task_unscoped(plan, &step.task)?;
+            self.store.assert_task_inputs(&task)?;
+            require(
+                !self
+                    .task_cancels
+                    .lock()
+                    .expect("task cancel mutex")
+                    .contains_key(&task.id),
+                "the blocked task is still running",
+            )?;
+            let report = task.report.as_deref().unwrap_or_default();
+            let blocker = blocker::parse(report)
+                .ok_or_else(|| Error::Invalid("task has no structured blocker".into()))?;
+            require(
+                !blocker.for_user(),
+                &format!(
+                    "Only the user can lift the permission blocker of {}; graph repair is left to the user",
+                    step.task
+                ),
+            )?;
+            match step.action.as_str() {
+                "add_task" => {
+                    let spec = step
+                        .spec
+                        .clone()
+                        .ok_or_else(|| Error::Invalid("add_task needs spec".into()))?;
+                    self.store.insert_unblocker(conversation, &task, spec)?;
+                }
+                "split_task" => {
+                    require(
+                        !task.spec["writes"].as_bool().unwrap_or(false),
+                        "splitting a writer with partial changes is left to the user",
+                    )?;
+                    self.store.insert_parts(conversation, &task, &step.parts)?;
+                }
+                _ => unreachable!(),
+            }
+            self.store.append_event(conversation, None, Some(plan), "task_recovery",
+                &json!({"actor":ORCHESTRATOR,"task":task.id,"action":step.action,"status":status::QUEUED}))?;
+        }
+        self.maybe_continue_plan(conversation, plan)?;
+        Ok(status::QUEUED.into())
     }
 
     fn count_unblocking(&self, conversation: &str, task: &str) -> Result<()> {

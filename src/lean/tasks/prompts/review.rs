@@ -7,6 +7,7 @@ pub fn verifier_prompt(
     changes: Option<&str>,
 ) -> String {
     let task_context = verifier_task_context(task);
+    let blocker = crate::lean::blocker::FORMAT;
     let obligations = obligations_text(&obligations(task));
     let (binding, risks) = verifier_prompt_notes(task);
     format!(
@@ -16,7 +17,7 @@ pub fn verifier_prompt(
          {task_context}\n\n{binding}\n\n\
          Your obligations (the task's risks, the checks of every verification, \
          then those for this kind of work, then the catalog risks of this kind of work):\n{obligations}{risks}\n\n\
-         The worker's report:\n<<<\n{report}\n>>>\n\n{}{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
+         The worker's report:\n<<<\n{report}\n>>>\n\n{}{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}\n\n{blocker}",
         change_note(changes),
     )
 }
@@ -69,6 +70,7 @@ pub fn verifier_turn_prompt(
 }
 
 pub fn verifier_followup(task: &TaskSpec, report: &str, changes: Option<&str>) -> String {
+    let blocker = crate::lean::blocker::FORMAT;
     let binding = if task.writes {
         OPTIONS_VERIFICATION
     } else {
@@ -76,7 +78,7 @@ pub fn verifier_followup(task: &TaskSpec, report: &str, changes: Option<&str>) -
     };
     format!(
         "The worker's updated report:\n<<<\n{report}\n>>>\n\n{}Check it again against \
-         the files. {binding} {REVIEW_RULES} account again for your obligations:\n{}\n\n{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}",
+         the files. {binding} {REVIEW_RULES} account again for your obligations:\n{}\n\n{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}\n\n{blocker}",
         changes
             .map(|text| format!("{text}\n\n"))
             .unwrap_or_default(),

@@ -171,10 +171,14 @@ impl Core {
             self.store.finish_interview(conversation)?;
         }
         if !interviewing && !unblocking.is_empty() {
-            // Supervised: only an answer of the user lets the orchestrator
-            // unblock; the runtime's own report does not.
+            // Structural repairs stay within the accepted task scope and are
+            // validated by the runtime. Retrying ordinary failures still needs
+            // the supervised user's decision.
             let decided = asked.last().is_some_and(|message| message.author == "user");
-            if decided || self.autonomous(conversation)? {
+            let structural = unblocking
+                .iter()
+                .all(|step| matches!(step.action.as_str(), "add_task" | "split_task"));
+            if decided || structural || self.autonomous(conversation)? {
                 self.unblock_by_orchestrator(conversation, &unblocking);
             } else {
                 self.notice(
