@@ -9,7 +9,7 @@ use crate::lean::store::SessionInfo;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
@@ -515,7 +515,7 @@ impl Details {
         if !query.is_empty() {
             out.push((
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(super::theme::ayu::BLUE)
                     .add_modifier(Modifier::BOLD),
                 format!("🔍 Record filter: \"{}\"  (Esc: clear)", query),
             ));
@@ -881,7 +881,7 @@ impl Details {
                     };
                     let mut head = vec![label(&summary)];
                     if !working.is_empty() {
-                        head.push((Style::default().fg(Color::Cyan), working));
+                        head.push((Style::default().fg(super::theme::ayu::BLUE), working));
                     }
                     if stored["verdict"].is_null() && stored["checks"].as_array().is_none_or(Vec::is_empty) {
                         head.push((
@@ -936,7 +936,7 @@ impl Details {
                         for comment in comments {
                             let state = view.comment_state(comment.id);
                             lines.push((
-                                Style::default().fg(Color::Magenta),
+                                Style::default().fg(super::theme::ayu::PURPLE),
                                 format!("    💬 #{} {state}: {}", comment.id, comment.text),
                             ));
                         }
@@ -1282,7 +1282,7 @@ impl Details {
         if !self.query.is_empty() {
             tabs_line.spans.push(Span::styled(
                 format!(" [🔍 \"{}\"]", self.query),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(super::theme::ayu::BLUE),
             ));
         }
         for span in &mut tabs_line.spans {
@@ -1642,7 +1642,7 @@ pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> 
                 Span::styled(
                     format!("[{}]", name(index)),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(super::theme::ayu::YELLOW)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
@@ -1692,7 +1692,7 @@ pub fn format_tabs<'a>(agent_key: &str, active_tab: usize, max_width: usize) -> 
             Span::styled(
                 format!("[{}] ", name(index)),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(super::theme::ayu::YELLOW)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
@@ -1760,12 +1760,12 @@ pub fn check_rows(stored: &Value) -> Vec<CheckRow> {
                 }
             };
             let (mark, style) = match (state, status.as_deref()) {
-                ("checking", _) => ("◐", Style::default().fg(Color::Cyan)),
-                (_, Some("ok")) => ("✓", Style::default().fg(Color::Green)),
-                (_, Some("issue")) => ("✗", Style::default().fg(Color::Red)),
-                (_, Some("blocked")) => ("!", Style::default().fg(Color::Yellow)),
+                ("checking", _) => ("◐", Style::default().fg(super::theme::ayu::BLUE)),
+                (_, Some("ok")) => ("✓", Style::default().fg(super::theme::ayu::GREEN)),
+                (_, Some("issue")) => ("✗", Style::default().fg(super::theme::ayu::RED)),
+                (_, Some("blocked")) => ("!", Style::default().fg(super::theme::ayu::YELLOW)),
                 (_, Some("n/a")) => ("–", dim()),
-                ("unaccounted", _) => ("?", Style::default().fg(Color::Yellow)),
+                ("unaccounted", _) => ("?", Style::default().fg(super::theme::ayu::YELLOW)),
                 _ => ("○", dim()),
             };
             let kind = match id.chars().next() {

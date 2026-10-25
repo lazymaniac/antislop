@@ -3,7 +3,7 @@ use super::view::{Comment, View, clean, dim, truncate};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -203,7 +203,7 @@ impl DiffView {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
                         format!("✗ Error loading changes: {error}"),
-                        Style::default().fg(Color::Red),
+                        Style::default().fg(super::theme::ayu::RED),
                     )),
                     body,
                 );
@@ -267,7 +267,7 @@ impl DiffView {
                     }
                 ),
                 if comment.status == "open" {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(super::theme::ayu::BLUE)
                 } else {
                     dim()
                 },
@@ -306,9 +306,9 @@ impl DiffView {
             let number =
                 |n: Option<u32>| n.map_or_else(|| "     ".to_owned(), |n| format!("{n:>5}"));
             let (sign, style) = match line.kind.as_str() {
-                "add" => ("+", Style::default().fg(Color::Green)),
-                "del" => ("-", Style::default().fg(Color::Red)),
-                "hunk" => ("", Style::default().fg(Color::Cyan)),
+                "add" => ("+", Style::default().fg(super::theme::ayu::GREEN)),
+                "del" => ("-", Style::default().fg(super::theme::ayu::RED)),
+                "hunk" => ("", Style::default().fg(super::theme::ayu::BLUE)),
                 _ => (" ", Style::default()),
             };
             let text = if line.kind == "hunk" {
@@ -451,7 +451,7 @@ fn draw_files(
         Block::default()
             .borders(Borders::ALL)
             .border_style(if focused {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(super::theme::ayu::BLUE)
             } else {
                 dim()
             })
@@ -471,10 +471,10 @@ fn draw_files(
         .take(height)
         .map(|(index, file)| {
             let (mark, color) = match file.status.as_str() {
-                "added" => ("A", Color::Green),
-                "deleted" => ("D", Color::Red),
-                "renamed" => ("R", Color::Yellow),
-                _ => ("M", Color::Blue),
+                "added" => ("A", super::theme::ayu::GREEN),
+                "deleted" => ("D", super::theme::ayu::RED),
+                "renamed" => ("R", super::theme::ayu::YELLOW),
+                _ => ("M", super::theme::ayu::BLUE),
             };
             let counts = format!(" +{} −{}", file.added, file.removed);
             let room = width.saturating_sub(counts.width() + 2);

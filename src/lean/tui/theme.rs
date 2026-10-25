@@ -145,14 +145,36 @@ pub struct Theme {
     pub ascii: bool,
 }
 
-fn fg(index: u8) -> Style {
-    Style::default().fg(Color::Indexed(index))
+/// The Ayu Dark palette: every colour the TUI paints comes from here.
+pub mod ayu {
+    use ratatui::style::Color;
+
+    pub const BG: Color = Color::Rgb(0x0B, 0x0E, 0x14);
+    pub const PANEL: Color = Color::Rgb(0x0F, 0x13, 0x1A);
+    pub const LINE: Color = Color::Rgb(0x15, 0x1A, 0x23);
+    pub const RAISED: Color = Color::Rgb(0x1B, 0x21, 0x2C);
+    pub const SELECTION: Color = Color::Rgb(0x27, 0x37, 0x47);
+    pub const FG: Color = Color::Rgb(0xBF, 0xBD, 0xB6);
+    pub const TITLE: Color = Color::Rgb(0xE6, 0xE1, 0xCF);
+    pub const DIM: Color = Color::Rgb(0x56, 0x5B, 0x66);
+    pub const FAINT: Color = Color::Rgb(0x3E, 0x44, 0x51);
+    pub const BLUE: Color = Color::Rgb(0x59, 0xC2, 0xFF);
+    pub const GREEN: Color = Color::Rgb(0xAA, 0xD9, 0x4C);
+    pub const YELLOW: Color = Color::Rgb(0xFF, 0xB4, 0x54);
+    pub const ORANGE: Color = Color::Rgb(0xFF, 0x8F, 0x40);
+    pub const RED: Color = Color::Rgb(0xF0, 0x71, 0x78);
+    pub const PURPLE: Color = Color::Rgb(0xD2, 0xA6, 0xFF);
+    pub const CYAN: Color = Color::Rgb(0x95, 0xE6, 0xCB);
+    pub const GOLD: Color = Color::Rgb(0xE6, 0xB4, 0x50);
+    pub const PINK: Color = Color::Rgb(0xF2, 0x96, 0x68);
 }
 
-fn card_style(bg: u8, text: u8) -> Style {
-    Style::default()
-        .bg(Color::Indexed(bg))
-        .fg(Color::Indexed(text))
+fn fg(color: Color) -> Style {
+    Style::default().fg(color)
+}
+
+fn card_style(bg: Color, text: Color) -> Style {
+    Style::default().bg(bg).fg(text)
 }
 
 impl Theme {
@@ -201,21 +223,21 @@ impl Theme {
     pub fn role_accent(&self, key: &str, kind: &str) -> Style {
         let role = key.split_once(':').map_or(key, |(role, _)| role);
         let color = match role {
-            "plan_verifier" | "plan-verifier" => 141,
-            "auditor" => 73,
+            "plan_verifier" | "plan-verifier" => ayu::PURPLE,
+            "auditor" => ayu::CYAN,
             "worker" | "verifier" => {
                 let base = match kind {
-                    "analysis" => 110,
-                    "implementation" => 114,
-                    "static_analysis" => 179,
-                    "testing" => 215,
-                    "integration" => 175,
-                    _ => 109,
+                    "analysis" => ayu::BLUE,
+                    "implementation" => ayu::GREEN,
+                    "static_analysis" => ayu::YELLOW,
+                    "testing" => ayu::ORANGE,
+                    "integration" => ayu::PINK,
+                    _ => ayu::CYAN,
                 };
                 // A verifier shares its worker's hue, dimmed below.
                 base
             }
-            _ => 176,
+            _ => ayu::PURPLE,
         };
         let style = self.pick(fg(color), Style::default());
         if role == "verifier" {
@@ -230,54 +252,54 @@ impl Theme {
     }
 
     pub fn text(&self) -> Style {
-        self.pick(fg(252), Style::default())
+        self.pick(fg(ayu::FG), Style::default())
     }
 
     pub fn dim(&self) -> Style {
-        self.pick(fg(245), Style::default().add_modifier(Modifier::DIM))
+        self.pick(fg(ayu::DIM), Style::default().add_modifier(Modifier::DIM))
     }
 
     pub fn faint(&self) -> Style {
-        self.pick(fg(240), Style::default().add_modifier(Modifier::DIM))
+        self.pick(fg(ayu::FAINT), Style::default().add_modifier(Modifier::DIM))
     }
 
     pub fn accent(&self) -> Style {
-        self.pick(fg(74), Style::default())
+        self.pick(fg(ayu::BLUE), Style::default())
             .add_modifier(Modifier::BOLD)
     }
 
     pub fn title(&self) -> Style {
-        self.pick(fg(255), Style::default())
+        self.pick(fg(ayu::TITLE), Style::default())
             .add_modifier(Modifier::BOLD)
     }
 
     /// Header and footer bars.
     pub fn bar(&self) -> Style {
-        self.pick(card_style(236, 250), Style::default())
+        self.pick(card_style(ayu::LINE, ayu::FG), Style::default())
     }
 
     /// Full-panel overlays (details, palette, confirmation).
     pub fn overlay(&self) -> Style {
-        self.pick(card_style(234, 252), Style::default())
+        self.pick(card_style(ayu::BG, ayu::FG), Style::default())
     }
 
     pub fn card(&self) -> Style {
-        self.pick(card_style(235, 252), Style::default())
+        self.pick(card_style(ayu::PANEL, ayu::FG), Style::default())
     }
 
     /// Floating overlays above the graph.
     pub fn panel(&self) -> Style {
-        self.pick(card_style(236, 252), Style::default())
+        self.pick(card_style(ayu::LINE, ayu::FG), Style::default())
     }
 
     /// The focused card or the active composer.
     pub fn raised(&self) -> Style {
-        self.pick(card_style(237, 254), Style::default())
+        self.pick(card_style(ayu::RAISED, ayu::TITLE), Style::default())
     }
 
     pub fn selected(&self) -> Style {
         self.pick(
-            card_style(24, 255),
+            card_style(ayu::SELECTION, ayu::TITLE),
             Style::default().add_modifier(Modifier::REVERSED),
         )
         .add_modifier(Modifier::BOLD)
@@ -286,23 +308,26 @@ impl Theme {
     /// The primary phase action above the composer: a filled, bold button.
     pub fn button(&self) -> Style {
         self.pick(
-            card_style(30, 255),
+            card_style(ayu::GOLD, ayu::BG),
             Style::default().add_modifier(Modifier::REVERSED),
         )
         .add_modifier(Modifier::BOLD)
     }
 
     pub fn separator(&self, focused: bool) -> Style {
-        self.pick(fg(if focused { 74 } else { 238 }), Style::default())
+        self.pick(
+            fg(if focused { ayu::BLUE } else { ayu::FAINT }),
+            Style::default(),
+        )
     }
 
     pub fn status(&self, status: &str) -> Style {
         let color = match tone(status) {
-            Tone::Active => 75,
-            Tone::Done => 114,
-            Tone::Failed => 203,
-            Tone::Waiting => 179,
-            Tone::Queued => 245,
+            Tone::Active => ayu::BLUE,
+            Tone::Done => ayu::GREEN,
+            Tone::Failed => ayu::RED,
+            Tone::Waiting => ayu::YELLOW,
+            Tone::Queued => ayu::DIM,
         };
         self.pick(fg(color), Style::default())
     }
@@ -329,30 +354,53 @@ impl Theme {
     /// A stable color for a message sender or recipient.
     pub fn person(&self, name: &str) -> Style {
         let color = match name {
-            "user" | "You" => 74,
-            "orchestrator" => 176,
-            "*" => 179,
-            _ => 110,
+            "user" | "You" => ayu::BLUE,
+            "orchestrator" => ayu::PURPLE,
+            "*" => ayu::YELLOW,
+            _ => ayu::CYAN,
         };
         self.pick(fg(color), Style::default())
     }
 
     pub fn edge(&self, kind: &str) -> Style {
         let color = match kind {
-            "verifies" | "verified by" => 114,
-            "depends_on" | "depends on" => 179,
-            "communicates_with" | "communicates with" => 141,
-            _ => 247,
+            "verifies" | "verified by" => ayu::GREEN,
+            "depends_on" | "depends on" => ayu::YELLOW,
+            "communicates_with" | "communicates with" => ayu::PURPLE,
+            _ => ayu::DIM,
         };
         self.pick(fg(color), Style::default())
     }
 
+    pub fn ok(&self) -> Style {
+        self.pick(fg(ayu::GREEN), Style::default())
+    }
+
+    pub fn info(&self) -> Style {
+        self.pick(fg(ayu::CYAN), Style::default())
+    }
+
+    pub fn warn(&self) -> Style {
+        self.pick(fg(ayu::YELLOW), Style::default())
+    }
+
+    pub fn err(&self) -> Style {
+        self.pick(fg(ayu::RED), Style::default())
+    }
+
+    pub fn purple(&self) -> Style {
+        self.pick(fg(ayu::PURPLE), Style::default())
+    }
+
     pub fn warning(&self) -> Style {
-        self.pick(fg(179), Style::default().add_modifier(Modifier::BOLD))
+        self.pick(
+            fg(ayu::YELLOW),
+            Style::default().add_modifier(Modifier::BOLD),
+        )
     }
 
     pub fn error(&self) -> Style {
-        self.pick(fg(203), Style::default().add_modifier(Modifier::BOLD))
+        self.pick(fg(ayu::RED), Style::default().add_modifier(Modifier::BOLD))
     }
 
     /// Removes control sequences and, in ASCII mode, replaces non-ASCII graphemes.

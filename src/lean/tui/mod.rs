@@ -4259,7 +4259,7 @@ impl App {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan))
+                        .border_style(Style::default().fg(theme::ayu::BLUE))
                         .title(if let Some(rest) = editor.target.strip_prefix("unblock:") {
                             let task = rest.rsplit(':').next().unwrap_or_default();
                             let action = rest.split(':').next().unwrap_or_default();
@@ -4340,19 +4340,19 @@ impl App {
                         Span::styled(
                             " Confirmation: ",
                             Style::default()
-                                .fg(Color::Yellow)
+                                .fg(theme::ayu::YELLOW)
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::raw(&conf.title),
                     ]),
                     Line::from(vec![Span::styled(
                         format!(" Scope: {}", conf.scope_hash),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme::ayu::DIM),
                     )]),
                     Line::from(vec![Span::styled(
                         " [Enter / y] Confirm   [Esc / n] Reject",
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme::ayu::BLUE)
                             .add_modifier(Modifier::BOLD),
                     )]),
                 ];
@@ -4360,7 +4360,7 @@ impl App {
                     Paragraph::new(lines).block(
                         Block::default()
                             .borders(Borders::ALL)
-                            .border_style(Style::default().fg(Color::Yellow))
+                            .border_style(Style::default().fg(theme::ayu::YELLOW))
                             .title(" Confirmation required "),
                     ),
                     box_area,
@@ -4383,14 +4383,14 @@ impl App {
                 Line::styled(
                     truncate("Open this directory as a project?", inner),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme::ayu::YELLOW)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Line::raw(""),
                 Line::styled(
                     truncate(&path.display().to_string(), inner),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme::ayu::BLUE)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Line::raw(""),
@@ -4404,14 +4404,14 @@ impl App {
                 Line::raw(""),
                 Line::styled(
                     truncate("[Enter / y] Trust and open   [Esc / n] Cancel", inner),
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme::ayu::GREEN),
                 ),
             ];
             frame.render_widget(
                 Paragraph::new(lines).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow))
+                        .border_style(Style::default().fg(theme::ayu::YELLOW))
                         .title(" trust ")
                         .padding(ratatui::widgets::Padding::horizontal(1)),
                 ),
@@ -4437,14 +4437,14 @@ impl App {
                 Line::from(vec![Span::styled(
                     truncate("Do you trust the contents of this directory?", inner_w),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme::ayu::YELLOW)
                         .add_modifier(Modifier::BOLD),
                 )]),
                 Line::raw(""),
                 Line::from(vec![Span::styled(
                     format!("  {}", truncate(dir, inner_w.saturating_sub(2))),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme::ayu::BLUE)
                         .add_modifier(Modifier::BOLD),
                 )]),
                 Line::raw(""),
@@ -4462,7 +4462,7 @@ impl App {
                         inner_w,
                     ),
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(theme::ayu::GREEN)
                         .add_modifier(Modifier::BOLD),
                 )]),
             ];
@@ -4470,7 +4470,7 @@ impl App {
                 Paragraph::new(lines).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow))
+                        .border_style(Style::default().fg(theme::ayu::YELLOW))
                         .title(" Workspace trust required "),
                 ),
                 box_area,
@@ -5006,7 +5006,7 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(if focused {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(theme::ayu::BLUE)
             } else {
                 dim()
             })
@@ -5129,7 +5129,7 @@ impl App {
                 Paragraph::new(lines).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow))
+                        .border_style(Style::default().fg(theme::ayu::YELLOW))
                         .title(" now ")
                         .padding(ratatui::widgets::Padding::horizontal(1)),
                 ),
@@ -5460,10 +5460,54 @@ pub fn in_ascii(buffer: &mut ratatui::buffer::Buffer) {
 /// Drops every color; what was dim stays dim, selection is reversed anyway.
 pub fn without_color(buffer: &mut ratatui::buffer::Buffer) {
     for cell in &mut buffer.content {
-        if cell.fg == Color::DarkGray {
+        if cell.fg == theme::ayu::DIM || cell.fg == theme::ayu::FAINT {
             cell.modifier.insert(Modifier::DIM);
         }
         cell.set_fg(Color::Reset).set_bg(Color::Reset);
+    }
+}
+
+/// Whether the terminal advertises 24-bit color; `ANTISLOP_TRUECOLOR=1` forces it.
+pub fn truecolor_terminal() -> bool {
+    let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    set("ANTISLOP_TRUECOLOR")
+        || std::env::var("COLORTERM")
+            .is_ok_and(|value| matches!(value.as_str(), "truecolor" | "24bit"))
+}
+
+/// The xterm-256 color closest to an RGB value: the 6x6x6 cube or the gray ramp.
+pub fn nearest_indexed(r: u8, g: u8, b: u8) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let level = |v: u8| {
+        (0..6)
+            .min_by_key(|&i| (i32::from(LEVELS[i]) - i32::from(v)).abs())
+            .unwrap_or(0)
+    };
+    let distance = |a: (u8, u8, u8)| {
+        let d = |x: u8, y: u8| (i32::from(x) - i32::from(y)).pow(2);
+        d(a.0, r) + d(a.1, g) + d(a.2, b)
+    };
+    let (ri, gi, bi) = (level(r), level(g), level(b));
+    let cube = (LEVELS[ri], LEVELS[gi], LEVELS[bi]);
+    let average = ((u32::from(r) + u32::from(g) + u32::from(b)) / 3) as i32;
+    let step = ((average - 8 + 5) / 10).clamp(0, 23);
+    let gray = (8 + 10 * step) as u8;
+    if distance((gray, gray, gray)) < distance(cube) {
+        232 + step as u8
+    } else {
+        (16 + 36 * ri + 6 * gi + bi) as u8
+    }
+}
+
+/// Maps every RGB color to its nearest xterm-256 index for terminals without true color.
+pub fn to_indexed_colors(buffer: &mut ratatui::buffer::Buffer) {
+    let map = |color: Color| match color {
+        Color::Rgb(r, g, b) => Color::Indexed(nearest_indexed(r, g, b)),
+        other => other,
+    };
+    for cell in &mut buffer.content {
+        cell.fg = map(cell.fg);
+        cell.bg = map(cell.bg);
     }
 }
 
@@ -5626,6 +5670,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
     // https://no-color.org: nothing depends on color alone (design §17).
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     let ascii = ascii_terminal();
+    let truecolor = truecolor_terminal();
     let mut terminal = ratatui::init();
     let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableMouseCapture);
     let result = (|| -> Result<()> {
@@ -5638,9 +5683,20 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
                 plan.tick = app.tick;
             }
             terminal.draw(|frame| {
+                if !no_color {
+                    let area = frame.area();
+                    frame.render_widget(
+                        ratatui::widgets::Block::default()
+                            .style(Style::default().bg(theme::ayu::BG).fg(theme::ayu::FG)),
+                        area,
+                    );
+                }
                 app.draw(frame);
                 if no_color {
                     without_color(frame.buffer_mut());
+                }
+                if !no_color && !truecolor {
+                    to_indexed_colors(frame.buffer_mut());
                 }
                 if ascii {
                     in_ascii(frame.buffer_mut());
@@ -5700,6 +5756,25 @@ pub mod tests {
         in_ascii(&mut buffer);
         let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
         assert_eq!(text, "+-+ aebc ?  ");
+    }
+
+    #[test]
+    fn rgb_falls_back_to_the_nearest_256_color() {
+        assert_eq!(nearest_indexed(0, 0, 0), 16);
+        assert_eq!(nearest_indexed(255, 255, 255), 231);
+        assert_eq!(nearest_indexed(0xFF, 0x00, 0x00), 196);
+        // Ayu's near-black background lands on the gray ramp, not the cube.
+        assert!((232..=235).contains(&nearest_indexed(0x0B, 0x0E, 0x14)));
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+        buffer.set_string(
+            0,
+            0,
+            "a",
+            Style::default().fg(Color::Rgb(255, 0, 0)).bg(Color::Red),
+        );
+        to_indexed_colors(&mut buffer);
+        assert_eq!(buffer.content[0].fg, Color::Indexed(196));
+        assert_eq!(buffer.content[0].bg, Color::Red);
     }
 
     #[test]

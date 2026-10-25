@@ -171,7 +171,7 @@ impl Core {
             self.store.finish_interview(conversation)?;
         }
         if !interviewing && !unblocking.is_empty() {
-            // Structural repairs stay within the accepted task scope and are
+            // Structural repairs preserve the accepted requirements and are
             // validated by the runtime. Retrying ordinary failures still needs
             // the supervised user's decision.
             let decided = asked.last().is_some_and(|message| message.author == "user");

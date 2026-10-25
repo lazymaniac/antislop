@@ -7,7 +7,7 @@ use super::view::{Comment, TaskRow, View, clean, status_label};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -408,7 +408,7 @@ impl PlanView {
         let comment_style = |c: &Comment| {
             if c.status == "open" {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(super::theme::ayu::YELLOW)
                     .add_modifier(Modifier::BOLD)
             } else {
                 theme.dim()
@@ -442,7 +442,7 @@ impl PlanView {
             let start = rows.len();
             let mut text_style = if dline.is_heading {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(super::theme::ayu::BLUE)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -450,11 +450,11 @@ impl PlanView {
             match dline.state {
                 SectionState::Done => {
                     text_style = text_style
-                        .fg(Color::Green)
+                        .fg(super::theme::ayu::GREEN)
                         .add_modifier(Modifier::UNDERLINED);
                 }
-                SectionState::Problem => text_style = text_style.fg(Color::Red),
-                SectionState::Working => text_style = text_style.fg(Color::Cyan),
+                SectionState::Problem => text_style = text_style.fg(super::theme::ayu::RED),
+                SectionState::Working => text_style = text_style.fg(super::theme::ayu::BLUE),
                 SectionState::Open => {}
             }
             if selected {
@@ -462,7 +462,7 @@ impl PlanView {
             }
             let gutter_style = if selected {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(super::theme::ayu::YELLOW)
                     .add_modifier(Modifier::BOLD)
             } else {
                 theme.dim()
@@ -482,16 +482,17 @@ impl PlanView {
                 ];
                 if n + 1 == count && dline.is_heading {
                     let badge = match dline.state {
-                        SectionState::Done => {
-                            Some((format!(" {} COMPLETED", theme.glyphs().done), Color::Green))
-                        }
+                        SectionState::Done => Some((
+                            format!(" {} COMPLETED", theme.glyphs().done),
+                            super::theme::ayu::GREEN,
+                        )),
                         SectionState::Working => Some((
                             format!(" {} IN PROGRESS", theme.spinner(self.tick)),
-                            Color::Cyan,
+                            super::theme::ayu::BLUE,
                         )),
                         SectionState::Problem => Some((
                             format!(" {} NEEDS ATTENTION", theme.glyphs().problem),
-                            Color::Red,
+                            super::theme::ayu::RED,
                         )),
                         SectionState::Open => None,
                     };
@@ -529,7 +530,7 @@ impl PlanView {
         let title = format!(" Plan Document ({}) ", self.plan_id);
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(super::theme::ayu::BLUE))
             .title(title);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -575,7 +576,7 @@ impl PlanView {
                 notes.push(Span::styled(
                     format!(" ✎ {drafts} draft comment(s) "),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(super::theme::ayu::BLUE)
                         .add_modifier(Modifier::BOLD),
                 ));
                 notes.push(Span::styled("— R sends them for review · ", theme.dim()));
@@ -584,7 +585,7 @@ impl PlanView {
                 notes.push(Span::styled(
                     format!(" ⚠ {sent} unresolved comment(s) on this plan "),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(super::theme::ayu::YELLOW)
                         .add_modifier(Modifier::BOLD),
                 ));
                 notes.push(Span::styled("— r resolve · o retry/reopen", theme.dim()));
@@ -611,7 +612,7 @@ impl PlanView {
                         view.tasks.len()
                     ),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(super::theme::ayu::BLUE)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
@@ -729,7 +730,7 @@ impl PlanView {
             let b_block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(if active {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(super::theme::ayu::BLUE)
                 } else {
                     theme.dim()
                 });

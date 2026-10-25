@@ -142,13 +142,13 @@ enum Kind {
 impl Kind {
     fn style(self) -> Style {
         match self {
-            Self::Depends => Style::default().fg(Color::Blue),
-            Self::Verifies => Style::default().fg(Color::Yellow),
+            Self::Depends => Style::default().fg(super::theme::ayu::BLUE),
+            Self::Verifies => Style::default().fg(super::theme::ayu::YELLOW),
             Self::Mail { recent: true } => Style::default()
-                .fg(Color::Magenta)
+                .fg(super::theme::ayu::PURPLE)
                 .add_modifier(Modifier::BOLD),
-            Self::Mail { recent: false } => Style::default().fg(Color::Magenta),
-            Self::Supervises => Style::default().fg(Color::DarkGray),
+            Self::Mail { recent: false } => Style::default().fg(super::theme::ayu::PURPLE),
+            Self::Supervises => Style::default().fg(super::theme::ayu::DIM),
         }
     }
 }
@@ -1346,12 +1346,12 @@ fn effect_lines(view: &View, key: &str, width: usize, max: usize) -> Vec<String>
 
 pub fn mark(status: &str) -> (&'static str, Color) {
     match status {
-        "approved" => ("✓", Color::Green),
-        "needs_user" | "waiting" => ("!", Color::Yellow),
-        "failed" => ("✗", Color::Red),
-        "skipped" | "cancelled" | "revised" => ("–", Color::DarkGray),
-        "working" | "verifying" => ("●", Color::Cyan),
-        _ => ("○", Color::Gray),
+        "approved" => ("✓", super::theme::ayu::GREEN),
+        "needs_user" | "waiting" => ("!", super::theme::ayu::YELLOW),
+        "failed" => ("✗", super::theme::ayu::RED),
+        "skipped" | "cancelled" | "revised" => ("–", super::theme::ayu::DIM),
+        "working" | "verifying" => ("●", super::theme::ayu::BLUE),
+        _ => ("○", super::theme::ayu::DIM),
     }
 }
 
@@ -2007,7 +2007,7 @@ mod tests {
             vec![(36, 25), (22, 16)],
             vec![(29, 21), (29, 16), (22, 16)],
         ];
-        let style = ratatui::style::Style::default().fg(ratatui::style::Color::Cyan);
+        let style = ratatui::style::Style::default().fg(crate::lean::tui::theme::ayu::BLUE);
         let mut full = super::Canvas::new_window(0, 0, 80, 60);
         let mut clipped = super::Canvas::new_window(20, 15, 12, 7);
         for route in &routes {

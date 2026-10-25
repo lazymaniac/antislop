@@ -148,7 +148,7 @@ pub fn check_unblocker(
         "the blocker was already tried twice; the user decides",
     )?;
     dependencies(spec, blocked, plan)?;
-    scope(spec, blocked)?;
+    requirements(spec, blocked)?;
     let found = feasibility::check(std::slice::from_ref(spec));
     let blocking = found
         .iter()
@@ -182,16 +182,9 @@ fn dependencies(spec: &TaskSpec, blocked: &TaskSpec, plan: &[(TaskSpec, String)]
 }
 
 /// The requirements a clearing task serves are the blocked task's own.
-fn scope(spec: &TaskSpec, blocked: &TaskSpec) -> Result<()> {
-    for path in &spec.scope {
-        require(
-            crate::lean::split::contained(path, &blocked.scope),
-            &format!(
-                "unblocker scope {path} is outside the scope of {}",
-                blocked.id
-            ),
-        )?;
-    }
+fn requirements(spec: &TaskSpec, blocked: &TaskSpec) -> Result<()> {
+    // Read-only discovery may need paths outside the blocked task's scope.
+    // Keep its purpose bounded by the same requirements and criteria instead.
     for (what, mine, theirs) in [
         (
             "requirement",
@@ -204,7 +197,7 @@ fn scope(spec: &TaskSpec, blocked: &TaskSpec) -> Result<()> {
         require(
             outside.is_none(),
             &format!(
-                "{what} {} is not one of {}'s; clearing a blocker may not widen the scope",
+                "{what} {} is not one of {}'s; clearing a blocker may not widen the requirements",
                 outside.map(String::as_str).unwrap_or_default(),
                 blocked.id
             ),
@@ -298,6 +291,24 @@ mod tests {
     }
 
     #[test]
+    fn missing_input_can_be_found_outside_the_blocked_tasks_paths() {
+        let base = plan(&[]);
+        for paths in [
+            vec!["."],
+            vec![".git", "docs"],
+            vec!["../related-project"],
+            vec![],
+        ] {
+            let mut spec = clearing("fix", &["t1"]);
+            spec.scope = paths.into_iter().map(str::to_owned).collect();
+            check_unblocker(&spec, &base[1].0, &base).unwrap();
+
+            spec.criterion_ids.push("unrelated-criterion".into());
+            rejects(&spec, &base, "may not widen the requirements");
+        }
+    }
+
+    #[test]
     fn the_rules_that_keep_unblocking_bounded() {
         let base = plan(&[]);
         let mut writer = clearing("fix", &["t1"]);
@@ -316,7 +327,7 @@ mod tests {
         rejects(&clearing("t1", &[]), &base, "repeats");
         let mut wider = clearing("fix", &[]);
         wider.requirement_ids.push("other".into());
-        rejects(&wider, &base, "may not widen the scope");
+        rejects(&wider, &base, "may not widen the requirements");
         let mut elsewhere = clearing("fix", &[]);
         elsewhere.resolves = Some("t1".into());
         rejects(&elsewhere, &base, "must name the blocked task");

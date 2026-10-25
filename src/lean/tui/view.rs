@@ -6,7 +6,7 @@ use super::super::tasks::{
     resets_card, status,
 };
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use serde_json::Value;
@@ -314,7 +314,7 @@ impl Stage {
 }
 
 pub fn dim() -> Style {
-    Style::default().fg(Color::DarkGray)
+    Style::default().fg(super::theme::ayu::DIM)
 }
 
 impl View {
@@ -708,7 +708,7 @@ impl View {
                     self.cards.push(TranscriptCard::Message(msg));
                     self.push(
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(super::theme::ayu::BLUE)
                             .add_modifier(Modifier::BOLD),
                         "You",
                     );
@@ -745,7 +745,7 @@ impl View {
                     self.cards.push(TranscriptCard::Message(msg));
                     self.push(
                         Style::default()
-                            .fg(Color::Green)
+                            .fg(super::theme::ayu::GREEN)
                             .add_modifier(Modifier::BOLD),
                         display_author,
                     );
@@ -825,7 +825,7 @@ impl View {
                     if failed {
                         let line =
                             format!("✗ orchestrator: {} — {}", text("status"), text("error"));
-                        self.push(Style::default().fg(Color::Red), line.clone());
+                        self.push(Style::default().fg(super::theme::ayu::RED), line.clone());
                         self.system_card("Orchestrator", line, super::theme::Tone::Failed);
                     }
                 } else if let Some(row) = self.row_of(&key) {
@@ -1024,7 +1024,7 @@ impl View {
                 self.links.clear();
                 self.mailbox.clear();
                 for line in super::super::cli::review_lines("plan verifier", &payload["review"]) {
-                    self.push(Style::default().fg(Color::Yellow), line);
+                    self.push(Style::default().fg(super::theme::ayu::YELLOW), line);
                 }
                 let review = &payload["review"];
                 if !review.is_null() {
@@ -1049,7 +1049,7 @@ impl View {
                     tasks: self.tasks.len(),
                     text: plan_text.clone(),
                 });
-                self.push(Style::default().fg(Color::Yellow), plan_text);
+                self.push(Style::default().fg(super::theme::ayu::YELLOW), plan_text);
                 self.push(Style::default(), "");
             }
             "plan_rejected" => {
@@ -1066,7 +1066,7 @@ impl View {
                     tone: super::theme::Tone::Failed,
                 });
                 self.push(
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(super::theme::ayu::RED),
                     format!("✗ plan rejected: {reason}"),
                 );
             }
@@ -1089,7 +1089,7 @@ impl View {
                     text: message.clone(),
                     tone: super::theme::Tone::Failed,
                 });
-                self.push(Style::default().fg(Color::Red), message);
+                self.push(Style::default().fg(super::theme::ayu::RED), message);
             }
             "plan_invalid" => {
                 let err = text("error");
@@ -1111,7 +1111,7 @@ impl View {
                     tone: super::theme::Tone::Failed,
                 });
                 self.push(
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(super::theme::ayu::RED),
                     format!("✗ plan rejected: {err}"),
                 );
             }
@@ -1191,7 +1191,7 @@ impl View {
                             row.title,
                             status_label(&row.status)
                         );
-                        self.push(Style::default().fg(Color::Yellow), line);
+                        self.push(Style::default().fg(super::theme::ayu::YELLOW), line);
                     }
                     let (title, was, was_round, status, round) = progress;
                     self.report_progress(&id, &title, (&was, was_round), (&status, round), reason);
@@ -1221,7 +1221,7 @@ impl View {
                     text: txt.into(),
                     tone: super::theme::Tone::Waiting,
                 });
-                self.push(Style::default().fg(Color::Yellow), txt);
+                self.push(Style::default().fg(super::theme::ayu::YELLOW), txt);
             }
             "notice" => {
                 let txt = text("text");
@@ -1231,7 +1231,10 @@ impl View {
                     text: txt.clone(),
                     tone: super::theme::Tone::Waiting,
                 });
-                self.push(Style::default().fg(Color::Yellow), format!("⚠ {txt}"));
+                self.push(
+                    Style::default().fg(super::theme::ayu::YELLOW),
+                    format!("⚠ {txt}"),
+                );
             }
             "mode" => {
                 self.autonomous = Some(payload["autonomous"] == true);
@@ -1240,7 +1243,7 @@ impl View {
                 } else {
                     "⚙ supervised mode: next plans wait for approval (Ctrl+A)"
                 };
-                self.push(Style::default().fg(Color::Yellow), text);
+                self.push(Style::default().fg(super::theme::ayu::YELLOW), text);
                 self.system_card("Mode", text.into(), super::theme::Tone::Queued);
             }
             "check" => {
@@ -1280,7 +1283,7 @@ impl View {
                     if approved {
                         dim()
                     } else {
-                        Style::default().fg(Color::Yellow)
+                        Style::default().fg(super::theme::ayu::YELLOW)
                     },
                     format!("· {title}: {detail}"),
                 );
@@ -1385,7 +1388,7 @@ impl View {
                     text("text")
                 );
                 self.push(
-                    Style::default().fg(Color::Magenta),
+                    Style::default().fg(super::theme::ayu::PURPLE),
                     format!("✉ {line} · waiting for recipient's next turn"),
                 );
                 let from = Self::mail_key(&text("sender"));
@@ -1451,7 +1454,7 @@ impl View {
                     }
                 }
                 self.push(
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(super::theme::ayu::RED),
                     format!(
                         "✗ message from {} to {} undeliverable: {}",
                         text("sender"),
@@ -1463,7 +1466,7 @@ impl View {
             "audit" => {
                 let lines = super::super::cli::review_lines("audit", payload);
                 for line in &lines {
-                    self.push(Style::default().fg(Color::Yellow), line.clone());
+                    self.push(Style::default().fg(super::theme::ayu::YELLOW), line.clone());
                 }
                 let tone = if payload["approved"] == true {
                     super::theme::Tone::Done
@@ -1481,7 +1484,7 @@ impl View {
                     let who = format!("code review {task}");
                     let lines = super::super::cli::review_lines(&who, payload);
                     for line in &lines {
-                        self.push(Style::default().fg(Color::Yellow), line.clone());
+                        self.push(Style::default().fg(super::theme::ayu::YELLOW), line.clone());
                     }
                     self.system_card(
                         &format!("Code review {task}"),
@@ -1540,7 +1543,7 @@ impl View {
                     text: comment.text.clone(),
                     status: card_status,
                 });
-                self.push(Style::default().fg(Color::Cyan), line);
+                self.push(Style::default().fg(super::theme::ayu::BLUE), line);
                 self.comments.insert(comment.id, comment);
             }
             _ => {}
@@ -1827,7 +1830,7 @@ pub fn draw_min_term_guard(frame: &mut ratatui::Frame, area: Rect) -> bool {
                 .wrap(ratatui::widgets::Wrap { trim: false })
                 .style(
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(super::theme::ayu::YELLOW)
                         .add_modifier(Modifier::BOLD),
                 ),
             area,
@@ -1904,7 +1907,7 @@ pub fn render_header_with(
     let label_style = theme.text().add_modifier(Modifier::BOLD);
     let secondary = theme.text();
     let active_button = if theme.color {
-        theme.raised().fg(Color::Indexed(215))
+        theme.raised().fg(super::theme::ayu::ORANGE)
     } else {
         theme.raised()
     }
@@ -1971,7 +1974,7 @@ pub fn render_header_with(
     if width >= 40 && !status.trim().is_empty() {
         spans.push(Span::styled(
             format!(" · {} ", clean_line(status)),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(super::theme::ayu::YELLOW),
         ));
     }
     let button = |label: &str, enabled: bool| {

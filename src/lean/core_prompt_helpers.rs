@@ -9,7 +9,7 @@ pub(super) fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
             .is_some_and(|blocker| !blocker.for_user())
     });
     let mut text = if repairable {
-        "The plan needs a structural repair. Resolve the structured blockers with `add_task` or `split_task` in a ```recover block. These actions are checked by the runtime against the accepted scope and dependency graph. Preserve all obligations; do not ask the user to choose retries or more rounds.\n".into()
+        "The plan needs a structural repair. Resolve the structured blockers with `add_task` or `split_task` in a ```recover block. These actions are checked by the runtime against the accepted requirements and dependency graph. Preserve all obligations; do not ask the user to choose retries or more rounds.\n".into()
     } else {
         blocked_intro(autonomous)
     };
@@ -22,6 +22,9 @@ pub(super) fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
 const BLOCKED_INSTRUCTIONS: &str = "\nWays out: `retry_with_guidance` (the message is the hint for the worker; it \
 starts a fresh round with its report and findings), `extend_rounds`. For a structured blocker, \
 use `add_task` with a `spec` supplying the missing input, or `split_task` with 2–8 `parts`. \
+An `add_task` spec must be read-only and serve only the blocked task's requirements and \
+criteria; it may read additional paths needed to find the missing input, within existing \
+permissions. Split parts must stay within the blocked task's file scope. \
 The runtime inserts those tasks before the blocked one, rejects dependencies on it or its \
 descendants, and resumes it only after their verification. Never cancel, skip or approve an \
 unperformed task to bypass a blocker. Preserve every remaining obligation. \

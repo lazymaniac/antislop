@@ -6,7 +6,7 @@ use super::view::{TaskRow, clean, truncate};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -193,7 +193,7 @@ impl Unblock {
         frame.render_widget(Clear, boxed);
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(super::theme::ayu::YELLOW))
             .title(format!(
                 " Task actions {} · {} ",
                 clean(&self.task),
@@ -209,7 +209,7 @@ impl Unblock {
             )),
             Line::from(Span::styled(
                 truncate(&clean(&self.reason).replace('\n', " "), text_width),
-                Style::default().fg(Color::Red),
+                Style::default().fg(super::theme::ayu::RED),
             )),
             Line::raw(""),
         ];
@@ -242,7 +242,7 @@ impl Unblock {
             lines.extend((0..gap).map(|_| Line::raw("")));
             lines.push(Line::from(Span::styled(
                 truncate("↑/↓ choose · Enter or 1-9 do it · Esc back", text_width),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(super::theme::ayu::DIM),
             )));
         }
         frame.render_widget(Paragraph::new(lines), inner);

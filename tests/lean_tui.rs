@@ -1361,7 +1361,12 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
 
     // 6. NO_COLOR preservation of DIM and REVERSED
     let mut buffer_nc = Buffer::empty(Rect::new(0, 0, 3, 1));
-    buffer_nc.set_string(0, 0, "a", Style::default().fg(Color::DarkGray));
+    buffer_nc.set_string(
+        0,
+        0,
+        "a",
+        Style::default().fg(antislop::lean::tui::theme::ayu::DIM),
+    );
     buffer_nc.set_string(1, 0, "b", Style::default().fg(Color::Red).bg(Color::Blue));
     buffer_nc.set_string(2, 0, "c", Style::default().add_modifier(Modifier::REVERSED));
     without_color(&mut buffer_nc);

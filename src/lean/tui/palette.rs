@@ -7,7 +7,7 @@ use super::view::{View, agent_name, dim, truncate};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -350,7 +350,7 @@ impl Picker {
             Paragraph::new(lines).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(super::theme::ayu::BLUE))
                     .title(title),
             ),
             box_area,
@@ -587,7 +587,7 @@ impl Help {
             Paragraph::new(shown_lines).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(super::theme::ayu::BLUE))
                     .title(title),
             ),
             box_area,
