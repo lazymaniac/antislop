@@ -112,6 +112,8 @@ pub fn proposed_run(answer: &str) -> Option<String> {
 }
 
 /// One step of a ```recover block: how the orchestrator unblocks a task.
+/// `clarify_task` uses `message` as the evidence rationale and `spec` as the
+/// proposed contract. Only goal/focus can change, after independent review.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Unblocking {
     pub task: String,

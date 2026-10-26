@@ -55,7 +55,80 @@ fn graph_event(
     Ok(())
 }
 
+fn clarification_count(db: &rusqlite::Connection, task: &str) -> Result<usize> {
+    Ok(db.query_row(
+        "SELECT count(*) FROM events WHERE kind='task_clarified' AND json_extract(payload,'$.task')=?1",
+        [task], |row| row.get::<_, i64>(0).map(|count| count as usize),
+    )?)
+}
+
 impl Store {
+    pub(in crate::lean) fn clarification_count(&self, task: &str) -> Result<usize> {
+        clarification_count(&self.db(), task)
+    }
+
+    /// Preserve old rounds and record both contracts atomically. A new input
+    /// generation prevents an old worker/verifier result from overwriting it.
+    pub(in crate::lean) fn clarify_task(
+        &self,
+        conversation: &str,
+        blocked: &Task,
+        spec: &TaskSpec,
+        review: &crate::lean::tasks::Verdict,
+        reason: &str,
+    ) -> Result<()> {
+        let before: TaskSpec = serde_json::from_value(blocked.spec.clone())?;
+        blocker::check_clarification(&before, spec)?;
+        require(
+            review.approved,
+            "task clarification was not independently approved",
+        )?;
+        require(
+            blocked.status == status::NEEDS_USER,
+            "only a blocked task can be clarified",
+        )?;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        require(
+            clarification_count(&tx, &blocked.id)? < blocker::CLARIFICATIONS,
+            "task was already clarified twice; the user decides",
+        )?;
+        let current: String =
+            tx.query_row("SELECT spec FROM tasks WHERE id=?1", [&blocked.id], |row| {
+                row.get(0)
+            })?;
+        require(
+            serde_json::from_str::<TaskSpec>(&current)? == before,
+            "task changed during clarification review",
+        )?;
+        let changed = tx.execute(
+            "UPDATE tasks SET spec=?2,status='queued',verdict=NULL,feedback=NULL WHERE id=?1 AND conversation_id=?3 AND status='needs_user' AND round=?4 AND spec=?5 AND coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)=?6",
+            params![blocked.id, serde_json::to_string(spec)?, conversation, blocked.round, current, blocked.input_generation],
+        )?;
+        require(changed == 1, "task changed during clarification review")?;
+        let bumped = tx.execute(
+            "UPDATE task_inputs SET generation=generation+1 WHERE task_id=?1",
+            [&blocked.id],
+        )?;
+        require(bumped == 1, "task has no input binding")?;
+        graph_event(
+            &tx,
+            conversation,
+            blocked,
+            &blocked.id,
+            spec,
+            blocked.round,
+            None,
+        )?;
+        let payload = serde_json::json!({"task":blocked.id,"before":before,"after":spec,"review":review,"reason":reason});
+        tx.execute(
+            "INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'task_clarified',?3,?4)",
+            params![conversation, blocked.plan_id, payload.to_string(), now_ms()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// The plan's tasks with their statuses, in order.
     fn plan_with_status(&self, blocked: &Task) -> Result<Vec<(TaskSpec, String)>> {
         self.plan(&blocked.plan_id)?

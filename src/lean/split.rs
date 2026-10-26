@@ -24,15 +24,7 @@ pub fn prepare(
         (2..=MAX_PARTS).contains(&parts.len()),
         &format!("a split makes 2 to {MAX_PARTS} parts"),
     )?;
-    require(
-        blocked.resolves.is_none() && blocked.part_of.is_none(),
-        "this task is itself a part or clears a blocker; cutting it further is left to the user",
-    )?;
-    require(
-        plan.iter()
-            .all(|(other, _)| other.part_of.as_deref() != Some(&blocked.id)),
-        "this task was already cut once; the user decides",
-    )?;
+    check_parent(blocked, plan)?;
     let ready: Vec<TaskSpec> = parts.iter().map(|part| inherit(part, blocked)).collect();
     names(&ready, plan)?;
     for part in &ready {
@@ -55,6 +47,20 @@ pub fn prepare(
         )?;
     }
     Ok(ready)
+}
+
+/// Parent-level eligibility before validating a proposed set of parts.
+pub fn check_parent(blocked: &TaskSpec, plan: &[(TaskSpec, String)]) -> Result<()> {
+    require(
+        blocked.resolves.is_none() && blocked.part_of.is_none(),
+        "this task is itself a part or clears a blocker; cutting it further is left to the user",
+    )?;
+    require(
+        plan.iter()
+            .all(|(other, _)| other.part_of.as_deref() != Some(&blocked.id)),
+        "this task was already cut once; the user decides",
+    )?;
+    Ok(())
 }
 
 /// A part serves the requirements of the task it was cut from, works where

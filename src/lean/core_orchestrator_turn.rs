@@ -175,11 +175,14 @@ impl Core {
             // validated by the runtime. Retrying ordinary failures still needs
             // the supervised user's decision.
             let decided = asked.last().is_some_and(|message| message.author == "user");
-            let structural = unblocking
-                .iter()
-                .all(|step| matches!(step.action.as_str(), "add_task" | "split_task"));
+            let structural = unblocking.iter().all(|step| {
+                matches!(
+                    step.action.as_str(),
+                    "add_task" | "split_task" | "clarify_task"
+                )
+            });
             if decided || structural || self.autonomous(conversation)? {
-                self.unblock_by_orchestrator(conversation, &unblocking);
+                self.unblock_by_orchestrator(conversation, &unblocking, cancel);
             } else {
                 self.notice(
                     conversation,

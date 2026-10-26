@@ -16,6 +16,31 @@ use crate::{Result, require};
 /// third attempt is the user's decision.
 pub const ATTEMPTS: usize = 2;
 
+/// Allow a clearing task to obtain an independently verified baseline, but
+/// stop recursive recovery from growing an unbounded chain of prerequisites.
+pub const MAX_DEPTH: usize = 2;
+
+pub const CLARIFICATIONS: usize = 2;
+
+/// A clarification may correct evidence applicability, but cannot change
+/// ownership, access, dependencies, or the accepted requirement identities.
+/// Semantic preservation also requires an independent review at runtime.
+pub fn check_clarification(before: &TaskSpec, after: &TaskSpec) -> Result<()> {
+    require(!before.writes, "only a read-only task can be clarified")?;
+    require(
+        !after.goal.trim().is_empty() && !after.verifier.focus.trim().is_empty(),
+        "clarification needs a nonempty goal and verifier focus",
+    )?;
+    let mut allowed = before.clone();
+    allowed.goal = after.goal.clone();
+    allowed.verifier.focus = after.verifier.focus.clone();
+    require(
+        allowed == *after,
+        "clarification may change only goal and verifier focus; preserve all other task fields",
+    )?;
+    require(before != after, "clarification does not change the task")
+}
+
 pub const FORMAT: &str = "If the goal cannot be reached because something outside your task is \
      missing, do not repeat the shortfall in prose round after round. End your report with \
      this block, once:\n```blocker\n{\"kind\":\"missing_input|permission|unsatisfiable_requirement|too_large\",\
@@ -26,6 +51,11 @@ pub const FORMAT: &str = "If the goal cannot be reached because something outsid
      the task is more than you can finish well in one piece (say in `suggest` how you would cut \
      it into parts that can be done and checked one by one). \
      The runtime stops the task and hands the problem to the orchestrator, who fixes the plan. \
+     Bind source-backed claims to the source versions actually inspected; distinguish current \
+     observations, dirty working files and historical evidence. Read-only tasks need no writer \
+     base/result commits. Never invent missing historical identities: record the limitation. \
+     If verified current inputs suffice for a new assessment under your goal, use them without \
+     claiming to authenticate old reports. Block only for evidence necessary to your own goal. \
      Do not use it for work you can still do.\n\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,7 +117,9 @@ pub fn worker_note(task: &TaskSpec) -> String {
     let clears = task.resolves.as_deref().map(|blocked| {
         format!(
             "This task exists to clear the blocker of task {blocked}. Its goal states what must be \
-             true afterwards: report the evidence, in a form {blocked}'s worker can rely on.\n\n"
+             true afterwards: report the evidence, in a form {blocked}'s worker can rely on. \
+             Supply inputs for {blocked}; do not require {blocked}'s downstream assessment or \
+             verdict before completing your own input handoff.\n\n"
         )
     });
     format!(
@@ -122,10 +154,7 @@ pub fn check_unblocker(
         spec.resolves.as_deref() == Some(blocked.id.as_str()),
         "`resolves` must name the blocked task",
     )?;
-    require(
-        blocked.resolves.is_none(),
-        "this task itself clears a blocker; a second level is left to the user",
-    )?;
+    check_addition(blocked, plan)?;
     require(
         !spec.writes,
         "a task that clears a blocker works read-only; one that must write is left to the user",
@@ -133,19 +162,6 @@ pub fn check_unblocker(
     require(
         plan.iter().all(|(other, _)| other.id != spec.id),
         &format!("task id {} repeats", spec.id),
-    )?;
-    let attempts: Vec<&str> = plan
-        .iter()
-        .filter(|(other, _)| other.resolves == spec.resolves)
-        .map(|(_, state)| state.as_str())
-        .collect();
-    require(
-        attempts.iter().all(|state| status::finished(state)),
-        "another task is already clearing this blocker",
-    )?;
-    require(
-        attempts.len() < ATTEMPTS,
-        "the blocker was already tried twice; the user decides",
     )?;
     dependencies(spec, blocked, plan)?;
     requirements(spec, blocked)?;
@@ -157,6 +173,47 @@ pub fn check_unblocker(
         blocking.is_none(),
         &blocking.map(|f| f.detail.clone()).unwrap_or_default(),
     )
+}
+
+/// Parent-level eligibility, shared by execution and recovery guidance.
+pub fn check_addition(blocked: &TaskSpec, plan: &[(TaskSpec, String)]) -> Result<()> {
+    let mut ancestor = blocked;
+    let mut depth = 1;
+    let mut seen = BTreeSet::from([blocked.id.as_str()]);
+    while let Some(target) = ancestor.resolves.as_deref() {
+        require(
+            seen.insert(target),
+            "blocker recovery chain contains a cycle",
+        )?;
+        depth += 1;
+        require(
+            depth <= MAX_DEPTH,
+            "blocker recovery depth exceeds two levels; the user decides",
+        )?;
+        ancestor = plan
+            .iter()
+            .find(|(task, _)| task.id == target)
+            .map(|(task, _)| task)
+            .ok_or_else(|| {
+                crate::Error::Invalid(format!(
+                    "blocker target {target} is not a task of this plan"
+                ))
+            })?;
+    }
+    let attempts: Vec<&str> = plan
+        .iter()
+        .filter(|(other, _)| other.resolves.as_deref() == Some(blocked.id.as_str()))
+        .map(|(_, state)| state.as_str())
+        .collect();
+    require(
+        attempts.iter().all(|state| status::finished(state)),
+        "another task is already clearing this blocker",
+    )?;
+    require(
+        attempts.len() < ATTEMPTS,
+        "the blocker was already tried twice; the user decides",
+    )?;
+    Ok(())
 }
 
 /// Dependencies must exist and must not wait on the blocked task.
@@ -347,10 +404,33 @@ mod tests {
     }
 
     #[test]
-    fn a_clearing_task_cannot_itself_be_cleared() {
+    fn a_clearing_task_can_obtain_a_verified_baseline_but_depth_is_bounded() {
         let mut base = plan(&[]);
         base[1].0.resolves = Some("t1".into());
-        rejects(&clearing("fix", &[]), &base, "second level");
+        check_unblocker(&clearing("fix", &[]), &base[1].0, &base).unwrap();
+        let obligations = crate::lean::tasks::obligations(&clearing("fix", &[]));
+        assert!(
+            obligations
+                .iter()
+                .any(|(id, text)| id == "B1" && text.contains("t2"))
+        );
+        base[0].0.resolves = Some("t3".into());
+        rejects(&clearing("fix", &[]), &base, "depth exceeds two levels");
+    }
+
+    #[test]
+    fn nested_recovery_rejects_cycles_missing_targets_and_downstream_inputs() {
+        let mut base = plan(&[]);
+        base[1].0.resolves = Some("t1".into());
+        rejects(
+            &clearing("fix", &["t3"]),
+            &base,
+            "would wait for the task it unblocks",
+        );
+        base[1].0.resolves = Some("t2".into());
+        rejects(&clearing("fix", &[]), &base, "contains a cycle");
+        base[1].0.resolves = Some("missing".into());
+        rejects(&clearing("fix", &[]), &base, "not a task of this plan");
     }
 
     #[test]

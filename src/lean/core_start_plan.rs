@@ -124,7 +124,8 @@ impl Core {
     fn finish_blocked_plan(self: &Arc<Self>, conversation: &str, tasks: &[Task]) {
         let autonomous = self.autonomous(conversation).unwrap_or(false);
         let mut plans = self.plans.lock().expect("plans mutex");
-        let report = blocked_report(tasks, autonomous);
+        let limits = self.recovery_limits(conversation, tasks);
+        let report = blocked_report(tasks, autonomous, &limits);
         let told = self
             .blocked_seen
             .lock()

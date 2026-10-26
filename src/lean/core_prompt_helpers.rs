@@ -1,33 +1,66 @@
 use super::*;
 
 /// What the orchestrator is told when tasks wait for the user.
-pub(super) fn blocked_report(tasks: &[Task], autonomous: bool) -> String {
-    let repairable = tasks.iter().filter(|task| is_blocked(task)).all(|task| {
-        task.report
-            .as_deref()
-            .and_then(blocker::parse)
-            .is_some_and(|blocker| !blocker.for_user())
-    });
-    let mut text = if repairable {
-        "The plan needs a structural repair. Resolve the structured blockers with `add_task` or `split_task` in a ```recover block. These actions are checked by the runtime against the accepted requirements and dependency graph. Preserve all obligations; do not ask the user to choose retries or more rounds.\n".into()
-    } else {
-        blocked_intro(autonomous)
-    };
-    append_blocked_tasks(&mut text, tasks);
+pub(super) fn blocked_report(
+    tasks: &[Task],
+    autonomous: bool,
+    limits: &HashMap<String, super::core_recovery_options::RecoveryLimits>,
+) -> String {
+    let mut text = blocked_intro(autonomous);
+    let plan: Vec<_> = tasks
+        .iter()
+        .filter_map(|task| {
+            serde_json::from_value::<TaskSpec>(task.spec.clone())
+                .ok()
+                .map(|spec| (spec, task.status.clone()))
+        })
+        .collect();
+    for task in tasks.iter().filter(|task| is_blocked(task)) {
+        text.push_str(&blocked_task_line(task));
+        let defaults = super::core_recovery_options::RecoveryLimits::default();
+        let budget = limits.get(&task.id).unwrap_or(&defaults);
+        let additions = plan
+            .iter()
+            .filter(|(spec, _)| spec.resolves.as_deref() == task.spec["id"].as_str())
+            .count();
+        text.push_str(&format!(
+            "\n  Recovery budget used: prerequisite additions {}/{}, clarifications {}/{}, automatic retries {}/3 (retry limit applies only in autonomous mode).",
+            additions, blocker::ATTEMPTS, budget.clarifications, blocker::CLARIFICATIONS, budget.retries
+        ));
+        let options =
+            super::core_recovery_options::recovery_options(task, &plan, autonomous, budget);
+        text.push_str(&super::core_recovery_options::options_text(&options));
+        if let Some(block) = task.report.as_deref().and_then(blocker::parse) {
+            text.push_str(&format!(
+                "\n  Structured blocker: {}",
+                tasks::bound(&block.summary(), 1600)
+            ));
+        }
+    }
     append_pending_tasks(&mut text, tasks);
     text.push_str(BLOCKED_INSTRUCTIONS);
     text
 }
 
 const BLOCKED_INSTRUCTIONS: &str = "\nWays out: `retry_with_guidance` (the message is the hint for the worker; it \
-starts a fresh round with its report and findings), `extend_rounds`. For a structured blocker, \
+starts a fresh round with its report and findings), `extend_rounds`. Select only actions marked available above. For a structured blocker, \
 use `add_task` with a `spec` supplying the missing input, or `split_task` with 2–8 `parts`. \
 An `add_task` spec must be read-only and serve only the blocked task's requirements and \
 criteria; it may read additional paths needed to find the missing input, within existing \
-permissions. Split parts must stay within the blocked task's file scope. \
+permissions. A clearing task may itself receive a read-only prerequisite for an independently \
+verified baseline (at most two recovery levels). Split parts must stay within the blocked task's file scope. \
 The runtime inserts those tasks before the blocked one, rejects dependencies on it or its \
-descendants, and resumes it only after their verification. Never cancel, skip or approve an \
-unperformed task to bypass a blocker. Preserve every remaining obligation. \
+descendants, and resumes it only after their verification. Use `retry_with_guidance` when already verified dependency inputs resolve the missing input. \
+Use `clarify_task` with `message` explaining the evidence and a full replacement `spec` when the \
+goal or verifier focus incorrectly demands unavailable history or downstream work. Only `goal` \
+and `verifier.focus` may change; copy every other field exactly from the current spec. An \
+independent reviewer must approve preservation of every substantive obligation before the task \
+is queued for fresh worker and verifier turns. At most two clarifications per task. \
+Historical evidence that was never recorded cannot be recreated by repeated discovery tasks. \
+Record that limitation and require a NEW assessment on current verified sources; never claim \
+that this authenticates the old report. An input task must not wait for its downstream consumer's \
+assessment or verdict. Never cancel, skip or approve an unperformed task to bypass a blocker. \
+Preserve every remaining obligation. \
 The user can also use /unblock <task>. To unblock steps, end your answer with:\n\
 ```recover\n{\"actions\":[{\"task\":\"t2\",\"action\":\"retry_with_guidance\",\
 \"message\":\"what to do differently\"}]}\n```";
@@ -42,15 +75,10 @@ new plan.\n"
     } else {
         "The plan cannot go on: these steps are blocked and wait for the user. Explain to \
 the user in two or three sentences what is wrong, and ask which way out they want \
-for each step. Do not unblock anything yet and do not propose a new plan: when the \
-user has answered, carry out their decision with a ```recover block (format below).\n"
+for ordinary retries. Available `add_task`, `split_task`, and independently reviewed \
+`clarify_task` repairs may proceed while preserving accepted requirements. Ordinary retries \
+need the user's decision; when answered, carry it out with a ```recover block (format below).\n"
             .into()
-    }
-}
-
-fn append_blocked_tasks(text: &mut String, tasks: &[Task]) {
-    for task in tasks.iter().filter(|task| is_blocked(task)) {
-        text.push_str(&blocked_task_line(task));
     }
 }
 

@@ -26,6 +26,7 @@ impl Core {
         self: &Arc<Self>,
         conversation: &str,
         steps: &[tasks::Unblocking],
+        cancel: &AtomicBool,
     ) {
         let autonomous = self.autonomous(conversation).unwrap_or(false);
         let Some(plan) = self
@@ -37,7 +38,7 @@ impl Core {
             return;
         };
         for step in steps {
-            let result = self.apply_unblocking_step(conversation, &plan, step, autonomous);
+            let result = self.apply_unblocking_step(conversation, &plan, step, autonomous, cancel);
             self.notice(conversation, &unblocking_notice(step, result));
         }
     }
@@ -48,7 +49,12 @@ impl Core {
         plan: &str,
         step: &tasks::Unblocking,
         autonomous: bool,
+        cancel: &AtomicBool,
     ) -> Result<String> {
+        require(!cancel.load(Ordering::SeqCst), "recovery was cancelled")?;
+        if step.action == "clarify_task" {
+            return self.clarify_blocked_task(conversation, plan, step, cancel);
+        }
         if matches!(step.action.as_str(), "add_task" | "split_task") {
             return self.repair_blocked_graph(conversation, plan, step);
         }
