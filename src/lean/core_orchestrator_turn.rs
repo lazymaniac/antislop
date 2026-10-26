@@ -93,7 +93,13 @@ impl Core {
         // after a deferred original comment revision.
         let (answer, addressed) = feedback::split(&answer);
 
-        let (mut text, mut plan) = tasks::parse_plan(&answer);
+        let planning = workflow.as_ref().is_some_and(|w| w.phase == "planning");
+        let (mut text, mut plan) = if planning && !editable_graph && !is_comment {
+            let (text, plan) = tasks::parse_required_plan(&answer);
+            (text, Some(plan))
+        } else {
+            tasks::parse_plan(&answer)
+        };
         if interviewing {
             match interview::parse(&text) {
                 Some(Ok(question)) => {
@@ -120,7 +126,7 @@ impl Core {
             plan = None;
         }
         if workflow.as_ref().is_some_and(|w| w.phase == "planning") {
-            self.store.append_event(conversation, None, None, "planning_progress", &json!({"text": if plan.as_ref().is_some_and(|p| p.is_ok()) { "Plan draft ready" } else { "Working on the plan draft" }}))?;
+            self.store.append_event(conversation, None, None, "planning_progress", &json!({"text": if plan.as_ref().is_some_and(|p| p.is_ok()) { "Plan draft ready" } else { "Plan draft requires correction" }}))?;
         }
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
         if interviewing && !cancel.load(Ordering::SeqCst) && self.autonomous(conversation)? {

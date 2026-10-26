@@ -20,6 +20,14 @@ pub struct Workflow {
 }
 
 impl Store {
+    pub(crate) fn queue_requirements_format_repair(&self, conversation: &str) -> Result<bool> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let queued = repair::queue_requirements_format_repair(&tx, conversation)?;
+        tx.commit()?;
+        Ok(queued)
+    }
+
     pub fn queue_plan_format_repair(
         &self,
         conversation: &str,

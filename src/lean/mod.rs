@@ -243,7 +243,12 @@ struct PlanProposal<'a> {
 #[derive(Clone, Debug)]
 enum SessionPolicy {
     Role,
-    TaskRound { task: String, round: u32 },
+    /// A complete local contract is supplied; no prior provider context is inherited.
+    Independent,
+    TaskRound {
+        task: String,
+        round: u32,
+    },
 }
 
 struct TurnSetup<'a> {

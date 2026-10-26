@@ -127,6 +127,7 @@ impl Core {
                 &spec,
                 &match &session_policy {
                     SessionPolicy::Role => String::new(),
+                    SessionPolicy::Independent => format!("turn:{}", turn.id),
                     SessionPolicy::TaskRound { .. } => format!(
                         "{session_policy:?}:{profile_name}:{}",
                         rounds::spec_signature(&profile_name, profile_effort, &spec)?

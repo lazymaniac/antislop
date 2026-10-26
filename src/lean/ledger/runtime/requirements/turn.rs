@@ -82,7 +82,7 @@ impl Core {
             WorkKind::Requirements
         };
         Ok(TurnSetup {
-            session_policy: crate::lean::SessionPolicy::Role,
+            session_policy: crate::lean::SessionPolicy::Independent,
             conversation,
             plan_id: None,
             role: role.into(),

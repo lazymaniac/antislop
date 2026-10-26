@@ -35,6 +35,8 @@ const IDLE: Duration = Duration::from_secs(10 * 60);
 /// How long the CLI must stay silent before a prompt is typed, once it has
 /// connected to the gateway: it may still be drawing its interface.
 const SETTLE: Duration = Duration::from_millis(400);
+/// UI animation must not block a CLI whose MCP tools are already available.
+const SETTLE_LIMIT: Duration = Duration::from_secs(2);
 /// How long a starting CLI may take to connect to the gateway.
 const READY_LIMIT: Duration = Duration::from_secs(60);
 const SCREEN_LINES: usize = 12;
@@ -325,13 +327,12 @@ impl Session {
         Ok(())
     }
 
-    /// Waits until the CLI is up (it has asked the gateway for its tools) and
-    /// has stopped drawing, so typed input is neither lost nor too early. A CLI
-    /// stuck before that point (a trust question, a login) is reported with
-    /// what its terminal shows.
+    /// Require MCP tool discovery, then briefly let startup drawing settle.
+    /// Output silence is a courtesy, not a readiness signal: interactive CLIs
+    /// may redraw a spinner continuously, including between completed turns.
     fn wait_ready(&self, cancel: &AtomicBool) -> Result<()> {
         let limit = Instant::now() + READY_LIMIT;
-        while !self.gateway.connected() || terminal::quiet_for(&self.screen) < SETTLE {
+        while !self.gateway.connected() {
             if cancel.load(Ordering::SeqCst) {
                 return Err(invalid(mcp::CANCELLED));
             }
@@ -346,7 +347,17 @@ impl Session {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        Ok(())
+        let settle_until = Instant::now() + SETTLE_LIMIT;
+        loop {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(invalid(mcp::CANCELLED));
+            }
+            self.check_alive()?;
+            if terminal::quiet_for(&self.screen) >= SETTLE || Instant::now() >= settle_until {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Runs one turn: types the prompt into the CLI and waits for it to end
@@ -596,6 +607,55 @@ print(json.dumps({"type": "text", "part": {"text": "opencode answer"}}))
         // Another live session in the same directory is not handed the same one.
         assert_eq!(session.identity().as_deref(), Some("ses_found"));
         assert_eq!(core.native.claimed(), ["ses_found"]);
+    }
+
+    #[test]
+    fn continuous_terminal_redraw_does_not_block_connected_first_or_followup_turns() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let core = core(dir.path());
+        let binary = opencode(dir.path());
+        let shim_path = binary.with_extension("shim.py");
+        let shim = std::fs::read_to_string(&shim_path).unwrap();
+        let shim = shim.replacen(
+            "    buffer = b\"\"\n",
+            "    import threading, time\n    def animate():\n        while True:\n            sys.stdout.write('\\rWorking')\n            sys.stdout.flush()\n            time.sleep(0.05)\n    threading.Thread(target=animate, daemon=True).start()\n    buffer = b\"\"\n",
+            1,
+        );
+        assert!(shim.contains("def animate():"));
+        std::fs::write(shim_path, shim).unwrap();
+        let spec = agent::Spec {
+            provider: crate::config::ProviderKind::Opencode,
+            binary,
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: dir.path().into(),
+            add_dirs: vec![],
+            access: agent::Access::ReadOnly,
+            resume: None,
+        };
+        let session = core
+            .native
+            .prepare_scoped(&core, "c", "orchestrator", &spec, "")
+            .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = session.clone();
+        std::thread::spawn(move || {
+            let outcomes = ["first", "followup"]
+                .map(|turn| worker.run(&core.native, turn, "hello", &worker_cancel));
+            let _ = send.send(outcomes);
+        });
+        let result = receive.recv_timeout(Duration::from_secs(15));
+        if result.is_err() {
+            cancel.store(true, Ordering::SeqCst);
+            let _ = receive.recv_timeout(Duration::from_secs(5));
+        }
+        for outcome in result.expect("terminal animations must not block a connected CLI") {
+            assert_eq!(outcome.unwrap().text, "opencode answer");
+        }
+        assert!(session.gateway.connected());
     }
 
     #[test]

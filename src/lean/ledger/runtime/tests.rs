@@ -76,6 +76,7 @@ if prompt.startswith('Independently compare'):
     answer='```verdict\n'+json.dumps({'approved':not os.path.exists('reject-review'),'findings':[{'issue':'missing qualifier'}] if os.path.exists('reject-review') else []})+'\n```'
 else:
     assert 'parent references another requirement' in prompt
+    assert 'ORCHESTRATOR_ROUTE_ONLY' not in prompt
     n=int(open('attempts').read()) if os.path.exists('attempts') else 0
     open('attempts','w').write(str(n+1))
     if n == 1:
@@ -124,6 +125,9 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         core.store
             .add_message(&conversation, "user", "Interview answer (focus)\nKeep")
             .unwrap();
+        // Orchestration routing text must never become analyst instructions.
+        core.store.add_message(&conversation, "requirements-approval",
+                "ORCHESTRATOR_ROUTE_ONLY: Return the complete task plan; do not emit a ledger block.").unwrap();
         let result = core.ensure_requirements(&conversation, &AtomicBool::new(false));
         assert!(
             dir.path().join("attempts").exists(),
@@ -152,6 +156,12 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                     .unwrap(),
                 1
             );
+            let findings = core
+                .store
+                .requirements_review_findings(&conversation, &run.id)
+                .unwrap();
+            let findings: serde_json::Value = serde_json::from_str(&findings).unwrap();
+            assert_eq!(findings[0]["issue"], "missing qualifier");
             let repeated = core
                 .ensure_requirements(&conversation, &AtomicBool::new(false))
                 .unwrap_err();
@@ -180,6 +190,15 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                     .count_since_requirements_reset(&conversation, "requirements-reviewer")
                     .unwrap(),
                 tasks::FORMAT_REPAIR_ATTEMPTS as usize + 3
+            );
+            let (sessions, turns): (i64, i64) = core.store.db().query_row(
+                "SELECT count(DISTINCT session_id),count(*) FROM turns WHERE conversation_id=?1 AND role='requirements-extraction-analyst'",
+                [&conversation], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap();
+            assert!(turns > 1);
+            assert_eq!(
+                sessions, turns,
+                "each analyst attempt must receive a fresh provider context"
             );
         } else if repairs {
             result.unwrap();

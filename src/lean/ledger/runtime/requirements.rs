@@ -97,17 +97,15 @@ impl Core {
     }
 
     fn requirements_feedback(&self, conversation: &str, run: &Run) -> Result<String> {
-        Ok(self
-            .store
-            .messages_after(conversation, run.start_message)?
-            .into_iter()
-            .rev()
-            .find(|message| {
-                message.author == "requirements-reviewer"
-                    || message.author == "requirements-approval"
-            })
-            .map(|message| message.text.clone())
-            .unwrap_or_default())
+        let findings: serde_json::Value = serde_json::from_str(
+            &self
+                .store
+                .requirements_review_findings(conversation, &run.id)?,
+        )?;
+        Ok(serde_json::to_string(&json!({
+            "review_findings": findings,
+            "user_rejection": self.store.rejected_requirements_feedback(conversation, &run.id)?,
+        }))?)
     }
 
     fn analyze_requirements(

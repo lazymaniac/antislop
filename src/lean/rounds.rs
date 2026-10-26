@@ -100,6 +100,9 @@ impl Core {
         add_dirs: &[PathBuf],
         access: agent::Access,
     ) -> Result<Option<String>> {
+        if matches!(policy, SessionPolicy::Independent) {
+            return Ok(None);
+        }
         let SessionPolicy::TaskRound { task, round } = policy else {
             return self.store.last_session(conversation, role, provider);
         };

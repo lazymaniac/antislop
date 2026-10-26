@@ -1,5 +1,13 @@
 use super::*;
 
+/// Planning cannot complete with prose or a requirements analyst's ledger block.
+pub(crate) fn parse_required_plan(answer: &str) -> (String, Result<Vec<TaskContract>>) {
+    let (text, plan) = parse_plan(answer);
+    (text, plan.unwrap_or_else(|| Err(Error::Invalid(
+        "planning response has no complete fenced plan block; return the complete task plan, not prose or a ledger block. Requirements extraction and ledger corrections belong to the runtime's requirements analyst".into(),
+    ))))
+}
+
 /// Splits an orchestrator answer into its text and an optional plan.
 pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskContract>>>) {
     let Some((text, body)) = fenced(answer, "plan") else {

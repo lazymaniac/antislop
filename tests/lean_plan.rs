@@ -458,7 +458,7 @@ fn one_review_sends_all_draft_comments_to_a_single_turn() {
 
 #[test]
 fn malformed_plan_json_is_corrected_automatically_with_a_finite_retry_limit() {
-    for persistent in [false, true] {
+    for (persistent, missing) in [(false, false), (true, false), (false, true), (true, true)] {
         let dir = tempfile::tempdir().unwrap();
         let (codex, agy) = fake_clis(dir.path());
         let source = std::fs::read_to_string(&codex).unwrap();
@@ -473,9 +473,31 @@ if not os.path.exists('format-error-sent') or {persistent}:
 "#,
             persistent = if persistent { "True" } else { "False" }
         );
+        let hook = if missing {
+            hook.lines()
+                .map(|line| {
+                    if line.trim_start().starts_with("_ledger_emit(") {
+                        "    _ledger_emit('```ledger\\n{\"entries\":[]}\\n```')"
+                    } else {
+                        line
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            hook
+        };
+
         std::fs::write(&codex, source.replace(marker, &format!("{hook}\n{marker}"))).unwrap();
         let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
         let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
+        if missing {
+            core.store.begin_interview(&conversation.id).unwrap();
+            core.store
+                .interview_summary(&conversation.id, "Assess storage and TUI", 0)
+                .unwrap();
+            core.store.approve_requirements(&conversation.id).unwrap();
+        }
         core.send(&conversation.id, "Assess storage and TUI")
             .unwrap();
         wait_idle(&core, &conversation.id);
@@ -503,46 +525,83 @@ if not os.path.exists('format-error-sent') or {persistent}:
 }
 
 #[test]
-fn restart_recovers_a_previously_failed_plan_json_without_a_new_user_message() {
-    use antislop::lean::store::{Store, TurnStatus};
-    use serde_json::json;
-    let dir = tempfile::tempdir().unwrap();
-    let state = dir.path().join("state");
-    std::fs::create_dir(&state).unwrap();
-    std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
-    let (codex, agy) = fake_clis(dir.path());
-    let store = Store::open(&state.join("core.db")).unwrap();
-    let conversation = store
-        .create_conversation(dir.path().to_str().unwrap())
-        .unwrap();
-    let message = store
-        .add_message(&conversation.id, "user", "Assess storage and TUI")
-        .unwrap();
-    let turn = store
-        .start_turn(&conversation.id, "orchestrator", "codex", message.seq, None)
-        .unwrap();
-    store.set_session(&turn.id, "orch").unwrap();
-    store
-        .append_event(
-            &conversation.id,
-            Some(&turn.id),
-            None,
-            "agent_final",
-            &json!({"text":"```plan\n{broken JSON}\n```"}),
-        )
-        .unwrap();
-    store.finish_turn(&turn.id, TurnStatus::Done, None).unwrap();
-    drop(store);
-    let core = Core::open(&state, config(&codex, &agy)).unwrap();
-    wait_idle(&core, &conversation.id);
-    assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
-    assert_eq!(
-        core.store
-            .messages_by(&conversation.id, "plan-format-repair", 0)
-            .unwrap()
-            .len(),
-        1
-    );
+fn restart_recovers_invalid_or_missing_plans_without_a_new_user_message() {
+    for (answer, analyst_failed) in [
+        ("```plan\n{broken JSON}\n```", false),
+        ("```ledger\n{\"entries\":[]}\n```", false),
+        ("I will prepare the plan.", false),
+        (
+            r#"```plan
+{"tasks":[{"id":"t1","title":"Inspect","goal":"Inspect the project","kind":"analysis","verifier":{"focus":"Check findings"}}]}
+```"#,
+            true,
+        ),
+    ] {
+        use antislop::lean::store::{Store, TurnStatus};
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
+        let (codex, agy) = fake_clis(dir.path());
+        let store = Store::open(&state.join("core.db")).unwrap();
+        let conversation = store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap();
+        let message = store
+            .add_message(&conversation.id, "user", "Assess storage and TUI")
+            .unwrap();
+        store.begin_interview(&conversation.id).unwrap();
+        store
+            .interview_summary(&conversation.id, "Assess storage and TUI", message.seq)
+            .unwrap();
+        let message = store.approve_requirements(&conversation.id).unwrap();
+        let turn = store
+            .start_turn(&conversation.id, "orchestrator", "codex", message.seq, None)
+            .unwrap();
+        store.set_session(&turn.id, "orch").unwrap();
+        store
+            .append_event(
+                &conversation.id,
+                Some(&turn.id),
+                None,
+                "agent_final",
+                &json!({"text":answer}),
+            )
+            .unwrap();
+        store.finish_turn(&turn.id, TurnStatus::Done, None).unwrap();
+        if analyst_failed {
+            store
+                .append_event(
+                    &conversation.id,
+                    None,
+                    None,
+                    "requirements_failed",
+                    &json!({"error":"missing ledger JSON block"}),
+                )
+                .unwrap();
+        }
+        drop(store);
+        let core = Core::open(&state, config(&codex, &agy)).unwrap();
+        wait_idle(&core, &conversation.id);
+        assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
+        assert_eq!(
+            core.store
+                .messages_by(
+                    &conversation.id,
+                    if analyst_failed {
+                        "requirements-format-repair"
+                    } else {
+                        "plan-format-repair"
+                    },
+                    0
+                )
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }
 
 #[test]

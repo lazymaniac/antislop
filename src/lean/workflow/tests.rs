@@ -161,3 +161,60 @@ fn pre_workflow_sessions_keep_their_existing_flow() {
     let conversation = store.create_conversation("project").unwrap();
     assert!(store.workflow(&conversation.id).unwrap().is_none());
 }
+
+#[test]
+fn malformed_requirements_retry_is_idempotent_and_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("state.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    store
+        .add_message(&conversation.id, "user", "Keep the same requirements")
+        .unwrap();
+    for attempt in 0..3 {
+        store
+            .append_event(
+                &conversation.id,
+                None,
+                None,
+                "requirements_failed",
+                &serde_json::json!({"error":"missing ledger JSON block"}),
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .queue_requirements_format_repair(&conversation.id)
+                .unwrap(),
+            attempt < 2
+        );
+        assert!(
+            !store
+                .queue_requirements_format_repair(&conversation.id)
+                .unwrap()
+        );
+    }
+    assert_eq!(
+        store
+            .messages_by(&conversation.id, "requirements-format-repair", 0)
+            .unwrap()
+            .len(),
+        2
+    );
+    store
+        .add_message(&conversation.id, "user", "Retry preparation")
+        .unwrap();
+    store
+        .append_event(
+            &conversation.id,
+            None,
+            None,
+            "requirements_failed",
+            &serde_json::json!({"error":"requirements proposal awaits user approval"}),
+        )
+        .unwrap();
+    // An approval blocker must not be treated as a malformed response.
+    assert!(
+        !store
+            .queue_requirements_format_repair(&conversation.id)
+            .unwrap()
+    );
+}

@@ -197,6 +197,41 @@ fn insert_review(tx: &rusqlite::Transaction<'_>, review: &LedgerReview<'_>) -> R
 }
 
 impl Store {
+    pub(crate) fn rejected_requirements_feedback(
+        &self,
+        conversation: &str,
+        run_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        let current = self.run(conversation, run_id)?;
+        let row: Option<(String, String)> = self.db().query_row(
+            "SELECT p.id,m.text FROM ledger_rejections r JOIN ledger_proposals p ON p.id=r.proposal_id JOIN messages m ON m.seq=r.comment_message WHERE p.run_id=?1 AND m.conversation_id=?2 AND m.author='user' AND json_extract(p.request,'$.expected_spec_revision')=?3 ORDER BY r.created_ms DESC,r.rowid DESC LIMIT 1",
+            params![run_id, conversation, current.spec_revision],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        row.map(|(proposal, comment)| {
+            let comment = self.decode_content(&comment)?;
+            Ok(serde_json::json!({"proposal":proposal,"decision":"rejected","comment":comment,"approval_required":true}))
+        }).transpose()
+    }
+
+    /// Local review data for the analyst, never orchestration routing messages.
+    pub(crate) fn requirements_review_findings(
+        &self,
+        conversation: &str,
+        run_id: &str,
+    ) -> Result<String> {
+        let current = self.run(conversation, run_id)?;
+        let note: Option<String> = self.db().query_row(
+            "SELECT note FROM ledger_reviews WHERE run_id=?1 AND spec_revision=?2 AND kind='extraction' ORDER BY created_ms DESC,rowid DESC LIMIT 1",
+            params![run_id, current.spec_revision], |row| row.get(0),
+        ).optional()?;
+        note.map(|note| {
+            serde_json::to_string(&crate::lean::tasks::parse_verdict(&note).findings)
+                .map_err(Into::into)
+        })
+        .unwrap_or_else(|| Ok("[]".into()))
+    }
+
     pub fn task_generation(&self, task: &str) -> Result<i64> {
         Ok(self
             .db()

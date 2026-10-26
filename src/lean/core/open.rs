@@ -136,12 +136,18 @@ fn restore_conversation(core: &Arc<Core>, conversation: &str) -> Result<()> {
         core.store.finish_interview(conversation)?;
     }
     queue_format_repair(core, conversation)?;
+    if core.unanswered(conversation)?.is_none() {
+        core.store.queue_requirements_format_repair(conversation)?;
+    }
     wake_pending_work(core, conversation)
 }
 
 fn queue_format_repair(core: &Arc<Core>, conversation: &str) -> Result<()> {
     let workflow = core.store.workflow(conversation)?;
-    if workflow.is_some_and(|workflow| workflow.phase == "interview") {
+    if workflow
+        .as_ref()
+        .is_some_and(|workflow| workflow.phase == "interview")
+    {
         return Ok(());
     }
     let Some(turn) = core.store.last_orchestration_turn(conversation)? else {
@@ -153,7 +159,15 @@ fn queue_format_repair(core: &Arc<Core>, conversation: &str) -> Result<()> {
     let Ok(Some(answer)) = core.store.turn_final_answer(conversation, &turn.id) else {
         return Ok(());
     };
-    if let (_, Some(Err(error))) = tasks::parse_plan(&answer) {
+    let required = workflow.is_some_and(|w| w.phase == "planning")
+        && turn.role == ORCHESTRATOR
+        && core.store.latest_plan(conversation)?.is_empty();
+    let plan = if required {
+        Some(tasks::parse_required_plan(&answer).1)
+    } else {
+        tasks::parse_plan(&answer).1
+    };
+    if let Some(Err(error)) = plan {
         core.store
             .queue_plan_format_repair(conversation, &turn.id, &error.to_string())?;
     }

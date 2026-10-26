@@ -1428,7 +1428,7 @@ fn rejected_requirements_resume_after_restart_as_a_new_unapproved_proposal() {
 import sys,json,uuid,os
 prompt=sys.argv[-1]
 if prompt.startswith('Act as requirements analyst'):
-    assert 'User feedback on that rejected proposal:' in prompt, prompt
+    assert '"decision":"rejected"' in prompt, prompt
     assert 'Preserve the offline exception' in prompt, prompt
     lines=prompt.rsplit('Run and ledger inputs (stable identities; keep their versions):\n',1)[1].splitlines()
     run=json.loads(lines[0])
