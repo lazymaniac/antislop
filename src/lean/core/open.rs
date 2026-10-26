@@ -97,7 +97,6 @@ fn make_core(state: &Path, config: Config, store: Store, lock: std::fs::File) ->
         plans: Mutex::new(HashMap::new()),
         reviews: Mutex::new(HashMap::new()),
         blocked_seen: Mutex::new(HashMap::new()),
-        unblocked: Mutex::new(HashMap::new()),
     });
     core.weak.set(Arc::downgrade(&core)).ok();
     spawn_native_reaper(&core);

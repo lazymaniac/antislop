@@ -1,10 +1,14 @@
 //! Small rows, each written on its own, plus an append-only event log. Nothing
 //! here grows with the size of the project the agents work on.
 
+#[path = "clarification.rs"]
+mod clarification;
 #[path = "graph_edit.rs"]
 mod graph_edit;
 #[path = "history.rs"]
 mod history;
+#[path = "store/recovery_progress.rs"]
+mod recovery_progress;
 #[path = "run_context.rs"]
 mod run_context;
 #[path = "unblocker.rs"]

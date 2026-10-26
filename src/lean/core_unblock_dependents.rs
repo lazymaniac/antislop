@@ -20,15 +20,13 @@ impl Core {
 
     /// Carries out the unblocking steps the orchestrator wrote, one task at a
     /// time. A step that cannot be taken is reported with its raw reason and
-    /// leaves the others alone. In an autonomous conversation a task is
-    /// unblocked this way only a few times, then it waits for the user.
+    /// leaves the others alone. Repeated proposals require evidence of progress.
     pub(in crate::lean) fn unblock_by_orchestrator(
         self: &Arc<Self>,
         conversation: &str,
         steps: &[tasks::Unblocking],
         cancel: &AtomicBool,
     ) {
-        let autonomous = self.autonomous(conversation).unwrap_or(false);
         let Some(plan) = self
             .store
             .latest_plan(conversation)
@@ -38,7 +36,7 @@ impl Core {
             return;
         };
         for step in steps {
-            let result = self.apply_unblocking_step(conversation, &plan, step, autonomous, cancel);
+            let result = self.apply_unblocking_step(conversation, &plan, step, cancel);
             self.notice(conversation, &unblocking_notice(step, result));
         }
     }
@@ -48,21 +46,20 @@ impl Core {
         conversation: &str,
         plan: &str,
         step: &tasks::Unblocking,
-        autonomous: bool,
         cancel: &AtomicBool,
     ) -> Result<String> {
         require(!cancel.load(Ordering::SeqCst), "recovery was cancelled")?;
         if step.action == "clarify_task" {
             return self.clarify_blocked_task(conversation, plan, step, cancel);
         }
+        let progress_task = self.task_unscoped(plan, &step.task)?;
+        self.store.assert_task_inputs(&progress_task)?;
+        self.check_recovery_progress(conversation, &progress_task, step, cancel)?;
         if matches!(step.action.as_str(), "add_task" | "split_task") {
             return self.repair_blocked_graph(conversation, plan, step);
         }
         let action = unblocking_action(step)?;
         let task = self.task_unscoped(plan, &step.task)?;
-        if autonomous {
-            self.count_unblocking(conversation, &task.id)?;
-        }
         let token = self.task_freshness_token(conversation, plan, &task.id)?;
         let response = self.recover_task_as(
             TaskRecoveryRequest {
@@ -130,19 +127,6 @@ impl Core {
         }
         self.maybe_continue_plan(conversation, plan)?;
         Ok(status::QUEUED.into())
-    }
-
-    fn count_unblocking(&self, conversation: &str, task: &str) -> Result<()> {
-        let mut seen = self.unblocked.lock().expect("unblocked mutex");
-        let count = seen
-            .entry((conversation.to_owned(), task.to_owned()))
-            .or_default();
-        require(
-            *count < 3,
-            "unblocked automatically too often; it waits for the user",
-        )?;
-        *count += 1;
-        Ok(())
     }
 
     /// The user's open comments on the checks of a task, for its verifier.

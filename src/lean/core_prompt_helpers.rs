@@ -4,7 +4,7 @@ use super::*;
 pub(super) fn blocked_report(
     tasks: &[Task],
     autonomous: bool,
-    limits: &HashMap<String, super::core_recovery_options::RecoveryLimits>,
+    states: &HashMap<String, super::core_recovery_options::RecoveryState>,
 ) -> String {
     let mut text = blocked_intro(autonomous);
     let plan: Vec<_> = tasks
@@ -17,18 +17,9 @@ pub(super) fn blocked_report(
         .collect();
     for task in tasks.iter().filter(|task| is_blocked(task)) {
         text.push_str(&blocked_task_line(task));
-        let defaults = super::core_recovery_options::RecoveryLimits::default();
-        let budget = limits.get(&task.id).unwrap_or(&defaults);
-        let additions = plan
-            .iter()
-            .filter(|(spec, _)| spec.resolves.as_deref() == task.spec["id"].as_str())
-            .count();
-        text.push_str(&format!(
-            "\n  Recovery budget used: prerequisite additions {}/{}, clarifications {}/{}, automatic retries {}/3 (retry limit applies only in autonomous mode).",
-            additions, blocker::ATTEMPTS, budget.clarifications, blocker::CLARIFICATIONS, budget.retries
-        ));
-        let options =
-            super::core_recovery_options::recovery_options(task, &plan, autonomous, budget);
+        let defaults = super::core_recovery_options::RecoveryState::default();
+        let state = states.get(&task.id).unwrap_or(&defaults);
+        let options = super::core_recovery_options::recovery_options(task, &plan, state);
         text.push_str(&super::core_recovery_options::options_text(&options));
         if let Some(block) = task.report.as_deref().and_then(blocker::parse) {
             text.push_str(&format!(
@@ -47,15 +38,14 @@ starts a fresh round with its report and findings), `extend_rounds`. Select only
 use `add_task` with a `spec` supplying the missing input, or `split_task` with 2–8 `parts`. \
 An `add_task` spec must be read-only and serve only the blocked task's requirements and \
 criteria; it may read additional paths needed to find the missing input, within existing \
-permissions. A clearing task may itself receive a read-only prerequisite for an independently \
-verified baseline (at most two recovery levels). Split parts must stay within the blocked task's file scope. \
+permissions. A clearing task may itself receive an independently verified read-only prerequisite; recovery chains must remain acyclic. Split parts must stay within the blocked task's file scope. \
 The runtime inserts those tasks before the blocked one, rejects dependencies on it or its \
 descendants, and resumes it only after their verification. Use `retry_with_guidance` when already verified dependency inputs resolve the missing input. \
 Use `clarify_task` with `message` explaining the evidence and a full replacement `spec` when the \
 goal or verifier focus incorrectly demands unavailable history or downstream work. Only `goal` \
 and `verifier.focus` may change; copy every other field exactly from the current spec. An \
 independent reviewer must approve preservation of every substantive obligation before the task \
-is queued for fresh worker and verifier turns. At most two clarifications per task. \
+is queued for fresh worker and verifier turns. There is no numerical recovery quota. Continue with materially corrected proposals or new evidence. Repeating an unchanged approach with the same inputs/outcome is stopped, even after restart. Independent review compares changed proposals with previous findings and stops rewordings that make no progress or require a user decision. Historical notes and architecture recommendations do not create new accepted requirements; justify instrumentation against an accepted criterion or make it conditional. \
 Historical evidence that was never recorded cannot be recreated by repeated discovery tasks. \
 Record that limitation and require a NEW assessment on current verified sources; never claim \
 that this authenticates the old report. An input task must not wait for its downstream consumer's \

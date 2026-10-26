@@ -36,6 +36,7 @@ mod core_path_helpers;
 mod core_plan_helpers;
 mod core_prompt_helpers;
 mod core_recovery_options;
+mod core_recovery_progress;
 pub mod daemon;
 pub mod diff;
 mod feasibility;
@@ -51,6 +52,7 @@ pub mod native;
 mod plan_tests;
 mod progress;
 pub mod projects;
+mod recovery_progress;
 #[cfg(test)]
 mod reliability_tests;
 pub mod risks;
@@ -230,8 +232,6 @@ pub struct Core {
     /// The blocked report last handed to each conversation's orchestrator,
     /// so that an unchanged block is told once.
     blocked_seen: Mutex<HashMap<String, String>>,
-    /// How often the orchestrator unblocked each task by itself.
-    unblocked: Mutex<HashMap<(String, String), u32>>,
 }
 
 impl Drop for Core {

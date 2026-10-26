@@ -12,16 +12,6 @@ use crate::lean::{
 };
 use crate::{Result, require};
 
-/// The most tasks that may be inserted to clear one task's blockers; a
-/// third attempt is the user's decision.
-pub const ATTEMPTS: usize = 2;
-
-/// Allow a clearing task to obtain an independently verified baseline, but
-/// stop recursive recovery from growing an unbounded chain of prerequisites.
-pub const MAX_DEPTH: usize = 2;
-
-pub const CLARIFICATIONS: usize = 2;
-
 /// A clarification may correct evidence applicability, but cannot change
 /// ownership, access, dependencies, or the accepted requirement identities.
 /// Semantic preservation also requires an independent review at runtime.
@@ -178,17 +168,11 @@ pub fn check_unblocker(
 /// Parent-level eligibility, shared by execution and recovery guidance.
 pub fn check_addition(blocked: &TaskSpec, plan: &[(TaskSpec, String)]) -> Result<()> {
     let mut ancestor = blocked;
-    let mut depth = 1;
     let mut seen = BTreeSet::from([blocked.id.as_str()]);
     while let Some(target) = ancestor.resolves.as_deref() {
         require(
             seen.insert(target),
             "blocker recovery chain contains a cycle",
-        )?;
-        depth += 1;
-        require(
-            depth <= MAX_DEPTH,
-            "blocker recovery depth exceeds two levels; the user decides",
         )?;
         ancestor = plan
             .iter()
@@ -208,10 +192,6 @@ pub fn check_addition(blocked: &TaskSpec, plan: &[(TaskSpec, String)]) -> Result
     require(
         attempts.iter().all(|state| status::finished(state)),
         "another task is already clearing this blocker",
-    )?;
-    require(
-        attempts.len() < ATTEMPTS,
-        "the blocker was already tried twice; the user decides",
     )?;
     Ok(())
 }
@@ -391,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn one_attempt_at_a_time_and_two_in_all() {
+    fn one_active_unblocker_at_a_time_without_a_lifetime_quota() {
         let running = plan(&[(clearing("a", &[]), "working")]);
         rejects(&clearing("b", &[]), &running, "already clearing");
         let once = plan(&[(clearing("a", &[]), "approved")]);
@@ -400,11 +380,11 @@ mod tests {
             (clearing("a", &[]), "approved"),
             (clearing("b", &[]), "failed"),
         ]);
-        rejects(&clearing("c", &[]), &twice, "tried twice");
+        check_unblocker(&clearing("c", &[]), &twice[1].0, &twice).unwrap();
     }
 
     #[test]
-    fn a_clearing_task_can_obtain_a_verified_baseline_but_depth_is_bounded() {
+    fn clearing_chains_can_grow_while_acyclic_and_independently_verified() {
         let mut base = plan(&[]);
         base[1].0.resolves = Some("t1".into());
         check_unblocker(&clearing("fix", &[]), &base[1].0, &base).unwrap();
@@ -415,7 +395,7 @@ mod tests {
                 .any(|(id, text)| id == "B1" && text.contains("t2"))
         );
         base[0].0.resolves = Some("t3".into());
-        rejects(&clearing("fix", &[]), &base, "depth exceeds two levels");
+        check_unblocker(&clearing("fix", &[]), &base[1].0, &base).unwrap();
     }
 
     #[test]

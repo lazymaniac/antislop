@@ -2,6 +2,10 @@
 //! result. Integration never overwrites the user's uncommitted edits and never
 //! leaves conflict markers in the project: it is checked in memory first.
 
+#[path = "git/recovery.rs"]
+mod recovery;
+pub use recovery::recovery_fingerprint;
+
 use crate::{Error, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
