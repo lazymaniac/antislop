@@ -51,6 +51,7 @@ pub struct Registry {
 pub struct Session {
     pub(crate) spec: agent::Spec,
     signature: String,
+    _settings: Option<tempfile::NamedTempFile>,
     gateway: mcp::Gateway,
     pub(crate) terminal: Mutex<terminal::Session>,
     screen: Arc<Mutex<State>>,
@@ -284,6 +285,7 @@ impl Session {
         Ok(Self {
             spec,
             signature,
+            _settings: launch.settings,
             gateway,
             terminal: Mutex::new(terminal),
             screen,
@@ -589,6 +591,44 @@ print(json.dumps({"type": "text", "part": {"text": "opencode answer"}}))
         // Another live session in the same directory is not handed the same one.
         assert_eq!(session.identity().as_deref(), Some("ses_found"));
         assert_eq!(core.native.claimed(), ["ses_found"]);
+    }
+
+    #[test]
+    fn gemini_connects_and_finishes_a_turn_through_the_session_gateway() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let core = core(dir.path());
+        let spec = agent::Spec {
+            provider: crate::config::ProviderKind::Gemini,
+            binary: opencode(dir.path()),
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: project,
+            add_dirs: vec![],
+            access: agent::Access::ReadOnly,
+            resume: None,
+        };
+        let session = core
+            .native
+            .prepare_scoped(&core, "g", "verifier", &spec, "")
+            .unwrap();
+        let settings = session._settings.as_ref().unwrap().path();
+        assert!(settings.exists());
+        let outcome = session
+            .run(
+                &core.native,
+                "gemini-turn",
+                "hello",
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+        assert_eq!(outcome.text, "opencode answer");
+        assert!(
+            settings.exists(),
+            "settings must survive for the entire PTY session"
+        );
     }
 
     #[test]

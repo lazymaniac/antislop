@@ -30,6 +30,7 @@ pub(crate) struct Launch {
     /// The CLI's own session identifier when it is known before the process
     /// starts (Claude is told it; any CLI is told it when resuming).
     pub session: Option<String>,
+    pub settings: Option<tempfile::NamedTempFile>,
 }
 
 pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
@@ -37,6 +38,7 @@ pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
     command.cwd(&spec.cwd);
     command.env("TERM", "xterm-256color");
     let read_only = spec.access == Access::ReadOnly;
+    let mut settings = None;
     let session = match spec.provider {
         ProviderKind::Claude => {
             command.args(&spec.args);
@@ -57,14 +59,76 @@ pub(crate) fn command(spec: &Spec, gateway: &Gateway) -> Result<Launch> {
             agy(&mut command, spec, gateway, read_only)?;
             spec.resume.clone()
         }
-        provider => {
-            return Err(Error::Invalid(format!(
-                "{} has no interactive adapter yet; choose Claude, Codex, OpenCode or Agy",
-                super::agent::name(provider)
-            )));
+        ProviderKind::Gemini => {
+            command.args(&spec.args);
+            settings = Some(gemini(&mut command, spec, gateway, read_only)?);
+            spec.resume.clone()
         }
     };
-    Ok(Launch { command, session })
+    Ok(Launch {
+        command,
+        session,
+        settings,
+    })
+}
+
+/// Gemini has no inline settings flag. Keep a private, per-session override
+/// under runtime state and pass its path without changing Gemini's own files.
+fn gemini(
+    command: &mut CommandBuilder,
+    spec: &Spec,
+    gateway: &Gateway,
+    read_only: bool,
+) -> Result<tempfile::NamedTempFile> {
+    let directory = spec.cwd.join(".antislop").join("sessions");
+    std::fs::create_dir_all(&directory)?;
+    let mut settings = tempfile::Builder::new()
+        .prefix("gemini-")
+        .suffix(".json")
+        .tempfile_in(directory)?;
+    let mut config = json!({
+        "mcp": {"allowed": [SERVER]},
+        "mcpServers": {SERVER: {
+            "httpUrl": gateway.url(),
+            "headers": {"Authorization": "Bearer ${ANTISLOP_MCP_TOKEN}"},
+            "trust": true,
+            "includeTools": [TOOL]
+        }},
+        "tools": {"exclude": ["delegate_to_agent", "ask_user"]},
+        "general": {"enableAutoUpdate": false}
+    });
+    if read_only {
+        // Do not expose a shell: even apparently read-only shell commands can
+        // write. Plan mode can also block the MCP tool needed to end a turn.
+        config["tools"]["core"] = json!([
+            "list_directory",
+            "read_file",
+            "read_many_files",
+            "glob",
+            "search_file_content",
+            "google_web_search",
+            "web_fetch"
+        ]);
+    }
+    if !read_only {
+        config["tools"]["allowed"] = json!(["run_shell_command"]);
+    }
+    serde_json::to_writer(&mut settings, &config)?;
+    command.env("GEMINI_CLI_SYSTEM_SETTINGS_PATH", settings.path());
+    command.env(TOKEN_ENV, gateway.token());
+    command.args(["--approval-mode", "auto_edit", "--extensions", "none"]);
+    command.args(["--allowed-mcp-server-names", SERVER]);
+    if let Some(model) = &spec.model {
+        command.args(["--model", model]);
+    }
+    for directory in &spec.add_dirs {
+        command.arg("--include-directories");
+        command.arg(directory);
+    }
+    if let Some(session) = &spec.resume {
+        command.args(["--resume", session]);
+    }
+    Ok(settings)
 }
 
 /// Agy takes MCP servers only from its own list. `antislop setup agy` puts the
@@ -477,15 +541,36 @@ mod tests {
     }
 
     #[test]
-    fn providers_without_an_adapter_fail_with_a_plain_reason() {
+    fn gemini_uses_private_session_settings_and_resumes() {
         let gateway = Gateway::start().unwrap();
-        let error = command(&spec(ProviderKind::Gemini, Access::Write, None), &gateway)
-            .err()
-            .unwrap();
-        assert!(
-            error
-                .to_string()
-                .contains("gemini has no interactive adapter")
-        );
+        let cwd = tempfile::tempdir().unwrap();
+        for access in [Access::ReadOnly, Access::Write] {
+            let mut spec = spec(ProviderKind::Gemini, access, Some("g-1"));
+            spec.cwd = cwd.path().to_owned();
+            let launch = command(&spec, &gateway).unwrap();
+            let path = launch.settings.as_ref().unwrap().path().to_owned();
+            let config: Value =
+                serde_json::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
+            assert_eq!(config["mcpServers"][SERVER]["httpUrl"], gateway.url());
+            assert_eq!(config["mcpServers"][SERVER]["trust"], true);
+            assert_eq!(config["mcpServers"][SERVER]["includeTools"], json!([TOOL]));
+            assert_eq!(
+                config["tools"]["core"].is_array(),
+                access == Access::ReadOnly
+            );
+            assert!(
+                !std::fs::read_to_string(&path)
+                    .unwrap()
+                    .contains(gateway.token())
+            );
+            let args = words(&launch);
+            assert!(args.windows(2).any(|w| w == ["--resume", "g-1"]));
+            assert!(args.windows(2).any(|w| w == ["--model", "m1"]));
+            assert!(!args.contains(&"--effort".to_owned()));
+            assert_eq!(launch.session.as_deref(), Some("g-1"));
+            drop(launch);
+            assert!(!path.exists());
+        }
+        assert!(!cwd.path().join(".gemini").exists());
     }
 }

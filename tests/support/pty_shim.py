@@ -37,6 +37,10 @@ if "OPENCODE_CONFIG_CONTENT" in os.environ:
     server = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])["mcp"]["antislop"]
     url = server["url"]
     token = server["headers"]["Authorization"].split()[1]
+if "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in os.environ:
+    with open(os.environ["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]) as settings:
+        server = json.load(settings)["mcpServers"]["antislop"]
+    url = server["httpUrl"]
 url = url or os.environ.get("ANTISLOP_MCP_URL")
 token = token or os.environ.get("ANTISLOP_MCP_TOKEN")
 session = resume or ("session-%d" % os.getpid())
