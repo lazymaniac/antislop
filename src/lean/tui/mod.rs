@@ -4909,27 +4909,27 @@ impl App {
         if self.view.workflow_phase.is_some() {
             let (title, body) = match self.view.stage() {
                 view::Stage::Interview if self.view.interview_question.is_some() => (
-                    "1/3 · Answer the interview question",
+                    "Phase 1/3: Answer the interview question",
                     "The orchestrator is waiting for your decision. /interview opens the question, suggested options and your own answer field.".to_owned(),
                 ),
                 view::Stage::Interview if self.view.requirements_summary.is_empty() => (
-                    "1/3 · Interview and requirements",
+                    "Phase 1/3: Interview and requirements",
                     "Describe your goal and answer the orchestrator's questions. Agree on scope, constraints and acceptance criteria. A requirements summary will appear here for approval.".to_owned(),
                 ),
                 view::Stage::Interview => (
-                    "1/3 · Review requirements",
+                    "Phase 1/3: Review requirements",
                     format!("{}\n\nReview the summary. Add comments in chat or choose Proceed to planning.", self.view.requirements_summary),
                 ),
                 view::Stage::Planning => (
-                    "2/3 · Planning",
+                    "Phase 2/3: Planning",
                     "The orchestrator is preparing the plan from approved requirements. The next step is your review and comments.".to_owned(),
                 ),
                 view::Stage::Review => (
-                    "2/3 · Review and comment on the plan",
+                    "Phase 2/3: Review and comment on the plan",
                     "Ctrl+L opens the plan. Add comments, submit Review and resolve outstanding feedback. Ctrl+A accepts the plan and starts implementation.".to_owned(),
                 ),
                 _ => (
-                    "3/3 · Implementation",
+                    "Phase 3/3: Implementation",
                     "Follow task progress and verification in the graph. Open task details to inspect results, diffs or add comments.".to_owned(),
                 ),
             };
