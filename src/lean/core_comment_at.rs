@@ -164,7 +164,13 @@ impl Core {
                 flag.store(true, Ordering::SeqCst);
             }
         }
-        for flags in [&self.running, &self.plans, &self.reviews, &self.mail_jobs] {
+        for flags in [
+            &self.running,
+            &self.plans,
+            &self.reviews,
+            &self.revision_jobs,
+            &self.agent_reviews,
+        ] {
             if let Some(flag) = flags.lock().expect("flags mutex").get(conversation) {
                 flag.store(true, Ordering::SeqCst);
             }
@@ -185,26 +191,40 @@ impl Core {
         // Read those two slots in the same order to observe that handoff atomically.
         let plans = self.plans.lock().expect("plans mutex");
         let running = self.running.lock().expect("running mutex");
-        !plans.contains_key(conversation)
+        !self
+            .agent_reviews
+            .lock()
+            .expect("agent reviews mutex")
+            .contains_key(conversation)
+            && !self
+                .revision_jobs
+                .lock()
+                .expect("revision jobs mutex")
+                .contains_key(conversation)
+            && !plans.contains_key(conversation)
             && !running.contains_key(conversation)
             && !self
                 .reviews
                 .lock()
                 .expect("reviews mutex")
                 .contains_key(conversation)
-            && !self
-                .mail_jobs
-                .lock()
-                .expect("mail jobs mutex")
-                .contains_key(conversation)
     }
 
     /// Whether any conversation has an agent or a plan running.
     pub fn busy(&self) -> bool {
-        !self.running.lock().expect("running mutex").is_empty()
+        !self
+            .agent_reviews
+            .lock()
+            .expect("agent reviews mutex")
+            .is_empty()
+            || !self
+                .revision_jobs
+                .lock()
+                .expect("revision jobs mutex")
+                .is_empty()
+            || !self.running.lock().expect("running mutex").is_empty()
             || !self.plans.lock().expect("plans mutex").is_empty()
             || !self.reviews.lock().expect("reviews mutex").is_empty()
-            || !self.mail_jobs.lock().expect("mail jobs mutex").is_empty()
     }
 
     pub fn task_freshness_token(

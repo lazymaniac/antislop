@@ -20,7 +20,7 @@ fn completed_followup_restarts_interview_without_erasing_history() {
     let tasks = store
         .add_plan(
             &conversation.id,
-            &[serde_json::json!({"id":"implementation"})],
+            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","kind":"implementation","verifier":{"focus":"Inspect behavior"}})],
         )
         .unwrap();
     let plan = &tasks[0].plan_id;

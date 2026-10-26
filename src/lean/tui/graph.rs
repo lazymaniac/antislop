@@ -1121,7 +1121,10 @@ pub fn health(view: &View, key: &str) -> Health {
         let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
             return Health::Idle;
         };
-        if matches!(task.status.as_str(), "failed" | "needs_user") {
+        if matches!(
+            task.status.as_str(),
+            "failed" | "coordinating" | "needs_user"
+        ) {
             return Health::Problem;
         }
         for role in ["worker", "verifier"] {
@@ -1347,7 +1350,7 @@ fn effect_lines(view: &View, key: &str, width: usize, max: usize) -> Vec<String>
 pub fn mark(status: &str) -> (&'static str, Color) {
     match status {
         "approved" => ("✓", super::theme::ayu::GREEN),
-        "needs_user" | "waiting" => ("!", super::theme::ayu::YELLOW),
+        "coordinating" | "needs_user" | "waiting" => ("!", super::theme::ayu::YELLOW),
         "failed" => ("✗", super::theme::ayu::RED),
         "skipped" | "cancelled" | "revised" => ("–", super::theme::ayu::DIM),
         "working" | "verifying" => ("●", super::theme::ayu::BLUE),
@@ -2527,6 +2530,7 @@ mod tests {
         view.tasks[1].status = "approved".into();
         view.tasks[1].round = 2;
         view.tasks[1].effect = Some("two  files cut…".into());
+        view.tasks[1].effect_cut = Some(true);
         view.tasks[1].integration = Some(json!({"outcome": "committed", "detail": "as abc12"}));
         let rows = render(&view);
         assert_eq!(

@@ -68,7 +68,7 @@ impl Store {
     }
     pub fn has_pending_requirements_approval(&self, conversation: &str) -> Result<bool> {
         Ok(self.db().query_row(
-                "SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND author IN ('requirements-approval','options-planner','options-plan-repair','plan-format-repair') AND seq>COALESCE((SELECT MAX(upto_message) FROM turns WHERE conversation_id=?1 AND role IN ('orchestrator','comment-orchestrator') AND status<>'interrupted'),0))",
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND author IN ('requirements-approval','requirements-planner','plan-format-repair') AND seq>COALESCE((SELECT MAX(upto_message) FROM turns WHERE conversation_id=?1 AND role IN ('orchestrator','comment-orchestrator') AND status<>'interrupted'),0))",
                 [conversation], |row| row.get(0)
             )?)
     }

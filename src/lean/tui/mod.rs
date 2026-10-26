@@ -457,16 +457,6 @@ impl App {
             buf.preferred_col = preferred_col;
             return buf;
         }
-        if let Some(text) = self.comment_drafts.remove(target) {
-            let (cursor, preferred_col) = self
-                .comment_draft_cursors
-                .remove(target)
-                .unwrap_or((text.len(), None));
-            let mut buf = InputBuffer::with_text(text);
-            buf.cursor = cursor.min(buf.text.len());
-            buf.preferred_col = preferred_col;
-            return buf;
-        }
         InputBuffer::new()
     }
 
@@ -484,8 +474,6 @@ impl App {
         let fallback_key = format!("{}::{target}", self.conversation);
         self.comment_drafts.remove(&fallback_key);
         self.comment_draft_cursors.remove(&fallback_key);
-        self.comment_drafts.remove(target);
-        self.comment_draft_cursors.remove(target);
     }
 
     pub fn open(&mut self, conversation: String) {

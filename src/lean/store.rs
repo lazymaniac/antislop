@@ -1,22 +1,18 @@
 //! Small rows, each written on its own, plus an append-only event log. Nothing
 //! here grows with the size of the project the agents work on.
 
-#[path = "clarification.rs"]
-mod clarification;
-#[path = "graph_edit.rs"]
-mod graph_edit;
+#[path = "plan_revision.rs"]
+mod plan_revision;
+pub use plan_revision::PlanRevision;
+pub(in crate::lean) use plan_revision::RevisionLease;
 #[path = "history.rs"]
 mod history;
-#[path = "store/recovery_progress.rs"]
-mod recovery_progress;
 #[path = "run_context.rs"]
 mod run_context;
-#[path = "unblocker.rs"]
-mod unblocker;
 #[path = "workflow.rs"]
 mod workflow;
 pub use history::{AgentMessage, ContentOwner, HistoryScope};
-pub use run_context::{RunAccess, RunBackend, RunContext};
+pub use run_context::{RunAccess, RunContext};
 pub use workflow::Workflow;
 
 use crate::{Error, Result};
@@ -25,6 +21,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Mutex;
+
+#[path = "store/agent_exchange.rs"]
+mod agent_exchange;
+#[path = "store/plan_reviews.rs"]
+mod plan_reviews;
+#[path = "store/revision_jobs.rs"]
+mod revision_jobs;
 
 pub struct Store {
     connection: Mutex<Connection>,
@@ -114,8 +117,6 @@ fn default_mail_state() -> String {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionInfo {
-    #[serde(default)]
-    pub backend: Option<String>,
     pub turn_id: String,
     #[serde(default)]
     pub plan_id: Option<String>,
@@ -275,7 +276,7 @@ impl TurnStatus {
 
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Incompatible databases are never modified or migrated.
-const SCHEMA: u32 = 12;
+const SCHEMA: u32 = 14;
 
 #[path = "store/comment_mail_state.rs"]
 mod comment_mail_state;

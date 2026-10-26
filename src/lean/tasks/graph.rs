@@ -58,7 +58,7 @@ pub fn scopes_overlap(a: &[String], b: &[String]) -> bool {
 }
 
 /// Whether task `from` depends directly or transitively on `target`.
-pub fn depends_transitively(tasks: &[TaskSpec], from: &str, target: &str) -> bool {
+pub fn depends_transitively(tasks: &[TaskContract], from: &str, target: &str) -> bool {
     let mut stack: Vec<&str> = tasks
         .iter()
         .find(|t| t.id == from)
@@ -91,7 +91,7 @@ pub struct PeerNode<'a> {
 
 /// For each task id, lists the peer task ids with which it can execute in parallel
 /// (neither depends on the other, and if both write, their scopes do not overlap).
-pub fn parallel_peers(tasks: &[TaskSpec]) -> std::collections::HashMap<String, Vec<String>> {
+pub fn parallel_peers(tasks: &[TaskContract]) -> std::collections::HashMap<String, Vec<String>> {
     let nodes: Vec<PeerNode> = tasks
         .iter()
         .map(|task| PeerNode {
@@ -179,7 +179,7 @@ fn peers_can_run(
 /// If the orchestrator's text already contains Markdown headings or paragraphs,
 /// preserves them and appends structured section blocks for any tasks not yet
 /// covered by a `#` heading so every task is mapped to a document section.
-pub fn render_plan_document(markdown: &str, tasks: &[TaskSpec]) -> String {
+pub fn render_plan_document(markdown: &str, tasks: &[TaskContract]) -> String {
     let peers = parallel_peers(tasks);
     let trimmed = markdown.trim();
     let mut document = plan_document_start(trimmed);
@@ -211,7 +211,7 @@ fn append_plan_task(
     document: &mut String,
     markdown: &str,
     index: usize,
-    task: &TaskSpec,
+    task: &TaskContract,
     peers: &std::collections::HashMap<String, Vec<String>>,
 ) {
     if markdown.contains(&format!("[{}]", task.id)) {
@@ -222,7 +222,7 @@ fn append_plan_task(
     append_task_relationships(document, task, peers);
 }
 
-fn append_task_heading(document: &mut String, index: usize, task: &TaskSpec) {
+fn append_task_heading(document: &mut String, index: usize, task: &TaskContract) {
     let section = task
         .section
         .as_deref()
@@ -231,7 +231,7 @@ fn append_task_heading(document: &mut String, index: usize, task: &TaskSpec) {
     document.push_str(&format!("### {}. {} [{}]\n", index + 1, section, task.id));
 }
 
-fn append_task_details(document: &mut String, task: &TaskSpec) {
+fn append_task_details(document: &mut String, task: &TaskContract) {
     document.push_str(&format!("- **Task**: `{}` — {}\n", task.id, task.title));
     document.push_str(&format!("- **Kind**: `{}`", work_kind_name(task.kind)));
     document.push_str(if task.writes {
@@ -245,7 +245,7 @@ fn append_task_details(document: &mut String, task: &TaskSpec) {
 
 fn append_task_relationships(
     document: &mut String,
-    task: &TaskSpec,
+    task: &TaskContract,
     peers: &std::collections::HashMap<String, Vec<String>>,
 ) {
     let dependencies = dependency_text(task);
@@ -254,7 +254,7 @@ fn append_task_relationships(
     document.push_str(&format!("- **Parallel with**: {parallel}\n\n"));
 }
 
-fn dependency_text(task: &TaskSpec) -> String {
+fn dependency_text(task: &TaskContract) -> String {
     if task.depends_on.is_empty() {
         "none (can start immediately)".into()
     } else {
@@ -262,7 +262,10 @@ fn dependency_text(task: &TaskSpec) -> String {
     }
 }
 
-fn peer_text(task: &TaskSpec, peers: &std::collections::HashMap<String, Vec<String>>) -> String {
+fn peer_text(
+    task: &TaskContract,
+    peers: &std::collections::HashMap<String, Vec<String>>,
+) -> String {
     peers
         .get(&task.id)
         .filter(|peers| !peers.is_empty())

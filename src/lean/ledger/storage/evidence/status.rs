@@ -42,7 +42,7 @@ fn linked_tasks<'a>(
     let mut linked: Vec<_> = tasks
         .iter()
         .filter(|(_, spec, _, _, _, _)| {
-            serde_json::from_str::<TaskSpec>(spec)
+            serde_json::from_str::<TaskContract>(spec)
                 .is_ok_and(|spec| spec.requirement_ids.contains(&entry.spec.id))
         })
         .collect();

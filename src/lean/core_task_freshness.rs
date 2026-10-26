@@ -1,4 +1,4 @@
-use super::core_path_helpers::task_path_component;
+use super::core_path_helpers::worktree_path;
 use super::*;
 
 impl Core {
@@ -87,10 +87,7 @@ impl Core {
                 "task {id} has no change: it does not write files or has not started"
             ))
         })?;
-        let worktree = self
-            .state
-            .join("worktrees")
-            .join(task_path_component(&task.id)?);
+        let worktree = worktree_path(&self.state, task)?;
         if worktree.exists() {
             return Ok((worktree, base, None));
         }
@@ -165,7 +162,7 @@ fn truncate_patch(mut patch: String) -> (String, bool) {
 }
 
 fn reviewer_profile(config: &Config, value: &serde_json::Value) -> Option<serde_json::Value> {
-    let spec = serde_json::from_value::<TaskSpec>(value.clone()).ok()?;
+    let spec = serde_json::from_value::<TaskContract>(value.clone()).ok()?;
     let profile = config.resolve(spec.kind, RoleKind::Verifier).ok()?;
     Some(json!({
         "provider": profile.provider,

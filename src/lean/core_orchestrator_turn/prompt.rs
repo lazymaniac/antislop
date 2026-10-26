@@ -62,11 +62,7 @@ fn append_graph(prompt: &mut String, editable: bool, graph: &[Task], graph_json:
     if !editable {
         return;
     }
-    prompt.push_str(&format!(
-        "\nEditable graph snapshot, base_plan={}:\n{}\nTo insert tasks or change dependencies, return a fenced ```graph JSON block with base_plan and tasks (complete specs of only added or updated tasks). Omitted nodes are preserved. Keep existing IDs. For example, to insert implementation between A and security/performance gates, add B depending on A and update those gates to depend on B. The runtime merges and validates the entire DAG. Before execution it stores a new immutable plan revision for review and approval. During execution it independently reviews the additive edit and applies it atomically within the approved requirements, preserving existing agents and results. Return either graph or plan, never both. During execution, existing task updates may change only depends_on, and only before that task has started. Add a new task for other changes. Never rewrite running or completed tasks. Historical graphs remain accessible through /plans.\n",
-        graph[0].plan_id,
-        graph_json
-    ));
+    prompt.push_str(&format!("\nCurrent task contracts for plan {}:\n{}\nUse submit_plan_revision with revision={{plan,base_revision,reason,tasks,retire}}. Only changed contracts go in tasks; omitted contracts are preserved. Retire a task only by replacing its obligations. Scope and permission expansion require the user's decision. Never emit graph or recover blocks.\n",graph[0].plan_id,graph_json));
 }
 
 fn prepend_phase(prompt: &mut String, interviewing: bool, workflow: Option<&Workflow>) {

@@ -9,14 +9,6 @@ use serde_json::Value;
 
 use crate::lean::tasks::{Verdict, counted_status};
 
-/// Rounds in a row without a new best that may leave the same obligations
-/// open before the rounds stop.
-pub const STALL_ROUNDS: u32 = 3;
-
-/// Share of the smaller open set that must be open in both rounds for them
-/// to count as the same problem.
-const SAME: f64 = 0.6;
-
 /// The obligations a verdict leaves open: judged an issue, blocked, or
 /// answered without a note.
 pub fn open_obligations(verdict: &Verdict) -> BTreeSet<String> {
@@ -25,6 +17,13 @@ pub fn open_obligations(verdict: &Verdict) -> BTreeSet<String> {
         .iter()
         .filter(|(_, entry)| is_open(entry))
         .map(|(id, _)| id.clone())
+        .chain(
+            verdict
+                .findings
+                .iter()
+                .filter(|f| matches!(f["severity"].as_str(), Some("critical" | "high" | "medium")))
+                .filter_map(|f| f["id"].as_str().map(|id| format!("finding:{id}"))),
+        )
         .collect()
 }
 
@@ -34,40 +33,18 @@ fn is_open(entry: &Value) -> bool {
 
 #[derive(Debug, Default)]
 pub struct Progress {
-    best: Option<usize>,
     previous: Option<BTreeSet<String>>,
-    stalled: u32,
 }
-
 impl Progress {
-    /// Records the obligations one round left open. Returns whether the
-    /// worker has stalled. A round that leaves none open (a verdict without
-    /// coverage) says nothing and neither counts nor resets.
+    /// The first rejection establishes a baseline; subsequent rejection must close an earlier obligation.
     pub fn record(&mut self, open: BTreeSet<String>) -> bool {
-        if open.is_empty() {
-            return false;
-        }
-        let better = self.best.is_none_or(|best| open.len() < best);
-        let same = self
+        let stalled = self
             .previous
             .as_ref()
-            .is_some_and(|before| overlap(before, &open) >= SAME);
-        if better {
-            self.best = Some(open.len());
-            self.stalled = 0;
-        } else if same {
-            self.stalled += 1;
-        } else {
-            self.stalled = 0;
-        }
+            .is_some_and(|before| !before.is_empty() && before.difference(&open).next().is_none());
         self.previous = Some(open);
-        self.stalled >= STALL_ROUNDS
+        stalled
     }
-}
-
-/// How much of the smaller set the other contains.
-fn overlap(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
-    a.intersection(b).count() as f64 / a.len().min(b.len()) as f64
 }
 
 #[cfg(test)]
@@ -88,7 +65,7 @@ mod tests {
     fn the_same_obligations_round_after_round_stall_the_worker() {
         let same = ["V5", "R2", "C3", "V1"];
         let stalled = rounds(&[&same, &same, &same, &same, &same]);
-        assert_eq!(stalled, [false, false, false, true, true]);
+        assert_eq!(stalled, [false, true, true, true, true]);
     }
 
     #[test]
@@ -99,7 +76,7 @@ mod tests {
             &["V5", "R2", "C3", "V1", "C13"],
             &["V5", "R2", "C3", "V1", "V4"],
         ]);
-        assert_eq!(stalled, [false, false, false, true]);
+        assert_eq!(stalled, [false, false, false, false]);
     }
 
     #[test]
@@ -113,7 +90,7 @@ mod tests {
             &["a", "b"],
             &["a", "b"],
         ]);
-        assert_eq!(stalled, [false, false, false, false, false, false, false]);
+        assert_eq!(stalled, [false, true, false, true, false, true, true]);
     }
 
     #[test]

@@ -62,29 +62,6 @@ pub enum Mode {
     Autonomous,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceMode {
-    InPlace,
-    /// Each writing task works in a private Git worktree stacked on its
-    /// dependencies' results; verified results are merged into the project.
-    TaskWorktrees,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkspaceConfig {
-    pub mode: WorkspaceMode,
-}
-
-impl Default for WorkspaceConfig {
-    fn default() -> Self {
-        Self {
-            mode: WorkspaceMode::TaskWorktrees,
-        }
-    }
-}
-
 impl ProviderKind {
     /// Pass the requested effort to the CLI; model-specific support is checked
     /// by the provider. Gemini has no native effort flag.
@@ -192,8 +169,6 @@ fn default_max_parallel() -> usize {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub schema_version: u32,
-    #[serde(default)]
-    pub workspace: WorkspaceConfig,
     pub providers: BTreeMap<ProviderKind, ProviderConfig>,
     pub profiles: BTreeMap<String, Profile>,
     pub orchestrator: OrchestratorConfig,

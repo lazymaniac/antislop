@@ -57,10 +57,6 @@ CREATE TABLE IF NOT EXISTS planning_runs(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), run_id TEXT NOT NULL REFERENCES runs(id));
 CREATE TABLE IF NOT EXISTS requirements_resumptions(
  operation_id TEXT PRIMARY KEY REFERENCES ledger_decisions(operation_id), message INTEGER NOT NULL REFERENCES messages(seq));
-CREATE TABLE IF NOT EXISTS solution_choices(
- run_id TEXT NOT NULL REFERENCES runs(id), spec_revision INTEGER NOT NULL,
- producer_turn TEXT NOT NULL REFERENCES turns(id), verifier_turn TEXT NOT NULL REFERENCES turns(id),
- decision TEXT NOT NULL, PRIMARY KEY(run_id,spec_revision));
 
 CREATE TABLE IF NOT EXISTS ledger_rejections(
  proposal_id TEXT PRIMARY KEY REFERENCES ledger_proposals(id),

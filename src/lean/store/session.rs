@@ -8,7 +8,7 @@ impl Store {
     ) -> Result<()> {
         let conflicting = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM run_contexts r JOIN turns t ON t.id=r.turn_id
-                WHERE t.id=?1 AND r.backend!='cli' AND
+                WHERE t.id=?1 AND
                 ((t.provider='codex' AND r.provider_thread_id IS NOT NULL AND r.provider_thread_id!=?2)
                  OR (t.provider!='codex' AND r.provider_session_id IS NOT NULL AND r.provider_session_id!=?2)))",
             params![turn, session],
@@ -16,7 +16,7 @@ impl Store {
         )?;
         crate::require(
             !conflicting,
-            "native run is already bound to another provider session",
+            "run is already bound to another provider session",
         )
     }
 

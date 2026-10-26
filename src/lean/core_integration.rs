@@ -9,7 +9,7 @@ impl Core {
         self: &Arc<Self>,
         conversation: &str,
         task: &mut Task,
-        spec: &TaskSpec,
+        spec: &TaskContract,
         project: &Path,
         worktree: &Path,
         config: &Config,

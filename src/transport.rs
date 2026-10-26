@@ -88,7 +88,7 @@ fn read_frame(reader: &mut impl BufRead) -> Result<Option<Value>> {
     Ok(Some(decode(&bytes)?))
 }
 
-/// Legacy small messages remain a single JSON line. Larger messages are sent
+/// Small messages use a single JSON line. Larger messages are sent
 /// as ordered bounded frames; MAX_FRAME limits a frame, never the whole text.
 pub fn write(writer: &mut impl Write, value: &impl serde::Serialize) -> Result<()> {
     let bytes = serde_json::to_vec(value)?;

@@ -1,8 +1,5 @@
 use super::*;
 
-#[path = "core_repeat_plan/delivery.rs"]
-mod delivery;
-
 impl Core {
     /// Whether `specs` asks for the same work as the last plan of the
     /// conversation that ran (ids aside).
@@ -10,9 +7,9 @@ impl Core {
         &self,
         conversation: &str,
         plan_id: &str,
-        specs: &[TaskSpec],
+        specs: &[TaskContract],
     ) -> Result<bool> {
-        let work = |spec: &TaskSpec| {
+        let work = |spec: &TaskContract| {
             (
                 spec.title.clone(),
                 spec.goal.clone(),
@@ -25,7 +22,7 @@ impl Core {
         };
         let mut before: Vec<_> = earlier
             .iter()
-            .filter_map(|task| serde_json::from_value::<TaskSpec>(task.spec.clone()).ok())
+            .filter_map(|task| serde_json::from_value::<TaskContract>(task.spec.clone()).ok())
             .map(|spec| work(&spec))
             .collect();
         let mut now: Vec<_> = specs.iter().map(work).collect();
@@ -34,35 +31,9 @@ impl Core {
         Ok(before == now)
     }
 
-    /// Sends the ```message blocks of `answer` and returns the answer
-    /// without them.
-    pub(in crate::lean) fn post(
-        self: &Arc<Self>,
-        conversation: &str,
-        plan_id: Option<&str>,
-        sender: &str,
-        answer: &str,
-    ) -> Result<String> {
-        let (text, outgoing, unreadable) = tasks::parse_messages_checked(answer);
-        for body in unreadable {
-            self.store.append_event(
-                conversation,
-                None,
-                plan_id,
-                "mail_rejected",
-                &json!({"sender": sender, "recipient": "?", "text": body,
-                        "reason": "unreadable message block: invalid JSON or an unescaped ``` inside it"}),
-            )?;
-        }
-        for message in outgoing {
-            self.deliver(conversation, plan_id, sender, message)?;
-        }
-        Ok(text)
-    }
-
-    /// The approved reports of the tasks `spec` depends on, as prompt text.
-    pub(in crate::lean) fn upstream(&self, plan_id: &str, spec: &TaskSpec) -> Result<String> {
-        let reports = self.store.dependency_reports(plan_id, &spec.depends_on)?;
+    /// Only named outputs and the selected local approach, as task data.
+    pub(in crate::lean) fn upstream(&self, plan_id: &str, spec: &TaskContract) -> Result<String> {
+        let reports = self.store.dependency_inputs(plan_id, spec)?;
         Ok(tasks::dependency_reports_note(&reports))
     }
 
@@ -72,7 +43,7 @@ impl Core {
     pub(in crate::lean) fn dependency_tasks(
         &self,
         plan_id: &str,
-        spec: &TaskSpec,
+        spec: &TaskContract,
     ) -> Result<Vec<Task>> {
         let plan = self.store.plan(plan_id)?;
         let mut seen = std::collections::HashSet::new();

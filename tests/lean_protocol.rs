@@ -109,7 +109,9 @@ impl DaemonGuard {
     }
 
     fn wait_for_planning(&self, conversation: &str) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Parallel protocol tests launch independent PTYs and daemons. Use the
+        // same budget as plan completion instead of assuming a five-second startup.
+        let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             let reply = self
                 .call_raw(&json!({"op":"events","conversation":conversation,"after":0,"wait_ms":0}))
@@ -124,7 +126,7 @@ impl DaemonGuard {
             }
             assert!(
                 Instant::now() < deadline,
-                "interview did not start planning automatically"
+                "interview did not start planning automatically; last response: {reply}"
             );
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -133,7 +135,7 @@ impl DaemonGuard {
     fn call_raw(&self, json_payload: &Value) -> std::result::Result<Value, String> {
         let socket_path = antislop::lean::daemon::socket(&self.state);
         let mut stream = UnixStream::connect(&socket_path).unwrap();
-        let mut bytes = serde_json::to_vec(json_payload).unwrap();
+        let mut bytes = serde_json::to_vec(&json!({"protocol":3,"request":json_payload})).unwrap();
         bytes.push(b'\n');
         stream.write_all(&bytes).unwrap();
         let mut reader = BufReader::new(stream);
@@ -473,7 +475,7 @@ fn test_sessions_structured_data() {
     assert_eq!(context["conversation"], conv_id);
     assert_eq!(context["role"], "orchestrator");
     assert_eq!(context["provider"], "codex");
-    assert_eq!(context["backend"], "cli");
+    assert!(context.get("backend").is_none());
     assert_eq!(context["profile"], "orchestrator");
     assert_eq!(context["cwd"], project.to_str().unwrap());
     assert_eq!(context["access"], "read_only");
@@ -895,7 +897,7 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
             "action": "extend_rounds", "freshness_token": token
         }))
         .unwrap_err();
-    assert!(error.contains("not waiting for recovery"), "{error}");
+    assert!(error.contains("unknown variant `extend_rounds`"), "{error}");
     let error = daemon
         .call_raw(&json!({
             "op": "recover", "conversation": conv, "plan": plan, "task": "t1",
@@ -1108,55 +1110,28 @@ fn live_config_updates_are_validated_and_preserve_daemon_identity() {
 }
 
 #[test]
-fn checks_falls_back_only_when_old_daemon_rejects_operation() {
-    use std::os::unix::net::UnixListener;
-
-    for unsupported in [true, false] {
-        let dir = tempfile::tempdir().unwrap();
-        let listener = UnixListener::bind(antislop::lean::daemon::socket(dir.path())).unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut line = String::new();
-            BufReader::new(&stream).read_line(&mut line).unwrap();
-            assert_eq!(
-                serde_json::from_str::<Value>(&line).unwrap()["op"],
-                "task_checks"
-            );
-            let error = if unsupported {
-                "unknown variant `task_checks`, expected `task`"
-            } else {
-                "conversation does not own plan"
-            };
-            writeln!(stream, "{}", json!({"error": error})).unwrap();
-            if unsupported {
-                let (mut stream, _) = listener.accept().unwrap();
-                line.clear();
-                BufReader::new(&stream).read_line(&mut line).unwrap();
-                let request: Value = serde_json::from_str(&line).unwrap();
-                assert_eq!(
-                    request,
-                    json!({"op": "task", "conversation": "c", "plan": "p", "id": "t"})
-                );
-                writeln!(stream, "{}", json!({"data": {"round": 3}})).unwrap();
-            }
-        });
-        let result = Client::at(dir.path()).call(&Request::TaskChecks {
+fn old_daemon_errors_are_reported_without_a_protocol_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener =
+        std::os::unix::net::UnixListener::bind(antislop::lean::daemon::socket(dir.path())).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line).unwrap();
+        let request: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["protocol"], 3);
+        assert_eq!(request["request"]["op"], "task_checks");
+        writeln!(stream, "{}", json!({"error":"incompatible protocol"})).unwrap();
+    });
+    let error = Client::at(dir.path())
+        .call(&Request::TaskChecks {
             conversation: Some("c".into()),
             plan: "p".into(),
             id: "t".into(),
-        });
-        if unsupported {
-            assert_eq!(result.unwrap()["round"], 3);
-        } else {
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("conversation does not own plan")
-            );
-        }
-        server.join().unwrap();
-    }
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("incompatible protocol"));
+    server.join().unwrap();
 }
 
 #[test]

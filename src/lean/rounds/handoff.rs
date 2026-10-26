@@ -4,7 +4,6 @@ struct HandoffSeed {
     report: Option<(u32, String)>,
     dependencies: Vec<tasks::DependencyReport>,
     primary: PathBuf,
-    in_place: bool,
 }
 
 impl Core {
@@ -14,7 +13,7 @@ impl Core {
         round: u32,
         cwd: &Path,
         task: &Task,
-        spec: &tasks::TaskSpec,
+        spec: &tasks::TaskContract,
     ) -> Result<RoundHandoff> {
         let seed = self.handoff_seed(id, round, task, spec)?;
         Ok(base_handoff(task, spec, round, cwd, seed))
@@ -25,19 +24,15 @@ impl Core {
         id: &str,
         round: u32,
         task: &Task,
-        spec: &tasks::TaskSpec,
+        spec: &tasks::TaskContract,
     ) -> Result<HandoffSeed> {
         let report = self.store.completed_worker_report(id, round)?;
-        let dependencies = self
-            .store
-            .dependency_reports(&task.plan_id, &spec.depends_on)?;
+        let dependencies = self.store.dependency_inputs(&task.plan_id, spec)?;
         let primary = self.primary_project(&task.plan_id)?;
-        let in_place = self.config_snapshot().workspace.mode == WorkspaceMode::InPlace;
         Ok(HandoffSeed {
             report,
             dependencies,
             primary,
-            in_place,
         })
     }
 
@@ -51,7 +46,7 @@ impl Core {
     pub(super) fn add_handoff_requirements(
         &self,
         task: &Task,
-        spec: &tasks::TaskSpec,
+        spec: &tasks::TaskContract,
         handoff: &mut RoundHandoff,
     ) -> Result<()> {
         let conversation = self.store.plan_conversation(&task.plan_id)?;
@@ -61,6 +56,13 @@ impl Core {
                 .ledger_entries(&conversation, &run, None)?
                 .into_iter()
                 .filter(|entry| spec.requirement_ids.contains(&entry.spec.id))
+                .map(|mut entry| {
+                    entry
+                        .spec
+                        .criteria
+                        .retain(|criterion| spec.criterion_ids.contains(&criterion.id));
+                    entry
+                })
                 .collect();
         }
         Ok(())
@@ -77,10 +79,14 @@ impl Core {
             .comments(&conversation, "open")?
             .into_iter()
             .filter(|comment| {
-                comment
-                    .plan_id
-                    .as_deref()
-                    .is_none_or(|plan| plan == task.plan_id)
+                (comment.target == spec_target(task)
+                    || comment
+                        .target
+                        .starts_with(&format!("{}/", spec_target(task))))
+                    && comment
+                        .plan_id
+                        .as_deref()
+                        .is_none_or(|plan| plan == task.plan_id)
             })
             .collect();
         Ok(())
@@ -88,22 +94,23 @@ impl Core {
 
     pub(super) fn add_protected_paths(
         &self,
-        task: &Task,
-        spec: &tasks::TaskSpec,
+        _task: &Task,
+        spec: &tasks::TaskContract,
         handoff: &mut RoundHandoff,
     ) -> Result<()> {
         if !spec.writes {
             return Ok(());
         }
-        handoff.protected_paths = if handoff.in_place {
-            task.base
-                .as_ref()
-                .map(|base| self.in_place_user_edits(&handoff.primary, base))
-                .transpose()?
-                .unwrap_or_default()
-        } else {
-            git::uncommitted(&handoff.primary)?
-        };
+        handoff.protected_paths = git::uncommitted(&handoff.primary)?
+            .into_iter()
+            .filter(|path| {
+                spec.scope.is_empty()
+                    || spec
+                        .scope
+                        .iter()
+                        .any(|scope| scope == "." || Path::new(path).starts_with(scope))
+            })
+            .collect();
         handoff.protected_paths.sort();
         handoff.protected_paths.dedup();
         Ok(())
@@ -191,7 +198,7 @@ impl Core {
 
 fn base_handoff(
     task: &Task,
-    spec: &tasks::TaskSpec,
+    spec: &tasks::TaskContract,
     round: u32,
     cwd: &Path,
     seed: HandoffSeed,
@@ -212,7 +219,6 @@ fn base_handoff(
         comments: vec![],
         protected_paths: vec![],
         primary: seed.primary,
-        in_place: seed.in_place,
     }
 }
 
@@ -253,4 +259,8 @@ fn should_mark_interrupted(
                 .report
                 .as_ref()
                 .is_none_or(|(reported, _)| source > *reported))
+}
+
+fn spec_target(task: &Task) -> &str {
+    task.spec["id"].as_str().unwrap_or(&task.id)
 }

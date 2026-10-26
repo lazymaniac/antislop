@@ -17,6 +17,9 @@ impl Core {
         )?;
         self.validate_plan_inputs(conversation, plan_id)?;
         queue(&self.store)?;
+        let authorized: bool = self.store.db().query_row("SELECT EXISTS(SELECT 1 FROM plan_authorizations WHERE plan_id=?1 AND conversation_id=?2)",rusqlite::params![plan_id,conversation],|r|r.get(0))?;
+        require(authorized, "plan implementation has not been authorized")?;
+
         self.blocked_seen
             .lock()
             .expect("blocked mutex")
@@ -45,7 +48,7 @@ impl Core {
             .plan_specs(plan_id)?
             .into_iter()
             .map(serde_json::from_value)
-            .collect::<std::result::Result<Vec<TaskSpec>, _>>()?;
+            .collect::<std::result::Result<Vec<TaskContract>, _>>()?;
         tasks::validate(&specs)?;
         let run = self.store.plan_run(plan_id)?.ok_or_else(|| {
             Error::Invalid("integrity error: plan has no requirements run".into())
@@ -87,6 +90,15 @@ impl Core {
         self.warn_of_uncommitted(conversation, tasks_write);
         loop {
             self.run_plan(conversation, plan_id, cancel);
+            while self
+                .revision_jobs
+                .lock()
+                .expect("revision jobs mutex")
+                .contains_key(conversation)
+                && !cancel.load(Ordering::SeqCst)
+            {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
             let _graph_guard = self.graph_updates.lock().expect("graph update mutex");
             if !cancel.load(Ordering::SeqCst) && self.has_runnable_dependents(plan_id) {
                 continue;
@@ -95,8 +107,10 @@ impl Core {
                 self.clear_running_plan(conversation);
                 return;
             }
-            self.finish_plan_run(conversation, plan_id, cancel);
-            break;
+            drop(_graph_guard);
+            if self.finish_plan_run(conversation, plan_id, cancel) {
+                break;
+            }
         }
     }
 
@@ -112,20 +126,30 @@ impl Core {
         self.plans.lock().expect("plans mutex").remove(conversation);
     }
 
-    fn finish_plan_run(self: &Arc<Self>, conversation: &str, plan_id: &str, cancel: &AtomicBool) {
+    fn finish_plan_run(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: &str,
+        cancel: &AtomicBool,
+    ) -> bool {
+        let graph = self.graph_updates.lock().expect("graph update mutex");
+        if self.has_runnable_dependents(plan_id) {
+            return false;
+        }
         let tasks = self.store.plan(plan_id).unwrap_or_default();
         if has_blocked_tasks(&tasks) {
             self.finish_blocked_plan(conversation, &tasks);
+            true
         } else {
-            self.finish_audited_plan(conversation, plan_id, cancel);
+            drop(graph);
+            self.finish_audited_plan(conversation, plan_id, cancel)
         }
     }
 
     fn finish_blocked_plan(self: &Arc<Self>, conversation: &str, tasks: &[Task]) {
         let autonomous = self.autonomous(conversation).unwrap_or(false);
         let mut plans = self.plans.lock().expect("plans mutex");
-        let states = self.recovery_states(tasks);
-        let report = blocked_report(tasks, autonomous, &states);
+        let report = blocked_report(tasks, autonomous);
         let told = self
             .blocked_seen
             .lock()
@@ -147,8 +171,32 @@ impl Core {
         conversation: &str,
         plan_id: &str,
         cancel: &AtomicBool,
-    ) {
+    ) -> bool {
+        let revision = self.store.plan_revision(plan_id).ok();
+        let basis = self
+            .store
+            .plan(plan_id)
+            .map(|tasks| plan_scope_hash(&tasks))
+            .ok();
         let report = self.plan_report(conversation, plan_id, cancel);
+        let _graph = self.graph_updates.lock().expect("graph update mutex");
+        if !cancel.load(Ordering::SeqCst)
+            && (self
+                .revision_jobs
+                .lock()
+                .expect("revision jobs mutex")
+                .contains_key(conversation)
+                || self.store.plan_revision(plan_id).ok() != revision
+                || self
+                    .store
+                    .plan(plan_id)
+                    .map(|tasks| plan_scope_hash(&tasks))
+                    .ok()
+                    != basis
+                || self.has_runnable_dependents(plan_id))
+        {
+            return false;
+        }
         let mut plans = self.plans.lock().expect("plans mutex");
         if let Ok(report) = report
             && self
@@ -159,12 +207,12 @@ impl Core {
             self.wake(conversation);
         }
         plans.remove(conversation);
+        true
     }
 
     /// Tell the user that worktree writers inherit their local changes.
     pub(in crate::lean) fn warn_of_uncommitted(&self, conversation: &str, writes: bool) {
-        let config = self.config_snapshot();
-        if !writes || config.workspace.mode == WorkspaceMode::InPlace {
+        if !writes {
             return;
         }
         let Some(text) = self.uncommitted_notice(conversation) else {
@@ -277,10 +325,5 @@ fn dependencies_approved(task: &Task, tasks: &[Task]) -> bool {
 }
 
 fn has_blocked_tasks(tasks: &[Task]) -> bool {
-    tasks.iter().any(|task| {
-        matches!(
-            task.status.as_str(),
-            status::STALE | status::NEEDS_USER | status::WAITING | status::FAILED
-        )
-    })
+    tasks.iter().any(|task| task.status != status::APPROVED)
 }

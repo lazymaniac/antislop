@@ -3,7 +3,7 @@ mod support;
 use antislop::lean::{
     ledger::*,
     store::{Store, TurnStatus},
-    tasks::TaskSpec,
+    tasks::TaskContract,
 };
 use serde_json::json;
 
@@ -526,7 +526,7 @@ fn removed_entry_and_task_fields_are_rejected() {
     }
     let mut task = f.task("task", &["r"], &[]);
     task["plan_item_ids"] = json!([]);
-    assert!(serde_json::from_value::<TaskSpec>(task).is_err());
+    assert!(serde_json::from_value::<TaskContract>(task).is_err());
 }
 
 #[test]
@@ -543,11 +543,11 @@ import json,sys,uuid,os,time,re
 prompt=sys.argv[-1]
 if 'Task id:' in prompt and 'You verify' not in prompt:
     task='a' if 'Task id: a\n' in prompt else 'b'
-    open('entered-'+task,'w').close()
-    while not os.path.exists('release-'+task):time.sleep(0.01)
+    open(os.path.join(os.path.dirname(__file__),'entered-'+task),'w').close()
+    while not os.path.exists(os.path.join(os.path.dirname(__file__),'release-'+task)):time.sleep(0.01)
     answer='Concrete report for '+task
 elif 'You verify' in prompt or 'You audit' in prompt:
-    ids=re.findall(r'^- ([RCV][0-9]+): ',prompt,re.M)
+    ids=re.findall(r'^- ([A-Za-z0-9_.-]+): ',prompt,re.M)
     answer='```verdict\n'+json.dumps({'approved':True,'findings':[],'coverage':{i:{'status':'ok','note':'independently checked'} for i in ids}})+'\n```'
 else:answer='Scope remains open; request executor work for evidence.'
 session=str(uuid.uuid4())
@@ -597,7 +597,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
     wait(&|| core.is_idle(&f.conversation));
     let after = core.store.plan(&tasks[0].plan_id).unwrap();
     assert_eq!(after[0].status, "stale");
-    assert_eq!(after[1].status, "approved");
+    assert_eq!(after[1].status, "approved", "{:?}", after[1].report);
     assert!(core.store.assert_task_inputs(&tasks[0]).is_err());
     assert!(core.store.assert_task_inputs(&after[1]).is_ok());
     assert_eq!(
@@ -1147,12 +1147,6 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 .id,
             analyst
         );
-        assert!(
-            core.store
-                .solution_choice(&f.conversation, &f.run.id)
-                .unwrap()
-                .is_none()
-        );
         for role in [
             "requirements-options-analyst",
             "requirements-options-verifier",
@@ -1183,12 +1177,6 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         core.store
             .apply_ledger_change(&f.change(2, vec![amended]), f.dir.path(), true)
             .unwrap();
-        assert!(
-            core.store
-                .solution_choice(&f.conversation, &f.run.id)
-                .unwrap()
-                .is_none()
-        );
     }
 }
 
@@ -1248,211 +1236,6 @@ fn accepted_requirements_resume_durably_after_restart_and_ignore_empty_manual_se
             .has_pending_requirements_approval(&f.conversation)
             .unwrap()
     );
-}
-
-#[test]
-fn old_options_rejection_recovers_as_plan_feedback_without_repeating_agents() {
-    let f = Fixture::new();
-    f.store.begin_interview(&f.conversation).unwrap();
-    let user = f.store.messages_by(&f.conversation, "user", 0).unwrap()[0].seq;
-    f.store
-        .interview_summary(&f.conversation, "Keep scope", user)
-        .unwrap();
-    f.store.finish_interview(&f.conversation).unwrap();
-    f.store
-        .select_planning_run(&f.conversation, &f.run.id)
-        .unwrap();
-    f.apply(&f.change(0, vec![f.entry("r1")]));
-    f.review("extraction", "", true);
-    let producer = f.turn("options", false);
-    let verifier = f.turn("options", true);
-    let comparison = json!({"run_id":f.run.id,"spec_revision":1,"criteria":["Evidence"],"alternatives":[{"id":"diagnose","approach":"Measure before selecting an optimization","evaluations":["Establishes evidence"],"risks":"Measurement may be inconclusive","validation":"Check a reproducible baseline"},{"id":"rewrite","approach":"Rewrite based on old measurements","evaluations":["Uses stale evidence"],"risks":"May optimize the wrong path","validation":"Compare against a baseline"}],"selected":"diagnose","rationale":{"why":"Fresh evidence is needed","tradeoffs":["Defers optimization until after measurement"],"reopen":{"when":"The baseline identifies another bottleneck"}}});
-    f.store
-        .append_event(
-            &f.conversation,
-            Some(&producer),
-            None,
-            "agent_final",
-            &json!({"text":format!("```options\n{}\n```",comparison)}),
-        )
-        .unwrap();
-    f.store
-        .record_ledger_review(
-            &f.conversation,
-            &f.run.id,
-            1,
-            "options",
-            &producer,
-            &verifier,
-            "",
-            false,
-            "The complete plan must specify the decision criteria and independent oracle.",
-        )
-        .unwrap();
-    f.store.recover_options_comparisons().unwrap();
-    f.store.recover_options_comparisons().unwrap();
-    let choice = f
-        .store
-        .solution_choice(&f.conversation, &f.run.id)
-        .unwrap()
-        .unwrap();
-    assert!(choice.rationale.contains("Fresh evidence is needed"));
-    assert!(choice.rationale.contains("Defers optimization"));
-    assert!(choice.rationale.contains("another bottleneck"));
-    assert!(choice.review_findings[0].contains("independent oracle"));
-    assert_eq!(
-        f.store
-            .messages_by(&f.conversation, "options-planner", 0)
-            .unwrap()
-            .len(),
-        1
-    );
-    assert!(
-        f.store
-            .has_pending_requirements_approval(&f.conversation)
-            .unwrap()
-    );
-}
-
-#[test]
-fn live_graph_inserts_work_before_gates_preserving_existing_task_identity() {
-    let f = Fixture::new();
-    f.apply(&f.change(0, vec![f.entry("R1")]));
-    f.review("extraction", "", true);
-    let tasks = f.plan(vec![
-        f.task("implementation", &["R1"], &[]),
-        f.task("security", &["R1"], &["implementation"]),
-        f.task("performance", &["R1"], &["implementation"]),
-    ]);
-    let plan = &tasks[0].plan_id;
-    f.store.queue_plan(&f.conversation, plan).unwrap();
-    // A worker is active while two downstream checks remain unstarted.
-    let mut worker = f.store.plan(plan).unwrap()[0].clone();
-    worker.status = "working".into();
-    worker.round = 1;
-    worker.report = Some("Historical progress".into());
-    f.store.update_task(&worker).unwrap();
-    let baseline = f.store.plan(plan).unwrap();
-    let patch = json!({"base_plan":plan,"tasks":[
-        f.task("extra", &["R1"], &["implementation"]),
-        f.task("security", &["R1"], &["extra"]),
-        f.task("performance", &["R1"], &["extra"])
-    ]});
-    let current = baseline
-        .iter()
-        .map(|task| serde_json::from_value(task.spec.clone()).unwrap())
-        .collect::<Vec<TaskSpec>>();
-    let specs =
-        antislop::lean::tasks::parse_graph_edit(&format!("```graph\n{patch}\n```"), plan, &current)
-            .1
-            .unwrap()
-            .unwrap();
-    f.store
-        .extend_running_graph(&f.conversation, &baseline, &specs)
-        .unwrap();
-    let edited = f.store.plan(plan).unwrap();
-    assert_eq!(edited.len(), 4);
-    assert_eq!(edited[0].id, tasks[0].id);
-    assert_eq!(edited[0].round, 1);
-    assert_eq!(edited[0].report.as_deref(), Some("Historical progress"));
-    assert_eq!(edited[1].spec["id"], "extra");
-    assert_eq!(edited[1].status, "queued");
-    assert_eq!(edited[2].id, tasks[1].id);
-    assert_eq!(edited[2].spec["depends_on"], json!(["extra"]));
-    assert_eq!(edited[3].id, tasks[2].id);
-    f.store.assert_task_inputs(&edited[1]).unwrap();
-    assert_eq!(f.store.plans_page(&f.conversation, 0, 10).unwrap().total, 1);
-    // The same reviewed baseline cannot overwrite a later graph revision.
-    assert!(
-        f.store
-            .extend_running_graph(&f.conversation, &baseline, &specs)
-            .is_err()
-    );
-}
-
-#[test]
-fn live_graph_rejects_started_gate_changes_atomically() {
-    let f = Fixture::new();
-    f.apply(&f.change(0, vec![f.entry("R1")]));
-    f.review("extraction", "", true);
-    let tasks = f.plan(vec![
-        f.task("implementation", &["R1"], &[]),
-        f.task("security", &["R1"], &["implementation"]),
-    ]);
-    let plan = &tasks[0].plan_id;
-    f.store.queue_plan(&f.conversation, plan).unwrap();
-    let baseline = f.store.plan(plan).unwrap();
-    let specs = vec![
-        serde_json::from_value(f.task("implementation", &["R1"], &[])).unwrap(),
-        serde_json::from_value(f.task("extra", &["R1"], &["implementation"])).unwrap(),
-        serde_json::from_value(f.task("security", &["R1"], &["extra"])).unwrap(),
-    ];
-    let mut gate = baseline[1].clone();
-    gate.status = "verifying".into();
-    gate.round = 1;
-    f.store.update_task(&gate).unwrap();
-    let error = f
-        .store
-        .extend_running_graph(&f.conversation, &baseline, &specs)
-        .unwrap_err();
-    assert!(error.to_string().contains("already started"));
-    let unchanged = f.store.plan(plan).unwrap();
-    assert_eq!(unchanged.len(), 2);
-    assert_eq!(unchanged[1].spec["depends_on"], json!(["implementation"]));
-    assert_eq!(unchanged[1].status, "verifying");
-}
-
-#[test]
-fn initial_and_graph_plans_reject_the_same_invalid_requirement_links() {
-    let f = Fixture::new();
-    let mut inactive = f.entry("inactive");
-    f.apply(&f.change(0, vec![f.entry("R1"), f.entry("R2"), inactive.clone()]));
-    inactive.disposition = Disposition::SupersededByUser;
-    f.apply(&f.change(1, vec![inactive]));
-    f.review("extraction", "", true);
-    let tasks = f.plan(vec![f.task("base", &["R1", "R2"], &[])]);
-    f.store
-        .queue_plan(&f.conversation, &tasks[0].plan_id)
-        .unwrap();
-    let baseline = f.store.plan(&tasks[0].plan_id).unwrap();
-    for (requirements, criteria) in [
-        (json!([]), json!([])),
-        (json!(["missing"]), json!([])),
-        (json!(["inactive"]), json!([])),
-        (json!(["R1"]), json!(["R2.accept"])),
-    ] {
-        let mut invalid = f.task("added", &["R1"], &["base"]);
-        invalid["requirement_ids"] = requirements;
-        invalid["criterion_ids"] = criteria;
-        let specs = vec![baseline[0].spec.clone(), invalid];
-        let candidate = f.store.add_plan(&f.conversation, &specs).unwrap();
-        f.store
-            .link_plan_run(&f.conversation, &candidate[0].plan_id, &f.run.id)
-            .unwrap();
-        let initial = f
-            .store
-            .bind_task_ledger(&f.conversation, &f.run.id, &candidate[0].plan_id)
-            .unwrap_err();
-        let specs: Vec<TaskSpec> = specs
-            .into_iter()
-            .map(|s| serde_json::from_value(s).unwrap())
-            .collect();
-        let edit = f
-            .store
-            .extend_running_graph(&f.conversation, &baseline, &specs)
-            .unwrap_err();
-        assert_eq!(initial.to_string(), edit.to_string());
-        assert_eq!(f.store.plan(&tasks[0].plan_id).unwrap(), baseline);
-    }
-    let mut support = f.task("support", &["R1"], &["base"]);
-    support["criterion_ids"] = json!([]);
-    let specs = vec![
-        serde_json::from_value(baseline[0].spec.clone()).unwrap(),
-        serde_json::from_value(support).unwrap(),
-    ];
-    f.store
-        .extend_running_graph(&f.conversation, &baseline, &specs)
-        .unwrap();
 }
 
 #[test]

@@ -5,9 +5,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-/// Historical paste threshold, retained for API compatibility; no longer enforced.
-pub const MAX_PASTE_BYTES: usize = 64 * 1024;
-
 /// Normalizes line endings and sanitizes terminal controls without clipping text.
 pub fn sanitize_paste(raw: &str) -> String {
     clean(&raw.replace("\r\n", "\n").replace('\r', "\n"))

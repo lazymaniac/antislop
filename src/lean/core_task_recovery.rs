@@ -1,5 +1,5 @@
 use super::core_feedback_helpers::{event_files, land, note};
-use super::core_path_helpers::{task_path_component, worktree_branch};
+use super::core_path_helpers::{worktree_branch, worktree_path};
 use super::*;
 
 impl Core {
@@ -14,16 +14,18 @@ impl Core {
         let project = PathBuf::from(conv.project);
         let _one_at_a_time = self.integrating.lock().expect("integration mutex");
         let mut task = self.task(&req.plan, &req.task)?;
-        let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
+        let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
         self.store.assert_task_inputs(&task)?;
         let current_token = self.task_freshness_token(&req.conversation, &req.plan, &task.id)?;
         require(req.freshness_token == current_token, "stale_token")?;
         require(
-            (req.action == RecoveryAction::RestartAgent
-                && matches!(
-                    task.status.as_str(),
-                    status::QUEUED | status::WORKING | status::VERIFYING
-                ))
+            (matches!(
+                req.action,
+                RecoveryAction::RestartAgent | RecoveryAction::CancelTask
+            ) && matches!(
+                task.status.as_str(),
+                status::QUEUED | status::WORKING | status::VERIFYING
+            )) || task.status == status::COORDINATING
                 || task.status == status::NEEDS_USER
                 || task.status == status::WAITING
                 || task.status == status::FAILED
@@ -32,7 +34,10 @@ impl Core {
             "task is not waiting for recovery",
         )?;
 
-        if req.action == RecoveryAction::RestartAgent {
+        if matches!(
+            req.action,
+            RecoveryAction::RestartAgent | RecoveryAction::CancelTask
+        ) {
             let active = self.task_cancels.lock().expect("task cancel mutex");
             if let Some((_, cancel)) = active.get(&task.id) {
                 self.task_restarts
@@ -58,6 +63,10 @@ impl Core {
 
         match req.action {
             RecoveryAction::IntegrateWithConsent => {
+                require(
+                    task.verdict.as_ref().is_some_and(|v| v["approved"] == true),
+                    "independent review must approve the current result before integration",
+                )?;
                 let change = task.result.clone().ok_or_else(|| {
                     Error::Invalid("task has no result commit to integrate".into())
                 })?;
@@ -122,10 +131,7 @@ impl Core {
                     }
                 }
                 if task.status == status::APPROVED {
-                    let worktree = self
-                        .state
-                        .join("worktrees")
-                        .join(task_path_component(&task.id)?);
+                    let worktree = worktree_path(&self.state, &task)?;
                     if worktree.exists() {
                         git::remove_worktree(
                             &project,
@@ -180,10 +186,7 @@ impl Core {
                     Some(&b),
                     &[],
                 );
-                let worktree = self
-                    .state
-                    .join("worktrees")
-                    .join(task_path_component(&task.id)?);
+                let worktree = worktree_path(&self.state, &task)?;
                 let _ = git::remove_worktree_keep_branch(&project, &worktree);
                 note(&mut task, notice.clone());
                 self.store.update_task(&task)?;
@@ -221,6 +224,19 @@ impl Core {
                 task.result = Some(snapshot.clone());
                 self.set_status(&req.conversation, &mut task, status::VERIFYING)?;
                 let verifier = format!("verifier:{}", task.id);
+                let reviewdir = self.state.join("worktrees").join(format!(
+                    "{}-manual-review-g{}-{}",
+                    task.id, task.input_generation, task.round
+                ));
+                git::add_worktree(
+                    &project,
+                    &reviewdir,
+                    &format!(
+                        "antislop/{}-manual-review-g{}-{}",
+                        task.id, task.input_generation, task.round
+                    ),
+                    &snapshot,
+                )?;
                 let setup = TurnSetup {
                     session_policy: SessionPolicy::TaskRound {
                         task: task.id.clone(),
@@ -230,7 +246,7 @@ impl Core {
                     plan_id: Some(task.plan_id.clone()),
                     role: verifier.clone(),
                     profile: config.resolve(spec.kind, RoleKind::Verifier),
-                    cwd: project.clone(),
+                    cwd: reviewdir,
                     add_dirs: vec![],
                     access: agent::Access::ReadOnly,
                     upto_message: 0,
@@ -251,14 +267,30 @@ impl Core {
                         if fresh { "" } else { &upstream },
                     )
                 })?;
-                let answer = answer.unwrap_or_default();
-                let answer = self.post(
-                    &req.conversation,
-                    Some(&task.plan_id),
-                    &format!("{}/verifier", spec.id),
-                    &answer,
-                )?;
-                let mut verdict = tasks::parse_verdict(&answer);
+                let Some(answer) = answer else {
+                    self.stop_task(&req.conversation, &mut task, &verifier, &cancel)?;
+                    return Err(Error::Invalid(
+                        "manual snapshot verifier failed; inspect its raw turn error".into(),
+                    ));
+                };
+                let mut verdict = match serde_json::from_str::<turn_result::TurnResult>(&answer)? {
+                    turn_result::TurnResult::Review { verdict, .. } => verdict,
+                    turn_result::TurnResult::NeedsInput {
+                        request,
+                        checkpoint,
+                    } => {
+                        task.report = Some(checkpoint);
+                        self.wait_for_question(&req.conversation, &mut task, &request, true)?;
+                        return Err(Error::Invalid(
+                            "manual snapshot awaits orchestrator answer".into(),
+                        ));
+                    }
+                    _ => {
+                        return Err(Error::Invalid(
+                            "manual snapshot requires an independent review".into(),
+                        ));
+                    }
+                };
                 let obligations = tasks::obligations(&spec);
                 tasks::settle(&mut verdict, &obligations, !spec.writes);
 
@@ -282,11 +314,11 @@ impl Core {
                     task.status = status::APPROVED.to_string();
                     let (outcome, commit) = if config.policy.local_commits && !fixed.is_empty() {
                         (
-                            Outcome::InPlaceCommitted,
+                            Outcome::Committed,
                             Some(git::commit_paths(&project, &fixed, &spec.title)?),
                         )
                     } else {
-                        (Outcome::InPlaceApplied, None)
+                        (Outcome::Applied, None)
                     };
                     notice = match &commit {
                         Some(commit) => format!("manual fixes verified and committed as {commit}"),
@@ -302,10 +334,7 @@ impl Core {
                         &fixed,
                     );
                     note(&mut task, notice.clone());
-                    let worktree = self
-                        .state
-                        .join("worktrees")
-                        .join(task_path_component(&task.id)?);
+                    let worktree = worktree_path(&self.state, &task)?;
                     if worktree.exists() {
                         git::remove_worktree(
                             &project,
@@ -341,7 +370,7 @@ impl Core {
                     ));
                     land(
                         &mut task,
-                        Outcome::InPlaceCommitted,
+                        Outcome::Committed,
                         "recovery",
                         &notice,
                         Some(&snapshot),
@@ -410,27 +439,6 @@ impl Core {
                 )?;
                 self.maybe_continue_plan(&req.conversation, &req.plan)?;
             }
-            RecoveryAction::ExtendRounds => {
-                task.status = status::QUEUED.to_string();
-                task.verdict = None;
-                task.feedback = None;
-                notice = "extended rounds for task".to_string();
-                self.store.update_task(&task)?;
-                self.announce_task(&req.conversation, &task, None);
-                self.store.append_event(
-                    &req.conversation,
-                    None,
-                    Some(&req.plan),
-                    "task_recovery",
-                    &json!({
-                        "actor": actor,
-                        "task": task.id,
-                        "action": tasks::action::EXTEND_ROUNDS,
-                        "status": task.status
-                    }),
-                )?;
-                self.maybe_continue_plan(&req.conversation, &req.plan)?;
-            }
             RecoveryAction::RestartAgent => {
                 // The next turns of this task start in fresh CLI sessions;
                 // its worktree, report and results stay as they are.
@@ -470,94 +478,13 @@ impl Core {
                 )?;
                 self.maybe_continue_plan(&req.conversation, &req.plan)?;
             }
-            RecoveryAction::ForceApprove => {
-                let worker_done = self
-                    .store
-                    .last_turn(&req.conversation, &format!("worker:{}", task.id))?
-                    .is_some_and(|turn| turn.status == TurnStatus::Done);
-                require(
-                    worker_done && task.report.is_some() && task.round > 0,
-                    "a task that never ran cannot be approved; retry it instead",
-                )?;
-                if spec.writes {
-                    require(
-                        task.base.is_some() && task.result.is_some(),
-                        "a writer must have a result commit before approval",
-                    )?;
-                    let worktree = self
-                        .state
-                        .join("worktrees")
-                        .join(task_path_component(&task.id)?);
-                    git::add_worktree(
-                        &project,
-                        &worktree,
-                        &worktree_branch(&self.state, &task)?,
-                        task.result.as_deref().unwrap(),
-                    )?;
-                    // integrate takes the same mutex; the recovery guard already serializes it.
-                    drop(_one_at_a_time);
-                    self.integrate(
-                        &req.conversation,
-                        &mut task,
-                        &spec,
-                        &project,
-                        &worktree,
-                        &config,
-                        &AtomicBool::new(false),
-                    )?;
-                    require(
-                        task.status == status::APPROVED,
-                        "the result is not integrated; resolve the recorded integration problem",
-                    )?;
-                }
-                task.status = status::APPROVED.to_string();
-                notice = req
-                    .message
-                    .as_deref()
-                    .map(|m| format!("verification overridden by {actor}: {m}"))
-                    .unwrap_or_else(|| format!("verification overridden by {actor}"));
-                if spec.writes {
-                    if let Some(feedback) = task.feedback.as_mut() {
-                        feedback["verification_override"] =
-                            json!({"source": "recovery", "detail": notice});
-                    }
-                } else {
-                    land(
-                        &mut task,
-                        Outcome::ForceApproved,
-                        "recovery",
-                        &notice,
-                        None,
-                        None,
-                        &[],
-                    );
-                }
+            RecoveryAction::CancelTask => {
+                task.status = status::CANCELLED.into();
+                task.verdict = None;
+                notice = "task cancelled; its outstanding requirements remain unsatisfied".into();
                 note(&mut task, notice.clone());
                 self.store.update_task(&task)?;
-                self.announce_task(&req.conversation, &task, None);
-                self.store.append_event(
-                    &req.conversation,
-                    None,
-                    Some(&req.plan),
-                    "task_recovery",
-                    &json!({
-                        "actor": actor,
-                        "task": task.id,
-                        "action": tasks::action::FORCE_APPROVE,
-                        "status": task.status,
-                        "detail": tasks::bound(&notice, tasks::DETAIL_LIMIT)
-                    }),
-                )?;
-                self.unblock_dependent_tasks(&req.conversation, &req.plan, &task.id)?;
-                // Mail that reached the task before it was approved by hand
-                // has no round left to be read in.
-                self.answer_in_background(&req.conversation, &req.plan);
-                self.maybe_continue_plan(&req.conversation, &req.plan)?;
-            }
-            RecoveryAction::CancelTask => {
-                return Err(Error::Invalid(
-                    "tasks cannot be discarded; pause the plan or retry the task".into(),
-                ));
+                self.announce_task(&req.conversation, &task, Some(&notice));
             }
         }
 

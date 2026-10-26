@@ -40,6 +40,7 @@ impl Store {
         transaction.execute_batch(include_str!("../ledger/schema.sql"))?;
         Self::initialize_history(&transaction)?;
         Self::initialize_run_context(&transaction)?;
+        transaction.execute_batch(include_str!("agent_runtime.sql"))?;
         transaction.pragma_update(None, "user_version", SCHEMA)?;
         transaction.commit()?;
         Ok(())

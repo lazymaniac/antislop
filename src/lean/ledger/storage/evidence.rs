@@ -122,7 +122,7 @@ fn validate_evidence_task_links(
         |row| row.get(0),
     )?;
     require(
-        serde_json::from_str::<TaskSpec>(&spec)?
+        serde_json::from_str::<TaskContract>(&spec)?
             .criterion_ids
             .contains(&proposal.criterion_id),
         "evidence task does not implement this criterion",

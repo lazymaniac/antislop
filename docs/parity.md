@@ -19,7 +19,7 @@ In reference state `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8`:
 In **lean core** (`src/lean/`):
 
 - State uses lightweight SQLite (`core.db`), append-only events (`events`), and an asynchronous daemon queried through `events long-poll` (up to 500 entries / 1 MB payload per `events` request).
-- Agents are native CLI processes in Git worktrees (or `in-place` with snapshot commits detecting user edits).
+- Agents are native CLI processes in isolated task worktrees with separate read-only verification checkouts.
 - The TUI deterministically projects the event log (`View = fold(events)`). Heavy resources (diffs, task reports, structured history) load asynchronously on dedicated threads when requested, without blocking rendering or input.
 - **Parity with `main` covers all user ergonomics, editor semantics, shortcuts, responsiveness, card appearance, inspection, recipient selection, and safety guarantees (frozen confirmations with `scope_hash` validation).**
 

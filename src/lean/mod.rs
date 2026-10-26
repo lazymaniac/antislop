@@ -2,17 +2,15 @@
 //! rows of state and an event log. See docs/lean-core.md.
 
 pub mod agent;
-mod blocker;
 pub mod cli;
 pub mod content;
 mod core;
+mod core_agent_review;
 mod core_agent_turn;
 mod core_change_review;
-mod core_clarify_task;
 mod core_comment_at;
 mod core_comment_helpers;
 mod core_config_snapshot;
-mod core_finish_in_place;
 mod core_integration;
 mod core_integration_repair;
 mod core_orchestrator_turn;
@@ -20,23 +18,23 @@ mod core_plan_proposal;
 mod core_plan_report;
 mod core_plan_resume;
 mod core_plan_review;
+mod core_plan_revision;
 mod core_repeat_plan;
-mod core_revise_graph;
 mod core_start_plan;
 mod core_task_checks;
 mod core_task_execution;
 mod core_task_freshness;
+mod core_task_inputs;
 mod core_task_recovery;
 mod core_unanswered;
 mod core_unblock_dependents;
 mod core_writer_base;
 pub use core_comment_helpers::comment_label;
+mod agent_tools;
 mod core_feedback_helpers;
 mod core_path_helpers;
 mod core_plan_helpers;
 mod core_prompt_helpers;
-mod core_recovery_options;
-mod core_recovery_progress;
 pub mod daemon;
 pub mod diff;
 mod feasibility;
@@ -52,21 +50,21 @@ pub mod native;
 mod plan_tests;
 mod progress;
 pub mod projects;
-mod recovery_progress;
 #[cfg(test)]
 mod reliability_tests;
 pub mod risks;
 mod rounds;
-mod split;
 pub mod store;
+mod task_failure;
 pub mod tasks;
 pub mod terminal;
 pub mod trust;
 pub mod tui;
+pub mod turn_result;
 
 use crate::{
     Error, Result,
-    config::{Config, ResolvedProfile, RoleKind, WorkKind, WorkspaceMode},
+    config::{Config, ResolvedProfile, RoleKind, WorkKind},
     require,
 };
 use serde_json::json;
@@ -77,7 +75,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use store::{
     Comment, Conversation, Mail, Message, PlanHistory, PlansPage, Store, Task, TurnStatus,
 };
-use tasks::{Outcome, TaskSpec, Verdict, status};
+use tasks::{Outcome, TaskContract, Verdict, status};
 
 /// A task role address. Bare task IDs are handled by callers that accept them;
 /// storage and UI callers must only recognize explicit worker/verifier roles.
@@ -106,9 +104,7 @@ pub enum RecoveryAction {
     KeepOnBranch,
     VerifyManualSnapshot,
     RetryWithGuidance,
-    ExtendRounds,
     RestartAgent,
-    ForceApprove,
     CancelTask,
 }
 
@@ -198,7 +194,6 @@ const PLAN_VERIFIER: &str = "plan-verifier";
 const PLAN_LINT: &str = "plan-lint";
 /// Checks, after a plan ran, that the user's request was fully delivered.
 const AUDITOR: &str = "auditor";
-const MAIL_TURNS: usize = 2;
 
 pub struct Core {
     pub store: Store,
@@ -214,14 +209,13 @@ pub struct Core {
     /// Writers land on the user's branch one at a time.
     integrating: Mutex<()>,
     graph_updates: Mutex<()>,
-    /// In-place writers work in the user's directory one at a time.
-    in_place: Mutex<()>,
-    /// Mail work must not occupy the plan scheduler's ownership slot.
-    mail_jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    revising: Mutex<std::collections::BTreeSet<String>>,
+    revision_jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    agent_reviews: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Active task processes can be cancelled independently.
     task_cancels: Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,
     task_restarts: Mutex<HashMap<String, TaskRecoveryRequest>>,
     orchestrator_restarts: Mutex<std::collections::HashSet<String>>,
-    mail_failures: Mutex<HashMap<(String, String), u64>>,
     turn_locks: Mutex<mail::TurnLocks>,
     /// Conversations with an orchestrator loop running, and its cancel flag.
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -243,7 +237,7 @@ impl Drop for Core {
 /// Who runs a turn, where, and with what access.
 struct PlanProposal<'a> {
     config: &'a Config,
-    specs: &'a [TaskSpec],
+    specs: &'a [TaskContract],
 }
 
 #[derive(Clone, Debug)]

@@ -2,14 +2,10 @@
 # Copy to your project as antislop.toml and adjust binaries and models.
 # Supported CLIs: codex, agy, claude, gemini, opencode. Each task kind names a worker profile
 # and a verifier profile; every verifier gets its own session.
-schema_version = 1
+schema_version = 2
 
-# task-worktrees: each writer works in its own git worktree and its approved
-# change is integrated into your branch. in-place: writers work in this
-# directory itself, one at a time; a writer that touches a file you were
-# editing stops for you.
-[workspace]
-mode = "task-worktrees"
+# Every writer uses an isolated Git worktree. Verified changes are integrated
+# through the runtime; direct writes in the primary checkout are unsupported.
 
 # supervised: you accept every plan. autonomous: a checked plan runs on its own.
 # This is the default; `/mode` changes it for one conversation.
@@ -89,7 +85,7 @@ effort = "high"
 # implementation, refactoring, static analysis, test design/execution,
 # integration, research, writing and delivery. Like reasoning, it is an
 # executor. A task's writes flag determines write access; the profile name
-# itself does not grant it. workspace.mode determines where writers work.
+# itself does not grant it. writers always work in isolated task worktrees.
 [profiles.execution]
 provider = "agy"
 # model = "gemini-3.8-flash-high"

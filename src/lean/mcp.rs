@@ -1,7 +1,8 @@
 //! The one channel back from an interactive agent: a loopback MCP server
-//! with a single tool, `finish_turn`. The daemon types the prompt into the
+//! with role-scoped tools. The daemon types the prompt into the
 //! agent's terminal; the agent ends the turn by calling the tool with the
 //! turn's id and its final answer. Nothing is read from the terminal screen.
+mod schema;
 use super::native::invalid;
 use crate::{Error, Result};
 use serde_json::{Value, json};
@@ -12,6 +13,15 @@ use std::time::{Duration, Instant};
 
 pub(crate) const SERVER: &str = "antislop";
 pub(crate) const TOOL: &str = "finish_turn";
+pub(crate) const TOOLS: &[&str] = &[
+    TOOL,
+    "ask_orchestrator",
+    "await_orchestrator",
+    "reply_to_agent",
+    "submit_plan_revision",
+    "task_risks",
+];
+pub(crate) type Handler = dyn Fn(&str, &Value) -> Result<Value> + Send + Sync;
 /// The error of a turn the runtime cancelled while it waited.
 pub(crate) const CANCELLED: &str = "agent turn cancelled";
 /// Largest request body accepted; an answer is text, not a repository.
@@ -32,6 +42,11 @@ struct State {
     session: Option<String>,
     /// The CLI asked for the tool list: it is running and can use the tool.
     listed: bool,
+    handler: Option<Arc<Handler>>,
+    role: String,
+    receipt: Option<(String, Value)>,
+    waiting: Option<Instant>,
+    waited: Duration,
 }
 
 struct Shared {
@@ -94,11 +109,30 @@ impl Gateway {
         let mut state = self.shared.state.lock().map_err(invalid)?;
         state.expected = Some(turn.into());
         state.finished = None;
+        state.waited = Duration::ZERO;
+        state.waiting = None;
         Ok(())
     }
 
     /// Whether the CLI has connected and discovered the tool; every supported
     /// CLI does so while starting, before it takes a prompt.
+    pub(crate) fn set_role(&self, role: &str) -> Result<()> {
+        self.shared.state.lock().map_err(invalid)?.role = role.into();
+        Ok(())
+    }
+
+    pub(crate) fn tool_names(&self) -> Vec<&'static str> {
+        self.shared
+            .state
+            .lock()
+            .map_or_else(|_| vec![TOOL], |s| allowed_tools(&s.role))
+    }
+
+    pub(crate) fn set_handler(&self, handler: Arc<Handler>) -> Result<()> {
+        self.shared.state.lock().map_err(invalid)?.handler = Some(handler);
+        Ok(())
+    }
+
     pub(crate) fn connected(&self) -> bool {
         self.shared.state.lock().is_ok_and(|state| state.listed)
     }
@@ -117,7 +151,7 @@ impl Gateway {
         timeout: Duration,
         alive: impl Fn() -> Result<()>,
     ) -> Result<Finish> {
-        let deadline = Instant::now() + timeout;
+        let started = Instant::now();
         let mut state = self.shared.state.lock().map_err(invalid)?;
         loop {
             if let Some(finish) = state.finished.take() {
@@ -128,7 +162,8 @@ impl Gateway {
                 state.expected = None;
                 return Err(Error::Invalid(CANCELLED.into()));
             }
-            if Instant::now() >= deadline {
+            let waiting = state.waited + state.waiting.map_or(Duration::ZERO, |at| at.elapsed());
+            if started.elapsed().saturating_sub(waiting) >= timeout {
                 state.expected = None;
                 return Err(Error::Invalid(format!(
                     "the agent did not call {TOOL} for turn {turn} within {} s",
@@ -271,7 +306,10 @@ fn serve(shared: &Shared, mut request: tiny_http::Request) -> Result<()> {
             if let Ok(mut state) = shared.state.lock() {
                 state.listed = true;
             }
-            result(id, json!({"tools": [tool()]}))
+            result(
+                id,
+                json!({"tools": tool_list(&shared.state.lock().map_err(invalid)?.role)}),
+            )
         }
         "tools/call" => result(id, call(shared, &message["params"])),
         other => error(id, -32601, &format!("method not supported: {other}")),
@@ -279,54 +317,116 @@ fn serve(shared: &Shared, mut request: tiny_http::Request) -> Result<()> {
     respond(request, 200, Some(reply))
 }
 
-fn tool() -> Value {
-    json!({
-        "name": TOOL,
-        "description": "End your current turn. Call it exactly once, as your last action, \
-                        with the turn id you were given and your complete final answer.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "turn": {"type": "string", "description": "The turn id from the prompt."},
-                "text": {"type": "string", "description": "Your complete final answer."}
-            },
-            "required": ["turn", "text"]
-        }
-    })
+fn allowed_tools(role: &str) -> Vec<&'static str> {
+    if super::task_role(role).is_some() {
+        vec![TOOL, "ask_orchestrator", "await_orchestrator"]
+    } else if matches!(role, "orchestrator" | "comment-orchestrator") {
+        vec![TOOL, "reply_to_agent", "submit_plan_revision", "task_risks"]
+    } else {
+        vec![TOOL]
+    }
 }
 
-/// Runs the tool; a refusal is a tool error the model can read and correct.
+fn tool_list(role: &str) -> Vec<Value> {
+    allowed_tools(role).iter().map(|name| {
+        let (description, fields, required) = match *name {
+            "finish_turn" => ("Record the typed result of the current turn. Only call when finished.", json!({"result":{"type":"object","description":"Tasks: completed {summary,report,outputs,selection?}, review {report,verdict}, or needs_input {request,checkpoint}. Other roles: report {text}. Each object requires type."}}), vec!["turn","result"]),
+            "ask_orchestrator" => ("Ask a question about your local task without ending your turn.", json!({"request_key":{"type":"string"},"question":{"type":"string"}}), vec!["turn","request_key","question"]),
+            "await_orchestrator" => ("Wait up to 25 seconds for your answer; pending does not mean failure.", json!({"request":{"type":"string"}}), vec!["turn","request"]),
+            "task_risks" => ("Read the domain catalog before selecting relevant verifier.risk_ids for a local contract.", json!({"kind":{"type":"string"}}),vec!["turn","kind"]),
+            "reply_to_agent" => ("Orchestrator only: answer a pending question. Answers cannot change contracts or permissions.", json!({"request":{"type":"string"},"answer":{"type":"string"},"state":{"enum":["answered","awaiting_user"]}}), vec!["turn","request","answer"]),
+            _ => ("Orchestrator only: submit a complete plan revision for independent review.", json!({"request_key":{"type":"string"},"revision":schema::revision()}), vec!["turn","request_key","revision"]),
+        };
+        let mut properties = fields.as_object().unwrap().clone();
+        if *name == TOOL { properties.insert("result".into(),schema::result(role)); }
+        properties.insert("turn".into(),json!({"type":"string"}));
+        json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
+    }).collect()
+}
+
+/// Validate the open lease before dispatch; never hold the gateway lock during work.
 fn call(shared: &Shared, params: &Value) -> Value {
-    let refuse =
-        |message: &str| json!({"isError": true, "content": [{"type":"text","text":message}]});
-    for key in ["threadId", "sessionId"] {
-        if let Some(id) = params["_meta"][key].as_str()
-            && let Ok(mut state) = shared.state.lock()
-        {
-            state.session.get_or_insert_with(|| id.into());
+    let outcome = dispatch(shared, params);
+    match outcome {
+        Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}]}),
+        Err(error) => json!({"isError":true,"content":[{"type":"text","text":error.to_string()}]}),
+    }
+}
+
+fn dispatch(shared: &Shared, params: &Value) -> Result<Value> {
+    let name = params["name"].as_str().unwrap_or_default();
+    crate::require(TOOLS.contains(&name), "unknown tool")?;
+    let args = &params["arguments"];
+    let turn = args["turn"]
+        .as_str()
+        .ok_or_else(|| invalid("turn: required"))?;
+    let handler = {
+        let mut state = shared.state.lock().map_err(invalid)?;
+        crate::require(
+            allowed_tools(&state.role).contains(&name),
+            "tool is unavailable for this role",
+        )?;
+        for key in ["threadId", "sessionId"] {
+            if let Some(id) = params["_meta"][key].as_str() {
+                state.session.get_or_insert_with(|| id.into());
+            }
         }
-    }
-    if params["name"] != TOOL {
-        return refuse("unknown tool");
-    }
-    let (Some(turn), Some(text)) = (
-        params["arguments"]["turn"].as_str(),
-        params["arguments"]["text"].as_str(),
-    ) else {
-        return refuse("turn and text are required: call finish_turn(turn, text)");
+        if name == TOOL
+            && let Some((recorded, result)) = &state.receipt
+            && recorded == turn
+        {
+            crate::require(
+                result == &args["result"],
+                "turn already recorded with another result",
+            )?;
+            return Ok(json!({"recorded":true}));
+        }
+        crate::require(
+            state.expected.as_deref() == Some(turn),
+            "turn is not open; use the current prompt's turn",
+        )?;
+        crate::require(state.finished.is_none(), "turn is already finished")?;
+        if name == "await_orchestrator" {
+            crate::require(
+                state.waiting.is_none(),
+                "only one answer wait may be active",
+            )?;
+            state.waiting = Some(Instant::now());
+        }
+        state.handler.clone()
     };
-    let Ok(mut state) = shared.state.lock() else {
-        return refuse("gateway failed");
+    let response = match handler {
+        Some(handler) => handler(name, args),
+        None if name == TOOL => {
+            serde_json::from_value::<super::turn_result::TurnResult>(args["result"].clone())
+                .map(|_| json!({"recorded":true}))
+                .map_err(Into::into)
+        }
+        None => Err(invalid("agent tool handler is not installed")),
     };
-    if state.expected.as_deref() != Some(turn) {
-        return refuse("that turn is not open; use the turn id from your latest prompt");
+    let mut state = shared.state.lock().map_err(invalid)?;
+    if name == "await_orchestrator"
+        && let Some(at) = state.waiting.take()
+    {
+        state.waited += at.elapsed();
     }
-    if state.finished.is_some() {
-        return refuse("this turn is already finished");
+    let response = response?;
+    crate::require(
+        state.expected.as_deref() == Some(turn),
+        "turn closed while the tool was executing",
+    )?;
+    if name == TOOL {
+        let result: super::turn_result::TurnResult =
+            serde_json::from_value(args["result"].clone())?;
+        state.receipt = Some((turn.into(), args["result"].clone()));
+        let text = match result {
+            super::turn_result::TurnResult::Report { text } => text,
+            other => serde_json::to_string(&other)?,
+        };
+        state.finished = Some(Finish { text });
+        shared.changed.notify_all();
     }
-    state.finished = Some(Finish { text: text.into() });
-    shared.changed.notify_all();
-    json!({"content": [{"type": "text", "text": "turn recorded"}]})
+    Ok(response)
 }
 
 fn result(id: Value, result: Value) -> Value {
@@ -361,7 +461,7 @@ mod tests {
 
     fn finish(turn: &str, text: &str) -> Value {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-            "name":TOOL,"arguments":{"turn":turn,"text":text}}})
+            "name":TOOL,"arguments":{"turn":turn,"result":{"type":"report","text":text}}}})
     }
 
     #[test]
@@ -427,7 +527,7 @@ mod tests {
             &gateway,
             &token,
             json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
-                "name":TOOL,"arguments":{"turn":"t1","text":"ok"},
+                "name":TOOL,"arguments":{"turn":"t1","result":{"type":"report","text":"ok"}},
                 "_meta":{"threadId":"thread-7"}}}),
         );
         assert_eq!(gateway.session().as_deref(), Some("thread-7"));
@@ -442,7 +542,7 @@ mod tests {
             json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
             json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
             json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
-                "name":TOOL,"arguments":{"turn":"t1","text":"from agy"}}}),
+                "name":TOOL,"arguments":{"turn":"t1","result":{"type":"report","text":"from agy"}}}}),
         ]
         .iter()
         .map(|message| format!("{message}\n"))
@@ -463,7 +563,12 @@ mod tests {
             .collect();
         assert_eq!(replies.len(), 3, "the notification gets no reply");
         assert_eq!(replies[1]["result"]["tools"][0]["name"], TOOL);
-        assert_eq!(replies[2]["result"]["content"][0]["text"], "turn recorded");
+        assert!(
+            replies[2]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("recorded")
+        );
         assert_eq!(gateway.session().as_deref(), Some("conversation-9"));
         let cancel = AtomicBool::new(false);
         let finish = gateway
@@ -489,5 +594,85 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.to_string().contains("agent exited"));
+    }
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+
+    fn shared(role: &str) -> Shared {
+        Shared {
+            token: "test".into(),
+            state: Mutex::new(State {
+                role: role.into(),
+                expected: Some("current".into()),
+                ..State::default()
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    #[test]
+    fn tools_and_result_schemas_are_role_scoped() {
+        for role in ["worker:task", "verifier:task"] {
+            let tools = tool_list(role);
+            let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+            assert_eq!(
+                names,
+                vec!["finish_turn", "ask_orchestrator", "await_orchestrator"]
+            );
+            assert!(tools[0]["inputSchema"]["properties"]["result"]["oneOf"].is_array());
+            assert!(!allowed_tools(role).contains(&"submit_plan_revision"));
+        }
+        assert_eq!(
+            allowed_tools("orchestrator"),
+            vec![
+                "finish_turn",
+                "reply_to_agent",
+                "submit_plan_revision",
+                "task_risks"
+            ]
+        );
+        assert_eq!(allowed_tools("auditor"), vec!["finish_turn"]);
+        assert!(
+            schema::revision()["properties"]["tasks"]["items"]["properties"]["inputs"].is_object()
+        );
+    }
+
+    #[test]
+    fn stale_leases_and_foreign_role_commands_are_rejected_before_dispatch() {
+        let shared = shared("worker:task");
+        let stale = json!({"name":"finish_turn","arguments":{"turn":"old","result":{"type":"report","text":"done"}}});
+        assert!(
+            dispatch(&shared, &stale)
+                .unwrap_err()
+                .to_string()
+                .contains("turn is not open")
+        );
+        let foreign = json!({"name":"reply_to_agent","arguments":{"turn":"current","request":"q","answer":"ok"}});
+        assert!(
+            dispatch(&shared, &foreign)
+                .unwrap_err()
+                .to_string()
+                .contains("unavailable for this role")
+        );
+        assert!(shared.state.lock().unwrap().finished.is_none());
+    }
+
+    #[test]
+    fn finish_receipt_is_idempotent_after_the_result_is_consumed() {
+        let shared = shared("orchestrator");
+        let submission = json!({"name":"finish_turn","arguments":{"turn":"current","result":{"type":"report","text":"done"}}});
+        assert_eq!(dispatch(&shared, &submission).unwrap()["recorded"], true);
+        {
+            let mut state = shared.state.lock().unwrap();
+            state.finished.take();
+            state.expected = None;
+        }
+        assert_eq!(dispatch(&shared, &submission).unwrap()["recorded"], true);
+        let mut conflict = submission;
+        conflict["arguments"]["result"]["text"] = json!("different");
+        assert!(dispatch(&shared, &conflict).is_err());
     }
 }

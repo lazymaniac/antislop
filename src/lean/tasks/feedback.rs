@@ -12,41 +12,21 @@ pub enum Outcome {
     NoChanges,
     Conflict,
     UserEdits,
-    InPlaceCommitted,
-    InPlaceApplied,
-    InPlaceUserEdits,
     NotApplicable,
-    ForceApproved,
     Cancelled,
 }
 
 /// Every outcome with its card name and card label, side by side so the
 /// sets can never drift: the daemon stamps `name`, a frontend reads a name
 /// back with `named` and shows `label`.
-pub(super) const OUTCOMES: [(Outcome, &str, &str); 12] = [
+pub(super) const OUTCOMES: [(Outcome, &str, &str); 8] = [
     (Outcome::Committed, "committed", "committed"),
     (Outcome::Applied, "applied", "applied uncommitted"),
     (Outcome::LeftOnBranch, "left_on_branch", "on branch"),
     (Outcome::NoChanges, "no_changes", "no changes"),
     (Outcome::Conflict, "conflict", "conflict"),
     (Outcome::UserEdits, "user_edits", "user edits"),
-    (
-        Outcome::InPlaceCommitted,
-        "in_place_committed",
-        "committed in place",
-    ),
-    (
-        Outcome::InPlaceApplied,
-        "in_place_applied",
-        "applied in place",
-    ),
-    (
-        Outcome::InPlaceUserEdits,
-        "in_place_user_edits",
-        "held for your edits",
-    ),
     (Outcome::NotApplicable, "not_applicable", "read-only none"),
-    (Outcome::ForceApproved, "force_approved", "force approved"),
     (Outcome::Cancelled, "cancelled", "cancelled"),
 ];
 
@@ -84,9 +64,7 @@ pub mod action {
     pub const KEEP_ON_BRANCH: &str = "keep_on_branch";
     pub const VERIFY_MANUAL_SNAPSHOT: &str = "verify_manual_snapshot";
     pub const RETRY_WITH_GUIDANCE: &str = "retry_with_guidance";
-    pub const EXTEND_ROUNDS: &str = "extend_rounds";
     pub const RESTART_AGENT: &str = "restart_agent";
-    pub const FORCE_APPROVE: &str = "force_approve";
     pub const CANCEL_TASK: &str = "cancel_task";
     pub const UNBLOCK: &str = "unblock";
 }
@@ -94,10 +72,7 @@ pub mod action {
 /// Actions that start the work over: whatever an earlier round showed on
 /// the card no longer stands once one is announced.
 pub fn resets_card(action: &str) -> bool {
-    matches!(
-        action,
-        action::RETRY_WITH_GUIDANCE | action::EXTEND_ROUNDS | action::UNBLOCK
-    )
+    matches!(action, action::RETRY_WITH_GUIDANCE | action::UNBLOCK)
 }
 
 /// The landing a recovery event settles by itself, named as a card reads
@@ -105,7 +80,6 @@ pub fn resets_card(action: &str) -> bool {
 pub fn recovery_outcome(action: &str) -> Option<&'static str> {
     let outcome = match action {
         action::KEEP_ON_BRANCH => Outcome::LeftOnBranch,
-        action::FORCE_APPROVE => Outcome::ForceApproved,
         action::CANCEL_TASK => Outcome::Cancelled,
         _ => return None,
     };

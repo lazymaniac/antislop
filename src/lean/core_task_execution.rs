@@ -1,10 +1,9 @@
 use super::core_feedback_helpers::land;
-use super::core_path_helpers::{task_path_component, worktree_branch};
+use super::core_path_helpers::{task_path_component, worktree_branch, worktree_path};
 use super::*;
 
 impl Core {
-    /// Worker and verifier take turns until the verifier approves or the
-    /// rounds run out; each new round starts fresh sessions with a durable handoff.
+    /// Worker and verifier continue while verified obligations close.
     pub(in crate::lean) fn run_task(
         self: &Arc<Self>,
         conversation: &str,
@@ -18,67 +17,18 @@ impl Core {
             .unwrap_or(0);
         let config = self.config_snapshot();
         self.store.assert_task_inputs(task)?;
-        let mut spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
+        let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
-        let in_place = spec.writes && config.workspace.mode == WorkspaceMode::InPlace;
-        let autonomous = self.autonomous(conversation)?;
-        // In place, writers take turns in the user's directory.
-        let _writing = if in_place {
-            require(
-                git::is_repository(&project),
-                "tasks that change files need the project to be a git repository: run `git init` and commit first",
-            )?;
-            require(
-                config.policy.local_write,
-                "in-place writers need policy.local_write",
-            )?;
-            loop {
-                match self.in_place.try_lock() {
-                    Ok(guard) => break Some(guard),
-                    // A writer that panicked left nothing half-locked.
-                    Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-                        break Some(poisoned.into_inner());
-                    }
-                    Err(std::sync::TryLockError::WouldBlock) => {}
-                }
-                if cancel.load(Ordering::SeqCst) {
-                    return self.set_status(conversation, task, status::QUEUED);
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        } else {
-            None
-        };
-        if in_place && task.base.is_none() {
-            task.base = Some(git::snapshot(&project, &format!("before {}", spec.title))?);
-        }
-        // Earlier approved results may still be uncommitted. Exempt only
-        // paths that still match their latest approved version.
-        let user_edits = match (&task.base, in_place) {
-            (Some(base), true) => self.in_place_user_edits(&project, base)?,
-            _ => vec![],
-        };
-        // A writer works in its own worktree (in place: in the project);
-        // everyone else in the project.
-        let worktree = if spec.writes && !in_place {
+        let worktree = if spec.writes {
             require(
                 git::is_repository(&project),
                 "tasks that change files need the project to be a git repository: run `git init` and commit first",
             )?;
             let base = match &task.base {
                 Some(base) => base.clone(),
-                None => match self.writer_base(&task.plan_id, &spec, &project) {
-                    Ok(base) => base,
-                    Err(error) if error.to_string().contains("could not combine the results") => {
-                        self.repair_writer_base(conversation, task, &mut spec, &project, &error)?
-                    }
-                    Err(error) => return Err(error),
-                },
+                None => self.writer_base(&task.plan_id, &spec, &project)?,
             };
-            let path = self
-                .state
-                .join("worktrees")
-                .join(task_path_component(&task.id)?);
+            let path = worktree_path(&self.state, task)?;
             // A resumed writer whose worktree is gone continues from its work.
             let start = task.result.clone().unwrap_or_else(|| base.clone());
             git::add_worktree(
@@ -92,7 +42,30 @@ impl Core {
         } else {
             None
         };
-        let workdir = worktree.clone().unwrap_or_else(|| project.clone());
+        let observation = if worktree.is_none() && git::is_repository(&project) {
+            let base = self.writer_base(&task.plan_id, &spec, &project)?;
+            let path = self.state.join("worktrees").join(format!(
+                "{}-observation-g{}",
+                task_path_component(&task.id)?,
+                task.input_generation
+            ));
+            git::add_worktree(
+                &project,
+                &path,
+                &format!(
+                    "antislop/{}-observation-g{}",
+                    task.id, task.input_generation
+                ),
+                &base,
+            )?;
+            Some(path)
+        } else {
+            None
+        };
+        let workdir = worktree
+            .clone()
+            .or(observation)
+            .unwrap_or_else(|| project.clone());
         let project_text = workdir.to_string_lossy().into_owned();
         let access = if spec.writes {
             agent::Access::Write
@@ -116,12 +89,6 @@ impl Core {
             })
             .filter(|path| !path.starts_with(&project))
             .collect::<Vec<_>>();
-        let team: Vec<TaskSpec> = self
-            .store
-            .plan_specs(&task.plan_id)?
-            .into_iter()
-            .map(serde_json::from_value)
-            .collect::<std::result::Result<_, _>>()?;
         let upstream = self.upstream(&task.plan_id, &spec)?;
         let worker = format!("worker:{}", task.id);
         let verifier = format!("verifier:{}", task.id);
@@ -132,13 +99,9 @@ impl Core {
             .and_then(|verdict| serde_json::from_value::<Verdict>(verdict.clone()).ok());
         if let Some(verdict) = &verdict
             && verdict.approved
+            && let Some(path) = &worktree
         {
-            if let Some(path) = &worktree {
-                return self.integrate(conversation, task, &spec, &project, path, &config, cancel);
-            }
-            if in_place {
-                return self.finish_in_place(conversation, task, &spec, &project, &config);
-            }
+            return self.integrate(conversation, task, &spec, &project, path, &config, cancel);
         }
         let mut findings = verdict.map(|verdict| verdict.findings).unwrap_or_default();
         let mut dependents_invalidated = self
@@ -148,34 +111,26 @@ impl Core {
             .any(|mail| mail.kind == "agent_work");
         let resumed = task.round > 0;
         let first_round = task.round + 1;
-        // Supervised: a few rounds run on their own, then the user decides.
-        // Autonomous: more of them, and they end early when the verifier
-        // repeats its findings or keeps the same obligations open, which
-        // means the worker is not getting closer.
-        let last_round = first_round
-            + if autonomous {
-                tasks::AUTONOMOUS_ROUNDS
-            } else {
-                tasks::MAX_ROUNDS
-            }
-            - 1;
-        let mut previous: Option<String> = None;
         let mut progress = super::progress::Progress::default();
-        for round in first_round..=last_round {
+        for round in first_round.. {
             let config = self.config_snapshot();
             task.round = round;
             task.verdict = None;
             // A verifier-only request checks the same result; a worker round
             // begins without exposing the preceding report as its new result.
             let recheck = task.report.is_some()
-                && self
-                    .store
-                    .pending_mail(conversation, &verifier)?
-                    .iter()
-                    .any(|mail| mail.kind == "agent_work")
-                && self.store.pending_mail(conversation, &worker)?.is_empty();
+                && (task
+                    .feedback
+                    .as_ref()
+                    .is_some_and(|f| f["resume_role"] == "verifier")
+                    || (self
+                        .store
+                        .pending_mail(conversation, &verifier)?
+                        .iter()
+                        .any(|mail| mail.kind == "agent_work")
+                        && self.store.pending_mail(conversation, &worker)?.is_empty()));
             if !recheck && resumed && !dependents_invalidated {
-                self.store.invalidate_task_dependents(conversation, task)?;
+                self.invalidate_task_dependents(conversation, task)?;
                 dependents_invalidated = true;
             }
             if !recheck {
@@ -214,7 +169,7 @@ impl Core {
                 upto_message: 0,
             };
             let report = if recheck {
-                task.report.clone()
+                Some(self.store.completed_task_output(task)?.to_string())
             } else {
                 self.turn(worker_setup(), cancel, |first| {
                     let continuation = if round == 1 {
@@ -227,87 +182,39 @@ impl Core {
                     tasks::worker_turn_prompt(
                         &project_text,
                         &spec,
-                        &team,
-                        autonomous,
                         continuation.as_deref(),
                         if first { "" } else { &upstream },
-                        &if first {
-                            String::new()
-                        } else {
-                            tasks::user_edits_note(&user_edits)
-                        },
                     )
                 })?
             };
             let Some(report) = report else {
                 return self.stop_task(conversation, task, &worker, cancel);
             };
-            let mut report = self.post(conversation, Some(&task.plan_id), &spec.id, &report)?;
+
             task.report = Some(report.clone());
             self.store.update_task(task)?;
-            // Approved tasks addressed by it answer now, so its next turn reads them.
-            self.answer_waiting(conversation, &task.plan_id, cancel)?;
-            // Messages that arrived while it worked get a turn of their own.
-            for _ in 0..MAIL_TURNS {
-                if self.store.pending_mail(conversation, &worker)?.is_empty() {
-                    break;
+            let completion: turn_result::TurnResult = serde_json::from_str(&report)?;
+            let (report, summary) = match completion {
+                turn_result::TurnResult::Completed {
+                    report, summary, ..
+                } => (report, summary),
+                turn_result::TurnResult::NeedsInput {
+                    request,
+                    checkpoint,
+                } => {
+                    if let Some(path) = &worktree {
+                        task.result = Some(git::commit_all(
+                            path,
+                            &format!("{} checkpoint", spec.title),
+                        )?);
+                    }
+                    task.report = Some(checkpoint);
+                    return self.wait_for_question(conversation, task, &request, false);
                 }
-                let next = self.turn(worker_setup(), cancel, |first| {
-                    tasks::worker_turn_prompt(
-                        &project_text,
-                        &spec,
-                        &team,
-                        autonomous,
-                        if first {
-                            None
-                        } else {
-                            Some(tasks::INBOX_FOLLOWUP)
-                        },
-                        if first { "" } else { &upstream },
-                        &if first {
-                            String::new()
-                        } else {
-                            tasks::user_edits_note(&user_edits)
-                        },
-                    )
-                })?;
-                let Some(next) = next else {
-                    return self.stop_task(conversation, task, &worker, cancel);
-                };
-                report = self.post(conversation, Some(&task.plan_id), &spec.id, &next)?;
-                task.report = Some(report.clone());
-                self.store.update_task(task)?;
-            }
-            // The worker may have stated its own effect for the card in the
-            // same answer. Keep that line for feedback and drop the block
-            // from the stored report; an empty or damaged block stays in
-            // the report whole and the round falls back to the diffstat
-            // (writers) or the report's first text line (read-only).
-            if let Some(blocker) = blocker::parse(&report) {
-                let reason = blocker.summary();
-                if let Some(path) = &worktree {
-                    task.result = Some(git::commit_all(
-                        path,
-                        &format!("{} (blocked round {round})", spec.title),
-                    )?);
-                } else if in_place {
-                    task.result = Some(git::snapshot(
-                        &project,
-                        &format!("{} (blocked round {round})", spec.title),
-                    )?);
-                }
-                task.report = Some(format!("{report}\n\n[runtime] {reason}"));
-                task.verdict = None;
-                return self.stop(conversation, task, status::NEEDS_USER, Some(&reason));
-            }
-            if let Some(question) = tasks::integration_question(&report) {
-                task.report = Some(report);
-                task.verdict = None;
-                return self.stop(conversation, task, status::NEEDS_USER, Some(&question));
-            }
-            let (report, stated) = tasks::parse_effect(&report);
+                _ => return Err(Error::Invalid("worker did not submit a completion".into())),
+            };
             task.report = Some(report.clone());
-            let mut effect_text = stated;
+            let mut effect_text = Some(tasks::bound_cut(&summary, tasks::EFFECT_LIMIT));
             let changes = match (&worktree, &task.base) {
                 (Some(path), Some(base)) => {
                     let result = git::commit_all(path, &format!("{} (round {round})", spec.title))?;
@@ -317,67 +224,29 @@ impl Core {
                     effect_text.get_or_insert_with(|| tasks::effect(&stat, &files));
                     Some(tasks::changes_text(base, &result, &stat))
                 }
-                (None, Some(base)) if in_place => {
-                    let result =
-                        git::snapshot(&project, &format!("{} (round {round})", spec.title))?;
-                    task.result = Some(result.clone());
-                    let stat = git::diff_stat(&project, base, &result)?;
-                    let files = git::changed_files(&project, base, &result)?;
-                    effect_text.get_or_insert_with(|| tasks::effect(&stat, &files));
-                    let touched: Vec<String> = files
-                        .into_iter()
-                        .filter(|file| user_edits.contains(file))
-                        .collect();
-                    if !touched.is_empty() {
-                        let text = format!(
-                            "the worker changed files you were editing: {}. Your version is kept: \
-                              `git checkout {base} -- <file>` restores it",
-                            touched.join(", ")
-                        );
-                        let (effect, effect_cut) = tasks::effect_keys(&effect_text);
-                        let _ = self.store.append_event(
-                            conversation,
-                            None,
-                            Some(&task.plan_id),
-                            "integration",
-                            &json!({"id": spec.id, "title": spec.title,
-                                    "status": status::NEEDS_USER,
-                                    "detail": tasks::bound(&text, tasks::DETAIL_LIMIT)}),
-                        );
-                        task.report = Some(format!("{report}\n\n[in place] {text}"));
-                        task.feedback = Some(json!({"round": task.round, "effect": effect,
-                                        "effect_cut": effect_cut}));
-                        land(
-                            task,
-                            Outcome::InPlaceUserEdits,
-                            "run",
-                            &text,
-                            None,
-                            None,
-                            &touched,
-                        );
-                        return self.stop(conversation, task, status::NEEDS_USER, Some(&text));
-                    }
-                    Some(tasks::changes_text(base, &result, &stat))
-                }
                 _ => None,
             };
-            {
-                // Serialize the final mailbox check with send_to_agent. Mail
-                // accepted before this boundary must run before verification.
-                let _integration = self.integrating.lock().expect("integration mutex");
-                if self
-                    .store
-                    .pending_mail(conversation, &worker)?
-                    .iter()
-                    .any(|mail| mail.kind == "agent_work")
-                {
-                    task.verdict = None;
-                    self.set_status(conversation, task, status::QUEUED)?;
-                    return Ok(());
-                }
-                self.set_status(conversation, task, status::VERIFYING)?;
-            }
+            self.set_status(conversation, task, status::VERIFYING)?;
+            let review_commit = task.result.clone().or_else(|| git::head(&workdir).ok());
+            let reviewdir = if let Some(result) = &review_commit {
+                let path = self.state.join("worktrees").join(format!(
+                    "{}-review-g{}-{round}",
+                    task_path_component(&task.id)?,
+                    task.input_generation
+                ));
+                git::add_worktree(
+                    &project,
+                    &path,
+                    &format!(
+                        "antislop/{}-review-g{}-{round}",
+                        task.id, task.input_generation
+                    ),
+                    result,
+                )?;
+                path
+            } else {
+                workdir.clone()
+            };
             let setup = TurnSetup {
                 session_policy: SessionPolicy::TaskRound {
                     task: task.id.clone(),
@@ -389,7 +258,7 @@ impl Core {
                 profile: self
                     .config_snapshot()
                     .resolve(spec.kind, RoleKind::Verifier),
-                cwd: workdir.clone(),
+                cwd: reviewdir,
                 add_dirs: add_dirs.clone(),
                 access: agent::Access::ReadOnly,
                 upto_message: 0,
@@ -409,69 +278,20 @@ impl Core {
             let Some(answer) = answer else {
                 return self.stop_task(conversation, task, &verifier, cancel);
             };
-            let answer = self.post(
-                conversation,
-                Some(&task.plan_id),
-                &format!("{}/verifier", spec.id),
-                &answer,
-            )?;
-            if let Some(blocker) = blocker::parse(&answer) {
-                let reason = blocker.summary();
-                task.report = Some(format!("{report}\n\n{answer}\n\n[runtime] {reason}"));
-                return self.stop(conversation, task, status::NEEDS_USER, Some(&reason));
-            }
-            let mut verdict = tasks::parse_verdict(&answer);
-            let obligations = tasks::obligations(&spec);
-            let missing = tasks::unaccounted(&verdict, &obligations);
-            if !missing.is_empty() {
-                // A verdict that skips an obligation does not count; the
-                // verifier gets one turn to account for it.
-                let prompt = tasks::coverage_followup(&missing);
-                let setup = TurnSetup {
-                    session_policy: SessionPolicy::TaskRound {
-                        task: task.id.clone(),
-                        round: task.round,
-                    },
-                    conversation,
-                    plan_id: Some(task.plan_id.clone()),
-                    role: verifier.clone(),
-                    profile: self
-                        .config_snapshot()
-                        .resolve(spec.kind, RoleKind::Verifier),
-                    cwd: workdir.clone(),
-                    add_dirs: add_dirs.clone(),
-                    access: agent::Access::ReadOnly,
-                    upto_message: 0,
-                };
-                let Some(answer) = self.turn(setup, cancel, |fresh| {
-                    if fresh {
-                        let instructions = tasks::verifier_turn_prompt(
-                            &project_text,
-                            &spec,
-                            "",
-                            changes.as_deref(),
-                            true,
-                            "",
-                        );
-                        format!("{user_checks}{instructions}\n\n{prompt}")
-                    } else {
-                        prompt
-                    }
-                })?
-                else {
-                    return self.stop_task(conversation, task, &verifier, cancel);
-                };
-                let answer = self.post(
-                    conversation,
-                    Some(&task.plan_id),
-                    &format!("{}/verifier", spec.id),
-                    &answer,
-                )?;
-                let earlier = std::mem::replace(&mut verdict, tasks::parse_verdict(&answer));
-                for (id, entry) in earlier.coverage {
-                    verdict.coverage.entry(id).or_insert(entry);
+
+            let completion: turn_result::TurnResult = serde_json::from_str(&answer)?;
+            let mut verdict = match completion {
+                turn_result::TurnResult::Review { verdict, .. } => verdict,
+                turn_result::TurnResult::NeedsInput {
+                    request,
+                    checkpoint,
+                } => {
+                    task.report = Some(report + "\n" + &checkpoint);
+                    return self.wait_for_question(conversation, task, &request, true);
                 }
-            }
+                _ => return Err(Error::Invalid("verifier did not submit a review".into())),
+            };
+            let obligations = tasks::obligations(&spec);
             let incomplete = !tasks::unaccounted(&verdict, &obligations).is_empty();
             tasks::settle(&mut verdict, &obligations, !spec.writes);
             // The verdict has the last word on every check, with its evidence.
@@ -533,28 +353,10 @@ impl Core {
                     Some("the verifier's verdict still leaves obligations unaccounted for"),
                 );
             }
-            let worker_mail = self
-                .store
-                .pending_mail(conversation, &worker)?
-                .iter()
-                .any(|mail| mail.kind == "agent_work");
-            let verifier_mail = self
-                .store
-                .pending_mail(conversation, &verifier)?
-                .iter()
-                .any(|mail| mail.kind == "agent_work");
-            if worker_mail || verifier_mail {
-                self.store.update_task(task)?;
-                findings = verdict.findings;
-                continue;
-            }
             if verdict.approved {
                 return match &worktree {
                     Some(path) => {
                         self.integrate(conversation, task, &spec, &project, path, &config, cancel)
-                    }
-                    None if in_place => {
-                        self.finish_in_place(conversation, task, &spec, &project, &config)
                     }
                     None => {
                         let _integration = self.integrating.lock().expect("integration mutex");
@@ -574,42 +376,19 @@ impl Core {
                     }
                 };
             }
-            if task
-                .report
-                .as_deref()
-                .is_some_and(tasks::environment_denied)
-            {
-                return self.stop(
-                    conversation,
-                    task,
-                    status::NEEDS_USER,
-                    Some(
-                        "the environment denied an operation (Operation not permitted); \
-                         more rounds cannot fix it. Change the permissions, then restart the agent",
-                    ),
-                );
-            }
-            let text = tasks::findings_key(&verdict.findings);
-            let repeated = previous.as_deref() == Some(text.as_str());
-            if repeated || progress.record(super::progress::open_obligations(&verdict)) {
-                let why = if repeated {
-                    "the verifier repeated the same findings; the worker is not getting closer"
-                } else {
-                    "the verifier left the same obligations open for several rounds; \
-                     the worker is not getting closer"
-                };
+            if progress.record(super::progress::open_obligations(&verdict)) {
+                let why = "no previously open obligation was resolved; the orchestrator must supply a new basis or revise the contract";
                 let report = task.report.take().unwrap_or_default();
                 task.report = Some(format!("{report}\n\n[runtime] {why}"));
-                return self.stop(conversation, task, status::NEEDS_USER, Some(why));
+                return self.stop(conversation, task, status::COORDINATING, Some(why));
             }
-            previous = Some(text);
             findings = verdict.findings;
         }
         self.stop(
             conversation,
             task,
             status::NEEDS_USER,
-            Some("the correction rounds that run without asking are over; the verifier has not approved"),
+            Some("task attempt counter exhausted"),
         )
     }
 }

@@ -71,6 +71,15 @@ impl Store {
         id: &str,
         report: Option<&str>,
     ) -> Result<()> {
+        let durable:Option<String>=tx.query_row("SELECT r.result FROM turns t JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id LEFT JOIN agent_results r ON r.turn_id=t.id WHERE s.task_id=?1 AND t.role='worker:'||?1 AND s.round=(SELECT round FROM tasks WHERE id=?1) AND x.generation=coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0) ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",[id],|r|r.get(0)).optional()?.flatten();
+        let completed = durable
+            .as_ref()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .is_some_and(|r| r["type"] == "completed");
+        let correction:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM mail WHERE conversation_id=(SELECT conversation_id FROM tasks WHERE id=?1) AND recipient='worker:'||?1 AND delivered_turn IS NULL)",[id],|r|r.get(0))?;
+        if completed && !correction {
+            tx.execute("UPDATE tasks SET feedback=json_set(coalesce(feedback,'{}'),'$.resume_role','verifier') WHERE id=?1",[id])?;
+        }
         let text = interrupted_report(self, report)?;
         tx.execute(
             "UPDATE tasks SET status='queued',report=?2 WHERE id=?1",

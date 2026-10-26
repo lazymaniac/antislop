@@ -59,7 +59,14 @@ impl Core {
         self: &Arc<Self>,
         message: &store::AgentMessage,
     ) -> Result<serde_json::Value> {
+        let graph = self.graph_updates.lock().expect("graph update mutex");
         let _scope = self.integrating.lock().expect("integration mutex");
+        let before = message
+            .plan
+            .as_ref()
+            .map(|plan| self.store.plan(plan))
+            .transpose()?
+            .unwrap_or_default();
         let reply = self.store.enqueue_agent_message(message)?;
         if reply["state"] == "delivered" {
             return Ok(reply);
@@ -68,15 +75,20 @@ impl Core {
             && let Some(plan) = &message.plan
         {
             let tasks = self.store.plan(plan)?;
+            self.cancel_changed_task_inputs(&before, &tasks);
             for task in tasks {
                 self.announce_task(&message.conversation, &task, None);
             }
             self.maybe_continue_plan(&message.conversation, plan)?;
         }
+        drop(_scope);
+        drop(graph);
+        if matches!(message.recipient.as_str(), PLAN_VERIFIER | AUDITOR) {
+            self.resume_agent_reviews(&message.conversation);
+        }
         if message.recipient == ORCHESTRATOR {
             self.wake(&message.conversation);
         }
-        self.answer_in_background(&message.conversation, message.plan.as_deref().unwrap_or(""));
         Ok(reply)
     }
 

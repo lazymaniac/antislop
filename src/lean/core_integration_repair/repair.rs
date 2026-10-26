@@ -1,17 +1,15 @@
-use super::super::core_feedback_helpers::land;
-use super::super::core_path_helpers::worktree_branch;
 use super::super::*;
 
 pub(super) struct Repair<'a> {
     core: &'a Arc<Core>,
     conversation: &'a str,
     task: &'a mut Task,
-    spec: &'a TaskSpec,
+    spec: &'a TaskContract,
     worktree: &'a Path,
     onto: &'a str,
     change: &'a str,
-    outcome: Outcome,
     files: &'a [String],
+    outcome: Outcome,
     cancel: &'a AtomicBool,
     base: String,
     attempts: u64,
@@ -21,12 +19,12 @@ pub(super) struct RepairParts<'a> {
     pub(super) core: &'a Arc<Core>,
     pub(super) conversation: &'a str,
     pub(super) task: &'a mut Task,
-    pub(super) spec: &'a TaskSpec,
+    pub(super) spec: &'a TaskContract,
     pub(super) worktree: &'a Path,
     pub(super) onto: &'a str,
     pub(super) change: &'a str,
-    pub(super) outcome: Outcome,
     pub(super) files: &'a [String],
+    pub(super) outcome: Outcome,
     pub(super) cancel: &'a AtomicBool,
 }
 
@@ -42,8 +40,8 @@ impl<'a> Repair<'a> {
             worktree: parts.worktree,
             onto: parts.onto,
             change: parts.change,
-            outcome: parts.outcome,
             files: parts.files,
+            outcome: parts.outcome,
             cancel: parts.cancel,
             base,
             attempts,
@@ -61,14 +59,40 @@ impl<'a> Repair<'a> {
                 .core
                 .stop_task(self.conversation, self.task, &worker, self.cancel);
         };
-        if let Some(question) = self.ask_user(&report)? {
-            return self.core.stop(
-                self.conversation,
-                self.task,
-                status::NEEDS_USER,
-                Some(&question),
-            );
-        }
+        let result: turn_result::TurnResult = serde_json::from_str(&report)?;
+        let report = match result {
+            turn_result::TurnResult::Completed { report, .. } => report,
+            turn_result::TurnResult::NeedsInput {
+                request,
+                checkpoint,
+            } => {
+                self.task.result = Some(git::commit_all(
+                    self.worktree,
+                    &format!("{} checkpoint", self.spec.title),
+                )?);
+                let branch =
+                    super::super::core_path_helpers::worktree_branch(&self.core.state, self.task)?;
+                super::super::core_feedback_helpers::land(
+                    self.task,
+                    self.outcome,
+                    "run",
+                    &checkpoint,
+                    None,
+                    Some(&branch),
+                    self.files,
+                );
+                self.task.report = Some(checkpoint);
+                self.task.verdict = None;
+                return self
+                    .core
+                    .wait_for_question(self.conversation, self.task, &request, false);
+            }
+            _ => {
+                return Err(Error::Invalid(
+                    "integration repair requires a worker completion".into(),
+                ));
+            }
+        };
         self.persist_repair(report)?;
         self.queue_verification()
     }
@@ -90,9 +114,7 @@ impl<'a> Repair<'a> {
              worktree. The runtime will use {} as the new base and independently verify your \
              repaired result before landing. Do not merge unrelated snapshot paths into your result.\n\
              Resolve mechanical conflicts yourself. If the versions represent an unclear product or \
-             behavior choice, do not guess or silently pick ours/theirs. Return a fenced \
-             integration_question block describing the conflicting intentions, the concrete \
-             alternatives and a question asking the user which to accept. Otherwise resolve the \
+             behavior choice, do not guess or silently pick ours/theirs. Use ask_orchestrator with the conflicting intentions and alternatives. Save needs_input when a decision remains pending. Otherwise resolve the \
              files and report what you preserved and how you tested it.",
             self.files.join(", "),
             self.base,
@@ -118,14 +140,7 @@ impl<'a> Repair<'a> {
         else {
             return Ok(None);
         };
-        self.core
-            .post(
-                self.conversation,
-                Some(&self.task.plan_id),
-                &self.spec.id,
-                &answer,
-            )
-            .map(Some)
+        Ok(Some(answer))
     }
 
     fn worker_setup(&self, worker: String) -> TurnSetup<'_> {
@@ -152,10 +167,7 @@ impl<'a> Repair<'a> {
         let instructions = tasks::worker_turn_prompt(
             &self.worktree.to_string_lossy(),
             self.spec,
-            &[],
-            false,
             Some(prompt),
-            "",
             "",
         );
         if fresh {
@@ -163,25 +175,6 @@ impl<'a> Repair<'a> {
         } else {
             instructions + &tasks::round_handoff_prompt(handoff, true)
         }
-    }
-
-    fn ask_user(&mut self, report: &str) -> Result<Option<String>> {
-        let Some(question) = tasks::integration_question(report) else {
-            return Ok(None);
-        };
-        self.task.verdict = None;
-        self.task.report = Some(report.to_owned());
-        let branch = worktree_branch(&self.core.state, self.task)?;
-        land(
-            self.task,
-            self.outcome,
-            "run",
-            &question,
-            None,
-            Some(&branch),
-            self.files,
-        );
-        Ok(Some(question))
     }
 
     fn persist_repair(&mut self, report: String) -> Result<()> {
@@ -225,7 +218,7 @@ impl<'a> Repair<'a> {
 
     fn verification_prompt(&self) -> String {
         format!(
-            "Verify the conflict resolution independently. Compare original task delta: git diff {} {}; concurrent project edits: git diff {} {}. Confirm both intentions survive in {} and that no unrelated project edits are reverted. Reject silent ours/theirs choices and unresolved conflict markers. If a behavior choice needs the user, require an explicit integration_question from the worker.",
+            "Verify the conflict resolution independently. Compare original task delta: git diff {} {}; concurrent project edits: git diff {} {}. Confirm both intentions survive in {} and that no unrelated project edits are reverted. Reject silent ours/theirs choices and unresolved conflict markers. If the repair leaves a behavior choice unresolved, ask the orchestrator.",
             self.base,
             self.change,
             self.base,

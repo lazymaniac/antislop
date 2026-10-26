@@ -9,11 +9,7 @@ fn card_outcomes_have_one_stable_name_each() {
         (Outcome::NoChanges, "no_changes"),
         (Outcome::Conflict, "conflict"),
         (Outcome::UserEdits, "user_edits"),
-        (Outcome::InPlaceCommitted, "in_place_committed"),
-        (Outcome::InPlaceApplied, "in_place_applied"),
-        (Outcome::InPlaceUserEdits, "in_place_user_edits"),
         (Outcome::NotApplicable, "not_applicable"),
-        (Outcome::ForceApproved, "force_approved"),
         (Outcome::Cancelled, "cancelled"),
     ] {
         assert_eq!(serde_json::to_value(outcome).unwrap(), json!(name));
@@ -36,18 +32,13 @@ fn every_outcome_has_its_own_honest_label() {
 
 #[test]
 fn restarting_actions_are_named_once_for_both_layers() {
-    for action in [
-        action::RETRY_WITH_GUIDANCE,
-        action::EXTEND_ROUNDS,
-        action::UNBLOCK,
-    ] {
+    for action in [action::RETRY_WITH_GUIDANCE, action::UNBLOCK] {
         assert!(resets_card(action), "{action} must clear the card");
     }
     for action in [
         action::INTEGRATE_WITH_CONSENT,
         action::KEEP_ON_BRANCH,
         action::VERIFY_MANUAL_SNAPSHOT,
-        action::FORCE_APPROVE,
         action::CANCEL_TASK,
         "anything-else",
     ] {
@@ -56,10 +47,6 @@ fn restarting_actions_are_named_once_for_both_layers() {
     assert_eq!(
         recovery_outcome(action::KEEP_ON_BRANCH),
         Some(Outcome::LeftOnBranch.name())
-    );
-    assert_eq!(
-        recovery_outcome(action::FORCE_APPROVE),
-        Some(Outcome::ForceApproved.name())
     );
     assert_eq!(
         recovery_outcome(action::CANCEL_TASK),
@@ -132,58 +119,4 @@ fn a_read_only_effect_is_the_reports_opening_line() {
     // the last grapheme is the mark of the cut.
     assert_eq!(bounded.len(), EFFECT_LIMIT);
     assert!(cut && bounded.ends_with(CUT_MARK), "{bounded}");
-}
-
-#[test]
-fn a_worker_stated_effect_is_kept_bounded_and_removed_from_the_report() {
-    let answer = "I fixed the store.\n\n```effect\n2 files changed — src/a.rs, src/b.rs\n```\n\
-                      The verifier should check the diff.";
-    let (report, effect) = parse_effect(answer);
-    let (stated, cut) = effect.expect("stated effect");
-    assert_eq!(stated, "2 files changed — src/a.rs, src/b.rs");
-    assert!(!cut);
-    assert!(!report.contains("```effect"), "{report}");
-    assert!(report.contains("I fixed the store.") && report.contains("check the diff"));
-}
-
-#[test]
-fn the_last_effect_block_wins_and_unicode_survives_the_cut() {
-    let answer = "```effect\nfirst\n```\ntext\n```effect\n👩‍💻e\u{301} fixed — bile\n```";
-    let (_, effect) = parse_effect(answer);
-    let (stated, cut) = effect.expect("stated effect");
-    assert_eq!(stated, "👩‍💻e\u{301} fixed — bile");
-    assert!(!cut, "a short cluster-rich line is not cut");
-    let long = "long-效果".repeat(EFFECT_LIMIT);
-    let answer = format!("report\n```effect\n{long}\n```");
-    let (report, effect) = parse_effect(&answer);
-    let (effect, cut) = effect.expect("stated effect");
-    assert!(effect.len() <= EFFECT_LIMIT, "{}", effect.len());
-    assert!(cut && effect.ends_with(CUT_MARK), "a cut effect says so");
-    // The cut sits on a cluster edge: combining marks and CJK stay whole.
-    let units: Vec<&str> = effect.graphemes(true).collect();
-    let whole: Vec<&str> = long.graphemes(true).collect();
-    let body = effect.strip_suffix(CUT_MARK).unwrap_or(&effect);
-    let shown: Vec<&str> = body.graphemes(true).collect();
-    assert!(whole.starts_with(&shown), "{units:?}");
-    assert!(report.starts_with("report"), "{report}");
-}
-
-#[test]
-fn an_empty_or_damaged_effect_block_stays_in_the_report() {
-    // Empty body: the block is not a stated effect, and it is not lost.
-    let answer = "report text\n```effect\n\n```";
-    let (report, effect) = parse_effect(answer);
-    assert_eq!(effect, None);
-    assert_eq!(report, answer);
-    // A closing fence that does not stand on its own line is text:
-    // an inline backtick cannot cut the block short, and an unterminated
-    // block keeps the whole answer for the fallback to read.
-    let answer = "report\n```effect\ninline `code` here ```effect tail";
-    let (report, effect) = parse_effect(answer);
-    assert_eq!(effect, None);
-    assert_eq!(report, answer);
-    // No block at all: untouched, `None` — the older answers' path.
-    let (report, effect) = parse_effect("plain report, no block");
-    assert_eq!(effect, None);
-    assert_eq!(report, "plain report, no block");
 }

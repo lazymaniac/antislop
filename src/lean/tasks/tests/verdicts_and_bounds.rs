@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn a_verdict_counts_only_with_every_obligation_accounted_for() {
-    let task: TaskSpec = serde_json::from_value(serde_json::json!({
+    let task: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "t1", "title": "Revenue", "goal": "g", "kind": "analysis",
         "verifier": {"focus": "f", "risks": ["units"]}
     }))
@@ -14,7 +14,7 @@ fn a_verdict_counts_only_with_every_obligation_accounted_for() {
         obligations.len(),
         1 + COMMON_CHECKS.split("; ").count()
             + checklist(task.kind).split("; ").count()
-            + crate::lean::risks::for_kind(task.kind).count()
+            + task.verifier.risk_ids.len()
     );
 
     let mut skipped = parse_verdict("```verdict\n{\"approved\": true}\n```");
@@ -60,7 +60,7 @@ fn a_verdict_counts_only_with_every_obligation_accounted_for() {
 
 #[test]
 fn a_read_only_report_is_not_rejected_for_defects_it_rightly_reports() {
-    let task: TaskSpec = serde_json::from_value(serde_json::json!({
+    let task: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "t1", "title": "Audit", "goal": "g", "kind": "analysis",
         "verifier": {"focus": "f", "risks": ["stale consent"]}
     }))
@@ -94,8 +94,8 @@ fn a_read_only_report_is_not_rejected_for_defects_it_rightly_reports() {
         !verdict.approved,
         "an issue on a common check still rejects"
     );
-    assert_eq!(verdict.findings.len(), 1);
-    assert_eq!(verdict.findings[0]["where"], "V1");
+    assert_eq!(verdict.findings.len(), 2);
+    assert_eq!(verdict.findings[0]["where"], "R1");
 
     let mut only_risk = Verdict {
         approved: true,
@@ -104,7 +104,7 @@ fn a_read_only_report_is_not_rejected_for_defects_it_rightly_reports() {
     };
     only_risk.coverage["R1"] = serde_json::json!({"status": "issue", "note": "open in code"});
     settle(&mut only_risk, &obligations, true);
-    assert!(only_risk.approved && only_risk.findings.is_empty());
+    assert!(!only_risk.approved && !only_risk.findings.is_empty());
     let mut writer = Verdict {
         approved: true,
         findings: vec![],

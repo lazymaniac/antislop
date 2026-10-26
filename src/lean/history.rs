@@ -1,5 +1,4 @@
-//! Durable round attribution and bounded history reads. Legacy turns remain
-//! unassigned unless the runtime recorded their scope explicitly.
+//! Durable round attribution and bounded history reads from recorded identities.
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,23 +70,18 @@ impl Store {
     ) -> Result<Option<u64>> {
         let mail = i64::try_from(mail)
             .map_err(|_| Error::Invalid("mail identifier exceeds SQLite range".into()))?;
-        let message: Option<i64> = self
-            .db()
-            .query_row(
-                "SELECT COALESCE(json_extract(e.payload,'$.user_message'),
-                (SELECT json_extract(n.payload,'$.seq') FROM events n
-                 WHERE n.seq=e.seq+1 AND n.conversation_id=e.conversation_id
-                 AND n.kind='message' AND json_extract(n.payload,'$.author')='user'))
-             FROM events e WHERE e.conversation_id=?1 AND e.turn_id IS NULL
-             AND e.kind='mail' AND json_extract(e.payload,'$.sender')='user'
-             AND json_extract(e.payload,'$.recipient')='orchestrator'
-             AND json_extract(e.payload,'$.id')=?2 ORDER BY e.seq DESC LIMIT 1",
-                params![conversation, mail],
-                |row| row.get(0),
-            )
-            .optional()?
-            .flatten();
-        Ok(message.map(|seq| seq as u64))
+        let message:Option<Option<i64>>=self.db().query_row(
+            "SELECT json_extract(e.payload,'$.user_message') FROM events e WHERE e.conversation_id=?1 AND e.turn_id IS NULL AND e.kind='mail' AND json_extract(e.payload,'$.sender')='user' AND json_extract(e.payload,'$.recipient')='orchestrator' AND json_extract(e.payload,'$.id')=?2 ORDER BY e.seq DESC LIMIT 1",
+            params![conversation,mail],|row|row.get(0)).optional()?;
+        message
+            .map(|source| {
+                let source = source.ok_or_else(|| {
+                    Error::Invalid("orchestrator mail has no recorded user message source".into())
+                })?;
+                crate::require(source > 0, "invalid recorded user message source")?;
+                Ok(source as u64)
+            })
+            .transpose()
     }
 }
 

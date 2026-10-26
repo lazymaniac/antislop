@@ -138,11 +138,8 @@ pub struct TaskRow {
     /// The current round's bounded effect, as the daemon reported it in the
     /// task event's feedback. `None`: that round has reported no effect.
     pub effect: Option<String>,
-    /// Whether the daemon cut that effect at the moment it stored it
-    /// (the feedback's explicit `effect_cut` stamp). `None`: the feedback
-    /// predates the stamp, and a reader falls back to the trailing mark —
-    /// a guess that feedback written after the stamp never needs, because
-    /// honest text may end in `…` and a kept whole cluster carries none.
+    /// Whether the daemon or this bounded projection cut the attached effect.
+    /// No text suffix is interpreted as truncation metadata.
     pub effect_cut: Option<bool>,
     /// The current round's obligation coverage
     /// (`{total, ok, issue, blocked, na, missing, unknown}`). `None`: no
@@ -446,7 +443,7 @@ impl View {
             && self.tasks.iter().any(|task| {
                 matches!(
                     task.status.as_str(),
-                    "cancelled" | "failed" | "needs_user" | "skipped" | "waiting"
+                    "cancelled" | "failed" | "coordinating" | "needs_user" | "skipped" | "waiting"
                 )
             })
     }
@@ -503,11 +500,9 @@ impl View {
                 Tone::Done,
             ),
             "failed" => (format!("✗ {name} failed{why}"), Tone::Failed),
+            "coordinating" => (format!("! {name} awaits orchestration{why}"), Tone::Waiting),
             "needs_user" => (format!("! {name} needs your decision{why}"), Tone::Waiting),
-            "waiting" => (
-                format!("‖ {name} waits for login or limit{why}"),
-                Tone::Waiting,
-            ),
+            "waiting" => (format!("‖ {name} waits{why}"), Tone::Waiting),
             "skipped" => (format!("– {name} skipped{why}"), Tone::Queued),
             "working" if now.1 > was.1 && was.1 > 0 => (
                 format!(
@@ -611,53 +606,6 @@ impl View {
             }
             "session_started" => {
                 self.session_branch = payload["branch"].as_str().map(clean_line);
-            }
-            "options_selected" => {
-                self.requirements_progress = Some((
-                    false,
-                    format!(
-                        "Options compared; recommendation: {}. Preparing the plan.",
-                        text("selected")
-                    ),
-                ));
-                let mut summary = format!(
-                    "Recommendation: {}\n{}",
-                    text("selected"),
-                    text("rationale")
-                );
-                let review_findings = payload["review_findings"]
-                    .as_array()
-                    .filter(|findings| !findings.is_empty());
-                if let Some(findings) = review_findings {
-                    summary.push_str("\n\nTo resolve in the plan:");
-                    for finding in findings {
-                        if let Some(text) = finding.as_str() {
-                            summary.push_str(&format!("\n- {text}"));
-                        }
-                    }
-                }
-                if let Some(alternatives) = payload["alternatives"].as_array() {
-                    for alternative in alternatives {
-                        summary.push_str(&format!(
-                            "\n\n{}: {}\nRisks: {}\nValidation: {}",
-                            alternative["id"].as_str().unwrap_or(""),
-                            alternative["approach"].as_str().unwrap_or(""),
-                            alternative["risks"].as_str().unwrap_or(""),
-                            alternative["validation"].as_str().unwrap_or("")
-                        ));
-                    }
-                }
-                self.cards.push(TranscriptCard::System {
-                    title: "Implementation options reviewed".into(),
-                    meta: String::new(),
-                    tone: if review_findings.is_some() {
-                        super::theme::Tone::Waiting
-                    } else {
-                        super::theme::Tone::Done
-                    },
-                    text: summary.clone(),
-                });
-                self.push(dim(), summary);
             }
             "planning_progress" => {
                 self.requirements_progress = Some((false, text("text")));
@@ -870,7 +818,7 @@ impl View {
                     if let Some(existing) =
                         self.tasks.iter_mut().find(|existing| existing.id == row.id)
                     {
-                        existing.depends_on = row.depends_on;
+                        *existing = row;
                     } else {
                         if let Some(uuid) = &row.uuid {
                             self.task_rows.insert(uuid.clone(), self.tasks.len());
@@ -904,6 +852,8 @@ impl View {
                         .enumerate()
                         .filter_map(|(index, id)| id.as_str().map(|id| (id, index)))
                         .collect();
+                    self.tasks
+                        .retain(|task| positions.contains_key(task.id.as_str()));
                     self.tasks.sort_by_key(|task| {
                         positions
                             .get(task.id.as_str())
@@ -1141,25 +1091,16 @@ impl View {
                     // round is stale and reads as not reported.
                     let feedback = &payload["feedback"];
                     let fresh = feedback_is_current(feedback, row.round);
-                    // An effect older than the daemon's own bound folds to
-                    // the bounded projection here, marked when it had to be
-                    // cut; the effect's raw source stays in the report.
-                    row.effect = if fresh {
-                        feedback["effect"]
-                            .as_str()
-                            .map(|effect| bound(&clean_line(effect), EFFECT_LIMIT))
+                    let projected = if fresh {
+                        feedback["effect"].as_str().map(|effect| {
+                            super::super::tasks::bound_cut(&clean_line(effect), EFFECT_LIMIT)
+                        })
                     } else {
                         None
                     };
-                    // The cut stamp travels with its effect and its round:
-                    // an effect that never attached carries no verdict,
-                    // and feedback without the stamp stays unknown (`None`)
-                    // so the reader falls back honestly to the mark.
-                    row.effect_cut = if row.effect.is_some() {
-                        feedback["effect_cut"].as_bool()
-                    } else {
-                        None
-                    };
+                    row.effect = projected.as_ref().map(|(text, _)| text.clone());
+                    row.effect_cut =
+                        projected.map(|(_, cut)| cut || feedback["effect_cut"] == true);
                     row.obligations = if fresh && feedback["coverage"].is_object() {
                         Some(bounded_coverage(&feedback["coverage"]))
                     } else {
@@ -1629,7 +1570,7 @@ impl View {
                         act
                     ));
                 }
-                "waiting" => lines.push(format!("{} waiting for login/limit", task.id)),
+                "waiting" => lines.push(format!("{} waiting", task.id)),
                 _ => {}
             }
         }
@@ -1743,11 +1684,12 @@ pub fn status_label(status: &str) -> &str {
         "working" => "working",
         "verifying" => "verifying",
         "approved" => "approved",
+        "coordinating" => "awaiting orchestrator",
         "needs_user" => "needs decision",
         "failed" => "failed",
         "skipped" => "skipped",
         "cancelled" => "cancelled",
-        "waiting" => "waiting for login/limit",
+        "waiting" => "waiting",
         "revised" => "sent back",
         other => other,
     }

@@ -41,7 +41,7 @@ with open({log:?}, "a") as f:
     f.write(json.dumps({{"bin": sys.argv[0].rsplit("/", 1)[-1], "prompt": prompt}}) + "\n")
 def verdict(approved):
     import re
-    ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     coverage = {{i: {{"status": "ok", "note": "checked"}} for i in ids}}
     return "```verdict\n" + json.dumps({{"approved": approved, "findings": [], "coverage": coverage}}) + "\n```"
 def task(id, title, depends=()):
@@ -152,7 +152,7 @@ fn events(core: &Core, conversation: &str, kind: &str) -> Vec<Value> {
 }
 
 fn run(core: &Arc<Core>, dir: &Path) -> String {
-    let conversation = support::legacy_conversation(core, &dir.join("project"))
+    let conversation = support::fixture_conversation(core, &dir.join("project"))
         .unwrap()
         .id;
     core.send(&conversation, "zbadaj").unwrap();
@@ -162,259 +162,6 @@ fn run(core: &Arc<Core>, dir: &Path) -> String {
         .clone();
     core.accept_plan(&conversation, &plan).unwrap();
     conversation
-}
-
-#[test]
-fn a_worker_tells_another_task_what_it_found() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        r#"
-answer = "done" if "[runtime]" in prompt else plan(task("t1", "Protocol"), task("t2", "Client", ["t1"]), task("t3", "Docs"))
-"#,
-        r#"    answer = "protocol report" + message("t2", "finding", "the API sends UTF-16") + message("t9", "status", "lost") if "Task id: t1" in prompt else "report""#,
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("plan finished", || core.is_idle(&conversation));
-
-    let tasks = core.store.latest_plan(&conversation).unwrap();
-    assert_eq!(tasks[0].report.as_deref(), Some("protocol report"));
-    let worker_prompts: Vec<String> = prompts(dir.path())
-        .into_iter()
-        .filter(|(bin, prompt)| bin == "agy" && prompt.contains("Task id:"))
-        .map(|(_, prompt)| prompt)
-        .collect();
-    let client = worker_prompts
-        .iter()
-        .find(|prompt| prompt.contains("Task id: t2"))
-        .unwrap();
-    assert!(
-        client.starts_with("Messages for you:\n- from t1 (finding): the API sends UTF-16"),
-        "{client}"
-    );
-    let docs = worker_prompts
-        .iter()
-        .find(|prompt| prompt.contains("Task id: t3"))
-        .unwrap();
-    assert!(!docs.contains("UTF-16"), "only the recipient gets it");
-    assert!(docs.contains("- t1: Protocol") && docs.contains("```message"));
-
-    let mail = events(&core, &conversation, "mail");
-    assert_eq!(mail.len(), 1);
-    assert_eq!(
-        (&mail[0]["sender"], &mail[0]["recipient"]),
-        (&Value::from("t1"), &Value::from("t2"))
-    );
-    assert_eq!(events(&core, &conversation, "mail_delivered").len(), 1);
-    let rejected = events(&core, &conversation, "mail_rejected");
-    assert_eq!(rejected[0]["recipient"], "t9");
-}
-
-#[test]
-fn the_orchestrator_reaches_a_task_by_its_plan_label_from_a_mail_turn() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        r#"
-if "[runtime]" in prompt:
-    answer = "done"
-elif "from t1 (status)" in prompt:
-    answer = "noted" + message("t1", "answer", "use UTF-8")
-else:
-    answer = plan(task("t1", "Audit"))
-"#,
-        r#"    answer = "noted" if "Messages for you" in prompt else "audit report" + message("orchestrator", "status", "blocked on encoding")"#,
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("plan finished", || {
-        core.is_idle(&conversation)
-            && core
-                .store
-                .mail(&conversation)
-                .unwrap()
-                .iter()
-                .any(|mail| mail.sender == "orchestrator" && mail.text == "use UTF-8")
-    });
-    assert!(events(&core, &conversation, "mail_rejected").is_empty());
-}
-
-#[test]
-fn an_approved_task_answers_a_question_that_arrives_after_its_approval() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        r#"
-answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2", "Gate", ["t1"]))
-"#,
-        r#"    if "from t1 (answer)" in prompt:
-        answer = "gate closed on UTF-16"
-    elif "from t2 (question)" in prompt:
-        answer = "no findings" + message("t2", "answer", "UTF-16")
-    elif "Task id: t2" in prompt:
-        answer = "gate waits" + message("t1", "question", "which encoding?")
-    else:
-        answer = "audit report""#,
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("plan finished", || core.is_idle(&conversation));
-
-    let tasks = core.store.latest_plan(&conversation).unwrap();
-    assert_eq!(tasks[0].status, "approved");
-    assert_eq!(tasks[1].report.as_deref(), Some("gate closed on UTF-16"));
-    assert!(events(&core, &conversation, "mail_rejected").is_empty());
-    let mail = core.store.mail(&conversation).unwrap();
-    assert!(
-        mail.iter()
-            .filter(|mail| mail.sender == "t2" || mail.sender == "t1")
-            .all(|mail| mail.delivered_turn.is_some()),
-        "{mail:?}"
-    );
-}
-
-#[test]
-fn the_user_writes_to_an_approved_task_and_its_worker_answers() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        r#"
-answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"))
-"#,
-        r#"    answer = "noted" if "Messages for you" in prompt else "audit report""#,
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("plan finished", || core.is_idle(&conversation));
-
-    core.submit(&conversation, "@t1 add a UTF-8 case").unwrap();
-    wait_until("answered", || {
-        core.is_idle(&conversation)
-            && core
-                .store
-                .mail(&conversation)
-                .unwrap()
-                .iter()
-                .any(|mail| mail.sender == "user" && mail.delivered_turn.is_some())
-    });
-    assert!(prompts(dir.path()).iter().any(|(bin, prompt)| bin == "agy"
-        && prompt.starts_with("Messages for you:\n- from user (user_instruction): add")));
-    // The answering turn changes neither the task nor its report.
-    let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "approved");
-    assert_eq!(task.report.as_deref(), Some("audit report"));
-}
-
-#[test]
-fn user_mail_reaches_workers_and_verifiers_in_every_stopped_state() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
-        "    answer = 'noted' if 'Messages for you' in prompt else 'audit report'",
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("finished", || core.is_idle(&conversation));
-    for status in [
-        "failed",
-        "needs_user",
-        "waiting",
-        "cancelled",
-        "skipped",
-        "approved",
-    ] {
-        let mut task = core.store.latest_plan(&conversation).unwrap()[0].clone();
-        task.status = status.into();
-        core.store.update_task(&task).unwrap();
-        for role in ["worker", "verifier"] {
-            let body = format!("message for {role} in {status}");
-            core.submit(&conversation, &format!("@{role}:t1 {body}"))
-                .unwrap();
-            wait_until("recipient acknowledged", || {
-                core.is_idle(&conversation)
-                    && core
-                        .store
-                        .mail(&conversation)
-                        .unwrap()
-                        .iter()
-                        .any(|mail| mail.text == body && mail.delivered_turn.is_some())
-            });
-        }
-        assert_eq!(
-            core.store.latest_plan(&conversation).unwrap()[0].status,
-            status
-        );
-    }
-    assert!(events(&core, &conversation, "mail_rejected").is_empty());
-}
-
-#[test]
-fn pending_task_mail_is_delivered_after_a_daemon_restart() {
-    let dir = tempfile::tempdir().unwrap();
-    let orchestrator = "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))";
-    let agent = "    answer = 'noted' if 'Messages for you' in prompt else 'audit report'";
-    let core = open(dir.path(), orchestrator, agent);
-    let conversation = run(&core, dir.path());
-    wait_until("finished", || core.is_idle(&conversation));
-    let task = core.store.latest_plan(&conversation).unwrap()[0].clone();
-    let role = format!("verifier:{}", task.id);
-    let mail = core
-        .store
-        .add_mail(
-            &conversation,
-            &role,
-            &antislop::lean::store::Mail {
-                id: 0,
-                sender: "user".into(),
-                recipient: role.clone(),
-                kind: "question".into(),
-                text: "survive restart".into(),
-                created_ms: 0,
-                delivered_turn: None,
-                delivered_ms: None,
-                state: "queued".into(),
-            },
-        )
-        .unwrap();
-    drop(core);
-    let core = open(dir.path(), orchestrator, agent);
-    wait_until("pending mail redelivered", || {
-        core.is_idle(&conversation)
-            && core
-                .store
-                .mail(&conversation)
-                .unwrap()
-                .iter()
-                .any(|item| item.id == mail.id && item.delivered_turn.is_some())
-    });
-}
-
-#[test]
-fn a_failed_task_still_receives_and_answers_its_mail() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        r#"
-answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2", "Gate"))
-"#,
-        r#"    if "Task id: t1" in prompt:
-        sys.exit(1)
-    elif "not delivered" in prompt:
-        answer = "gate saw the notice"
-    else:
-        time.sleep(1)
-        answer = "gate waits" + message("t1", "question", "which encoding?")"#,
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("plan finished", || core.is_idle(&conversation));
-
-    let tasks = core.store.latest_plan(&conversation).unwrap();
-    assert_ne!(tasks[0].status, "approved");
-    assert_eq!(tasks[1].report.as_deref(), Some("gate waits"));
-    assert!(events(&core, &conversation, "mail_rejected").is_empty());
-    let mail = core.store.mail(&conversation).unwrap();
-    assert!(
-        mail.iter()
-            .any(|m| m.sender == "t2" && m.delivered_turn.is_some()),
-        "{mail:?}"
-    );
 }
 
 #[test]
@@ -446,25 +193,20 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Parser"))
     let extra = all
         .iter()
         .find(|(_, prompt)| {
-            prompt.contains("add a UTF-8 case") && prompt.contains("arrived while you worked")
+            prompt.contains("add a UTF-8 case") && prompt.contains("Task role: worker")
         })
         .expect("the worker got a turn for the message");
     assert!(
         extra
             .1
-            .contains("- from user (user_instruction): add a UTF-8 case")
+            .contains("- from user (agent_work): add a UTF-8 case")
     );
-    let summary = &all.iter().rfind(|(bin, _)| bin == "codex").unwrap().1;
     assert!(
-        summary.contains("(the user wrote to t1) add a UTF-8 case"),
-        "{summary}"
-    );
-    // Not a message to the orchestrator: no turn of its own was started.
-    let messages = core.store.messages_after(&conversation, 0).unwrap();
-    assert!(
-        messages
+        core.store
+            .mail(&conversation)
+            .unwrap()
             .iter()
-            .all(|message| !message.text.contains("add a case"))
+            .any(|m| m.text == "add a UTF-8 case" && m.delivered_turn.is_some())
     );
 }
 
@@ -536,7 +278,7 @@ answer = "First sentence.\nSecond line of the answer that is kept whole."
 "#,
         "    answer = 'unused'",
     );
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     core.send(&conversation, "hello there").unwrap();
@@ -552,7 +294,7 @@ answer = "First sentence.\nSecond line of the answer that is kept whole."
 }
 
 fn plan_with_two_draft_comments(core: &Arc<Core>, dir: &Path) -> (String, String, Vec<u64>) {
-    let conversation = support::legacy_conversation(core, &dir.join("project"))
+    let conversation = support::fixture_conversation(core, &dir.join("project"))
         .unwrap()
         .id;
     core.send(&conversation, "plan it").unwrap();
@@ -668,7 +410,7 @@ if len(_ledger_context)==2:
     );
     assert!(source.contains("next-plan-started"));
     std::fs::write(&codex, source).unwrap();
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     core.store
@@ -863,7 +605,7 @@ answer = plan(task("t1", "One"), task("t2", "Two")) if "[runtime]" not in prompt
         ),
         max_parallel,
     );
-    let conversation = support::legacy_conversation(&core, &dir.join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.join("project"))
         .unwrap()
         .id;
     core.send(&conversation, "two things").unwrap();
@@ -924,7 +666,7 @@ fn the_plan_verifier_is_told_when_a_plan_that_changes_code_has_no_context_scout(
         WRITING_PLAN,
         "    answer = verdict(True) if \"You review a plan\" in prompt else 'unused'",
     );
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     core.send(&conversation, "change a.rs").unwrap();
@@ -947,7 +689,7 @@ fn turning_the_required_gates_off_is_said_when_a_plan_changes_code() {
         "    answer = verdict(True) if \"You review a plan\" in prompt else 'unused'",
         &[("required_gates = true", "required_gates = false")],
     );
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     core.send(&conversation, "change a.rs").unwrap();
@@ -967,7 +709,7 @@ fn turning_the_required_gates_off_is_said_when_a_plan_changes_code() {
         WRITING_PLAN,
         "    answer = verdict(True) if \"You review a plan\" in prompt else 'unused'",
     );
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     core.send(&conversation, "change a.rs").unwrap();
@@ -980,7 +722,7 @@ fn turning_the_required_gates_off_is_said_when_a_plan_changes_code() {
 }
 
 #[test]
-fn a_task_reads_the_approved_reports_of_its_dependencies() {
+fn dependencies_do_not_expose_undeclared_reports() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -1001,296 +743,12 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2
         .iter()
         .find(|prompt| prompt.contains("Task id: t2"))
         .unwrap();
-    assert!(
-        gate.contains("### t1: Audit\naudit found F1 and F2"),
-        "{gate}"
-    );
+    assert!(!gate.contains("audit found F1 and F2"), "{gate}");
     let docs = worker_prompts
         .iter()
         .find(|prompt| prompt.contains("Task id: t3"))
         .unwrap();
     assert!(!docs.contains("audit found"), "only dependents get it");
-}
-
-#[test]
-fn reviewers_receive_mail_before_a_plan_and_keep_their_review_context() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
-        "    answer = 'noted'",
-    );
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
-        .unwrap()
-        .id;
-    for role in ["plan-verifier", "auditor"] {
-        let body = format!("mail before a plan for {role}");
-        core.submit(&conversation, &format!("@{role} {body}"))
-            .unwrap();
-        wait_until("reviewer receipt", || {
-            core.is_idle(&conversation)
-                && core
-                    .store
-                    .mail(&conversation)
-                    .unwrap()
-                    .iter()
-                    .any(|mail| mail.text == body && mail.delivered_turn.is_some())
-        });
-    }
-    core.send(&conversation, "make a plan").unwrap();
-    wait_until("plan reviewed", || core.is_idle(&conversation));
-    assert!(!core.store.latest_plan(&conversation).unwrap().is_empty());
-    assert!(
-        prompts(dir.path())
-            .iter()
-            .any(|(_, prompt)| prompt.contains("You review a plan before any of it runs"))
-    );
-}
-
-#[test]
-fn a_failure_after_the_prompt_was_typed_is_never_retried_automatically() {
-    let dir = tempfile::tempdir().unwrap();
-    let marker = dir.path().join("first-attempt");
-    let agent = format!(
-        r#"    import os
-    if "Mailbox recipient: auditor" in prompt and not os.path.exists({marker:?}):
-        open({marker:?}, "w").close()
-        print("temporary failure: connection reset", file=sys.stderr)
-        sys.exit(1)
-    answer = "acknowledged""#,
-        marker = marker.to_string_lossy()
-    );
-    let core = open(dir.path(), "answer = 'done'", &agent);
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
-        .unwrap()
-        .id;
-    core.submit(&conversation, "@auditor retry this message")
-        .unwrap();
-    wait_until("failure recorded", || {
-        core.is_idle(&conversation)
-            && !events(&core, &conversation, "mail_delivery_failed").is_empty()
-    });
-    // The CLI had the prompt: it may have acted, so nothing is sent again by
-    // itself. The message waits for the next wakeup, and is not lost.
-    assert!(events(&core, &conversation, "mail_retry").is_empty());
-    assert!(
-        core.store
-            .mail(&conversation)
-            .unwrap()
-            .iter()
-            .any(|mail| mail.recipient == "auditor" && mail.delivered_turn.is_none())
-    );
-}
-
-#[test]
-fn authentication_failure_keeps_mail_pending_until_a_new_wakeup() {
-    let dir = tempfile::tempdir().unwrap();
-    let marker = dir.path().join("logged-in");
-    let agent = format!(
-        r#"    import os
-    if not os.path.exists({marker:?}):
-        print("not logged in: run agy login", file=sys.stderr)
-        sys.exit(1)
-    answer = "acknowledged""#,
-        marker = marker.to_string_lossy()
-    );
-    let core = open(dir.path(), "answer = 'done'", &agent);
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
-        .unwrap()
-        .id;
-    core.submit(&conversation, "@auditor original question")
-        .unwrap();
-    wait_until("login failure recorded", || core.is_idle(&conversation));
-    assert_eq!(
-        events(&core, &conversation, "mail_delivery_failed").len(),
-        1
-    );
-    assert!(events(&core, &conversation, "mail_retry").is_empty());
-    assert!(
-        core.store
-            .mail(&conversation)
-            .unwrap()
-            .iter()
-            .any(|mail| mail.text == "original question" && mail.delivered_turn.is_none())
-    );
-    std::fs::write(marker, "ready").unwrap();
-    core.submit(&conversation, "@auditor login is fixed")
-        .unwrap();
-    wait_until("both messages delivered", || {
-        core.is_idle(&conversation)
-            && core
-                .store
-                .mail(&conversation)
-                .unwrap()
-                .iter()
-                .filter(|mail| mail.recipient == "auditor")
-                .all(|mail| mail.delivered_turn.is_some())
-    });
-}
-
-#[test]
-fn agent_mail_reaches_the_orchestrator_without_replanning() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        "answer = 'mail noted' if 'Mailbox recipient:' in prompt or '[runtime]' in prompt else plan(task('t1', 'Audit'))",
-        "    answer = 'report' + message('orchestrator', 'status', 'agent handoff') if 'Task id: t1' in prompt else 'noted'",
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("orchestrator acknowledged", || {
-        core.is_idle(&conversation)
-            && core
-                .store
-                .mail(&conversation)
-                .unwrap()
-                .iter()
-                .any(|mail| mail.text == "agent handoff" && mail.delivered_turn.is_some())
-    });
-    // The orchestrator's first draft is revised into the ledger-mapped plan; the
-    // mail must not add a third one.
-    assert_eq!(
-        core.store.plans_page(&conversation, 0, 20).unwrap().total,
-        2
-    );
-    assert_eq!(
-        core.store.latest_plan(&conversation).unwrap()[0].status,
-        "approved"
-    );
-}
-
-#[test]
-fn a_mail_reply_loop_has_a_bounded_budget_and_preserves_the_remaining_mail() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
-        "    answer = 'report' if 'Task id:' in prompt else 'reply' + message('t1', 'question', 'repeat')",
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("plan done", || core.is_idle(&conversation));
-    core.submit(&conversation, "@t1 start a reply loop")
-        .unwrap();
-    wait_until("reply budget reached", || core.is_idle(&conversation));
-    let mail = core.store.mail(&conversation).unwrap();
-    assert!(
-        mail.iter()
-            .any(|item| item.text == "start a reply loop" && item.delivered_turn.is_some())
-    );
-    assert!(
-        mail.iter()
-            .any(|item| item.text == "repeat" && item.delivered_turn.is_none())
-    );
-    assert!(mail.iter().filter(|item| item.text == "repeat").count() <= 8);
-    assert_eq!(
-        core.store.latest_plan(&conversation).unwrap()[0].status,
-        "approved"
-    );
-}
-
-#[test]
-fn a_receipt_turn_does_not_occupy_the_plan_scheduler_slot() {
-    let dir = tempfile::tempdir().unwrap();
-    let entered = dir.path().join("mail-entered");
-    let release = dir.path().join("mail-release");
-    let agent = format!(
-        r#"    import os
-    if 'Mailbox recipient:' in prompt:
-        open({entered:?}, 'w').close()
-        while not os.path.exists({release:?}): time.sleep(0.01)
-    answer = 'noted'"#,
-        entered = entered.to_string_lossy(),
-        release = release.to_string_lossy()
-    );
-    let core = open(
-        dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
-        &agent,
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("first plan finished", || core.is_idle(&conversation));
-    core.submit(&conversation, "@t1 slow receipt").unwrap();
-    wait_until("receipt in flight", || entered.exists());
-    let tasks = core
-        .store
-        .add_plan(
-            &conversation,
-            &[serde_json::json!({
-                "id": "t2", "title": "Second task", "goal": "read", "kind": "analysis",
-                "requirement_ids": ["fixture-requirement"], "criterion_ids": ["fixture.accept"],
-                "verifier": {"focus": "inspect"}
-            })],
-        )
-        .unwrap();
-    let run = core.store.latest_run(&conversation).unwrap().unwrap();
-    core.store
-        .link_plan_run(&conversation, &tasks[0].plan_id, &run.id)
-        .unwrap();
-    core.store
-        .bind_task_ledger(&conversation, &run.id, &tasks[0].plan_id)
-        .unwrap();
-    let accepted = core.accept_plan(&conversation, &tasks[0].plan_id);
-    // Always release the fixture, including when an assertion would fail.
-    std::fs::write(release, "continue").unwrap();
-    assert!(
-        accepted.is_ok(),
-        "mail must not masquerade as a running plan: {accepted:?}"
-    );
-    wait_until("second plan completed", || core.is_idle(&conversation));
-    assert_eq!(
-        core.store.plan(&tasks[0].plan_id).unwrap()[0].status,
-        "approved"
-    );
-}
-
-#[test]
-fn explicit_task_uuids_keep_mail_with_historical_agents_and_their_conversation() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Audit'))",
-        "    answer = 'noted'",
-    );
-    let conversation = run(&core, dir.path());
-    wait_until("old plan finished", || core.is_idle(&conversation));
-    let original = core.store.latest_plan(&conversation).unwrap()[0].clone();
-    let newer = core.store.add_plan(&conversation, &[serde_json::json!({
-        "id": "t1", "title": "New task with the same label", "goal": "read", "kind": "analysis",
-        "verifier": {"focus": "inspect"}
-    })]).unwrap();
-    for role in ["worker", "verifier", "code-review"] {
-        let body = format!("historical receipt for {role}");
-        let recipient = format!("{role}:{}", original.id);
-        core.submit_addressed(&conversation, &body, Some(&recipient))
-            .unwrap();
-        wait_until("historical recipient acknowledged", || {
-            core.is_idle(&conversation)
-                && core
-                    .store
-                    .mail(&conversation)
-                    .unwrap()
-                    .iter()
-                    .any(|mail| mail.text == body && mail.delivered_turn.is_some())
-        });
-    }
-    let other = support::legacy_conversation(&core, &dir.path().join("project"))
-        .unwrap()
-        .id;
-    assert!(
-        core.submit_addressed(
-            &other,
-            "wrong conversation",
-            Some(&format!("worker:{}", original.id))
-        )
-        .is_err()
-    );
-    assert_eq!(
-        core.store.plan(&newer[0].plan_id).unwrap()[0].status,
-        "proposed"
-    );
-    assert_eq!(
-        core.store.plan(&original.plan_id).unwrap()[0].status,
-        "approved"
-    );
 }
 
 #[test]
@@ -1369,7 +827,7 @@ fn direct_worker_correction_invalidates_and_recomputes_the_dependency_chain() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Source'),task('t2', 'Consumer', ['t1']))",
+        "answer = 'done' if '[runtime]' in prompt else plan(dict(task('t1', 'Source'),outputs=['api']),dict(task('t2', 'Consumer', ['t1']),inputs=[{'name':'api','task':'t1','output':'api'}]))",
         r#"    if "The worker's updated report:" in prompt:
         answer = verdict(True)
     elif "make correction" in prompt:
@@ -1421,7 +879,7 @@ answer = "ąe\u0301👩‍💻" * 300000
 "#,
         "    answer = 'unused'",
     );
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     let request = "full request 👩‍💻 ".repeat(3500);
@@ -1510,7 +968,7 @@ fn direct_orchestrator_message_uses_normal_workflow_and_validates_the_run() {
         "answer = 'response: ' + prompt.splitlines()[-1]",
         "    answer = 'unused'",
     );
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     core.send(&conversation, "first question").unwrap();
@@ -1576,7 +1034,7 @@ fn direct_verifier_recheck_keeps_unchanged_dependents_and_rejection_recomputes_t
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
-        "answer = 'done' if '[runtime]' in prompt else plan(task('t1', 'Source'),task('t2', 'Consumer', ['t1']))",
+        "answer = 'done' if '[runtime]' in prompt else plan(dict(task('t1', 'Source'),outputs=['api']),dict(task('t2', 'Consumer', ['t1']),inputs=[{'name':'api','task':'t1','output':'api'}]))",
         r#"    if "The worker's updated report:" in prompt or "You verify another agent's work." in prompt:
         answer = verdict(False) if 'reject the old report' in prompt else verdict(True)
     else:
@@ -1791,4 +1249,137 @@ fn direct_reviewers_receive_review_context_instead_of_receipt_only_instructions(
                 .any(|(_, prompt)| prompt.contains("receipt-only"))
         );
     }
+}
+
+#[test]
+fn isolated_worker_can_ask_orchestrator_with_the_only_task_slot_occupied() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open_limited(
+        dir.path(),
+        r#"
+import os,re,urllib.request
+if 'Agent question ' in prompt:
+    question=re.findall(r'Agent question ([a-f0-9-]+)',prompt)[-1]
+    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'reply_to_agent','arguments':{'turn':os.environ['FIXTURE_TURN'],'request':question,'answer':'Use UTF-8'}}}
+    req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
+    reply=json.load(urllib.request.urlopen(req,timeout=10))
+    assert not reply['result'].get('isError'),reply
+    answer='Answered the local question.'
+else:
+    answer='done' if '[runtime]' in prompt else plan(task('t1','Encoding inspection'))
+"#,
+        r#"    import os,urllib.request
+    def call(name,**arguments):
+        arguments['turn']=os.environ['FIXTURE_TURN']
+        body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':name,'arguments':arguments}}
+        req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
+        reply=json.load(urllib.request.urlopen(req,timeout=30))['result']
+        assert not reply.get('isError'),reply
+        return json.loads(reply['content'][0]['text'])
+    receipt=call('ask_orchestrator',request_key='encoding',question='Which encoding should this local report use?')
+    response=call('await_orchestrator',request=receipt['request'])
+    assert response['state']=='answered',response
+    assert response['answer']=='Use UTF-8',response
+    answer='Inspected encoding: UTF-8'"#,
+        1,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until(
+        "worker received live answer and passed independent verification",
+        || core.is_idle(&conversation),
+    );
+    let tasks = core.store.latest_plan(&conversation).unwrap();
+    assert_eq!(tasks[0].status, "approved", "{:?}", tasks[0].report);
+    assert_eq!(
+        tasks[0].report.as_deref(),
+        Some("Inspected encoding: UTF-8")
+    );
+    assert_eq!(
+        prompts(dir.path())
+            .iter()
+            .filter(|(bin, p)| bin == "agy" && p.contains("Task role: worker"))
+            .count(),
+        1
+    );
+    let worker = prompts(dir.path())
+        .into_iter()
+        .find(|(bin, p)| bin == "agy" && p.contains("Task role: worker"))
+        .unwrap()
+        .1;
+    assert!(!worker.contains("Team:"));
+    assert!(!worker.contains("The user's request:"));
+}
+
+#[test]
+fn a_dependency_correction_cancels_the_old_consumer_and_releases_its_only_slot() {
+    struct ReleaseOnDrop(std::path::PathBuf);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, "release");
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let entered = dir.path().join("old-consumer-entered");
+    let release = dir.path().join("release-old-consumer");
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    let agent = format!(
+        r#"    import os
+    if 'Task id: t2\n' in prompt:
+        if not os.path.exists({entered:?}):
+            open({entered:?},'w').close()
+            while not os.path.exists({release:?}): time.sleep(0.01)
+        answer='consumer recomputed'
+    else:
+        answer='source corrected' if 'make correction' in prompt else 'source initial'"#,
+        entered = entered.to_string_lossy(),
+        release = release.to_string_lossy()
+    );
+    let core = open_limited(
+        dir.path(),
+        "answer='done' if '[runtime]' in prompt else plan(task('t1','Source'),task('t2','Consumer',['t1']))",
+        &agent,
+        1,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("consumer occupied the only scheduler slot", || {
+        entered.exists()
+    });
+    let before = core.store.latest_plan(&conversation).unwrap();
+    core.send_to_agent(&antislop::lean::store::AgentMessage {
+        conversation: conversation.clone(),
+        plan: Some(before[0].plan_id.clone()),
+        recipient: format!("worker:{}", before[0].id),
+        operation_id: antislop::id(),
+        expected_round: Some(before[0].round),
+        expected_run: None,
+        text: "make correction".into(),
+    })
+    .unwrap();
+    wait_until(
+        "obsolete consumer cancelled and both tasks recomputed",
+        || {
+            core.is_idle(&conversation)
+                && core
+                    .store
+                    .latest_plan(&conversation)
+                    .unwrap()
+                    .iter()
+                    .zip(&before)
+                    .all(|(new, old)| new.status == "approved" && new.round > old.round)
+        },
+    );
+    let after = core.store.latest_plan(&conversation).unwrap();
+    assert!(after[1].input_generation > before[1].input_generation);
+    assert!(
+        !release.exists(),
+        "the old worker must be cancelled, not manually released"
+    );
+    let role = format!("worker:{}", before[1].id);
+    assert!(
+        core.store
+            .sessions(&conversation)
+            .unwrap()
+            .iter()
+            .any(|s| s.role == role && s.status == "cancelled")
+    );
 }

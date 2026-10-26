@@ -177,7 +177,7 @@ struct CodeReview {
     conversation: String,
     plan: String,
     task_id: String,
-    spec: TaskSpec,
+    spec: TaskContract,
     dir: PathBuf,
     base: String,
     result: Option<String>,

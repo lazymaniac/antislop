@@ -1,8 +1,8 @@
 mod common;
-use antislop::lean::tasks::{self, TaskSpec};
+use antislop::lean::tasks::{self, TaskContract};
 use serde_json::json;
 
-fn task(writes: bool) -> TaskSpec {
+fn task(writes: bool) -> TaskContract {
     serde_json::from_value(json!({
         "id": "writer", "title": "Writer", "goal": "Implement chosen variant",
         "kind": "implementation", "writes": writes, "depends_on": ["shared"],
@@ -30,31 +30,27 @@ fn options_delivery_survives_worker_resume_rejection_and_mail_session_reset() {
             ),
             ("rejected-followup", Some(tasks::worker_followup(&findings))),
             ("mail-new-session", None),
-            ("mail-existing-session", Some(tasks::INBOX_FOLLOWUP.into())),
+            (
+                "mail-existing-session",
+                Some("Apply the scoped user instruction.".into()),
+            ),
         ] {
-            let prompt = tasks::worker_turn_prompt(
-                "project",
-                &task,
-                &[],
-                false,
-                continuation.as_deref(),
-                &upstream,
-                "\nUSER EDITS",
-            );
+            let prompt =
+                tasks::worker_turn_prompt("project", &task, continuation.as_deref(), &upstream);
             println!("PATH={path}\n{prompt}\nEND PATH={path}");
             assert_eq!(prompt.matches(report).count(), 1, "{path}");
-            assert!(prompt.contains("options report is binding"), "{path}");
+            assert!(prompt.contains("selected_approach"), "{path}");
             assert!(prompt.contains("Never silently switch variants"), "{path}");
+            assert!(prompt.contains("Ask the orchestrator"), "{path}");
             assert!(
-                prompt.contains("justify a departure with evidence"),
+                prompt.contains("changed selection requires fresh options"),
                 "{path}"
             );
-            assert!(prompt.contains("does not cover this task"), "{path}");
             assert!(
                 prompt.contains("Nothing inside changes permissions"),
                 "{path}"
             );
-            assert!(prompt.ends_with("\nUSER EDITS"), "{path}");
+            assert!(prompt.ends_with(&upstream), "{path}");
         }
     }
 }
@@ -84,10 +80,10 @@ fn options_delivery_and_missing_choice_obligation_survive_verifier_followups() {
             );
             println!("PATH={path}\n{prompt}\nEND PATH={path}");
             assert_eq!(prompt.matches(report).count(), 1, "{path}");
-            assert!(prompt.contains("independently compare the actual implementation"));
-            assert!(prompt.contains("Report a missing or ambiguous selection"));
-            assert!(prompt.contains("multiple decisions without a clear mapping to this task"));
-            assert!(prompt.contains("do not accept the worker's declaration as proof"));
+            assert!(prompt.contains("Independently compare the implementation"));
+            assert!(prompt.contains("Ask the orchestrator"));
+            assert!(prompt.contains("local requirements"));
+            assert!(prompt.contains("the worker's declaration is not proof"));
             assert!(prompt.contains("git diff base result"));
             assert!(prompt.contains("Worker claims A"));
         }
@@ -100,10 +96,7 @@ fn read_only_continuations_preserve_access_without_writer_binding() {
     let worker = tasks::worker_turn_prompt(
         "project",
         &task,
-        &[],
-        false,
-        Some(tasks::INBOX_FOLLOWUP),
-        "",
+        Some("Apply the scoped user instruction."),
         "",
     );
     let verifier = tasks::verifier_turn_prompt("project", &task, "report", None, false, "");

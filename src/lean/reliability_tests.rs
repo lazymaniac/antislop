@@ -43,14 +43,14 @@ fn task_branches_validate_ids_and_distinguish_shared_prefixes() {
     task.id = format!("combine-base-{}", "a".repeat(64));
     assert!(branch(&task).is_err());
     task.id = "12345678-1234-4234-8234-123456789abc".to_owned();
-    assert_eq!(branch(&task).unwrap(), format!("antislop/{}", task.id));
+    assert_eq!(branch(&task).unwrap(), format!("antislop/{}-g0", task.id));
     let first = branch(&task).unwrap();
     task.id = "12345678-2222-4222-8222-222222222222".into();
     assert_ne!(first, branch(&task).unwrap());
 }
 
 #[test]
-fn resumed_worktrees_keep_legacy_branches_and_cleanup_the_actual_branch() {
+fn worktrees_bind_exact_task_generation_and_reject_foreign_branches() {
     let project = tempfile::tempdir().unwrap();
     let root = project.path();
     assert!(
@@ -70,16 +70,16 @@ fn resumed_worktrees_keep_legacy_branches_and_cleanup_the_actual_branch() {
     }))
     .unwrap();
     let state = root.join(".antislop");
-    let path = state.join("worktrees").join(&task.id);
-    let legacy = "antislop/12345678";
-    git::add_worktree(root, &path, legacy, &base).unwrap();
+    let path = super::core_path_helpers::worktree_path(&state, &task).unwrap();
+    let legacy = branch(&task).unwrap();
+    git::add_worktree(root, &path, &legacy, &base).unwrap();
     let actual = worktree_branch(&state, &task).unwrap();
     assert_eq!(actual, legacy);
     git::add_worktree(root, &path, &actual, &base).unwrap();
     assert_eq!(git::worktree_branch(&path).unwrap(), legacy);
     // A second task sharing the prefix gets its own branch and worktree.
     task.id = "12345678-2222-4222-8222-222222222222".into();
-    let other = state.join("worktrees").join(&task.id);
+    let other = super::core_path_helpers::worktree_path(&state, &task).unwrap();
     let unique = worktree_branch(&state, &task).unwrap();
     git::add_worktree(root, &other, &unique, &base).unwrap();
     git::remove_worktree(root, &path, &actual).unwrap();
@@ -108,7 +108,7 @@ fn resumed_worktrees_keep_legacy_branches_and_cleanup_the_actual_branch() {
         worktree_branch(&state, &task)
             .unwrap_err()
             .to_string()
-            .contains("unrelated branch")
+            .contains("expected")
     );
     assert!(git::add_worktree(root, &other, &unique, &changed).is_err());
     assert!(git::remove_worktree(root, &other, &unique).is_err());

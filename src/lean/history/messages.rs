@@ -97,11 +97,8 @@ impl Store {
                 has_more = true;
                 break;
             }
-            let content = if let Some(reference) = text.strip_prefix("\0antislop-content:") {
-                serde_json::json!({"session_content":serde_json::from_str::<Value>(reference)?})
-            } else {
-                serde_json::json!({"legacy":true,"bytes":text.len()})
-            };
+            let reference = crate::lean::content::Content::reference(&text)?;
+            let content = serde_json::json!({"session_content":reference});
             messages.push(serde_json::json!({"id":id,"sender":sender,"recipient":recipient,"content":content,"delivered_turn":delivered,"state":if delivered.is_some(){"delivered"}else{"queued"}}));
         }
         Ok((messages, has_more))

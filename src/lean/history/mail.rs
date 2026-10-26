@@ -102,9 +102,9 @@ fn invalidate_dependents(
     now: i64,
 ) -> Result<()> {
     let mut statement = tx.prepare("WITH RECURSIVE affected(id,local_id) AS (
-                SELECT id,json_extract(spec,'$.id') FROM tasks WHERE id=?1
+                SELECT id,json_extract(spec,'$.id') FROM tasks WHERE id=?1 AND status<>'superseded'
                 UNION SELECT t.id,json_extract(t.spec,'$.id') FROM tasks t,affected a,json_each(t.spec,'$.depends_on') d
-                WHERE t.plan_id=?2 AND (d.value=a.id OR d.value=a.local_id))
+                WHERE t.plan_id=?2 AND t.status<>'superseded' AND (d.value=a.id OR d.value=a.local_id))
                 SELECT id FROM affected WHERE id<>?1")?;
     let affected = statement
         .query_map(params![task, plan], |row| row.get::<_, String>(0))?
@@ -131,9 +131,8 @@ fn invalidate_dependent(
     )?;
     tx.execute(
         "UPDATE tasks SET status='queued',verdict=NULL,feedback=NULL,
-        base=CASE WHEN status='approved' THEN NULL ELSE base END,
-        result=CASE WHEN status='approved' THEN NULL ELSE result END
-        WHERE id=?1 AND status NOT IN ('proposed','stale')",
+        base=NULL,result=NULL
+        WHERE id=?1 AND status NOT IN ('proposed','stale','superseded')",
         [dependent],
     )?;
     record_invalidation(tx, dependent, source, plan, conversation, operation, now)

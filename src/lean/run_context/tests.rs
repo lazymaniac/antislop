@@ -14,10 +14,8 @@ fn context(store: &Store, provider: &str) -> RunContext {
         cwd: std::env::current_dir().unwrap(),
         add_dirs: vec![],
         access: RunAccess::ReadOnly,
-        backend: RunBackend::Cli,
         provider_thread_id: None,
         provider_session_id: None,
-        provider_turn_id: None,
     }
 }
 
@@ -65,7 +63,7 @@ fn context_survives_restart_and_keeps_thread_separate_from_session() {
 }
 
 #[test]
-fn context_cannot_change_scope_backend_profile_or_directory() {
+fn context_cannot_change_scope_profile_or_directory() {
     let store = Store::open(Path::new(":memory:")).unwrap();
     let original = context(&store, "codex");
     store.record_run_context(&original).unwrap();
@@ -83,7 +81,6 @@ fn context_cannot_change_scope_backend_profile_or_directory() {
         "profile",
         "cwd",
         "access",
-        "backend",
     ] {
         let mut changed = original.clone();
         match field {
@@ -93,7 +90,6 @@ fn context_cannot_change_scope_backend_profile_or_directory() {
             "profile" => changed.profile = "foreign".into(),
             "cwd" => changed.cwd = original.cwd.join("foreign"),
             "access" => changed.access = RunAccess::Write,
-            "backend" => changed.backend = RunBackend::CodexAppServer,
             _ => unreachable!(),
         }
         assert!(store.record_run_context(&changed).is_err(), "{field}");
@@ -111,61 +107,9 @@ fn context_cannot_change_scope_backend_profile_or_directory() {
 }
 
 #[test]
-fn native_turn_binding_is_scoped_and_idempotent() {
-    let store = Store::open(Path::new(":memory:")).unwrap();
-    let mut context = context(&store, "codex");
-    assert!(
-        store
-            .bind_provider_turn(&context.conversation, &context.turn_id, "turn-1")
-            .is_err()
-    );
-    context.backend = RunBackend::CodexAppServer;
-    store.record_run_context(&context).unwrap();
-    assert!(
-        store
-            .bind_provider_turn("foreign", &context.turn_id, "turn-1")
-            .is_err()
-    );
-    assert!(
-        store
-            .bind_provider_turn(&context.conversation, &context.turn_id, "")
-            .is_err()
-    );
-    store
-        .bind_provider_turn(&context.conversation, &context.turn_id, "turn-1")
-        .unwrap();
-    store
-        .bind_provider_turn(&context.conversation, &context.turn_id, "turn-1")
-        .unwrap();
-    assert!(
-        store
-            .bind_provider_turn(&context.conversation, &context.turn_id, "turn-2")
-            .is_err()
-    );
-    let bound = store
-        .run_context(&context.conversation, &context.turn_id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(bound.provider_turn_id.as_deref(), Some("turn-1"));
-    assert_eq!(bound.provider_thread_id, None);
-    assert_eq!(bound.provider_session_id, None);
-    store
-        .finish_turn(&context.turn_id, TurnStatus::Interrupted, None)
-        .unwrap();
-    assert!(
-        store
-            .bind_provider_turn(&context.conversation, &context.turn_id, "turn-1")
-            .is_err()
-    );
-}
-
-#[test]
 fn invalid_context_does_not_leave_a_row() {
     let store = Store::open(Path::new(":memory:")).unwrap();
     let mut context = context(&store, "codex");
-    context.backend = RunBackend::OpencodeServer;
-    assert!(store.record_run_context(&context).is_err());
-    context.backend = RunBackend::Cli;
     context.cwd = "relative".into();
     assert!(store.record_run_context(&context).is_err());
     context.cwd = std::env::current_dir().unwrap();
@@ -180,14 +124,10 @@ fn invalid_context_does_not_leave_a_row() {
 }
 
 #[test]
-fn native_session_cannot_be_rebound_and_legacy_resume_updates_atomically() {
-    for (provider, backend) in [
-        ("codex", RunBackend::CodexAppServer),
-        ("opencode", RunBackend::OpencodeServer),
-    ] {
+fn cli_session_identity_is_scoped_and_idempotent() {
+    for provider in ["codex", "opencode", "claude", "gemini", "agy"] {
         let store = Store::open(Path::new(":memory:")).unwrap();
-        let mut context = context(&store, provider);
-        context.backend = backend;
+        let context = context(&store, provider);
         store.record_run_context(&context).unwrap();
         store.set_session(&context.turn_id, "original").unwrap();
         store.set_session(&context.turn_id, "original").unwrap();
@@ -210,5 +150,15 @@ fn native_session_cannot_be_rebound_and_legacy_resume_updates_atomically() {
             assert_eq!(bound.provider_session_id.as_deref(), Some("original"));
             assert_eq!(bound.provider_thread_id, None);
         }
+    }
+}
+
+#[test]
+fn removed_server_metadata_is_rejected() {
+    let store = Store::open(Path::new(":memory:")).unwrap();
+    for field in ["backend", "provider_turn_id"] {
+        let mut value = serde_json::to_value(context(&store, "codex")).unwrap();
+        value[field] = serde_json::json!("removed-server-value");
+        assert!(serde_json::from_value::<RunContext>(value).is_err());
     }
 }

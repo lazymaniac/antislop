@@ -1,7 +1,6 @@
 use super::*;
 
 /// Validate database task IDs before using them as path or branch components.
-/// Keep the original spelling so existing worktrees can be resumed.
 pub(super) fn task_path_component(id: &str) -> Result<&str> {
     if id.len() < 8
         || id.starts_with("combine-")
@@ -17,27 +16,31 @@ pub(super) fn task_path_component(id: &str) -> Result<&str> {
     Ok(id)
 }
 
-/// New writers use the complete validated ID, so shared prefixes cannot collide.
-pub(super) fn branch(task: &Task) -> Result<String> {
-    Ok(format!("antislop/{}", task_path_component(&task.id)?))
+/// Each input generation owns a distinct checkout and branch.
+pub(super) fn worktree_path(state: &Path, task: &Task) -> Result<PathBuf> {
+    let id = task_path_component(&task.id)?;
+    Ok(state
+        .join("worktrees")
+        .join(format!("{id}-g{}", task.input_generation)))
 }
 
-/// Existing worktrees retain their actual branch, including legacy short names.
+pub(super) fn branch(task: &Task) -> Result<String> {
+    Ok(format!(
+        "antislop/{}-g{}",
+        task_path_component(&task.id)?,
+        task.input_generation
+    ))
+}
+
 pub(super) fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
-    let id = task_path_component(&task.id)?;
-    let path = state.join("worktrees").join(id);
+    let path = worktree_path(state, task)?;
     let expected = branch(task)?;
     if path.exists() {
         let actual = git::worktree_branch(&path)?;
-        let legacy = format!("antislop/{}", &id[..8]);
-        if actual != expected && actual != legacy {
-            return Err(Error::Invalid(format!(
-                "task {} worktree is on unrelated branch {actual}; expected {expected} or legacy {legacy}",
-                task.id
-            )));
-        }
-        Ok(actual)
-    } else {
-        Ok(expected)
+        require(
+            actual == expected,
+            &format!("task worktree is on {actual}; expected {expected}"),
+        )?;
     }
+    Ok(expected)
 }

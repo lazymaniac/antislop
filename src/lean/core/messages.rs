@@ -42,136 +42,66 @@ fn dispatch_addressed(
     if recipient == ORCHESTRATOR {
         return Ok(json!(core.send(conversation, body)?.seq));
     }
-    if matches!(recipient, PLAN_VERIFIER | AUDITOR | COMMENT_ORCHESTRATOR) {
-        return queue_directive(core, conversation, recipient, body);
-    }
+    let plan = core.store.latest_plan(conversation)?;
     if recipient == "all" {
-        return broadcast(core, conversation, body);
-    }
-    deliver_to_task(core, conversation, recipient, body)
-}
-
-fn queue_directive(
-    core: &Arc<Core>,
-    conversation: &str,
-    recipient: &str,
-    body: &str,
-) -> Result<serde_json::Value> {
-    let mail = core.store.add_mail(
-        conversation,
-        recipient,
-        &queued_mail("user", recipient, "user_instruction", body),
-    )?;
-    queue_orchestrator_copy(
-        core,
-        conversation,
-        &format!("(the user wrote to {recipient}) {body}"),
-    )?;
-    core.answer_in_background(conversation, "");
-    Ok(json!({"mail":mail.id,"state":"queued","recipient":recipient,"recipient_finished":false}))
-}
-
-fn broadcast(core: &Arc<Core>, conversation: &str, body: &str) -> Result<serde_json::Value> {
-    let plan = core.store.latest_plan(conversation)?;
-    if plan.is_empty() {
-        return reject_broadcast(core, conversation, body, &plan);
-    }
-    let mail_ids = queue_broadcast_targets(core, conversation, &plan, body)?;
-    queue_orchestrator_copy(
-        core,
-        conversation,
-        &format!("(the user broadcast to all) {body}"),
-    )?;
-    if let Some(task) = plan.first() {
-        core.answer_in_background(conversation, &task.plan_id);
-    }
-    Ok(
-        json!({"mail":mail_ids.first().copied().unwrap_or(0),"mail_ids":mail_ids,"state":"queued","recipient":"all","recipient_finished":false}),
-    )
-}
-
-fn reject_broadcast(
-    core: &Core,
-    conversation: &str,
-    body: &str,
-    plan: &[Task],
-) -> Result<serde_json::Value> {
-    core.store.append_event(conversation, None, plan.first().map(|t| t.plan_id.as_str()), "mail_rejected", &json!({"sender":"user","recipient":"all","text":body,"reason":"no valid recipients for broadcast in current plan"}))?;
-    Err(crate::Error::Invalid(
-        "no valid recipients for broadcast in current plan".into(),
-    ))
-}
-
-fn queue_broadcast_targets(
-    core: &Core,
-    conversation: &str,
-    plan: &[Task],
-    body: &str,
-) -> Result<Vec<u64>> {
-    plan.iter()
-        .map(|task| {
-            let recipient = format!("worker:{}", task.id);
-            let label = task.spec["id"].as_str().unwrap_or_default();
-            Ok(core
-                .store
-                .add_mail(
+        if plan.is_empty() {
+            core.store.append_event(conversation,None,None,"mail_rejected",&json!({"sender":"user","recipient":recipient,"text":body,"reason":"no valid recipients for broadcast in current plan"}))?;
+            return Err(Error::Invalid(
+                "no valid recipients for broadcast in current plan".into(),
+            ));
+        }
+        let receipts = plan
+            .iter()
+            .map(|task| {
+                direct_task(
+                    core,
                     conversation,
-                    &recipient,
-                    &queued_mail("user", label, "broadcast", body),
-                )?
-                .id)
-        })
-        .collect()
-}
-
-fn deliver_to_task(
-    core: &Arc<Core>,
-    conversation: &str,
-    recipient: &str,
-    body: &str,
-) -> Result<serde_json::Value> {
-    let plan = core.store.latest_plan(conversation)?;
+                    task,
+                    &format!("worker:{}", task.id),
+                    body,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(
+            json!({"mail_ids":receipts.iter().map(|r|&r["mail"]).collect::<Vec<_>>(),"state":"queued","recipient":"all","recipient_finished":false}),
+        );
+    }
+    if matches!(recipient, PLAN_VERIFIER | AUDITOR) {
+        let run = core.store.last_turn(conversation, recipient)?.map(|t| t.id);
+        return core.send_to_agent(&store::AgentMessage {
+            conversation: conversation.into(),
+            plan: plan.first().map(|t| t.plan_id.clone()),
+            recipient: recipient.into(),
+            operation_id: crate::id(),
+            expected_round: None,
+            expected_run: run,
+            text: body.into(),
+        });
+    }
     let Some((task, role)) = core.mail_address_task(conversation, &plan, recipient)? else {
         return reject_recipient(core, conversation, recipient, body);
     };
-    let mail = core.store.add_mail(
-        conversation,
-        &role,
-        &queued_mail("user", recipient, "user_instruction", body),
-    )?;
-    queue_orchestrator_copy(
-        core,
-        conversation,
-        &format!("(the user wrote to {recipient}) {body}"),
-    )?;
-    let finished = status::finished(&task.status);
-    if finished {
-        core.answer_in_background(conversation, &task.plan_id);
-    }
-    Ok(json!({"mail":mail.id,"state":"queued","recipient":recipient,"recipient_finished":finished}))
+    direct_task(core, conversation, &task, &role, body)
 }
 
-fn queued_mail(sender: &str, recipient: &str, kind: &str, text: &str) -> Mail {
-    Mail {
-        id: 0,
-        sender: sender.into(),
-        recipient: recipient.into(),
-        kind: kind.into(),
-        text: text.into(),
-        created_ms: 0,
-        delivered_turn: None,
-        delivered_ms: None,
-        state: "queued".into(),
-    }
-}
-
-fn queue_orchestrator_copy(core: &Core, conversation: &str, text: &str) -> Result<()> {
-    core.store.add_mail(
-        conversation,
-        ORCHESTRATOR,
-        &queued_mail("user", ORCHESTRATOR, "copy", text),
-    )?;
-    Ok(())
+fn direct_task(
+    core: &Arc<Core>,
+    conversation: &str,
+    task: &Task,
+    role: &str,
+    body: &str,
+) -> Result<serde_json::Value> {
+    let mut receipt = core.send_to_agent(&store::AgentMessage {
+        conversation: conversation.into(),
+        plan: Some(task.plan_id.clone()),
+        recipient: role.into(),
+        operation_id: crate::id(),
+        expected_round: Some(task.round),
+        expected_run: None,
+        text: body.into(),
+    })?;
+    receipt["recipient_finished"] = json!(status::finished(&task.status));
+    Ok(receipt)
 }
 
 fn reject_recipient(
@@ -188,5 +118,5 @@ fn reject_recipient(
         "mail_rejected",
         &json!({"sender":"user","recipient":recipient,"text":body,"reason":reason}),
     )?;
-    Err(crate::Error::Invalid(reason))
+    Err(Error::Invalid(reason))
 }

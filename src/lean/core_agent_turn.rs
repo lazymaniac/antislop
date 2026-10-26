@@ -6,7 +6,6 @@ impl Core {
         setup: TurnSetup<'_>,
         cancel: &AtomicBool,
         prompt: impl FnOnce(bool) -> String,
-        mail_only: bool,
     ) -> Result<Option<String>> {
         let lock = self.turn_lock(setup.conversation, &setup.role);
         let Some(_turn_guard) = mail::lock_cancellable(&lock, cancel) else {
@@ -21,17 +20,8 @@ impl Core {
             cwd,
             add_dirs,
             access,
-            mut upto_message,
+            upto_message,
         } = setup;
-        if mail_only {
-            if self.store.pending_mail(conversation, &role)?.is_empty() {
-                return Ok(None);
-            }
-            upto_message = self.store.last_answered(conversation, &role)?;
-            if matches!(role.as_str(), ORCHESTRATOR | COMMENT_ORCHESTRATOR) {
-                upto_message = self.store.last_orchestration_answered(conversation)?;
-            }
-        }
         if role != ORCHESTRATOR && role != COMMENT_ORCHESTRATOR && role != PLAN_VERIFIER {
             // Cancelling a paused conversation ends what waits, too.
             while !cancel.load(Ordering::SeqCst) && self.store.paused(conversation)? {
@@ -53,7 +43,7 @@ impl Core {
         )?;
         let mut inbox = self.store.pending_mail(conversation, &role)?;
         let mut history_mail = std::collections::HashSet::new();
-        if role == ORCHESTRATOR && !mail_only {
+        if role == ORCHESTRATOR {
             let mut visible = Vec::with_capacity(inbox.len());
             for mail in inbox {
                 if mail.kind == "agent_work"
@@ -68,12 +58,6 @@ impl Core {
                 visible.push(mail);
             }
             inbox = visible;
-        }
-        if mail_only && role == ORCHESTRATOR {
-            inbox.retain(|mail| mail.kind != "agent_work");
-        }
-        if mail_only && inbox.is_empty() {
-            return Ok(None);
         }
         let comments: Vec<u64> = if role == ORCHESTRATOR || role == COMMENT_ORCHESTRATOR {
             let answered = self.store.last_orchestration_answered(conversation)?;
@@ -110,18 +94,6 @@ impl Core {
                 persistence_error.borrow_mut().get_or_insert(error);
             }
         };
-        // A verifier reports its checks in its answer; they are recorded
-        // when the turn ends, before the verdict is read.
-        let live = role
-            .strip_prefix("verifier:")
-            .and_then(|task| self.store.task_by_id(task).ok().flatten());
-        let record = |updates: Vec<tasks::CheckUpdate>| {
-            if let Some(task) = &live {
-                for update in updates {
-                    self.record_check(conversation, task, &update);
-                }
-            }
-        };
         // What ran, for the history and its export (design §15).
         announce(
             "turn_started",
@@ -131,7 +103,6 @@ impl Core {
                 "model": profile.as_ref().ok().and_then(|profile| profile.model.clone()),
                 "effort": profile.as_ref().ok().and_then(|profile| profile.native_effort.clone()),
                 "comments": comments,
-                "mail_only": mail_only,
                 "execution_signature": profile.as_ref().ok().map(rounds::execution_signature).transpose()?,
             }),
         );
@@ -175,14 +146,12 @@ impl Core {
                     agent::Access::ReadOnly => store::RunAccess::ReadOnly,
                     agent::Access::Write => store::RunAccess::Write,
                 },
-                backend: store::RunBackend::Cli,
                 provider_thread_id: (spec.provider == crate::config::ProviderKind::Codex)
                     .then(|| identity.clone())
                     .flatten(),
                 provider_session_id: (spec.provider != crate::config::ProviderKind::Codex)
                     .then(|| identity.clone())
                     .flatten(),
-                provider_turn_id: None,
             })?;
             // A resumed CLI may omit another session announcement. Persist
             // its known identity now so further turns in this round continue it.
@@ -198,6 +167,41 @@ impl Core {
             } else {
                 tasks::inbox_text_from(prompt_mail)
             };
+            if let Some((id, verifier)) = task_role(&role) {
+                let task = self
+                    .store
+                    .task_by_id(id)?
+                    .ok_or_else(|| Error::Invalid("task no longer exists".into()))?;
+                if git::is_repository(&spec.cwd) {
+                    text.push_str(&format!(
+                        "Input revision: {}; source commit: {}\n",
+                        task.input_generation,
+                        git::head(&spec.cwd)?
+                    ));
+                }
+                let local: TaskContract = serde_json::from_value(task.spec)?;
+                let questions = self.store.local_questions(&turn.id)?;
+                if !questions.is_empty() {
+                    text.push_str(&format!(
+                        "Your task questions and answers: {}\n",
+                        serde_json::to_string(&questions)?
+                    ));
+                }
+                text.push_str(&format!(
+                    "Local check ids: {}\n",
+                    serde_json::to_string(
+                        &tasks::obligations(&local)
+                            .iter()
+                            .map(|(id, _)| id)
+                            .collect::<Vec<_>>()
+                    )?
+                ));
+                text.push_str(if verifier {
+                    "Task role: verifier\n"
+                } else {
+                    "Task role: worker\n"
+                });
+            }
             text.push_str(&prompt(resume.is_none()));
             if resume.is_none()
                 && let SessionPolicy::TaskRound { task, round } = &session_policy
@@ -210,7 +214,6 @@ impl Core {
             }
             if let Some((id, _)) = task_role(&role)
                 && let Some(task) = self.store.task_by_id(id)?
-                && !mail_only
             {
                 require(
                     task.status != status::STALE,
@@ -218,18 +221,29 @@ impl Core {
                 )?;
                 self.store.assert_task_inputs(&task)?;
             }
+            let weak = self.weak.get().expect("core weak reference").clone();
+            let (conv, agent_role, agent_turn) =
+                (conversation.to_owned(), role.clone(), turn.id.clone());
+            native.set_tool_handler(Arc::new(move |tool, args| {
+                let core = weak
+                    .upgrade()
+                    .ok_or_else(|| Error::Invalid("daemon stopped".into()))?;
+                let outcome = core.agent_tool(&conv, &agent_role, &agent_turn, tool, args);
+                if let Err(error) = &outcome {
+                    core.store.append_event(
+                        &conv,
+                        Some(&agent_turn),
+                        None,
+                        "agent_tool_rejected",
+                        &json!({"tool":tool,"error":error.to_string()}),
+                    )?;
+                }
+                outcome
+            }))?;
             native.run(&self.native, &turn.id, &text, cancel)
         });
         match outcome {
             Ok(outcome) => {
-                // The answer carries the verifier's check lines.
-                record(
-                    outcome
-                        .text
-                        .lines()
-                        .filter_map(tasks::parse_progress)
-                        .collect(),
-                );
                 if let Some(session) = &outcome.session {
                     self.store.set_session(&turn.id, session)?;
                 }

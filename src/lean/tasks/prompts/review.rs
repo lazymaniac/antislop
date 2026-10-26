@@ -2,12 +2,12 @@ use super::*;
 
 pub fn verifier_prompt(
     project: &str,
-    task: &TaskSpec,
+    task: &TaskContract,
     report: &str,
     changes: Option<&str>,
 ) -> String {
     let task_context = verifier_task_context(task);
-    let blocker = crate::lean::blocker::FORMAT;
+    let blocker = "Ask the orchestrator about ambiguities. Report unrelated problems separately; do not expand this task.";
     let obligations = obligations_text(&obligations(task));
     let (binding, risks) = verifier_prompt_notes(task);
     format!(
@@ -17,12 +17,12 @@ pub fn verifier_prompt(
          {task_context}\n\n{binding}\n\n\
          Your obligations (the task's risks, the checks of every verification, \
          then those for this kind of work, then the catalog risks of this kind of work):\n{obligations}{risks}\n\n\
-         The worker's report:\n<<<\n{report}\n>>>\n\n{}{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}\n\n{blocker}",
+         The worker's report:\n<<<\n{report}\n>>>\n\n{}Submit type=review through finish_turn, with report and verdict. Findings must have stable id, assigned check, severity, issue and where. Reuse previous ids for unresolved defects. Suggestions outside this contract belong in the report, not blocking findings. {COVERAGE_FORMAT}\n\n{blocker}",
         change_note(changes),
     )
 }
 
-fn verifier_prompt_notes(task: &TaskSpec) -> (&'static str, &'static str) {
+fn verifier_prompt_notes(task: &TaskContract) -> (&'static str, &'static str) {
     let binding = if task.writes {
         OPTIONS_VERIFICATION
     } else {
@@ -42,7 +42,7 @@ fn change_note(changes: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn verifier_task_context(task: &TaskSpec) -> String {
+fn verifier_task_context(task: &TaskContract) -> String {
     format!(
         "Task: {}\nGoal: {}\nScope: {}\nWorker validation to assess from its recorded evidence only: {}",
         task.title,
@@ -55,7 +55,7 @@ fn verifier_task_context(task: &TaskSpec) -> String {
 /// Resumed verifiers need the same current dependency evidence as new sessions.
 pub fn verifier_turn_prompt(
     project: &str,
-    task: &TaskSpec,
+    task: &TaskContract,
     report: &str,
     changes: Option<&str>,
     fresh: bool,
@@ -69,8 +69,8 @@ pub fn verifier_turn_prompt(
     prompt + upstream
 }
 
-pub fn verifier_followup(task: &TaskSpec, report: &str, changes: Option<&str>) -> String {
-    let blocker = crate::lean::blocker::FORMAT;
+pub fn verifier_followup(task: &TaskContract, report: &str, changes: Option<&str>) -> String {
+    let blocker = "Ask the orchestrator about ambiguities. Report unrelated problems separately; do not expand this task.";
     let binding = if task.writes {
         OPTIONS_VERIFICATION
     } else {
@@ -78,7 +78,7 @@ pub fn verifier_followup(task: &TaskSpec, report: &str, changes: Option<&str>) -
     };
     format!(
         "The worker's updated report:\n<<<\n{report}\n>>>\n\n{}Check it again against \
-         the files. {binding} {REVIEW_RULES} account again for your obligations:\n{}\n\n{PROGRESS_FORMAT} {VERDICT_FORMAT} {COVERAGE_FORMAT}\n\n{blocker}",
+         the files. {binding} {REVIEW_RULES} account again for your obligations:\n{}\n\nSubmit type=review through finish_turn, with report and verdict. Findings must have stable id, assigned check, severity, issue and where. Reuse previous ids for unresolved defects. Suggestions outside this contract belong in the report, not blocking findings. {COVERAGE_FORMAT}\n\n{blocker}",
         changes
             .map(|text| format!("{text}\n\n"))
             .unwrap_or_default(),
@@ -89,7 +89,7 @@ pub fn verifier_followup(task: &TaskSpec, report: &str, changes: Option<&str>) -
 /// A code review the user asked for on a writer's change.
 pub fn code_review_prompt(
     dir: &str,
-    task: &TaskSpec,
+    task: &TaskContract,
     base: &str,
     result: Option<&str>,
     comments: &[crate::lean::store::Comment],
@@ -130,7 +130,7 @@ fn review_comments(comments: &[crate::lean::store::Comment]) -> String {
     )
 }
 
-pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskSpec]) -> String {
+pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -> String {
     format!(
         "You review a plan before any of it runs or the user sees it. The \
          project is your current working directory: {project}. Read the files \
@@ -139,12 +139,15 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskSpec]) -> St
          The orchestrator's plan:\n{}\n\n{}{}",
         request,
         plan_text(plan),
-        PLAN_CHECKS,
+        format_args!(
+            "{PLAN_CHECKS}\nAvailable domain risks; validate the selected subset for each local task:\n{}",
+            plan_risk_catalog(plan)
+        ),
         VERDICT_FORMAT
     )
 }
 
-pub fn plan_review_followup(request: &str, plan: &[TaskSpec]) -> String {
+pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
     format!(
         "{}The orchestrator's new plan:\n{}\n\nCheck it again. {}{}",
         if request.is_empty() {
@@ -173,7 +176,7 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      verification agents from the predefined pool are included so touched code \
      is left in a better state; each verifier's focus and risks fit its own task and require only inspection of files and recorded evidence, never execution or edits. ";
 
-fn plan_text(plan: &[TaskSpec]) -> String {
+fn plan_text(plan: &[TaskContract]) -> String {
     serde_json::to_string_pretty(plan).unwrap_or_default()
 }
 
@@ -215,3 +218,13 @@ const AUDIT_CHECKS: &str = "List every obligation in the request, each \
      show it done and whether touched code was left in a cleaner, better state \
      than before. A missing, partial or unverified obligation is a high \
      finding. ";
+
+fn plan_risk_catalog(plan: &[TaskContract]) -> String {
+    let kinds: std::collections::BTreeSet<_> = plan.iter().map(|task| task.kind).collect();
+    kinds
+        .into_iter()
+        .flat_map(crate::lean::risks::for_kind)
+        .map(|(id, text)| format!("{id}: {text}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}

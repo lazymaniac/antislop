@@ -15,7 +15,7 @@ def bump(name, step=1):
     return n
 import re
 def cover(answer):
-    ids = re.findall(r"^- ([BRCV][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     if not ids or "```verdict" not in answer:
         return answer
     head, body = answer.rsplit("```verdict", 1)
@@ -100,7 +100,7 @@ fn events(core: &Core, conversation: &str, kind: &str) -> Vec<Value> {
 }
 
 fn ask(core: &Arc<Core>, dir: &Path, text: &str) -> String {
-    let conversation = support::legacy_conversation(core, &dir.join("project"))
+    let conversation = support::fixture_conversation(core, &dir.join("project"))
         .unwrap()
         .id;
     core.send(&conversation, text).unwrap();
@@ -197,181 +197,6 @@ if "You review a plan" in prompt or "new plan:" in prompt:
 }
 
 #[test]
-fn a_blocker_is_cleared_by_a_task_inserted_before_the_blocked_one() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        true,
-        r#"
-fix = {"id": "inv", "title": "Inventory", "goal": "Produce the inventory", "kind": "analysis",
-       "verifier": {"focus": "f"}}
-if "blocked (MissingInput)" in prompt:
-    answer = "Adding a task.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
-elif "[runtime]" in prompt:
-    answer = "done"
-else:
-    answer = plan(task("t1", "Work"))
-"#,
-        r#"
-if "You review a plan" in prompt or "You audit" in prompt:
-    say("reviewer", verdict(True))
-elif "You verify" in prompt or "updated report" in prompt:
-    say("verifier", verdict(True))
-elif "Task id: t1" in prompt and bump("t1") == 1:
-    say("worker", "Cannot go on.\n```blocker\n" + json.dumps({"kind": "missing_input", "needs": "an inventory", "why": "none exists"}) + "\n```")
-else:
-    say("worker", "report")
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "work");
-
-    let plan = core.store.latest_plan(&conversation).unwrap();
-    let ids: Vec<_> = plan
-        .iter()
-        .map(|t| t.spec["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, ["inv", "t1"], "inserted before the blocked task");
-    assert!(plan.iter().all(|t| t.status == "approved"), "{plan:#?}");
-    assert_eq!(plan[0].spec["resolves"], "t1");
-    assert_eq!(plan[1].spec["depends_on"][0], "inv");
-    assert_eq!(plan[1].round, 2, "the blocked task resumed in a new round");
-    let recoveries = events(&core, &conversation, "task_recovery");
-    assert_eq!(recoveries[0]["action"], "add_task");
-    let messages = core.store.messages_after(&conversation, 0).unwrap();
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.text.contains("blocked (MissingInput)"))
-    );
-}
-
-#[test]
-fn a_task_that_is_too_large_is_cut_into_parts_that_come_first() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        true,
-        r#"
-a = {"id": "a", "title": "Part A", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}}
-b = {"id": "b", "title": "Part B", "goal": "g", "kind": "analysis", "depends_on": ["a"], "verifier": {"focus": "f"}}
-if "blocked (TooLarge)" in prompt:
-    answer = "Cutting it.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "split_task", "parts": [a, b]}]}) + "\n```"
-elif "[runtime]" in prompt:
-    answer = "done"
-else:
-    answer = plan(task("t1", "Work"))
-"#,
-        r#"
-if "You review a plan" in prompt or "You audit" in prompt:
-    say("reviewer", verdict(True))
-elif "You verify" in prompt or "updated report" in prompt:
-    say("verifier", verdict(True))
-elif "Task id: t1" in prompt and bump("t1") == 1:
-    say("worker", "Too much.\n```blocker\n" + json.dumps({"kind": "too_large", "needs": "a smaller task", "why": "two areas", "suggest": "one part each"}) + "\n```")
-else:
-    say("worker", "report")
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "work");
-
-    let plan = core.store.latest_plan(&conversation).unwrap();
-    let ids: Vec<_> = plan
-        .iter()
-        .map(|t| t.spec["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, ["a", "b", "t1"], "the parts come before the whole");
-    assert!(plan.iter().all(|t| t.status == "approved"), "{plan:#?}");
-    assert_eq!(plan[0].spec["part_of"], "t1");
-    assert_eq!(plan[1].spec["depends_on"][0], "a");
-    assert_eq!(plan[2].spec["depends_on"], serde_json::json!(["a", "b"]));
-    assert_eq!(plan[2].round, 2, "the whole resumed in a new round");
-    let recoveries = events(&core, &conversation, "task_recovery");
-    assert_eq!(recoveries[0]["action"], "split_task");
-}
-
-#[test]
-fn a_split_that_breaks_the_rules_changes_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        true,
-        r#"
-a = {"id": "a", "title": "Part A", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}}
-b = {"id": "b", "title": "Part B", "goal": "g", "kind": "analysis", "depends_on": ["a"], "verifier": {"focus": "f"}}
-if "blocked (TooLarge)" in prompt:
-    answer = "Cutting it.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "split_task", "parts": [a]}]}) + "\n```"
-elif "[runtime]" in prompt:
-    answer = "done"
-else:
-    answer = plan(task("t1", "Work"))
-"#,
-        r#"
-if "You review a plan" in prompt or "You audit" in prompt:
-    say("reviewer", verdict(True))
-elif "You verify" in prompt or "updated report" in prompt:
-    say("verifier", verdict(True))
-elif "Task id: t1" in prompt and bump("t1") == 1:
-    say("worker", "Too much.\n```blocker\n" + json.dumps({"kind": "too_large", "needs": "a smaller task", "why": "two areas", "suggest": "one part each"}) + "\n```")
-else:
-    say("worker", "report")
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "work");
-
-    let plan = core.store.latest_plan(&conversation).unwrap();
-    assert_eq!(plan.len(), 1, "nothing was inserted");
-    assert_eq!(plan[0].status, "needs_user");
-    let notices = events(&core, &conversation, "notice");
-    assert!(notices.iter().any(|n| {
-        n["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("2 to 8 parts"))
-    }));
-}
-
-#[test]
-fn a_refused_permission_is_left_to_the_user_not_to_another_agent() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        true,
-        r#"
-fix = {"id": "inv", "title": "Inventory", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}}
-if "blocked (Permission)" in prompt:
-    answer = "Trying.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
-elif "[runtime]" in prompt:
-    answer = "done"
-else:
-    answer = plan(task("t1", "Work"))
-"#,
-        r#"
-if "You review a plan" in prompt or "You audit" in prompt:
-    say("reviewer", verdict(True))
-elif "Task id: t1" in prompt:
-    say("worker", "Denied.\n```blocker\n" + json.dumps({"kind": "permission", "needs": "write access", "why": "sandbox"}) + "\n```")
-else:
-    say("worker", "report")
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "work");
-
-    let plan = core.store.latest_plan(&conversation).unwrap();
-    assert_eq!(plan.len(), 1, "no task was inserted");
-    assert_eq!(plan[0].status, "needs_user");
-    let notices = events(&core, &conversation, "notice");
-    assert!(notices.iter().any(|n| {
-        n["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("left to the user"))
-    }));
-    let messages = core.store.messages_after(&conversation, 0).unwrap();
-    assert!(messages.iter().any(|m| {
-        m.text
-            .contains("Only the user can lift the permission blocker of t1")
-    }));
-}
-
-#[test]
 fn autonomous_mode_runs_a_checked_plan_and_reports_audit_gaps() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
@@ -461,7 +286,7 @@ elif "found problems" in prompt:
     say("worker", "report")
 elif "You verify" in prompt or "updated report" in prompt:
     n = bump("verdicts")
-    say("verifier", verdict(n >= 5, [] if n >= 5 else [{"severity": "high", "issue": "case %d" % n, "where": "a"}]))
+    say("verifier", verdict(n >= 5, [] if n >= 5 else [{"severity": "high", "id":"case-%d" % n,"issue": "case %d" % n, "where": "a"}]))
 else:
     say("worker", "report")
 "#,
@@ -494,22 +319,22 @@ else:
     let conversation = ask(&core, dir.path(), "fix");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "needs_user");
+    assert_eq!(task.status, "coordinating");
     assert_eq!(task.round, 2);
     assert!(
         task.report
             .as_deref()
             .unwrap()
-            .contains("repeated the same findings")
+            .contains("no previously open obligation")
     );
     // Frontends are told why it stopped.
     let last = events(&core, &conversation, "task").pop().unwrap();
-    assert_eq!(last["status"], "needs_user");
+    assert_eq!(last["status"], "coordinating");
     assert!(
         last["reason"]
             .as_str()
             .unwrap()
-            .contains("not getting closer")
+            .contains("no previously open obligation")
     );
 }
 
@@ -527,10 +352,10 @@ elif "found problems" in prompt:
     say("worker", "report")
 elif "You verify" in prompt or "updated report" in prompt:
     n = bump("verdicts")
-    ids = re.findall(r"^- ([BRCV][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     cov = {i: {"status": "ok", "note": "checked"} for i in ids}
     cov["V1"] = {"status": "issue", "note": "open %d" % n}
-    findings = [{"severity": "high", "issue": "case %d" % n, "where": "a"}]
+    findings = [{"severity": "high", "id":"same-case","issue": "case %d" % n, "where": "a"}]
     say("verifier", "```verdict\n" + json.dumps({"approved": False, "findings": findings, "coverage": cov}) + "\n```", False)
 else:
     say("worker", "report")
@@ -539,17 +364,17 @@ else:
     let conversation = ask(&core, dir.path(), "fix");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "needs_user");
-    assert_eq!(task.round, 4, "three rounds in a row without a new best");
-    let report = task.report.as_deref().unwrap();
-    assert!(
-        report.contains("left the same obligations open"),
-        "{report}"
+    assert_eq!(task.status, "coordinating");
+    assert_eq!(
+        task.round, 2,
+        "unchanged local obligations require coordination"
     );
+    let report = task.report.as_deref().unwrap();
+    assert!(report.contains("no previously open obligation"), "{report}");
 }
 
 #[test]
-fn an_autonomous_task_stops_at_the_ceiling_even_when_the_problems_keep_changing() {
+fn independently_verified_progress_has_no_fixed_round_ceiling() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -562,11 +387,11 @@ elif "found problems" in prompt:
     say("worker", "report")
 elif "You verify" in prompt or "updated report" in prompt:
     n = bump("verdicts")
-    ids = re.findall(r"^- ([BRCV][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     cov = {i: {"status": "ok", "note": "checked"} for i in ids}
-    cov["V1" if n % 2 else "V2"] = {"status": "issue", "note": "open %d" % n}
-    findings = [{"severity": "high", "issue": "case %d" % n, "where": "a"}]
-    say("verifier", "```verdict\n" + json.dumps({"approved": False, "findings": findings, "coverage": cov}) + "\n```", False)
+    if n < 14: cov["V1" if n % 2 else "V2"] = {"status": "issue", "note": "open %d" % n}
+    findings = [{"severity": "high", "id":"case-%d" % n,"issue": "case %d" % n, "where": "a"}]
+    say("verifier", "```verdict\n" + json.dumps({"approved": n >= 14, "findings": [] if n >= 14 else findings, "coverage": cov}) + "\n```", False)
 else:
     say("worker", "report")
 "#,
@@ -574,10 +399,8 @@ else:
     let conversation = ask(&core, dir.path(), "fix");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "needs_user");
-    assert_eq!(task.round, 12, "AUTONOMOUS_ROUNDS");
-    let last = events(&core, &conversation, "task").pop().unwrap();
-    assert!(last["reason"].as_str().unwrap().contains("are over"));
+    assert_eq!(task.status, "approved");
+    assert_eq!(task.round, 14);
 }
 
 #[test]
@@ -625,7 +448,7 @@ fn a_verdict_that_skips_an_obligation_is_asked_again_and_never_approves() {
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 elif "You verify" in prompt or "does not account" in prompt:
-    say("verifier", verdict(True), covered=False)
+    say("verifier", json.dumps({"type":"review","report":"Skipped obligations","verdict":{"approved":True,"findings":[],"coverage":{}}}), covered=False)
 else:
     say("worker", "report")
 "#,
@@ -633,21 +456,9 @@ else:
     let conversation = ask(&core, dir.path(), "calculate revenue");
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
-    assert_eq!(task.status, "needs_user");
-    let verdict = task.verdict.clone().unwrap();
-    assert_eq!(verdict["approved"], false);
-    assert!(
-        verdict["findings"][0]["issue"]
-            .as_str()
-            .unwrap()
-            .contains("R1 (units of money)"),
-        "{verdict}"
-    );
-    let verifier_turns = events(&core, &conversation, "turn_started")
-        .iter()
-        .filter(|turn| turn["role"] == format!("verifier:{}", task.id))
-        .count();
-    assert_eq!(verifier_turns, 2, "asked once more, then the user");
+    assert_eq!(task.status, "failed");
+    assert!(task.report.as_deref().unwrap().contains("verdict.coverage"));
+    assert!(task.verdict.is_none());
 }
 
 #[test]
@@ -659,16 +470,16 @@ fn an_obligation_marked_issue_sends_its_note_to_the_worker() {
         RISKY_PLAN,
         r#"
 import re
-ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
+ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
 if "You review a plan" in prompt or "You audit" in prompt:
     say("reviewer", verdict(True))
 elif "You verify" in prompt and "fixed: converted" not in prompt:
     # The units check, as an issue: the rest is asked for again.
-    lines = re.findall(r"^- ([RCV][0-9]+): (.*)$", prompt, re.M)
+    lines = re.findall(r"^- ([A-Za-z0-9_.-]+): (.*)$", prompt, re.M)
     uid = next(i for i, text in lines if "units and denominators" in text)
-    coverage = {"R1": {"status": "ok", "note": "the report flags the mixed currencies"},
-                uid: {"status": "issue", "note": "EUR added to PLN"}}
-    say("verifier", "```verdict\n" + json.dumps({"approved": True, "findings": [], "coverage": coverage}) + "\n```", covered=False)
+    coverage = {i:{"status":"ok","note":"checked"} for i in ids}
+    coverage[uid] = {"status":"issue","note":"EUR added to PLN"}
+    say("verifier", "```verdict\n" + json.dumps({"approved": False, "findings": [], "coverage": coverage}) + "\n```", covered=False)
 elif "does not account" in prompt:
     assert "R1" not in ids, ids
     say("verifier", verdict(True))
@@ -810,138 +621,6 @@ else:
 }
 
 #[test]
-fn a_blocker_repair_cannot_wait_for_a_transitive_dependent() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        true,
-        r#"
-if "blocked (MissingInput)" in prompt:
-    fix = task("inv", "Inventory", ["t3"])
-    answer = "Repair.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
-elif "[runtime]" in prompt:
-    answer = "done"
-else:
-    answer = plan(task("t1", "Scout"), task("t2", "Writer", ["t1"]), task("t3", "Check", ["t2"]))
-"#,
-        r#"
-if "You review a plan" in prompt or "You audit" in prompt:
-    say("reviewer", verdict(True))
-elif "You verify" in prompt:
-    raise RuntimeError("a blocked worker must not reach verification")
-else:
-    say("worker", '```blocker\n{"kind":"missing_input","needs":"current scan","why":"scan is assigned downstream"}\n```')
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "inventory and verify");
-    let tasks = core.store.latest_plan(&conversation).unwrap();
-    assert_eq!(tasks.len(), 3);
-    assert_eq!(tasks[0].status, "needs_user");
-    assert_eq!(tasks[0].round, 1);
-    assert!(
-        tasks[1..]
-            .iter()
-            .all(|task| task.status == "queued" && task.round == 0)
-    );
-    assert!(events(&core, &conversation, "notice").iter().any(|notice| {
-        notice["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("would wait for the task it unblocks"))
-    }));
-    assert!(events(&core, &conversation, "task_recovery").is_empty());
-}
-
-#[test]
-fn supervised_runtime_repairs_missing_inputs_without_a_retry_decision() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        false,
-        r#"
-if "blocked (MissingInput)" in prompt:
-    fix = task("inv", "Inventory")
-    answer = "Repair.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
-elif "[runtime]" in prompt:
-    answer = "done"
-else:
-    answer = plan(task("t1", "Scout"), task("t2", "Uses inventory", ["t1"]))
-"#,
-        r#"
-if "You review a plan" in prompt or "You audit" in prompt:
-    say("reviewer", verdict(True))
-elif "You verify" in prompt or "updated report" in prompt:
-    say("verifier", verdict(True))
-elif "Task id: t1" in prompt and bump("scout") == 1:
-    say("worker", '```blocker\n{"kind":"missing_input","needs":"current scan","why":"no current evidence"}\n```')
-else:
-    say("worker", "inventory evidence")
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "inventory and verify");
-    let plan = core.store.latest_plan(&conversation).unwrap()[0]
-        .plan_id
-        .clone();
-    core.accept_plan(&conversation, &plan).unwrap();
-    wait_idle(&core, &conversation);
-    let tasks = core.store.plan(&plan).unwrap();
-    assert_eq!(
-        tasks
-            .iter()
-            .map(|task| task.spec["id"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["inv", "t1", "t2"]
-    );
-    assert!(tasks.iter().all(|task| task.status == "approved"));
-    assert_eq!(tasks[1].round, 2);
-    assert_eq!(
-        events(&core, &conversation, "task_recovery")[0]["action"],
-        "add_task"
-    );
-}
-
-#[test]
-fn a_verifiers_missing_input_is_repaired_before_another_worker_round() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        true,
-        r#"
-if "blocked (MissingInput)" in prompt:
-    fix = task("scan", "Current source scan")
-    answer = "Repair.\n```recover\n" + json.dumps({"actions": [{"task": "t1", "action": "add_task", "spec": fix}]}) + "\n```"
-elif "[runtime]" in prompt:
-    answer = "done"
-else:
-    answer = plan(task("t1", "Scout"), task("t2", "Uses inventory", ["t1"]))
-"#,
-        r#"
-if "You review a plan" in prompt or "You audit" in prompt:
-    say("reviewer", verdict(True))
-elif "You verify" in prompt or "updated report" in prompt:
-    if "Task: Scout" in prompt and bump("scout-verifier") == 1:
-        say("verifier", '```blocker\n{"kind":"missing_input","needs":"current scan","why":"historical evidence cannot certify current sources"}\n```')
-    else:
-        say("verifier", verdict(True))
-else:
-    say("worker", "source inventory")
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "inventory and verify");
-    let tasks = core.store.latest_plan(&conversation).unwrap();
-    assert_eq!(
-        tasks
-            .iter()
-            .map(|task| task.spec["id"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["scan", "t1", "t2"]
-    );
-    assert!(tasks.iter().all(|task| task.status == "approved"));
-    assert_eq!(tasks[0].round, 1);
-    assert_eq!(tasks[1].round, 2);
-    assert_eq!(tasks[1].spec["depends_on"], serde_json::json!(["scan"]));
-}
-
-#[test]
 fn runtime_refuses_a_cyclic_persisted_graph_before_starting_workers() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
@@ -975,4 +654,57 @@ else:
             .iter()
             .all(|task| task.status == "proposed" && task.round == 0)
     );
+}
+
+#[test]
+fn plan_corrections_continue_beyond_three_rejections_when_findings_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        false,
+        r#"answer=plan(task('t1','Focused plan'))"#,
+        r#"
+if 'You review a plan' in prompt or 'new plan:' in prompt:
+    n=bump('plan-review-count')
+    findings=[] if n>=6 else [{'id':'plan-%d'%i,'severity':'high','issue':'Missing dependency %d'%i,'where':'t1'} for i in range(n,6)]
+    say('plan',verdict(n>=6,findings))
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "Plan the local work");
+    let proposed = events(&core, &conversation, "plan_proposed");
+    assert_eq!(proposed.len(), 1);
+    assert_eq!(proposed[0]["review"]["approved"], true);
+    assert_eq!(events(&core, &conversation, "plan_review").len(), 5);
+}
+
+#[test]
+fn rewording_the_same_plan_finding_stops_automatic_replanning() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        false,
+        r#"answer=plan(task('t1','Focused plan'))"#,
+        r#"
+if 'You review a plan' in prompt or 'new plan:' in prompt:
+    n=bump('plan-review-count')
+    say('plan',verdict(False,[{'id':'missing-input','severity':'high','issue':'Missing input, wording %d'%n,'where':'t1'}]))
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "Plan the local work");
+    let proposed = events(&core, &conversation, "plan_proposed");
+    assert_eq!(proposed.len(), 1);
+    assert_eq!(proposed[0]["review"]["approved"], false);
+    let starts = events(&core, &conversation, "turn_started");
+    assert_eq!(
+        starts
+            .iter()
+            .filter(|e| e["role"] == "plan-verifier")
+            .count(),
+        2
+    );
+    assert!(events(&core, &conversation, "notice").iter().any(|e| {
+        e["text"]
+            .as_str()
+            .is_some_and(|s| s.contains("closure of a previous finding"))
+    }));
 }

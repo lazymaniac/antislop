@@ -1,52 +1,6 @@
 use super::*;
 
 #[test]
-fn progress_lines_are_read_however_they_are_decorated() {
-    let update = |id: &str, status: Option<&str>, note: &str| {
-        Some(CheckUpdate {
-            id: id.into(),
-            status: status.map(Into::into),
-            note: note.into(),
-        })
-    };
-    assert_eq!(parse_progress("CHECKING R1"), update("R1", None, ""));
-    assert_eq!(
-        parse_progress("- **CHECK V2 ok**: src/a.rs:10 handles it"),
-        update("V2", Some("ok"), "src/a.rs:10 handles it")
-    );
-    assert_eq!(
-        parse_progress("`CHECK C3 N/A: nothing to migrate`"),
-        update("C3", Some("n/a"), "nothing to migrate")
-    );
-    assert_eq!(parse_progress("CHECK R1 maybe: x"), None);
-    assert_eq!(parse_progress("CHECK X1 ok: x"), None);
-    assert_eq!(parse_progress("Checking the code now"), None);
-}
-
-#[test]
-fn progress_survives_lines_split_across_deltas() {
-    let mut progress = Progress::default();
-    assert!(progress.push("CHECKING R").is_empty());
-    let first = progress.push("1\nCHECK R1 issue: br");
-    assert_eq!(first.len(), 1);
-    assert_eq!(first[0].status, None);
-    assert!(progress.push("oken").is_empty());
-    let last = progress.finish();
-    assert_eq!(last[0].note, "broken");
-    assert_eq!(last[0].status.as_deref(), Some("issue"));
-}
-#[test]
-fn a_recover_block_is_split_off_with_its_steps() {
-    let answer = "Retrying.\n```recover\n{\"actions\":[{\"task\":\"t1\",\"action\":\"extend_rounds\"}]}\n```";
-    let (text, steps) = parse_recoveries(answer);
-    assert_eq!(text, "Retrying.");
-    assert_eq!(steps.len(), 1);
-    assert_eq!(steps[0].task, "t1");
-    assert_eq!(parse_recoveries("a\n```recover\nnope\n```").1, vec![]);
-    assert_eq!(parse_recoveries("plain"), ("plain".to_owned(), vec![]));
-}
-
-#[test]
 fn task_ids_reject_paths_and_empty_fragments() {
     for id in [
         "",
@@ -67,7 +21,7 @@ fn task_ids_reject_paths_and_empty_fragments() {
         let error = parse_plan(&answer).1.unwrap().unwrap_err().to_string();
         assert!(error.contains("invalid task id"), "{id:?}: {error}");
     }
-    let mut task: TaskSpec = serde_json::from_value(json!({
+    let mut task: TaskContract = serde_json::from_value(json!({
         "id": "x".repeat(257), "title": "Task", "goal": "Assess",
         "kind": "analysis", "verifier": {"focus": "claims"}
     }))
@@ -78,7 +32,11 @@ fn task_ids_reject_paths_and_empty_fragments() {
     assert!(validate(&[task.clone()]).is_ok());
     let generated = with_options(vec![
         task.clone(),
-        TaskSpec {
+        TaskContract {
+            quality_gate: false,
+            inputs: vec![],
+            outputs: vec![],
+            options_for: None,
             id: format!("{}-2", "x".repeat(254)),
             ..task
         },
@@ -109,7 +67,7 @@ fn saved_plans_keep_valid_ids_and_generated_options() {
             .collect::<Vec<_>>(),
         ids
     );
-    let restored: Vec<TaskSpec> =
+    let restored: Vec<TaskContract> =
         serde_json::from_str(&serde_json::to_string(&tasks).unwrap()).unwrap();
     assert_eq!(restored, tasks);
     validate(&with_options(with_required_agents(restored))).unwrap();
@@ -161,7 +119,7 @@ fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
         let tasks = parse(&spec).unwrap();
         assert_eq!(tasks[0].summary, summary.as_str().map(str::to_owned));
         assert_eq!(tasks[0].verifier.summary, tasks[0].summary);
-        let roundtrip: TaskSpec =
+        let roundtrip: TaskContract =
             serde_json::from_value(serde_json::to_value(&tasks[0]).unwrap()).unwrap();
         assert_eq!(roundtrip, tasks[0]);
     }

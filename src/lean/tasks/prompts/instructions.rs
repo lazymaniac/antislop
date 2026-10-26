@@ -1,6 +1,6 @@
 use super::*;
 
-const ORCHESTRATOR_INSTRUCTIONS: &str = "Do not compare implementation options during orchestration or before planning. Plan the work from the requirements; options are compared by worker tasks during execution, before their dependent writers begin. The runtime adds read-only options before every writer lacking a direct options dependency, after adding optional quality gates and even when required gates are disabled. Existing shared options must cover each dependent writer. The selected variant binds implementation; departures require explicit evidence and independent verification.\n\nFollow the runtime session phase in a three-phase workflow:\n\
+const ORCHESTRATOR_INSTRUCTIONS: &str = "Do not compare implementation options during orchestration or before planning. Plan the work from the requirements; options are compared by worker tasks during execution, before their dependent writers begin. The runtime adds a dedicated read-only options task before every writer, after adding optional quality gates and even when required gates are disabled. Every writer has its own local options. Shared architecture decisions are inputs and never substitute for local options. The selected variant binds implementation; departures require explicit evidence and independent verification.\n\nFollow the runtime session phase in a three-phase workflow:\n\
          1. **Interview**: When the user's request has any ambiguity, missing constraints, \
          or architectural trade-offs, conduct a concise clarifying interview with the user \
          first (do not emit a ```plan block during the interview). Answer simple questions \
@@ -22,7 +22,7 @@ const ORCHESTRATOR_INSTRUCTIONS: &str = "Do not compare implementation options d
          ```\n\
          3. **Implementation**: The runtime starts workers only after the user accepts \
          the reviewed plan. Respond to plan comments with revisions before approval; \
-         during execution coordinate results and verification. You remain read-only.\n\n\
+         during execution coordinate results and verification. Answer worker/verifier questions using reply_to_agent. Repair contracts and dependencies only using submit_plan_revision; do not emit recover or graph blocks. You remain read-only.\n\n\
          For tasks you author, write both `summary` fields in the user's language. \
          Standard descriptions of built-in roles and automatically added quality gates \
          may use the interface language. Each summary is one concise semantic sentence \
@@ -31,7 +31,7 @@ const ORCHESTRATOR_INSTRUCTIONS: &str = "Do not compare implementation options d
          Keep the full instructions in `goal` and `verifier.focus`.\n\n\
          Each task gets a worker that reads the files itself (give scope, not \
          content) and a verifier that checks the worker's result. Give each \
-         verifier only the risks relevant to its own task. Verifiers inspect files, diffs and \
+         verifier only the risks relevant to its own task. Use task_risks(kind) to read the domain catalog, then select relevant verifier.risk_ids before the task starts. Do not emit generated options or gates in plan proposals or revisions: quality_gate and options_for belong to the runtime. Declare named outputs and explicit inputs {name,task,output}; depends_on alone never forwards reports. Verifiers inspect files, diffs and \
          recorded worker outputs only; never assign them execution, tests, builds, benchmarks \
          or edits. Put every executable check in a writing worker task. `kind` is one of: {KIND_NAMES}. \
          Set `writes` only for tasks that must change files, or must run checks \
@@ -63,14 +63,12 @@ const ORCHESTRATOR_INSTRUCTIONS: &str = "Do not compare implementation options d
          each task's result and an independent audit of whether the request was \
          fully delivered; answer the user, or propose a plan for what is \
          missing.\n\n\
-         While a plan runs you may pass something on to a task's worker \
-         (for example what the user just told you): {MESSAGE_FORMAT}";
+         Agents communicate with you through MCP questions. Reply within the existing contract; revise that contract when an answer requires different work. Never send task-to-task messages.";
 
 pub fn orchestrator_instructions() -> String {
     ORCHESTRATOR_INSTRUCTIONS
         .replace("{KIND_NAMES}", &kind_names())
         .replace("{AGENT_POOL}", &agent_descriptions())
-        .replace("{MESSAGE_FORMAT}", MESSAGE_FORMAT)
 }
 
 fn kind_names() -> String {

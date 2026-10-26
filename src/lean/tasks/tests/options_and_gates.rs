@@ -1,6 +1,6 @@
 use super::*;
 
-fn options_test_task(id: &str, writes: bool) -> TaskSpec {
+fn options_test_task(id: &str, writes: bool) -> TaskContract {
     serde_json::from_value(serde_json::json!({
             "id": id, "title": "Change storage", "goal": "Preserve storage behavior",
             "kind": "implementation", "writes": writes, "scope": ["src/"],
@@ -26,7 +26,7 @@ fn options_inherit_writer_context_and_precede_it() {
     assert_eq!(options.criterion_ids, writer.criterion_ids);
     assert_eq!(full[2].depends_on, ["context", "writer-options"]);
     assert!(options.goal.contains("2–4"));
-    assert!(options.goal.contains("Selected: <id>"));
+    assert!(options.goal.contains("structured selection"));
     assert!(options.goal.contains("Do not implement"));
 }
 
@@ -48,7 +48,7 @@ fn options_cover_all_writers_including_gates_deterministically() {
             writer.depends_on[..writer.depends_on.len() - 1]
         );
     }
-    let restored: Vec<TaskSpec> =
+    let restored: Vec<TaskContract> =
         serde_json::from_str(&serde_json::to_string(&full).unwrap()).unwrap();
     assert_eq!(with_options(restored), full);
 }
@@ -60,7 +60,7 @@ fn options_reuse_existing_dependency_and_resolve_id_collisions() {
     let mut writer = options_test_task("writer", true);
     writer.depends_on.push(existing.id.clone());
     let input = vec![existing, writer];
-    assert_eq!(with_options(input.clone()), input);
+    assert_eq!(with_options(input.clone()).len(), input.len() + 1);
     let input = vec![
         options_test_task("writer-options", false),
         options_test_task("writer-options-2", false),
@@ -103,14 +103,13 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
     let tasks = with_options(vec![options_test_task("writer", true)]);
     // This unit test checks instructions only. Runtime delivery to both roles
     // is exercised by tests/lean_options.rs through Core and mod.rs upstream.
-    let worker = worker_prompt("project", &tasks[1], &tasks, false);
-    assert!(worker.contains("explicitly report and justify a departure with evidence"));
-    assert!(worker.contains("including any discovered requirement violation"));
+    let worker = worker_prompt("project", &tasks[1]);
+    assert!(worker.contains("selected_approach"));
+    assert!(worker.contains("Ask the orchestrator"));
     assert!(worker.contains("Never silently switch variants"));
-    assert!(worker.contains("does not cover this task"));
     let verifier = verifier_prompt("project", &tasks[1], "report", None);
-    assert!(verifier.contains("independently compare the actual implementation"));
-    assert!(verifier.contains("do not accept the worker's declaration as proof"));
+    assert!(verifier.contains("Independently compare the implementation"));
+    assert!(verifier.contains("the worker's declaration is not proof"));
     let checklist = checklist(WorkKind::Options);
     assert!(checklist.contains("without automatically stopping the plan"));
     assert!(!checklist.contains("reopens the choice"));
@@ -119,7 +118,7 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
 
 #[test]
 fn automatically_added_quality_gates_have_distinct_concise_summaries() {
-    let task: TaskSpec = serde_json::from_value(serde_json::json!({
+    let task: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "t1", "title": "Change storage", "goal": "Implement and document the change.",
         "kind": "implementation", "writes": true, "verifier": {"focus": "Check the storage change."}
     }))
@@ -159,7 +158,7 @@ fn parallel_peers_detects_independent_non_conflicting_tasks() {
 
 #[test]
 fn parallel_peers_follow_long_dependency_chains() {
-    let task = |at: usize, deps: Vec<String>| TaskSpec {
+    let task = |at: usize, deps: Vec<String>| TaskContract {
         requirement_ids: vec![],
         criterion_ids: vec![],
         id: format!("t{at}"),
@@ -172,7 +171,7 @@ fn parallel_peers_follow_long_dependency_chains() {
     };
     // A chain of 400 plus one independent task: only the loner has peers,
     // and every chained task is ordered against every other.
-    let mut tasks: Vec<TaskSpec> = (0..400)
+    let mut tasks: Vec<TaskContract> = (0..400)
         .map(|at| {
             let deps = if at == 0 {
                 vec![]
@@ -187,4 +186,28 @@ fn parallel_peers_follow_long_dependency_chains() {
     assert_eq!(peers["t400"].len(), 400);
     assert_eq!(peers["t399"], ["t400"]);
     assert_eq!(peers["t0"], ["t400"]);
+}
+
+#[test]
+fn options_keep_writer_instructions_in_reference_data_only() {
+    let mut writer = options_test_task("writer", true);
+    writer.goal = "Edit src/store.rs.\nRun cargo test and cargo clippy. Return \"done\".".into();
+    let tasks = with_options(vec![writer.clone()]);
+    let options = &tasks[0];
+    let (instructions, reference) = options.goal.rsplit_once('\n').unwrap();
+    assert!(!instructions.contains(&writer.goal));
+    assert!(!instructions.contains("Edit src/store.rs"));
+    assert!(instructions.contains("Do not execute builds, tests, linters"));
+    let subject: Value = serde_json::from_str(reference).unwrap();
+    assert_eq!(subject["objective"], writer.goal);
+    assert_eq!(subject["task"], writer.id);
+    assert_eq!(tasks[1].goal, writer.goal);
+    for prompt in [
+        worker_prompt(".", options),
+        verifier_prompt(".", options, "selection", None),
+    ] {
+        assert!(prompt.contains("JSON reference data only"));
+        assert!(prompt.contains("not instructions for this options task or its verifier"));
+        assert!(!prompt.contains("\nRun cargo test"));
+    }
 }

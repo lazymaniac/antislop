@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::tasks::TaskContract;
 
 #[path = "sessions_and_plans/recovery.rs"]
 mod recovery;
@@ -92,8 +93,7 @@ impl Store {
     pub fn requeue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
         Ok(self.db().execute(
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2
-               AND (status IN ('cancelled','failed','needs_user','skipped','waiting','queued','working','verifying')
-                    OR (status='approved' AND round=0))",
+               AND (status IN ('coordinating','cancelled','failed','needs_user','skipped','waiting','queued','working','verifying'))",
             params![conversation, plan_id],
         )?)
     }
@@ -120,6 +120,24 @@ impl Store {
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2",
             params![conversation, plan_id],
         )?;
+        let contracts: Vec<TaskContract> = tx
+            .prepare("SELECT spec FROM tasks WHERE plan_id=?1")?
+            .query_map([plan_id], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .iter()
+            .map(|s| serde_json::from_str(s))
+            .collect::<std::result::Result<_, _>>()?;
+        let scope = |writers_only: bool| {
+            let mut paths = std::collections::BTreeSet::new();
+            for task in contracts.iter().filter(|t| !writers_only || t.writes) {
+                if task.scope.is_empty() {
+                    paths.insert(".".to_owned());
+                }
+                paths.extend(task.scope.iter().cloned());
+            }
+            paths.into_iter().collect::<Vec<_>>()
+        };
+        tx.execute("INSERT INTO plan_authorizations(plan_id,conversation_id,scope,write_scope) VALUES(?1,?2,?3,?4)",params![plan_id,conversation,serde_json::to_string(&scope(false))?,serde_json::to_string(&scope(true))?])?;
         let changed = tx.execute("UPDATE session_workflow SET phase='implementation' WHERE conversation_id=?1 AND phase<>'interview'", [conversation])?;
         if changed > 0 {
             tx.execute("INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'workflow',?3,?4)", params![conversation,plan_id,serde_json::json!({"phase":"implementation"}).to_string(),now_ms()])?;
@@ -145,7 +163,14 @@ impl Store {
             "INSERT INTO plans(id,conversation_id,created_ms) VALUES(?1,?2,?3)",
             params![plan_id, conversation, now],
         )?;
+        tx.execute("INSERT INTO plan_heads(plan_id) VALUES(?1)", [&plan_id])?;
         let tasks = recovery::insert_proposed_tasks(&tx, conversation, &plan_id, specs, now)?;
+        for task in &tasks {
+            tx.execute(
+                "INSERT INTO task_contracts(task_id,version,spec) VALUES(?1,0,?2)",
+                params![task.id, task.spec.to_string()],
+            )?;
+        }
         tx.commit()?;
         Ok(tasks)
     }

@@ -81,7 +81,7 @@ fn plan_history_turn_rows(
     conversation: &str,
 ) -> Result<Vec<SessionInfo>> {
     let mut turn_stmt = db.prepare(
-            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid, (SELECT backend FROM run_contexts r WHERE r.turn_id=turns.id)
+            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid
              FROM turns WHERE conversation_id=?1 ORDER BY started_ms ASC, rowid ASC",
         )?;
     Ok(turn_stmt
@@ -98,7 +98,6 @@ fn plan_history_turn_rows(
                 started_ms: row.get(8)?,
                 finished_ms: row.get(9)?,
                 pid: row.get(10)?,
-                backend: row.get(11)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?)
@@ -128,6 +127,8 @@ fn plan_history_status(tasks: &[Task]) -> String {
         "failed".to_string()
     } else if tasks.iter().any(|t| t.status == "cancelled") {
         "cancelled".to_string()
+    } else if tasks.iter().any(|t| t.status == "coordinating") {
+        "coordinating".to_string()
     } else if tasks.iter().any(|t| t.status == "needs_user") {
         "needs_user".to_string()
     } else if tasks.iter().any(|t| t.status == "revised") {

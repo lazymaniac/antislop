@@ -16,7 +16,7 @@ import tty
 import urllib.request
 
 here = os.path.abspath(sys.argv[1])
-legacy = here
+fixture = here
 args = sys.argv[2:]
 name = os.path.basename(here)
 
@@ -96,8 +96,54 @@ def answer_of(output):
     return text, seen
 
 
-def finish(turn, text, thread):
-    params = {"name": "finish_turn", "arguments": {"turn": turn, "text": text}}
+def task_result(text, prompt):
+    try:
+        result = json.loads(text)
+        if isinstance(result, dict) and result.get("type") in ("completed", "review", "needs_input"):
+            return result
+    except (ValueError, TypeError):
+        pass
+    if "Task role:" not in prompt:
+        return {"type": "report", "text": text}
+    pending = re.search(r"```integration_question\s*(.*?)```", text, re.S)
+    if pending:
+        body = json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask_orchestrator","arguments":{"turn":turn_of_current,"request_key":"integration-choice","question":pending.group(1).strip()}}})
+        req=urllib.request.Request(url,body.encode(),{"Authorization":"Bearer "+token,"Content-Type":"application/json"})
+        response=json.load(urllib.request.urlopen(req,timeout=30))["result"]
+        if response.get("isError"): raise RuntimeError(response)
+        request=json.loads(response["content"][0]["text"])["request"]
+        return {"type":"needs_input","request":request,"checkpoint":pending.group(1).strip()}
+    if "Task role: verifier" in prompt:
+        found = re.search(r"```verdict\s*(?:JSON\s*)?(.*?)```", text, re.S)
+        verdict = json.loads(found.group(1)) if found else {"approved": True, "findings": [], "coverage": {}}
+        if not verdict.get("coverage"):
+            checks = re.search(r"Local check ids: (.*)", prompt)
+            verdict["coverage"] = {key: {"status": "ok", "note": "Fixture source inspection"} for key in json.loads(checks.group(1))} if checks else {}
+        checks = re.search(r"Local check ids: (.*)", prompt)
+        if checks:
+            allowed = set(json.loads(checks.group(1)))
+            verdict["coverage"] = {key: value for key, value in verdict.get("coverage", {}).items() if key in allowed}
+        for index, finding in enumerate(verdict.get("findings", [])):
+            if isinstance(finding, dict):
+                finding.setdefault("id", "fixture-finding-%d" % index)
+                finding.setdefault("check", "V1")
+                finding.setdefault("where", "fixture source")
+        return {"type": "review", "report": text, "verdict": verdict}
+    contract_match = re.search(r"Full task and working rules: (.*)", prompt)
+    contract = json.loads(contract_match.group(1)) if contract_match else {}
+    result = {"type": "completed", "summary": text.splitlines()[0] if text.splitlines() else "Completed", "report": text, "outputs": {key: text for key in contract.get("outputs", [])}}
+    if contract.get("kind") == "options" or "Choose the best available approach" in prompt:
+        result["selection"] = {"criteria": ["Satisfies local contract"], "alternatives": [
+            {"id": "A", "approach": "Focused implementation", "evaluations": ["Satisfies the contract"], "eligible": True, "tradeoffs": "Local changes"},
+            {"id": "B", "approach": "Broader restructuring", "evaluations": ["Higher change cost"], "eligible": True, "tradeoffs": "More coordination"}],
+            "selected": (re.findall(r"Selected:\s*([AB])", text) or ["A"])[-1], "rationale": "The focused approach satisfies this local contract", "reconsider_when": "The contract or source evidence changes"}
+    return result
+
+
+def finish(turn, text, thread, prompt):
+    global turn_of_current
+    turn_of_current=turn
+    params = {"name": "finish_turn", "arguments": {"turn": turn, "result": task_result(text,prompt)}}
     if thread:
         # Codex names its thread in the call; Agy's bridge adds the conversation.
         params["_meta"] = {"sessionId" if "agy" in name else "threadId": thread}
@@ -107,7 +153,9 @@ def finish(turn, text, thread):
         body.encode(),
         {"Authorization": "Bearer " + token, "Content-Type": "application/json"},
     )
-    urllib.request.urlopen(request, timeout=30).read()
+    reply = json.loads(urllib.request.urlopen(request, timeout=30).read())
+    if reply.get("result", {}).get("isError"):
+        raise RuntimeError(reply["result"]["content"])
 
 
 def turn_of(prompt):
@@ -115,20 +163,20 @@ def turn_of(prompt):
     return match.group(1) if match else None
 
 
-def run_legacy(prompt):
+def run_fixture(prompt, turn):
     # The earlier fixtures were called like the headless CLIs.
     if name.endswith("codex") or "codex" in name:
-        argv = [legacy] + extra + ["exec"]
+        argv = [fixture] + extra + ["exec"]
         if resume:
             argv += ["resume", "-c", 'sandbox_mode="%s"' % sandbox] + model_args + [resume]
         else:
             argv += ["--json", "-C", os.getcwd(), "-s", sandbox] + model_args
     else:
-        argv = [legacy] + extra
+        argv = [fixture] + extra
         if resume:
             argv += ["--conversation" if "agy" in name else "--resume", resume]
     argv.append(prompt)
-    env = dict(os.environ, FIXTURE_HEADLESS="1")
+    env = dict(os.environ, FIXTURE_HEADLESS="1", FIXTURE_TURN=turn, ANTISLOP_MCP_URL=url, ANTISLOP_MCP_TOKEN=token or "")
     return subprocess.run(argv, capture_output=True, text=True, cwd=os.getcwd(), env=env)
 
 
@@ -172,7 +220,7 @@ def main():
         prompt = pasted.split("\n\n---\nWhen this turn is complete", 1)[0]
         with open(here + ".prompts", "a") as record:
             record.write(json.dumps({"turn": turn, "prompt": prompt}) + "\n")
-        done = run_legacy(prompt)
+        done = run_fixture(prompt, turn)
         text, seen = answer_of(done.stdout)
         if done.returncode != 0 or text is None:
             termios.tcsetattr(fd, termios.TCSADRAIN, termios.tcgetattr(fd))
@@ -181,7 +229,7 @@ def main():
         # Like the real CLIs, the next prompt continues this session.
         global resume
         resume = seen or resume
-        finish(turn, text, seen)
+        finish(turn, text, seen, prompt)
 
 
 sys.exit(main())

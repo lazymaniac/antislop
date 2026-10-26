@@ -257,10 +257,7 @@ fn obsolete_configuration_is_rejected_without_echoing_values() {
             .is_err()
         );
     }
-    assert!(
-        Config::from_toml(&example.replace("mode = \"task-worktrees\"", "mode = \"worktree\""))
-            .is_err()
-    );
+    assert!(Config::from_toml(&format!("{example}\n[workspace]\nmode = \"in-place\"\n")).is_err());
 }
 
 #[test]

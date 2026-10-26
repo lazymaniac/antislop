@@ -82,20 +82,18 @@ else:
     if 'You are a worker' in prompt and re.search(r'Task id: (W2-options|gate-options)\n', prompt):
         task = re.search(r'Task id: ([^\n]+)', prompt).group(1)
         version = open('mode.txt').read().strip()
-        upstream = prompt.split('### W1: Change mode\n', 1)[1].split('\n### ', 1)[0]
-        contract = re.search(r'Mode contract: (\{[^\n]+\})', upstream)
-        if contract:
-            choice = json.loads(contract.group(1))
-        else:
-            try:
-                json.loads(version)
-                choice = {'format':'json', 'field':'records'}
-            except ValueError:
-                choice = {'format':'lines'}
+        upstream = ''
+        try:
+            json.loads(version)
+            choice={'format':'json','field':'records'}
+        except ValueError:
+            choice={'format':'lines'}
         observation = {'task':task,'cwd':os.getcwd(),'version':version,'choice':choice,'upstream':upstream,'prompt':prompt}
         with open(os.path.join(os.path.dirname(sys.argv[0]),'observations.jsonl'),'a') as log:
             log.write(json.dumps(observation)+'\n')
         answer = json.dumps({'version':version,'choice':choice,'upstream':upstream})+'\nSelected: '+choice['format']
+    elif 'You are a worker' in prompt and 'Task id: W1-options' in prompt:
+        answer='Compare focused mode change with a broader migration. Selected: A'
     elif 'You are a worker' in prompt:
         task = re.search(r'Task id: ([^\n]+)', prompt).group(1)
         with open(os.path.join(os.path.dirname(sys.argv[0]),'writers.jsonl'),'a') as log:
@@ -108,7 +106,7 @@ else:
     else:
         if 'You verify' in prompt and 'Task: Change mode\n' in prompt:
             assert json.load(open('mode.txt')) == {'records':[7,11]}
-        ids = re.findall(r'^- ([RCV][0-9]+): ', prompt, re.M)
+        ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)
         answer = '```verdict\n'+json.dumps({'approved':True,'findings':[],'coverage':{i:{'status':'ok','note':'fixture inspected'} for i in ids}})+'\n```'
     print(json.dumps({'event':'init','conversation_id':'fixture'}))
     print(json.dumps({'event':'result','result':{'conversation_id':'fixture','status':'SUCCESS','response':answer,'usage':{}}}))
@@ -214,7 +212,7 @@ else:
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
-        assert_eq!(writers.len(), if unmerged { 2 } else { 4 }, "{writers:?}");
+        assert_eq!(writers.len(), if unmerged { 2 } else { 3 }, "{writers:?}");
         for id in ["W2", "gate"] {
             let writer = writers.iter().find(|item| item["task"] == id).unwrap();
             assert_eq!(writer["version"], r#"{"records":[7,11]}"#);
@@ -222,21 +220,9 @@ else:
         }
         for id in ["W2-options", "gate-options"] {
             let observation = observations.iter().find(|item| item["task"] == id).unwrap();
-            assert_eq!(observation["cwd"], project.to_str().unwrap());
-            assert_eq!(
-                observation["version"],
-                if unmerged {
-                    "7\n11"
-                } else {
-                    r#"{"records":[7,11]}"#
-                }
-            );
-            assert!(
-                observation["upstream"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with(report)
-            );
+            assert_ne!(observation["cwd"], project.to_str().unwrap());
+            assert_eq!(observation["version"], r#"{"records":[7,11]}"#);
+            assert!(!observation["prompt"].as_str().unwrap().contains(report));
             let task = core
                 .store
                 .plan(&plan)
@@ -260,11 +246,7 @@ else:
                 _ => None,
             };
             let pass = decoded.as_deref() == Some(&[7, 11]);
-            assert_eq!(
-                pass,
-                matches!(case, "normal-opaque" | "unmerged-accurate"),
-                "{case}: {observation}"
-            );
+            assert!(pass, "{case}: {observation}");
             println!(
                 "probe {}",
                 json!({"case":case,"task":id,"read":observation["version"],"report":report,"choice":observation["choice"],"writer_input":input,"decoded":decoded,"outcome":if pass {"PASS"} else {"FAIL"}})

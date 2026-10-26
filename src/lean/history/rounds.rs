@@ -157,27 +157,12 @@ impl Store {
         task: &str,
         round: u32,
     ) -> Result<Option<(u32, String)>> {
-        let encoded: Option<(u32, String)> = self
-            .db()
-            .query_row(
-                "SELECT s.round,e.payload FROM events e JOIN turns t ON t.id=e.turn_id
-             JOIN turn_scopes s ON s.turn_id=t.id
-             WHERE s.task_id=?1 AND s.round<=?2 AND t.role='worker:'||?1 AND e.kind='agent_final'
-             AND NOT EXISTS(SELECT 1 FROM events start WHERE start.turn_id=t.id AND start.kind='turn_started' AND json_extract(start.payload,'$.mail_only')=1)
-             ORDER BY e.seq DESC LIMIT 1",
-                params![task, round],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        encoded
-            .map(|(source, encoded)| {
-                let payload = self.hydrate_event_payload("agent_final", &encoded)?;
-                payload["text"]
-                    .as_str()
-                    .map(|text| (source, text.to_owned()))
-                    .ok_or_else(|| Error::Invalid("worker final answer has no text".into()))
-            })
-            .transpose()
+        let row: Option<(u32,String)> = self.db().query_row("SELECT s.round,r.result FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id WHERE s.task_id=?1 AND s.round<=?2 AND t.role='worker:'||?1 AND json_extract(r.result,'$.type')='completed' ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",params![task,round],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        row.map(|(round, result)| {
+            let result: crate::lean::turn_result::TurnResult = serde_json::from_str(&result)?;
+            Ok((round, result.text().to_owned()))
+        })
+        .transpose()
     }
 
     pub(in crate::lean) fn handoff_field(&self, value: &Value, json: bool) -> Result<Value> {
@@ -250,20 +235,25 @@ type HandoffRound = (u32, String, bool, bool);
 
 fn load_round_turns(db: &rusqlite::Connection, task: &str, round: u32) -> Result<Vec<Value>> {
     let mut statement = db.prepare(
-        "SELECT t.id,t.role,t.status,(SELECT backend FROM run_contexts r WHERE r.turn_id=t.id),t.session_id FROM turns t JOIN turn_scopes s ON s.turn_id=t.id WHERE s.task_id=?1 AND s.round=?2 ORDER BY t.started_ms,t.rowid",
+        "SELECT t.id,t.role,t.status,t.session_id FROM turns t JOIN turn_scopes s ON s.turn_id=t.id WHERE s.task_id=?1 AND s.round=?2 ORDER BY t.started_ms,t.rowid",
     )?;
     statement.query_map(params![task, round], |row| Ok(serde_json::json!({
-        "turn_id":row.get::<_,String>(0)?,"role":row.get::<_,String>(1)?,"status":row.get::<_,String>(2)?,"backend":row.get::<_,Option<String>>(3)?,"session_id":row.get::<_,Option<String>>(4)?
+        "turn_id":row.get::<_,String>(0)?,"role":row.get::<_,String>(1)?,"status":row.get::<_,String>(2)?,"session_id":row.get::<_,Option<String>>(3)?
     })))?.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 fn load_native_sessions(db: &rusqlite::Connection, task: &str, round: u32) -> Result<Vec<Value>> {
     let mut statement = db.prepare(
-        "SELECT t.role,r.backend,COALESCE(r.provider_thread_id,r.provider_session_id,t.session_id) FROM tasks k JOIN turns t ON t.conversation_id=k.conversation_id AND t.role IN ('worker:'||k.id,'verifier:'||k.id) JOIN run_contexts r ON r.turn_id=t.id JOIN turn_scopes current_scope ON current_scope.turn_id=t.id AND current_scope.round=k.round WHERE k.id=?1 AND k.round=?2 AND t.id=(SELECT p.id FROM turns p WHERE p.conversation_id=t.conversation_id AND p.role=t.role ORDER BY p.started_ms DESC,p.rowid DESC LIMIT 1)",
+        "SELECT t.role,COALESCE(r.provider_thread_id,r.provider_session_id,t.session_id) FROM tasks k JOIN turns t ON t.conversation_id=k.conversation_id AND t.role IN ('worker:'||k.id,'verifier:'||k.id) JOIN run_contexts r ON r.turn_id=t.id JOIN turn_scopes current_scope ON current_scope.turn_id=t.id AND current_scope.round=k.round WHERE k.id=?1 AND k.round=?2 AND t.id=(SELECT p.id FROM turns p WHERE p.conversation_id=t.conversation_id AND p.role=t.role ORDER BY p.started_ms DESC,p.rowid DESC LIMIT 1)",
     )?;
-    statement.query_map(params![task, round], |row| Ok(serde_json::json!({
-        "role":row.get::<_,String>(0)?,"backend":row.get::<_,String>(1)?,"session_id":row.get::<_,Option<String>>(2)?
-    })))?.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    statement
+        .query_map(params![task, round], |row| {
+            Ok(serde_json::json!({
+                "role":row.get::<_,String>(0)?,"session_id":row.get::<_,Option<String>>(1)?
+            }))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 fn load_handoff_round_rows(

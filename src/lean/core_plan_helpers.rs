@@ -1,6 +1,6 @@
 use super::*;
 
-/// Hash a length-framed pair so even legacy, unvalidated IDs cannot form paths
+/// Hash a length-framed pair so untrusted IDs cannot form paths
 /// or alias another plan/task pair by moving a delimiter between the IDs.
 pub(super) fn writer_base_scratch(state: &Path, plan_id: &str, spec_id: &str) -> PathBuf {
     let key = format!("{}:{plan_id}{spec_id}", plan_id.len());
@@ -10,7 +10,7 @@ pub(super) fn writer_base_scratch(state: &Path, plan_id: &str, spec_id: &str) ->
 }
 
 /// Add options after quality gates so every writer, including gates, is covered.
-pub(super) fn finalize_plan(specs: Vec<TaskSpec>, required_gates: bool) -> Vec<TaskSpec> {
+pub(super) fn finalize_plan(specs: Vec<TaskContract>, required_gates: bool) -> Vec<TaskContract> {
     let specs = if required_gates {
         tasks::with_required_agents(specs)
     } else {
@@ -22,7 +22,7 @@ pub(super) fn finalize_plan(specs: Vec<TaskSpec>, required_gates: bool) -> Vec<T
 /// What a plan that changes code lacks of the agents the pool makes required
 /// before the change (the gates after it are added by the runtime): told to
 /// the plan verifier, who rejects the plan for it.
-pub(super) fn planning_gaps(specs: &[TaskSpec]) -> Option<String> {
+pub(super) fn planning_gaps(specs: &[TaskContract]) -> Option<String> {
     if !specs.iter().any(|spec| spec.writes) {
         return None;
     }

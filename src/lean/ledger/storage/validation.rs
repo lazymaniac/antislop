@@ -144,12 +144,12 @@ fn expand_dependent_tasks(db: &Connection, run: &str, tasks: &mut HashSet<String
     loop {
         let n = tasks.len();
         for (id, plan, spec) in &rows {
-            let spec: TaskSpec = serde_json::from_str(spec)?;
+            let spec: TaskContract = serde_json::from_str(spec)?;
             for dep in &spec.depends_on {
                 if rows.iter().any(|(up, p, s)| {
                     p == plan
                         && tasks.contains(up)
-                        && serde_json::from_str::<TaskSpec>(s).is_ok_and(|s| s.id == *dep)
+                        && serde_json::from_str::<TaskContract>(s).is_ok_and(|s| s.id == *dep)
                 }) {
                     tasks.insert(id.clone());
                 }

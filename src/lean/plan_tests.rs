@@ -3,7 +3,7 @@ use super::*;
 
 #[test]
 fn finalization_adds_options_with_and_without_required_gates() {
-    let writer: TaskSpec = serde_json::from_value(json!({
+    let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
         "kind": "implementation", "writes": true, "scope": ["src/"],
         "verifier": {"focus": "Check change"}
@@ -109,7 +109,7 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
     }
     std::fs::write(root.join("user.txt"), "local edit\n").unwrap();
     std::fs::write(root.join("draft.txt"), "untracked\n").unwrap();
-    let spec: TaskSpec = serde_json::from_value(tasks[4].spec.clone()).unwrap();
+    let spec: TaskContract = serde_json::from_value(tasks[4].spec.clone()).unwrap();
     let dependencies = core.dependency_tasks(&tasks[4].plan_id, &spec).unwrap();
     assert!(
         dependencies
@@ -157,28 +157,6 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
         .writer_base(&tasks[4].plan_id, &spec, root)
         .unwrap_err();
     assert!(error.to_string().contains("git apply"));
-    let mut task = tasks[4].clone();
-    let mut repair_spec = spec;
-    let fallback = core
-        .repair_writer_base(&conversation.id, &mut task, &mut repair_spec, root, &error)
-        .unwrap();
-    let mail = core
-        .store
-        .pending_mail(&conversation.id, &format!("worker:{}", task.id))
-        .unwrap();
-    assert_eq!(mail.len(), 1);
-    assert!(mail[0].text.contains("Resolve the upstream changes"));
-    for dependency in &tasks[..4] {
-        assert!(mail[0].text.contains(dependency.result.as_deref().unwrap()));
-    }
-    let allocated = root.join(".antislop/worktrees/repair");
-    git::add_worktree(root, &allocated, "test/repair", &fallback).unwrap();
-    assert_eq!(
-        std::fs::read_to_string(allocated.join("config.txt")).unwrap(),
-        "user conflict\n"
-    );
-    git::remove_worktree(root, &allocated, "test/repair").unwrap();
     assert!(!scratch.exists());
-    assert!(!scratch.with_extension("patch").exists());
     assert_eq!(git::head(root).unwrap(), head);
 }

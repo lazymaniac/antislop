@@ -86,7 +86,7 @@ fn options_checklist() -> &'static str {
              weaknesses; material trade-offs and disadvantages of the selected \
              option stated; an observable condition for reconsidering the \
              selection stated; no implementation, invented measurements or \
-             copied repository contents; report ends with Selected: <id>"
+             copied repository contents; structured selection identifies an eligible variant with rationale and reconsideration conditions"
 }
 
 fn architecture_checklist() -> &'static str {

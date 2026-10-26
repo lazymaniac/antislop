@@ -220,6 +220,10 @@ pub fn head(dir: &Path) -> Result<String> {
     ok(dir, &["rev-parse", "HEAD"])
 }
 
+pub fn tree_identity(dir: &Path, commit: &str) -> Result<String> {
+    ok(dir, &["rev-parse", &format!("{commit}^{{tree}}")])
+}
+
 pub fn common_base(dir: &Path, left: &str, right: &str) -> Result<String> {
     ok(dir, &["merge-base", left, right])
 }

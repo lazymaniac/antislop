@@ -189,13 +189,8 @@ const NO_EFFECT_STATED: &str = "effect: not reported by worker";
 /// effect shape a view shows composes itself from these parts, so what
 /// counts as a fragment is decided exactly once.
 ///
-/// The fragment verdict reads the daemon's explicit `effect_cut` stamp —
-/// recorded at the moment of the cut, and the only honest answer: honest
-/// text may end in `…` and a kept whole oversized cluster carries no
-/// mark. Only feedback that predates the stamp (`effect_cut: None`) falls
-/// back to the trailing mark, the one signal such historical rows still
-/// carry. Sanitizing the text always happens before that mark is read, so
-/// a smuggled escape can neither pose as nor hide the cut.
+/// Only explicit projection metadata marks a fragment. Text ending in an
+/// ellipsis is ordinary user-visible text, never a control signal.
 fn effect_pieces(row: &TaskRow) -> Option<(String, bool)> {
     let reported = row.effect.is_some()
         || row.obligations.is_some()
@@ -208,10 +203,7 @@ fn effect_pieces(row: &TaskRow) -> Option<(String, bool)> {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    let fragment = match row.effect_cut {
-        Some(cut) => cut,
-        None => text.ends_with('…'),
-    };
+    let fragment = row.effect_cut == Some(true);
     Some((text, fragment))
 }
 
@@ -636,6 +628,7 @@ mod tests {
         );
         let mut cut = row("approved", 1);
         cut.effect = Some("3 files changed — src/a.rs, src/b…".into());
+        cut.effect_cut = Some(true);
         assert!(effect_line(&cut).unwrap().ends_with("[fragment]"));
         // Both shapes come from the one reading: the same text and the one
         // fragment verdict, only the marker's seat differs.
@@ -658,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fragment_verdict_reads_the_stamp_the_mark_is_only_the_fallback() {
+    fn only_explicit_metadata_marks_an_effect_as_a_fragment() {
         // An honest sentence ending in an ellipsis is no fragment once the
         // daemon's stamp says the stored text was never cut.
         let mut honest = row("approved", 1);
@@ -679,14 +672,9 @@ mod tests {
             Some("effect: [fragment] 👩‍👩‍👧‍👦"),
             "the stamp decides, and the card puts it in front of the text"
         );
-        // Historical feedback without the stamp falls back to the mark,
-        // stated as the best the row allows.
-        let mut legacy = row("approved", 1);
-        legacy.effect = Some("3 files changed — src/a…".into());
-        assert!(effect_line(&legacy).unwrap().ends_with("[fragment]"));
-        let mut legacy_plain = row("approved", 1);
-        legacy_plain.effect = Some("3 files changed — src/a.rs".into());
-        assert!(!effect_line(&legacy_plain).unwrap().contains("[fragment]"));
+        let mut unstamped = row("approved", 1);
+        unstamped.effect = Some("An honest ellipsis…".into());
+        assert!(!effect_line(&unstamped).unwrap().contains("[fragment]"));
     }
 
     #[test]
@@ -739,15 +727,11 @@ mod tests {
         for (outcome, label) in [
             ("committed", "committed"),
             ("applied", "applied uncommitted"),
-            ("in_place_committed", "committed in place"),
-            ("in_place_applied", "applied in place"),
-            ("in_place_user_edits", "held for your edits"),
             ("no_changes", "no changes"),
             ("conflict", "conflict"),
             ("user_edits", "user edits"),
             ("left_on_branch", "on branch"),
             ("not_applicable", "read-only none"),
-            ("force_approved", "force approved"),
             ("cancelled", "cancelled"),
         ] {
             let mut r = row("approved", 1);
@@ -764,13 +748,10 @@ mod tests {
     fn the_landing_line_pairs_label_with_the_whole_detail() {
         let mut r = row("approved", 2);
         r.integration = Some(json!({
-            "outcome": "in_place_committed",
-            "detail": "committed in place as deadbee",
+            "outcome": "committed",
+            "detail": "committed as deadbee",
         }));
-        assert_eq!(
-            integration_line(&r),
-            "committed in place · committed in place as deadbee"
-        );
+        assert_eq!(integration_line(&r), "committed · committed as deadbee");
         assert_eq!(
             integration_line(&row("working", 1)),
             "not reported · detail not reported"

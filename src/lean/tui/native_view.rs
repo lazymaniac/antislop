@@ -481,10 +481,11 @@ mod tests {
         let (resume, ready) = mpsc::sync_channel(1);
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let request: Request =
+            let request: crate::lean::daemon::RequestEnvelope =
                 crate::transport::read(&mut std::io::BufReader::new(stream.try_clone().unwrap()))
                     .unwrap()
                     .unwrap();
+            let request = request.request;
             assert!(matches!(
                 request,
                 Request::TerminalOpen {
@@ -504,11 +505,12 @@ mod tests {
             let mut opened = false;
             loop {
                 let (mut stream, _) = listener.accept().unwrap();
-                let request: Request = crate::transport::read(&mut std::io::BufReader::new(
-                    stream.try_clone().unwrap(),
-                ))
+                let request: crate::lean::daemon::RequestEnvelope = crate::transport::read(
+                    &mut std::io::BufReader::new(stream.try_clone().unwrap()),
+                )
                 .unwrap()
                 .unwrap();
+                let request = request.request;
                 let detached = matches!(request, Request::TerminalDetach { .. });
                 let value = match request {
                     Request::TerminalOpen { columns, rows, .. } => {
@@ -637,6 +639,7 @@ mod tests {
                 ))
                 .unwrap()
                 .unwrap();
+                let request = &request["request"];
                 assert_eq!(request["op"], "terminal_input");
                 assert_eq!(request["sequence"], 7);
                 assert_eq!(request["input"]["text"], "draft 👩‍💻");
@@ -673,11 +676,12 @@ mod tests {
             let mut sequences = vec![];
             loop {
                 let (mut stream, _) = listener.accept().unwrap();
-                let request: Request = crate::transport::read(&mut std::io::BufReader::new(
-                    stream.try_clone().unwrap(),
-                ))
+                let request: crate::lean::daemon::RequestEnvelope = crate::transport::read(
+                    &mut std::io::BufReader::new(stream.try_clone().unwrap()),
+                )
                 .unwrap()
                 .unwrap();
+                let request = request.request;
                 let detach = matches!(request, Request::TerminalDetach { .. });
                 let data = match request {
                     Request::TerminalOpen { .. } => serde_json::to_value(screen("ready")).unwrap(),

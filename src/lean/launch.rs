@@ -92,7 +92,7 @@ fn gemini(
             "httpUrl": gateway.url(),
             "headers": {"Authorization": "Bearer ${ANTISLOP_MCP_TOKEN}"},
             "trust": true,
-            "includeTools": [TOOL]
+            "includeTools": gateway.tool_names()
         }},
         "tools": {"exclude": ["delegate_to_agent", "ask_user"]},
         "general": {"enableAutoUpdate": false}
@@ -194,7 +194,10 @@ fn claude(
     command.args(["--mcp-config", &config.to_string(), "--strict-mcp-config"]);
     // Plan mode refuses MCP tools, so read-only is the default mode without
     // any editing tool. A CLI's own subagents would be a team nobody verifies.
-    let mut allowed = vec![format!("mcp__{SERVER}__{TOOL}")];
+    let mut allowed: Vec<String> = crate::lean::mcp::TOOLS
+        .iter()
+        .map(|tool| format!("mcp__{SERVER}__{tool}"))
+        .collect();
     let mut denied = vec!["Task", "Agent"];
     allowed.push("Bash".into());
     if read_only {
@@ -329,6 +332,9 @@ fn opencode(
         format!("{SERVER}_{TOOL}"): "allow",
         "external_directory": { "*": "deny" }
     });
+    for tool in gateway.tool_names() {
+        permission[format!("{SERVER}_{tool}")] = "allow".into();
+    }
     for dir in &spec.add_dirs {
         permission["external_directory"][format!("{}/*", dir.display())] = "allow".into();
     }
@@ -553,7 +559,10 @@ mod tests {
                 serde_json::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
             assert_eq!(config["mcpServers"][SERVER]["httpUrl"], gateway.url());
             assert_eq!(config["mcpServers"][SERVER]["trust"], true);
-            assert_eq!(config["mcpServers"][SERVER]["includeTools"], json!([TOOL]));
+            assert_eq!(
+                config["mcpServers"][SERVER]["includeTools"],
+                json!(gateway.tool_names())
+            );
             assert_eq!(
                 config["tools"]["core"].is_array(),
                 access == Access::ReadOnly

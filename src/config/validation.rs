@@ -89,8 +89,8 @@ fn syntax_diagnostic(message: &str) -> (String, &'static str) {
 
 pub(super) fn validate(config: &Config) -> Result<()> {
     require(
-        config.schema_version == 1,
-        "schema_version is unsupported; set schema_version = 1",
+        config.schema_version == 2,
+        "schema_version is unsupported; set schema_version = 2",
     )?;
     require(
         config.policy.max_parallel > 0,

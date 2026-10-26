@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::WorkKind;
-use crate::lean::tasks::TaskSpec;
+use crate::lean::tasks::TaskContract;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -53,7 +53,7 @@ const WAITING: [&str; 6] = [
     "wait for ",
 ];
 
-pub fn check(specs: &[TaskSpec]) -> Vec<Finding> {
+pub fn check(specs: &[TaskContract]) -> Vec<Finding> {
     let descendants = descendants(specs);
     let mut findings = Vec::new();
     for spec in specs {
@@ -65,7 +65,7 @@ pub fn check(specs: &[TaskSpec]) -> Vec<Finding> {
     findings
 }
 
-fn finding(spec: &TaskSpec, rule: &'static str, severity: Severity, detail: String) -> Finding {
+fn finding(spec: &TaskContract, rule: &'static str, severity: Severity, detail: String) -> Finding {
     Finding {
         task: spec.id.clone(),
         rule,
@@ -76,7 +76,7 @@ fn finding(spec: &TaskSpec, rule: &'static str, severity: Severity, detail: Stri
 
 /// A writer works in its own worktree; a scope outside the project is
 /// outside what it may change.
-fn scope_escape(spec: &TaskSpec, out: &mut Vec<Finding>) {
+fn scope_escape(spec: &TaskContract, out: &mut Vec<Finding>) {
     if !spec.writes {
         return;
     }
@@ -93,7 +93,7 @@ fn scope_escape(spec: &TaskSpec, out: &mut Vec<Finding>) {
     }
 }
 
-fn read_only_writer(spec: &TaskSpec, out: &mut Vec<Finding>) {
+fn read_only_writer(spec: &TaskContract, out: &mut Vec<Finding>) {
     if !spec.writes && spec.kind == WorkKind::Implementation {
         out.push(finding(
             spec,
@@ -104,7 +104,7 @@ fn read_only_writer(spec: &TaskSpec, out: &mut Vec<Finding>) {
     }
 }
 
-fn asks_to_execute(spec: &TaskSpec, out: &mut Vec<Finding>) {
+fn asks_to_execute(spec: &TaskContract, out: &mut Vec<Finding>) {
     if spec.writes {
         return;
     }
@@ -134,7 +134,7 @@ fn requested(text: &str, phrase: &str) -> bool {
 }
 
 fn waits_for_descendant(
-    spec: &TaskSpec,
+    spec: &TaskContract,
     descendants: &BTreeMap<&str, BTreeSet<&str>>,
     out: &mut Vec<Finding>,
 ) {
@@ -158,7 +158,7 @@ fn waits_for_descendant(
 }
 
 /// For each task, the tasks that depend on it directly or through others.
-fn descendants(specs: &[TaskSpec]) -> BTreeMap<&str, BTreeSet<&str>> {
+fn descendants(specs: &[TaskContract]) -> BTreeMap<&str, BTreeSet<&str>> {
     let mut map: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for spec in specs {
         for dependency in &spec.depends_on {
@@ -204,8 +204,12 @@ mod tests {
     use super::*;
     use crate::lean::tasks::VerifierSpec;
 
-    fn task(id: &str, kind: WorkKind, writes: bool, depends_on: &[&str]) -> TaskSpec {
-        TaskSpec {
+    fn task(id: &str, kind: WorkKind, writes: bool, depends_on: &[&str]) -> TaskContract {
+        TaskContract {
+            quality_gate: false,
+            inputs: vec![],
+            outputs: vec![],
+            options_for: None,
             id: id.into(),
             requirement_ids: Vec::new(),
             criterion_ids: Vec::new(),
@@ -218,16 +222,15 @@ mod tests {
             depends_on: depends_on.iter().map(|d| (*d).to_owned()).collect(),
             kind,
             verifier: VerifierSpec {
+                risk_ids: vec![],
                 focus: "check".into(),
                 summary: None,
                 risks: Vec::new(),
             },
-            resolves: None,
-            part_of: None,
         }
     }
 
-    fn rules(specs: &[TaskSpec]) -> Vec<&'static str> {
+    fn rules(specs: &[TaskContract]) -> Vec<&'static str> {
         check(specs).iter().map(|f| f.rule).collect()
     }
 

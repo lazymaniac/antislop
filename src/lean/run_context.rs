@@ -9,14 +9,6 @@ mod tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RunBackend {
-    Cli,
-    CodexAppServer,
-    OpencodeServer,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum RunAccess {
     ReadOnly,
     Write,
@@ -33,10 +25,8 @@ pub struct RunContext {
     pub cwd: PathBuf,
     pub add_dirs: Vec<PathBuf>,
     pub access: RunAccess,
-    pub backend: RunBackend,
     pub provider_thread_id: Option<String>,
     pub provider_session_id: Option<String>,
-    pub provider_turn_id: Option<String>,
 }
 
 impl Store {
@@ -46,8 +36,7 @@ impl Store {
                 turn_id TEXT PRIMARY KEY REFERENCES turns(id),
                 profile TEXT NOT NULL, cwd TEXT NOT NULL, add_dirs TEXT NOT NULL,
                 access TEXT NOT NULL CHECK(access IN ('read_only','write')),
-                backend TEXT NOT NULL CHECK(backend IN ('cli','codex_app_server','opencode_server')),
-                provider_thread_id TEXT, provider_session_id TEXT, provider_turn_id TEXT);
+                provider_thread_id TEXT, provider_session_id TEXT);
              CREATE TABLE IF NOT EXISTS native_processes(
                 pid INTEGER PRIMARY KEY,started_ms INTEGER NOT NULL,provider TEXT NOT NULL);",
         )?;
@@ -56,7 +45,7 @@ impl Store {
 
     /// Record once, before launching a process. Scope comes from the owning
     /// turn, rather than mutable frontend state. Repeating the same write is
-    /// harmless; changing a running turn's scope or backend is rejected.
+    /// harmless; changing a running turn's scope is rejected.
     pub fn record_run_context(&self, context: &RunContext) -> Result<()> {
         let encoded = encode_context(context)?;
         let mut db = self.db();
@@ -67,8 +56,8 @@ impl Store {
         Ok(())
     }
 
-    /// Legacy turns deliberately return None: their historical cwd and access
-    /// cannot be reconstructed safely from today's configuration.
+    /// A turn that failed before launch has no recorded execution context.
+    /// Never reconstruct its permissions from the current configuration.
     pub fn run_context(&self, conversation: &str, turn: &str) -> Result<Option<RunContext>> {
         Self::read_run_context(&self.db(), conversation, turn)
     }
@@ -81,9 +70,8 @@ impl Store {
         let raw = db.query_row(
             "SELECT json_object('turn_id',t.id,'conversation',t.conversation_id,
                 'role',t.role,'provider',t.provider,'profile',r.profile,'cwd',r.cwd,
-                'add_dirs',json(r.add_dirs),'access',r.access,'backend',r.backend,
-                'provider_thread_id',r.provider_thread_id,'provider_session_id',r.provider_session_id,
-                'provider_turn_id',r.provider_turn_id)
+                'add_dirs',json(r.add_dirs),'access',r.access,
+                'provider_thread_id',r.provider_thread_id,'provider_session_id',r.provider_session_id)
              FROM run_contexts r JOIN turns t ON t.id=r.turn_id
              WHERE t.conversation_id=?1 AND t.id=?2",
             params![conversation, turn], |row| row.get::<_, String>(0),
@@ -91,36 +79,12 @@ impl Store {
         raw.map(|raw| serde_json::from_str(&raw).map_err(Into::into))
             .transpose()
     }
-
-    /// A native adapter binds the provider's turn separately from its thread.
-    /// Retrying notification delivery cannot silently reassign that binding.
-    pub fn bind_provider_turn(
-        &self,
-        conversation: &str,
-        turn: &str,
-        provider_turn: &str,
-    ) -> Result<()> {
-        crate::require(!provider_turn.is_empty(), "provider turn id is empty")?;
-        let changed = self.db().execute(
-            "UPDATE run_contexts SET provider_turn_id=?3
-             WHERE turn_id=?2 AND backend!='cli'
-                AND (provider_turn_id IS NULL OR provider_turn_id=?3)
-                AND EXISTS(SELECT 1 FROM turns t WHERE t.id=?2 AND t.conversation_id=?1
-                    AND t.status='running')",
-            params![conversation, turn, provider_turn],
-        )?;
-        crate::require(
-            changed == 1,
-            "provider turn does not match a running native context",
-        )
-    }
 }
 
 struct EncodedContext<'a> {
     cwd: &'a str,
     add_dirs: String,
     access: serde_json::Value,
-    backend: serde_json::Value,
 }
 
 fn encode_context(context: &RunContext) -> Result<EncodedContext<'_>> {
@@ -132,14 +96,6 @@ fn encode_context(context: &RunContext) -> Result<EncodedContext<'_>> {
         context.add_dirs.iter().all(|path| path.is_absolute()),
         "run context requires absolute additional directories",
     )?;
-    crate::require(
-        match context.backend {
-            RunBackend::Cli => true,
-            RunBackend::CodexAppServer => context.provider == "codex",
-            RunBackend::OpencodeServer => context.provider == "opencode",
-        },
-        "run backend does not match provider",
-    )?;
     let cwd = context
         .cwd
         .to_str()
@@ -148,7 +104,6 @@ fn encode_context(context: &RunContext) -> Result<EncodedContext<'_>> {
         cwd,
         add_dirs: serde_json::to_string(&context.add_dirs)?,
         access: serde_json::to_value(context.access)?,
-        backend: serde_json::to_value(context.backend)?,
     })
 }
 
@@ -176,19 +131,17 @@ fn insert_context(
     encoded: &EncodedContext<'_>,
 ) -> Result<()> {
     transaction.execute(
-        "INSERT INTO run_contexts(turn_id,profile,cwd,add_dirs,access,backend,
-                provider_thread_id,provider_session_id,provider_turn_id)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(turn_id) DO NOTHING",
+        "INSERT INTO run_contexts(turn_id,profile,cwd,add_dirs,access,
+                provider_thread_id,provider_session_id)
+             VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(turn_id) DO NOTHING",
         params![
             context.turn_id,
             context.profile,
             encoded.cwd,
             encoded.add_dirs,
             encoded.access.as_str(),
-            encoded.backend.as_str(),
             context.provider_thread_id,
-            context.provider_session_id,
-            context.provider_turn_id
+            context.provider_session_id
         ],
     )?;
     let stored = Store::read_run_context(transaction, &context.conversation, &context.turn_id)?;

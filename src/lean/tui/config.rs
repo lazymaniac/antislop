@@ -152,7 +152,6 @@ impl ConfigEditor {
         } else if path != ["schema_version"] {
             let key = path.last().unwrap().as_str();
             let choices = match key {
-                "mode" if path[0] == "workspace" => vec!["in-place", "task-worktrees"],
                 "mode" => vec!["supervised", "autonomous"],
                 "effort" => vec!["low", "medium", "high", "xhigh"],
                 _ if value.is_boolean() => vec!["false", "true"],
@@ -224,7 +223,7 @@ impl ConfigEditor {
     }
 
     fn parse_draft(&mut self) -> Option<Value> {
-        let mut root = serde_json::json!({"schema_version": 1, "profiles": {}, "providers": {}, "routing": {}});
+        let mut root = serde_json::json!({"schema_version": 2, "profiles": {}, "providers": {}, "routing": {}});
         let mut invalid = false;
         for field in &mut self.fields {
             field.error = None;

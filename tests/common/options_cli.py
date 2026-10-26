@@ -43,7 +43,7 @@ else:
         else:
             implementation = 'B' if scenario == 'reject-once' and count == 1 else settings['implementation']
             if implementation == 'selected':
-                implementation = re.findall(r'^Selected: ([AB])$', prompt, re.M)[-1]
+                implementation = re.findall(r'"id":\s*"([AB])"', prompt)[-1]
             open('result-'+task+'.txt','w').write(implementation)
             record_call({'written':task,'actual':open('result-'+task+'.txt').read()})
             answer = 'APPROVED. I complied with the selected variant. '+settings['claim']
@@ -52,23 +52,18 @@ else:
         # of a contradiction or departure belongs to the real verifier.
         files = {path:open(path).read() for path in glob.glob('result-*.txt')}
         actual = list(files.values())
-        approved = not actual or all(value == 'A' for value in actual)
-        if actual and not approved:
-            # Parse the worker report delivered by runtime, never settings['claim'].
-            # A claim is insufficient: check the cited repository contract and
-            # compare its required format with the actual implementation bytes.
-            handoff = re.search(r'Latest worker report \(source round [0-9]+\):\n(.*?)\nPrevious verifier findings and evidence:', prompt, re.S)
-            report = handoff.group(1) if handoff else prompt.split("The worker's report:\n<<<\n", 1)[-1].split('\n>>>', 1)[0]
-            departure = re.search(r'Departure: (\{[^\n]+\})', report)
-            if departure:
-                evidence = json.loads(departure.group(1))
-                path = evidence.get('evidence')
-                if path == 'required-format.txt' and evidence.get('justification', '').strip():
-                    required = open(path).read().strip()
-                    approved = (required != 'A' and evidence.get('variant') == required
-                                and all(value == required for value in actual))
+        required = open('required-format.txt').read().strip()
+        selected = required
+        for line in prompt.splitlines():
+            try:
+                local = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(local, dict) and isinstance(local.get('variant'), dict):
+                selected = local['variant']['id']
+        approved = not actual or all(value == selected and value == required for value in actual)
         record_call({'verified':task,'files':files,'required':open('required-format.txt').read().strip(),'approved':approved})
-        ids = re.findall(r'^- ([RCV][0-9]+): ', prompt, re.M)
+        ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)
         answer = '```verdict\n'+json.dumps({'approved':approved,'findings':[] if approved else [{'severity':'high','issue':'Implementation B contradicts Selected: A without evidence'}], 'coverage':{i:{'status':'ok','note':'fixture inspected'} for i in ids}})+'\n```'
 if os.path.basename(sys.argv[0]) == 'codex':
     print(json.dumps({'type':'thread.started','thread_id':'planner'}))

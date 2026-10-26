@@ -62,18 +62,10 @@ impl Core {
             )?;
         }
         let graph = self.store.latest_plan(conversation)?;
-        let editable_graph = !graph.is_empty()
-            && (graph
-                .iter()
-                .all(|task| matches!(task.status.as_str(), status::PROPOSED | status::REVISED))
-                || graph.iter().any(|task| {
-                    matches!(
-                        task.status.as_str(),
-                        status::QUEUED | status::WORKING | status::VERIFYING
-                    )
-                }));
-        let graph_json =
-            serde_json::to_string(&graph.iter().map(|task| &task.spec).collect::<Vec<_>>())?;
+        let editable_graph = !graph.is_empty();
+        let graph_json = serde_json::to_string(
+            &json!({"base_revision":graph.first().map(|t|self.store.plan_revision(&t.plan_id)).transpose()?,"tasks":graph.iter().map(|task|&task.spec).collect::<Vec<_>>()}),
+        )?;
         let history = self.store.recent_messages_through(conversation, answered)?;
         let ledger_context = planning_ledger_context(self, conversation)?;
         let Some(answer) = self.turn(setup, cancel, |first| {
@@ -96,48 +88,12 @@ impl Core {
         else {
             return Ok(());
         };
-        let latest = self.store.latest_plan(conversation)?;
-        let answer = self.post(
-            conversation,
-            latest.first().map(|task| task.plan_id.as_str()),
-            ORCHESTRATOR,
-            &answer,
-        )?;
-        if let Some(task) = latest.first() {
-            self.answer_in_background(conversation, &task.plan_id);
-        }
+
         // A regenerated plan can carry a fresh selective claim too, including
         // after a deferred original comment revision.
         let (answer, addressed) = feedback::split(&answer);
-        let (answer, unblocking) = tasks::parse_recoveries(&answer);
+
         let (mut text, mut plan) = tasks::parse_plan(&answer);
-        let graph_revision = answer.contains("```graph");
-        let mut graph_baseline = None;
-        if graph_revision {
-            let graph = self.store.latest_plan(conversation)?;
-            let current = graph
-                .iter()
-                .map(|task| serde_json::from_value(task.spec.clone()))
-                .collect::<std::result::Result<Vec<TaskSpec>, _>>()?;
-            let (graph_text, graph_edit) = tasks::parse_graph_edit(
-                &answer,
-                graph.first().map_or("", |task| task.plan_id.as_str()),
-                &current,
-            );
-            if let Some(edit) = graph_edit {
-                text = graph_text;
-                plan = Some(if plan.is_some() {
-                    Err(Error::Invalid(
-                        "return either a graph edit or a full plan, never both".into(),
-                    ))
-                } else if graph.is_empty() {
-                    Err(Error::Invalid("no graph to edit".into()))
-                } else {
-                    edit
-                });
-            }
-            graph_baseline = Some(graph);
-        }
         if interviewing {
             match interview::parse(&text) {
                 Some(Ok(question)) => {
@@ -170,63 +126,6 @@ impl Core {
         if interviewing && !cancel.load(Ordering::SeqCst) && self.autonomous(conversation)? {
             self.store.finish_interview(conversation)?;
         }
-        if !interviewing && !unblocking.is_empty() {
-            // Structural repairs preserve the accepted requirements and are
-            // validated by the runtime. Retrying ordinary failures still needs
-            // the supervised user's decision.
-            let decided = asked.last().is_some_and(|message| message.author == "user");
-            let structural = unblocking.iter().all(|step| {
-                matches!(
-                    step.action.as_str(),
-                    "add_task" | "split_task" | "clarify_task"
-                )
-            });
-            if decided || structural || self.autonomous(conversation)? {
-                self.unblock_by_orchestrator(conversation, &unblocking, cancel);
-            } else {
-                self.notice(
-                    conversation,
-                    "the orchestrator proposed to unblock steps before you decided; nothing was done",
-                );
-            }
-        }
-        let running_baseline = graph_baseline.as_ref().unwrap_or(&graph);
-        let live_revision = graph_revision
-            && running_baseline
-                .iter()
-                .any(|task| !matches!(task.status.as_str(), status::PROPOSED | status::REVISED))
-            || workflow
-                .as_ref()
-                .is_some_and(|workflow| workflow.phase == "implementation")
-                && running_baseline.iter().any(|task| {
-                    matches!(
-                        task.status.as_str(),
-                        status::QUEUED | status::WORKING | status::VERIFYING
-                    )
-                });
-        if !interviewing
-            && live_revision
-            && let Some(Ok(specs)) = plan.as_ref()
-        {
-            if let Err(error) = self.revise_running_graph(
-                conversation,
-                &project,
-                &text,
-                running_baseline,
-                specs,
-                cancel,
-            ) {
-                self.store.append_event(
-                    conversation,
-                    None,
-                    running_baseline.first().map(|task| task.plan_id.as_str()),
-                    "plan_invalid",
-                    &json!({"error":error.to_string(),"retrying":false}),
-                )?;
-                self.notice(conversation, &format!("graph edit rejected: {error}"));
-            }
-            return Ok(());
-        }
         match plan {
             Some(Ok(specs)) => self.propose(
                 conversation,
@@ -240,17 +139,16 @@ impl Core {
                 cancel,
             )?,
             Some(Err(error)) => {
-                let retrying = if !graph_revision
-                    && let Some(turn) = self.store.last_orchestration_turn(conversation)?
-                {
-                    self.store.queue_plan_format_repair(
-                        conversation,
-                        &turn.id,
-                        &error.to_string(),
-                    )?
-                } else {
-                    false
-                };
+                let retrying =
+                    if let Some(turn) = self.store.last_orchestration_turn(conversation)? {
+                        self.store.queue_plan_format_repair(
+                            conversation,
+                            &turn.id,
+                            &error.to_string(),
+                        )?
+                    } else {
+                        false
+                    };
                 self.store.append_event(
                     conversation,
                     None,

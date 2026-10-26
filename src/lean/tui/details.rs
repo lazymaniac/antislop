@@ -1,7 +1,7 @@
 //! Full-screen details of one agent or conversation: what it was asked,
 //! its session history, messages, deliverables, obligations, and comments.
 
-use super::super::tasks::{TaskSpec, obligations, status};
+use super::super::tasks::{TaskContract, obligations, status};
 use super::taskinfo;
 use super::theme::Theme;
 use super::view::{View, agent_name, dim, duration, status_label, wrap};
@@ -57,7 +57,7 @@ pub fn section_starts(key: &str, tab: usize) -> bool {
     tab == VERIFIER && tabs_for(key).contains(&VERIFIER)
 }
 
-/// Task addresses share one set of tabs, including legacy verifier keys.
+/// Task addresses share one set of tabs, for both worker and verifier addresses.
 pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
         "worker" | "verifier" => vec![0, 1, RESULT, VERIFIER, CHECKS, COMMENTS, REQUIREMENTS],
@@ -1724,7 +1724,7 @@ pub struct CheckRow {
 /// kind's checklist) and how far each is: what the verifier reported while it
 /// works, else how the latest verdict accounted for it.
 pub fn check_rows(stored: &Value) -> Vec<CheckRow> {
-    let Ok(spec) = serde_json::from_value::<TaskSpec>(stored["spec"].clone()) else {
+    let Ok(spec) = serde_json::from_value::<TaskContract>(stored["spec"].clone()) else {
         return Vec::new();
     };
     let live = stored["checks"].as_array().filter(|rows| !rows.is_empty());

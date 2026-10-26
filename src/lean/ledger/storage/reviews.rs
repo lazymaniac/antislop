@@ -20,7 +20,8 @@ fn prior_covered_criteria(store: &Store, prior: &[Task], plan: &str) -> Result<H
         .filter(|task| task.plan_id != plan && task.status == "approved")
     {
         if store.assert_task_inputs(task).is_ok() {
-            covered.extend(serde_json::from_value::<TaskSpec>(task.spec.clone())?.criterion_ids);
+            covered
+                .extend(serde_json::from_value::<TaskContract>(task.spec.clone())?.criterion_ids);
         }
     }
     Ok(covered)
@@ -46,7 +47,7 @@ fn bind_task_inputs(
     all: &[LedgerEntry],
     covered: &mut HashSet<String>,
 ) -> Result<()> {
-    let spec: TaskSpec = serde_json::from_value(task.spec.clone())?;
+    let spec: TaskContract = serde_json::from_value(task.spec.clone())?;
     super::validate_task_links(&spec, all)?;
     covered.extend(spec.criterion_ids.iter().cloned());
     tx.execute("INSERT INTO task_inputs(task_id,run_id) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET run_id=excluded.run_id", params![task.id,run])?;
@@ -106,7 +107,7 @@ fn assignment_is_present(
 ) -> bool {
     current.iter().chain(prior.iter().copied()).any(|task| {
         (task.id == assigned || task.spec["id"].as_str() == Some(assigned))
-            && serde_json::from_value::<TaskSpec>(task.spec.clone())
+            && serde_json::from_value::<TaskContract>(task.spec.clone())
                 .is_ok_and(|spec| spec.requirement_ids.iter().any(|id| id == requirement))
     })
 }

@@ -42,14 +42,20 @@ impl Content {
         Ok(self.directory.join(&reference.id))
     }
 
-    /// A tagged reference in legacy text columns; untagged historical rows
-    /// remain readable. New user text is always externalized, including text
-    /// that happens to resemble this internal encoding.
+    /// Externalize user text behind an opaque reference. Short runtime messages
+    /// may be stored inline; user text is never interpreted as an encoding.
     pub fn encode(&self, text: &str) -> Result<String> {
         Ok(format!(
             "\0antislop-content:{}",
             serde_json::to_string(&self.write(text)?)?
         ))
+    }
+
+    pub fn reference(encoded: &str) -> Result<Reference> {
+        let reference = encoded
+            .strip_prefix("\0antislop-content:")
+            .ok_or_else(|| crate::Error::Invalid("stored content reference is missing".into()))?;
+        Ok(serde_json::from_str(reference)?)
     }
 
     pub fn decode(&self, text: &str) -> Result<String> {
@@ -116,7 +122,7 @@ impl Content {
         })
     }
 
-    /// Compatibility path for existing consumers. New history readers use chunks.
+    /// Read a complete recorded value; paginated history readers use `chunk`.
     pub fn read(&self, reference: &Reference) -> Result<String> {
         let mut result = String::new();
         let mut offset = 0;

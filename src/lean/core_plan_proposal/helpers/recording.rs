@@ -5,7 +5,7 @@ pub(super) fn record_plan_review_start(
     conversation: &str,
     plan: &str,
     config: &Config,
-    specs: &[TaskSpec],
+    specs: &[TaskContract],
 ) -> Result<()> {
     if !config.policy.required_gates && !tasks::missing_quality_agents(specs).is_empty() {
         let _ = store.append_event(
@@ -29,7 +29,7 @@ pub(super) fn record_plan_review_start(
 pub(super) fn plan_review_prompt(
     project: &str,
     request: &str,
-    specs: &[TaskSpec],
+    specs: &[TaskContract],
     first: bool,
 ) -> String {
     if first {
@@ -49,7 +49,7 @@ pub(super) fn append_planning_gaps(prompt: String, gaps: Option<&str>) -> String
 pub(super) fn plan_event_payload(
     text: &str,
     plan: &PreparedPlan,
-    specs: &[TaskSpec],
+    specs: &[TaskContract],
     review: &std::result::Result<Verdict, String>,
     autonomous: bool,
     waiting: Option<&str>,

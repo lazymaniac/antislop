@@ -86,12 +86,12 @@ fn make_core(state: &Path, config: Config, store: Store, lock: std::fs::File) ->
         state: state.canonicalize()?,
         integrating: Mutex::new(()),
         graph_updates: Mutex::new(()),
-        in_place: Mutex::new(()),
-        mail_jobs: Mutex::new(HashMap::new()),
+        revising: Mutex::new(std::collections::BTreeSet::new()),
+        revision_jobs: Mutex::new(HashMap::new()),
+        agent_reviews: Mutex::new(HashMap::new()),
         task_cancels: Mutex::new(HashMap::new()),
         task_restarts: Mutex::new(HashMap::new()),
         orchestrator_restarts: Mutex::new(std::collections::HashSet::new()),
-        mail_failures: Mutex::new(HashMap::new()),
         turn_locks: Mutex::new(HashMap::new()),
         running: Mutex::new(HashMap::new()),
         plans: Mutex::new(HashMap::new()),
@@ -115,6 +115,7 @@ fn spawn_native_reaper(core: &Arc<Core>) {
 }
 
 fn restore_startup(core: &Arc<Core>, interrupted: InterruptedWork) -> Result<()> {
+    core.store.interrupt_revision_jobs()?;
     core.store.recover_approved_requirements()?;
     restore_conversations(core)?;
     resume_cut_off(core, &interrupted.0);
@@ -192,7 +193,8 @@ fn resume_interrupted(core: &Arc<Core>, plans: &[(String, String)]) {
 
 fn answer_pending_mail(core: &Arc<Core>) -> Result<()> {
     for conversation in core.store.pending_mail_conversations()? {
-        core.answer_in_background(&conversation, "");
+        core.wake(&conversation);
+        core.resume_agent_reviews(&conversation);
     }
     Ok(())
 }

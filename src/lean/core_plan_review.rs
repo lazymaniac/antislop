@@ -25,7 +25,7 @@ impl Core {
                 &review_request(&all, if initial { 0 } else { answered }),
             )
         })?;
-        self.review_outcome(conversation, role, plan_id, answer)
+        self.review_outcome(conversation, role, answer)
     }
 
     /// Runs one agent turn and records it. `Ok(None)` means the turn failed
@@ -36,21 +36,17 @@ impl Core {
         cancel: &AtomicBool,
         prompt: impl FnOnce(bool) -> String,
     ) -> Result<Option<String>> {
-        self.turn_inner(setup, cancel, prompt, false)
+        self.turn_inner(setup, cancel, prompt)
     }
 
     fn review_outcome(
         self: &Arc<Self>,
         conversation: &str,
         role: &str,
-        plan_id: Option<&str>,
         answer: Option<String>,
     ) -> Result<std::result::Result<Verdict, String>> {
         Ok(match answer {
-            Some(answer) => {
-                let answer = self.post(conversation, plan_id, role, &answer)?;
-                Ok(tasks::parse_verdict(&answer))
-            }
+            Some(answer) => Ok(tasks::parse_verdict(&answer)),
             None => Err(self
                 .store
                 .last_turn(conversation, role)?

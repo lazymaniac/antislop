@@ -1,8 +1,6 @@
 //! Versioned obligations. Sources and history are immutable; completion is derived
 //! from independent evidence about the integrated result, never task approval.
-mod options;
 mod runtime;
-pub use options::SolutionChoice;
 mod storage;
 
 use crate::{Result, require};
@@ -259,7 +257,7 @@ pub fn diff_hash(diff: &LedgerDiff) -> Result<String> {
 
 /// Shared by initial plans and edits of the running task graph.
 pub(crate) fn validate_task_links(
-    spec: &crate::lean::tasks::TaskSpec,
+    spec: &crate::lean::tasks::TaskContract,
     entries: &[LedgerEntry],
 ) -> Result<()> {
     require(

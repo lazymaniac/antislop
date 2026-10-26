@@ -1,3 +1,4 @@
+const LARGE_PASTE_BYTES: usize = 64 * 1024;
 mod common;
 use antislop::lean::{
     comment_label,
@@ -10,8 +11,7 @@ use antislop::lean::{
         diffview::diff_header_with_reviewer,
         draw_rows,
         editor::{
-            MAX_PASTE_BYTES, compute_visual_lines, sanitize_paste, sanitize_single_line_paste,
-            visual_text_lines,
+            compute_visual_lines, sanitize_paste, sanitize_single_line_paste, visual_text_lines,
         },
         in_ascii, sanitize,
         view::{
@@ -286,21 +286,21 @@ fn escape_never_quits_and_q_quits_views_while_editors_keep_text() {
 #[test]
 fn large_multiline_paste_keeps_the_cursor_and_last_line_visible() {
     let mut app = App::test_app();
-    app.paste(&"\n".repeat(MAX_PASTE_BYTES));
+    app.paste(&"\n".repeat(LARGE_PASTE_BYTES));
     app.paste("finish");
     let (col, row) = app.input.visual_cursor(58);
     assert_eq!(col, 6);
-    assert_eq!(row, MAX_PASTE_BYTES);
+    assert_eq!(row, LARGE_PASTE_BYTES);
 
     app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-    assert_eq!(app.input.visual_cursor(58).1, MAX_PASTE_BYTES - 1);
+    assert_eq!(app.input.visual_cursor(58).1, LARGE_PASTE_BYTES - 1);
     app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    assert_eq!(app.input.visual_cursor(58).1, MAX_PASTE_BYTES);
+    assert_eq!(app.input.visual_cursor(58).1, LARGE_PASTE_BYTES);
     app.input.move_buffer_end();
 
     let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
-    assert_eq!(app.input_shown, MAX_PASTE_BYTES - 5);
+    assert_eq!(app.input_shown, LARGE_PASTE_BYTES - 5);
     let cursor = terminal.get_cursor_position().unwrap();
     assert_eq!(cursor.y, 7);
     assert_eq!(terminal.backend().buffer()[(1, cursor.y)].symbol(), "f");
@@ -353,7 +353,7 @@ fn full_width_drafts_show_the_cursor_after_the_last_character() {
 #[test]
 fn long_pasted_search_queries_keep_the_cursor_at_the_visible_end() {
     let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
-    for len in [MAX_PASTE_BYTES - 2, MAX_PASTE_BYTES] {
+    for len in [LARGE_PASTE_BYTES - 2, LARGE_PASTE_BYTES] {
         let mut app = App::test_app();
         app.picker = Some(Picker::new(Kind::History));
         app.paste(&"a".repeat(len));
@@ -368,7 +368,7 @@ fn long_pasted_search_queries_keep_the_cursor_at_the_visible_end() {
 fn long_activity_labels_fit_the_status_above_chat_input() {
     let mut app = App::test_app();
     app.focus = Focus::Graph;
-    app.view.activity = Some("a".repeat(MAX_PASTE_BYTES - 1));
+    app.view.activity = Some("a".repeat(LARGE_PASTE_BYTES - 1));
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let rendered: String = terminal
@@ -491,9 +491,9 @@ fn tui_paste_sanitization_preserves_full_unicode_text() {
 
     // Large Unicode pastes remain intact.
     let unit = "abąćęł cńódź efżó ";
-    let repeat_count = (MAX_PASTE_BYTES / unit.len()) + 10;
+    let repeat_count = (LARGE_PASTE_BYTES / unit.len()) + 10;
     let huge = unit.repeat(repeat_count);
-    assert!(huge.len() > MAX_PASTE_BYTES);
+    assert!(huge.len() > LARGE_PASTE_BYTES);
 
     let capped = sanitize_paste(&huge);
     assert_eq!(capped, huge);
@@ -636,7 +636,7 @@ fn app_interaction_sequences_editing_and_paste() {
     assert_eq!(app.input.text, "wklejka 1\nwklejka 2\n");
 
     // 6. Large paste remains intact without a truncation notice
-    let big = "a".repeat(MAX_PASTE_BYTES + 100);
+    let big = "a".repeat(LARGE_PASTE_BYTES + 100);
     app.paste(&big);
     assert!(app.input.text.ends_with(&big));
     assert_ne!(
@@ -903,7 +903,7 @@ fn app_fake_request_capture_through_app() {
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
-            let parsed: Value = serde_json::from_str(&line).unwrap();
+            let parsed: Value = serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
             tx.send(parsed).unwrap();
 
             let mut writer = stream;
@@ -1394,7 +1394,7 @@ fn tui_isolated_fake_request_capture() {
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
-            let parsed: Value = serde_json::from_str(&line).unwrap();
+            let parsed: Value = serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
             tx.send(parsed).unwrap();
 
             // Reply with dummy JSON line
@@ -3163,6 +3163,7 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
                 && !line.is_empty()
                 && let Ok(parsed) = serde_json::from_str::<Value>(&line)
             {
+                let parsed = parsed["request"].clone();
                 let _ = tx.send(parsed.clone());
                 let mut writer = stream;
                 if parsed["op"] == "conversations" {
@@ -5345,11 +5346,7 @@ fn every_reported_landing_earns_its_real_label_on_the_card() {
         (Outcome::NoChanges, "no changes"),
         (Outcome::Conflict, "conflict"),
         (Outcome::UserEdits, "user edits"),
-        (Outcome::InPlaceCommitted, "committed in place"),
-        (Outcome::InPlaceApplied, "applied in place"),
-        (Outcome::InPlaceUserEdits, "held for your edits"),
         (Outcome::NotApplicable, "read-only none"),
-        (Outcome::ForceApproved, "force approved"),
         (Outcome::Cancelled, "cancelled"),
     ] {
         let name = serde_json::to_value(outcome).unwrap();
@@ -5650,7 +5647,7 @@ fn configuration_load_and_save_use_live_daemon_requests() {
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut line)
                 .unwrap();
-            let request: Value = serde_json::from_str(&line).unwrap();
+            let request: Value = serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
             captured.send(request.clone()).unwrap();
             let source = if save {
                 request["toml"].as_str().unwrap()
@@ -5786,14 +5783,10 @@ mod config_editor_acceptance {
     fn serialized_config_field_paths() -> BTreeSet<Vec<String>> {
         use antislop::config::{
             CommandLine, OrchestratorConfig, Policy, Profile, ProviderConfig, RoleRouting,
-            WorkspaceConfig,
         };
         let config = Config::from_toml(SOURCE).unwrap();
         let fixture = Config {
             schema_version: config.schema_version,
-            workspace: WorkspaceConfig {
-                mode: config.workspace.mode,
-            },
             policy: Policy {
                 mode: config.policy.mode,
                 local_write: config.policy.local_write,
@@ -5905,7 +5898,6 @@ mod config_editor_acceptance {
                 let old = field.input.text.clone();
                 let key = path.last().unwrap().as_str();
                 let (new, cycle) = match key {
-                    "mode" if path[0] == "workspace" => (json!("in-place"), true),
                     "mode" => (json!("autonomous"), true),
                     "local_write" | "local_commits" | "required_gates" => {
                         (json!(old != "true"), true)
@@ -6608,7 +6600,8 @@ fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut line)
                 .unwrap();
-            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let request: serde_json::Value =
+                serde_json::from_str::<Value>(&line).unwrap()["request"].clone();
             if index == 1 {
                 assert_eq!(request["op"], "task_checks", "{request}");
                 assert_eq!(request["conversation"], "test-conv");

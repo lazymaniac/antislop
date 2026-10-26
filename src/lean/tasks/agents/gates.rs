@@ -12,7 +12,7 @@ pub(super) struct GatePlan {
 }
 
 impl GatePlan {
-    pub(super) fn new(tasks: &[TaskSpec], mut ordered: Vec<&'static PredefinedAgent>) -> Self {
+    pub(super) fn new(tasks: &[TaskContract], mut ordered: Vec<&'static PredefinedAgent>) -> Self {
         ordered.sort_by_key(|agent| GATE_KINDS.iter().position(|kind| *kind == agent.kind));
         Self {
             writers: writer_ids(tasks),
@@ -26,7 +26,7 @@ impl GatePlan {
         }
     }
 
-    pub(super) fn next(&mut self) -> Option<TaskSpec> {
+    pub(super) fn next(&mut self) -> Option<TaskContract> {
         let agent = self.ordered.first().copied()?;
         self.ordered.remove(0);
         let id = reserve_task_id(agent.id, &mut self.ids);
@@ -55,7 +55,7 @@ impl GatePlan {
     }
 }
 
-fn writer_ids(tasks: &[TaskSpec]) -> Vec<String> {
+fn writer_ids(tasks: &[TaskContract]) -> Vec<String> {
     tasks
         .iter()
         .filter(|task| task.writes)
@@ -63,7 +63,7 @@ fn writer_ids(tasks: &[TaskSpec]) -> Vec<String> {
         .collect()
 }
 
-fn writer_scope(tasks: &[TaskSpec]) -> Vec<String> {
+fn writer_scope(tasks: &[TaskContract]) -> Vec<String> {
     let mut scope = Vec::new();
     for path in tasks
         .iter()
@@ -77,7 +77,10 @@ fn writer_scope(tasks: &[TaskSpec]) -> Vec<String> {
     scope
 }
 
-fn union_ids(tasks: &[TaskSpec], select: impl Fn(&TaskSpec) -> &Vec<String>) -> Vec<String> {
+fn union_ids(
+    tasks: &[TaskContract],
+    select: impl Fn(&TaskContract) -> &Vec<String>,
+) -> Vec<String> {
     tasks
         .iter()
         .flat_map(|task| select(task).iter().cloned())
@@ -143,8 +146,12 @@ fn gate_task(
     requirement_ids: &[String],
     criterion_ids: &[String],
     description: GateDescription,
-) -> TaskSpec {
-    TaskSpec {
+) -> TaskContract {
+    TaskContract {
+        quality_gate: true,
+        inputs: vec![],
+        outputs: vec![],
+        options_for: None,
         requirement_ids: requirement_ids.to_vec(),
         criterion_ids: criterion_ids.to_vec(),
         id,
@@ -156,9 +163,10 @@ fn gate_task(
         writes: !description.audit,
         depends_on,
         kind: agent.kind,
-        resolves: None,
-        part_of: None,
         verifier: VerifierSpec {
+            risk_ids: crate::lean::risks::for_kind(agent.kind)
+                .map(|(id, _)| id)
+                .collect(),
             focus: agent.focus.to_owned(),
             summary: Some(description.verifier_summary.to_owned()),
             risks: Vec::new(),

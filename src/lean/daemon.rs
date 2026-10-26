@@ -55,6 +55,15 @@ pub fn build_identity(executable: &Path) -> Result<String> {
     )))
 }
 
+const PROTOCOL_VERSION: u32 = 3;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestEnvelope {
+    pub(crate) protocol: u32,
+    pub(crate) request: Request,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
     TerminalOpen {
@@ -1800,8 +1809,15 @@ pub fn serve(project: &Path, config_path: &Path, state: &Path) -> Result<()> {
         let socket = socket.clone();
         std::thread::spawn(move || {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-            let request = crate::transport::read::<Request>(&mut BufReader::new(&stream))
-                .and_then(|request| request.ok_or_else(|| Error::Invalid("empty request".into())));
+            let request = crate::transport::read::<RequestEnvelope>(&mut BufReader::new(&stream))
+                .and_then(|request| request.ok_or_else(|| Error::Invalid("empty request".into())))
+                .and_then(|wire| {
+                    require(
+                        wire.protocol == PROTOCOL_VERSION,
+                        "incompatible daemon protocol; restart client and daemon together",
+                    )?;
+                    Ok(wire.request)
+                });
             let shutdown = matches!(request, Ok(Request::Shutdown | Request::ForceShutdown));
             let response =
                 match request.and_then(|request| handle(&core, &project, &config_path, request)) {
@@ -3019,26 +3035,6 @@ impl Client {
     /// which changes nothing, is repeated once.
     pub fn call(&self, request: &Request) -> Result<Value> {
         let result = self.call_once(request);
-        // A busy daemon may intentionally keep its previous build while a new
-        // frontend connects. Only an unsupported operation permits fallback;
-        // scope and other validation errors must reach the caller unchanged.
-        let result = match (&result, request) {
-            (
-                Err(Error::Invalid(message)),
-                Request::TaskChecks {
-                    conversation,
-                    plan,
-                    id,
-                },
-            ) if message.contains("unknown variant `task_checks`") => {
-                self.call_once(&Request::TaskScoped {
-                    conversation: conversation.clone(),
-                    plan: plan.clone(),
-                    id: id.clone(),
-                })
-            }
-            _ => result,
-        };
         match (result, &self.origin) {
             (Err(error), Some((project, config, state)))
                 // State the user deleted stays deleted.
@@ -3064,7 +3060,10 @@ impl Client {
         };
         stream.set_read_timeout(Some(wait + Duration::from_secs(10)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-        crate::transport::write(&mut stream, request)?;
+        crate::transport::write(
+            &mut stream,
+            &json!({"protocol":PROTOCOL_VERSION,"request":request}),
+        )?;
         let response: Response = crate::transport::read(&mut BufReader::new(stream))?
             .ok_or_else(|| Error::Invalid(DISCONNECTED.into()))?;
         match response.error {

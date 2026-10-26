@@ -2,9 +2,9 @@ use super::*;
 
 pub const VERDICT_FORMAT: &str = "End your answer with a verdict block:\n\
      ```verdict\n\
-     {\"approved\": true, \"findings\": [{\"severity\": \"high|medium|low\", \"issue\": \"...\", \"where\": \"path:line\"}]}\n\
+     {\"approved\": true, \"findings\": [{\"id\": \"stable-finding-id\", \"severity\": \"high|medium|low\", \"issue\": \"...\", \"where\": \"path:line\"}]}\n\
      ```\n\
-     Approve only when no high or medium findings remain.";
+     Reuse the same finding id while a defect remains open, even when its wording changes. Approve only when no high or medium findings remain.";
 
 /// What every agent of a task keeps to (design §10.3, §13).
 pub(super) const PROJECT_RULES: &str = "The project's own instructions (AGENTS.md, \
@@ -35,14 +35,8 @@ pub(super) const REVIEW_RULES: &str = "Never run builds, tests, formatters, lint
      reject a result merely because you cannot rerun a command. Missing worker evidence \
      is a finding asking the worker to provide it; no independent execution is required.";
 
-pub(super) const PROGRESS_FORMAT: &str = "While you work, report on lines of their own, one per \
-     obligation id: `CHECKING <id>` when you start on it, and `CHECK <id> \
-     <ok|issue|blocked|n/a>: <evidence>` as soon as you settle it. The evidence \
-     is what you saw: file:line, or the command you ran and its result; not a \
-     general assurance. The verdict block that ends your answer repeats them.";
-
-pub(super) const COVERAGE_FORMAT: &str = "Your verdict must also account for every \
-     obligation by its id: \"coverage\": {\"R1\": {\"status\": \"ok|issue|blocked|n/a\", \
+pub(super) const COVERAGE_FORMAT: &str = "Your verdict must also account for every assigned local \
+     criterion and risk by its id: \"coverage\": {\"R1\": {\"status\": \"ok|issue|blocked|n/a\", \
      \"note\": \"what you checked, or why it does not apply\"}, \"V1\": {...}, \"C1\": {...}}. \
      Use blocked when you could not settle it (missing data is not ok) and n/a \
      only with a reason tied to this task. A verdict that leaves one out, or \
@@ -52,23 +46,6 @@ pub(super) const COVERAGE_FORMAT: &str = "Your verdict must also account for eve
      the code); issue means the report is wrong, incomplete or unsupported. A command the \
      environment denied (`Operation not permitted`, `os error 1`, `PermissionDenied`) is \
      blocked, never issue: the worker cannot fix the environment.";
-
-/// Markers of the environment refusing an operation (sandbox, file or socket
-/// permissions). More correction rounds cannot cure them.
-const ENVIRONMENT_DENIALS: [&str; 4] = [
-    "operation not permitted",
-    "os error 1)",
-    "permissiondenied",
-    "eperm",
-];
-
-/// Whether `report` records the environment denying an operation.
-pub fn environment_denied(report: &str) -> bool {
-    let report = report.to_ascii_lowercase();
-    ENVIRONMENT_DENIALS
-        .iter()
-        .any(|marker| report.contains(marker))
-}
 
 pub(super) fn scope_text(scope: &[String]) -> String {
     if scope.is_empty() {
@@ -184,7 +161,7 @@ pub(crate) fn round_handoff_prompt(
     let protection = handoff_protection(handoff);
     let report = latest_report(handoff);
     format!(
-        "\n\nRound handoff\nFull task and working rules: {}\nWorktree: {}\nRound: {}\nInterrupted before a report: {}\n{}\nPrevious verifier findings and evidence: {}\nBase commit: {:?}\nLatest result commit: {:?}\nFiles changed in earlier rounds: {}\nInspect the actual files, uncommitted changes and the Git diff between the base and latest result yourself. Preserve user changes and follow repository instructions. A verifier must assess every obligation and the complete task, including areas outside earlier findings.\n{}{}",
+        "\n\nRound handoff\nFull task and working rules: {}\nWorktree: {}\nRound: {}\nInterrupted before a report: {}\n{}\nPrevious verifier findings and evidence: {}\nBase commit: {:?}\nLatest result commit: {:?}\nFiles changed in earlier rounds: {}\nInspect actual local files. For a writing task, inspect its provided base/result diff; a read-only task has no writer commits to produce. Earlier-round results are unverified against changed inputs. Preserve user changes and follow repository instructions. A verifier must assess every obligation and the complete task, including areas outside earlier findings.\n{}{}",
         serde_json::json!(handoff.task),
         handoff.worktree.display(),
         handoff.round,
@@ -203,9 +180,6 @@ pub(crate) fn round_handoff_prompt(
 }
 
 fn handoff_protection(handoff: &crate::lean::rounds::RoundHandoff) -> String {
-    if handoff.in_place {
-        return user_edits_note(&handoff.protected_paths);
-    }
     if handoff.protected_paths.is_empty() {
         return String::new();
     }
@@ -225,17 +199,13 @@ fn latest_report(handoff: &crate::lean::rounds::RoundHandoff) -> String {
 
 fn handoff_tail(
     handoff: &crate::lean::rounds::RoundHandoff,
-    verifier: bool,
+    _verifier: bool,
     protection: &str,
 ) -> String {
     format!(
         "\nPrevious round interruptions (fresh session continues from files and the report):\n{}\n{}Current open comments:\n{}{}",
         serde_json::json!(handoff.interruptions),
-        if verifier {
-            requirements_note(&handoff.requirements)
-        } else {
-            String::new()
-        },
+        requirements_note(&handoff.requirements),
         serde_json::json!(handoff.comments),
         protection
     )

@@ -20,7 +20,7 @@ fn a_verifier_started_after_a_live_update_uses_the_new_profile_in_the_same_round
     std::fs::write(&agy, source).unwrap();
     let initial = config(&codex, &agy);
     let core = Core::open(&dir.path().join("state"), initial.clone()).unwrap();
-    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
     wait_idle(&core, &conversation.id);
@@ -102,7 +102,7 @@ print(json.dumps({"type": "turn.completed", "usage": {}}))
             + r#"
 def cover(answer):
     import re
-    ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     if not ids or "```verdict" not in answer:
         return answer
     head, body = answer.rsplit("```verdict", 1)
@@ -172,7 +172,7 @@ fn plan_summaries_survive_core_storage_and_event_replay() {
     let state = dir.path().join("state");
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&state, config(&codex, &agy)).unwrap();
-    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and the interface.")
         .unwrap();
     wait_idle(&core, &conversation.id);
@@ -214,7 +214,7 @@ fn a_plan_comment_gets_an_independent_revision_and_verification() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
     wait_idle(&core, &conversation.id);
@@ -333,7 +333,7 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
     std::fs::create_dir_all(project.join("src")).unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-    let conversation = support::legacy_conversation(&core, &project).unwrap();
+    let conversation = support::fixture_conversation(&core, &project).unwrap();
 
     core.send(&conversation.id, "analyze the project architecture")
         .unwrap();
@@ -406,7 +406,7 @@ fn one_review_sends_all_draft_comments_to_a_single_turn() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
     wait_idle(&core, &conversation.id);
@@ -475,7 +475,7 @@ if not os.path.exists('format-error-sent') or {persistent}:
         );
         std::fs::write(&codex, source.replace(marker, &format!("{hook}\n{marker}"))).unwrap();
         let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-        let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+        let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
         core.send(&conversation.id, "Assess storage and TUI")
             .unwrap();
         wait_idle(&core, &conversation.id);
@@ -559,7 +559,7 @@ fn repairing_json_after_the_ledger_mapping_reuses_the_requirements() {
 "#;
     std::fs::write(&codex, source.replace(marker, hook)).unwrap();
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
     wait_idle(&core, &conversation.id);
@@ -600,15 +600,22 @@ fn orchestrator_extends_a_running_graph_before_the_pending_verification() {
     );
     std::fs::write(&agy, worker).unwrap();
     let hook = r#"
-if 'insert-extra' in prompt and 'Editable graph snapshot' in prompt:
+if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
     import re
-    base, snapshot = re.search(r'base_plan=([-\w]+):\n([^\n]+)', prompt).groups()
+    base, snapshot = re.search(r'Current task contracts for plan ([-\w]+):\n([^\n]+)', prompt).groups()
     snapshot = json.loads(snapshot)
+    revision = snapshot['base_revision']
+    snapshot = snapshot['tasks']
     extra = dict(snapshot[0])
     extra.update(id='extra', title='Extra', goal='Assess additional details', kind='analysis', writes=False, depends_on=['t1'])
     gate = dict(next(task for task in snapshot if task['id'] == 't2'))
     gate['depends_on'] = ['extra']
-    answer = 'Insert additional analysis before the downstream check.\n```graph\n' + json.dumps({'base_plan':base,'tasks':[extra,gate]}) + '\n```'
+    import os,urllib.request
+    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'submit_plan_revision','arguments':{'turn':os.environ['FIXTURE_TURN'],'request_key':'insert-extra','revision':{'plan':base,'base_revision':revision,'reason':'Add focused analysis before downstream verification','tasks':[extra,gate],'retire':[]}}}}
+    req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
+    reply=json.load(urllib.request.urlopen(req,timeout=10))
+    assert not reply['result'].get('isError'),reply
+    answer='Revision submitted for independent review.'
     print(json.dumps({'type':'thread.started','thread_id':'orch'}))
     print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
     print(json.dumps({'type':'turn.completed','usage':{}}))
@@ -620,7 +627,7 @@ if 'insert-extra' in prompt and 'Editable graph snapshot' in prompt:
     );
     std::fs::write(&codex, orchestrator).unwrap();
     let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
-    let conversation = support::legacy_conversation(&core, dir.path()).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
     core.send(&conversation.id, "Assess storage and TUI")
         .unwrap();
     wait_idle(&core, &conversation.id);

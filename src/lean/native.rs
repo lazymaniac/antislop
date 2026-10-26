@@ -246,7 +246,7 @@ impl Registry {
             return Ok(session.clone());
         }
         sessions.remove(&key);
-        let session = Arc::new(Session::start(core, spec.clone(), signature)?);
+        let session = Arc::new(Session::start(core, spec.clone(), signature, role)?);
         sessions.insert(key, session.clone());
         Ok(session)
     }
@@ -275,8 +275,9 @@ impl Registry {
 }
 
 impl Session {
-    fn start(core: &Core, spec: agent::Spec, signature: String) -> Result<Self> {
+    fn start(core: &Core, spec: agent::Spec, signature: String, role: &str) -> Result<Self> {
         let gateway = mcp::Gateway::start()?;
+        gateway.set_role(role)?;
         let launch = launch::command(&spec, &gateway)?;
         let weak = core.weak.get().expect("core weak").clone();
         let terminal =
@@ -378,6 +379,10 @@ impl Session {
         }
     }
 
+    pub(crate) fn set_tool_handler(&self, handler: Arc<mcp::Handler>) -> Result<()> {
+        self.gateway.set_handler(handler)
+    }
+
     fn execute(
         &self,
         registry: &Registry,
@@ -468,8 +473,8 @@ impl Session {
 fn turn_text(turn: &str, prompt: &str) -> String {
     format!(
         "{prompt}\n\n---\nWhen this turn is complete, call the `{}` tool of the MCP server \
-         `{}` exactly once as your last action, with turn = \"{turn}\" and text = your \
-         complete final answer. Do not stop without calling it.",
+         `{}` exactly once as your last action, with turn = \"{turn}\" and result = your \
+         typed final result. Task workers use type=completed with summary, report, outputs; options also require selection. Task verifiers use type=review with report and verdict. For a saved pending question use type=needs_input with request and checkpoint. Other roles use type=report with text. Do not stop without calling it.",
         mcp::TOOL,
         mcp::SERVER
     )

@@ -74,24 +74,21 @@ opens another by path (`/project PATH`); each keeps its own configuration,
 3. `supervised`: you accept the plan. `autonomous`: a checked plan starts by
    itself, and the next one too, until a plan would repeat one that already
    ran.
-4. Workers read and edit the project's files themselves. A task that changes
-   files works in its own git worktree; the runtime commits its work there.
-   With `workspace.mode = "in-place"` writers work in your directory itself,
-   one at a time, and stop if they touch a file you were editing. A later
-   writer can extend an earlier approved result without committing it, as
-   long as that file still matches its latest approved version; your later
-   edits and unapproved changes remain protected.
-5. The task's verifier reads the result (and the diff) and must account for
-   each obligation by id: the task's risks, the checks of every verification
-   and the checklist for that kind of work (`ok`, `issue`, `blocked` or
-   `n/a` with a reason). It approves or lists findings; findings go back to the
-   same worker session (supervised: three rounds, then you decide;
-   autonomous: until approval, or until the verifier repeats itself).
-6. Approved changes are integrated into your branch one at a time, never over
-   files you are editing and never with conflict markers.
-7. An independent auditor checks that every part of your request was
-   delivered; the orchestrator receives the results and the audit and
-   answers you, or proposes a plan for what is missing.
+4. Every writing task first gets its own read-only options comparison and review,
+   including tasks that implement quality checks. Shared architecture decisions
+   do not replace that local choice.
+5. Workers receive their local contract and named inputs, then read and edit files
+   in isolated worktrees. They can ask the orchestrator through MCP while working.
+6. Independent verifiers inspect separate result checkouts and cover the task's
+   criteria and selected risks. Corrections continue while verification shows
+   progress; unchanged unresolved obligations return to the orchestrator.
+7. Approved changes are integrated into the project while preserving user edits.
+   Plan revisions require independent review and stay within accepted permissions.
+8. An independent audit checks delivery of the request before the orchestrator
+   reports completion.
+
+This alpha changes the database, configuration and daemon protocol formats.
+See [the execution model](docs/lean-core.md) for the contracts and version boundary.
 
 ## Build and test
 

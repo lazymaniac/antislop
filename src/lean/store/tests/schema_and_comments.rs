@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn incompatible_databases_are_rejected_without_writes() {
-    for version in [0, 1, 5, 10, 11, SCHEMA + 1] {
+    for version in [0, 1, 5, 10, 11, 12, 13, SCHEMA + 1] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("core.db");
         let db = Connection::open(&path).unwrap();
@@ -69,6 +69,8 @@ fn current_schema_initializes_and_reopens_without_removed_columns() {
         ("ledger_entries", "kind"),
         ("ledger_versions", "technical_goal"),
         ("ledger_versions", "execution_check"),
+        ("run_contexts", "backend"),
+        ("run_contexts", "provider_turn_id"),
     ] {
         let count: i64 = db
             .query_row(
@@ -124,7 +126,7 @@ fn deferred_plan_comment_claims_expire_after_user_input_or_plan_publication() {
         )
         .unwrap();
     store
-        .add_message(id, "options-planner", "regenerate the plan")
+        .add_message(id, "requirements-planner", "regenerate the plan")
         .unwrap();
     assert_eq!(store.pending_plan_comment_ids(id).unwrap(), Some(vec![1]));
     let next = store.add_message(id, "user", "new scope").unwrap();
@@ -143,4 +145,40 @@ fn deferred_plan_comment_claims_expire_after_user_input_or_plan_publication() {
         .append_event(id, None, None, "plan_proposed", &serde_json::json!({}))
         .unwrap();
     assert_eq!(store.pending_plan_comment_ids(id).unwrap(), None);
+}
+
+#[test]
+fn plan_review_progress_survives_restart_and_resets_for_new_user_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("core.db");
+    let store = Store::open(&path).unwrap();
+    let conversation = store.create_conversation("project").unwrap().id;
+    store
+        .add_message(&conversation, "user", "Plan this request")
+        .unwrap();
+    assert!(
+        store
+            .previous_plan_rejection(&conversation)
+            .unwrap()
+            .is_none()
+    );
+    store.append_event(&conversation,None,None,"plan_review",&serde_json::json!({"plan":"draft","approved":false,"findings":[{"id":"missing-input","severity":"high","issue":"Input is missing","where":"task"}]})).unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    let review = store
+        .previous_plan_rejection(&conversation)
+        .unwrap()
+        .unwrap();
+    assert_eq!(review.findings[0]["id"], "missing-input");
+    let other = store.create_conversation("other-project").unwrap().id;
+    assert!(store.previous_plan_rejection(&other).unwrap().is_none());
+    store
+        .add_message(&conversation, "user", "Reconsider using this new input")
+        .unwrap();
+    assert!(
+        store
+            .previous_plan_rejection(&conversation)
+            .unwrap()
+            .is_none()
+    );
 }

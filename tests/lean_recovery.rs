@@ -17,7 +17,7 @@ fn fake_clis(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
         r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
-prompt = prompt.split("\nEditable graph snapshot, base_plan=",1)[0].rstrip()
+prompt = prompt.split("\nCurrent task contracts for plan ",1)[0].rstrip()
 def task(id, title, depends=(), writes=False):
     return {"id": id, "title": title, "goal": "g", "depends_on": list(depends),
             "writes": writes, "scope": ["."], "kind": "implementation" if writes else "analysis",
@@ -79,7 +79,7 @@ if "Task: Manual fix" in prompt and "You verify" not in prompt and "You audit" n
         f.write("from worker manual\n")
 def cover(answer):
     import re
-    ids = re.findall(r"^- ([RCV][0-9]+): ", prompt, re.M)
+    ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     if not ids or "```verdict" not in answer:
         return answer
     head, body = answer.rsplit("```verdict", 1)
@@ -183,7 +183,7 @@ fn a_failure_keeps_every_dependent_task_pending_and_says_why() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     let plan = propose(&core, &conversation, "chain");
@@ -201,7 +201,7 @@ fn after_a_login_resuming_finishes_the_plan_in_fresh_round_sessions() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     let plan = propose(&core, &conversation, "chain");
@@ -238,7 +238,7 @@ fn accepting_runs_the_plan_the_user_saw_not_a_newer_one() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     let first = propose(&core, &conversation, "first");
@@ -265,7 +265,7 @@ fn legacy_supervised_tasks_require_ledger_extraction_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("project")).unwrap();
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
@@ -301,7 +301,7 @@ fn autonomous_plan_without_requirements_cannot_resume() {
     std::fs::create_dir(dir.path().join("project")).unwrap();
     std::fs::write(dir.path().join("logged-in"), "").unwrap();
     let core = open_in_mode(dir.path(), "autonomous");
-    let conversation = support::legacy_conversation(&core, &dir.path().join("project"))
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
         .unwrap()
         .id;
     let spec = json!({"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
@@ -332,7 +332,7 @@ fn test_freshness_token_staleness_and_rejection() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let message = core
         .store
         .add_message(&conversation, "user", "Check freshness token")
@@ -415,7 +415,7 @@ fn test_blocked_task_prevents_premature_audit() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -441,13 +441,12 @@ fn test_blocked_task_prevents_premature_audit() {
     // The orchestrator is told, once, which step is blocked and how to go on.
     let reports: Vec<_> = messages
         .iter()
-        .filter(|m| m.author == "runtime" && m.text.contains("cannot go on"))
+        .filter(|m| m.author == "runtime" && m.text.contains("Tasks need coordination"))
         .collect();
     assert_eq!(reports.len(), 1, "{messages:?}");
     let text = &reports[0].text;
-    assert!(text.contains("is waiting after"), "{text}");
-    assert!(text.contains("Waiting for dependencies; these tasks remain pending"));
-    assert!(text.contains("/unblock"));
+    assert!(text.contains("reply_to_agent"));
+    assert!(text.contains("submit_plan_revision"));
 }
 
 #[test]
@@ -459,13 +458,13 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
     std::fs::write(dir.path().join("concurrent-user-edit"), "").unwrap();
 
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "write_chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
     // w1 stopped because of user edit, w2 was skipped
-    assert_eq!(statuses(&core, &plan), ["needs_user", "queued"]);
+    assert_eq!(statuses(&core, &plan), ["waiting", "queued"]);
     assert_eq!(
         std::fs::read_to_string(project.join("hello.txt")).unwrap(),
         "user edit\n"
@@ -495,7 +494,9 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
         })
         .unwrap_err();
     assert!(
-        error.to_string().contains("uncommitted edits remain"),
+        error
+            .to_string()
+            .contains("independent review must approve"),
         "{error}"
     );
     assert_eq!(
@@ -511,7 +512,7 @@ fn test_recover_task_integrate_with_consent_and_dag_cascade() {
             conversation: conversation.clone(),
             plan: plan.clone(),
             task: w1_id.clone(),
-            action: RecoveryAction::IntegrateWithConsent,
+            action: RecoveryAction::VerifyManualSnapshot,
             consent_files: Some(vec!["hello.txt".into()]),
             freshness_token: token,
             message: None,
@@ -536,19 +537,19 @@ fn preserving_a_branch_keeps_integration_and_dependents_pending() {
     std::fs::write(dir.path().join("concurrent-user-edit"), "").unwrap();
 
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "write_chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
 
-    assert_eq!(statuses(&core, &plan), ["needs_user", "queued"]);
+    assert_eq!(statuses(&core, &plan), ["waiting", "queued"]);
     let tasks = core.store.plan(&plan).unwrap();
     let w1_id = &tasks
         .iter()
         .find(|task| task.spec["id"] == "w1")
         .unwrap()
         .id;
-    let branch = format!("antislop/{}", w1_id);
+    let branch = format!("antislop/{}-g0", w1_id);
     let token = core
         .task_freshness_token(&conversation, &plan, w1_id)
         .unwrap();
@@ -588,7 +589,7 @@ fn test_recover_task_verify_manual_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "manual_fix");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -644,7 +645,7 @@ fn test_recover_task_retry_with_guidance() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "chain");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -677,40 +678,11 @@ fn test_recover_task_retry_with_guidance() {
 }
 
 #[test]
-fn an_unperformed_task_cannot_be_approved_or_discarded() {
-    let dir = tempfile::tempdir().unwrap();
-    let project = init_git_project(dir.path());
-    let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
-    let plan = propose(&core, &conversation, "chain");
-    core.accept_plan(&conversation, &plan).unwrap();
-    wait_idle(&core, &conversation);
-    for action in [RecoveryAction::ForceApprove, RecoveryAction::CancelTask] {
-        let task = core.store.plan(&plan).unwrap()[0].clone();
-        let error = core
-            .recover_task(TaskRecoveryRequest {
-                conversation: conversation.clone(),
-                plan: plan.clone(),
-                task: task.id.clone(),
-                action,
-                consent_files: None,
-                freshness_token: core
-                    .task_freshness_token(&conversation, &plan, &task.id)
-                    .unwrap(),
-                message: None,
-            })
-            .unwrap_err();
-        assert!(!error.to_string().is_empty());
-        assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
-    }
-}
-
-#[test]
 fn test_mechanical_audit_gate_prevents_false_success() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let spec1 = json!({"id": "t1", "title": "Done", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}});
     let spec2 = json!({"id": "t2", "title": "Blocked", "goal": "g", "kind": "analysis", "verifier": {"focus": "f"}});
     let tasks = core.store.add_plan(&conversation, &[spec1, spec2]).unwrap();
@@ -756,158 +728,11 @@ fn test_mechanical_audit_gate_prevents_false_success() {
 }
 
 #[test]
-fn supervised_orchestrator_unblocks_only_after_the_user_decides() {
-    let dir = tempfile::tempdir().unwrap();
-    let project = init_git_project(dir.path());
-    let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
-    let plan = propose(&core, &conversation, "chain");
-    core.accept_plan(&conversation, &plan).unwrap();
-    wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
-
-    core.send(&conversation, "retry t1").unwrap();
-    wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
-    let events = core.store.events_since(&conversation, 0, 1000).unwrap();
-    assert!(events.iter().any(|e| {
-        e.kind == "notice"
-            && e.payload["text"]
-                .as_str()
-                .is_some_and(|text| text.contains("orchestrator unblocked t1"))
-    }));
-}
-
-#[test]
-fn autonomous_orchestrator_unblocks_a_blocked_task_by_itself() {
-    let dir = tempfile::tempdir().unwrap();
-    let project = init_git_project(dir.path());
-    let core = open_in_mode(dir.path(), "autonomous");
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
-    core.send(&conversation, "chain").unwrap();
-    wait_idle(&core, &conversation);
-    let plan = core.store.latest_plan(&conversation).unwrap()[0]
-        .plan_id
-        .clone();
-    assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);
-}
-
-/// Recovery announcements share the card's byte limits: the `task_recovery`
-/// event carries the bounded line, while the whole reason stays readable —
-/// guidance reaches the worker as mail in full, and a force-approve note
-/// stays whole in the task's report.
-#[test]
-fn recovery_events_carry_bounded_details_and_keep_the_whole_reason() {
-    let limit = antislop::lean::tasks::DETAIL_LIMIT;
-    let dir = tempfile::tempdir().unwrap();
-    let project = init_git_project(dir.path());
-    let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
-    let plan = propose(&core, &conversation, "chain");
-    core.accept_plan(&conversation, &plan).unwrap();
-    wait_idle(&core, &conversation);
-    assert_eq!(statuses(&core, &plan), ["waiting", "queued", "queued"]);
-
-    let t1_id = core.store.plan(&plan).unwrap()[0].id.clone();
-    let token = core
-        .task_freshness_token(&conversation, &plan, &t1_id)
-        .unwrap();
-    let guidance = format!("{} — tail", "g".repeat(4 * limit));
-    std::fs::write(dir.path().join("logged-in"), "").unwrap();
-    core.recover_task(TaskRecoveryRequest {
-        conversation: conversation.clone(),
-        plan: plan.clone(),
-        task: t1_id.clone(),
-        action: RecoveryAction::RetryWithGuidance,
-        consent_files: None,
-        freshness_token: token,
-        message: Some(guidance.clone()),
-    })
-    .unwrap();
-    wait_idle(&core, &conversation);
-
-    let events = core.store.events_since(&conversation, 0, 10_000).unwrap();
-    let retry = events
-        .iter()
-        .rev()
-        .find(|event| {
-            event.kind == "task_recovery"
-                && event.payload["action"] == antislop::lean::tasks::action::RETRY_WITH_GUIDANCE
-        })
-        .expect("a retry recovery event");
-    let message = retry.payload["message"].as_str().expect("the message");
-    assert!(message.len() <= limit, "{} bytes", message.len());
-    let mail = core.store.mail(&conversation).unwrap();
-    assert!(
-        mail.iter().any(|mail| mail.text == guidance),
-        "the worker gets the whole guidance as mail"
-    );
-
-    // A second chain ends waiting again; a force approve with a huge note
-    // keeps the whole note in the report and a bounded line in the event.
-    std::fs::remove_file(dir.path().join("logged-in")).unwrap();
-    let plan2 = propose(&core, &conversation, "chain");
-    core.accept_plan(&conversation, &plan2).unwrap();
-    wait_idle(&core, &conversation);
-    let tasks2 = core.store.plan(&plan2).unwrap();
-    let token2 = core
-        .task_freshness_token(&conversation, &plan2, &tasks2[0].id)
-        .unwrap();
-    let note = "f".repeat(4 * limit);
-    let mut completed = tasks2[0].clone();
-    completed.report = Some("completed read-only analysis".into());
-    core.store.update_task(&completed).unwrap();
-    let turn = core
-        .store
-        .start_turn(
-            &conversation,
-            &format!("worker:{}", completed.id),
-            "agy",
-            0,
-            Some(&plan2),
-        )
-        .unwrap();
-    core.store
-        .finish_turn(&turn.id, antislop::lean::store::TurnStatus::Done, None)
-        .unwrap();
-    core.recover_task(TaskRecoveryRequest {
-        conversation: conversation.clone(),
-        plan: plan2.clone(),
-        task: tasks2[0].id.clone(),
-        action: RecoveryAction::ForceApprove,
-        consent_files: None,
-        freshness_token: token2,
-        message: Some(note.clone()),
-    })
-    .unwrap();
-    let events = core.store.events_since(&conversation, 0, 10_000).unwrap();
-    let force = events
-        .iter()
-        .rev()
-        .find(|event| {
-            event.kind == "task_recovery"
-                && event.payload["action"] == antislop::lean::tasks::action::FORCE_APPROVE
-        })
-        .expect("a force approve recovery event");
-    assert_eq!(force.payload["actor"], "user");
-    let detail = force.payload["detail"].as_str().expect("the detail");
-    assert!(detail.len() <= limit, "{} bytes", detail.len());
-    let forced = core.store.task_by_id(&tasks2[0].id).unwrap().expect("task");
-    assert!(
-        forced
-            .report
-            .as_deref()
-            .is_some_and(|report| report.contains(&note)),
-        "the report keeps the whole force-approve reason"
-    );
-}
-
-#[test]
 fn manual_snapshot_delivers_options_and_rejects_a_silent_variant_switch() {
     let dir = tempfile::tempdir().unwrap();
     let project = init_git_project(dir.path());
     let core = open(dir.path());
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let plan = propose(&core, &conversation, "manual_fix");
     core.accept_plan(&conversation, &plan).unwrap();
     wait_idle(&core, &conversation);
@@ -932,7 +757,7 @@ fn manual_snapshot_delivers_options_and_rejects_a_silent_variant_switch() {
     let agy = dir.path().join("agy");
     let script = std::fs::read_to_string(&agy).unwrap().replace(
         "answer = cover(answer)",
-        r#"if "Selected: direct fixture change" in prompt and "independently compare the actual implementation" in prompt and open("hello.txt").read() == "unjustified alternative variant\n":
+        r#"if "selected_approach" in prompt and "Independently compare the implementation" in prompt and open("hello.txt").read() == "unjustified alternative variant\n":
     answer = "```verdict\n" + json.dumps({"approved": False, "findings": [{"severity": "high", "issue": "Silent variant switch: alternative lacks evidence and justification"}]}) + "\n```"
 answer = cover(answer)"#,
     );
@@ -964,9 +789,9 @@ answer = cover(answer)"#,
     let log = std::fs::read_to_string(dir.path().join("agy.log")).unwrap();
     let args: Vec<String> = serde_json::from_str(log.lines().last().unwrap()).unwrap();
     let prompt = args.last().unwrap();
-    assert!(prompt.contains("Selected: direct fixture change"));
-    assert!(prompt.contains("independently compare the actual implementation"));
-    assert!(prompt.contains("Check the evidence and justification for any explicit departure"));
+    assert!(prompt.contains("selected_approach"));
+    assert!(prompt.contains("Independently compare the implementation"));
+    assert!(prompt.contains("reviewed options"));
     assert!(prompt.contains("git diff"));
 }
 
@@ -991,7 +816,7 @@ worker = "Task: Fail" in prompt or "was interrupted" in prompt"#,
         ),
     )
     .unwrap();
-    let conversation = support::legacy_conversation(&core, &project).unwrap().id;
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
     let message = core
         .store
         .add_message(&conversation, "user", "Check restart")

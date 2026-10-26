@@ -11,7 +11,7 @@ use crate::{
     Error,
     lean::{
         store::{Store, now_ms},
-        tasks::TaskSpec,
+        tasks::TaskContract,
     },
 };
 use rusqlite::{OptionalExtension, params};

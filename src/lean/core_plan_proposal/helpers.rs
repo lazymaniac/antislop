@@ -8,7 +8,7 @@ impl Core {
     pub(super) fn prepare_plan(
         self: &Arc<Self>,
         conversation: &str,
-        specs: &[TaskSpec],
+        specs: &[TaskContract],
         addressed: Option<&[u64]>,
         cancel: &AtomicBool,
     ) -> Result<Option<PreparedPlan>> {
@@ -42,7 +42,7 @@ impl Core {
     fn persist_proposed_tasks(
         &self,
         conversation: &str,
-        specs: &[TaskSpec],
+        specs: &[TaskContract],
     ) -> Result<(Vec<Task>, String)> {
         let values = specs
             .iter()
@@ -76,7 +76,7 @@ impl Core {
         if self
             .store
             .count_since_user(conversation, "requirements-planner")?
-            >= tasks::MAX_ROUNDS as usize
+            >= tasks::FORMAT_REPAIR_ATTEMPTS as usize
         {
             return Ok(());
         }
@@ -96,7 +96,7 @@ impl Core {
         conversation: &str,
         project: &Path,
         plan: &PreparedPlan,
-        specs: &[TaskSpec],
+        specs: &[TaskContract],
         config: &Config,
         cancel: &AtomicBool,
     ) -> Result<std::result::Result<Verdict, String>> {
@@ -141,11 +141,18 @@ impl Core {
         let Ok(verdict) = review else {
             return Ok(false);
         };
-        if verdict.approved
-            || self.store.count_since_user(conversation, PLAN_VERIFIER)?
-                >= tasks::MAX_ROUNDS as usize
-        {
+        if verdict.approved {
             return Ok(false);
+        }
+        if let Some(previous) = self.store.previous_plan_rejection(conversation)? {
+            let before = super::super::progress::open_obligations(&previous);
+            let now = super::super::progress::open_obligations(verdict);
+            let mut progress = super::super::progress::Progress::default();
+            progress.record(before.clone());
+            if before.is_empty() || now.is_empty() || progress.record(now) {
+                self.notice(conversation,"plan review has not confirmed closure of a previous finding; preserve stable finding ids and provide a new basis before retrying");
+                return Ok(false);
+            }
         }
         self.record_proposed_plan_rejection(conversation, plan, verdict)?;
         Ok(true)
@@ -187,7 +194,7 @@ impl Core {
         text: &str,
         addressed: Option<&[u64]>,
         plan: &PreparedPlan,
-        specs: &[TaskSpec],
+        specs: &[TaskContract],
         review: &std::result::Result<Verdict, String>,
     ) -> Result<()> {
         let checked = review.as_ref().is_ok_and(|verdict| verdict.approved);
@@ -232,7 +239,7 @@ impl Core {
         &self,
         conversation: &str,
         plan: &PreparedPlan,
-        specs: &[TaskSpec],
+        specs: &[TaskContract],
         autonomous: bool,
         checked: bool,
     ) -> Result<Option<&'static str>> {

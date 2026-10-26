@@ -26,7 +26,7 @@ verification against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8` is in
 | 7 | Supervised stops at the gate and goes on after consent | A plan waits for `accept` naming the plan the user saw; `/mode` switches a conversation for what it does next, never for what waits | runtime: `lean_recovery::accepting_runs_the_plan_the_user_saw_not_a_newer_one`, `lean_review::a_mode_change_applies_to_what_the_conversation_does_next` |
 | 8 | Autonomous runs within policy; a missing capability is not bypassed | A checked plan starts by itself, and correction rounds go on, without a count (design §14); a plan that repeats one that ran, or a verifier repeating its findings, waits for the user; a plan whose review failed never runs by itself; without `local_write` a change stays on its branch | runtime: `lean_review::autonomous_mode_runs_a_checked_plan_and_reports_audit_gaps`, `…_plans_go_on_until_one_repeats_a_plan_that_ran`, `…_rounds_go_on_while_the_worker_gets_closer`, `…_verifier_repeating_its_findings_stops_the_rounds`, `…_review_failed_is_shown_but_never_runs_by_itself` |
 | 9 | Closing the TUI does not stop the run; reattaching restores graph and chat | The daemon owns the work; frontends replay events | runtime: `lean_core::the_cli_talks_to_one_daemon_that_outlives_it`; the View is rebuilt from events (`view::the_view_follows_a_conversation_and_its_tasks`); TUI responsive layout (breakpoint 85, 12x5 guard), grapheme cluster editing & wrapping, Enter/Ctrl+S submission, history on draft boundaries, Escape draft stashing/detaching, draft recovery on error and across A→B→A switches, inspectors with raw view and query/scroll retention, recipient picker, pinned confirmations with stale_scope validation, adaptive graph layout with corridor bypass routing, compaction on fold/filter, and bounded canvas memory (`tests/lean_tui.rs`, `tests/lean_protocol.rs`, `src/lean/tui/`, [parity.md](parity.md)) |
-| 10 | A daemon crash between an action and its record does not repeat it blindly | Turns left running become `interrupted`, tasks `cancelled`; resume continues the agents' sessions; integration and in-place commits notice a change that already landed | runtime: `lean_recovery::tasks_cut_off_by_a_daemon_restart_end_cancelled`, `git::tests::a_change_that_already_landed_is_not_landed_again`, `git::snapshot_tests::committing_paths_leaves_the_users_other_changes_alone` |
+| 10 | A daemon crash between an action and its record does not repeat it blindly | Turns left running become `interrupted`, tasks `cancelled`; resume continues the agents' sessions; integration notices a change that already landed | runtime: `lean_recovery::tasks_cut_off_by_a_daemon_restart_end_cancelled`, `git::tests::a_change_that_already_landed_is_not_landed_again`, `git::snapshot_tests::committing_paths_leaves_the_users_other_changes_alone` |
 | 11 | Research with a non-existent or unsupportive source is not passed | Research obligations (every source exists and supports its claim) | prompt |
 | 12 | Analysis with a wrong unit or denominator is corrected after recomputation | Analysis obligations (independent recomputation, units, denominators); an obligation marked `issue` returns to the worker | runtime: `lean_review::an_obligation_marked_issue_sends_its_note_to_the_worker`; prompt |
 | 13 | A fix after a positive review is verified again | Every worker round is followed by its verifier; an approved task is not changed afterwards; later changes are new tasks with their own verifiers; the audit checks the end state | runtime: `lean_plan::a_plan_runs_worker_verifier_pairs_and_reports_back` (rejected → fixed → verified again) |
@@ -77,12 +77,7 @@ always requires `routing.options` and valid executor/verifier profiles. Evidence
 
 The options prompt requires 2–4 realistic alternatives, common criteria, exclusion
 of requirement violations before ranking, an evidence-supported selection, and a
-final `Selected: <id>` line. Approved options reports reach both writer and
-verifier as direct dependency reports. These content and binding obligations are
-prompt contracts independently checked by agents, rather than a runtime parser
-of the selection line. The scripted integration tests in `tests/lean_options.rs`
-exercise ordering, report delivery, implementation agreement and departure
-verdicts; they do not prove the quality of an arbitrary real model's decision.
+structured MCP selection. Only the chosen local approach is delivered to the writer and its verifier. See [execution contracts](lean-core.md).
 
 ## Deliberate departures from the design
 

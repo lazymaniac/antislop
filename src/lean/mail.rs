@@ -2,21 +2,10 @@
 
 use super::*;
 
-#[path = "mail/background.rs"]
-mod background;
-#[path = "mail/delivery.rs"]
-mod delivery;
-#[path = "mail/recipient.rs"]
-mod recipient;
-#[path = "mail/routing.rs"]
-mod routing;
 use std::sync::{MutexGuard, TryLockError, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub(super) type TurnLocks = HashMap<(String, String), Weak<Mutex<()>>>;
-const DELIVERY_ATTEMPTS: u32 = 3;
-const MAIL_BATCH_LIMIT: usize = 4;
-
 fn parse_mail_address(address: &str) -> (&str, &str) {
     if let Some(id) = address.strip_prefix("code-review:") {
         (id, CODE_REVIEW)
@@ -47,37 +36,6 @@ pub(super) fn lock_cancellable<'a>(
     }
 }
 
-fn retryable(error: &str) -> bool {
-    if error.contains(super::native::EXECUTION_FAILED) {
-        return false;
-    }
-    let error = error.to_ascii_lowercase();
-    [
-        "temporarily unavailable",
-        "temporary failure",
-        "connection reset",
-        "connection refused",
-        "timed out",
-        "timeout",
-        "database is locked",
-        "os error 11",
-        "os error 35",
-    ]
-    .iter()
-    .any(|reason| error.contains(reason))
-}
-
-fn retry_delay(attempt: u32, cancel: &AtomicBool) -> bool {
-    let end = Instant::now() + Duration::from_millis(250 * (1 << attempt));
-    while Instant::now() < end {
-        if cancel.load(Ordering::SeqCst) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    !cancel.load(Ordering::SeqCst)
-}
-
 impl Core {
     pub(super) fn turn_lock(&self, conversation: &str, role: &str) -> Arc<Mutex<()>> {
         let mut locks = self
@@ -96,18 +54,24 @@ impl Core {
     }
 }
 
-#[cfg(test)]
-mod native_retry_tests {
-    #[test]
-    fn an_accepted_native_turn_is_never_automatically_retried() {
-        assert!(super::retryable("connection reset"));
-        assert!(!super::retryable(&format!(
-            "{}connection reset after prompt submission",
-            crate::lean::native::EXECUTION_FAILED
-        )));
-        assert!(!super::retryable(&format!(
-            "{}timed out",
-            crate::lean::native::EXECUTION_FAILED
-        )));
+impl Core {
+    pub(in crate::lean) fn mail_address_task(
+        &self,
+        conversation: &str,
+        plan: &[Task],
+        address: &str,
+    ) -> Result<Option<(Task, String)>> {
+        let (id, prefix) = parse_mail_address(address);
+        let task = plan
+            .iter()
+            .find(|task| task.spec["id"] == id || task.id == id)
+            .cloned()
+            .or(self.store.task_by_id(id)?);
+        let Some(task) = task else { return Ok(None) };
+        if self.store.plan_conversation(&task.plan_id)? != conversation {
+            return Ok(None);
+        };
+        let role = format!("{prefix}:{}", task.id);
+        Ok(Some((task, role)))
     }
 }

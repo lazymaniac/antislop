@@ -5,7 +5,7 @@ mod mail_tests {
     use super::*;
 
     #[test]
-    fn orchestrator_mail_keeps_its_user_message_source_without_schema_changes() {
+    fn orchestrator_mail_requires_its_recorded_user_message_source() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(&directory.path().join("core.db")).unwrap();
         let conversation = store.create_conversation("project").unwrap();
@@ -43,15 +43,17 @@ mod mail_tests {
             pairs.push((mail, message));
         }
         assert_ne!(pairs[0].1, pairs[1].1);
-        // Schema 11 records made before source metadata was added retain
-        // their atomic mail/message event pair and need no migration.
+        // Removing attribution is corruption, not permission to infer a source
+        // from whichever message happens to occupy the next event position.
         store.db().execute("UPDATE events SET payload=json_remove(payload,'$.user_message') WHERE conversation_id=?1 AND kind='mail'",[&conversation.id]).unwrap();
-        for (mail, message) in pairs {
-            assert_eq!(
-                store
-                    .agent_mail_user_message(&conversation.id, mail)
-                    .unwrap(),
-                Some(message)
+        for (mail, _) in pairs {
+            let error = store
+                .agent_mail_user_message(&conversation.id, mail)
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("no recorded user message source")
             );
         }
         let schema: u32 = store
@@ -229,6 +231,47 @@ mod round_tests {
             .unwrap();
         assert_eq!(page["messages"][0]["id"], receipt["mail"]);
         assert!(page["messages"][0]["content"]["session_content"].is_object());
+        let mail_id = receipt["mail"].as_u64().unwrap();
+        let stored: String = store
+            .db()
+            .query_row(
+                "SELECT text FROM mail WHERE id=?1",
+                params![mail_id as i64],
+                |row| row.get(0),
+            )
+            .unwrap();
+        store
+            .db()
+            .execute(
+                "UPDATE mail SET text=?1 WHERE id=?2",
+                params!["obsolete inline text", mail_id as i64],
+            )
+            .unwrap();
+        assert!(
+            store
+                .history_content(&conversation.id, &ContentOwner::Mail { id: mail_id }, 0)
+                .is_err()
+        );
+        assert!(
+            store
+                .history_messages(
+                    &conversation.id,
+                    &HistoryScope::Round {
+                        task: task.id.clone(),
+                        round: 2,
+                    },
+                    0,
+                    1
+                )
+                .is_err()
+        );
+        store
+            .db()
+            .execute(
+                "UPDATE mail SET text=?1 WHERE id=?2",
+                params![stored, mail_id as i64],
+            )
+            .unwrap();
         let foreign = store.create_conversation("foreign").unwrap();
         assert!(
             store

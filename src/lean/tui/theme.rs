@@ -133,6 +133,7 @@ pub fn tone(status: &str) -> Tone {
         | "waiting"
         | "waiting_agent"
         | "awaiting_verification"
+        | "coordinating"
         | "needs_user"
         | "pending_unknown" => Tone::Waiting,
         _ => Tone::Queued,

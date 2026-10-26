@@ -71,40 +71,6 @@ fn plans_with_unknown_dependencies_are_rejected() {
 }
 
 #[test]
-fn message_blocks_are_taken_out_of_the_answer() {
-    let answer = "Report.\n```message\n{\"to\": \"t2\", \"kind\": \"finding\", \"text\": \"UTF-16\"}\n```\n\
-                      More.\n```message\n{\"to\": \"all\", \"text\": \"heads up\"}\n```\n\
-                      ```message\nnot json\n```";
-    let (text, messages) = parse_messages(answer);
-    assert_eq!(
-        messages
-            .iter()
-            .map(|message| (
-                message.to.as_str(),
-                message.kind.as_str(),
-                message.text.as_str()
-            ))
-            .collect::<Vec<_>>(),
-        [("t2", "finding", "UTF-16"), ("all", "status", "heads up")]
-    );
-    assert_eq!(text, "Report.\n\nMore.\n\n```message\nnot json\n```");
-}
-
-#[test]
-fn backticks_inside_a_message_do_not_cut_it() {
-    let answer =
-        "Report.\n```message\n{\"to\": \"t14\", \"text\": \"last ```effect fence wins\"}\n```";
-    let (text, messages, unreadable) = parse_messages_checked(answer);
-    assert!(unreadable.is_empty());
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].text, "last ```effect fence wins");
-    assert_eq!(text, "Report.");
-    let (_, none, bad) = parse_messages_checked("```message\nnot json\n```");
-    assert!(none.is_empty());
-    assert_eq!(bad, ["not json"]);
-}
-
-#[test]
 fn login_and_limit_errors_wait_for_the_user() {
     assert!(needs_user_action("Error: Not logged in. Run `agy login`."));
     assert!(needs_user_action("429 Too Many Requests"));

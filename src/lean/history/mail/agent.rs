@@ -86,6 +86,10 @@ fn validate_task_scope(
     status: &str,
 ) -> Result<()> {
     crate::require(
+        status != "superseded",
+        "task was retired; submit a reviewed revision before assigning work",
+    )?;
+    crate::require(
         status != "stale",
         "task inputs are stale; update the plan before sending work",
     )?;
@@ -232,16 +236,16 @@ pub(super) fn update_agent_task(
             now,
         )?;
     }
-    queue_agent_task(tx, task)
+    queue_agent_task(tx, task, request.recipient.starts_with("worker:"))
 }
 
-fn queue_agent_task(tx: &rusqlite::Transaction<'_>, task: &str) -> Result<()> {
+fn queue_agent_task(tx: &rusqlite::Transaction<'_>, task: &str, worker: bool) -> Result<()> {
     tx.execute(
         "UPDATE tasks SET status='queued',verdict=NULL,feedback=NULL,
-        base=CASE WHEN status='approved' THEN NULL ELSE base END,
-        result=CASE WHEN status='approved' THEN NULL ELSE result END
+        base=CASE WHEN status='approved' AND ?2 THEN NULL ELSE base END,
+        result=CASE WHEN status='approved' AND ?2 THEN NULL ELSE result END
         WHERE id=?1 AND status NOT IN ('working','verifying','queued','proposed','stale')",
-        [task],
+        params![task, worker],
     )?;
     Ok(())
 }

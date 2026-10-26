@@ -92,6 +92,12 @@ impl Core {
         reason: Option<&str>,
     ) -> Result<()> {
         task.status = status.into();
+        if let Some(reason) = reason {
+            let feedback = task
+                .feedback
+                .get_or_insert_with(|| json!({"round":task.round}));
+            feedback["reason"] = json!(reason);
+        }
         self.store.update_task(task)?;
         self.announce_task(conversation, task, reason);
         Ok(())

@@ -247,6 +247,7 @@ fn persist_turn_scope(
     turn: &Turn,
 ) -> Result<()> {
     let scope = crate::lean::task_role(&turn.role).map(|(task, _)| task);
+    tx.execute("INSERT INTO turn_inputs(turn_id,generation) SELECT ?1,coalesce(i.generation,0) FROM tasks t LEFT JOIN task_inputs i ON i.task_id=t.id WHERE t.id=?2 AND t.conversation_id=?3",params![turn.id,scope,conversation])?;
     tx.execute(
         "INSERT INTO turn_scopes(turn_id,task_id,round)
          SELECT ?1,id,round FROM tasks WHERE id=?2 AND conversation_id=?3 AND plan_id=?4",

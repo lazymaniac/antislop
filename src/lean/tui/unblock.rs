@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 pub fn is_blocked(status: &str) -> bool {
     matches!(
         status,
-        "failed" | "needs_user" | "waiting" | "cancelled" | "skipped"
+        "failed" | "coordinating" | "needs_user" | "waiting" | "cancelled" | "skipped"
     )
 }
 
@@ -27,8 +27,8 @@ pub struct Choice {
 }
 
 /// The choices that fit a stopped task: a writer's change can be kept or
-/// applied anyway, every task can be retried, given more rounds, approved as
-/// it is, or cancelled.
+/// integrated after independent approval. Tasks can be retried with guidance
+/// or cancelled; unresolved requirements remain open.
 pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
     let choice = |action, label, asks_text| Choice {
         action,
@@ -47,17 +47,10 @@ pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
         "Retry with a hint for the worker",
         true,
     )];
-    if task.status == "needs_user" || task.status == "failed" {
-        choices.push(choice(
-            RecoveryAction::ExtendRounds,
-            "Give it more rounds",
-            false,
-        ));
-    }
     if task.writes && task.status == "needs_user" {
         choices.push(choice(
             RecoveryAction::IntegrateWithConsent,
-            "Apply its change anyway",
+            "Integrate the independently verified change",
             false,
         ));
         choices.push(choice(
@@ -74,11 +67,6 @@ pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
     choices.push(choice(
         RecoveryAction::RestartAgent,
         "Restart the agent in a fresh session",
-        true,
-    ));
-    choices.push(choice(
-        RecoveryAction::ForceApprove,
-        "Approve it as it is (skips verification)",
         true,
     ));
     choices
@@ -280,21 +268,19 @@ mod tests {
             actions(&row("needs_user", true)),
             [
                 RetryWithGuidance,
-                ExtendRounds,
                 IntegrateWithConsent,
                 KeepOnBranch,
                 VerifyManualSnapshot,
                 RestartAgent,
-                ForceApprove
             ]
         );
         assert_eq!(
             actions(&row("needs_user", false)),
-            [RetryWithGuidance, ExtendRounds, RestartAgent, ForceApprove]
+            [RetryWithGuidance, RestartAgent]
         );
         assert_eq!(
             actions(&row("waiting", true)),
-            [RetryWithGuidance, RestartAgent, ForceApprove]
+            [RetryWithGuidance, RestartAgent]
         );
         assert!(is_blocked("skipped") && !is_blocked("working") && !is_blocked("approved"));
     }
@@ -313,8 +299,8 @@ mod tests {
         let Outcome::Choose(choice) = press(&mut modal, KeyCode::Enter) else {
             panic!("Enter chooses");
         };
-        assert_eq!(choice.action, RecoveryAction::ExtendRounds);
-        assert!(!choice.asks_text);
+        assert_eq!(choice.action, RecoveryAction::RestartAgent);
+        assert!(choice.asks_text);
         let Outcome::Choose(choice) = press(&mut modal, KeyCode::Char('1')) else {
             panic!("a number chooses");
         };
@@ -351,7 +337,7 @@ mod tests {
             .collect();
         assert!(text.contains("Task actions t1"));
         assert!(text.contains("the verifier repeated the same findings"));
-        let rect = modal.rects[2];
+        let rect = modal.rects[1];
         let Outcome::Choose(choice) = modal.click(rect.x + 2, rect.y) else {
             panic!("a click on a choice chooses it");
         };

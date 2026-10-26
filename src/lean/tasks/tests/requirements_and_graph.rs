@@ -1,15 +1,6 @@
 use super::*;
 
 #[test]
-fn environment_denials_are_recognised() {
-    assert!(environment_denied(
-        "daemon failed: Operation not permitted (os error 1)"
-    ));
-    assert!(environment_denied("listener: PermissionDenied"));
-    assert!(!environment_denied("assertion failed: left == right"));
-}
-
-#[test]
 fn requirements_reach_only_verifiers_as_readable_id_and_text() {
     let entry: crate::lean::ledger::LedgerEntry = serde_json::from_value(serde_json::json!({
         "run_id":"run","version":1,"spec_revision":1,"original":"","status":"active",
@@ -21,7 +12,7 @@ fn requirements_reach_only_verifiers_as_readable_id_and_text() {
             ]}
     }))
     .unwrap();
-    let task: TaskSpec = serde_json::from_value(serde_json::json!({
+    let task: TaskContract = serde_json::from_value(serde_json::json!({
         "id":"t","title":"t","goal":"deliver observable result","kind":"analysis",
         "verifier":{"focus":"correctness"}
     }))
@@ -42,7 +33,6 @@ fn requirements_reach_only_verifiers_as_readable_id_and_text() {
         comments: vec![],
         protected_paths: vec![],
         primary: "/primary".into(),
-        in_place: false,
     };
     let verifier = super::round_handoff_prompt(&handoff, true);
     assert!(verifier.contains(
@@ -50,50 +40,8 @@ fn requirements_reach_only_verifiers_as_readable_id_and_text() {
         ));
     assert!(!verifier.contains("\"interpretation\""));
     let worker = super::round_handoff_prompt(&handoff, false);
-    assert!(!worker.contains("Requirements and acceptance criteria"));
-    assert!(!worker.contains("CSV has a header"));
-}
-
-#[test]
-fn graph_edits_insert_between_existing_dependencies_without_removing_nodes() {
-    let spec = |id: &str, deps: &[&str]| {
-        serde_json::from_value::<TaskSpec>(serde_json::json!({
-            "id":id,"title":id,"goal":"deliver observable result","kind":"analysis",
-            "depends_on":deps,"verifier":{"focus":"correctness"}
-        }))
-        .unwrap()
-    };
-    let current = vec![
-        spec("implementation", &[]),
-        spec("security", &["implementation"]),
-        spec("performance", &["implementation"]),
-    ];
-    let patch = serde_json::json!({"base_plan":"p1","tasks":[spec("extra", &["implementation"]), spec("security", &["extra"]), spec("performance", &["extra"])]});
-    let answer = format!("Updated plan\n```graph\n{patch}\n```");
-    let (text, edited) = parse_graph_edit(&answer, "p1", &current);
-    let edited = edited.unwrap().unwrap();
-    assert_eq!(text, "Updated plan");
-    assert_eq!(edited.len(), 4);
-    assert_eq!(edited[0], current[0]);
-    assert_eq!(edited[1].id, "extra");
-    assert_eq!(edited[1].depends_on, ["implementation"]);
-    assert_eq!(edited[2].depends_on, ["extra"]);
-    assert_eq!(edited[3].depends_on, ["extra"]);
-    assert!(
-        parse_graph_edit(&answer, "p2", &current)
-            .1
-            .unwrap()
-            .is_err()
-    );
-    let cycle =
-        serde_json::json!({"base_plan":"p1","tasks":[spec("implementation", &["security"])]});
-    assert!(
-        parse_graph_edit(&format!("```graph\n{cycle}\n```"), "p1", &current)
-            .1
-            .unwrap()
-            .is_err()
-    );
-    assert_eq!(current[1].depends_on, ["implementation"]);
+    assert!(worker.contains("Requirements and acceptance criteria"));
+    assert!(worker.contains("CSV has a header"));
 }
 
 #[test]

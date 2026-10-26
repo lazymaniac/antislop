@@ -14,7 +14,7 @@ mod tests;
 
 #[derive(Debug)]
 pub(crate) struct RoundHandoff {
-    pub task: tasks::TaskSpec,
+    pub task: tasks::TaskContract,
     pub round: u32,
     pub worktree: PathBuf,
     pub report: Option<(u32, String)>,
@@ -29,7 +29,6 @@ pub(crate) struct RoundHandoff {
     pub comments: Vec<Comment>,
     pub protected_paths: Vec<String>,
     pub primary: PathBuf,
-    pub in_place: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -122,7 +121,7 @@ impl Core {
             .store
             .task_by_id(id)?
             .ok_or_else(|| Error::Invalid(format!("task {id} does not exist")))?;
-        let spec: tasks::TaskSpec = serde_json::from_value(task.spec.clone())?;
+        let spec: tasks::TaskContract = serde_json::from_value(task.spec.clone())?;
         let mut handoff = self.new_handoff(id, round, cwd, &task, &spec)?;
         self.add_handoff_requirements(&task, &spec, &mut handoff)?;
         self.add_handoff_comments(&task, &mut handoff)?;

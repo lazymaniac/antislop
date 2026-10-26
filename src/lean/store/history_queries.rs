@@ -80,7 +80,7 @@ impl Store {
             .db()
             .query_row(
                 "SELECT id FROM tasks WHERE plan_id=?1 AND (id=?2 OR json_extract(spec, '$.id')=?2)
-             ORDER BY position LIMIT 1",
+             ORDER BY (id=?2) DESC,(status='superseded') ASC,position LIMIT 1",
                 params![plan_id, task_id],
                 |row| row.get(0),
             )

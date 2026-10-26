@@ -78,7 +78,7 @@ impl Store {
         self.conversation(conversation)?;
         let db = self.db();
         let mut statement = db.prepare(
-            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid, (SELECT backend FROM run_contexts r WHERE r.turn_id=turns.id)
+            "SELECT id, plan_id, role, provider, session_id, status, error, upto_message, started_ms, finished_ms, pid
              FROM turns WHERE conversation_id=?1 ORDER BY started_ms ASC, rowid ASC",
         )?;
         let rows = statement.query_map([conversation], |row| {
@@ -94,7 +94,6 @@ impl Store {
                 started_ms: row.get(8)?,
                 finished_ms: row.get(9)?,
                 pid: row.get(10)?,
-                backend: row.get(11)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)

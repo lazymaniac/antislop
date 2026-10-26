@@ -4,7 +4,7 @@ use antislop::{
     config::Config,
     lean::{
         Core,
-        tasks::{self, TaskSpec},
+        tasks::{self, TaskContract},
     },
 };
 use serde_json::{Value, json};
@@ -205,12 +205,12 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
             "selected",
             "",
         );
-        let specs: Vec<TaskSpec> = stored
+        let specs: Vec<TaskContract> = stored
             .iter()
             .map(|t| serde_json::from_value(t.spec.clone()).unwrap())
             .collect();
         assert_eq!(tasks::with_options(specs.clone()), specs);
-        let input: Vec<TaskSpec> = vec![serde_json::from_value(writer("w")).unwrap()];
+        let input: Vec<TaskContract> = vec![serde_json::from_value(writer("w")).unwrap()];
         let normalize = |input| {
             tasks::with_options(if gates {
                 tasks::with_required_agents(input)
@@ -261,14 +261,14 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
                 .unwrap()["prompt"]
                 .as_str()
                 .unwrap();
-            assert!(worker.contains(REPORT));
+            assert_selected_input(worker);
             let verifier = calls
                 .iter()
                 .find(|c| c["worker"] == false && c["task"] == spec.title)
                 .unwrap()["prompt"]
                 .as_str()
                 .unwrap();
-            assert!(verifier.contains(REPORT));
+            assert_selected_input(verifier);
         }
         let prompt = calls.iter().find(|c| c["task"] == "w-options").unwrap()["prompt"]
             .as_str()
@@ -277,7 +277,7 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
             "2–4",
             "same explicit criteria",
             "Exclude variants violating requirements",
-            "Selected: <id>",
+            "structured selection",
         ] {
             assert!(prompt.contains(text), "{text}");
         }
@@ -285,51 +285,36 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
 }
 
 #[test]
-fn shared_options_are_not_duplicated_and_bind_every_writer_even_with_ambiguous_reports() {
-    for report in [
+fn shared_analysis_never_substitutes_for_dedicated_options() {
+    let mut w = writer("w");
+    w["depends_on"] = json!(["shared"]);
+    let mut x = writer("x");
+    x["depends_on"] = json!(["shared", "w"]);
+    let (stored, calls, _) = run(
+        json!({"tasks":[{"id":"shared","title":"shared","goal":"Compare formats","kind":"options","writes":false,"verifier":{"focus":"selection"}},w,x]}),
+        false,
         REPORT,
-        "A and B are plausible; no selection.",
-        "Selected: A\nSelected: B",
-        "For w: Selected: A\nFor x: Selected: B",
-    ] {
-        let mut w = writer("w");
-        w["depends_on"] = json!(["shared"]);
-        let mut x = writer("x");
-        x["depends_on"] = json!(["shared", "w"]);
-        let (stored, calls, _) = run(
-            json!({"tasks":[{"id":"shared","title":"shared","goal":"Compare formats","kind":"options","writes":false,"verifier":{"focus":"selection"}},w,x]}),
-            false,
-            report,
-            "A",
-            "",
+        "A",
+        "",
+    );
+    assert_eq!(stored.len(), 5);
+    for id in ["w", "x"] {
+        let local = stored.iter().find(|t| t.spec["options_for"] == id).unwrap();
+        let target = stored.iter().find(|t| t.spec["id"] == id).unwrap();
+        assert!(
+            target.spec["depends_on"]
+                .as_array()
+                .unwrap()
+                .contains(&local.spec["id"])
         );
-        assert_eq!(stored.len(), 3);
-        for id in ["w", "x"] {
-            let prompt = calls
-                .iter()
-                .find(|c| c["worker"] == true && c["task"] == id)
-                .unwrap()["prompt"]
-                .as_str()
-                .unwrap();
-            assert!(prompt.contains(report));
-            assert!(prompt.contains("options report is binding"));
-            assert!(prompt.contains(
-                "If a shared options report does not cover this task, report that gap explicitly"
-            ));
-        }
-        for title in ["w", "x"] {
-            let verifier = calls
-                .iter()
-                .find(|c| c["worker"] == false && c["task"] == title)
-                .unwrap()["prompt"]
-                .as_str()
-                .unwrap();
-            assert!(verifier.contains(report));
-            assert!(verifier.contains("Report a missing or ambiguous selection"));
-            assert!(verifier.contains("multiple decisions without a clear mapping to this task"));
-        }
-        // Approach A forwards reports verbatim: ambiguous/multiple decisions are
-        // evidence gaps for the agents, not a structured runtime selection gate.
+        let prompt = calls
+            .iter()
+            .find(|c| c["worker"] == true && c["task"] == id)
+            .unwrap()["prompt"]
+            .as_str()
+            .unwrap();
+        assert_selected_input(prompt);
+        assert!(!prompt.contains(REPORT));
     }
 }
 
@@ -337,7 +322,7 @@ fn shared_options_are_not_duplicated_and_bind_every_writer_even_with_ambiguous_r
 fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
     let departure = r#"Departure: {"variant":"B","justification":"A violates the format required by the repository contract","evidence":"required-format.txt"}"#;
     for (claim, required_format, approved) in [
-        (departure, "B", true),
+        (departure, "B", false),
         // Same claim, different actual evidence: the verifier must reject it.
         (departure, "A", false),
         (
@@ -382,8 +367,8 @@ fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
             .as_str()
             .unwrap();
         for text in [
-            "explicitly report and justify a departure with evidence",
-            "including any discovered requirement violation",
+            "Ask the orchestrator",
+            "changed selection requires fresh options",
             "Never silently switch variants",
         ] {
             assert!(worker.contains(text), "{text}");
@@ -398,9 +383,9 @@ fn only_verifier_verdict_can_approve_worker_claims_and_departures() {
             .unwrap();
         assert!(verifier.contains(claim));
         for text in [
-            "independently compare the actual implementation",
-            "Check the evidence and justification",
-            "do not accept the worker's declaration as proof",
+            "Independently compare the implementation",
+            "reviewed options",
+            "the worker's declaration is not proof",
             "APPROVED. I complied",
         ] {
             assert!(verifier.contains(text), "{text}");
@@ -425,7 +410,7 @@ fn read_only_plan_runs_without_generated_options_or_quality_writers() {
             1,
             "read-only plans must not acquire options or writing gates"
         );
-        let spec: TaskSpec = serde_json::from_value(stored[0].spec.clone()).unwrap();
+        let spec: TaskContract = serde_json::from_value(stored[0].spec.clone()).unwrap();
         assert_eq!(spec.id, "inspect");
         assert!(!spec.writes);
         assert!(spec.depends_on.is_empty());
@@ -529,15 +514,7 @@ fn assert_core_delivery(scenario: &str) {
     }
     let second = continued[1];
     let prompt = second["prompt"].as_str().unwrap();
-    assert!(
-        prompt.contains(REPORT),
-        "{scenario}: missing dependency report"
-    );
-    assert_eq!(
-        prompt.matches(REPORT).count(),
-        1,
-        "dependency reports must not be duplicated in a handoff"
-    );
+    assert_selected_input(prompt);
     let args = second["args"].as_array().unwrap();
     assert_eq!(
         args.iter().any(|v| v == "--conversation"),
@@ -547,15 +524,15 @@ fn assert_core_delivery(scenario: &str) {
     if scenario == "resume-verifier" {
         assert!(prompt.contains("You verify another agent's work."));
         assert!(prompt.contains("Latest worker report"));
-        assert!(prompt.contains("Report a missing or ambiguous selection"));
+        assert!(prompt.contains("Ask the orchestrator"));
     } else {
-        assert!(prompt.contains("options report is binding"));
+        assert!(prompt.contains("selected_approach"));
         assert!(prompt.contains("Never silently switch variants"));
         let branch = match scenario {
             "resume-worker" => "Your work on this task was interrupted",
             "reject-once" => "Your verifier found problems:",
             "mail-new" => "You are a worker on a team",
-            "mail-existing" => tasks::INBOX_FOLLOWUP,
+            "mail-existing" => "Apply the scoped user instruction.",
             _ => unreachable!(),
         };
         assert!(
@@ -571,8 +548,8 @@ fn assert_core_delivery(scenario: &str) {
         let followup = verifier_calls[1]["prompt"].as_str().unwrap();
         assert!(followup.contains("You verify another agent's work."));
         assert!(followup.contains("Latest worker report"));
-        assert!(followup.contains(REPORT));
-        assert!(followup.contains("Report a missing or ambiguous selection"));
+        assert_selected_input(followup);
+        assert!(followup.contains("Ask the orchestrator"));
         let bytes: Vec<_> = calls
             .iter()
             .filter_map(|c| c["written"].as_str().map(|_| c["actual"].clone()))
@@ -596,12 +573,36 @@ fn core_delivery_follows_rejection_in_both_roles() {
     assert_core_delivery("reject-once");
 }
 
-#[test]
-fn core_delivery_mail_starts_new_worker_session() {
-    assert_core_delivery("mail-new");
+fn assert_selected_input(prompt: &str) {
+    let inputs: Vec<Value> = prompt
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|value| value["variant"].is_object())
+        .collect();
+    assert_eq!(
+        inputs.len(),
+        1,
+        "expected one local selection, not dependency reports"
+    );
+    assert!(inputs[0]["variant"]["id"].is_string());
+    assert_eq!(
+        inputs[0]["rationale"],
+        "The focused approach satisfies this local contract"
+    );
 }
 
 #[test]
-fn core_delivery_mail_resumes_worker_session() {
-    assert_core_delivery("mail-existing");
+fn an_independently_reviewed_local_choice_can_select_b() {
+    let (tasks, _, _) = run_with_requirement(
+        json!({"tasks":[writer("w")]}),
+        false,
+        &REPORT.replace("Selected: A", "Selected: B"),
+        "B",
+        "",
+        "B",
+    );
+    assert_eq!(
+        tasks.iter().find(|t| t.spec["id"] == "w").unwrap().status,
+        "approved"
+    );
 }

@@ -7,7 +7,7 @@ use super::*;
 
 impl Core {
     /// Stores the plan and has it checked. A plan the verifier sends back
-    /// goes back to the orchestrator (a bounded number of times); otherwise it
+    /// goes back to the orchestrator while review confirms progress; otherwise it
     /// is shown to the user with the verdict, and in autonomous mode a checked
     /// plan starts at once.
     pub(in crate::lean) fn propose(
@@ -28,7 +28,9 @@ impl Core {
             .collect();
         if !blocking.is_empty() {
             let message = feasibility::message(&blocking);
-            if self.store.count_since_user(conversation, PLAN_LINT)? < tasks::MAX_ROUNDS as usize {
+            if self.store.count_since_user(conversation, PLAN_LINT)?
+                < tasks::FORMAT_REPAIR_ATTEMPTS as usize
+            {
                 self.store.add_message(conversation, PLAN_LINT, &message)?;
             } else {
                 self.notice(conversation, &message);

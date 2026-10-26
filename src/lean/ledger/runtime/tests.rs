@@ -169,7 +169,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
                 "3"
             );
-            for _ in 0..tasks::MAX_ROUNDS + 1 {
+            for _ in 0..tasks::FORMAT_REPAIR_ATTEMPTS + 1 {
                 assert!(
                     core.ensure_requirements(&conversation, &AtomicBool::new(false))
                         .is_err()
@@ -179,7 +179,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                 core.store
                     .count_since_requirements_reset(&conversation, "requirements-reviewer")
                     .unwrap(),
-                tasks::MAX_ROUNDS as usize + 3
+                tasks::FORMAT_REPAIR_ATTEMPTS as usize + 3
             );
         } else if repairs {
             result.unwrap();

@@ -84,7 +84,14 @@ impl<'a> Scheduler<'a> {
         'a: 'scope,
     {
         let id = task.spec["id"].as_str().unwrap_or_default().to_owned();
-        if !self.is_runnable(task, &id) {
+        if self
+            .core
+            .revising
+            .lock()
+            .expect("revision mutex")
+            .contains(&task.id)
+            || !self.is_runnable(task, &id)
+        {
             return false;
         }
         if task.status == status::SKIPPED {
@@ -126,15 +133,13 @@ impl<'a> Scheduler<'a> {
 
     fn conflicts_with_writer(&self, task: &Task) -> bool {
         let writes = task.spec["writes"].as_bool().unwrap_or(false);
-        let config = self.core.config_snapshot();
         let scope: Vec<String> =
             serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
         writes
-            && (config.workspace.mode == WorkspaceMode::InPlace && !self.writers.is_empty()
-                || self
-                    .writers
-                    .values()
-                    .any(|active| tasks::scopes_overlap(&scope, active)))
+            && (self
+                .writers
+                .values()
+                .any(|active| tasks::scopes_overlap(&scope, active)))
     }
 
     fn reserve(&mut self, task: &Task, id: &str) {
@@ -214,10 +219,9 @@ fn execute_task(
     conversation: &str,
     mut task: Task,
     cancel: Arc<AtomicBool>,
-    plan_cancel: &AtomicBool,
+    _plan_cancel: &AtomicBool,
 ) {
     fail_task(core, conversation, &mut task, &cancel);
-    let _ = core.answer_waiting(conversation, &task.plan_id, plan_cancel);
     restart_agent(core, conversation, &task);
 }
 

@@ -6,7 +6,7 @@ pub(super) struct Integration<'a> {
     core: &'a Arc<Core>,
     conversation: &'a str,
     task: &'a mut Task,
-    spec: &'a TaskSpec,
+    spec: &'a TaskContract,
     project: &'a Path,
     worktree: &'a Path,
     config: &'a Config,
@@ -24,7 +24,7 @@ impl<'a> Integration<'a> {
         core: &'a Arc<Core>,
         conversation: &'a str,
         task: &'a mut Task,
-        spec: &'a TaskSpec,
+        spec: &'a TaskContract,
         project: &'a Path,
         worktree: &'a Path,
         config: &'a Config,
@@ -121,10 +121,19 @@ impl<'a> Integration<'a> {
         let Some((kind, files)) = conflict_with_files(outcome) else {
             return Ok(false);
         };
-        if repair_limit_reached(self.task) {
+        let onto = git::snapshot(self.project, "Current project for conflict resolution")?;
+        let basis = crate::hash(serde_json::to_vec(&(
+            git::tree_identity(self.project, self.task.base.as_deref().unwrap_or(change))?,
+            git::tree_identity(self.project, change)?,
+            git::tree_identity(self.project, &onto)?,
+        ))?);
+        let fresh = self.core.store.db().execute(
+            "INSERT OR IGNORE INTO integration_attempts(task_id,generation,basis) VALUES(?1,?2,?3)",
+            rusqlite::params![self.task.id, self.task.input_generation, basis],
+        )?;
+        if fresh == 0 {
             return Ok(false);
         }
-        let onto = git::snapshot(self.project, "Current project for conflict resolution")?;
         drop(lock);
         self.core.repair_integration(
             self.conversation,
@@ -264,14 +273,6 @@ fn conflict_with_files(outcome: &git::Integration) -> Option<(Outcome, &[String]
         git::Integration::UserEdits(files) => Some((Outcome::UserEdits, files)),
         _ => None,
     }
-}
-
-fn repair_limit_reached(task: &Task) -> bool {
-    task.feedback
-        .as_ref()
-        .and_then(|feedback| feedback["integration_repairs"].as_u64())
-        .unwrap_or(0)
-        >= u64::from(tasks::MAX_ROUNDS)
 }
 
 fn add_report_note(task: &mut Task, text: &str) {

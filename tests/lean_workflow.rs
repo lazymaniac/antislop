@@ -28,7 +28,7 @@ if 'SESSION PHASE: INTERVIEW.' in prompt:
     else:
         answer = '```question\n' + json.dumps({'id':'scope','context':'The scope determines what we inspect.','question':'What should we inspect?','options':[{'label':'Source code','description':'Inspect code quality first'},{'label':'Documentation','description':'Inspect documentation first'}]}) + '\n```\n' + plan
 elif any(marker in prompt for marker in ['You review a plan', 'new plan:', 'You verify', 'Your verifier found']):
-    ids = re.findall(r'^- ([RCV][0-9]+): ', prompt, re.M)
+    ids = re.findall(r'^- ([A-Za-z0-9_.-]+): ', prompt, re.M)
     answer = '```verdict\n' + json.dumps({'approved':True,'findings':[], 'coverage':{i:{'status':'ok','note':'checked'} for i in ids}}) + '\n```'
 elif 'Task: ' in prompt:
     answer = 'Project inspected.'

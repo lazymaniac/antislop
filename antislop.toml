@@ -1,8 +1,6 @@
 # Local routing: Codex Sol 6.1 orchestrates; Codex Luna executes and verifies.
-schema_version = 1
+schema_version = 2
 
-[workspace]
-mode = "task-worktrees"
 
 [policy]
 mode = "supervised"
