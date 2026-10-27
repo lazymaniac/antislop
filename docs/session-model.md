@@ -10,9 +10,10 @@ The runtime owns the turn identity, task input generation, permissions and sourc
 identity. MCP tool calls must match that active lease. A task does not authenticate
 historical sources or infer authorization from another agent's report.
 
-The planner drafts the first plan of a conversation in its own session and
-execution profile (`routing.planning`); after the first draft, comments, revisions
-and agent questions belong to the orchestrator. The planner's words reach the user
+The planner drafts the first plan of every planning cycle (each interview that
+ends in planning) in its own session and execution profile (`routing.planning`);
+after that draft, comments, revisions and agent questions belong to the
+orchestrator, which can hand the whole plan back with `request_replan`. The planner's words reach the user
 as the orchestrator's.
 
 Task agents see only question, answer-wait and completion tools. The orchestrator

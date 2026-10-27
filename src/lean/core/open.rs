@@ -156,9 +156,7 @@ fn queue_format_repair(core: &Arc<Core>, conversation: &str) -> Result<()> {
     let Ok(Some(answer)) = core.store.turn_final_answer(conversation, &turn.id) else {
         return Ok(());
     };
-    let required = workflow.planning()
-        && turn.role == PLANNER
-        && core.store.latest_plan(conversation)?.is_empty();
+    let required = turn.role == PLANNER && core.store.awaiting_first_plan(conversation)?;
     let plan = if required {
         Some(tasks::parse_required_plan(&answer).1)
     } else {

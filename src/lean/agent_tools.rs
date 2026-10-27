@@ -99,6 +99,13 @@ impl Core {
                     serde_json::from_value(args["revision"].clone())?,
                 )
             }
+            "request_replan" => {
+                require(
+                    role == ORCHESTRATOR || role == COMMENT_ORCHESTRATOR,
+                    "only the orchestrator may ask for a new plan",
+                )?;
+                self.request_replan(conversation, &required("reason")?)
+            }
             "finish_turn" => {
                 let result: TurnResult = serde_json::from_value(args["result"].clone())?;
                 self.validate_agent_result(conversation, role, turn, &result)?;

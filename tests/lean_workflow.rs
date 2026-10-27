@@ -255,6 +255,40 @@ fn autonomous_mode_accepts_the_checked_plan_after_the_interview() {
             .iter()
             .any(|s| s.role.starts_with("worker:"))
     );
+
+    // The finished plan ends the cycle. The next request interviews again and
+    // the planner drafts its plan too, though an older plan exists.
+    core.send(&conversation.id, "Inspect the documentation too")
+        .unwrap();
+    idle(&core, &conversation.id);
+    assert!(
+        core.store
+            .workflow(&conversation.id)
+            .unwrap()
+            .interviewing()
+    );
+    let question = core
+        .store
+        .events_since(&conversation.id, 0, 2000)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|e| e.kind == "interview_question")
+        .unwrap();
+    let answer = format!(
+        "Interview answer ({})\nAnswer: Documentation",
+        question.payload["id"].as_str().unwrap()
+    );
+    core.send(&conversation.id, &answer).unwrap();
+    idle(&core, &conversation.id);
+    let planner_turns = core
+        .store
+        .sessions(&conversation.id)
+        .unwrap()
+        .iter()
+        .filter(|s| s.role == antislop::lean::PLANNER)
+        .count();
+    assert_eq!(planner_turns, 2, "one draft per planning cycle");
 }
 
 #[test]

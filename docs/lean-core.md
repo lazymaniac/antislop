@@ -85,8 +85,11 @@ Task workers and task verifiers see:
 - `await_orchestrator(turn, request)`;
 - `finish_turn(turn, result)`.
 
-The orchestrator sees `task_risks`, `reply_to_agent`, `submit_plan_revision` and
-`finish_turn`. The planner sees `task_risks` and `finish_turn`; it neither answers
+The orchestrator sees `task_risks`, `reply_to_agent`, `submit_plan_revision`,
+`request_replan(turn, reason)` and `finish_turn`. `request_replan` records a
+durable request; the next turn is the planner's, which redrafts the whole plan
+with the current contracts and the reason, and the result is reviewed like any
+new plan. Contract and dependency repairs stay with `submit_plan_revision`. The planner sees `task_risks` and `finish_turn`; it neither answers
 agents nor revises a plan.
 Other workflow roles finish with a report. Tools are authenticated, scoped to the
 session and checked against the active turn. An agent cannot choose another role

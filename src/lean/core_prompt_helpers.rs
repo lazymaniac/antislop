@@ -57,6 +57,7 @@ fn format_message(message: &Message) -> String {
     match message.author.as_str() {
         RUNTIME => format!("[runtime]\n{}", message.text),
         PLAN_VERIFIER => format!("[plan verifier]\n{}", message.text),
+        REPLAN => format!("[replan request]\n{}", message.text),
         "user" => format!("[user]\n{}", message.text),
         _ => message.text.clone(),
     }

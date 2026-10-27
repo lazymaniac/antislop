@@ -98,6 +98,22 @@ impl Store {
         Ok(())
     }
 
+    /// Whether the planner still owes this planning cycle its first plan: the
+    /// conversation is planning, and no plan was drafted since the interview
+    /// that led here ended. Plans of earlier cycles do not count.
+    pub fn awaiting_first_plan(&self, conversation: &str) -> Result<bool> {
+        Ok(self.db().query_row(
+            "SELECT w.phase='planning' AND NOT EXISTS(
+                 SELECT 1 FROM tasks t WHERE t.conversation_id=?1 AND t.created_ms >= COALESCE(
+                     (SELECT max(created_ms) FROM events
+                      WHERE conversation_id=?1 AND kind='workflow'
+                        AND json_extract(payload,'$.phase')='planning'),0))
+             FROM session_workflow w WHERE w.conversation_id=?1",
+            [conversation],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn ask_interview_question(
         &self,
         conversation: &str,

@@ -8,6 +8,8 @@ pub(super) struct PlannerPrompt<'a> {
     pub(super) first: bool,
     pub(super) requirements: &'a str,
     pub(super) asked: &'a [Message],
+    /// The task contracts of the plan the orchestrator asked to replace.
+    pub(super) replaced: Option<&'a str>,
     pub(super) ledger_context: Option<&'a str>,
 }
 
@@ -27,6 +29,11 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
         context.requirements
     ));
     prompt.push_str(&format_messages(context.asked));
+    if let Some(contracts) = context.replaced {
+        prompt.push_str(&format!(
+            "\n\nThe orchestrator asked for a new plan; its reason is above. The plan to replace has these task contracts:\n{contracts}\nReturn the complete replacement plan block, not a patch; the runtime reviews it like any new plan.\n"
+        ));
+    }
     append_ledger(context.ledger_context, &mut prompt);
     prompt
 }

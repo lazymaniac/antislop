@@ -19,6 +19,7 @@ pub(crate) const TOOLS: &[&str] = &[
     "await_orchestrator",
     "reply_to_agent",
     "submit_plan_revision",
+    "request_replan",
     "task_risks",
 ];
 pub(crate) type Handler = dyn Fn(&str, &Value) -> Result<Value> + Send + Sync;
@@ -352,7 +353,13 @@ fn allowed_tools(role: &str) -> Vec<&'static str> {
     if super::task_role(role).is_some() {
         vec![TOOL, "ask_orchestrator", "await_orchestrator"]
     } else if matches!(role, "orchestrator" | "comment-orchestrator") {
-        vec![TOOL, "reply_to_agent", "submit_plan_revision", "task_risks"]
+        vec![
+            TOOL,
+            "reply_to_agent",
+            "submit_plan_revision",
+            "request_replan",
+            "task_risks",
+        ]
     } else if role == "planner" {
         vec![TOOL, "task_risks"]
     } else {
@@ -368,6 +375,7 @@ fn tool_list(role: &str) -> Vec<Value> {
             "await_orchestrator" => ("Wait up to 25 seconds for your answer; pending does not mean failure.", json!({"request":{"type":"string","description":"Question ID returned by ask_orchestrator, not question text"}}), vec!["turn","request"]),
             "task_risks" => ("Read the domain catalog before selecting relevant verifier.risk_ids for a local contract.", json!({"kind":{"type":"string"}}),vec!["turn","kind"]),
             "reply_to_agent" => ("Orchestrator only: answer a pending question. Answers cannot change contracts or permissions.", json!({"request":{"type":"string","description":"Question ID returned by ask_orchestrator, not question text"},"answer":{"type":"string"},"state":{"enum":["answered","awaiting_user"]}}), vec!["turn","request","answer"]),
+            "request_replan" => ("Orchestrator only: ask the planner to redraft the whole plan when contract repairs are not enough. It is reviewed like any new plan.", json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn","reason"]),
             _ => ("Orchestrator only: submit a complete plan revision for independent review.", json!({"request_key":{"type":"string"},"revision":schema::revision()}), vec!["turn","request_key","revision"]),
         };
         let mut properties = fields.as_object().unwrap().clone();
@@ -679,6 +687,7 @@ mod role_tests {
                 "finish_turn",
                 "reply_to_agent",
                 "submit_plan_revision",
+                "request_replan",
                 "task_risks"
             ]
         );

@@ -274,3 +274,48 @@ fn execution_decisions_are_durable_idempotent_and_do_not_change_worker_questions
     invalid.options.clear();
     assert!(store.ask_user_decision(&conversation.id, &invalid).is_err());
 }
+
+#[test]
+fn every_planning_cycle_awaits_its_own_first_plan() {
+    let pause = || std::thread::sleep(std::time::Duration::from_millis(3));
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("state.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    let task = serde_json::json!({"id":"t1","title":"T","goal":"g","kind":"analysis","verifier":{"focus":"f"}});
+    let settle = |request: &str| {
+        let message = store
+            .add_message(&conversation.id, "user", request)
+            .unwrap();
+        store
+            .interview_summary(&conversation.id, request, message.seq)
+            .unwrap();
+        assert!(store.finish_interview(&conversation.id).unwrap());
+    };
+    assert!(!store.awaiting_first_plan(&conversation.id).unwrap());
+    settle("first request");
+    assert!(store.awaiting_first_plan(&conversation.id).unwrap());
+    pause();
+    let mut plan = store
+        .add_plan(&conversation.id, std::slice::from_ref(&task))
+        .unwrap()
+        .remove(0);
+    assert!(!store.awaiting_first_plan(&conversation.id).unwrap());
+
+    // The plan ran to the end; the next request interviews again, and its
+    // planning cycle is not satisfied by the previous plan.
+    store.queue_plan(&conversation.id, &plan.plan_id).unwrap();
+    plan.status = "approved".into();
+    store.update_task(&plan).unwrap();
+    pause();
+    store
+        .add_message(&conversation.id, "user", "second request")
+        .unwrap();
+    assert!(store.workflow(&conversation.id).unwrap().interviewing());
+    assert!(!store.awaiting_first_plan(&conversation.id).unwrap());
+    pause();
+    settle("second request, agreed");
+    assert!(store.awaiting_first_plan(&conversation.id).unwrap());
+    pause();
+    store.add_plan(&conversation.id, &[task]).unwrap();
+    assert!(!store.awaiting_first_plan(&conversation.id).unwrap());
+}

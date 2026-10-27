@@ -186,6 +186,8 @@ const ORCHESTRATOR: &str = "orchestrator";
 pub const COMMENT_ORCHESTRATOR: &str = "comment-orchestrator";
 /// Drafts the first plan; its own native CLI session and execution profile.
 pub const PLANNER: &str = "planner";
+/// Author of the orchestrator's request that the planner redraft the plan.
+pub const REPLAN: &str = "replan-request";
 /// The sessions that answer the user's messages, in the order they are asked.
 pub const ORCHESTRATION_ROLES: [&str; 3] = [ORCHESTRATOR, COMMENT_ORCHESTRATOR, PLANNER];
 const RUNTIME: &str = "runtime";

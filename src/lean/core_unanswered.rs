@@ -42,17 +42,16 @@ impl Core {
             .collect())
     }
 
-    /// Whether the planner owns the next turn: the interview is over and no
-    /// plan exists yet. Comments and everything after the first draft belong to
-    /// the orchestrator.
+    /// Whether the planner owns the next turn: this planning cycle has no plan
+    /// yet, or the orchestrator asked for a new one. Comments and everything
+    /// else after the first draft belong to the orchestrator.
     pub(in crate::lean) fn planner_owns_turn(&self, conversation: &str, upto: u64) -> Result<bool> {
-        let planning = self.store.workflow(conversation)?.planning();
-        if !planning || !self.store.latest_plan(conversation)?.is_empty() {
-            return Ok(false);
-        }
         let answered = self.store.last_orchestration_answered(conversation)?;
         let asked = self.asked_since(conversation, answered, upto)?;
-        Ok(!includes_comment(&asked))
+        if includes_comment(&asked) {
+            return Ok(false);
+        }
+        Ok(self.store.awaiting_first_plan(conversation)? || includes_replan(&asked))
     }
 }
 
@@ -61,4 +60,9 @@ pub(in crate::lean) fn includes_comment(asked: &[Message]) -> bool {
     asked
         .iter()
         .any(|message| message.text.starts_with(COMMENT_PREFIX))
+}
+
+/// Whether a message of `asked` is the orchestrator's request for a new plan.
+fn includes_replan(asked: &[Message]) -> bool {
+    asked.iter().any(|message| message.author == REPLAN)
 }

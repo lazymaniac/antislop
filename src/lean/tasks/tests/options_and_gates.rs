@@ -222,7 +222,12 @@ fn the_planner_gets_the_plan_format_but_not_the_orchestrators_workflow() {
         assert!(text.contains("even when required gates are disabled"));
         assert!(!text.contains("{KIND_NAMES}") && !text.contains("{AGENT_POOL}"));
     }
-    for orchestrator_only in ["reply_to_agent", "submit_plan_revision", "**Interview**"] {
+    for orchestrator_only in [
+        "reply_to_agent",
+        "submit_plan_revision",
+        "request_replan",
+        "**Interview**",
+    ] {
         assert!(orchestrator.contains(orchestrator_only));
         assert!(!planner.contains(orchestrator_only), "{orchestrator_only}");
     }

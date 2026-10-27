@@ -1258,6 +1258,70 @@ fn direct_reviewers_receive_review_context_instead_of_receipt_only_instructions(
 }
 
 #[test]
+fn the_orchestrator_hands_the_whole_plan_back_to_the_planner() {
+    let dir = tempfile::tempdir().unwrap();
+    // Planner and orchestrator share the fake codex; the planner's prompt says so.
+    let core = open(
+        dir.path(),
+        r#"
+import os,urllib.request
+if 'Draft the complete plan for review' in prompt:
+    answer = plan(task('t2', 'Seam two')) if '[replan request]' in prompt else plan(task('t1', 'Seam one'))
+elif 'please replan' in prompt:
+    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'request_replan','arguments':{'turn':os.environ['FIXTURE_TURN'],'reason':'split the work along another seam'}}}
+    req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
+    reply=json.load(urllib.request.urlopen(req,timeout=10))
+    assert not reply['result'].get('isError'),reply
+    answer='Asked the planner to redraft the plan.'
+else:
+    answer='done'
+"#,
+        "    answer = 'unused'",
+    );
+    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
+        .unwrap()
+        .id;
+    core.send(&conversation, "plan it").unwrap();
+    wait_until("first plan", || core.is_idle(&conversation));
+    let first = core.store.latest_plan(&conversation).unwrap();
+    assert_eq!(first[0].spec["id"], "t1");
+
+    core.send(&conversation, "please replan").unwrap();
+    wait_until("replacement plan", || {
+        core.is_idle(&conversation)
+            && core
+                .store
+                .latest_plan(&conversation)
+                .unwrap()
+                .first()
+                .is_some_and(|task| task.spec["id"] == "t2")
+    });
+    let second = core.store.latest_plan(&conversation).unwrap();
+    assert_ne!(second[0].plan_id, first[0].plan_id);
+    let reasons = core
+        .store
+        .messages_by(&conversation, antislop::lean::REPLAN, 0)
+        .unwrap();
+    assert_eq!(reasons.len(), 1);
+    assert!(reasons[0].text.contains("another seam"));
+    let drafts = core
+        .store
+        .sessions(&conversation)
+        .unwrap()
+        .iter()
+        .filter(|turn| turn.role == antislop::lean::PLANNER)
+        .count();
+    assert_eq!(drafts, 2, "the planner drafted both plans");
+    // The planner saw the plan it replaces and the reason.
+    let redraft = prompts(dir.path())
+        .into_iter()
+        .map(|(_, prompt)| prompt)
+        .find(|prompt| prompt.contains("[replan request]"))
+        .expect("the planner was asked to redraft");
+    assert!(redraft.contains("another seam") && redraft.contains("Seam one"));
+}
+
+#[test]
 fn isolated_worker_can_ask_orchestrator_with_the_only_task_slot_occupied() {
     let dir = tempfile::tempdir().unwrap();
     let core = open_limited(
