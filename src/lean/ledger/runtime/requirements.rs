@@ -17,7 +17,7 @@ impl Core {
         };
         let producer =
             self.extract_requirements(conversation, &run, &sources, new_source, cancel)?;
-        self.verify_requirements(conversation, &run, &sources, &producer, cancel)
+        self.accept_requirements(conversation, &run, &producer)
     }
 
     fn prepare_requirements(&self, conversation: &str) -> Result<(Run, Option<(String, bool)>)> {
@@ -207,31 +207,14 @@ impl Core {
         Ok(())
     }
 
-    fn verify_requirements(
-        self: &Arc<Self>,
-        conversation: &str,
-        run: &Run,
-        sources: &str,
-        producer: &str,
-        cancel: &AtomicBool,
-    ) -> Result<Run> {
+    /// The analyst's ledger is accepted without a second model: the separate
+    /// source-coverage review rejected correct ledgers over wording and cost
+    /// hours per request. Task and plan reviews still check coverage later.
+    fn accept_requirements(&self, conversation: &str, run: &Run, producer: &str) -> Result<Run> {
         let current = self.store.run(conversation, &run.id)?;
         self.require_extracted_entries(conversation, run)?;
-        let (answer,verifier)=self.requirements_turn(conversation,&run.id,"extraction",true,format!(
-            "Independently compare the requirement entries to every full source and the interview context. This is extraction before task planning: tasks and execution evidence may legitimately be absent. Selected interview options include their descriptions; use that context before declaring ambiguity. For planning-only requests, completion criteria describe acceptance tests for later implementation, not a demand to implement now. Do not add obligations unsupported by user sources or project instructions. Find omitted obligations, lost qualifiers, ambiguous interpretation, missing plan steps, prescribed methods and missing composite integration criteria. Do not accept analyst assertions as evidence. Read full document artifacts. Return a ```verdict JSON block {{\"approved\":true|false,\"findings\":[{{\"issue\":\"...\"}}]}}. Full sources:\n{sources}"),cancel)?;
-        let verdict = tasks::parse_verdict(&answer);
-        self.store.record_ledger_review(
-            conversation,
-            &run.id,
-            current.spec_revision,
-            "extraction",
-            producer,
-            &verifier,
-            "",
-            verdict.approved,
-            &answer,
-        )?;
-        self.finish_requirements_review(conversation, &current, &verdict, cancel)?;
+        self.store
+            .accept_extraction(conversation, &run.id, current.spec_revision, producer)?;
         Ok(current)
     }
 
@@ -242,29 +225,6 @@ impl Core {
                 .ledger_entries(conversation, &run.id, None)?
                 .is_empty(),
             "requirements extraction is empty",
-        )
-    }
-
-    fn finish_requirements_review(
-        &self,
-        conversation: &str,
-        current: &Run,
-        verdict: &tasks::Verdict,
-        cancel: &AtomicBool,
-    ) -> Result<()> {
-        if !verdict.approved && !cancel.load(Ordering::SeqCst) {
-            self.store.add_message(
-                conversation,
-                "requirements-reviewer",
-                &extraction::requirements_review_message(current, verdict),
-            )?;
-        }
-        require(
-            verdict.approved,
-            &format!(
-                "requirements source coverage rejected: {}",
-                tasks::findings_text(&verdict.findings)
-            ),
         )
     }
 }

@@ -105,6 +105,8 @@ pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
 fn worker_change_rules(task: &TaskContract) -> &'static str {
     if task.writes {
         "Work only in this allocated worktree and the assigned task scope. Do not commit; the runtime records changes. Ask the orchestrator before any change outside the contract.\n\n"
+    } else if task.kind == WorkKind::Context {
+        "You work in a throwaway checkout that is discarded and never merged. Do not edit tracked files. You may run commands there that measure or inspect the project, such as the repository's own checkers and diagnostics, a build of them, or scripts that count lines; read a script before you run it. Record each command and the part of its output you rely on in the report, since the verifier cannot rerun it.\n\n"
     } else {
         "Work read-only; do not modify anything.\n\n"
     }

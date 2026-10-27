@@ -67,7 +67,10 @@ impl Core {
             .or(observation)
             .unwrap_or_else(|| project.clone());
         let project_text = workdir.to_string_lossy().into_owned();
-        let access = if spec.writes {
+        // A context task maps the project by running its own checkers, so it
+        // gets a shell in its throwaway observation checkout. It still has no
+        // writer worktree and nothing it leaves there is ever integrated.
+        let access = if spec.writes || spec.kind == crate::config::WorkKind::Context {
             agent::Access::Write
         } else {
             agent::Access::ReadOnly

@@ -61,7 +61,7 @@ fn full_sources_keep_source_question_and_summary_order() {
 
 #[test]
 fn extraction_repairs_invalid_parent_once_and_preserves_atomicity() {
-    for (repairs, reject_review) in [(true, false), (false, false), (true, true)] {
+    for repairs in [true, false] {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("analyst");
         std::fs::write(&script, r#"#!/usr/bin/env python3
@@ -70,10 +70,7 @@ prompt=sys.argv[-1]
 lines=prompt.rsplit('Run and ledger inputs (stable identities; keep their versions):\n',1)[1].splitlines()
 run=json.loads(lines[0])
 assert 'selected option details' in prompt
-if prompt.startswith('Independently compare'):
-    assert 'may legitimately be absent' in prompt
-    answer='```verdict\n'+json.dumps({'approved':not os.path.exists('reject-review'),'findings':[{'issue':'missing qualifier'}] if os.path.exists('reject-review') else []})+'\n```'
-else:
+if True:
     assert 'parent references another requirement' in prompt
     assert 'ORCHESTRATOR_ROUTE_ONLY' not in prompt
     n=int(open('attempts').read()) if os.path.exists('attempts') else 0
@@ -94,9 +91,6 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         crate::lean::native::fixture::interactive(&script);
         if repairs {
             std::fs::write(dir.path().join("repair"), "").unwrap();
-        }
-        if reject_review {
-            std::fs::write(dir.path().join("reject-review"), "").unwrap();
         }
         let config = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -141,65 +135,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
             .store
             .ledger_entries(&conversation, &run.id, None)
             .unwrap();
-        if reject_review {
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("missing qualifier")
-            );
-            assert_eq!(entries.len(), 2);
-            assert_eq!(
-                core.store
-                    .count_since_user(&conversation, "requirements-reviewer")
-                    .unwrap(),
-                1
-            );
-            let findings = core
-                .store
-                .requirements_review_findings(&conversation, &run.id)
-                .unwrap();
-            let findings: serde_json::Value = serde_json::from_str(&findings).unwrap();
-            assert_eq!(findings[0]["issue"], "missing qualifier");
-            let repeated = core
-                .ensure_requirements(&conversation, &AtomicBool::new(false))
-                .unwrap_err();
-            assert!(
-                repeated.to_string().contains("missing qualifier"),
-                "unchanged entries must not create a scope approval: {repeated}"
-            );
-            assert_eq!(
-                core.store
-                    .count_since_user(&conversation, "requirements-reviewer")
-                    .unwrap(),
-                2
-            );
-            assert_eq!(
-                std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
-                "3"
-            );
-            for _ in 0..tasks::FORMAT_REPAIR_ATTEMPTS + 1 {
-                assert!(
-                    core.ensure_requirements(&conversation, &AtomicBool::new(false))
-                        .is_err()
-                );
-            }
-            assert_eq!(
-                core.store
-                    .count_since_requirements_reset(&conversation, "requirements-reviewer")
-                    .unwrap(),
-                tasks::FORMAT_REPAIR_ATTEMPTS as usize + 3
-            );
-            let (sessions, turns): (i64, i64) = core.store.db().query_row(
-                "SELECT count(DISTINCT session_id),count(*) FROM turns WHERE conversation_id=?1 AND role='requirements-extraction-analyst'",
-                [&conversation], |row| Ok((row.get(0)?, row.get(1)?)),
-            ).unwrap();
-            assert!(turns > 1);
-            assert_eq!(
-                sessions, turns,
-                "each analyst attempt must receive a fresh provider context"
-            );
-        } else if repairs {
+        if repairs {
             result.unwrap();
             assert_eq!(entries.len(), 2);
             assert_eq!(run.spec_revision, 1);
@@ -208,6 +144,16 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
                     .extraction_current(&conversation, &run.id)
                     .unwrap()
             );
+            let verifiers: i64 = core
+                .store
+                .db()
+                .query_row(
+                    "SELECT count(*) FROM turns WHERE role='requirements-extraction-verifier'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(verifiers, 0, "no separate source-coverage review runs");
         } else {
             assert!(
                 result

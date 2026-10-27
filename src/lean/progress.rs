@@ -37,11 +37,12 @@ pub struct Progress {
 }
 impl Progress {
     /// The first rejection establishes a baseline; subsequent rejection must close an earlier obligation.
+    /// A rejection that names nothing open, twice in a row, is a stall too: the
+    /// worker has nothing to correct.
     pub fn record(&mut self, open: BTreeSet<String>) -> bool {
-        let stalled = self
-            .previous
-            .as_ref()
-            .is_some_and(|before| !before.is_empty() && before.difference(&open).next().is_none());
+        let stalled = self.previous.as_ref().is_some_and(|before| {
+            before.difference(&open).next().is_none() && (!before.is_empty() || open.is_empty())
+        });
         self.previous = Some(open);
         stalled
     }
@@ -106,9 +107,14 @@ mod tests {
     }
 
     #[test]
-    fn a_verdict_without_coverage_says_nothing() {
-        let mut progress = Progress::default();
-        assert!(!(0..10).any(|_| progress.record(BTreeSet::new())));
+    fn rejections_naming_nothing_open_stall_after_the_first() {
+        let stalled = rounds(&[&[], &[], &[]]);
+        assert_eq!(stalled, [false, true, true]);
+    }
+
+    #[test]
+    fn a_first_named_obligation_after_an_empty_rejection_is_new_information() {
+        assert_eq!(rounds(&[&[], &["a"], &["a"]]), [false, false, true]);
     }
 
     #[test]

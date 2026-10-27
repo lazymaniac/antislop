@@ -35,11 +35,3 @@ pub(super) fn correction_feedback(error: &Error, answer: &str) -> String {
         "\nThe previous extraction was rejected: {error}. Correct the complete ledger JSON without dropping obligations or weakening criteria. Previous response:\n{answer}"
     )
 }
-
-pub(super) fn requirements_review_message(current: &Run, verdict: &tasks::Verdict) -> String {
-    format!(
-        "Independent requirements review rejected requirements revision {}.\n\nFindings:\n{}",
-        current.spec_revision,
-        tasks::findings_text(&verdict.findings)
-    )
-}

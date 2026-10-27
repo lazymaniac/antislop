@@ -628,16 +628,16 @@ fn repairing_json_after_the_ledger_mapping_reuses_the_requirements() {
         1
     );
     let events = core.store.events_since(&conversation.id, 0, 2000).unwrap();
-    for role in [
-        "requirements-extraction-analyst",
-        "requirements-extraction-verifier",
+    for (role, expected) in [
+        ("requirements-extraction-analyst", 1),
+        ("requirements-extraction-verifier", 0),
     ] {
         assert_eq!(
             events
                 .iter()
                 .filter(|e| e.kind == "turn_started" && e.payload["role"] == role)
                 .count(),
-            1,
+            expected,
             "{role} must not repeat during JSON repair"
         );
     }

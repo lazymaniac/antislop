@@ -10,8 +10,20 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error(transparent)]
+    #[error("{}", sql_message(.0))]
     Sql(#[from] rusqlite::Error),
+}
+
+/// Agents and users see the cause, not a bare driver message.
+fn sql_message(error: &rusqlite::Error) -> String {
+    match error {
+        rusqlite::Error::QueryReturnedNoRows => {
+            "a record this step depends on no longer exists (the task or plan was replaced); \
+             re-read the current state and retry"
+                .into()
+        }
+        other => other.to_string(),
+    }
 }
 pub type Result<T> = std::result::Result<T, Error>;
 pub fn require(condition: bool, message: &str) -> Result<()> {

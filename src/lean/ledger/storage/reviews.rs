@@ -296,6 +296,41 @@ impl Store {
         persist_review(&tx, &record)?;
         tx.commit().map_err(Into::into)
     }
+    /// Records the analyst's extraction as accepted for the current revision.
+    /// The producer turn stands in for the verifier: it is bound to every source.
+    pub fn accept_extraction(
+        &self,
+        conversation: &str,
+        run_id: &str,
+        revision: i64,
+        producer: &str,
+    ) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        require(
+            run(&tx, conversation, run_id)?.spec_revision == revision,
+            "review refers to an old spec revision",
+        )?;
+        let record = LedgerReview {
+            conversation,
+            run_id,
+            revision,
+            kind: "extraction",
+            producer,
+            verifier: producer,
+            fingerprint: "",
+            approved: true,
+            note: "Accepted without a separate source-coverage review.",
+        };
+        insert_review(&tx, &record)?;
+        event(
+            &tx,
+            conversation,
+            "ledger_review",
+            &serde_json::json!({"run":run_id,"revision":revision,"kind":"extraction","approved":true}),
+        )?;
+        tx.commit().map_err(Into::into)
+    }
     pub fn extraction_current(&self, conversation: &str, run_id: &str) -> Result<bool> {
         let db = self.db();
         let r = run(&db, conversation, run_id)?;

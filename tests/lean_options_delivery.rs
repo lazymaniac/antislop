@@ -103,3 +103,19 @@ fn read_only_continuations_preserve_access_without_writer_binding() {
     assert!(!worker.contains("options report is binding"));
     assert!(!verifier.contains("Independently verify requirements"));
 }
+
+#[test]
+fn a_context_worker_may_run_commands_in_its_throwaway_checkout() {
+    let context = |kind: &str| -> TaskContract {
+        serde_json::from_value(json!({
+            "id": "scout", "title": "Scout", "goal": "Map the project",
+            "kind": kind, "writes": false, "verifier": {"focus": "Check the map"}
+        }))
+        .unwrap()
+    };
+    let prompt = tasks::worker_turn_prompt("project", &context("context"), None, "");
+    assert!(prompt.contains("throwaway checkout"), "{prompt}");
+    assert!(prompt.contains("Record each command"), "{prompt}");
+    let other = tasks::worker_turn_prompt("project", &context("analysis"), None, "");
+    assert!(other.contains("Work read-only"), "{other}");
+}

@@ -69,11 +69,14 @@ pub(in crate::lean) struct RevisionLease<'a> {
 
 impl Store {
     pub(in crate::lean) fn plan_revision(&self, plan: &str) -> Result<i64> {
-        Ok(self.db().query_row(
-            "SELECT revision FROM plan_heads WHERE plan_id=?1",
-            [plan],
-            |r| r.get(0),
-        )?)
+        self.db()
+            .query_row(
+                "SELECT revision FROM plan_heads WHERE plan_id=?1",
+                [plan],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| Error::Invalid("plan has no revision head; it was replaced".into()))
     }
 
     pub(in crate::lean) fn apply_plan_revision(

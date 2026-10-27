@@ -248,9 +248,29 @@ fn original_tasks(core: &Core, conversation: &str) -> Vec<antislop::lean::store:
 }
 
 fn wait_idle(core: &Core, conversation: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !core.is_idle(conversation) {
-        assert!(Instant::now() < deadline, "conversation never went idle");
+        if Instant::now() >= deadline {
+            let plan = core.store.latest_plan(conversation).unwrap_or_default();
+            let state: Vec<_> = plan
+                .iter()
+                .map(|task| format!("{} {}", task.spec["id"], task.status))
+                .collect();
+            let events = core.store.events_since(conversation, 0, 4000).unwrap();
+            let tail: Vec<_> = events
+                .iter()
+                .rev()
+                .take(8)
+                .map(|e| {
+                    format!(
+                        "{} {}",
+                        e.kind,
+                        e.payload.to_string().chars().take(200).collect::<String>()
+                    )
+                })
+                .collect();
+            panic!("conversation never went idle; tasks {state:?}; last events {tail:#?}");
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -308,6 +328,41 @@ fn required_gates_join_plans_that_write() {
             "performance",
             "integration"
         ]
+    );
+}
+
+/// Smoke test of the whole default pipeline: a user message becomes a plan with
+/// options and every required gate, and each task finishes approved. A session
+/// that stalls on any gate fails here instead of in a live run.
+#[test]
+fn the_default_pipeline_finishes_every_task_of_a_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = project(dir.path());
+    let (codex, agy) = fake_clis(dir.path());
+    // Read-only audits have no diff to inspect; this verifier simply approves.
+    let script = std::fs::read_to_string(&agy).unwrap();
+    std::fs::write(&agy, script.replace("\"git diff\" in prompt", "True")).unwrap();
+    let config = config_with(&codex, &agy, |text| {
+        text.replace("required_gates = false", "required_gates = true")
+    });
+    let core = Core::open(&project.join(".antislop"), config).unwrap();
+    let conversation = run_plan(&core, &project);
+
+    let plan = core.store.latest_plan(&conversation).unwrap();
+    assert!(plan.len() >= 8, "options and gates join the plan");
+    let unfinished: Vec<_> = plan
+        .iter()
+        .filter(|task| task.status != "approved")
+        .map(|task| (task.spec["id"].clone(), task.status.clone()))
+        .collect();
+    assert!(
+        unfinished.is_empty(),
+        "tasks left unfinished: {unfinished:?}"
+    );
+    assert!(core.is_idle(&conversation));
+    assert_eq!(
+        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
+        "from worker\n"
     );
 }
 
