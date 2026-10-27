@@ -16,7 +16,7 @@ import json, sys
 prompt = sys.argv[-1]
 if "SESSION PHASE: INTERVIEW." in prompt:
     answer = "```requirements\nGoal, scope and acceptance: inspect the requested fixture.\n```"
-elif "propose" in prompt:
+elif "propose" in prompt or "SESSION PHASE: planning" in prompt:
     answer = "Plan:\n```plan\n{\"tasks\": [{\"id\": \"t1\", \"title\": \"T1\", \"goal\": \"g\", \"kind\": \"analysis\", \"verifier\": {\"focus\": \"f\"}}]}\n```"
 else:
     answer = "answer: " + prompt.splitlines()[-1] if prompt else "answer: ok"

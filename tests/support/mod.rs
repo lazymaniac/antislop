@@ -16,16 +16,20 @@ pub fn install_ledger_protocol(path: &std::path::Path) {
     std::fs::write(path, source).unwrap();
 }
 
-/// Scheduler/mail fixtures predate guided sessions and intentionally exercise
-/// persisted conversations without workflow state (including automatic plans).
-/// New-session approval gates are covered in lean_workflow.
+/// A conversation whose interview is already settled: the next message is the
+/// request, and the planner drafts the plan for it. The interview itself is
+/// covered in lean_workflow.
 #[allow(dead_code)]
 pub fn fixture_conversation(
     core: &antislop::lean::Core,
     project: &std::path::Path,
 ) -> antislop::Result<antislop::lean::store::Conversation> {
     let project = project.canonicalize()?;
-    core.store.create_conversation(&project.to_string_lossy())
+    let conversation = core.store.create_conversation(&project.to_string_lossy())?;
+    core.store
+        .interview_summary(&conversation.id, "Fixture requirements.", 0)?;
+    core.store.approve_requirements(&conversation.id)?;
+    Ok(conversation)
 }
 
 /// Keep file-writing fixtures from executing their writer branch during

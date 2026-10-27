@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::lean::core_planning_context::append_ledger;
 use crate::lean::core_prompt_helpers::orchestrator_prompt;
 use crate::lean::store::Workflow;
 use std::path::Path;
@@ -15,7 +16,7 @@ pub(super) struct PromptContext<'a> {
     pub(super) graph: &'a [Task],
     pub(super) graph_json: &'a str,
     pub(super) interviewing: bool,
-    pub(super) workflow: Option<&'a Workflow>,
+    pub(super) workflow: &'a Workflow,
     pub(super) ledger_context: Option<&'a str>,
 }
 
@@ -65,56 +66,18 @@ fn append_graph(prompt: &mut String, editable: bool, graph: &[Task], graph_json:
     prompt.push_str(&format!("\nCurrent task contracts for plan {}:\n{}\nUse submit_plan_revision with revision={{plan,base_revision,reason,tasks,retire}}. Only changed contracts go in tasks; omitted contracts are preserved. Retire a task only by replacing its obligations. Scope and permission expansion require the user's decision. Never emit graph or recover blocks.\n",graph[0].plan_id,graph_json));
 }
 
-fn prepend_phase(prompt: &mut String, interviewing: bool, workflow: Option<&Workflow>) {
+fn prepend_phase(prompt: &mut String, interviewing: bool, workflow: &Workflow) {
     if interviewing {
         prompt.insert_str(0, INTERVIEW_INSTRUCTIONS);
-    } else if let Some(workflow) = workflow {
-        prompt.insert_str(
-            0,
-            &format!(
-                "\nSESSION PHASE: {}. Collected requirements:\n{}\nPrepare or revise the complete plan for review and comments. Never start implementation yourself; separate user plan approval is required. During implementation, follow progress and respond to results or questions; propose revisions for approval if necessary.\n",
-                workflow.phase, workflow.summary
-            ),
-        );
+        return;
     }
+    prompt.insert_str(
+        0,
+        &format!(
+            "\nSESSION PHASE: {}. Collected requirements:\n{}\nThe planner drafts the first plan; you revise it for review and comments. Never start implementation yourself; the runtime starts it once the reviewed plan is accepted. During implementation, follow progress and respond to results or questions; propose revisions for approval if necessary.\n",
+            workflow.phase, workflow.summary
+        ),
+    );
 }
-
-fn append_ledger(context: Option<&str>, prompt: &mut String) {
-    let Some(context) = context else { return };
-    prompt.push_str(context);
-    prompt.push_str(LEDGER_INSTRUCTIONS);
-}
-
-pub(super) fn planning_ledger_context(core: &Core, conversation: &str) -> Result<Option<String>> {
-    load_planning_context(core.store.planning_run(conversation)?, |run| {
-        core.ledger_context(conversation, &run.id)
-    })
-}
-
-fn load_planning_context<T>(
-    run: Option<T>,
-    render: impl FnOnce(T) -> Result<String>,
-) -> Result<Option<String>> {
-    run.map(render).transpose()
-}
-
-const LEDGER_INSTRUCTIONS: &str = "\nThe runtime binds this plan to the active requirements run. Each task must include requirement_ids and criterion_ids. Every task serves at least one active requirement. Cover every mandatory criterion across the tasks; supporting tasks need not cover every criterion themselves. Return the complete fenced plan block. Requirements extraction and ledger corrections are performed by the runtime requirements analyst, including after requirements review rejection; do not emit ledger blocks. Resolve task planning findings in the plan. Do not ask the user to copy run or option identifiers.\n";
 
 const INTERVIEW_INSTRUCTIONS: &str = "\nSESSION PHASE: INTERVIEW. This overrides any instruction to propose a plan. Ask concise concrete questions in the user's language to establish the goal, scope, constraints, exclusions and observable acceptance criteria. Use answers already given; do not repeat questions. Even a self-contained request needs a requirements checkpoint. Ask one question at a time using a fenced ```question JSON block: {\"id\":\"scope\",\"context\":\"Why this decision matters\",\"question\":\"What should we build?\",\"options\":[{\"label\":\"Option A\",\"description\":\"Tradeoff\"},{\"label\":\"Option B\",\"description\":\"Tradeoff\"}]}. Offer 2–6 concrete options, put the recommended option first, mark its label as recommended in the user's language and explain its tradeoff. Do not include an Other option: the UI always supplies a custom answer field. Do not combine a question with the requirements checkpoint in the same answer. When no more questions are needed, end with a fenced ```requirements Markdown summary containing those agreed requirements and any explicit assumptions. This completes the interview. In supervised mode, wait for explicit user approval before planning; in autonomous mode planning starts automatically. Do not emit a plan block, schedule work or implement anything. The UI offers approval of the requirements summary; the user can comment before proceeding.\n";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ledger_context_storage_error_is_not_replaced_with_empty_text() {
-        let run = Some(());
-        let result =
-            load_planning_context(run, |_| Err(Error::Invalid("ledger unavailable".into())));
-
-        assert!(matches!(
-            result,
-            Err(Error::Invalid(message)) if message == "ledger unavailable"
-        ));
-    }
-}

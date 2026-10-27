@@ -297,3 +297,28 @@ fn required_gates_need_routes_for_the_work_they_add() {
     let off = without.replace("required_gates = true", "required_gates = false");
     assert!(Config::from_toml(&off).is_ok());
 }
+
+#[test]
+fn the_planner_resolves_the_planning_executor_and_nothing_else() {
+    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+    config
+        .routing
+        .get_mut(&WorkKind::Planning)
+        .unwrap()
+        .executor = "execution".into();
+    let planner = config
+        .resolve(WorkKind::Planning, RoleKind::Planner)
+        .unwrap();
+    assert_eq!(planner.profile, "execution");
+    assert_eq!(planner.role, RoleKind::Planner);
+    for kind in [WorkKind::Orchestration, WorkKind::Implementation] {
+        assert!(config.resolve(kind, RoleKind::Planner).is_err());
+    }
+    config.routing.remove(&WorkKind::Planning);
+    assert!(config.validate().is_err());
+    assert!(
+        config
+            .resolve(WorkKind::Planning, RoleKind::Planner)
+            .is_err()
+    );
+}

@@ -44,13 +44,12 @@ impl Store {
     pub(super) fn last_turn_for_roles(
         &self,
         conversation: &str,
-        role: &str,
-        other: &str,
+        roles: [&str; 3],
     ) -> Result<Option<Turn>> {
         let row = self.db().query_row(
             "SELECT id,role,status,session_id,error,upto_message,plan_id FROM turns
-             WHERE conversation_id=?1 AND role IN (?2,?3) ORDER BY started_ms DESC, rowid DESC LIMIT 1",
-            params![conversation, role, other],
+             WHERE conversation_id=?1 AND role IN (?2,?3,?4) ORDER BY started_ms DESC, rowid DESC LIMIT 1",
+            params![conversation, roles[0], roles[1], roles[2]],
             read_turn_row,
         ).optional()?;
         row.map(decode_turn_row).transpose()

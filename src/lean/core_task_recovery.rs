@@ -237,6 +237,7 @@ impl Core {
                     ),
                     &snapshot,
                 )?;
+                let verifier_project = reviewdir.to_string_lossy().into_owned();
                 let setup = TurnSetup {
                     session_policy: SessionPolicy::TaskRound {
                         task: task.id.clone(),
@@ -255,7 +256,7 @@ impl Core {
                 let cancel = AtomicBool::new(false);
                 let answer = self.turn(setup, &cancel, |fresh| {
                     tasks::verifier_turn_prompt(
-                        &project.to_string_lossy(),
+                        &verifier_project,
                         &spec,
                         if fresh {
                             ""

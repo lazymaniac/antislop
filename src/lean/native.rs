@@ -414,7 +414,7 @@ impl Session {
                 }
             })
             .map_err(|error| {
-                if error.to_string().contains("did not call") {
+                if error.to_string().contains("finish_turn") {
                     invalid(format!(
                         "{error}; the terminal shows:\n{}",
                         terminal::tail(&self.screen, SCREEN_LINES)
@@ -484,8 +484,8 @@ impl Session {
 fn turn_text(turn: &str, prompt: &str) -> String {
     format!(
         "{prompt}\n\n---\nWhen this turn is complete, call the `{}` tool of the MCP server \
-         `{}` exactly once as your last action, with turn = \"{turn}\" and result = your \
-         typed final result. Task workers use type=completed with summary, report, outputs; options also require selection. Task verifiers use type=review with report and verdict. For a saved pending question use type=needs_input with request and checkpoint. Other roles use type=report with text. Do not stop without calling it.",
+         `{}` as your last action; stop only after receiving recorded=true. If rejected, correct the reported error and resubmit, with turn = \"{turn}\" and result = your \
+         typed final result. Task workers use type=completed with summary, report, outputs; options also require selection. Task verifiers use type=review with report and verdict. For a saved pending question use type=needs_input with request set to the existing ID returned by ask_orchestrator and checkpoint set to your progress. Never put question text in request. If waiting on a revision, ask_orchestrator must first record that unresolved request; an answered question resumes the task. Other roles use type=report with text. Do not stop without calling it.",
         mcp::TOOL,
         mcp::SERVER
     )

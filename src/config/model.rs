@@ -53,6 +53,8 @@ pub enum RoleKind {
     Executor,
     Verifier,
     Orchestrator,
+    /// Drafts the first plan from the agreed requirements.
+    Planner,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

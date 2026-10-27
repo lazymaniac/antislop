@@ -15,7 +15,7 @@ fn tagged(kind: &str, mut fields: Value, required: &[&str]) -> Value {
 pub(super) fn result(role: &str) -> Value {
     let pending = tagged(
         "needs_input",
-        json!({"request":{"type":"string"},"checkpoint":{"type":"string"}}),
+        json!({"request":{"type":"string","description":"Existing question ID returned as request by ask_orchestrator, never question text. Save a checkpoint while that question is pending or awaiting_user; an answered question resumes the task."},"checkpoint":{"type":"string"}}),
         &["request", "checkpoint"],
     );
     if role.starts_with("verifier:") {

@@ -14,11 +14,13 @@ mod core_config_snapshot;
 mod core_integration;
 mod core_integration_repair;
 mod core_orchestrator_turn;
+mod core_plan_answer;
 mod core_plan_proposal;
 mod core_plan_report;
 mod core_plan_resume;
 mod core_plan_review;
 mod core_plan_revision;
+mod core_planner_turn;
 mod core_repeat_plan;
 mod core_start_plan;
 mod core_task_checks;
@@ -34,6 +36,7 @@ mod agent_tools;
 mod core_feedback_helpers;
 mod core_path_helpers;
 mod core_plan_helpers;
+mod core_planning_context;
 mod core_prompt_helpers;
 pub mod daemon;
 pub mod diff;
@@ -181,6 +184,10 @@ pub fn task_scope_hash(task: &Task) -> String {
 const ORCHESTRATOR: &str = "orchestrator";
 /// Plan feedback has an independent native CLI session.
 pub const COMMENT_ORCHESTRATOR: &str = "comment-orchestrator";
+/// Drafts the first plan; its own native CLI session and execution profile.
+pub const PLANNER: &str = "planner";
+/// The sessions that answer the user's messages, in the order they are asked.
+pub const ORCHESTRATION_ROLES: [&str; 3] = [ORCHESTRATOR, COMMENT_ORCHESTRATOR, PLANNER];
 const RUNTIME: &str = "runtime";
 /// Author of a code review's findings, and how its message starts.
 const CODE_REVIEW: &str = "code-review";

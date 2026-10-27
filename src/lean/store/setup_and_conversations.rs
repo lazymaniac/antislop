@@ -60,7 +60,9 @@ impl Store {
             project: project.into(),
             created_ms: now_ms(),
         };
-        self.db().execute(
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute(
             "INSERT INTO conversations(id,project,created_ms) VALUES(?1,?2,?3)",
             params![
                 conversation.id,
@@ -68,6 +70,8 @@ impl Store {
                 conversation.created_ms
             ],
         )?;
+        crate::lean::store::workflow::begin_interview(&tx, &conversation.id)?;
+        tx.commit()?;
         Ok(conversation)
     }
 

@@ -47,6 +47,7 @@ struct State {
     receipt: Option<(String, Value)>,
     waiting: Option<Instant>,
     waited: Duration,
+    rejected_finish: Option<(Instant, String)>,
 }
 
 struct Shared {
@@ -111,6 +112,7 @@ impl Gateway {
         state.finished = None;
         state.waited = Duration::ZERO;
         state.waiting = None;
+        state.rejected_finish = None;
         Ok(())
     }
 
@@ -162,16 +164,45 @@ impl Gateway {
                 state.expected = None;
                 return Err(Error::Invalid(CANCELLED.into()));
             }
+            if let Some((at, error)) = &state.rejected_finish
+                && at.elapsed() >= Duration::from_secs(60)
+            {
+                let error = format!(
+                    "{TOOL} rejected for turn {turn}; no accepted correction within 60 s: {error}"
+                );
+                state.expected = None;
+                return Err(invalid(error));
+            }
             let waiting = state.waited + state.waiting.map_or(Duration::ZERO, |at| at.elapsed());
             if started.elapsed().saturating_sub(waiting) >= timeout {
                 state.expected = None;
+                let rejection = state
+                    .rejected_finish
+                    .as_ref()
+                    .map_or(String::new(), |(_, error)| {
+                        format!("; last rejected submission: {error}")
+                    });
                 return Err(Error::Invalid(format!(
-                    "the agent did not call {TOOL} for turn {turn} within {} s",
+                    "no accepted {TOOL} for turn {turn} within {} s{rejection}",
                     timeout.as_secs()
                 )));
             }
             drop(state);
-            alive()?;
+            if let Err(error) = alive() {
+                let mut state = self.shared.state.lock().map_err(invalid)?;
+                if let Some(finish) = state.finished.take() {
+                    state.expected = None;
+                    return Ok(finish);
+                }
+                let rejection = state
+                    .rejected_finish
+                    .as_ref()
+                    .map_or(String::new(), |(_, reason)| {
+                        format!("; last rejected {TOOL}: {reason}")
+                    });
+                state.expected = None;
+                return Err(invalid(format!("{error}{rejection}")));
+            }
             state = self.shared.state.lock().map_err(invalid)?;
             if state.finished.is_none() {
                 state = self
@@ -322,6 +353,8 @@ fn allowed_tools(role: &str) -> Vec<&'static str> {
         vec![TOOL, "ask_orchestrator", "await_orchestrator"]
     } else if matches!(role, "orchestrator" | "comment-orchestrator") {
         vec![TOOL, "reply_to_agent", "submit_plan_revision", "task_risks"]
+    } else if role == "planner" {
+        vec![TOOL, "task_risks"]
     } else {
         vec![TOOL]
     }
@@ -330,11 +363,11 @@ fn allowed_tools(role: &str) -> Vec<&'static str> {
 fn tool_list(role: &str) -> Vec<Value> {
     allowed_tools(role).iter().map(|name| {
         let (description, fields, required) = match *name {
-            "finish_turn" => ("Record the typed result of the current turn. Only call when finished.", json!({"result":{"type":"object","description":"Tasks: completed {summary,report,outputs,selection?}, review {report,verdict}, or needs_input {request,checkpoint}. Other roles: report {text}. Each object requires type."}}), vec!["turn","result"]),
+            "finish_turn" => ("Record the typed result of the current turn. Stop only after recorded=true; if rejected, correct the error and resubmit within 60 seconds.", json!({"result":{"type":"object","description":"Tasks: completed {summary,report,outputs,selection?}, review {report,verdict}, or needs_input {request,checkpoint}. Other roles: report {text}. Each object requires type."}}), vec!["turn","result"]),
             "ask_orchestrator" => ("Ask a question about your local task without ending your turn.", json!({"request_key":{"type":"string"},"question":{"type":"string"}}), vec!["turn","request_key","question"]),
-            "await_orchestrator" => ("Wait up to 25 seconds for your answer; pending does not mean failure.", json!({"request":{"type":"string"}}), vec!["turn","request"]),
+            "await_orchestrator" => ("Wait up to 25 seconds for your answer; pending does not mean failure.", json!({"request":{"type":"string","description":"Question ID returned by ask_orchestrator, not question text"}}), vec!["turn","request"]),
             "task_risks" => ("Read the domain catalog before selecting relevant verifier.risk_ids for a local contract.", json!({"kind":{"type":"string"}}),vec!["turn","kind"]),
-            "reply_to_agent" => ("Orchestrator only: answer a pending question. Answers cannot change contracts or permissions.", json!({"request":{"type":"string"},"answer":{"type":"string"},"state":{"enum":["answered","awaiting_user"]}}), vec!["turn","request","answer"]),
+            "reply_to_agent" => ("Orchestrator only: answer a pending question. Answers cannot change contracts or permissions.", json!({"request":{"type":"string","description":"Question ID returned by ask_orchestrator, not question text"},"answer":{"type":"string"},"state":{"enum":["answered","awaiting_user"]}}), vec!["turn","request","answer"]),
             _ => ("Orchestrator only: submit a complete plan revision for independent review.", json!({"request_key":{"type":"string"},"revision":schema::revision()}), vec!["turn","request_key","revision"]),
         };
         let mut properties = fields.as_object().unwrap().clone();
@@ -349,7 +382,22 @@ fn call(shared: &Shared, params: &Value) -> Value {
     let outcome = dispatch(shared, params);
     match outcome {
         Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}]}),
-        Err(error) => json!({"isError":true,"content":[{"type":"text","text":error.to_string()}]}),
+        Err(error) => {
+            if params["name"] == TOOL
+                && let Ok(mut state) = shared.state.lock()
+                && state.expected.as_deref() == params["arguments"]["turn"].as_str()
+                && state.expected.is_some()
+                && state.finished.is_none()
+            {
+                let at = state
+                    .rejected_finish
+                    .as_ref()
+                    .map_or_else(Instant::now, |(at, _)| *at);
+                state.rejected_finish = Some((at, error.to_string()));
+                shared.changed.notify_all();
+            }
+            json!({"isError":true,"content":[{"type":"text","text":error.to_string()}]})
+        }
     }
 }
 
@@ -634,6 +682,7 @@ mod role_tests {
                 "task_risks"
             ]
         );
+        assert_eq!(allowed_tools("planner"), vec!["finish_turn", "task_risks"]);
         assert_eq!(allowed_tools("auditor"), vec!["finish_turn"]);
         assert!(
             schema::revision()["properties"]["tasks"]["items"]["properties"]["inputs"].is_object()
@@ -674,5 +723,147 @@ mod role_tests {
         let mut conflict = submission;
         conflict["arguments"]["result"]["text"] = json!("different");
         assert!(dispatch(&shared, &conflict).is_err());
+    }
+}
+
+#[cfg(test)]
+mod rejection_tests {
+    use super::*;
+
+    fn submission(turn: &str) -> Value {
+        json!({"name":TOOL,"arguments":{"turn":turn,"result":{"type":"report","text":"done"}}})
+    }
+
+    #[test]
+    fn rejected_finish_can_be_corrected_without_accepting_a_stale_turn() {
+        let gateway = Gateway::start().unwrap();
+        gateway.begin("current").unwrap();
+        gateway
+            .set_handler(Arc::new(|_, _| {
+                Err(invalid("request: unknown question ID"))
+            }))
+            .unwrap();
+        assert_eq!(call(&gateway.shared, &submission("old"))["isError"], true);
+        assert!(
+            gateway
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .rejected_finish
+                .is_none()
+        );
+        assert_eq!(
+            call(&gateway.shared, &submission("current"))["isError"],
+            true
+        );
+        assert!(gateway.shared.state.lock().unwrap().finished.is_none());
+        let rejected_at = gateway
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .rejected_finish
+            .as_ref()
+            .unwrap()
+            .0;
+        call(&gateway.shared, &submission("current"));
+        assert_eq!(
+            gateway
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .rejected_finish
+                .as_ref()
+                .unwrap()
+                .0,
+            rejected_at
+        );
+        gateway
+            .set_handler(Arc::new(|_, _| Ok(json!({"recorded":true}))))
+            .unwrap();
+        call(&gateway.shared, &submission("current"));
+        assert_eq!(
+            gateway
+                .wait(
+                    "current",
+                    &AtomicBool::new(false),
+                    Duration::ZERO,
+                    || Ok(())
+                )
+                .unwrap()
+                .text,
+            "done"
+        );
+    }
+
+    #[test]
+    fn rejection_has_bounded_recovery_time_and_resets_for_a_new_turn() {
+        let gateway = Gateway::start().unwrap();
+        gateway.begin("current").unwrap();
+        gateway.shared.state.lock().unwrap().rejected_finish = Some((
+            Instant::now() - Duration::from_secs(61),
+            "request: unknown question ID".into(),
+        ));
+        let error = gateway
+            .wait(
+                "current",
+                &AtomicBool::new(false),
+                Duration::from_secs(1800),
+                || Ok(()),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("request: unknown question ID"));
+        assert!(gateway.shared.state.lock().unwrap().expected.is_none());
+        gateway.begin("next").unwrap();
+        assert!(
+            gateway
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .rejected_finish
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn cli_exit_retains_rejection_and_closes_the_turn() {
+        let gateway = Gateway::start().unwrap();
+        gateway.begin("current").unwrap();
+        gateway.shared.state.lock().unwrap().rejected_finish =
+            Some((Instant::now(), "bad checkpoint".into()));
+        let error = gateway
+            .wait(
+                "current",
+                &AtomicBool::new(false),
+                Duration::from_secs(1800),
+                || Err(invalid("CLI exited (1)")),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("CLI exited (1)"));
+        assert!(error.contains("last rejected finish_turn: bad checkpoint"));
+        assert!(gateway.shared.state.lock().unwrap().expected.is_none());
+    }
+
+    #[test]
+    fn timeout_retains_the_rejection_reason() {
+        let gateway = Gateway::start().unwrap();
+        gateway.begin("current").unwrap();
+        gateway.shared.state.lock().unwrap().rejected_finish =
+            Some((Instant::now(), "bad checkpoint".into()));
+        let error = gateway
+            .wait(
+                "current",
+                &AtomicBool::new(false),
+                Duration::ZERO,
+                || Ok(()),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("last rejected submission: bad checkpoint"));
     }
 }

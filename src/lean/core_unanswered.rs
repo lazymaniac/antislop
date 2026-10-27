@@ -26,4 +26,39 @@ impl Core {
             .or_else(|| pending.last())
             .map(|message| message.seq))
     }
+
+    /// The messages a turn up to `upto` is asked, after what was answered.
+    pub(in crate::lean) fn asked_since(
+        &self,
+        conversation: &str,
+        answered: u64,
+        upto: u64,
+    ) -> Result<Vec<Message>> {
+        Ok(self
+            .store
+            .messages_after(conversation, answered)?
+            .into_iter()
+            .filter(|message| message.author != ORCHESTRATOR && message.seq <= upto)
+            .collect())
+    }
+
+    /// Whether the planner owns the next turn: the interview is over and no
+    /// plan exists yet. Comments and everything after the first draft belong to
+    /// the orchestrator.
+    pub(in crate::lean) fn planner_owns_turn(&self, conversation: &str, upto: u64) -> Result<bool> {
+        let planning = self.store.workflow(conversation)?.planning();
+        if !planning || !self.store.latest_plan(conversation)?.is_empty() {
+            return Ok(false);
+        }
+        let answered = self.store.last_orchestration_answered(conversation)?;
+        let asked = self.asked_since(conversation, answered, upto)?;
+        Ok(!includes_comment(&asked))
+    }
+}
+
+/// Whether a message of `asked` is a user comment on the plan.
+pub(in crate::lean) fn includes_comment(asked: &[Message]) -> bool {
+    asked
+        .iter()
+        .any(|message| message.text.starts_with(COMMENT_PREFIX))
 }

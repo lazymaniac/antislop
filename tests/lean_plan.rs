@@ -339,7 +339,11 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
         .unwrap();
     wait_idle(&core, &conversation.id);
     let messages = core.store.messages_after(&conversation.id, 0).unwrap();
-    assert_eq!(messages[1].text, "Two tasks.", "plan block is not shown");
+    let shown = messages
+        .iter()
+        .find(|message| message.author == "orchestrator")
+        .expect("the plan's words reach the user");
+    assert_eq!(shown.text, "Two tasks.", "plan block is not shown");
     let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
         .plan_id
         .clone();
@@ -491,13 +495,6 @@ if not os.path.exists('format-error-sent') or {persistent}:
         std::fs::write(&codex, source.replace(marker, &format!("{hook}\n{marker}"))).unwrap();
         let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
         let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
-        if missing {
-            core.store.begin_interview(&conversation.id).unwrap();
-            core.store
-                .interview_summary(&conversation.id, "Assess storage and TUI", 0)
-                .unwrap();
-            core.store.approve_requirements(&conversation.id).unwrap();
-        }
         core.send(&conversation.id, "Assess storage and TUI")
             .unwrap();
         wait_idle(&core, &conversation.id);
@@ -552,13 +549,12 @@ fn restart_recovers_invalid_or_missing_plans_without_a_new_user_message() {
         let message = store
             .add_message(&conversation.id, "user", "Assess storage and TUI")
             .unwrap();
-        store.begin_interview(&conversation.id).unwrap();
         store
             .interview_summary(&conversation.id, "Assess storage and TUI", message.seq)
             .unwrap();
         let message = store.approve_requirements(&conversation.id).unwrap();
         let turn = store
-            .start_turn(&conversation.id, "orchestrator", "codex", message.seq, None)
+            .start_turn(&conversation.id, "planner", "codex", message.seq, None)
             .unwrap();
         store.set_session(&turn.id, "orch").unwrap();
         store

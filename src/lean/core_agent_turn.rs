@@ -22,7 +22,7 @@ impl Core {
             access,
             upto_message,
         } = setup;
-        if role != ORCHESTRATOR && role != COMMENT_ORCHESTRATOR && role != PLAN_VERIFIER {
+        if !ORCHESTRATION_ROLES.contains(&role.as_str()) && role != PLAN_VERIFIER {
             // Cancelling a paused conversation ends what waits, too.
             while !cancel.load(Ordering::SeqCst) && self.store.paused(conversation)? {
                 std::thread::sleep(std::time::Duration::from_millis(200));
@@ -203,6 +203,10 @@ impl Core {
                     "Task role: worker\n"
                 });
             }
+            if task_role(&role).is_some() {
+            let allocation = json!({"turn":turn.id,"role":role,"cwd":spec.cwd,"session_policy":format!("{session_policy:?}")});
+            text.push_str(&format!("Current runtime allocation (for this turn only): {allocation}\nThe current cwd is authoritative for your role, including resumed turns. Paths in earlier reports identify historical allocations; do not copy them as the current checkout or infer cross-checkout equivalence from matching HEAD. Allocation metadata alone does not attest file contents or uncommitted state.\n"));
+            }
             text.push_str(&prompt(resume.is_none()));
             if resume.is_none()
                 && let SessionPolicy::TaskRound { task, round } = &session_policy
@@ -231,13 +235,19 @@ impl Core {
                     .ok_or_else(|| Error::Invalid("daemon stopped".into()))?;
                 let outcome = core.agent_tool(&conv, &agent_role, &agent_turn, tool, args);
                 if let Err(error) = &outcome {
-                    core.store.append_event(
-                        &conv,
-                        Some(&agent_turn),
-                        None,
-                        "agent_tool_rejected",
-                        &json!({"tool":tool,"error":error.to_string()}),
-                    )?;
+                    core.store
+                        .append_event(
+                            &conv,
+                            Some(&agent_turn),
+                            None,
+                            "agent_tool_rejected",
+                            &json!({"tool":tool,"error":error.to_string()}),
+                        )
+                        .map_err(|logging| {
+                            Error::Invalid(format!(
+                                "{error}; recording tool rejection also failed: {logging}"
+                            ))
+                        })?;
                 }
                 outcome
             }))?;

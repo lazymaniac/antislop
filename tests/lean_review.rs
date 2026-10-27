@@ -602,7 +602,10 @@ else:
         .iter()
         .map(|plan| plan["automatic"] == true)
         .collect();
-    assert_eq!(automatic, [false, true, false]);
+    // The finished autonomous plan ends the cycle: the next request starts a
+    // new interview, which the supervised mode leaves for the user to approve.
+    assert_eq!(automatic, [false, true]);
+    assert!(core.store.workflow(&conversation).unwrap().interviewing());
     let plans = events(&core, &conversation, "plan_proposed");
     let first = plans[0]["plan"].as_str().unwrap();
     assert!(

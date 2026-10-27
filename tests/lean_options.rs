@@ -1,4 +1,5 @@
 mod common;
+mod support;
 
 use antislop::{
     config::Config,
@@ -107,10 +108,7 @@ fn run_scenario(
         Config::from_toml(&config).unwrap(),
     )
     .unwrap();
-    let conversation = core
-        .store
-        .create_conversation(project.to_str().unwrap())
-        .unwrap();
+    let conversation = support::fixture_conversation(&core, &project).unwrap();
     let idle = || {
         let deadline = Instant::now() + Duration::from_secs(60);
         while !core.is_idle(&conversation.id) {

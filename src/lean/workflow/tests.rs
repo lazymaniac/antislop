@@ -5,7 +5,6 @@ fn completed_followup_restarts_interview_without_erasing_history() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("state.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
-    store.begin_interview(&conversation.id).unwrap();
     let first = store
         .add_message(&conversation.id, "user", "First goal")
         .unwrap();
@@ -30,7 +29,7 @@ fn completed_followup_restarts_interview_without_erasing_history() {
         .add_message(&conversation.id, "user", "More context")
         .unwrap();
     assert_eq!(
-        store.workflow(&conversation.id).unwrap().unwrap().phase,
+        store.workflow(&conversation.id).unwrap().phase,
         "implementation"
     );
     store.set_plan_status(plan, "queued", "approved").unwrap();
@@ -38,13 +37,13 @@ fn completed_followup_restarts_interview_without_erasing_history() {
         .add_message(&conversation.id, "runtime", "Finished")
         .unwrap();
     assert_eq!(
-        store.workflow(&conversation.id).unwrap().unwrap().phase,
+        store.workflow(&conversation.id).unwrap().phase,
         "implementation"
     );
     store
         .add_message(&conversation.id, "user", "Next goal")
         .unwrap();
-    let workflow = store.workflow(&conversation.id).unwrap().unwrap();
+    let workflow = store.workflow(&conversation.id).unwrap();
     assert_eq!(workflow.phase, "interview");
     assert!(workflow.summary.is_empty());
     assert_eq!(workflow.upto_message, 0);
@@ -56,10 +55,7 @@ fn completed_followup_restarts_interview_without_erasing_history() {
     store
         .add_message(&conversation.id, "user", "Next constraint")
         .unwrap();
-    assert_eq!(
-        store.workflow(&conversation.id).unwrap().unwrap().phase,
-        "interview"
-    );
+    assert_eq!(store.workflow(&conversation.id).unwrap().phase, "interview");
 }
 
 #[test]
@@ -68,7 +64,6 @@ fn acceptance_requires_current_summary_and_survives_reopening() {
     let path = dir.path().join("state.db");
     let store = Store::open(&path).unwrap();
     let conversation = store.create_conversation("project").unwrap();
-    store.begin_interview(&conversation.id).unwrap();
     assert!(store.approve_requirements(&conversation.id).is_err());
     let first = store
         .add_message(&conversation.id, "user", "Goal 👩‍💻")
@@ -105,7 +100,7 @@ fn acceptance_requires_current_summary_and_survives_reopening() {
     assert!(store.approve_requirements(&conversation.id).is_err());
     drop(store);
     let store = Store::open(&path).unwrap();
-    let workflow = store.workflow(&conversation.id).unwrap().unwrap();
+    let workflow = store.workflow(&conversation.id).unwrap();
     assert_eq!(workflow.phase, "planning");
     assert!(workflow.summary.contains("draft preservation"));
     let events = store.events_since(&conversation.id, 0, 100).unwrap();
@@ -117,7 +112,6 @@ fn automatic_planning_is_fresh_idempotent_and_does_not_forge_user_approval() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("state.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
-    store.begin_interview(&conversation.id).unwrap();
     assert!(!store.finish_interview(&conversation.id).unwrap());
     let first = store
         .add_message(&conversation.id, "user", "Inspect code")
@@ -134,10 +128,7 @@ fn automatic_planning_is_fresh_idempotent_and_does_not_forge_user_approval() {
         .unwrap();
     assert!(store.finish_interview(&conversation.id).unwrap());
     assert!(!store.finish_interview(&conversation.id).unwrap());
-    assert_eq!(
-        store.workflow(&conversation.id).unwrap().unwrap().phase,
-        "planning"
-    );
+    assert_eq!(store.workflow(&conversation.id).unwrap().phase, "planning");
     assert_eq!(
         store
             .messages_by(&conversation.id, "user", 0)
@@ -155,11 +146,13 @@ fn automatic_planning_is_fresh_idempotent_and_does_not_forge_user_approval() {
 }
 
 #[test]
-fn pre_workflow_sessions_keep_their_existing_flow() {
+fn every_conversation_begins_in_its_interview() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("state.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
-    assert!(store.workflow(&conversation.id).unwrap().is_none());
+    let workflow = store.workflow(&conversation.id).unwrap();
+    assert!(workflow.interviewing() && workflow.summary.is_empty());
+    assert!(store.workflow("missing").is_err());
 }
 
 #[test]
@@ -217,4 +210,67 @@ fn malformed_requirements_retry_is_idempotent_and_bounded() {
             .queue_requirements_format_repair(&conversation.id)
             .unwrap()
     );
+}
+
+#[test]
+fn execution_decisions_are_durable_idempotent_and_do_not_change_worker_questions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("state.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    let turn = store
+        .start_turn(&conversation.id, "orchestrator", "fixture", 0, None)
+        .unwrap();
+    let request = store
+        .ask_agent_question(&conversation.id, &turn.id, "old", "Old question?")
+        .unwrap();
+    store
+        .answer_agent_question(&conversation.id, &request, "Answered")
+        .unwrap();
+    let before = store.workflow(&conversation.id).unwrap();
+    let question = serde_json::from_value(serde_json::json!({"id":"metadata-scope","context":"Read-only metadata access needs a scope decision.","question":"Allow this exact metadata scope?","options":[{"label":"Allow"},{"label":"Reject"}]})).unwrap();
+    store
+        .ask_user_decision(&conversation.id, &question)
+        .unwrap();
+    store
+        .ask_user_decision(&conversation.id, &question)
+        .unwrap();
+    drop(store);
+    let store = Store::open(&dir.path().join("state.db")).unwrap();
+    let events = store.events_since(&conversation.id, 0, 100).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == "user_decision_requested")
+            .count(),
+        1
+    );
+    assert_eq!(
+        store.workflow(&conversation.id).unwrap().phase,
+        before.phase
+    );
+    assert_eq!(
+        store
+            .agent_question(&conversation.id, &request, None)
+            .unwrap()["state"],
+        "answered"
+    );
+    store.add_message(&conversation.id, "user", "Interview answer (metadata-scope)\nQuestion: Allow this exact metadata scope?\nAnswer: Reject").unwrap();
+    assert_eq!(
+        store
+            .agent_question(&conversation.id, &request, None)
+            .unwrap()["answer"],
+        "Answered"
+    );
+    let mut changed = question.clone();
+    changed.question = "Different decision?".into();
+    assert!(
+        store
+            .ask_user_decision(&conversation.id, &changed)
+            .unwrap_err()
+            .to_string()
+            .contains("already used")
+    );
+    let mut invalid = question;
+    invalid.options.clear();
+    assert!(store.ask_user_decision(&conversation.id, &invalid).is_err());
 }

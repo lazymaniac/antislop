@@ -278,7 +278,10 @@ answer = "First sentence.\nSecond line of the answer that is kept whole."
 "#,
         "    answer = 'unused'",
     );
-    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
+    // The orchestrator answers in words while the interview is open.
+    let conversation = core
+        .store
+        .create_conversation(dir.path().join("project").to_str().unwrap())
         .unwrap()
         .id;
     core.send(&conversation, "hello there").unwrap();
@@ -968,7 +971,10 @@ fn direct_orchestrator_message_uses_normal_workflow_and_validates_the_run() {
         "answer = 'response: ' + prompt.splitlines()[-1]",
         "    answer = 'unused'",
     );
-    let conversation = support::fixture_conversation(&core, &dir.path().join("project"))
+    // The orchestrator answers in words while the interview is open.
+    let conversation = core
+        .store
+        .create_conversation(dir.path().join("project").to_str().unwrap())
         .unwrap()
         .id;
     core.send(&conversation, "first question").unwrap();

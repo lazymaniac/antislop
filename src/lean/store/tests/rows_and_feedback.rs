@@ -199,7 +199,12 @@ fn rows_and_events_round_trip() {
             .unwrap(),
         None
     );
-    let events = store.events_since(&conversation.id, 0, 10).unwrap();
+    let events: Vec<_> = store
+        .events_since(&conversation.id, 0, 10)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind != "workflow")
+        .collect();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].payload["text"], "hello");
     assert!(

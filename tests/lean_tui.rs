@@ -7041,8 +7041,10 @@ fn configuration_sparse_routes_and_empty_providers_can_be_restored() {
         .parse::<toml_edit::DocumentMut>()
         .unwrap();
     let options = doc["routing"]["options"].clone();
+    let planning = doc["routing"]["planning"].clone();
     doc["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
     doc["routing"]["options"] = options;
+    doc["routing"]["planning"] = planning;
     doc["policy"]["required_gates"] = toml_edit::value(false);
     let mut editor = ConfigEditor::new(&doc.to_string(), "antislop.toml".into()).unwrap();
     editor.selected = editor
@@ -7099,7 +7101,7 @@ fn configuration_kind_picker_includes_every_missing_kind() {
         assert!(provider.command.is_none());
     }
 
-    // Keep the mandatory options route and offer every missing route exactly once.
+    // Keep the mandatory options and planning routes and offer every missing route exactly once.
     let mut expected: BTreeSet<String> = serde_json::to_value(Config::from_toml(source).unwrap())
         .unwrap()["routing"]
         .as_object()
@@ -7108,10 +7110,13 @@ fn configuration_kind_picker_includes_every_missing_kind() {
         .cloned()
         .collect();
     assert!(expected.remove("options"));
+    assert!(expected.remove("planning"));
     let mut doc = source.parse::<toml_edit::DocumentMut>().unwrap();
     let options = doc["routing"]["options"].clone();
+    let planning = doc["routing"]["planning"].clone();
     doc["routing"] = toml_edit::Item::Table(toml_edit::Table::new());
     doc["routing"]["options"] = options;
+    doc["routing"]["planning"] = planning;
     doc["policy"]["required_gates"] = toml_edit::value(false);
     let mut editor = ConfigEditor::new(&doc.to_string(), "antislop.toml".into()).unwrap();
     editor.selected = editor

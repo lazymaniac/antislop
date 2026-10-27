@@ -211,3 +211,21 @@ fn options_keep_writer_instructions_in_reference_data_only() {
         assert!(!prompt.contains("\nRun cargo test"));
     }
 }
+
+#[test]
+fn the_planner_gets_the_plan_format_but_not_the_orchestrators_workflow() {
+    let planner = planner_instructions();
+    let orchestrator = orchestrator_instructions();
+    for text in [&planner, &orchestrator] {
+        assert!(text.contains("```plan"));
+        assert!(text.contains("task_risks(kind)"));
+        assert!(text.contains("even when required gates are disabled"));
+        assert!(!text.contains("{KIND_NAMES}") && !text.contains("{AGENT_POOL}"));
+    }
+    for orchestrator_only in ["reply_to_agent", "submit_plan_revision", "**Interview**"] {
+        assert!(orchestrator.contains(orchestrator_only));
+        assert!(!planner.contains(orchestrator_only), "{orchestrator_only}");
+    }
+    assert!(planner.contains("You are the planner"));
+    assert!(orchestrator.contains("a dedicated planner drafts the plan"));
+}

@@ -136,7 +136,7 @@ impl Form {
         );
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Interview · choose an answer ")
+            .title(" Question · choose an answer ")
             .border_style(theme.accent());
         let inner_width = usize::from(area.width.saturating_sub(3).max(1));
         let mut rows = Vec::new();

@@ -43,7 +43,6 @@ fn full_sources_keep_source_question_and_summary_order() {
     core.store
         .register_message_source(&conversation, &run.id, answer.seq)
         .unwrap();
-    core.store.begin_interview(&conversation).unwrap();
     core.store
         .interview_summary(&conversation, "The user selected option B.", answer.seq)
         .unwrap();

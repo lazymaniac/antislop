@@ -2,6 +2,7 @@
 //! runner in .antislop/probe-evidence, independently of fixture observations.
 //! Deterministic choices are validated against actual writer input records.
 mod common;
+mod support;
 
 use antislop::{config::Config, lean::Core};
 use serde_json::{Value, json};
@@ -124,10 +125,7 @@ else:
             Config::from_toml(&text).unwrap(),
         )
         .unwrap();
-        let conversation = core
-            .store
-            .create_conversation(project.to_str().unwrap())
-            .unwrap();
+        let conversation = support::fixture_conversation(&core, &project).unwrap();
         core.send(&conversation.id, "Probe dependent mode choices")
             .unwrap();
         idle(&core, &conversation.id);

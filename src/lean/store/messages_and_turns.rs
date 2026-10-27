@@ -195,15 +195,11 @@ impl Store {
     /// The latest turn of `role`, which carries the session to resume and the
     /// last message it answered.
     pub fn last_turn(&self, conversation: &str, role: &str) -> Result<Option<Turn>> {
-        self.last_turn_for_roles(conversation, role, role)
+        self.last_turn_for_roles(conversation, [role; 3])
     }
 
     pub fn last_orchestration_turn(&self, conversation: &str) -> Result<Option<Turn>> {
-        self.last_turn_for_roles(
-            conversation,
-            crate::lean::ORCHESTRATOR,
-            crate::lean::COMMENT_ORCHESTRATOR,
-        )
+        self.last_turn_for_roles(conversation, crate::lean::ORCHESTRATION_ROLES)
     }
 }
 

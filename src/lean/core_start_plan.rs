@@ -35,9 +35,7 @@ impl Core {
 
     fn ensure_plan_can_start(&self, conversation: &str) -> Result<()> {
         require(
-            self.store
-                .workflow(conversation)?
-                .is_none_or(|workflow| workflow.phase != "interview"),
+            !self.store.workflow(conversation)?.interviewing(),
             "finish the interview and accept the reviewed plan before starting implementation",
         )
     }
@@ -253,12 +251,29 @@ impl Core {
             let Some(upto) = self.next_orchestration_upto(conversation, cancel) else {
                 return;
             };
-            if self.orchestrator_turn(conversation, upto, cancel).is_err() {
+            if self
+                .next_orchestration_turn(conversation, upto, cancel)
+                .is_err()
+            {
                 // The store itself failed; retrying would spin. The next
                 // message starts a new loop.
                 self.stop_orchestrator(conversation);
                 return;
             }
+        }
+    }
+
+    /// The first plan is drafted by the planner; every other turn is the orchestrator's.
+    fn next_orchestration_turn(
+        self: &Arc<Self>,
+        conversation: &str,
+        upto: u64,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        if self.planner_owns_turn(conversation, upto)? {
+            self.planner_turn(conversation, upto, cancel)
+        } else {
+            self.orchestrator_turn(conversation, upto, cancel)
         }
     }
 

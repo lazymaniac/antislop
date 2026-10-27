@@ -122,7 +122,11 @@ impl Config {
                 )?;
                 &self.orchestrator.profile
             }
-            RoleKind::Executor | RoleKind::Verifier => {
+            RoleKind::Executor | RoleKind::Verifier | RoleKind::Planner => {
+                require(
+                    role != RoleKind::Planner || work_kind == WorkKind::Planning,
+                    "planner role requires planning work",
+                )?;
                 let route = self.routing.get(&work_kind).ok_or_else(|| {
                     Error::Invalid(
                         "no explicit route for requested work; provider fallback is forbidden"
@@ -130,8 +134,8 @@ impl Config {
                     )
                 })?;
                 match role {
-                    RoleKind::Executor => &route.executor,
-                    _ => &route.verifier,
+                    RoleKind::Verifier => &route.verifier,
+                    _ => &route.executor,
                 }
             }
         };

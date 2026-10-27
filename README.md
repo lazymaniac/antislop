@@ -66,25 +66,29 @@ opens another by path (`/project PATH`); each keeps its own configuration,
 ## How a request runs
 
 1. The orchestrator works in the project directory, read-only, with its CLI's
-   own tools. It answers, asks, or proposes a plan: tasks with a goal, the
-   directories in scope, dependencies, whether the task changes files, and what
-   its verifier should focus on (including the risks of that task's domain).
-2. An independent plan verifier checks the plan against your request and the
-   project before you see it; a flawed plan goes back to the orchestrator.
-3. `supervised`: you accept the plan. `autonomous`: a checked plan starts by
+   own tools. It interviews you and settles the requirements.
+2. A dedicated planner, in a session of its own, drafts the plan from those
+   requirements: tasks with a goal, the directories in scope, dependencies,
+   whether the task changes files, and what its verifier should focus on
+   (including the risks of that task's domain). It runs with the executor
+   profile of `[routing.planning]`.
+3. An independent plan verifier checks the plan against your request and the
+   project before you see it; a flawed plan goes back to the orchestrator,
+   which revises it and answers your comments.
+4. `supervised`: you accept the plan. `autonomous`: a checked plan starts by
    itself, and the next one too, until a plan would repeat one that already
    ran.
-4. Every writing task first gets its own read-only options comparison and review,
+5. Every writing task first gets its own read-only options comparison and review,
    including tasks that implement quality checks. Shared architecture decisions
    do not replace that local choice.
-5. Workers receive their local contract and named inputs, then read and edit files
+6. Workers receive their local contract and named inputs, then read and edit files
    in isolated worktrees. They can ask the orchestrator through MCP while working.
-6. Independent verifiers inspect separate result checkouts and cover the task's
+7. Independent verifiers inspect separate result checkouts and cover the task's
    criteria and selected risks. Corrections continue while verification shows
    progress; unchanged unresolved obligations return to the orchestrator.
-7. Approved changes are integrated into the project while preserving user edits.
+8. Approved changes are integrated into the project while preserving user edits.
    Plan revisions require independent review and stay within accepted permissions.
-8. An independent audit checks delivery of the request before the orchestrator
+9. An independent audit checks delivery of the request before the orchestrator
    reports completion.
 
 This alpha changes the database, configuration and daemon protocol formats.

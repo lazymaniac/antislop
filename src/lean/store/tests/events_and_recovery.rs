@@ -65,7 +65,12 @@ fn running_turns_become_interrupted_on_restart() {
         .unwrap()
         .unwrap();
     assert_eq!(turn.status, TurnStatus::Interrupted);
-    let events = store.events_since(&conversation.id, 0, 10).unwrap();
+    let events: Vec<_> = store
+        .events_since(&conversation.id, 0, 10)
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind != "workflow")
+        .collect();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, "turn_finished");
     assert_eq!(events[0].payload["status"], "interrupted");
@@ -78,7 +83,8 @@ fn running_turns_become_interrupted_on_restart() {
     assert!(store.interrupt_running_turns().unwrap().is_empty());
     assert_eq!(
         store.events_since(&conversation.id, 0, 10).unwrap().len(),
-        1
+        events.len() + 1,
+        "the interview's workflow event and the interruption, nothing more"
     );
 }
 

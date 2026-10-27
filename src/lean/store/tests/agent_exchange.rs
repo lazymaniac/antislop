@@ -284,3 +284,49 @@ fn input_changes_invalidate_questions_without_leaking_them_into_the_new_turn() {
             .is_err()
     );
 }
+
+#[test]
+fn unknown_question_ids_are_actionable_and_cannot_cross_conversations() {
+    let (_dir, store, conversation, _, turn) = fixture();
+    let text = "Please provide the reviewed delivery revision";
+    let error = store
+        .agent_question(&conversation, text, Some(&turn.id))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("request ID returned by ask_orchestrator"));
+    let error = store
+        .answer_agent_question(&conversation, text, "Answer")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unknown question ID"));
+    let id = store
+        .ask_agent_question(&conversation, &turn.id, "revision", "Which revision?")
+        .unwrap();
+    assert!(
+        store
+            .answer_agent_question("other", &id, "Answer")
+            .unwrap_err()
+            .to_string()
+            .contains("unknown question ID")
+    );
+    assert_eq!(
+        store
+            .agent_question(&conversation, &id, Some(&turn.id))
+            .unwrap()["state"],
+        "pending"
+    );
+    store
+        .db()
+        .execute(
+            "UPDATE agent_questions SET state='invalidated' WHERE id=?1",
+            [&id],
+        )
+        .unwrap();
+    assert!(
+        store
+            .answer_agent_question(&conversation, &id, "Answer")
+            .unwrap_err()
+            .to_string()
+            .contains("invalidated")
+    );
+}

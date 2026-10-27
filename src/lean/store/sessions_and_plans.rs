@@ -16,19 +16,22 @@ impl Store {
     }
 
     pub fn last_orchestration_answered(&self, conversation: &str) -> Result<u64> {
-        Ok(self
-            .last_answered(conversation, crate::lean::ORCHESTRATOR)?
-            .max(self.last_answered(conversation, crate::lean::COMMENT_ORCHESTRATOR)?))
+        let mut answered = 0;
+        for role in crate::lean::ORCHESTRATION_ROLES {
+            answered = answered.max(self.last_answered(conversation, role)?);
+        }
+        Ok(answered)
     }
 
     /// Starts subsequent orchestration turns without resuming the old sessions.
     pub fn forget_orchestrator_sessions(&self, conversation: &str) -> Result<()> {
         self.db().execute(
-            "UPDATE turns SET session_id=NULL WHERE conversation_id=?1 AND role IN (?2,?3)",
+            "UPDATE turns SET session_id=NULL WHERE conversation_id=?1 AND role IN (?2,?3,?4)",
             params![
                 conversation,
-                crate::lean::ORCHESTRATOR,
-                crate::lean::COMMENT_ORCHESTRATOR
+                crate::lean::ORCHESTRATION_ROLES[0],
+                crate::lean::ORCHESTRATION_ROLES[1],
+                crate::lean::ORCHESTRATION_ROLES[2]
             ],
         )?;
         Ok(())

@@ -144,8 +144,10 @@ verifier = "review"
 
 # planning: Break work into tasks with clear goals, dependencies and completion criteria.
 # Reviewer checks: Verify requirement coverage, dependency order and explicit handling of unknowns.
+# The planner drafts every plan with this executor profile; tasks of kind
+# planning use it too. The orchestrator profile revises the plan afterwards.
 [routing.planning]
-executor = "reasoning"
+executor = "orchestrator"
 verifier = "review"
 
 # architecture: Design module boundaries, interfaces and data flow within the existing project.

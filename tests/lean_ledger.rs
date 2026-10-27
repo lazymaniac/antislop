@@ -69,6 +69,17 @@ fn unknown_requirement_source_is_a_correctable_validation_error() {
     );
 }
 impl Fixture {
+    /// A fixture whose interview is over, so plans can be drafted and accepted.
+    fn settled() -> Self {
+        let f = Self::new();
+        let user = f.store.messages_by(&f.conversation, "user", 0).unwrap()[0].seq;
+        f.store
+            .interview_summary(&f.conversation, "Keep scope", user)
+            .unwrap();
+        f.store.finish_interview(&f.conversation).unwrap();
+        f
+    }
+
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("core.db")).unwrap();
@@ -533,7 +544,7 @@ fn removed_entry_and_task_fields_are_rejected() {
 fn live_scope_edit_cancels_only_affected_process_and_rejects_late_task_updates() {
     use antislop::{config::Config, lean::Core};
     use std::time::{Duration, Instant};
-    let f = Fixture::new();
+    let f = Fixture::settled();
     f.apply(&f.change(0, vec![f.entry("r1"), f.entry("r2")]));
     let tasks = f.plan(vec![f.task("a", &["r1"], &[]), f.task("b", &["r2"], &[])]);
     f.review("extraction", "", true);
@@ -1023,7 +1034,7 @@ fn approving_requirements_plans_without_orchestrator_options() {
         time::{Duration, Instant},
     };
     for reject_plan in [false, true] {
-        let f = Fixture::new();
+        let f = Fixture::settled();
         f.apply(&f.change(0, vec![f.entry("r1")]));
         let analyst = f.turn("extraction", false);
         let mut entry = f.entry("r1");
@@ -1183,7 +1194,6 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
 #[test]
 fn accepted_requirements_resume_durably_after_restart_and_ignore_empty_manual_sets() {
     let f = Fixture::new();
-    f.store.begin_interview(&f.conversation).unwrap();
     let user = f.store.messages_by(&f.conversation, "user", 0).unwrap()[0].seq;
     f.store
         .interview_summary(&f.conversation, "Keep scope", user)
@@ -1396,7 +1406,6 @@ fn rejected_requirements_resume_after_restart_as_a_new_unapproved_proposal() {
         time::{Duration, Instant},
     };
     let f = Fixture::new();
-    f.store.begin_interview(&f.conversation).unwrap();
     let user = f.store.messages_by(&f.conversation, "user", 0).unwrap()[0].seq;
     f.store
         .interview_summary(&f.conversation, "Keep scope", user)

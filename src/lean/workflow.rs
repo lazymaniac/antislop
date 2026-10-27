@@ -1,4 +1,4 @@
-//! Durable interview checkpoint. Missing rows preserve pre-workflow sessions.
+//! Durable interview checkpoint. Every conversation starts in its interview.
 use super::{Message, Store, now_ms};
 use crate::{Result, require};
 use repair::{queue_plan_repair, repair_is_needed};
@@ -17,6 +17,16 @@ pub struct Workflow {
     pub phase: String,
     pub summary: String,
     pub upto_message: u64,
+}
+
+impl Workflow {
+    pub fn interviewing(&self) -> bool {
+        self.phase == "interview"
+    }
+
+    pub fn planning(&self) -> bool {
+        self.phase == "planning"
+    }
 }
 
 impl Store {
@@ -44,9 +54,8 @@ impl Store {
         Ok(true)
     }
 
-    pub fn workflow(&self, conversation: &str) -> Result<Option<Workflow>> {
-        Ok(self
-            .db()
+    pub fn workflow(&self, conversation: &str) -> Result<Workflow> {
+        self.db()
             .query_row(
                 "SELECT phase,summary,upto_message FROM session_workflow WHERE conversation_id=?1",
                 [conversation],
@@ -58,18 +67,33 @@ impl Store {
                     })
                 },
             )
-            .optional()?)
+            .optional()?
+            .ok_or_else(|| crate::Error::Invalid("conversation has no workflow".into()))
     }
 
-    pub fn begin_interview(&self, conversation: &str) -> Result<()> {
+    /// Execution decisions are independent of worker questions and workflow approval.
+    pub fn ask_user_decision(
+        &self,
+        conversation: &str,
+        question: &crate::lean::interview::Question,
+    ) -> Result<()> {
+        question.validate()?;
+        let payload = serde_json::to_string(question)?;
+        crate::require(payload.len() <= 16384, "user decision exceeds 16 KiB")?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        tx.execute(
-            "INSERT INTO session_workflow(conversation_id,phase) VALUES(?1,'interview')",
-            [conversation],
-        )?;
-        tx.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'workflow',?2,?3)",
-            params![conversation, serde_json::json!({"phase":"interview","summary":""}).to_string(), now_ms()])?;
+        let previous: Option<String> = tx.query_row(
+            "SELECT payload FROM events WHERE conversation_id=?1 AND kind='user_decision_requested' AND json_extract(payload,'$.id')=?2 ORDER BY seq DESC LIMIT 1",
+            params![conversation, question.id], |row| row.get(0),
+        ).optional()?;
+        if let Some(previous) = previous {
+            crate::require(
+                previous == payload,
+                "decision id already used for another question; use a new id",
+            )?;
+        } else {
+            tx.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'user_decision_requested',?2,?3)", params![conversation,payload,now_ms()])?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -145,7 +169,7 @@ fn promote_current_interview(tx: &rusqlite::Transaction<'_>, conversation: &str)
 }
 
 fn queue_planning_message(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<()> {
-    let text = "Interview complete. Prepare the plan from the collected requirements for review. Implementation requires separate user approval of the plan.";
+    let text = "Interview complete. Prepare the plan from the collected requirements for review. The runtime starts implementation once the reviewed plan is accepted.";
     tx.execute(
         "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'runtime',?2,?3)",
         params![conversation, text, now_ms()],
@@ -209,6 +233,20 @@ fn store_approval_message(
         serde_json::json!({"phase":"planning"}),
     )?;
     Ok(seq)
+}
+
+/// Every conversation begins in its interview; planning follows from it.
+pub(super) fn begin_interview(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<()> {
+    tx.execute(
+        "INSERT INTO session_workflow(conversation_id,phase) VALUES(?1,'interview')",
+        [conversation],
+    )?;
+    record_event(
+        tx,
+        conversation,
+        "workflow",
+        serde_json::json!({"phase":"interview","summary":""}),
+    )
 }
 
 fn record_event(

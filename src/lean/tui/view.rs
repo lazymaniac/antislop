@@ -232,6 +232,7 @@ pub struct View {
     pub workflow_phase: Option<String>,
     pub session_branch: Option<String>,
     pub interview_question: Option<(u64, crate::lean::interview::Question)>,
+    pub user_decision: bool,
     pub requirements_summary: String,
     pub requirements_approval_run: Option<String>,
     pub requirements_approval_event: u64,
@@ -450,7 +451,7 @@ impl View {
 
     /// The agent key of a session role (`worker:<uuid>` → `worker:t1`).
     fn agent_key(&self, role: &str) -> String {
-        if role == super::super::COMMENT_ORCHESTRATOR {
+        if role == super::super::COMMENT_ORCHESTRATOR || role == super::super::PLANNER {
             return ORCHESTRATOR.into();
         }
         match role.split_once(':') {
@@ -466,7 +467,7 @@ impl View {
     fn mail_key(name: &str) -> String {
         match name {
             ORCHESTRATOR | PLAN_VERIFIER | AUDITOR | "user" | "runtime" => name.to_owned(),
-            super::super::COMMENT_ORCHESTRATOR => ORCHESTRATOR.to_owned(),
+            super::super::COMMENT_ORCHESTRATOR | super::super::PLANNER => ORCHESTRATOR.to_owned(),
             name => match name.split_once('/') {
                 Some((task, _)) => format!("verifier:{task}"),
                 None => format!("worker:{name}"),
@@ -595,12 +596,26 @@ impl View {
                     ));
                 }
             }
+            "user_decision_requested" => {
+                if let Ok(question) =
+                    serde_json::from_value::<crate::lean::interview::Question>(payload.clone())
+                {
+                    self.user_decision = true;
+                    self.system_card(
+                        "Decision required",
+                        question.transcript(),
+                        super::theme::Tone::Waiting,
+                    );
+                    self.interview_question = Some((self.after, question));
+                }
+            }
             "interview_question" => {
                 if let Ok(question) =
                     serde_json::from_value::<crate::lean::interview::Question>(payload.clone())
                     && (2..=6).contains(&question.options.len())
                 {
                     self.interview_question = Some((self.after, question));
+                    self.user_decision = false;
                     self.requirements_summary.clear();
                 }
             }
@@ -619,7 +634,7 @@ impl View {
             }
             "workflow" => {
                 self.workflow_phase = Some(text("phase"));
-                if self.workflow_phase.as_deref() != Some("interview") {
+                if self.workflow_phase.as_deref() != Some("interview") && !self.user_decision {
                     self.interview_question = None;
                 }
                 if payload["summary"].is_string() {
@@ -643,6 +658,18 @@ impl View {
                         payload["seq"].as_u64().unwrap_or(self.latest_user_message);
                     if self.workflow_phase.as_deref() == Some("interview") {
                         self.requirements_summary.clear();
+                    }
+                    if self.user_decision
+                        && self
+                            .interview_question
+                            .as_ref()
+                            .is_some_and(|(_, question)| {
+                                text("text")
+                                    .starts_with(&format!("Interview answer ({})\n", question.id))
+                            })
+                    {
+                        self.interview_question = None;
+                        self.user_decision = false;
                     }
                     let msg = MessageEntry {
                         id: format!("m{}", self.after),
@@ -738,6 +765,18 @@ impl View {
                 agent.started_ms = event["created_ms"].as_i64().filter(|ms| *ms > 0);
                 agent.activity = "starting turn".into();
                 self.roles.insert(turn.to_owned(), key);
+            }
+            "agent_tool_rejected" => {
+                let who = if key.is_empty() { "agent" } else { &key };
+                let line = format!("{who}: {} rejected: {}", text("tool"), text("error"));
+                if let Some(agent) = self.agents.get_mut(&key) {
+                    agent.activity = line.clone();
+                }
+                if let Some(row) = self.row_of(&key) {
+                    row.activity = line.clone();
+                }
+                self.push(Style::default().fg(super::theme::ayu::RED), line.clone());
+                self.system_card("Agent tool rejected", line, super::theme::Tone::Waiting);
             }
             "turn_finished" => {
                 let failed = payload["status"] != "done";
@@ -2320,6 +2359,71 @@ mod tests {
             .filter(|c| matches!(c, TranscriptCard::System { title, .. } if title == "Progress"))
             .count();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn execution_decision_survives_workflow_replay_and_requires_its_own_answer() {
+        let mut view = View {
+            requirements_summary: "Approved requirements".into(),
+            ..View::default()
+        };
+        let question = json!({"id":"metadata","context":"Scope decision required","question":"Allow metadata?","options":[{"label":"Allow"},{"label":"Reject"}]});
+        view.apply(&event(
+            1,
+            None,
+            "workflow",
+            json!({"phase":"implementation"}),
+        ));
+        view.apply(&event(2, None, "user_decision_requested", question));
+        assert!(view.user_decision);
+        assert!(view.interview_question.is_some());
+        view.apply(&event(
+            3,
+            None,
+            "workflow",
+            json!({"phase":"implementation"}),
+        ));
+        assert!(view.interview_question.is_some());
+        view.apply(&event(
+            4,
+            None,
+            "message",
+            json!({"author":"user","seq":4,"text":"Interview answer (another)\nAnswer: Allow"}),
+        ));
+        assert!(view.user_decision);
+        view.apply(&event(5, None, "message", json!({"author":"user","seq":5,"text":"Interview answer (metadata)\nQuestion: Allow metadata?\nAnswer: Reject"})));
+        assert!(!view.user_decision);
+        assert!(view.interview_question.is_none());
+        assert_eq!(view.workflow_phase.as_deref(), Some("implementation"));
+        assert!(view.tasks.is_empty());
+    }
+
+    #[test]
+    fn tool_rejections_are_visible_without_finishing_the_turn() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            Some("t"),
+            "turn_started",
+            json!({"role":"orchestrator","provider":"codex"}),
+        ));
+        view.apply(&event(
+            2,
+            Some("t"),
+            "agent_tool_rejected",
+            json!({"tool":"finish_turn","error":"request: unknown question ID"}),
+        ));
+        assert!(view.agents[ORCHESTRATOR].running);
+        assert_eq!(view.agents[ORCHESTRATOR].turns, 0);
+        assert!(view.cards.iter().any(|card| matches!(card, TranscriptCard::System { title, text, .. } if title == "Agent tool rejected" && text.contains("request: unknown question ID"))));
+        view.apply(&event(
+            3,
+            Some("t"),
+            "turn_finished",
+            json!({"role":"orchestrator","status":"done"}),
+        ));
+        assert!(!view.agents[ORCHESTRATOR].running);
+        assert_eq!(view.agents[ORCHESTRATOR].turns, 1);
     }
 
     #[test]

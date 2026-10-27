@@ -199,8 +199,7 @@ impl Core {
     ) -> Result<()> {
         let checked = review.as_ref().is_ok_and(|verdict| verdict.approved);
         self.resolve_plan_comments(conversation, addressed, plan, checked)?;
-        let autonomous =
-            self.autonomous(conversation)? && self.store.workflow(conversation)?.is_none();
+        let autonomous = self.autonomous(conversation)?;
         let waiting = self.plan_waiting_reason(conversation, plan, specs, autonomous, checked)?;
         let scope_hash = self.plan_scope_hash(conversation, &plan.id)?;
         self.store.append_event(

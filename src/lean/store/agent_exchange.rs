@@ -55,7 +55,7 @@ impl Store {
             "SELECT turn_id,state,answer FROM agent_questions WHERE conversation_id=?1 AND id=?2",
             params![conversation, request],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?;
+        ).optional()?.ok_or_else(|| Error::Invalid("request: unknown question ID in this conversation; use the request ID returned by ask_orchestrator, not question text".into()))?;
         if let Some(current) = turn
             && current != owner
         {
@@ -77,12 +77,15 @@ impl Store {
         crate::require(!answer.trim().is_empty(), "answer is required")?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        let previous: Option<String> = tx.query_row("SELECT answer FROM agent_questions WHERE conversation_id=?1 AND id=?2 AND state IN ('pending','awaiting_user','answered')",params![conversation,request], |r| r.get(0))?;
-        let answered: bool = tx.query_row(
-            "SELECT state='answered' FROM agent_questions WHERE id=?1",
-            [request],
-            |r| r.get(0),
+        let (state, previous): (String, Option<String>) = tx.query_row(
+            "SELECT state,answer FROM agent_questions WHERE conversation_id=?1 AND id=?2",
+            params![conversation, request], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?.ok_or_else(|| Error::Invalid("request: unknown question ID in this conversation; use the request ID returned by ask_orchestrator".into()))?;
+        crate::require(
+            state != "invalidated",
+            "question was invalidated; await a fresh task turn",
         )?;
+        let answered = state == "answered";
         if answered && let Some(previous) = previous {
             crate::require(
                 previous == answer,
@@ -142,7 +145,10 @@ impl Store {
     ) -> Result<Value> {
         crate::require(!explanation.trim().is_empty(), "explanation is required")?;
         let changed = self.db().execute("UPDATE agent_questions SET state='awaiting_user',answer=?3 WHERE conversation_id=?1 AND id=?2 AND state IN ('pending','awaiting_user')",params![conversation,request,explanation])?;
-        crate::require(changed == 1, "question is not awaiting a decision")?;
+        crate::require(
+            changed == 1,
+            "question is not awaiting a decision; answered or invalidated worker questions cannot be reopened. Ask the user with a fenced question block in your final report instead",
+        )?;
         Ok(serde_json::json!({"request":request,"state":"awaiting_user","answer":explanation}))
     }
 
@@ -153,7 +159,7 @@ impl Store {
     ) -> Result<String> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let question: String = tx.query_row("SELECT q.state FROM agent_questions q JOIN turn_scopes s ON s.turn_id=q.turn_id WHERE q.id=?1 AND s.task_id=?2",params![request,task.id],|r|r.get(0))?;
+        let question: String = tx.query_row("SELECT q.state FROM agent_questions q JOIN turn_scopes s ON s.turn_id=q.turn_id WHERE q.id=?1 AND s.task_id=?2",params![request,task.id],|r|r.get(0)).optional()?.ok_or_else(|| Error::Invalid("request: no question belongs to this task; use the request ID returned by ask_orchestrator".into()))?;
         crate::require(
             matches!(question.as_str(), "pending" | "awaiting_user" | "answered"),
             "question was invalidated",

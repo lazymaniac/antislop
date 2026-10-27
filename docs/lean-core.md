@@ -11,10 +11,11 @@ The interview establishes the goal, constraints, exclusions and observable
 acceptance criteria. Requirements remain versioned in the ledger. Independent
 requirements review and plan review precede implementation.
 
-The orchestrator proposes `TaskContract` records: a goal, paths, requirement and
+The planner drafts the first plan from the agreed requirements; the orchestrator
+revises it afterwards. Both propose `TaskContract` records: a goal, paths, requirement and
 criterion links, named inputs and outputs, dependencies, work kind and verifier
 focus. `verifier.risk_ids` selects relevant entries from the domain risk catalog.
-The orchestrator reads each needed catalog through `task_risks(kind)` before
+The planner and the orchestrator read each needed catalog through `task_risks(kind)` before
 selecting IDs; workers receive only the selected subset. Additional local risks may be stated in `verifier.risks`. Plan review checks both
 coverage of the request and the selected risk subsets.
 
@@ -85,7 +86,8 @@ Task workers and task verifiers see:
 - `finish_turn(turn, result)`.
 
 The orchestrator sees `task_risks`, `reply_to_agent`, `submit_plan_revision` and
-`finish_turn`.
+`finish_turn`. The planner sees `task_risks` and `finish_turn`; it neither answers
+agents nor revises a plan.
 Other workflow roles finish with a report. Tools are authenticated, scoped to the
 session and checked against the active turn. An agent cannot choose another role
 or address another task. There are no peer messages, agent broadcasts or

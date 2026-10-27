@@ -1,6 +1,7 @@
 //! Session-bound MCP commands. Waiting never owns a store or scheduler lock.
 use super::turn_result::TurnResult;
 use super::*;
+use rusqlite::OptionalExtension;
 use serde_json::Value;
 
 impl Core {
@@ -15,7 +16,7 @@ impl Core {
         let open: bool = self.store.db().query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND conversation_id=?2 AND role=?3 AND status='running')",rusqlite::params![turn,conversation,role],|r|r.get(0))?;
         require(open, "turn is closed or belongs to another agent")?;
         if let Some((task, _)) = task_role(role) {
-            let current: bool = self.store.db().query_row("SELECT x.generation=coalesce(i.generation,0) FROM turn_inputs x LEFT JOIN task_inputs i ON i.task_id=?2 WHERE x.turn_id=?1",rusqlite::params![turn,task],|r|r.get(0))?;
+            let current: bool = self.store.db().query_row("SELECT x.generation=coalesce(i.generation,0) FROM turn_inputs x LEFT JOIN task_inputs i ON i.task_id=?2 WHERE x.turn_id=?1",rusqlite::params![turn,task],|r|r.get(0)).optional()?.ok_or_else(|| Error::Invalid(format!("turn {turn}: missing task input binding; start a fresh task turn")))?;
             require(current, "task inputs changed; this turn is superseded")?;
         }
         let required = |field: &str| {
@@ -28,8 +29,8 @@ impl Core {
         match tool {
             "task_risks" => {
                 require(
-                    role == ORCHESTRATOR || role == COMMENT_ORCHESTRATOR,
-                    "only the orchestrator selects task risk coverage",
+                    ORCHESTRATION_ROLES.contains(&role),
+                    "only the orchestrator and the planner select task risk coverage",
                 )?;
                 let kind: WorkKind = serde_json::from_value(args["kind"].clone())?;
                 Ok(
@@ -117,11 +118,16 @@ impl Core {
             if answer["state"] != "pending" || std::time::Instant::now() >= deadline {
                 return Ok(answer);
             }
-            let open: bool = self.store.db().query_row(
-                "SELECT status='running' FROM turns WHERE id=?1",
-                [turn],
-                |r| r.get(0),
-            )?;
+            let open: bool = self
+                .store
+                .db()
+                .query_row(
+                    "SELECT status='running' FROM turns WHERE id=?1",
+                    [turn],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| Error::Invalid(format!("turn {turn}: no longer exists")))?;
             require(open, "turn is no longer running")?;
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
@@ -148,9 +154,20 @@ impl Core {
                 "result.type: use report for this role",
             )?;
         }
+        if matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR)
+            && let TurnResult::Report { text } = result
+            && let Some(question) = super::interview::parse(text)
+        {
+            question?;
+        }
         if let TurnResult::NeedsInput { request, .. } = result {
-            self.store
+            let question = self
+                .store
                 .agent_question(conversation, request, Some(turn))?;
+            require(
+                question["state"] != "invalidated",
+                "request: question was invalidated; await a fresh task turn",
+            )?;
         }
         Ok(())
     }

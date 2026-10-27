@@ -247,6 +247,7 @@ impl Core {
             } else {
                 workdir.clone()
             };
+            let verifier_project = reviewdir.to_string_lossy().into_owned();
             let setup = TurnSetup {
                 session_policy: SessionPolicy::TaskRound {
                     task: task.id.clone(),
@@ -266,7 +267,7 @@ impl Core {
             let user_checks = self.check_comments(conversation, &task.plan_id, &spec.id);
             let answer = self.turn(setup, cancel, |first| {
                 let prompt = tasks::verifier_turn_prompt(
-                    &project_text,
+                    &verifier_project,
                     &spec,
                     if first { "" } else { &report },
                     changes.as_deref(),

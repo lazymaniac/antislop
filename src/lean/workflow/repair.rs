@@ -24,7 +24,7 @@ fn turn_message_limit(
     turn_id: &str,
 ) -> Result<i64> {
     Ok(tx.query_row(
-        "SELECT upto_message FROM turns WHERE id=?1 AND conversation_id=?2 AND role IN ('orchestrator','comment-orchestrator') AND status='done'",
+        "SELECT upto_message FROM turns WHERE id=?1 AND conversation_id=?2 AND role IN ('orchestrator','comment-orchestrator','planner') AND status='done'",
         params![turn_id, conversation],
         |row| row.get(0),
     )?)

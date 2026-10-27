@@ -19,6 +19,33 @@ pub struct Question {
 }
 
 impl Question {
+    pub fn validate(&self) -> Result<()> {
+        require(!self.id.trim().is_empty(), "interview question needs an id")?;
+        require(
+            !self.context.trim().is_empty() && !self.question.trim().is_empty(),
+            "interview question needs context and a question",
+        )?;
+        require(
+            (2..=6).contains(&self.options.len()),
+            "interview question needs 2–6 options",
+        )?;
+        require(
+            self.options
+                .iter()
+                .all(|option| !option.label.trim().is_empty()),
+            "interview options need labels",
+        )?;
+        require(
+            self.id.len() <= 128 && !self.id.chars().any(char::is_control),
+            "question id must be at most 128 bytes without control characters",
+        )?;
+        require(
+            serde_json::to_vec(self)?.len() <= 16384,
+            "question exceeds 16 KiB",
+        )?;
+        Ok(())
+    }
+
     pub fn transcript(&self) -> String {
         let options = self
             .options
@@ -30,7 +57,7 @@ impl Question {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "{}\n\n{}\n\n{}\n\nChoose an option or write your own answer in the interview card. /interview reopens it.",
+            "{}\n\n{}\n\n{}\n\nChoose an option or write your own answer in the question card. /question reopens it.",
             self.context, self.question, options
         )
     }
@@ -65,25 +92,7 @@ fn parse_question_block<'a>(lines: &mut impl Iterator<Item = &'a str>) -> Result
 
 fn validate_question(body: &str) -> Result<Question> {
     let question: Question = serde_json::from_str(body)?;
-    require(
-        !question.id.trim().is_empty(),
-        "interview question needs an id",
-    )?;
-    require(
-        !question.context.trim().is_empty() && !question.question.trim().is_empty(),
-        "interview question needs context and a question",
-    )?;
-    require(
-        (2..=6).contains(&question.options.len()),
-        "interview question needs 2–6 options",
-    )?;
-    require(
-        question
-            .options
-            .iter()
-            .all(|option| !option.label.trim().is_empty()),
-        "interview options need labels",
-    )?;
+    question.validate()?;
     Ok(question)
 }
 

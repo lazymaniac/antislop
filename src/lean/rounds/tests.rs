@@ -948,6 +948,22 @@ fn same_round_cli_turns_keep_known_identity_when_resumed_output_omits_it() {
             let next = core.store.last_turn(&conversation, &role).unwrap().unwrap();
             assert_eq!(next.session_id, first.session_id);
             assert!(!turn_prompt(dir.path(), &next.id).contains("Round handoff"));
+            let prompt = turn_prompt(dir.path(), &next.id);
+            let allocation = prompt
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("Current runtime allocation (for this turn only): ")
+                })
+                .unwrap();
+            let allocation: serde_json::Value = serde_json::from_str(allocation).unwrap();
+            assert_eq!(allocation["turn"], next.id);
+            assert_eq!(allocation["role"], role);
+            let recorded = core
+                .store
+                .run_context(&conversation, &next.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(allocation["cwd"], recorded.cwd.to_string_lossy().as_ref());
         }
     }
 }

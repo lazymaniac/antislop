@@ -224,6 +224,10 @@ fn validate_routing(config: &Config) -> Result<()> {
         "routing.options is required even when policy.required_gates = false; \
              add an options route with executor and verifier profiles",
     )?;
+    require(
+        config.routing.contains_key(&WorkKind::Planning),
+        "routing.planning is required: the planner drafts every plan with its executor profile",
+    )?;
     require_gate_routes(config)
 }
 

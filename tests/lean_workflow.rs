@@ -12,11 +12,10 @@ fn idle(core: &Core, conversation: &str) {
     }
 }
 
-#[test]
-fn interview_starts_planning_automatically_but_implementation_requires_approval() {
-    let dir = tempfile::tempdir().unwrap();
+/// Fake agents for a full guided session: interview, plan, review, work.
+fn guided_session_source(dir: &std::path::Path) -> String {
     for name in ["codex", "agy"] {
-        let script = dir.path().join(name);
+        let script = dir.join(name);
         std::fs::write(&script, r#"#!/usr/bin/env python3
 import json, sys, os, re
 prompt = sys.argv[-1]
@@ -52,27 +51,32 @@ else:
             .unwrap();
         common::interactive(&script);
     }
-    let source = include_str!("../examples/antislop.toml")
+    include_str!("../examples/antislop.toml")
         .replace(
             "binary = \"codex\"",
-            &format!("binary = {:?}", dir.path().join("codex")),
+            &format!("binary = {:?}", dir.join("codex")),
         )
         .replace(
             "binary = \"agy\"",
-            &format!("binary = {:?}", dir.path().join("agy")),
-        );
+            &format!("binary = {:?}", dir.join("agy")),
+        )
+}
+
+#[test]
+fn approving_requirements_starts_planning_and_implementation_requires_plan_approval() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = guided_session_source(dir.path());
     let core = Core::open(
         &dir.path().join("state"),
         Config::from_toml(&source).unwrap(),
     )
     .unwrap();
     let conversation = core.start(dir.path()).unwrap();
-    core.set_mode(&conversation.id, true).unwrap();
     assert!(core.send(&conversation.id, "/planning").is_err());
     core.send(&conversation.id, "Inspect the project").unwrap();
     idle(&core, &conversation.id);
     assert!(core.store.latest_plan(&conversation.id).unwrap().is_empty());
-    let workflow = core.store.workflow(&conversation.id).unwrap().unwrap();
+    let workflow = core.store.workflow(&conversation.id).unwrap();
     assert_eq!(workflow.phase, "interview");
     assert!(workflow.summary.is_empty());
     assert!(core.send(&conversation.id, "/planning").is_err());
@@ -94,19 +98,31 @@ else:
     assert!(answer.contains("Answer: Source code"));
     core.send(&conversation.id, &answer).unwrap();
     idle(&core, &conversation.id);
-    let workflow = core.store.workflow(&conversation.id).unwrap().unwrap();
+    let workflow = core.store.workflow(&conversation.id).unwrap();
     assert!(workflow.summary.contains("Acceptance:"));
+    assert!(core.store.latest_plan(&conversation.id).unwrap().is_empty());
 
-    // No /planning command: completing the interview schedules the plan itself.
+    // Approving the requirements schedules the plan; it still waits for acceptance.
+    core.send(&conversation.id, "/planning").unwrap();
+    idle(&core, &conversation.id);
     let tasks = core.store.latest_plan(&conversation.id).unwrap();
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].status, "proposed");
-    assert_eq!(
+    // The planner, not the orchestrator, drafted it; the user still hears one voice.
+    let planner = core
+        .store
+        .last_turn(&conversation.id, antislop::lean::PLANNER)
+        .unwrap()
+        .expect("the planner drafted the first plan");
+    assert_eq!(planner.status, antislop::lean::store::TurnStatus::Done);
+    assert!(
         core.store
-            .workflow(&conversation.id)
+            .messages_by(&conversation.id, "planner", 0)
             .unwrap()
-            .unwrap()
-            .phase,
+            .is_empty()
+    );
+    assert_eq!(
+        core.store.workflow(&conversation.id).unwrap().phase,
         "planning"
     );
     assert!(
@@ -146,11 +162,7 @@ else:
     core.accept_plan(&conversation.id, &revised[0].plan_id)
         .unwrap();
     assert_eq!(
-        core.store
-            .workflow(&conversation.id)
-            .unwrap()
-            .unwrap()
-            .phase,
+        core.store.workflow(&conversation.id).unwrap().phase,
         "implementation"
     );
     idle(&core, &conversation.id);
@@ -161,10 +173,10 @@ else:
             .iter()
             .any(|s| s.role.starts_with("worker:"))
     );
-    // A completed interview left by an older daemon must resume without /planning.
+    // A completed interview left by a stopped daemon resumes without /planning.
+    // Autonomous conversations then carry on to the checked plan's acceptance;
+    // supervised ones wait for explicit requirements approval.
     let waiting = core.start(dir.path()).unwrap();
-    // Match the first conversation's autonomous interview policy. Supervised
-    // conversations correctly wait for explicit requirements approval.
     core.set_mode(&waiting.id, true).unwrap();
     let message = core
         .store
@@ -184,15 +196,133 @@ else:
     )
     .unwrap();
     idle(&core, &waiting.id);
-    assert_eq!(
-        core.store.workflow(&waiting.id).unwrap().unwrap().phase,
-        "planning"
-    );
     assert!(!core.store.latest_plan(&waiting.id).unwrap().is_empty());
+    assert_eq!(
+        core.store.workflow(&waiting.id).unwrap().phase,
+        "implementation"
+    );
+}
+
+#[test]
+fn autonomous_mode_accepts_the_checked_plan_after_the_interview() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = guided_session_source(dir.path());
+    let core = Core::open(
+        &dir.path().join("state"),
+        Config::from_toml(&source).unwrap(),
+    )
+    .unwrap();
+    let conversation = core.start(dir.path()).unwrap();
+    core.set_mode(&conversation.id, true).unwrap();
+    core.send(&conversation.id, "Inspect the project").unwrap();
+    idle(&core, &conversation.id);
+    let event = core
+        .store
+        .events_since(&conversation.id, 0, 100)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "interview_question")
+        .unwrap();
+    let answer = format!(
+        "Interview answer ({})\nAnswer: Source code",
+        event.payload["id"].as_str().unwrap()
+    );
+    core.send(&conversation.id, &answer).unwrap();
+    idle(&core, &conversation.id);
+    // Planning, the plan check and acceptance all happened without the user.
+    let planner = core
+        .store
+        .last_turn(&conversation.id, antislop::lean::PLANNER)
+        .unwrap()
+        .expect("the planner drafted the plan");
+    assert_eq!(planner.status, antislop::lean::store::TurnStatus::Done);
+    let proposed = core
+        .store
+        .events_since(&conversation.id, 0, 1000)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "plan_proposed")
+        .expect("a checked plan was proposed");
+    assert_eq!(proposed.payload["automatic"], true);
+    assert_eq!(
+        core.store.workflow(&conversation.id).unwrap().phase,
+        "implementation"
+    );
     assert!(
         core.store
-            .last_turn(&waiting.id, "worker:t1")
+            .sessions(&conversation.id)
             .unwrap()
-            .is_none()
+            .iter()
+            .any(|s| s.role.starts_with("worker:"))
     );
+}
+
+#[test]
+fn orchestrator_requests_a_user_decision_during_execution_without_reopening_worker_questions() {
+    for phase in ["planning", "implementation"] {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("codex");
+        std::fs::write(&script, r#"#!/usr/bin/env python3
+import json, sys
+prompt = sys.argv[-1]
+if 'Interview answer (metadata-scope)' in prompt:
+    answer = 'Decision received; existing gates remain unchanged.'
+else:
+    answer = '```question\n' + json.dumps({'id':'metadata-scope','context':'Allow read-only access to the current project worktree metadata. No writes or historical evidence reconstruction.','question':'Approve this metadata scope?','options':[{'label':'Approve'},{'label':'Reject'}]}) + '\n```'
+print(json.dumps({'type':'thread.started','thread_id':'execution-decision'}))
+print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':answer}}))
+print(json.dumps({'type':'turn.completed'}))
+"#).unwrap();
+        common::interactive(&script);
+        let source = include_str!("../examples/antislop.toml")
+            .replace("binary = \"codex\"", &format!("binary = {:?}", script));
+        let core = Core::open(
+            &dir.path().join("state"),
+            Config::from_toml(&source).unwrap(),
+        )
+        .unwrap();
+        let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
+        let mut task = core.store.add_plan(&conversation.id, &[serde_json::json!({"id":"context","title":"Context","goal":"Inspect source","kind":"analysis","verifier":{"focus":"Inspect evidence"}})]).unwrap().remove(0);
+        if phase == "implementation" {
+            core.store
+                .queue_plan(&conversation.id, &task.plan_id)
+                .unwrap();
+        }
+        task.status = "coordinating".into();
+        core.store.update_task(&task).unwrap();
+        core.send(&conversation.id, "Present the scope decision")
+            .unwrap();
+        idle(&core, &conversation.id);
+        let events = core.store.events_since(&conversation.id, 0, 1000).unwrap();
+        let question = events
+            .iter()
+            .find(|event| event.kind == "user_decision_requested")
+            .expect("execution question is delivered");
+        assert_eq!(question.payload["id"], "metadata-scope");
+        assert!(!events.iter().any(|event| event.kind == "planning_progress"
+            && event.payload["text"] == "Plan draft requires correction"));
+        assert_eq!(core.store.workflow(&conversation.id).unwrap().phase, phase);
+        assert_eq!(
+            core.store.task_by_id(&task.id).unwrap().unwrap().status,
+            "coordinating"
+        );
+        core.send(
+        &conversation.id,
+        "Interview answer (metadata-scope)\nQuestion: Approve this metadata scope?\nAnswer: Reject",
+    )
+    .unwrap();
+        idle(&core, &conversation.id);
+        assert_eq!(
+            core.store.task_by_id(&task.id).unwrap().unwrap().status,
+            "coordinating"
+        );
+        assert!(
+            !core
+                .store
+                .events_since(&conversation.id, 0, 1000)
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == "agent_tool_rejected")
+        );
+    }
 }

@@ -1,8 +1,11 @@
 use super::*;
 mod context;
 mod prompt;
+use super::core_plan_answer::PlanAnswer;
+use super::core_planning_context::planning_ledger_context;
+use super::core_unanswered::includes_comment;
 use context::comment_context;
-use prompt::{PromptContext, orchestrator_prompt_text, planning_ledger_context};
+use prompt::{PromptContext, orchestrator_prompt_text};
 
 impl Core {
     pub(in crate::lean) fn orchestrator_turn(
@@ -16,15 +19,8 @@ impl Core {
         // A failed turn may never have reached the agent: repeat everything
         // asked since the last answer.
         let answered = self.store.last_orchestration_answered(conversation)?;
-        let asked: Vec<Message> = self
-            .store
-            .messages_after(conversation, answered)?
-            .into_iter()
-            .filter(|message| message.author != ORCHESTRATOR && message.seq <= upto)
-            .collect();
-        let is_comment = asked
-            .iter()
-            .any(|message| message.text.starts_with(COMMENT_PREFIX));
+        let asked = self.asked_since(conversation, answered, upto)?;
+        let is_comment = includes_comment(&asked);
         let setup = TurnSetup {
             session_policy: SessionPolicy::Role,
             conversation,
@@ -51,8 +47,8 @@ impl Core {
             .collect();
         let comment_context = comment_context(self, conversation, upto, answered, is_comment)?;
         let workflow = self.store.workflow(conversation)?;
-        let interviewing = workflow.as_ref().is_some_and(|w| w.phase == "interview");
-        if workflow.as_ref().is_some_and(|w| w.phase == "planning") {
+        let interviewing = workflow.interviewing();
+        if workflow.planning() {
             self.store.append_event(
                 conversation,
                 None,
@@ -81,7 +77,7 @@ impl Core {
                 graph: &graph,
                 graph_json: &graph_json,
                 interviewing,
-                workflow: workflow.as_ref(),
+                workflow: &workflow,
                 ledger_context: ledger_context.as_deref(),
             })
         })?
@@ -93,13 +89,7 @@ impl Core {
         // after a deferred original comment revision.
         let (answer, addressed) = feedback::split(&answer);
 
-        let planning = workflow.as_ref().is_some_and(|w| w.phase == "planning");
-        let (mut text, mut plan) = if planning && !editable_graph && !is_comment {
-            let (text, plan) = tasks::parse_required_plan(&answer);
-            (text, Some(plan))
-        } else {
-            tasks::parse_plan(&answer)
-        };
+        let (mut text, mut plan) = tasks::parse_plan(&answer);
         if interviewing {
             match interview::parse(&text) {
                 Some(Ok(question)) => {
@@ -125,64 +115,35 @@ impl Core {
             }
             plan = None;
         }
-        if workflow.as_ref().is_some_and(|w| w.phase == "planning") {
+        let mut awaiting_decision = false;
+        if !interviewing && let Some(question) = interview::parse(&text) {
+            let question = question?;
+            self.store.ask_user_decision(conversation, &question)?;
+            awaiting_decision = true;
+            text = question.transcript();
+            // A question never submits a plan or changes existing permissions.
+            plan = None;
+        }
+        if workflow.planning() && !awaiting_decision {
             self.store.append_event(conversation, None, None, "planning_progress", &json!({"text": if plan.as_ref().is_some_and(|p| p.is_ok()) { "Plan draft ready" } else { "Plan draft requires correction" }}))?;
         }
         self.store.add_message(conversation, ORCHESTRATOR, &text)?;
         if interviewing && !cancel.load(Ordering::SeqCst) && self.autonomous(conversation)? {
             self.store.finish_interview(conversation)?;
         }
-        match plan {
-            Some(Ok(specs)) => self.propose(
+        self.handle_plan_answer(
+            PlanAnswer {
                 conversation,
-                &project,
-                &text,
-                PlanProposal {
-                    config: &config,
-                    specs: &specs,
-                },
-                addressed.as_deref(),
-                cancel,
-            )?,
-            Some(Err(error)) => {
-                let retrying =
-                    if let Some(turn) = self.store.last_orchestration_turn(conversation)? {
-                        self.store.queue_plan_format_repair(
-                            conversation,
-                            &turn.id,
-                            &error.to_string(),
-                        )?
-                    } else {
-                        false
-                    };
-                self.store.append_event(
-                    conversation,
-                    None,
-                    None,
-                    "plan_invalid",
-                    &json!({"error":error.to_string(),"retrying":retrying,"retry":if retrying {"Correcting the plan format automatically."} else {"The plan could not be decoded after two correction attempts. Send a message to retry; your requirements are preserved."}}),
-                )?;
-            }
-            None => {
-                // Answered in words only: the comments stay open for the user.
-                if is_comment {
-                    let replied: Vec<u64> = self
-                        .store
-                        .comments(conversation, "open")?
-                        .into_iter()
-                        .filter(|c| c.message > answered && c.message <= upto)
-                        .map(|c| c.id)
-                        .collect();
-                    self.store.append_event(
-                        conversation,
-                        None,
-                        None,
-                        "comment_replied",
-                        &json!({"comments": replied}),
-                    )?;
-                }
-            }
-        }
-        Ok(())
+                project: &project,
+                config: &config,
+                text: &text,
+                plan,
+                addressed: addressed.as_deref(),
+                is_comment,
+                answered,
+                upto,
+            },
+            cancel,
+        )
     }
 }

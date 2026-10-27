@@ -28,7 +28,6 @@ impl Core {
                 &json!({"branch": branch}),
             )?;
         }
-        self.store.begin_interview(&conversation.id)?;
         Ok(conversation)
     }
 

@@ -2339,7 +2339,7 @@ impl App {
         match text.as_str() {
             "" => {}
             "/requirements" => self.open_ledger(),
-            "/interview" => {
+            "/interview" | "/question" => {
                 self.sync_interview();
                 if let Some(form) = self
                     .interview_forms
@@ -2348,7 +2348,7 @@ impl App {
                 {
                     form.visible = true;
                 } else {
-                    self.notice = Some("No interview question is waiting for an answer.".into());
+                    self.notice = Some("No question is waiting for an answer.".into());
                 }
             }
             "/plans" => {
@@ -3101,7 +3101,7 @@ impl App {
     }
 
     fn interview_visible(&self) -> bool {
-        self.view.workflow_phase.as_deref() == Some("interview")
+        (self.view.workflow_phase.as_deref() == Some("interview") || self.view.user_decision)
             && self
                 .view
                 .interview_question
@@ -3144,7 +3144,11 @@ impl App {
 
     fn key_inner(&mut self, key: event::KeyEvent) -> bool {
         if self.native_focused() {
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(']') {
+            // Legacy terminals send Ctrl+] as 0x1d, which crossterm decodes
+            // as Ctrl+5. Enhanced keyboard protocols can report Ctrl+] directly.
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char(']' | '5'))
+            {
                 if let Some(details) = &mut self.details {
                     details.native_focus = false;
                 }
@@ -4532,7 +4536,7 @@ impl App {
         let theme = Theme::from_env();
         if area.width >= SIDE_BY_SIDE_BREAKPOINT {
             let chat_width = (body.width / 3).max(34);
-            let [chat, sep_col, team] = Layout::horizontal([
+            let [chat, _, team] = Layout::horizontal([
                 Constraint::Length(chat_width),
                 Constraint::Length(1),
                 Constraint::Min(1),
@@ -4540,13 +4544,6 @@ impl App {
             .areas(body);
             self.chat_area = chat;
             self.draw_chat(frame, chat, &theme);
-            let separator = theme.glyphs().vertical;
-            let buf = frame.buffer_mut();
-            for y in sep_col.top()..sep_col.bottom() {
-                buf[(sep_col.x, y)]
-                    .set_symbol(separator)
-                    .set_style(theme.separator(false));
-            }
             self.draw_graph(frame, team);
         } else if self.focus == Focus::Chat {
             self.chat_area = body;
@@ -5796,6 +5793,24 @@ pub mod tests {
     }
 
     #[test]
+    fn native_escape_accepts_legacy_and_enhanced_ctrl_bracket() {
+        for ch in [']', '5'] {
+            let mut app = test_app();
+            app.input = InputBuffer::with_text("Unsent draft 👩‍💻");
+            let mut details = Details::new("worker:t1".into());
+            details.native_focus = true;
+            app.details = Some(details);
+            assert!(app.native_focused());
+
+            app.key(key_ctrl(ch));
+
+            assert!(!app.native_focused());
+            assert!(app.details.is_some());
+            assert_eq!(app.input.text, "Unsent draft 👩‍💻");
+        }
+    }
+
+    #[test]
     fn ac_key_01_unconditional_pageup_transcript_scroll() {
         let mut app = test_app();
         app.input = InputBuffer::with_text("multiline\ndraft\nmessage");
@@ -5916,6 +5931,21 @@ pub mod tests {
         app.details = Some(Details::new("verifier:t1".into()));
         app.key(key_press(KeyCode::Char('c')));
         assert_eq!(app.editor.as_ref().unwrap().target, "verifier:t1");
+    }
+
+    #[test]
+    fn execution_decision_opens_the_question_form_without_discarding_chat() {
+        let mut app = test_app();
+        app.input = InputBuffer::with_text("Unsent chat draft 👩‍💻");
+        app.view.workflow_phase = Some("implementation".into());
+        app.view.user_decision = true;
+        let question = serde_json::from_value(serde_json::json!({"id":"metadata","context":"Scope decision","question":"Allow metadata?","options":[{"label":"Allow"},{"label":"Reject"}]})).unwrap();
+        app.view.interview_question = Some((42, question));
+        app.sync_interview();
+        assert!(app.interview_visible());
+        assert_eq!(app.input.text, "Unsent chat draft 👩‍💻");
+        app.view.user_decision = false;
+        assert!(!app.interview_visible());
     }
 
     #[test]
@@ -6273,10 +6303,10 @@ pub mod tests {
             (x0..x1).map(|x| buffer[(x, y)].symbol()).collect()
         };
         let title_row = (0..24)
-            .find(|&y| row(y, 0, 120).contains("Interview · choose an answer"))
+            .find(|&y| row(y, 0, 120).contains("Question · choose an answer"))
             .expect("form is drawn");
         let line = row(title_row, 0, 120);
-        let col = line[..line.find("Interview").unwrap()].chars().count() as u16;
+        let col = line[..line.find("Question").unwrap()].chars().count() as u16;
         assert!(col < chat.right(), "form title must sit in the chat panel");
         assert!(
             (0..24).any(|y| row(y, graph.x, graph.right()).contains("orchestrator")),
