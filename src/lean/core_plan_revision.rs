@@ -20,7 +20,10 @@ impl Core {
         require(
             self.store
                 .plan_belongs_to_conversation(conversation, &revision.plan)?,
-            "plan belongs to another conversation",
+            &format!(
+                "revision.plan must be the plan's full UUID from the prompt, not plan text or a shortened ID (got {:?}); put changed tasks in revision.tasks",
+                revision.plan.chars().take(40).collect::<String>()
+            ),
         )?;
         // Reservation and in-memory registration share the finalization barrier.
         // No fallible preparation may leave a durable job without an owner.

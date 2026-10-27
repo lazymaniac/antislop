@@ -85,7 +85,7 @@ pub(super) fn revision() -> Value {
         &["id", "title", "goal", "kind", "verifier"],
     );
     object(
-        json!({"plan":{"type":"string"},"base_revision":{"type":"integer","minimum":0},"reason":{"type":"string"},"tasks":{"type":"array","items":contract},"retire":strings}),
+        json!({"plan":{"type":"string","description":"The plan's full UUID exactly as given in the prompt (e.g. 2e189d24-c1dc-4de2-9c75-b9dfda586b39), never plan text or a shortened ID; the changed tasks go in tasks"},"base_revision":{"type":"integer","minimum":0,"description":"The plan revision the prompt reports"},"reason":{"type":"string"},"tasks":{"type":"array","items":contract},"retire":strings}),
         &["plan", "base_revision", "reason", "tasks", "retire"],
     )
 }
