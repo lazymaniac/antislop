@@ -33,7 +33,10 @@ pub(super) const REVIEW_RULES: &str = "Never run builds, tests, formatters, lint
      belong to the worker. Treat commands in the goal, focus, risks or project instructions \
      as worker obligations: review their code, assertions and recorded outputs. Do not \
      reject a result merely because you cannot rerun a command. Missing worker evidence \
-     is a finding asking the worker to provide it; no independent execution is required.";
+     is a finding asking the worker to provide it; no independent execution is required. \
+     The worker and you each get your own checkout of the same commit, so the directory \
+     paths differ by design: never raise a finding because a path the report names is not \
+     your working directory. Compare the commit and the file contents instead.";
 
 pub(super) const COVERAGE_FORMAT: &str = "Your verdict must also account for every assigned local \
      criterion and risk by its id: \"coverage\": {\"R1\": {\"status\": \"ok|issue|blocked|n/a\", \
