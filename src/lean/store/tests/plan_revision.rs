@@ -363,3 +363,28 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
         .unwrap();
     assert_eq!(event.payload["id"], fresh.id);
 }
+
+#[test]
+fn rejected_revision_reviews_are_counted_since_the_last_applied_one() {
+    let (_dir, store, conversation, _run, tasks) = fixture();
+    let plan = tasks[0].plan_id.clone();
+    let job = |key: &str, status: &str, error: Option<&str>| {
+        store
+            .db()
+            .execute(
+                "INSERT INTO plan_revision_jobs(id,conversation_id,plan_id,request_key,proposal,status,error) VALUES(?1,?2,?3,?4,'{}',?5,?6)",
+                rusqlite::params![crate::id(), conversation, plan, key, status, error],
+            )
+            .unwrap();
+    };
+    assert_eq!(store.rejected_revisions_in_a_row(&plan).unwrap(), 0);
+    job("a", "rejected", Some("revision review rejected: - x"));
+    job("b", "rejected", Some("stale plan revision"));
+    job("c", "rejected", Some("revision review rejected: - y"));
+    // Only review rejections count; a stale or malformed revision is not one.
+    assert_eq!(store.rejected_revisions_in_a_row(&plan).unwrap(), 2);
+    job("d", "applied", None);
+    assert_eq!(store.rejected_revisions_in_a_row(&plan).unwrap(), 0);
+    job("e", "rejected", Some("revision review rejected: - z"));
+    assert_eq!(store.rejected_revisions_in_a_row(&plan).unwrap(), 1);
+}

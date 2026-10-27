@@ -157,6 +157,24 @@ pub struct Policy {
     /// Most tasks of a plan that run at the same time.
     #[serde(default = "default_max_parallel")]
     pub max_parallel: usize,
+    /// Every writer gets a dedicated read-only options task that compares
+    /// approaches before it starts. Off, writers start straight from their
+    /// contract: for mechanical work (a refactor to fixed limits) the
+    /// comparison costs two agent runs per writer and decides nothing.
+    #[serde(default = "default_local_options")]
+    pub local_options: bool,
+    /// Most tasks a plan may be drafted with, before the runtime adds options
+    /// and gates. A larger plan is sent back to be grouped by module.
+    #[serde(default = "default_max_tasks")]
+    pub max_tasks: usize,
+}
+
+fn default_local_options() -> bool {
+    true
+}
+
+fn default_max_tasks() -> usize {
+    24
 }
 
 fn default_required_gates() -> bool {

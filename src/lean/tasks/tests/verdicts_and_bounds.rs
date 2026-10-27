@@ -151,6 +151,14 @@ fn verdicts_parse_or_fall_back_to_the_whole_answer() {
 }
 
 #[test]
+fn a_verdict_fenced_as_json_still_counts_but_other_json_does_not() {
+    let fenced = parse_verdict("Approved.\n```json\n{\"approved\": true, \"findings\": []}\n```");
+    assert!(fenced.approved);
+    let unrelated = parse_verdict("Sample:\n```json\n{\"name\": \"x\"}\n```");
+    assert!(!unrelated.approved);
+}
+
+#[test]
 fn bound_cuts_on_graphemes_within_a_byte_budget() {
     assert_eq!(bound("short", 10), "short");
     assert_eq!(bound("abcd", 4), "abcd");
@@ -212,4 +220,24 @@ fn verdict_json_label_renders_findings_as_text() {
     );
     assert!(!verdict.approved);
     assert_eq!(findings_text(&verdict.findings), "- Preserve Ctrl+O.");
+}
+
+#[test]
+fn only_structured_medium_and_low_findings_are_minor() {
+    let rejected = |findings: serde_json::Value| {
+        parse_verdict(&format!(
+            "```verdict\n{}\n```",
+            json!({"approved": false, "findings": findings})
+        ))
+    };
+    assert!(only_minor_findings(&rejected(
+        json!([{"severity": "medium", "issue": "x"}, {"severity": "low", "issue": "y"}])
+    )));
+    assert!(!only_minor_findings(&rejected(
+        json!([{"severity": "medium", "issue": "x"}, {"severity": "high", "issue": "y"}])
+    )));
+    assert!(!only_minor_findings(&rejected(json!([]))));
+    assert!(!only_minor_findings(&parse_verdict(
+        "REJECT without a block"
+    )));
 }

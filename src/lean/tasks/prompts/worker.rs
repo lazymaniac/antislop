@@ -92,6 +92,10 @@ pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
          you need yourself with your tools.\n\n\
          Task: {}\nTask id: {}\nGoal: {}\nScope: {}\n\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          {blocker}\n\n{team_note}\n\n\
+         Your checkout is the one the runtime allocated; a commit hash or path in the task or \
+         a dependency's report that differs from yours is not a blocker unless the files you \
+         must work on differ. Report the commit you actually observed instead of asking for \
+         alignment.\n\n\
          End with a complete report of your result; an independent verifier \
          will check it against the files.",
         task.title,

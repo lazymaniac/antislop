@@ -1,7 +1,10 @@
 use super::*;
 
 pub fn parse_verdict(answer: &str) -> Verdict {
+    // A reviewer that fences its verdict as plain `json` still gave a structured
+    // verdict; it must parse as one, so arbitrary JSON is never an approval.
     let mut verdict = fenced(answer, "verdict")
+        .or_else(|| fenced(answer, "json"))
         .and_then(|(_, body)| {
             let body = body
                 .strip_prefix("JSON\n")
@@ -25,6 +28,28 @@ pub fn parse_verdict(answer: &str) -> Verdict {
     });
     verdict.approved &= !blocking;
     verdict
+}
+
+/// Plan and revision reviews that rejected this many times in a row stop
+/// blocking on findings that are only medium or low: they travel with the plan
+/// as notes. Without this, a reviewer finding something new each round keeps a
+/// sound plan from ever running.
+pub const TOLERATED_PLAN_REJECTIONS: usize = 2;
+
+/// Whether every finding of a rejection is a structured medium or low one. An
+/// unstructured rejection or a high or critical finding is never minor.
+pub fn only_minor_findings(verdict: &Verdict) -> bool {
+    !verdict.approved
+        && !verdict.findings.is_empty()
+        && verdict.findings.iter().all(|finding| {
+            matches!(
+                finding["severity"]
+                    .as_str()
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("medium" | "low")
+            )
+        })
 }
 
 /// What every verification checks whatever the kind of work (design §7.6,

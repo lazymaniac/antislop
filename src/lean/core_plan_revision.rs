@@ -120,6 +120,7 @@ impl Core {
         let specs = super::core_plan_helpers::finalize_plan(
             revision.merge(&baseline)?,
             self.config_snapshot().policy.required_gates,
+            self.config_snapshot().policy.local_options,
         );
         tasks::validate(&specs)?;
         self.validate_revision_scope(conversation, &revision.plan, &specs)?;
@@ -164,13 +165,27 @@ impl Core {
     ) -> Result<()> {
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let review = self.review(conversation,PLAN_VERIFIER,Some(&revision.plan),&project,cancel,|_,request|format!("{}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate local inputs/outputs, selected risk coverage, dedicated options for every writer and all quality gates. Reason: {}. Previous contracts: {}",tasks::plan_review_prompt(&project.to_string_lossy(),request,specs),revision.reason,serde_json::to_string(&baseline.iter().map(|t|&t.spec).collect::<Vec<_>>()).unwrap_or_default()))?.map_err(Error::Invalid)?;
-        require(
-            review.approved,
-            &format!(
-                "revision review rejected: {}",
-                tasks::findings_text(&review.findings)
-            ),
-        )?;
+        if !review.approved
+            && tasks::only_minor_findings(&review)
+            && self.store.rejected_revisions_in_a_row(&revision.plan)?
+                >= tasks::TOLERATED_PLAN_REJECTIONS
+        {
+            self.notice(
+                conversation,
+                &format!(
+                    "revision applied with unresolved minor review findings after repeated rejections: {}",
+                    tasks::findings_text(&review.findings)
+                ),
+            );
+        } else {
+            require(
+                review.approved,
+                &format!(
+                    "revision review rejected: {}",
+                    tasks::findings_text(&review.findings)
+                ),
+            )?;
+        }
         require(!cancel.load(Ordering::SeqCst), "revision cancelled")?;
         let affected = affected_tasks(baseline, specs);
         let barrier = {

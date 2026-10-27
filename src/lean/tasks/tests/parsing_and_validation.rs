@@ -130,3 +130,27 @@ fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
     unknown["verifier"]["summery"] = Value::String("typo".into());
     assert!(parse(&unknown).is_err());
 }
+
+#[test]
+fn a_plan_with_out_of_order_dependencies_and_foreign_risks_is_repaired_not_rejected() {
+    let first = json!({"id": "consumer", "title": "Consumer", "goal": "Use it",
+        "kind": "analysis", "depends_on": ["scout"],
+        "verifier": {"focus": "claims", "risk_ids": ["R002", "R999"]}});
+    let second = json!({"id": "scout", "title": "Scout", "goal": "Find it",
+        "kind": "analysis", "verifier": {"focus": "claims"}});
+    let answer = format!("```plan\n{}\n```", json!({"tasks": [first, second]}));
+    let tasks = parse_plan(&answer).1.unwrap().unwrap();
+    let ids: Vec<_> = tasks.iter().map(|task| task.id.as_str()).collect();
+    assert_eq!(ids, ["scout", "consumer"]);
+    assert!(tasks[1].verifier.risk_ids.iter().all(|id| id != "R999"));
+
+    let cycle = |a: &str, b: &str| {
+        json!({"id": a, "title": a, "goal": "g", "kind": "analysis",
+            "depends_on": [b], "verifier": {"focus": "claims"}})
+    };
+    let answer = format!(
+        "```plan\n{}\n```",
+        json!({"tasks": [cycle("a", "b"), cycle("b", "a")]})
+    );
+    assert!(parse_plan(&answer).1.unwrap().is_err());
+}

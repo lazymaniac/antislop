@@ -10,13 +10,21 @@ pub(super) fn writer_base_scratch(state: &Path, plan_id: &str, spec_id: &str) ->
 }
 
 /// Add options after quality gates so every writer, including gates, is covered.
-pub(super) fn finalize_plan(specs: Vec<TaskContract>, required_gates: bool) -> Vec<TaskContract> {
+pub(super) fn finalize_plan(
+    specs: Vec<TaskContract>,
+    required_gates: bool,
+    local_options: bool,
+) -> Vec<TaskContract> {
     let specs = if required_gates {
         tasks::with_required_agents(specs)
     } else {
         specs
     };
-    tasks::with_options(specs)
+    if local_options {
+        tasks::with_options(specs)
+    } else {
+        tasks::without_options(specs)
+    }
 }
 
 /// What a plan that changes code lacks of the agents the pool makes required

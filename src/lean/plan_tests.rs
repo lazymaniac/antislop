@@ -2,6 +2,34 @@ use super::core_plan_helpers::*;
 use super::*;
 
 #[test]
+fn finalization_leaves_out_options_when_local_options_are_off() {
+    let writer: TaskContract = serde_json::from_value(json!({
+        "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
+        "kind": "implementation", "writes": true, "scope": ["src/"],
+        "verifier": {"focus": "Check change"}
+    }))
+    .unwrap();
+    for required_gates in [false, true] {
+        let with = finalize_plan(vec![writer.clone()], required_gates, true);
+        let without = finalize_plan(with.clone(), required_gates, false);
+        assert!(without.iter().all(|spec| spec.kind != WorkKind::Options));
+        assert!(without.iter().all(|spec| spec.options_for.is_none()));
+        let ids: Vec<_> = without.iter().map(|spec| &spec.id).collect();
+        assert!(
+            without
+                .iter()
+                .flat_map(|spec| &spec.depends_on)
+                .all(|dependency| ids.contains(&dependency))
+        );
+        tasks::validate(&without).unwrap();
+        assert_eq!(
+            without,
+            finalize_plan(without.clone(), required_gates, false)
+        );
+    }
+}
+
+#[test]
 fn finalization_adds_options_with_and_without_required_gates() {
     let writer: TaskContract = serde_json::from_value(json!({
         "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
@@ -11,9 +39,9 @@ fn finalization_adds_options_with_and_without_required_gates() {
     .unwrap();
     for required_gates in [false, true] {
         let input = vec![writer.clone()];
-        let specs = finalize_plan(input.clone(), required_gates);
-        assert_eq!(specs, finalize_plan(input, required_gates));
-        assert_eq!(specs, finalize_plan(specs.clone(), required_gates));
+        let specs = finalize_plan(input.clone(), required_gates, true);
+        assert_eq!(specs, finalize_plan(input, required_gates, true));
+        assert_eq!(specs, finalize_plan(specs.clone(), required_gates, true));
         if required_gates {
             assert!(tasks::missing_quality_agents(&specs).is_empty());
             assert!(specs.iter().filter(|spec| spec.writes).count() > 1);
@@ -67,6 +95,7 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
             .map(|spec| serde_json::from_value(spec).unwrap())
             .collect(),
         false,
+        true,
     );
     let values: Vec<_> = specs
         .iter()
@@ -150,13 +179,15 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
     assert!(!scratch.exists());
     assert!(!scratch.with_extension("patch").exists());
 
-    // A genuine conflict must still let the writer start with exact inputs
-    // and actionable guidance, without exposing a broken primary tree.
+    // The baseline is fixed for the plan: an edit the user makes afterwards
+    // does not change it, and clashes with the results only on integration,
+    // which protects it. Every task of the plan starts from one commit.
     std::fs::write(root.join("config.txt"), "user conflict\n").unwrap();
-    let error = core
-        .writer_base(&tasks[4].plan_id, &spec, root)
-        .unwrap_err();
-    assert!(error.to_string().contains("git apply"));
+    let again = core.writer_base(&tasks[4].plan_id, &spec, root).unwrap();
+    assert_eq!(
+        git::tree_identity(root, &again).unwrap(),
+        git::tree_identity(root, &base).unwrap()
+    );
     assert!(!scratch.exists());
     assert_eq!(git::head(root).unwrap(), head);
 }

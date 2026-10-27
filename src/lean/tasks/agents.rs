@@ -159,6 +159,20 @@ pub fn with_required_agents(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     tasks
 }
 
+/// The plan without generated options tasks, for `policy.local_options = false`.
+pub fn without_options(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
+    let generated: BTreeSet<_> = tasks
+        .iter()
+        .filter(|task| task.options_for.is_some())
+        .map(|task| task.id.clone())
+        .collect();
+    tasks.retain(|task| task.options_for.is_none());
+    for task in &mut tasks {
+        task.depends_on.retain(|id| !generated.contains(id));
+    }
+    tasks
+}
+
 /// Add a direct, read-only options prerequisite to every writer lacking one.
 /// Run after optional quality gates, including when required gates are disabled.
 /// Input order is preserved; valid plans remain topologically ordered.

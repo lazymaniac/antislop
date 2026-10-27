@@ -21,6 +21,11 @@ local_commits = true
 required_gates = true
 # Most tasks of a plan that run at the same time.
 max_parallel = 4
+# Every writer gets a read-only options task that compares approaches first.
+# Turn it off for mechanical work where the comparison decides nothing.
+local_options = true
+# Most tasks a plan is drafted with; a larger one is sent back to be grouped.
+max_tasks = 24
 
 [providers.codex]
 binary = "codex"

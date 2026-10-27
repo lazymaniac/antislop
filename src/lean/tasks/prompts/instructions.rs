@@ -2,6 +2,8 @@ use super::*;
 
 const OPTIONS_NOTE: &str = "Do not compare implementation options during orchestration or before planning. Plan the work from the requirements; options are compared by worker tasks during execution, before their dependent writers begin. The runtime adds a dedicated read-only options task before every writer, after adding optional quality gates and even when required gates are disabled. Every writer has its own local options. Shared architecture decisions are inputs and never substitute for local options. The selected variant binds implementation; departures require explicit evidence and independent verification.";
 
+const NO_PINNING: &str = "Never write commit hashes, branch names or checkout paths into a task contract. The runtime gives every task a checkout of one baseline commit and tells the agent which; a contract that pins a revision turns every later baseline difference into a blocker. Say what to inspect (paths, symbols, behaviour), not at which revision.";
+
 const ORCHESTRATOR_WORKFLOW: &str = "Follow the runtime session phase in a three-phase workflow:\n\
          1. **Interview**: When the user's request has any ambiguity, missing constraints, \
          or architectural trade-offs, conduct a concise clarifying interview with the user \
@@ -81,6 +83,7 @@ const ORCHESTRATOR_TAIL: &str = "An independent plan verifier checks your plan b
 pub fn orchestrator_instructions() -> String {
     [
         OPTIONS_NOTE,
+        NO_PINNING,
         ORCHESTRATOR_WORKFLOW,
         PLAN_FORMAT,
         ORCHESTRATOR_TAIL,
@@ -92,10 +95,16 @@ pub fn orchestrator_instructions() -> String {
 
 /// What the planner knows: its role and the plan format, not the workflow.
 pub fn planner_instructions() -> String {
-    [PLANNER_ROLE, OPTIONS_NOTE, PLAN_FORMAT, PLAN_REVIEW_NOTE]
-        .join("\n\n")
-        .replace("{KIND_NAMES}", &kind_names())
-        .replace("{AGENT_POOL}", &agent_descriptions())
+    [
+        PLANNER_ROLE,
+        OPTIONS_NOTE,
+        NO_PINNING,
+        PLAN_FORMAT,
+        PLAN_REVIEW_NOTE,
+    ]
+    .join("\n\n")
+    .replace("{KIND_NAMES}", &kind_names())
+    .replace("{AGENT_POOL}", &agent_descriptions())
 }
 
 fn kind_names() -> String {

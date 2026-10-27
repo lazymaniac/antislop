@@ -20,7 +20,26 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<()> {
         let PlanProposal { config, specs } = proposal;
-        let specs = finalize_plan(specs.to_vec(), config.policy.required_gates);
+        if specs.len() > config.policy.max_tasks {
+            let message = format!(
+                "The plan has {} tasks; at most {} are allowed. Group the work by module or responsibility into fewer, larger tasks (the runtime adds options and quality gates itself) and return the complete plan again.",
+                specs.len(),
+                config.policy.max_tasks
+            );
+            if self.store.count_since_user(conversation, PLAN_LINT)?
+                < tasks::FORMAT_REPAIR_ATTEMPTS as usize
+            {
+                self.store.add_message(conversation, PLAN_LINT, &message)?;
+            } else {
+                self.notice(conversation, &message);
+            }
+            return Ok(());
+        }
+        let specs = finalize_plan(
+            specs.to_vec(),
+            config.policy.required_gates,
+            config.policy.local_options,
+        );
         let findings = feasibility::check(&specs);
         let blocking: Vec<_> = findings
             .iter()

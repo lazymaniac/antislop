@@ -64,6 +64,18 @@ impl Store {
         Ok(())
     }
 
+    /// Revision reviews of this plan rejected since one was last applied.
+    pub(in crate::lean) fn rejected_revisions_in_a_row(&self, plan: &str) -> Result<usize> {
+        let count: i64 = self.db().query_row(
+            "SELECT count(*) FROM plan_revision_jobs WHERE plan_id=?1 AND status='rejected' \
+             AND error LIKE 'revision review rejected%' \
+             AND rowid>coalesce((SELECT max(rowid) FROM plan_revision_jobs WHERE plan_id=?1 AND status='applied'),0)",
+            [plan],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
     pub(in crate::lean) fn interrupt_revision_jobs(&self) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;

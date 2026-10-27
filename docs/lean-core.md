@@ -163,6 +163,17 @@ Plan reviews also use stable finding IDs and verified closure rather than a fixe
 number of attempts. Their baseline survives daemon restart and resets for a new
 user request. Format and schema repair retain a separate bounded retry guard.
 
+A revision review that has rejected twice in a row no longer blocks on findings
+that are only medium or low; they travel with the plan as a notice. A high or
+critical finding, or a rejection without a structured verdict, always blocks.
+`policy.max_tasks` (default 24)
+bounds the tasks a plan is drafted with, and `policy.local_options = false`
+leaves out the per-writer options tasks for mechanical work.
+
+Every task of a plan starts from one baseline commit, fixed when the plan's
+first task starts. Contracts never name commits or checkout paths; edits the
+user makes afterwards stay protected when results are integrated.
+
 The first rejection establishes a correction baseline. Later rejections must
 close an earlier finding or check. Rounds, reworded reports and arbitrary commits
 are not progress. Stagnation returns to the orchestrator for new input, a reviewed

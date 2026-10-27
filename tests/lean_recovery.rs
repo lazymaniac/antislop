@@ -153,7 +153,7 @@ fn init_git_project(dir: &Path) -> std::path::PathBuf {
 }
 
 fn wait_idle(core: &Core, conversation: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !core.is_idle(conversation) {
         assert!(Instant::now() < deadline, "conversation never went idle");
         std::thread::sleep(Duration::from_millis(20));

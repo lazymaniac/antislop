@@ -14,11 +14,7 @@ impl Core {
             .into_iter()
             .filter_map(|task| Some((task.base?, task.result?)))
             .collect();
-        let onto = if git::uncommitted(project)?.is_empty() {
-            git::head(project)?
-        } else {
-            git::snapshot(project, "User working tree before task")?
-        };
+        let onto = self.plan_base(plan_id, project)?;
         if changes.is_empty() {
             return Ok(onto);
         }
@@ -30,5 +26,33 @@ impl Core {
                 spec.id
             ))
         })
+    }
+
+    /// The commit every task of a plan starts from. A snapshot is a new commit
+    /// each time, even of an unchanged tree, so tasks that snapshotted when
+    /// they started disagreed about their baseline and kept asking which
+    /// commit was authoritative. The first task of the plan fixes it; what the
+    /// user changes later stays protected when results are integrated.
+    fn plan_base(&self, plan_id: &str, project: &Path) -> Result<String> {
+        let record = self
+            .state
+            .join("plan-bases")
+            .join(crate::hash(plan_id.as_bytes()));
+        if let Ok(pinned) = std::fs::read_to_string(&record) {
+            let pinned = pinned.trim();
+            if !pinned.is_empty() && git::tree_identity(project, pinned).is_ok() {
+                return Ok(pinned.to_owned());
+            }
+        }
+        let base = if git::uncommitted(project)?.is_empty() {
+            git::head(project)?
+        } else {
+            git::snapshot(project, "User working tree before task")?
+        };
+        if let Some(directory) = record.parent() {
+            std::fs::create_dir_all(directory)?;
+        }
+        std::fs::write(&record, &base)?;
+        Ok(base)
     }
 }

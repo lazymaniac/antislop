@@ -5793,6 +5793,8 @@ mod config_editor_acceptance {
                 local_commits: config.policy.local_commits,
                 required_gates: config.policy.required_gates,
                 max_parallel: config.policy.max_parallel,
+                local_options: config.policy.local_options,
+                max_tasks: config.policy.max_tasks,
             },
             providers: config
                 .providers
@@ -5899,10 +5901,11 @@ mod config_editor_acceptance {
                 let key = path.last().unwrap().as_str();
                 let (new, cycle) = match key {
                     "mode" => (json!("autonomous"), true),
-                    "local_write" | "local_commits" | "required_gates" => {
+                    "local_write" | "local_commits" | "required_gates" | "local_options" => {
                         (json!(old != "true"), true)
                     }
                     "max_parallel" => (json!(2), false),
+                    "max_tasks" => (json!(7), false),
                     "provider" => (json!(if old == "codex" { "agy" } else { "codex" }), true),
                     "effort" => (json!(if old == "low" { "medium" } else { "low" }), true),
                     "binary" => (json!("/tmp/config-editor-test-binary"), false),

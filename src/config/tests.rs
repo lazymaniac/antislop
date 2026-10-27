@@ -322,3 +322,18 @@ fn the_planner_resolves_the_planning_executor_and_nothing_else() {
             .is_err()
     );
 }
+
+#[test]
+fn local_options_and_task_ceiling_have_defaults_and_bounds() {
+    let text = include_str!("../../examples/antislop.toml");
+    let stripped = text
+        .replace("local_options = true\n", "")
+        .replace("max_tasks = 24\n", "");
+    let default = Config::from_toml(&stripped).unwrap();
+    assert!(default.policy.local_options);
+    assert_eq!(default.policy.max_tasks, 24);
+    let off =
+        Config::from_toml(&text.replace("local_options = true", "local_options = false")).unwrap();
+    assert!(!off.policy.local_options);
+    assert!(Config::from_toml(&text.replace("max_tasks = 24", "max_tasks = 0")).is_err());
+}

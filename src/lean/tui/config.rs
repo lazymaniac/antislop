@@ -46,11 +46,11 @@ impl Field {
                 .map(|v| serde_json::json!(v))
                 .map_err(|e| e.to_string()),
             "args" => Ok(serde_json::json!([])),
-            "max_parallel" => text
+            "max_parallel" | "max_tasks" => text
                 .parse::<i64>()
                 .map(|v| serde_json::json!(v))
                 .map_err(|e| e.to_string()),
-            "local_write" | "local_commits" | "required_gates" => text
+            "local_write" | "local_commits" | "required_gates" | "local_options" => text
                 .parse::<bool>()
                 .map(Value::Bool)
                 .map_err(|e| e.to_string()),

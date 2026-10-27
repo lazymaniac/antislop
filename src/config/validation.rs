@@ -97,6 +97,10 @@ pub(super) fn validate(config: &Config) -> Result<()> {
         "policy.max_parallel must be at least 1; set max_parallel to a positive integer",
     )?;
     require(
+        config.policy.max_tasks > 0,
+        "policy.max_tasks must be at least 1; set max_tasks to a positive integer",
+    )?;
+    require(
         !config.providers.is_empty(),
         "providers is empty; add a [providers.<name>] table with a binary or command",
     )?;

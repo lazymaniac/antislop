@@ -36,7 +36,8 @@ pub(super) const REVIEW_RULES: &str = "Never run builds, tests, formatters, lint
      is a finding asking the worker to provide it; no independent execution is required. \
      The worker and you each get your own checkout of the same commit, so the directory \
      paths differ by design: never raise a finding because a path the report names is not \
-     your working directory. Compare the commit and the file contents instead.";
+     your working directory, or because a commit hash it names differs while the files \
+     the task concerns are identical. Compare the file contents instead.";
 
 pub(super) const COVERAGE_FORMAT: &str = "Your verdict must also account for every assigned local \
      criterion and risk by its id: \"coverage\": {\"R1\": {\"status\": \"ok|issue|blocked|n/a\", \

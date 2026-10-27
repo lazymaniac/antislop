@@ -70,7 +70,12 @@ impl Selection {
             require(
                 alternative.evaluations.len() == self.criteria.len()
                     && alternative.evaluations.iter().all(|e| !e.trim().is_empty()),
-                "selection.alternatives.evaluations: assess each shared criterion",
+                &format!(
+                    "selection.alternatives.evaluations: alternative {:?} has {} evaluations for {} criteria; give exactly one non-empty evaluation per criterion, in the order of selection.criteria",
+                    alternative.id,
+                    alternative.evaluations.len(),
+                    self.criteria.len()
+                ),
             )?;
         }
         require(
@@ -106,10 +111,21 @@ impl TurnResult {
                     !summary.trim().is_empty() && !report.trim().is_empty(),
                     "summary and report: required",
                 )?;
+                let missing: Vec<_> = spec
+                    .outputs
+                    .iter()
+                    .filter(|key| !outputs.contains_key(*key))
+                    .collect();
+                let unexpected: Vec<_> = outputs
+                    .keys()
+                    .filter(|key| !spec.outputs.contains(key))
+                    .collect();
                 require(
-                    outputs.keys().all(|key| spec.outputs.contains(key))
-                        && spec.outputs.iter().all(|key| outputs.contains_key(key)),
-                    "outputs: must match the task's declared outputs",
+                    missing.is_empty() && unexpected.is_empty(),
+                    &format!(
+                        "outputs: must match the task's declared outputs {:?}; missing {missing:?}, not declared {unexpected:?}",
+                        spec.outputs
+                    ),
                 )?;
                 if spec.kind == crate::config::WorkKind::Options {
                     selection
