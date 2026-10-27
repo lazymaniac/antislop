@@ -1307,6 +1307,9 @@ fn card_lines(view: &View, key: &str, width: usize, max: usize) -> Vec<String> {
 /// The same bounded, grapheme-safe wrapping the summary uses: at most
 /// `max` lines of `width` columns, the cut line forced to end in `…`.
 fn fit_lines(text: &str, width: usize, max: usize) -> Vec<String> {
+    if width == 0 || max == 0 {
+        return Vec::new();
+    }
     let mut lines = wrap(text, width);
     if lines.len() > max {
         lines.truncate(max);
@@ -2169,6 +2172,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn compact_cards_with_effects_can_have_no_effect_rows() {
+        let mut row = task("t1", &[]);
+        row.effect = Some("Updated storage.".into());
+        let view = view(vec![row]);
+        let mut node = Node::new("worker:t1".into(), 0, 0);
+        node.height = MIN_HEIGHT;
+        assert_eq!(node.body_lines().1, 0);
+        let mut canvas = Canvas::new_window(0, 0, node.width, node.height);
+        draw_node(
+            &view,
+            &mut canvas,
+            &node,
+            false,
+            &Theme::new(true, false),
+            0,
+        );
+        assert!(canvas.lines().iter().all(|line| !line.contains("effect:")));
     }
 
     #[test]
