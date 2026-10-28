@@ -20,7 +20,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-pub const TABS: [&str; 8] = [
+pub const TABS: [&str; 9] = [
     "Overview",
     "Messages",
     "Result",
@@ -29,6 +29,7 @@ pub const TABS: [&str; 8] = [
     "Review",
     "Requirements",
     "Verifier",
+    "Plan",
 ];
 pub const RESULT: usize = 2;
 pub const CHECKS: usize = 3;
@@ -37,6 +38,7 @@ pub const REVIEW: usize = 5;
 pub const REQUIREMENTS: usize = 6;
 /// The verifier's own Overview: what it checks, and its terminal.
 pub const VERIFIER: usize = 7;
+pub const PLAN: usize = 8;
 
 /// The label of a tab for this address: the first tab of a task's worker
 /// section is the worker's Overview, the first of the verifier's is its own.
@@ -61,6 +63,7 @@ pub fn section_starts(key: &str, tab: usize) -> bool {
 pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
         "worker" | "verifier" => vec![0, 1, RESULT, VERIFIER, CHECKS, COMMENTS, REQUIREMENTS],
+        "planner" => vec![0, PLAN, 1, COMMENTS],
         "plan-verifier" | "auditor" => vec![0, REVIEW, COMMENTS],
         _ => vec![0, 1, COMMENTS],
     }
@@ -553,6 +556,23 @@ impl Details {
         let mut records = vec![];
 
         match self.tab {
+            PLAN => {
+                let document = view.plan_preview.as_deref().unwrap_or(&view.plan_doc);
+                let lines = if document.trim().is_empty() {
+                    vec![(dim(), "No plan submitted yet. The preview appears when the planner submits a version.".into())]
+                } else {
+                    let mut lines = vec![label(if view.plan_preview.is_some() {
+                        "Latest submitted plan"
+                    } else {
+                        "Current plan"
+                    })];
+                    lines.push(plain(String::new()));
+                    lines.extend(super::view::clean(document).lines().map(|line| plain(line.to_owned())));
+                    lines
+                };
+                let search_text = lines.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join("\n");
+                records.push(Rc::new(DetailRecord { lines, search_text }));
+            }
             REQUIREMENTS => {
                 let mut lines = vec![label("Requirement ledger · shared across all rounds")];
                 if let Some(stored) = &self.task {
@@ -1873,6 +1893,7 @@ mod tests {
             "verifier:t1",
             "auditor",
             "plan-verifier",
+            "planner",
             "orchestrator",
             "conversation",
         ] {
@@ -1959,6 +1980,47 @@ mod tests {
     }
 
     #[test]
+    fn planner_plan_preview_tracks_submitted_and_published_versions() {
+        let mut view = View::default();
+        let mut details = Details::new("planner".into());
+        details.switch_tab(PLAN);
+        let mut terminal = Terminal::new(TestBackend::new(80, 16)).unwrap();
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        assert!(screen(&terminal).contains("No plan submitted yet"));
+        view.apply(&serde_json::json!({"seq":1,"turn_id":"p","kind":"turn_started","payload":{"role":"planner"}}));
+        let draft = |seq, document| {
+            serde_json::json!({
+                "seq":seq, "turn_id":"p", "kind":"agent_final", "payload":{
+                    "text":serde_json::json!({"type":"plan","document":document,"tasks":[]}).to_string()
+                }
+            })
+        };
+        view.apply(&draft(2, "# First draft"));
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        assert!(screen(&terminal).contains("First draft"));
+        assert!(view.plan_doc.is_empty());
+        view.apply(&draft(3, "# Updated draft"));
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        let drawn = screen(&terminal);
+        assert!(drawn.contains("Updated draft"));
+        assert!(!drawn.contains("First draft"));
+        view.apply(
+            &serde_json::json!({"seq":4,"kind":"plan_proposed","payload":{
+                "plan":"plan1","document":"# Published plan","tasks":[]
+            }}),
+        );
+        terminal.draw(|frame| details.draw(frame, &view)).unwrap();
+        let drawn = screen(&terminal);
+        assert!(drawn.contains("Published plan"));
+        assert!(drawn.contains("Current plan"));
+        assert!(!drawn.contains("Updated draft"));
+        for (width, height) in [(11, 4), (2, 2)] {
+            let mut tiny = Terminal::new(TestBackend::new(width, height)).unwrap();
+            tiny.draw(|frame| details.draw(frame, &view)).unwrap();
+        }
+    }
+
+    #[test]
     fn details_empty_states() {
         let view = View::default();
         let mut details = Details::new("worker:t1".into());
@@ -2038,6 +2100,10 @@ mod tests {
         assert_eq!(names("auditor"), ["Overview", "Review", "Comments"]);
         assert_eq!(names("plan-verifier"), ["Overview", "Review", "Comments"]);
         assert_eq!(names("conversation"), ["Overview", "Messages", "Comments"]);
+        assert_eq!(
+            names("planner"),
+            ["Overview", "Plan", "Messages", "Comments"]
+        );
 
         // Navigation skips what is not there and wraps around.
         let mut details = Details::new("worker:t1".into());

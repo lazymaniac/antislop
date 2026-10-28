@@ -252,6 +252,8 @@ pub struct View {
     pub plan: Option<String>,
     /// Full Markdown document of the latest proposed plan.
     pub plan_doc: String,
+    /// Latest submitted plan before it is published.
+    pub plan_preview: Option<String>,
     /// The orchestrator's current activity, while it works.
     pub activity: Option<String>,
     pub idle: bool,
@@ -623,6 +625,13 @@ impl View {
             "session_started" => {
                 self.session_branch = payload["branch"].as_str().map(clean_line);
             }
+            "agent_final" if matches!(key.as_str(), super::super::PLANNER | ORCHESTRATOR) => {
+                if let super::super::turn_result::TurnResult::Plan { document, .. } =
+                    super::super::turn_result::TurnResult::decode(&text("text"))
+                {
+                    self.plan_preview = Some(clean(&document));
+                }
+            }
             "planning_progress" => {
                 self.requirements_progress = Some((false, text("text")));
                 self.cards.push(TranscriptCard::System {
@@ -927,6 +936,7 @@ impl View {
                 self.push(dim(), format!("Graph updated: {description}"));
             }
             "plan_proposed" => {
+                self.plan_preview = None;
                 self.requirements_progress = Some((
                     false,
                     "Plan ready for review. Esc closes requirements so you can review the plan."
