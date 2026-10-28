@@ -419,6 +419,34 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
 }
 
 #[test]
+fn a_session_resumed_after_a_restart_is_told_its_role_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let state = dir.path().join("state");
+    let codex = fake_codex(dir.path());
+    let core = Core::open(&state, config(&codex)).unwrap();
+    let conversation = core.start(&project).unwrap();
+    core.send(&conversation.id, "first message").unwrap();
+    wait_idle(&core, &conversation.id);
+    drop(core);
+
+    // A new build may have changed the role's instructions.
+    let core = Core::open(&state, config(&codex)).unwrap();
+    core.send(&conversation.id, "second message").unwrap();
+    wait_idle(&core, &conversation.id);
+    core.send(&conversation.id, "third message").unwrap();
+    wait_idle(&core, &conversation.id);
+    let calls = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
+    let calls: Vec<_> = calls.split("\n---\n").filter(|c| !c.is_empty()).collect();
+    assert_eq!(calls.len(), 3);
+    assert!(calls[1].contains("resume"), "{}", calls[1]);
+    assert!(calls[1].contains("Nothing from it is pasted here"));
+    assert!(calls[2].contains("resume"), "{}", calls[2]);
+    assert!(!calls[2].contains("Nothing from it is pasted here"));
+}
+
+#[test]
 fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");

@@ -79,10 +79,11 @@ impl Core {
         )?;
         let history = self.store.recent_messages_through(conversation, answered)?;
         let ledger_context = planning_ledger_context(self, conversation)?;
-        let Some(answer) = self.turn(setup, cancel, |first| {
+        let Some(answer) = self.turn(setup, cancel, |first, fresh| {
             orchestrator_prompt_text(PromptContext {
                 project: &project,
                 first,
+                fresh,
                 answered,
                 asked: &asked,
                 open: &open,

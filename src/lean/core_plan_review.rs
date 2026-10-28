@@ -18,7 +18,7 @@ impl Core {
         let all = self.store.messages_by(conversation, "user", 0)?;
         let upto = all.last().map_or(0, |message| message.seq);
         let setup = review_setup(conversation, role, plan_id, project, &config, upto);
-        let answer = self.turn(setup, cancel, |first| {
+        let answer = self.turn(setup, cancel, |first, _| {
             let initial = first || answered == 0;
             prompt(
                 initial,
@@ -34,7 +34,7 @@ impl Core {
         &self,
         setup: TurnSetup<'_>,
         cancel: &AtomicBool,
-        prompt: impl FnOnce(bool) -> String,
+        prompt: impl FnOnce(bool, bool) -> String,
     ) -> Result<Option<String>> {
         self.turn_inner(setup, cancel, prompt)
     }

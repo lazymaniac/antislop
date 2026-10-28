@@ -47,6 +47,20 @@ impl Store {
         Ok(())
     }
 
+    /// When a turn other than `current` last used `session`.
+    pub fn session_last_used_ms(
+        &self,
+        conversation: &str,
+        session: &str,
+        current: &str,
+    ) -> Result<Option<i64>> {
+        Ok(self.db().query_row(
+            "SELECT MAX(started_ms) FROM turns WHERE conversation_id=?1 AND session_id=?2 AND id<>?3",
+            params![conversation, session, current],
+            |row| row.get(0),
+        )?)
+    }
+
     /// The session of the latest turn of `role` with `provider` that got one,
     /// even if that turn later failed: the CLI keeps what it already saw.
     /// Another CLI's session id would mean nothing to it.

@@ -49,7 +49,7 @@ impl Core {
             access: agent::Access::ReadOnly,
             upto_message: upto,
         };
-        let Some(answer) = self.turn(setup, cancel, |first| {
+        let Some(answer) = self.turn(setup, cancel, |first, _| {
             planner_prompt_text(PlannerPrompt {
                 project: &project,
                 first,

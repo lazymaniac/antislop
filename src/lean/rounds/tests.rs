@@ -318,7 +318,7 @@ echo '{"type":"turn.completed"}'
                     upto_message: 0,
                 };
                 assert_eq!(
-                    core.turn(setup, &AtomicBool::new(false), |_| "Do the task".into())
+                    core.turn(setup, &AtomicBool::new(false), |_, _| "Do the task".into())
                         .unwrap()
                         .map(|s| serde_json::from_str::<turn_result::TurnResult>(&s)
                             .unwrap()
@@ -617,7 +617,7 @@ fn execute(
             upto_message: 0,
         },
         &AtomicBool::new(false),
-        |_| "Perform the task using the round handoff.".into(),
+        |_, _| "Perform the task using the round handoff.".into(),
     )
     .unwrap()
     .map(|s| {

@@ -209,6 +209,9 @@ pub struct Core {
     pub(crate) weak: std::sync::OnceLock<std::sync::Weak<Core>>,
     /// One process owns a state directory at a time.
     _lock: std::fs::File,
+    /// When this process took the state directory; a session last used
+    /// before it may hold instructions of an older build.
+    opened_ms: i64,
     config: RwLock<Arc<Config>>,
     config_update: Mutex<()>,
     config_modified: std::sync::atomic::AtomicU64,

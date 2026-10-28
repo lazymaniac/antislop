@@ -203,7 +203,7 @@ fn review_comments(
 fn execute_code_review(core: &Core, work: &CodeReview) -> std::result::Result<Verdict, String> {
     let setup = review_turn_setup(core, work);
     let answer = core
-        .turn(setup, &work.cancel, |_| review_prompt(work))
+        .turn(setup, &work.cancel, |_, _| review_prompt(work))
         .map_err(|error| error.to_string())?;
     match answer {
         Some(answer) => super::turn_result::TurnResult::review_verdict(&answer)

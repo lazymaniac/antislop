@@ -93,6 +93,7 @@ fn make_core(state: &Path, config: Config, store: Store, lock: std::fs::File) ->
         task_cancels: Mutex::new(HashMap::new()),
         task_restarts: Mutex::new(HashMap::new()),
         orchestrator_restarts: Mutex::new(std::collections::HashSet::new()),
+        opened_ms: store::now_ms(),
         turn_locks: Mutex::new(HashMap::new()),
         running: Mutex::new(HashMap::new()),
         plans: Mutex::new(HashMap::new()),

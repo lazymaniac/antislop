@@ -7,6 +7,8 @@ use std::path::Path;
 pub(super) struct PromptContext<'a> {
     pub(super) project: &'a Path,
     pub(super) first: bool,
+    /// A new session, which needs the earlier conversation.
+    pub(super) fresh: bool,
     pub(super) answered: u64,
     pub(super) asked: &'a [Message],
     pub(super) open: &'a [Comment],
@@ -27,9 +29,10 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
         context.asked,
         context.open,
     );
+    // A resumed session already holds the conversation.
     append_history(
         &mut prompt,
-        context.first,
+        context.fresh,
         context.answered,
         context.history,
     );
