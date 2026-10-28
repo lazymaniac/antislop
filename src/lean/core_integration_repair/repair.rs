@@ -134,7 +134,7 @@ impl<'a> Repair<'a> {
         let handoff = self
             .core
             .round_handoff(&self.task.id, self.task.round, self.worktree)?;
-        let Some(answer) = self.core.turn(setup, self.cancel, |fresh| {
+        let Some(answer) = self.core.turn(setup, self.cancel, |fresh, _| {
             self.worker_prompt(prompt, &handoff, fresh)
         })?
         else {

@@ -8,7 +8,7 @@ impl Core {
         &self,
         setup: TurnSetup<'_>,
         cancel: &AtomicBool,
-        prompt: impl FnOnce(bool) -> String,
+        prompt: impl FnOnce(bool, bool) -> String,
     ) -> Result<Option<String>> {
         let lock = self.turn_lock(setup.conversation, &setup.role);
         let Some(_turn_guard) = mail::lock_cancellable(&lock, cancel) else {
@@ -207,7 +207,16 @@ impl Core {
             let allocation = json!({"turn":turn.id,"role":role,"cwd":spec.cwd,"session_policy":format!("{session_policy:?}")});
             text.push_str(&format!("Current runtime allocation (for this turn only): {allocation}\nThe current cwd is authoritative for your role, including resumed turns. Paths in earlier reports identify historical allocations; do not copy them as the current checkout or infer cross-checkout equivalence from matching HEAD. Allocation metadata alone does not attest file contents or uncommitted state.\n"));
             }
-            text.push_str(&prompt(resume.is_none()));
+            // A session resumed across a daemon restart is told its role
+            // again: the new build may have changed what it may submit.
+            let introduce = match &resume {
+                None => true,
+                Some(session) => self
+                    .store
+                    .session_last_used_ms(conversation, session, &turn.id)?
+                    .is_none_or(|used| used < self.opened_ms),
+            };
+            text.push_str(&prompt(introduce, resume.is_none()));
             if resume.is_none()
                 && let SessionPolicy::TaskRound { task, round } = &session_policy
             {

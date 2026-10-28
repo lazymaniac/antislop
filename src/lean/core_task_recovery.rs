@@ -254,7 +254,7 @@ impl Core {
                 };
                 let upstream = self.upstream(&task.plan_id, &spec)?;
                 let cancel = AtomicBool::new(false);
-                let answer = self.turn(setup, &cancel, |fresh| {
+                let answer = self.turn(setup, &cancel, |fresh, _| {
                     tasks::verifier_turn_prompt(
                         &verifier_project,
                         &spec,

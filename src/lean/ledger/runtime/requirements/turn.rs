@@ -114,7 +114,7 @@ impl Core {
         conversation: &str,
         role: &str,
     ) -> Result<String> {
-        self.turn(setup, cancel, |_| format!("{prompt}\n{context}"))?
+        self.turn(setup, cancel, |_, _| format!("{prompt}\n{context}"))?
             .ok_or_else(|| Error::Invalid(self.requirements_failure(conversation, role)))
     }
 

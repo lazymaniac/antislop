@@ -188,7 +188,7 @@ impl Core {
             let report = if recheck {
                 Some(self.store.completed_task_output(task)?.to_string())
             } else {
-                self.turn(worker_setup(), cancel, |_| {
+                self.turn(worker_setup(), cancel, |_, _| {
                     let continuation = if round == 1 {
                         None
                     } else if resumed && round == first_round {
@@ -287,7 +287,7 @@ impl Core {
                 upto_message: 0,
             };
             let user_checks = self.check_comments(conversation, &task.plan_id, &spec.id);
-            let answer = self.turn(setup, cancel, |first| {
+            let answer = self.turn(setup, cancel, |first, _| {
                 let prompt = tasks::verifier_turn_prompt(
                     &verifier_project,
                     &spec,
