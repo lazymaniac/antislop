@@ -1266,6 +1266,7 @@ fn card_lines(view: &View, key: &str, width: usize, max: usize) -> Vec<String> {
     let normalize = |text: &str| clean(text).split_whitespace().collect::<Vec<_>>().join(" ");
     let text = match key {
         ORCHESTRATOR => "Coordinates the plan.".to_owned(),
+        super::super::PLANNER => "Drafts the plan.".to_owned(),
         PLAN_VERIFIER => "Checks the plan.".to_owned(),
         AUDITOR => "Audits task results.".to_owned(),
         super::super::COMMENT_ORCHESTRATOR => "Addresses comments.".to_owned(),
@@ -1888,7 +1889,7 @@ mod tests {
     #[test]
     fn graph_includes_planning_agents_in_every_layout() {
         let mut view = View::default();
-        for key in ["options-planner", "requirements-planner"] {
+        for key in ["planner", "options-planner", "requirements-planner"] {
             view.agents.insert(key.into(), Default::default());
         }
         for viewport in [None, Some((60, 30)), Some((180, 40))] {
@@ -1899,7 +1900,7 @@ mod tests {
                 GroupingMode::Dependency,
                 viewport,
             );
-            for key in ["options-planner", "requirements-planner"] {
+            for key in ["planner", "options-planner", "requirements-planner"] {
                 let node = graph.node(key).unwrap();
                 assert!(node.visible);
                 assert!(

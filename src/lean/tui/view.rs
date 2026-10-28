@@ -451,7 +451,7 @@ impl View {
 
     /// The agent key of a session role (`worker:<uuid>` → `worker:t1`).
     fn agent_key(&self, role: &str) -> String {
-        if role == super::super::COMMENT_ORCHESTRATOR || role == super::super::PLANNER {
+        if role == super::super::COMMENT_ORCHESTRATOR {
             return ORCHESTRATOR.into();
         }
         match role.split_once(':') {
@@ -467,7 +467,8 @@ impl View {
     fn mail_key(name: &str) -> String {
         match name {
             ORCHESTRATOR | PLAN_VERIFIER | AUDITOR | "user" | "runtime" => name.to_owned(),
-            super::super::COMMENT_ORCHESTRATOR | super::super::PLANNER => ORCHESTRATOR.to_owned(),
+            super::super::PLANNER => super::super::PLANNER.to_owned(),
+            super::super::COMMENT_ORCHESTRATOR => ORCHESTRATOR.to_owned(),
             name => match name.split_once('/') {
                 Some((task, _)) => format!("verifier:{task}"),
                 None => format!("worker:{name}"),
@@ -700,7 +701,7 @@ impl View {
                     self.push(dim(), "· task results handed to orchestrator");
                     self.push(Style::default(), "");
                 }
-                ORCHESTRATOR | PLAN_VERIFIER | "requirements-planner"
+                ORCHESTRATOR | PLAN_VERIFIER | super::super::PLANNER | "requirements-planner"
                     if self.workflow_phase.as_deref() == Some("planning") => {}
                 author => {
                     let display_author = match author {
@@ -815,6 +816,10 @@ impl View {
                         self.push(Style::default().fg(super::theme::ayu::RED), line.clone());
                         self.system_card("Orchestrator", line, super::theme::Tone::Failed);
                     }
+                } else if key == super::super::PLANNER && failed {
+                    let line = format!("✗ planner: {} — {}", text("status"), text("error"));
+                    self.push(Style::default().fg(super::theme::ayu::RED), line.clone());
+                    self.system_card("Planner", line, super::theme::Tone::Failed);
                 } else if let Some(row) = self.row_of(&key) {
                     row.activity = if failed {
                         format!("✗ {}", text("error"))
@@ -1613,7 +1618,7 @@ impl View {
                 _ => {}
             }
         }
-        for key in [PLAN_VERIFIER, AUDITOR] {
+        for key in [super::super::PLANNER, PLAN_VERIFIER, AUDITOR] {
             if self.agents.get(key).is_some_and(|agent| agent.running) {
                 // The shared live-activity rule (taskinfo): the "starting
                 // turn" placeholder is not work, so a step that has not
@@ -2518,6 +2523,39 @@ mod tests {
         assert_eq!(view.comment_state(4), "addressed");
         view.apply(&event(4, None, "comment_replied", json!({"comments": [4]})));
         assert_eq!(view.comment_state(4), "answered");
+    }
+
+    #[test]
+    fn planner_turns_keep_their_own_agent_and_status() {
+        let mut view = View::default();
+        view.apply(&event(
+            1,
+            Some("o"),
+            "turn_started",
+            json!({"role":"orchestrator","provider":"codex"}),
+        ));
+        view.apply(&event(
+            2,
+            Some("p"),
+            "turn_started",
+            json!({"role":"planner","provider":"codex"}),
+        ));
+        assert!(view.agents["planner"].running);
+        assert!(view.agents["orchestrator"].running);
+        assert!(
+            view.progress()
+                .iter()
+                .any(|line| line.starts_with("planner:"))
+        );
+        view.apply(&event(
+            3,
+            Some("p"),
+            "turn_finished",
+            json!({"role":"planner","status":"done"}),
+        ));
+        assert!(!view.agents["planner"].running);
+        assert!(view.agents["orchestrator"].running);
+        assert_eq!(View::mail_key("planner"), "planner");
     }
 
     #[test]
