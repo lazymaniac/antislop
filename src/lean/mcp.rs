@@ -527,9 +527,14 @@ fn dispatch(shared: &Shared, params: &Value) -> Result<Value> {
             && let Some((recorded, result)) = &state.receipt
             && recorded == turn
         {
+            // The first result ended the turn; a later, different call must
+            // not read as a failure of it.
             crate::require(
                 result == &receipt_payload(name, args),
-                "turn already recorded with another result",
+                &format!(
+                    "this turn already ended with your earlier {} call; that result stands and this call changed nothing. Stop now.",
+                    result["tool"].as_str().unwrap_or(TOOL)
+                ),
             )?;
             return Ok(json!({"recorded":true}));
         }
@@ -907,7 +912,11 @@ mod role_tests {
         assert_eq!(dispatch(&shared, &submission).unwrap()["recorded"], true);
         let mut conflict = submission;
         conflict["arguments"]["text"] = json!("different");
-        assert!(dispatch(&shared, &conflict).is_err());
+        let error = dispatch(&shared, &conflict).unwrap_err().to_string();
+        assert!(
+            error.contains("already ended with your earlier finish_turn call"),
+            "{error}"
+        );
     }
 }
 
