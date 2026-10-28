@@ -59,9 +59,31 @@ fn verifier_summary(writes: bool) -> &'static str {
     }
 }
 
-/// The runtime's contracts for a submitted plan, in dependency order.
+/// Authored contracts in dependency order, with generated gate references
+/// deferred until policy-aware finalization adds their targets.
 pub fn planned_graph(tasks: Vec<PlannedTask>) -> Result<Vec<TaskContract>> {
-    order_graph(tasks.into_iter().map(PlannedTask::into_contract).collect())
+    let tasks: Vec<_> = tasks.into_iter().map(PlannedTask::into_contract).collect();
+    // Generated gates are resolved only after policy and coverage are known.
+    // Sort and validate the authored graph without these deferred edges.
+    let mut authored = tasks.clone();
+    for task in &mut authored {
+        task.depends_on.retain(|dependency| {
+            tasks.iter().any(|other| &other.id == dependency)
+                || !PREDEFINED_AGENT_POOL
+                    .iter()
+                    .any(|agent| GATE_KINDS.contains(&agent.kind) && agent.id == dependency)
+        });
+    }
+    let mut ordered = order_graph(authored)?;
+    for task in &mut ordered {
+        task.depends_on = tasks
+            .iter()
+            .find(|original| original.id == task.id)
+            .unwrap()
+            .depends_on
+            .clone();
+    }
+    Ok(ordered)
 }
 
 /// Stable topological order for edits that insert nodes before existing gates.

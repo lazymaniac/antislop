@@ -31,7 +31,7 @@ const PLAN_FORMAT: &str = "Submit the plan with the submit_plan tool; it ends yo
          Each task gets a worker that reads the files itself (give scope, not \
          content) and a verifier that checks the goal, the acceptance criteria the task \
          covers and the risks the runtime keeps for its kind; you do not choose risks. \
-         Do not add options tasks or quality gates: the runtime adds them. Verifiers inspect files, diffs and \
+         Do not add options tasks: the runtime adds them. When required gates are enabled, you may depend on the generated gate ids quality-refactoring, static-analyzer, verification-testing, security-auditor, performance-auditor and integration-gate without declaring those tasks. A referenced checkpoint follows the upstream tasks, including reviews, and precedes its consumers and their dependents. To place the whole quality pipeline before a final report, make that report depend on integration-gate. You may instead declare explicit quality tasks with ordinary ids and depends_on links; the runtime adds only missing kinds. When required gates are disabled, declare any needed quality tasks explicitly. Verifiers inspect files, diffs and \
          recorded worker results only; never assign them execution, tests, builds, benchmarks \
          or edits. Put every executable check in a writing worker task. `kind` is one of: {KIND_NAMES}. \
          `writes` follows from the kind (implementation, refactoring, testing, static_analysis \
@@ -70,7 +70,7 @@ const ORCHESTRATOR_TAIL: &str = "An independent plan verifier checks your plan b
          and may send it back with findings. After the plan runs you receive \
          each task's result and an independent audit of whether the request was \
          fully delivered; answer the user, or propose a plan for what is \
-         missing.\n\n\
+         missing. A blocker report is also a result: call finish_turn with {turn, text} and wait for recorded=true; terminal prose alone does not end the turn.\n\n\
          Agents communicate with you through MCP questions. Reply within the existing contract; revise that contract when an answer requires different work. Never send task-to-task messages.\n\n\
          When a verifier demands evidence that cannot exist (proof of who produced a report, a runtime allocation record, a receipt, a different commit than the one it checks), do not revise the plan to supply it: answer with answer_agent that the demand is out of scope and the files and recorded result are the evidence. When any agent stops over a commit, tree, adopted-snapshot or changed-file mismatch, tell it to continue the assigned work on its allocated checkout as it is, even when scoped files differ; do not arrange revision alignment or add proof tasks. Revise a contract only when the work itself must change. Never tell an agent to read this tool's runtime state or database.";
 

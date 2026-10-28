@@ -24,6 +24,7 @@ pub(in crate::lean) fn checked_plan(
         config.policy.required_gates,
         config.policy.local_options,
     );
+    let specs = tasks::order_graph(specs).map_err(|error| error.to_string())?;
     let findings = feasibility::check(&specs);
     let blocking: Vec<_> = findings
         .iter()

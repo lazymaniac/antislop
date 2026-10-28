@@ -735,3 +735,38 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
         2
     );
 }
+
+#[test]
+fn submit_plan_accepts_generated_gates_before_the_final_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let plan = serde_json::json!({"tasks": [
+        {"id":"t11", "title":"Implement", "goal":"Implement change", "kind":"implementation"},
+        {"id":"t12", "title":"Review", "goal":"Review change", "kind":"analysis", "depends_on":["t11"]},
+        {"id":"t13", "title":"Report", "goal":"Report checked results", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]}
+    ]});
+    let source = std::fs::read_to_string(&codex).unwrap().replace(
+        "if \"[runtime]\" in prompt:",
+        &format!(
+            "plan = json.loads({:?})\nif \"[runtime]\" in prompt:",
+            plan.to_string()
+        ),
+    );
+    std::fs::write(&codex, source).unwrap();
+    let mut config = config(&codex, &agy);
+    config.policy.required_gates = true;
+    let core = Core::open(&dir.path().join("state"), config).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
+    core.send(
+        &conversation.id,
+        "Report only after quality and static checks",
+    )
+    .unwrap();
+    wait_idle(&core, &conversation.id);
+    let tasks = core.store.latest_plan(&conversation.id).unwrap();
+    assert!(!tasks.is_empty());
+    let position = |id: &str| tasks.iter().position(|task| task.spec["id"] == id).unwrap();
+    assert!(position("t12") < position("quality-refactoring"));
+    assert!(position("quality-refactoring") < position("static-analyzer"));
+    assert!(position("static-analyzer") < position("t13"));
+}

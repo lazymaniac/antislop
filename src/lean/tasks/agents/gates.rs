@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) struct GatePlan {
-    writers: Vec<String>,
+    prerequisites: Vec<String>,
     scope: Vec<String>,
     prior_gates: Vec<String>,
     refactoring: Option<String>,
@@ -14,14 +14,43 @@ pub(super) struct GatePlan {
 impl GatePlan {
     pub(super) fn new(tasks: &[TaskContract], mut ordered: Vec<&'static PredefinedAgent>) -> Self {
         ordered.sort_by_key(|agent| GATE_KINDS.iter().position(|kind| *kind == agent.kind));
+        let referenced: BTreeSet<_> = ordered
+            .iter()
+            .filter(|agent| !tasks.iter().any(|task| task.id == agent.id))
+            .map(|agent| agent.id.to_owned())
+            .collect();
+        let mut downstream = referenced.clone();
+        loop {
+            let before = downstream.len();
+            for task in tasks {
+                if task.depends_on.iter().any(|id| downstream.contains(id)) {
+                    downstream.insert(task.id.clone());
+                }
+            }
+            if downstream.len() == before {
+                break;
+            }
+        }
+        let placed = tasks.iter().any(|task| downstream.contains(&task.id));
+        let upstream: Vec<_> = tasks
+            .iter()
+            .filter(|task| !downstream.contains(&task.id))
+            .cloned()
+            .collect();
         Self {
-            writers: writer_ids(tasks),
-            scope: writer_scope(tasks),
+            // An explicitly referenced checkpoint follows all upstream work,
+            // including read-only reviews, but never its own consumers.
+            prerequisites: if placed {
+                upstream.iter().map(|task| task.id.clone()).collect()
+            } else {
+                writer_ids(tasks)
+            },
+            scope: writer_scope(&upstream),
             prior_gates: Vec::new(),
             refactoring: None,
             ids: tasks.iter().map(|task| task.id.clone()).collect(),
-            requirement_ids: union_ids(tasks, |task| &task.requirement_ids),
-            criterion_ids: union_ids(tasks, |task| &task.criterion_ids),
+            requirement_ids: union_ids(&upstream, |task| &task.requirement_ids),
+            criterion_ids: union_ids(&upstream, |task| &task.criterion_ids),
             ordered,
         }
     }
@@ -44,7 +73,7 @@ impl GatePlan {
     }
 
     fn dependencies(&mut self, kind: WorkKind, id: &str) -> Vec<String> {
-        let mut dependencies = self.writers.clone();
+        let mut dependencies = self.prerequisites.clone();
         match kind {
             WorkKind::Integration => dependencies.extend(self.prior_gates.iter().cloned()),
             WorkKind::Refactoring => self.refactoring = Some(id.to_owned()),

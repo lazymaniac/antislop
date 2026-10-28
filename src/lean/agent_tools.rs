@@ -268,7 +268,6 @@ impl Core {
     /// task the runtime could not run as written.
     fn check_submitted_plan(&self, conversation: &str, tasks: Vec<PlannedTask>) -> Result<()> {
         let mut specs = tasks::planned_graph(tasks)?;
-        tasks::validate(&specs)?;
         if let Some(run) = self.store.planning_run(conversation)? {
             let entries = self.store.ledger_entries(conversation, &run.id, None)?;
             if !entries.is_empty() {

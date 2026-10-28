@@ -21,6 +21,17 @@ checks are its goal, the acceptance criteria it covers and the whole risk
 catalog of its kind; the planner neither selects risks nor adds its own. Plan
 review checks coverage of the request.
 
+Quality tasks may also be declared explicitly with ordinary task ids and
+`depends_on` links when their position matters. The runtime appends only missing
+quality kinds. A final report that must follow all checks should depend on an
+explicit integration task, with explicit refactoring, static analysis, testing,
+security and performance tasks before it. With required gates enabled, tasks
+may also depend directly on generated gate ids such as `quality-refactoring`,
+`static-analyzer` or `integration-gate`. The runtime places the checkpoint after
+upstream tasks (including reviews) and before its consumers and their dependents.
+Generated checkpoint gates cover upstream work; later writing tasks belong to
+the next stage and need explicit checks when required by the request.
+
 Dependencies express ordering. When a dependency is approved, each direct
 dependent learns that it is unblocked and receives the dependency's title and
 short `summary`, never its full report or round history. An options task's

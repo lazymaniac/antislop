@@ -212,3 +212,114 @@ fn the_owner_goal_reaches_its_generated_options_task() {
     let revised = options_goal(&writer);
     assert!(revised.contains("different thing") && !revised.contains("source compatible"));
 }
+
+#[test]
+fn explicit_quality_checks_precede_the_final_task_after_finalization() {
+    let submitted = json!([
+        {"id":"t11", "title":"Implement", "goal":"Implement change", "kind":"implementation"},
+        {"id":"t12", "title":"Document", "goal":"Document change", "kind":"writing", "writes":true, "depends_on":["t11"]},
+        {"id":"quality", "title":"Simplify", "goal":"Review and simplify change", "kind":"refactoring", "depends_on":["t11","t12"]},
+        {"id":"static", "title":"Lint", "goal":"Run static checks", "kind":"static_analysis", "depends_on":["quality"]},
+        {"id":"tests", "title":"Test", "goal":"Run regression tests", "kind":"testing", "depends_on":["quality"]},
+        {"id":"security", "title":"Audit security", "goal":"Audit changed paths", "kind":"security", "depends_on":["quality"]},
+        {"id":"performance", "title":"Audit performance", "goal":"Audit changed paths", "kind":"performance", "depends_on":["quality"]},
+        {"id":"integration", "title":"Integrate", "goal":"Check combined results", "kind":"integration", "depends_on":["static","tests","security","performance"]},
+        {"id":"t13", "title":"Summarize", "goal":"Summarize checked results", "kind":"analysis", "depends_on":["integration"]}
+    ]);
+    let tasks = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
+    for required_gates in [false, true] {
+        let finalized = finalize_plan(tasks.clone(), required_gates, true);
+        tasks::validate(&finalized).unwrap();
+        let position = |id: &str| finalized.iter().position(|task| task.id == id).unwrap();
+        assert!(position("t12") < position("quality"));
+        assert!(position("quality") < position("static"));
+        assert!(position("static") < position("t13"));
+        assert_eq!(
+            finalized
+                .iter()
+                .filter(|task| task.kind == WorkKind::Refactoring)
+                .count(),
+            1
+        );
+        assert_eq!(
+            finalized
+                .iter()
+                .filter(|task| task.kind == WorkKind::StaticAnalysis)
+                .count(),
+            1
+        );
+        let final_task = &finalized[position("t13")];
+        assert_eq!(final_task.depends_on, ["integration"]);
+        assert!(position("integration") < position("t13"));
+        for kind in tasks::GATE_KINDS {
+            assert_eq!(finalized.iter().filter(|task| task.kind == kind).count(), 1);
+        }
+        assert_eq!(
+            finalized,
+            finalize_plan(finalized.clone(), required_gates, true)
+        );
+    }
+}
+
+#[test]
+fn generated_gates_can_be_prerequisites_of_authored_tasks() {
+    let submitted = json!([
+        {"id":"t11", "title":"Implement", "goal":"Implement change", "kind":"implementation"},
+        {"id":"t12", "title":"Review", "goal":"Review change", "kind":"analysis", "depends_on":["t11"]},
+        {"id":"t13", "title":"Report", "goal":"Report checked results", "kind":"analysis", "depends_on":["quality-refactoring","static-analyzer"]},
+        {"id":"t14", "title":"Deliver", "goal":"Prepare delivery", "kind":"writing", "writes":true, "depends_on":["t13"]},
+        {"id":"t15", "title":"Close", "goal":"Close delivery", "kind":"analysis", "depends_on":["t14","integration-gate"]}
+    ]);
+    let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
+    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+    config.policy.required_gates = true;
+    let finalized = super::core_plan_proposal::checked_plan(&specs, &config).unwrap();
+    tasks::validate(&finalized).unwrap();
+    let task = |id: &str| finalized.iter().find(|task| task.id == id).unwrap();
+    assert!(
+        task("quality-refactoring")
+            .depends_on
+            .contains(&"t12".to_owned())
+    );
+    assert!(
+        task("static-analyzer")
+            .depends_on
+            .contains(&"quality-refactoring".to_owned())
+    );
+    assert!(
+        task("t13")
+            .depends_on
+            .contains(&"static-analyzer".to_owned())
+    );
+    for gate in finalized.iter().filter(|task| task.quality_gate) {
+        assert!(
+            !gate
+                .depends_on
+                .iter()
+                .any(|id| ["t13", "t14", "t15"].contains(&id.as_str()))
+        );
+    }
+    assert_eq!(
+        finalized,
+        super::core_plan_proposal::checked_plan(&finalized, &config).unwrap()
+    );
+    config.policy.required_gates = false;
+    assert!(
+        super::core_plan_proposal::checked_plan(&specs, &config)
+            .unwrap_err()
+            .contains("unknown task")
+    );
+}
+
+#[test]
+fn generated_gate_references_do_not_hide_unknown_dependencies() {
+    let submitted = json!([
+        {"id":"t1", "title":"Report", "goal":"Report", "kind":"analysis", "depends_on":["static-analyzer", "typo"]}
+    ]);
+    assert!(
+        tasks::planned_graph(serde_json::from_value(submitted).unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("typo")
+    );
+}

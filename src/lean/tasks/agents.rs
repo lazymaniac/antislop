@@ -138,6 +138,8 @@ fn reserve_task_id(base: &str, ids: &mut BTreeSet<String>) -> String {
 /// Refactoring runs first, after all writing tasks, since it changes code the
 /// other gates must judge; static analysis, testing and the read-only audits
 /// run in parallel after it; integration runs last, after them too.
+/// When authored tasks depend on generated gates, the pipeline is placed after
+/// upstream tasks and before those consumers, rather than after all writers.
 pub fn with_required_agents(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     let generated: BTreeSet<_> = tasks
         .iter()
@@ -156,7 +158,9 @@ pub fn with_required_agents(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     while let Some(task) = gates.next() {
         tasks.push(task);
     }
-    tasks
+    // Referenced gates can precede authored tasks instead of being appended.
+    // Preserve invalid graphs for the caller's validation to report the cause.
+    super::plan::order_graph(tasks.clone()).unwrap_or(tasks)
 }
 
 /// The plan without generated options tasks, for `policy.local_options = false`.
