@@ -323,6 +323,16 @@ pub(crate) fn plain_findings(value: &serde_json::Value) -> Result<Vec<serde_json
         .collect()
 }
 
+/// The run's tasks an audit may cite, oldest plan first: plans the plan
+/// verifier sent back never ran.
+pub(crate) fn audited_tasks(
+    tasks: &[crate::lean::store::Task],
+) -> impl DoubleEndedIterator<Item = &crate::lean::store::Task> {
+    tasks
+        .iter()
+        .filter(|task| task.status != crate::lean::tasks::status::REVISED)
+}
+
 /// The evidence proposal `item` stands for, with the identities the runtime
 /// owns filled in except the producing turn and the integrated fingerprint.
 pub(crate) fn resolve_evidence(
@@ -345,8 +355,9 @@ pub(crate) fn resolve_evidence(
                 item.criterion_id
             ))
         })?;
-    let task = tasks
-        .iter()
+    // A plan id names the task in the latest plan of the run.
+    let task = audited_tasks(tasks)
+        .rev()
         .find(|task| task.id == item.task_id || task.spec["id"] == item.task_id.as_str())
         .ok_or_else(|| {
             Error::Invalid(format!(
@@ -423,5 +434,39 @@ mod tests {
         .unwrap();
         assert!(!audit_approves(&high));
         assert!(plain_findings(&serde_json::json!([{"issue": "x"}])).is_err());
+    }
+
+    #[test]
+    fn evidence_names_the_task_of_the_plan_that_ran() {
+        let entry: LedgerEntry = serde_json::from_value(serde_json::json!({
+            "run_id": "run", "version": 1, "spec_revision": 1, "original": "Add sub",
+            "status": "active",
+            "spec": {"id": "R1", "interpretation": "Add sub", "mandatory": true,
+                "position": 0, "disposition": "active", "depends_on": [], "qualifiers": [],
+                "parent": null, "task_ids": [], "implementation_owners": [],
+                "verification_owners": [],
+                "source": {"source_id": "s1", "start": 0, "end": 7},
+                "criteria": [{"id": "R1.1", "text": "sub subtracts", "mandatory": true,
+                    "integration": false}]}
+        }))
+        .unwrap();
+        let task = |id: &str, status: &str, round: u32| -> crate::lean::store::Task {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "plan_id": "p", "spec": {"id": "build"}, "status": status,
+                "round": round, "report": null, "verdict": null, "base": null, "result": null
+            }))
+            .unwrap()
+        };
+        // The plan verifier sent the first plan back; its task never ran.
+        let tasks = [task("old", "revised", 0), task("new", "approved", 1)];
+        let item = AuditEvidence {
+            criterion_id: "R1.1".into(),
+            task_id: "build".into(),
+            result: "ran the tests".into(),
+            artifact: None,
+        };
+        let proposal = resolve_evidence(&item, &[entry], &tasks).unwrap();
+        assert_eq!((proposal.task_id.as_str(), proposal.attempt), ("new", 1));
+        assert_eq!(audited_tasks(&tasks).count(), 1);
     }
 }

@@ -246,8 +246,7 @@ fn audit_prompt(scope: &AuditScope) -> Result<String> {
 
 /// What the auditor needs of each task to name it in evidence.
 fn audit_tasks(tasks: &[crate::lean::store::Task]) -> Vec<serde_json::Value> {
-    tasks
-        .iter()
+    audited_tasks(tasks)
         .map(|task| {
             serde_json::json!({
                 "task_id": task.spec["id"],

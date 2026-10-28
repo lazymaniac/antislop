@@ -22,7 +22,7 @@ use std::{
     },
 };
 pub use submissions::{AuditAssessment, AuditEvidence};
-pub(crate) use submissions::{audit_approves, evidence_id, resolve_evidence};
+pub(crate) use submissions::{audit_approves, audited_tasks, evidence_id, resolve_evidence};
 
 impl Core {
     pub fn ledger_fingerprint(&self, conversation: &str) -> Result<String> {
