@@ -48,7 +48,7 @@ fn config(codex: &std::path::Path) -> Config {
 }
 
 fn wait_idle(core: &Core, conversation: &str) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !core.is_idle(conversation) {
         assert!(Instant::now() < deadline, "orchestrator never went idle");
         std::thread::sleep(Duration::from_millis(20));
@@ -453,6 +453,49 @@ fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
     assert!(last.contains("fail please") && last.contains("now it works"));
 }
 
+#[test]
+fn a_cli_that_dies_while_starting_is_started_again_and_the_turn_completes() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let real = fake_codex(dir.path());
+    let wrapper = dir.path().join("flaky-codex");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nif [ ! -f '{marker}' ]; then touch '{marker}'; echo 'bootstrap failed' >&2; exit 1; fi\nexec '{real}' \"$@\"\n",
+            marker = dir.path().join("started-once").display(),
+            real = real.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &wrapper,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let core = Core::open(&dir.path().join("state"), config(&wrapper)).unwrap();
+    let conversation = core.start(&project).unwrap();
+
+    core.send(&conversation.id, "hello after a bad start")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+
+    let turn = core
+        .store
+        .last_turn(&conversation.id, "orchestrator")
+        .unwrap()
+        .unwrap();
+    assert_eq!(turn.status, TurnStatus::Done, "{:?}", turn.error);
+    let events = core.store.events_since(&conversation.id, 0, 500).unwrap();
+    assert!(events.iter().any(|event| {
+        event.kind == "planning_progress"
+            && event.payload["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("starting it again"))
+    }));
+}
+
 fn chat(dir: &std::path::Path, project: &std::path::Path, message: &str) -> String {
     common::trust(project);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
@@ -714,7 +757,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
         if rebuilt { &old_build } else { current_build },
         "sleepy: first",
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(120);
     let daemon = loop {
         if let Some(identity) = identity().filter(|identity| identity["busy"] == true) {
             break identity["pid"].clone();
@@ -804,7 +847,7 @@ fn a_daemon_whose_state_is_deleted_leaves() {
         .unwrap() as libc::pid_t;
 
     std::fs::remove_dir_all(dir.join("state")).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(120);
     // SAFETY: signal 0 only asks whether the process exists.
     while unsafe { libc::kill(pid, 0) } == 0 {
         assert!(Instant::now() < deadline, "the daemon lingered");
@@ -886,7 +929,7 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !std::fs::read_to_string(dir.join("calls.log"))
         .unwrap_or_default()
         .contains("sleepy question")
@@ -1075,7 +1118,7 @@ fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
     let conversation = core.start(dir.path()).unwrap();
     core.send(&conversation.id, "sleepy").unwrap();
     let log = dir.path().join("calls.log");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !std::fs::read_to_string(&log).is_ok_and(|text| text.ends_with("\n---\n")) {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(20));

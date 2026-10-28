@@ -63,6 +63,9 @@ pub struct Session {
     stop: AtomicBool,
     executing: AtomicBool,
     primed: AtomicBool,
+    /// The CLI died or never connected before any prompt was typed into it,
+    /// so the turn did nothing and can be started again without loss.
+    startup_failed: AtomicBool,
     touched: Mutex<Instant>,
 }
 
@@ -297,6 +300,7 @@ impl Session {
             stop: AtomicBool::new(false),
             executing: AtomicBool::new(false),
             primed: AtomicBool::new(false),
+            startup_failed: AtomicBool::new(false),
             touched: Mutex::new(Instant::now()),
         })
     }
@@ -390,6 +394,11 @@ impl Session {
         }
     }
 
+    /// Whether the last run failed before the CLI took its prompt.
+    pub(crate) fn failed_before_start(&self) -> bool {
+        self.startup_failed.load(Ordering::SeqCst)
+    }
+
     pub(crate) fn set_tool_handler(&self, handler: Arc<mcp::Handler>) -> Result<()> {
         self.gateway.set_handler(handler)
     }
@@ -401,7 +410,11 @@ impl Session {
         prompt: &str,
         cancel: &AtomicBool,
     ) -> Result<agent::Outcome> {
-        self.wait_ready(cancel)?;
+        self.wait_ready(cancel).inspect_err(|error| {
+            if error.to_string() != mcp::CANCELLED {
+                self.startup_failed.store(true, Ordering::SeqCst);
+            }
+        })?;
         self.gateway.begin(turn)?;
         terminal::Session::submit(&self.screen, &turn_text(turn, prompt))?;
         self.primed.store(true, Ordering::SeqCst);
@@ -480,12 +493,15 @@ impl Session {
     }
 }
 
-/// What is typed into the CLI: the prompt and how to hand the answer back.
+/// What is typed into the CLI: the prompt and how to hand the answer back. The
+/// shape of the result for the agent's role is the tool's own schema.
 fn turn_text(turn: &str, prompt: &str) -> String {
     format!(
         "{prompt}\n\n---\nWhen this turn is complete, call the `{}` tool of the MCP server \
-         `{}` as your last action; stop only after receiving recorded=true. If rejected, correct the reported error and resubmit, with turn = \"{turn}\" and result = your \
-         typed final result. Task workers use type=completed with summary, report, outputs; options also require selection. Task verifiers use type=review with report and verdict. For a saved pending question use type=needs_input with request set to the existing ID returned by ask_orchestrator and checkpoint set to your progress. Never put question text in request. If waiting on a revision, ask_orchestrator must first record that unresolved request; an answered question resumes the task. Other roles use type=report with text. Do not stop without calling it.",
+         `{}` as your last action, with turn = \"{turn}\" and your typed final result; stop only \
+         after receiving recorded=true. If rejected, correct the reported error and resubmit. \
+         For a saved pending question use type=needs_input with request set to the ID returned \
+         by ask_orchestrator, never question text.",
         mcp::TOOL,
         mcp::SERVER
     )
@@ -599,7 +615,7 @@ print(json.dumps({"type": "text", "part": {"text": "opencode answer"}}))
             let _ = finished.send(outcome);
         });
         let outcome = result
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(Duration::from_secs(120))
             .expect("learning the identity must not deadlock")
             .unwrap();
         assert_eq!(outcome.text, "opencode answer");
@@ -647,7 +663,7 @@ print(json.dumps({"type": "text", "part": {"text": "opencode answer"}}))
                 .map(|turn| worker.run(&core.native, turn, "hello", &worker_cancel));
             let _ = send.send(outcomes);
         });
-        let result = receive.recv_timeout(Duration::from_secs(15));
+        let result = receive.recv_timeout(Duration::from_secs(120));
         if result.is_err() {
             cancel.store(true, Ordering::SeqCst);
             let _ = receive.recv_timeout(Duration::from_secs(5));

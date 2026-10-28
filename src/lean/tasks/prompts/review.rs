@@ -16,7 +16,8 @@ pub fn verifier_prompt(
          files yourself with your tools. Work read-only. {REVIEW_RULES} {PROJECT_RULES}\n\n\
          {task_context}\n\n{binding}\n\n\
          Your obligations (the task's risks, the checks of every verification, \
-         then those for this kind of work, then the catalog risks of this kind of work):\n{obligations}{risks}\n\n\
+         then those for this kind of work, then the catalog risks of this kind of work). \
+         Assess each from files and recorded evidence only; do not execute or edit:\n{obligations}{risks}\n\n\
          The worker's report:\n<<<\n{report}\n>>>\n\n{}Submit type=review through finish_turn, with report and verdict. Findings must have stable id, assigned check, severity, issue and where. Reuse previous ids for unresolved defects. Suggestions outside this contract belong in the report, not blocking findings. {COVERAGE_FORMAT}\n\n{blocker}",
         change_note(changes),
     )
@@ -78,7 +79,7 @@ pub fn verifier_followup(task: &TaskContract, report: &str, changes: Option<&str
     };
     format!(
         "The worker's updated report:\n<<<\n{report}\n>>>\n\n{}Check it again against \
-         the files. {binding} {REVIEW_RULES} account again for your obligations:\n{}\n\nSubmit type=review through finish_turn, with report and verdict. Findings must have stable id, assigned check, severity, issue and where. Reuse previous ids for unresolved defects. Suggestions outside this contract belong in the report, not blocking findings. {COVERAGE_FORMAT}\n\n{blocker}",
+         the files. {binding} {REVIEW_RULES} {PROJECT_RULES} account again for your obligations (from files and recorded evidence only):\n{}\n\nSubmit type=review through finish_turn, with report and verdict. Findings must have stable id, assigned check, severity, issue and where. Reuse previous ids for unresolved defects. Suggestions outside this contract belong in the report, not blocking findings. {COVERAGE_FORMAT}\n\n{blocker}",
         changes
             .map(|text| format!("{text}\n\n"))
             .unwrap_or_default(),
@@ -167,7 +168,9 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      the same files or contract are not unordered); no ordering or intermediate \
      state is assumed that the system does not guarantee; no unknown that \
      matters is assumed instead of being established first; each goal is \
-     checkable; both task.summary and verifier.summary are concise single-sentence \
+     checkable; tasks and verifier criteria do not gate work on commit or tree hashes, \
+     snapshot adoption, a clean tree or unchanged scoped paths: agents use their allocated \
+     checkout as it is; both task.summary and verifier.summary are concise single-sentence \
      semantic summaries (about 60–80 characters), rather than the first sentence \
      of goal or focus; summaries authored by the orchestrator use the user's language, \
      while standard descriptions of built-in roles and automatically added quality gates \
@@ -176,8 +179,58 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      verification agents from the predefined pool are included so touched code \
      is left in a better state; each verifier's focus and risks fit its own task and require only inspection of files and recorded evidence, never execution or edits. ";
 
+/// The plan as the reviewer reads it: compact JSON. Tasks the runtime adds
+/// itself (options, quality gates) are listed without their standard goals;
+/// the reviewer checks that they exist, not their boilerplate.
 fn plan_text(plan: &[TaskContract]) -> String {
-    serde_json::to_string_pretty(plan).unwrap_or_default()
+    let entries: Vec<_> = plan.iter().map(plan_entry).collect();
+    serde_json::to_string(&entries).unwrap_or_default()
+}
+
+fn plan_entry(task: &TaskContract) -> Value {
+    if task.options_for.is_none() && !task.quality_gate {
+        return serde_json::to_value(task).unwrap_or_default();
+    }
+    serde_json::json!({
+        "id": task.id,
+        "title": task.title,
+        "kind": task.kind,
+        "writes": task.writes,
+        "depends_on": task.depends_on,
+        "options_for": task.options_for,
+        "quality_gate": task.quality_gate,
+        "added_by_runtime": true,
+    })
+}
+
+/// Review of a plan revision. A resumed reviewer has the plan already; either
+/// way the earlier contracts are repeated only for tasks the revision changed
+/// or removed, not for the whole plan.
+pub fn plan_revision_review_prompt(
+    project: &str,
+    request: &str,
+    plan: &[TaskContract],
+    baseline: &[Value],
+    reason: &str,
+    initial: bool,
+) -> String {
+    let current: Vec<Value> = plan
+        .iter()
+        .filter_map(|task| serde_json::to_value(task).ok())
+        .collect();
+    let previous: Vec<_> = baseline
+        .iter()
+        .filter(|spec| !current.contains(spec))
+        .collect();
+    let head = if initial {
+        plan_review_prompt(project, request, plan)
+    } else {
+        plan_review_followup(request, plan)
+    };
+    format!(
+        "{head}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate local inputs/outputs, selected risk coverage, dedicated options for every writer and all quality gates. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}",
+        serde_json::to_string(&previous).unwrap_or_default()
+    )
 }
 
 pub fn plan_rejected(findings: &[Value]) -> String {

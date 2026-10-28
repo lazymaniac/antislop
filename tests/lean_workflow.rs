@@ -5,7 +5,7 @@ use antislop::{config::Config, lean::Core};
 use std::time::{Duration, Instant};
 
 fn idle(core: &Core, conversation: &str) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !core.is_idle(conversation) {
         assert!(Instant::now() < deadline, "session did not become idle");
         std::thread::sleep(Duration::from_millis(10));

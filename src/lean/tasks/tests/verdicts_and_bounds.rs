@@ -156,6 +156,13 @@ fn a_verdict_fenced_as_json_still_counts_but_other_json_does_not() {
     assert!(fenced.approved);
     let unrelated = parse_verdict("Sample:\n```json\n{\"name\": \"x\"}\n```");
     assert!(!unrelated.approved);
+    // Bare JSON, as the whole answer or its last line, is a verdict too.
+    let whole = parse_verdict("{\"approved\":true,\"findings\":[],\"review\":\"fine\"}");
+    assert!(whole.approved);
+    let last =
+        parse_verdict("Approved after reading the files.\n\n{\"approved\":true,\"findings\":[]}\n");
+    assert!(last.approved);
+    assert!(!parse_verdict("Looks {\"approved\":true} to me, but unsure.").approved);
 }
 
 #[test]
@@ -240,4 +247,40 @@ fn only_structured_medium_and_low_findings_are_minor() {
     assert!(!only_minor_findings(&parse_verdict(
         "REJECT without a block"
     )));
+}
+
+#[test]
+fn bare_review_verdicts_preserve_findings_and_reject_blockers() {
+    for severity in ["low", "medium", "high", "critical"] {
+        let finding = serde_json::json!({"severity": severity, "issue": "Check source"});
+        let raw =
+            serde_json::json!({"approved": true, "findings": [finding], "review": "Reviewed"});
+        for answer in [
+            raw.to_string(),
+            format!(
+                "Review complete.\n{}",
+                serde_json::to_string_pretty(&raw).unwrap()
+            ),
+        ] {
+            let verdict = parse_verdict(&answer);
+            assert_eq!(verdict.approved, severity == "low", "{answer}");
+            assert_eq!(verdict.findings, vec![finding.clone()]);
+        }
+    }
+    assert!(parse_verdict("Reviewed.\n{\n  \"approved\": true,\n  \"findings\": []\n}\n").approved);
+    for answer in [
+        "Reviewed.\n{\"name\":\"example\"}",
+        "{\"approved\":true} trailing text",
+        "{\"approved\":true}\n{\"approved\":false,\"findings\":[]}",
+        "{\"approved\":\"true\"}",
+    ] {
+        assert!(!parse_verdict(answer).approved, "{answer}");
+    }
+}
+
+#[test]
+fn prose_alone_is_not_a_structured_verdict() {
+    assert!(structured_verdict("Plan review: approved. Everything is consistent.").is_none());
+    assert!(structured_verdict("```verdict\n{\"approved\":true,\"findings\":[]}\n```").is_some());
+    assert!(!parse_verdict("Plan review: approved.").approved);
 }

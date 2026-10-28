@@ -96,6 +96,14 @@ session and checked against the active turn. An agent cannot choose another role
 or address another task. There are no peer messages, agent broadcasts or
 receipt-only model turns.
 
+A CLI that dies or never connects before it took its prompt lost nothing, so the
+runtime starts it again up to twice (a login or limit error is not retried, it
+waits for the user). A failure after the prompt was typed is never retried
+automatically.
+
+Answers to decisions the runtime asked during execution steer the running work;
+they are not new requirements sources and do not re-extract the ledger.
+
 Questions and replies are durable. Repeating a request key with the same question
 returns its original identity; different content conflicts. Answer waits last at
 most 25 seconds per tool call and do not consume the agent's active-work timeout.
@@ -170,13 +178,22 @@ critical finding, or a rejection without a structured verdict, always blocks.
 bounds the tasks a plan is drafted with, and `policy.local_options = false`
 leaves out the per-writer options tasks for mechanical work.
 
+Agents work on their allocated checkout in its current state. Revision identifiers,
+adopted snapshots and changed-file lists from earlier reports are context, never
+execution or acceptance gates, even when scoped files differ. Workers perform the
+assigned work and measurements on the files they receive; verifiers assess concrete
+defects and evidence rather than repository identity. Do not reset or switch a
+checkout to satisfy a historical snapshot requirement.
+
 Every task of a plan starts from one baseline commit, fixed when the plan's
 first task starts. Contracts never name commits or checkout paths; edits the
 user makes afterwards stay protected when results are integrated.
 
 The first rejection establishes a correction baseline. Later rejections must
 close an earlier finding or check. Rounds, reworded reports and arbitrary commits
-are not progress. Stagnation returns to the orchestrator for new input, a reviewed
+are not progress. As a safety valve, one run of a task takes at most 16 rounds;
+then it returns to the orchestrator as `coordinating` (never as failed), and
+running it again starts a new count. Stagnation returns to the orchestrator for new input, a reviewed
 contract revision or a specific user decision.
 
 ## Storage, UI and alpha format changes

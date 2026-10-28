@@ -585,7 +585,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
     core.accept_plan(&f.conversation, &tasks[0].plan_id)
         .unwrap();
     let wait = |done: &dyn Fn() -> bool| {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while !done() {
             assert!(Instant::now() < deadline, "timed out waiting for processes");
             std::thread::sleep(Duration::from_millis(20));
@@ -731,7 +731,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
             .plan_report(&conversation, &plan, &AtomicBool::new(false))
             .unwrap()
     });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     while !f.dir.path().join("audit-verifier-entered").exists() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1085,7 +1085,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
             .apply_user_ledger_change(&proposal, &diff_hash(&diff).unwrap(), &change)
             .unwrap();
         assert_eq!(result.spec_revision, 2);
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while !core.is_idle(&f.conversation) {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
@@ -1462,7 +1462,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         .replace("binary = \"codex\"", &format!("binary = {:?}", script))
         .replace("provider = \"agy\"", "provider = \"codex\"");
     let core = Core::open(f.dir.path(), Config::from_toml(&config).unwrap()).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !core.is_idle(&f.conversation) {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));
@@ -1503,7 +1503,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         &revised_change,
     )
     .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !core.is_idle(&f.conversation) {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));

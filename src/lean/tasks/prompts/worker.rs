@@ -86,24 +86,43 @@ pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
     let change_rules = worker_change_rules(task);
     let blocker = "For missing input ask_orchestrator. Do not invent requirements or implement outside this contract.";
     let binding = if task.writes { OPTIONS_BINDING } else { "" };
+    let outputs = if task.outputs.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Declared outputs (submit each by name in `outputs`): {}\n",
+            task.outputs.join(", ")
+        )
+    };
+    let checks = worker_checks(task);
     format!(
         "You are a worker on a team of agents. The project is your current \
          working directory: {project}. Nothing is pasted for you: read the files \
          you need yourself with your tools.\n\n\
-         Task: {}\nTask id: {}\nGoal: {}\nScope: {}\n\n{binding}\n\n{}{PROJECT_RULES}\n\n\
+         Task: {}\nTask id: {}\nKind: {}\nGoal: {}\nScope: {}\n{outputs}{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          {blocker}\n\n{team_note}\n\n\
-         Your checkout is the one the runtime allocated; a commit hash or path in the task or \
-         a dependency's report that differs from yours is not a blocker unless the files you \
-         must work on differ. Report the commit you actually observed instead of asking for \
-         alignment.\n\n\
-         End with a complete report of your result; an independent verifier \
-         will check it against the files.",
+         End with a complete report of your result: what you did or found, the evidence \
+         and each declared output. Do not restate the task or dependency data or paste file \
+         contents; the independent verifier checks the report against the files.",
         task.title,
         task.id,
+        work_kind_name(task.kind),
         task.goal,
         scope_text(&task.scope),
         change_rules
     )
+}
+
+/// What the independent verifier will check, so the worker meets it up front.
+fn worker_checks(task: &TaskContract) -> String {
+    let mut text = format!("Your verifier will check: {}\n", task.verifier.focus);
+    if !task.verifier.risks.is_empty() {
+        text.push_str(&format!(
+            "Risks it weighs: {}\n",
+            task.verifier.risks.join("; ")
+        ));
+    }
+    text
 }
 
 fn worker_change_rules(task: &TaskContract) -> &'static str {
@@ -173,7 +192,8 @@ pub fn needs_user_action(error: &str) -> bool {
 pub fn worker_followup(findings: &[Value]) -> String {
     format!(
         "Your verifier found problems:\n{}\n\nAddress them and give your complete \
-         updated report. {}",
+         updated report: for each finding what you changed and the evidence, without \
+         restating the task or pasting file contents. {}",
         findings_text(findings),
         "Submit the complete typed result through finish_turn.",
     )

@@ -125,6 +125,15 @@ fn invalidate_dependent(
     operation: &str,
     now: i64,
 ) -> Result<()> {
+    // A task that never ran has nothing from an earlier input to discard.
+    let untouched: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?1 AND status='queued' AND round=0 AND report IS NULL AND result IS NULL)",
+        [dependent],
+        |row| row.get(0),
+    )?;
+    if untouched {
+        return Ok(());
+    }
     tx.execute(
         "UPDATE task_inputs SET generation=generation+1 WHERE task_id=?1",
         [dependent],

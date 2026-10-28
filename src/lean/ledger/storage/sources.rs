@@ -1,6 +1,20 @@
 use super::*;
 
 impl Store {
+    /// The IDs of decisions the runtime asked the user during execution. Their
+    /// answers steer the running work; they are not requirements, and treating
+    /// one as a new source re-extracts the ledger and invalidates the plan.
+    pub fn execution_decision_ids(&self, conversation: &str) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut statement = db.prepare(
+            "SELECT json_extract(payload,'$.id') FROM events WHERE conversation_id=?1 AND kind='user_decision_requested'",
+        )?;
+        let ids = statement
+            .query_map([conversation], |row| row.get::<_, Option<String>>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(ids.into_iter().flatten().collect())
+    }
+
     pub fn register_message_source(
         &self,
         conversation: &str,

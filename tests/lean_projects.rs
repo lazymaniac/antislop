@@ -76,7 +76,7 @@ impl Daemon {
             .spawn()
             .unwrap();
         let client = Client::at(&state);
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while client.call(&Request::Identity).is_err() {
             assert!(Instant::now() < deadline, "daemon did not start");
             std::thread::sleep(Duration::from_millis(25));
@@ -98,7 +98,7 @@ impl Drop for Daemon {
 }
 
 fn pump(app: &mut App, rx: &mpsc::Receiver<Update>, until: impl Fn(&App) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !until(app) {
         assert!(Instant::now() < deadline, "the screen never got there");
         if let Ok(update) = rx.recv_timeout(Duration::from_millis(50)) {

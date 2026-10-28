@@ -166,3 +166,75 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         }
     }
 }
+
+#[test]
+fn an_answer_to_an_execution_decision_is_not_a_requirements_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/antislop.toml"
+    ))
+    .unwrap();
+    let core = Core::open(
+        &dir.path().join("state"),
+        Config::from_toml(&config).unwrap(),
+    )
+    .unwrap();
+    let conversation = core
+        .store
+        .create_conversation(dir.path().to_str().unwrap())
+        .unwrap()
+        .id;
+    let request = core
+        .store
+        .add_message(&conversation, "user", "Refactor the crate")
+        .unwrap();
+    let run = core.store.create_run(&conversation, "Refactor").unwrap();
+    let question = crate::lean::interview::Question {
+        id: "pick-source".into(),
+        context: "Two sources exist.".into(),
+        question: "Which?".into(),
+        options: vec![
+            crate::lean::interview::Choice {
+                label: "A".into(),
+                description: String::new(),
+            },
+            crate::lean::interview::Choice {
+                label: "B".into(),
+                description: String::new(),
+            },
+        ],
+    };
+    core.store
+        .ask_user_decision(&conversation, &question)
+        .unwrap();
+    core.store
+        .add_message(
+            &conversation,
+            "user",
+            "Interview answer (pick-source)\nQuestion: Which?\nAnswer: A",
+        )
+        .unwrap();
+    let other = core
+        .store
+        .add_message(&conversation, "user", "Also keep the CLI unchanged")
+        .unwrap();
+    let user = core.store.messages_by(&conversation, "user", 0).unwrap();
+    assert!(
+        core.register_missing_sources(&conversation, &run, &user)
+            .unwrap()
+    );
+    let sources: Vec<_> = core
+        .store
+        .ledger_sources(&conversation, &run.id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|source| source.message)
+        .collect();
+    assert!(sources.contains(&request.seq) || run.start_message > request.seq);
+    assert!(sources.contains(&other.seq));
+    assert!(
+        !sources.contains(&(other.seq - 1)),
+        "the decision answer stays out of the sources: {sources:?}"
+    );
+}

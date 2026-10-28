@@ -173,7 +173,7 @@ impl<'a> Repair<'a> {
         if fresh {
             instructions
         } else {
-            instructions + &tasks::round_handoff_prompt(handoff, true)
+            instructions + &tasks::round_handoff_prompt(handoff, false)
         }
     }
 

@@ -2,7 +2,6 @@ use super::*;
 
 struct HandoffSeed {
     report: Option<(u32, String)>,
-    dependencies: Vec<tasks::DependencyReport>,
     primary: PathBuf,
 }
 
@@ -13,27 +12,15 @@ impl Core {
         round: u32,
         cwd: &Path,
         task: &Task,
-        spec: &tasks::TaskContract,
     ) -> Result<RoundHandoff> {
-        let seed = self.handoff_seed(id, round, task, spec)?;
-        Ok(base_handoff(task, spec, round, cwd, seed))
+        let seed = self.handoff_seed(id, round, task)?;
+        Ok(base_handoff(task, round, cwd, seed))
     }
 
-    fn handoff_seed(
-        &self,
-        id: &str,
-        round: u32,
-        task: &Task,
-        spec: &tasks::TaskContract,
-    ) -> Result<HandoffSeed> {
+    fn handoff_seed(&self, id: &str, round: u32, task: &Task) -> Result<HandoffSeed> {
         let report = self.store.completed_worker_report(id, round)?;
-        let dependencies = self.store.dependency_inputs(&task.plan_id, spec)?;
         let primary = self.primary_project(&task.plan_id)?;
-        Ok(HandoffSeed {
-            report,
-            dependencies,
-            primary,
-        })
+        Ok(HandoffSeed { report, primary })
     }
 
     fn primary_project(&self, plan: &str) -> Result<PathBuf> {
@@ -196,16 +183,10 @@ impl Core {
     }
 }
 
-fn base_handoff(
-    task: &Task,
-    spec: &tasks::TaskContract,
-    round: u32,
-    cwd: &Path,
-    seed: HandoffSeed,
-) -> RoundHandoff {
+fn base_handoff(task: &Task, round: u32, cwd: &Path, seed: HandoffSeed) -> RoundHandoff {
     RoundHandoff {
-        task: spec.clone(),
         round,
+        writes: task.spec["writes"].as_bool().unwrap_or(false),
         worktree: cwd.into(),
         report: seed.report,
         verdict: task.verdict.clone(),
@@ -214,7 +195,6 @@ fn base_handoff(
         result: task.result.clone(),
         interrupted: false,
         interruptions: vec![],
-        dependencies: seed.dependencies,
         requirements: vec![],
         comments: vec![],
         protected_paths: vec![],

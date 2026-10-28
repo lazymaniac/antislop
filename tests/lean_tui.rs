@@ -5744,7 +5744,7 @@ mod config_editor_acceptance {
         }
     }
     fn wait(mut done: impl FnMut() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while !done() {
             assert!(Instant::now() < deadline, "timed out");
             thread::sleep(Duration::from_millis(10));

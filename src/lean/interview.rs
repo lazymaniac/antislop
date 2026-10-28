@@ -4,10 +4,35 @@ use crate::{Result, require};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "RawChoice")]
 pub struct Choice {
     pub label: String,
     #[serde(default)]
     pub description: String,
+}
+
+/// A bare string is a choice with only a label; agents write options both ways.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawChoice {
+    Label(String),
+    Full {
+        label: String,
+        #[serde(default)]
+        description: String,
+    },
+}
+
+impl From<RawChoice> for Choice {
+    fn from(raw: RawChoice) -> Self {
+        match raw {
+            RawChoice::Label(label) => Self {
+                label,
+                description: String::new(),
+            },
+            RawChoice::Full { label, description } => Self { label, description },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,7 +116,11 @@ fn parse_question_block<'a>(lines: &mut impl Iterator<Item = &'a str>) -> Result
 }
 
 fn validate_question(body: &str) -> Result<Question> {
-    let question: Question = serde_json::from_str(body)?;
+    let question: Question = serde_json::from_str(body).map_err(|error| {
+        crate::Error::Invalid(format!(
+            "question block is not valid: {error}; the body must be one JSON object {{\"id\",\"context\",\"question\",\"options\":[{{\"label\",\"description\"}}]}}"
+        ))
+    })?;
     question.validate()?;
     Ok(question)
 }
@@ -108,6 +137,14 @@ mod tests {
         assert_eq!(parsed.options[0].label, "Small");
         assert!(parsed.options[1].description.is_empty());
         assert!(parse("```question\n{}").unwrap().is_err());
+        let strings =
+            serde_json::json!({"id":"s","context":"c","question":"q","options":["Keep","Switch"]});
+        let parsed = parse(&format!("```question\n{strings}\n```"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.options[1].label, "Switch");
+        let error = parse("```question\nnot json\n```").unwrap().unwrap_err();
+        assert!(error.to_string().contains("one JSON object"), "{error}");
         let mut invalid = question;
         invalid["options"] = serde_json::json!([]);
         assert!(

@@ -1,9 +1,26 @@
 use super::*;
 
-pub fn parse_verdict(answer: &str) -> Verdict {
+/// A verdict written as a bare JSON object: the whole answer, or its final block.
+/// It must still parse as a verdict, so prose and other JSON never approve.
+fn bare_verdict(answer: &str) -> Option<Verdict> {
+    let trimmed = answer.trim();
+    serde_json::from_str::<Verdict>(trimmed).ok().or_else(|| {
+        trimmed
+            .match_indices('\n')
+            .filter_map(|(index, _)| {
+                let suffix = trimmed[index + 1..].trim_start();
+                suffix.starts_with('{').then_some(suffix)
+            })
+            .find_map(|suffix| serde_json::from_str::<Verdict>(suffix).ok())
+    })
+}
+
+/// The verdict an answer states in a block or as a bare JSON object, if any.
+/// Prose alone is none, however plainly it says "approved".
+pub fn structured_verdict(answer: &str) -> Option<Verdict> {
     // A reviewer that fences its verdict as plain `json` still gave a structured
     // verdict; it must parse as one, so arbitrary JSON is never an approval.
-    let mut verdict = fenced(answer, "verdict")
+    fenced(answer, "verdict")
         .or_else(|| fenced(answer, "json"))
         .and_then(|(_, body)| {
             let body = body
@@ -12,11 +29,15 @@ pub fn parse_verdict(answer: &str) -> Verdict {
                 .unwrap_or(body);
             serde_json::from_str::<Verdict>(body).ok()
         })
-        .unwrap_or_else(|| Verdict {
-            approved: false,
-            findings: vec![Value::String(answer.trim().to_owned())],
-            coverage: serde_json::Map::new(),
-        });
+        .or_else(|| bare_verdict(answer))
+}
+
+pub fn parse_verdict(answer: &str) -> Verdict {
+    let mut verdict = structured_verdict(answer).unwrap_or_else(|| Verdict {
+        approved: false,
+        findings: vec![Value::String(answer.trim().to_owned())],
+        coverage: serde_json::Map::new(),
+    });
     let blocking = verdict.findings.iter().any(|finding| {
         matches!(
             finding["severity"]
@@ -93,7 +114,7 @@ pub fn obligations(task: &TaskContract) -> Vec<(String, String)> {
 pub(super) fn obligations_text(obligations: &[(String, String)]) -> String {
     obligations
         .iter()
-        .map(|(id, text)| format!("- {id}: Assess from files and recorded evidence only (do not execute or edit): {text}"))
+        .map(|(id, text)| format!("- {id}: {text}"))
         .collect::<Vec<_>>()
         .join("\n")
 }

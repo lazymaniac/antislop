@@ -1,5 +1,8 @@
 use super::*;
 
+/// Restarts of an agent CLI that failed before it took its prompt.
+const STARTUP_RETRIES: u32 = 2;
+
 impl Core {
     pub(in crate::lean) fn turn_inner(
         &self,
@@ -120,20 +123,17 @@ impl Core {
                 access,
                 resume: resume.clone(),
             };
-            let native = self.native.prepare_scoped(
-                self,
-                conversation,
-                &role,
-                &spec,
-                &match &session_policy {
-                    SessionPolicy::Role => String::new(),
-                    SessionPolicy::Independent => format!("turn:{}", turn.id),
-                    SessionPolicy::TaskRound { .. } => format!(
-                        "{session_policy:?}:{profile_name}:{}",
-                        rounds::spec_signature(&profile_name, profile_effort, &spec)?
-                    ),
-                },
-            )?;
+            let scope = match &session_policy {
+                SessionPolicy::Role => String::new(),
+                SessionPolicy::Independent => format!("turn:{}", turn.id),
+                SessionPolicy::TaskRound { .. } => format!(
+                    "{session_policy:?}:{profile_name}:{}",
+                    rounds::spec_signature(&profile_name, profile_effort, &spec)?
+                ),
+            };
+            let mut native = self
+                .native
+                .prepare_scoped(self, conversation, &role, &spec, &scope)?;
             let identity = native.identity().or_else(|| resume.clone());
             self.store.record_run_context(&store::RunContext {
                 turn_id: turn.id.clone(),
@@ -229,7 +229,7 @@ impl Core {
             let weak = self.weak.get().expect("core weak reference").clone();
             let (conv, agent_role, agent_turn) =
                 (conversation.to_owned(), role.clone(), turn.id.clone());
-            native.set_tool_handler(Arc::new(move |tool, args| {
+            let handler: Arc<crate::lean::mcp::Handler> = Arc::new(move |tool, args| {
                 let core = weak
                     .upgrade()
                     .ok_or_else(|| Error::Invalid("daemon stopped".into()))?;
@@ -250,8 +250,34 @@ impl Core {
                         })?;
                 }
                 outcome
-            }))?;
-            native.run(&self.native, &turn.id, &text, cancel)
+            });
+            native.set_tool_handler(handler.clone())?;
+            // A CLI that dies or hangs while starting, before it took the prompt,
+            // lost nothing: start it again a few times rather than failing the task.
+            let mut attempts = 0;
+            loop {
+                let result = native.run(&self.native, &turn.id, &text, cancel);
+                if result
+                    .as_ref()
+                    .is_err_and(|error| !tasks::needs_user_action(&error.to_string()))
+                    && native.failed_before_start()
+                    && attempts < STARTUP_RETRIES
+                    && !cancel.load(Ordering::SeqCst)
+                {
+                    attempts += 1;
+                    announce(
+                        "planning_progress",
+                        json!({"text": format!("The agent CLI failed while starting; starting it again ({attempts}/{STARTUP_RETRIES})")}),
+                    );
+                    std::thread::sleep(std::time::Duration::from_secs(3 * u64::from(attempts)));
+                    native = self
+                        .native
+                        .prepare_scoped(self, conversation, &role, &spec, &scope)?;
+                    native.set_tool_handler(handler.clone())?;
+                    continue;
+                }
+                break result;
+            }
         });
         match outcome {
             Ok(outcome) => {

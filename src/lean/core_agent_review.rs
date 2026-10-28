@@ -62,12 +62,16 @@ impl Core {
                             plan,
                             &project,
                             &cancel,
-                            |_, request| {
-                                tasks::plan_review_prompt(
-                                    &project.to_string_lossy(),
-                                    request,
-                                    &specs,
-                                )
+                            |initial, request| {
+                                if initial {
+                                    tasks::plan_review_prompt(
+                                        &project.to_string_lossy(),
+                                        request,
+                                        &specs,
+                                    )
+                                } else {
+                                    tasks::plan_review_followup(request, &specs)
+                                }
                             },
                         )?
                         .map_err(Error::Invalid)?;

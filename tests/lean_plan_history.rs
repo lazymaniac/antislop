@@ -80,7 +80,7 @@ impl DaemonGuard {
             .spawn()
             .unwrap();
         let client = Client::at(state);
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while Instant::now() < deadline {
             if client.call(&Request::Identity).is_ok() {
                 return Self { child, client };

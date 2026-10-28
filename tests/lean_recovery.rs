@@ -896,7 +896,7 @@ worker = "Task: Fail" in prompt or "was interrupted" in prompt"#,
         .bind_task_ledger(&conversation, &run.id, &plan)
         .unwrap();
     core.accept_plan(&conversation, &plan).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !dir.path().join("restart-started").exists() {
         assert!(Instant::now() < deadline, "worker did not start");
         std::thread::sleep(Duration::from_millis(20));

@@ -47,6 +47,33 @@ pub struct Alternative {
     pub tradeoffs: String,
 }
 
+/// What a verifier is shown of a completed turn: the prose report plus the
+/// typed deliverables the runtime recorded. The selection and the named
+/// outputs are the work product itself; a verifier handed only the prose
+/// cannot judge them and rejects the task for payload it never saw.
+pub fn report_with_deliverables(
+    report: &str,
+    outputs: &BTreeMap<String, String>,
+    selection: Option<&Selection>,
+) -> String {
+    let mut text = report.to_owned();
+    if let Some(selection) = selection
+        && let Ok(json) = serde_json::to_string_pretty(selection)
+    {
+        text.push_str(&format!(
+            "\n\nRecorded structured selection (accepted by the runtime; this is the deliverable):\n```json\n{json}\n```"
+        ));
+    }
+    if !outputs.is_empty()
+        && let Ok(json) = serde_json::to_string_pretty(outputs)
+    {
+        text.push_str(&format!(
+            "\n\nRecorded named outputs (accepted by the runtime):\n```json\n{json}\n```"
+        ));
+    }
+    text
+}
+
 impl Selection {
     pub fn validate(&self) -> Result<()> {
         require(
@@ -224,6 +251,26 @@ mod tests {
 
     fn task() -> TaskContract {
         serde_json::from_value(json!({"id":"local","title":"API","goal":"Define API","kind":"implementation","outputs":["api"],"verifier":{"focus":"Check API","risk_ids":["R021"]}})).unwrap()
+    }
+
+    #[test]
+    fn a_verifier_is_shown_the_recorded_selection_and_outputs() {
+        let selection = Selection {
+            criteria: vec!["cost".into()],
+            alternatives: vec![],
+            selected: "A".into(),
+            rationale: "cheapest".into(),
+            reconsider_when: "never".into(),
+        };
+        let outputs = BTreeMap::from([("map".to_owned(), "path/to/map".to_owned())]);
+        let shown = report_with_deliverables("prose", &outputs, Some(&selection));
+        assert!(shown.starts_with("prose"));
+        assert!(shown.contains("\"selected\": \"A\"") && shown.contains("cheapest"));
+        assert!(shown.contains("path/to/map"));
+        assert_eq!(
+            report_with_deliverables("prose", &BTreeMap::new(), None),
+            "prose"
+        );
     }
 
     #[test]

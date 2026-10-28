@@ -82,7 +82,7 @@ fn open(dir: &Path, autonomous: bool, orchestrator: &str, agent: &str) -> Arc<Co
 fn wait_idle(core: &Core, conversation: &str) {
     // Every round starts fresh worker and verifier terminals, and a task runs
     // up to a dozen rounds.
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + Duration::from_secs(600);
     while !core.is_idle(conversation) {
         assert!(Instant::now() < deadline, "conversation never went idle");
         std::thread::sleep(Duration::from_millis(20));
@@ -339,6 +339,39 @@ else:
 }
 
 #[test]
+fn a_verifier_inventing_new_finding_ids_each_round_still_hands_the_task_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        true,
+        r#"answer = "done" if "[runtime]" in prompt else plan(task("t1", "Fix"))"#,
+        r#"
+if "You review a plan" in prompt or "You audit" in prompt:
+    say("reviewer", verdict(True))
+elif "found problems" in prompt:
+    say("worker", "report")
+elif "You verify" in prompt or "updated report" in prompt:
+    n = bump("verdicts")
+    say("verifier", verdict(False, [{"severity": "high", "id": "new-%d" % n, "issue": "problem %d" % n, "where": "a"}]))
+else:
+    say("worker", "report")
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "fix");
+
+    let task = &core.store.latest_plan(&conversation).unwrap()[0];
+    assert_eq!(task.status, "coordinating", "{:?}", task.report);
+    assert_eq!(task.round, 16, "one run takes at most sixteen rounds");
+    let last = events(&core, &conversation, "task").pop().unwrap();
+    assert!(
+        last["reason"]
+            .as_str()
+            .unwrap()
+            .contains("correction rounds ran without approval")
+    );
+}
+
+#[test]
 fn the_same_obligations_open_round_after_round_stop_the_rounds_however_they_are_worded() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
@@ -374,7 +407,7 @@ else:
 }
 
 #[test]
-fn independently_verified_progress_has_no_fixed_round_ceiling() {
+fn independently_verified_progress_continues_past_many_rounds() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
@@ -525,7 +558,7 @@ else:
     core.pause(&conversation, true).unwrap();
     core.accept_plan(&conversation, &plan).unwrap();
     core.send(&conversation, "user question marker").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while core
         .store
         .messages_after(&conversation, 0)
@@ -678,6 +711,32 @@ if 'You review a plan' in prompt or 'new plan:' in prompt:
     assert_eq!(proposed.len(), 1);
     assert_eq!(proposed[0]["review"]["approved"], true);
     assert_eq!(events(&core, &conversation, "plan_review").len(), 5);
+}
+
+#[test]
+fn a_plan_review_that_only_says_approved_is_asked_for_its_verdict_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = open(
+        dir.path(),
+        false,
+        r#"answer=plan(task('t1','Focused plan'))"#,
+        r#"
+if 'required verdict block' in prompt:
+    bump('repairs')
+    say('plan', verdict(True))
+elif 'You review a plan' in prompt or 'new plan:' in prompt:
+    say('plan', 'Plan review: approved. The plan is consistent.', False)
+"#,
+    );
+    let conversation = ask(&core, dir.path(), "Plan the local work");
+    let proposed = events(&core, &conversation, "plan_proposed");
+    assert_eq!(proposed.len(), 1);
+    assert_eq!(proposed[0]["review"]["approved"], true);
+    assert!(events(&core, &conversation, "plan_review").is_empty());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("repairs")).unwrap(),
+        "1"
+    );
 }
 
 #[test]

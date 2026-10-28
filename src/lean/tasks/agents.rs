@@ -203,6 +203,22 @@ pub fn with_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     result
 }
 
+/// The options verifier's focus, with what the dependent writer's own verifier
+/// was asked to watch for. Generated contracts cannot be revised directly, so
+/// revising the owning task is how a requirement reaches its options check.
+fn options_focus(task: &TaskContract) -> String {
+    let base = "Check alternatives, common criteria, exclusions, evidence and selection.";
+    let owner = task.verifier.focus.trim();
+    if owner.is_empty() {
+        base.into()
+    } else {
+        format!(
+            "{base} The dependent writer's verifier will also check (reference for the comparison, not a task of this one): {}",
+            crate::lean::tasks::bound(owner, 400)
+        )
+    }
+}
+
 fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract {
     let id = reserve_task_id(&format!("{}-options", task.id), ids);
     TaskContract {
@@ -225,8 +241,7 @@ fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract
             risk_ids: crate::lean::risks::for_kind(WorkKind::Options)
                 .map(|(id, _)| id)
                 .collect(),
-            focus: "Check alternatives, common criteria, exclusions, evidence and selection."
-                .into(),
+            focus: options_focus(task),
             summary: Some(
                 "Verify the selection follows from feasible alternatives and evidence.".into(),
             ),

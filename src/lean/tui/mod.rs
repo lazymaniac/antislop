@@ -220,10 +220,27 @@ pub struct ConversationState {
     pub graph_viewport: Option<(u16, u16)>,
 }
 
+/// Layout data for the active conversation, separate from the viewport buffer.
+/// Unchanged cards reuse wrapped rows; only visible rows are copied per frame.
+#[derive(Default)]
+struct TranscriptLayout {
+    context: Option<(String, u16, Theme)>,
+    entries: Vec<TranscriptLayoutEntry>,
+}
+
+struct TranscriptLayoutEntry {
+    source: TranscriptCard,
+    comment: Option<(String, Option<String>)>,
+    found: bool,
+    rows: Vec<Row>,
+    end: usize,
+}
+
 pub struct App {
     native_views: std::collections::HashMap<String, native_view::View>,
     plan_history: Option<planhistory::Browser>,
     graph_layout_cache: graph::LayoutCache,
+    transcript_layout: TranscriptLayout,
     pub text_selection: selection::TextSelection,
     text_area: Option<Rect>,
     text_origin: usize,
@@ -328,6 +345,7 @@ impl App {
         App {
             plan_history: None,
             graph_layout_cache: graph::LayoutCache::default(),
+            transcript_layout: TranscriptLayout::default(),
             text_selection: Default::default(),
             text_area: None,
             text_origin: 0,
@@ -4712,8 +4730,41 @@ impl App {
         let mut cards: Vec<Row> = vec![];
         let mut top = None;
 
+        let context = (self.conversation.clone(), width, *theme);
+        if self.transcript_layout.context.as_ref() != Some(&context) {
+            self.transcript_layout.entries.clear();
+            self.transcript_layout.context = Some(context);
+        }
+        self.transcript_layout
+            .entries
+            .truncate(self.view.cards.len());
+        let mut history_height = 0;
         for (index, card_entry) in self.view.cards.iter().enumerate() {
             let is_found = self.found == Some(index);
+            if is_found {
+                top = Some(history_height);
+            }
+            let comment = match card_entry {
+                TranscriptCard::Comment { id, status, .. } => Some((
+                    self.view
+                        .comments
+                        .get(id)
+                        .map_or(status.as_str(), |_| self.view.comment_state(*id))
+                        .to_owned(),
+                    self.view.comment_error(*id).map(str::to_owned),
+                )),
+                _ => None,
+            };
+            if let Some(cached) = self.transcript_layout.entries.get_mut(index)
+                && cached.source == *card_entry
+                && cached.comment == comment
+                && cached.found == is_found
+            {
+                history_height += cached.rows.len();
+                cached.end = history_height;
+                continue;
+            }
+            let mut cards = Vec::new();
             match card_entry {
                 TranscriptCard::Message(msg) => {
                     let is_user = msg.sender == "You" || msg.sender == "user";
@@ -4723,7 +4774,6 @@ impl App {
                         theme.card()
                     };
                     if is_found {
-                        top = Some(cards.len());
                         fill = fill.add_modifier(Modifier::REVERSED);
                     }
                     let accent = theme.person(&msg.sender);
@@ -4757,7 +4807,6 @@ impl App {
                 TranscriptCard::Plan { plan, tasks, text } => {
                     let mut fill = theme.card();
                     if is_found {
-                        top = Some(cards.len());
                         fill = fill.add_modifier(Modifier::REVERSED);
                     }
                     cards.extend(card(
@@ -4784,7 +4833,6 @@ impl App {
                 } => {
                     let mut fill = theme.card();
                     if is_found {
-                        top = Some(cards.len());
                         fill = fill.add_modifier(Modifier::REVERSED);
                     }
                     let accent = match tone {
@@ -4818,7 +4866,6 @@ impl App {
                 } => {
                     let mut fill = theme.card();
                     if is_found {
-                        top = Some(cards.len());
                         fill = fill.add_modifier(Modifier::REVERSED);
                     }
                     let state = self
@@ -4849,7 +4896,6 @@ impl App {
                 TranscriptCard::Confirmation(conf) => {
                     let mut fill = theme.card();
                     if is_found {
-                        top = Some(cards.len());
                         fill = fill.add_modifier(Modifier::REVERSED);
                     }
                     let (accent, status_str) = match conf.status {
@@ -4888,6 +4934,19 @@ impl App {
                         },
                     ));
                 }
+            }
+            history_height += cards.len();
+            let entry = TranscriptLayoutEntry {
+                source: card_entry.clone(),
+                comment,
+                found: is_found,
+                rows: cards,
+                end: history_height,
+            };
+            if index < self.transcript_layout.entries.len() {
+                self.transcript_layout.entries[index] = entry;
+            } else {
+                self.transcript_layout.entries.push(entry);
             }
         }
 
@@ -4932,7 +4991,7 @@ impl App {
             ));
         }
 
-        if cards.is_empty() && !self.view.transcript.is_empty() {
+        if self.view.cards.is_empty() && cards.is_empty() && !self.view.transcript.is_empty() {
             for (index, entry) in self.view.transcript.iter().enumerate() {
                 let style = if self.found == Some(index) {
                     top = Some(cards.len());
@@ -4949,7 +5008,7 @@ impl App {
             }
         }
 
-        if cards.is_empty() {
+        if history_height == 0 && cards.is_empty() {
             cards.extend(card(
                 theme,
                 CardProps {
@@ -4967,22 +5026,41 @@ impl App {
             ));
         }
 
+        let total = history_height + cards.len();
         let height = area.height as usize;
         if let Some(top_idx) = top.take().filter(|_| self.scroll == usize::MAX) {
-            self.scroll = cards.len().saturating_sub(top_idx + height);
+            self.scroll = total.saturating_sub(top_idx + height);
         }
-        self.scroll = self.scroll.min(cards.len().saturating_sub(height));
-        let end = cards.len().saturating_sub(self.scroll);
+        self.scroll = self.scroll.min(total.saturating_sub(height));
+        let end = total.saturating_sub(self.scroll);
         let start = end.saturating_sub(height);
 
         let buf = frame.buffer_mut();
         let body_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
-        draw_rows(buf, body_area, &cards[start..end]);
+        // Materialize only the viewport; cached history rows stay in place.
+        let mut visible = Vec::with_capacity(height);
+        let first = self
+            .transcript_layout
+            .entries
+            .partition_point(|entry| entry.end <= start);
+        for entry in &self.transcript_layout.entries[first..] {
+            let origin = entry.end - entry.rows.len();
+            if origin >= end {
+                break;
+            }
+            let from = start.saturating_sub(origin);
+            let to = end.saturating_sub(origin).min(entry.rows.len());
+            visible.extend_from_slice(&entry.rows[from..to]);
+        }
+        let from = start.saturating_sub(history_height).min(cards.len());
+        let to = end.saturating_sub(history_height).min(cards.len());
+        visible.extend_from_slice(&cards[from..to]);
+        draw_rows(buf, body_area, &visible);
         self.text_area = Some(body_area);
         self.text_origin = start;
 
         let scroll_area = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
-        scrollbar(buf, theme, scroll_area, cards.len(), start, height);
+        scrollbar(buf, theme, scroll_area, total, start, height);
     }
 
     fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
@@ -5561,6 +5639,7 @@ pub fn run(options: &Options, client: Client) -> Result<()> {
         chat_area: Rect::default(),
         plan_history: None,
         graph_layout_cache: graph::LayoutCache::default(),
+        transcript_layout: TranscriptLayout::default(),
         text_selection: Default::default(),
         text_area: None,
         text_origin: 0,
@@ -6798,6 +6877,94 @@ pub mod tests {
         );
         let text: String = wide.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text.matches("[Plan]").count(), 1);
+    }
+
+    #[test]
+    fn transcript_cache_reuses_rows_and_matches_fresh_layout() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut app = test_app();
+        for i in 0..40 {
+            app.view.cards.push(TranscriptCard::Message(MessageEntry {
+                id: i.to_string(),
+                sender: "You".into(),
+                target: "orchestrator".into(),
+                text: format!("message {i}: {}", "👩‍💻 e\u{301} tekst ".repeat(20)),
+                state: "sent".into(),
+                kind: "user".into(),
+            }));
+        }
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let theme = Theme::new(true, false);
+        let draw = |app: &mut App, term: &mut Terminal<TestBackend>, theme: &Theme| {
+            term.draw(|frame| app.draw_transcript(frame, frame.area(), theme))
+                .unwrap();
+            term.backend().buffer().clone()
+        };
+        draw(&mut app, &mut term, &theme);
+        let original = app.transcript_layout.entries[0].rows.as_ptr();
+        draw(&mut app, &mut term, &theme);
+        assert_eq!(original, app.transcript_layout.entries[0].rows.as_ptr());
+        if let TranscriptCard::Message(msg) = &mut app.view.cards[39] {
+            msg.text.push_str(" updated");
+            msg.state = "answered".into();
+        }
+        draw(&mut app, &mut term, &theme);
+        assert_eq!(original, app.transcript_layout.entries[0].rows.as_ptr());
+        for (scroll, found, theme) in [
+            (0, None, theme),
+            (15, None, theme),
+            (usize::MAX, Some(20), theme),
+            (usize::MAX, None, Theme::new(false, true)),
+        ] {
+            app.scroll = scroll;
+            app.found = found;
+            let cached = draw(&mut app, &mut term, &theme);
+            let settled_scroll = app.scroll;
+            app.transcript_layout = TranscriptLayout::default();
+            app.scroll = settled_scroll;
+            assert_eq!(cached, draw(&mut app, &mut term, &theme));
+        }
+        term.resize(Rect::new(0, 0, 40, 16)).unwrap();
+        let cached = draw(&mut app, &mut term, &theme);
+        app.transcript_layout = TranscriptLayout::default();
+        assert_eq!(cached, draw(&mut app, &mut term, &theme));
+        app.view.cards.truncate(1);
+        draw(&mut app, &mut term, &theme);
+        assert_eq!(app.transcript_layout.entries.len(), 1);
+        app.view.cards.push(TranscriptCard::Comment {
+            id: 7,
+            target: "plan".into(),
+            text: "please fix".into(),
+            status: "open".into(),
+        });
+        app.view.comments.insert(
+            7,
+            view::Comment {
+                id: 7,
+                plan_id: None,
+                target: "plan".into(),
+                text: "please fix".into(),
+                status: "open".into(),
+            },
+        );
+        app.scroll = 0;
+        draw(&mut app, &mut term, &theme);
+        app.view.comment_progress.insert(
+            7,
+            view::CommentProgress {
+                state: "failed".into(),
+                error: Some("retry needed".into()),
+            },
+        );
+        let cached = draw(&mut app, &mut term, &theme);
+        let text: String = cached.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("retry needed"));
+        app.transcript_layout = TranscriptLayout::default();
+        assert_eq!(cached, draw(&mut app, &mut term, &theme));
+        app.conversation = "other".into();
+        app.view.cards.clear();
+        draw(&mut app, &mut term, &theme);
+        assert!(app.transcript_layout.entries.is_empty());
     }
 
     #[test]

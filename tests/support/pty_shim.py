@@ -129,10 +129,10 @@ def task_result(text, prompt):
                 finding.setdefault("check", "V1")
                 finding.setdefault("where", "fixture source")
         return {"type": "review", "report": text, "verdict": verdict}
-    contract_match = re.search(r"Full task and working rules: (.*)", prompt)
-    contract = json.loads(contract_match.group(1)) if contract_match else {}
-    result = {"type": "completed", "summary": text.splitlines()[0] if text.splitlines() else "Completed", "report": text, "outputs": {key: text for key in contract.get("outputs", [])}}
-    if contract.get("kind") == "options" or "Choose the best available approach" in prompt:
+    declared = re.search(r"Declared outputs \(submit each by name in `outputs`\): (.*)", prompt)
+    outputs = [name.strip() for name in declared.group(1).split(",")] if declared else []
+    result = {"type": "completed", "summary": text.splitlines()[0] if text.splitlines() else "Completed", "report": text, "outputs": {key: text for key in outputs}}
+    if "Kind: options" in prompt or "Choose the best available approach" in prompt:
         result["selection"] = {"criteria": ["Satisfies local contract"], "alternatives": [
             {"id": "A", "approach": "Focused implementation", "evaluations": ["Satisfies the contract"], "eligible": True, "tradeoffs": "Local changes"},
             {"id": "B", "approach": "Broader restructuring", "evaluations": ["Higher change cost"], "eligible": True, "tradeoffs": "More coordination"}],

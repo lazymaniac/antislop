@@ -48,17 +48,25 @@ impl Core {
         Ok((r, Some((sources, new_source))))
     }
 
-    fn register_missing_sources(
+    pub(in crate::lean::ledger::runtime) fn register_missing_sources(
         &self,
         conversation: &str,
         run: &Run,
         user: &[crate::lean::store::Message],
     ) -> Result<bool> {
         let known = self.store.ledger_sources(conversation, &run.id)?;
+        let decisions = self.store.execution_decision_ids(conversation)?;
         let mut added = false;
         for message in user
             .iter()
             .filter(|message| message.seq >= run.start_message)
+            .filter(|message| {
+                !decisions.iter().any(|id| {
+                    message
+                        .text
+                        .starts_with(&format!("Interview answer ({id})\n"))
+                })
+            })
         {
             if !known
                 .iter()

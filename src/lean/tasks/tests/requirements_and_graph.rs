@@ -12,14 +12,9 @@ fn requirements_reach_only_verifiers_as_readable_id_and_text() {
             ]}
     }))
     .unwrap();
-    let task: TaskContract = serde_json::from_value(serde_json::json!({
-        "id":"t","title":"t","goal":"deliver observable result","kind":"analysis",
-        "verifier":{"focus":"correctness"}
-    }))
-    .unwrap();
     let handoff = crate::lean::rounds::RoundHandoff {
-        task,
         round: 1,
+        writes: false,
         worktree: "/wt".into(),
         report: None,
         verdict: None,
@@ -28,7 +23,6 @@ fn requirements_reach_only_verifiers_as_readable_id_and_text() {
         result: None,
         interrupted: false,
         interruptions: vec![],
-        dependencies: vec![],
         requirements: vec![entry],
         comments: vec![],
         protected_paths: vec![],
@@ -42,6 +36,81 @@ fn requirements_reach_only_verifiers_as_readable_id_and_text() {
     let worker = super::round_handoff_prompt(&handoff, false);
     assert!(worker.contains("Requirements and acceptance criteria"));
     assert!(worker.contains("CSV has a header"));
+}
+
+#[test]
+fn handoff_with_findings_repeats_neither_report_nor_task() {
+    let mut handoff = crate::lean::rounds::RoundHandoff {
+        round: 2,
+        writes: true,
+        worktree: "/wt".into(),
+        report: Some((1, "PREVIOUS REPORT BODY".into())),
+        verdict: Some(serde_json::json!({"approved":false,"findings":[{"id":"f1"}]})),
+        files: vec!["src/a.rs".into()],
+        base: None,
+        result: None,
+        interrupted: false,
+        interruptions: vec![],
+        requirements: vec![],
+        comments: vec![],
+        protected_paths: vec![],
+        primary: "/primary".into(),
+    };
+    let worker = super::round_handoff_prompt(&handoff, false);
+    assert!(worker.contains("src/a.rs") && worker.contains("listed above"));
+    assert!(!worker.contains("\"f1\""));
+    assert!(super::round_handoff_prompt(&handoff, true).contains("\"f1\""));
+    assert!(!worker.contains("PREVIOUS REPORT BODY"));
+    assert!(!worker.contains("Full task and working rules"));
+    handoff.verdict = None;
+    assert!(super::round_handoff_prompt(&handoff, false).contains("PREVIOUS REPORT BODY"));
+    assert!(!super::round_handoff_prompt(&handoff, true).contains("PREVIOUS REPORT BODY"));
+}
+
+fn contract(value: serde_json::Value) -> TaskContract {
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
+    let writer = contract(serde_json::json!({
+        "id":"w","title":"Writer","goal":"WRITER GOAL","kind":"implementation","writes":true,
+        "verifier":{"focus":"f"}
+    }));
+    let options = contract(serde_json::json!({
+        "id":"w-options","title":"Options for Writer","goal":"OPTIONS BOILERPLATE","kind":"options",
+        "options_for":"w","verifier":{"focus":"f"}
+    }));
+    let prompt = plan_review_prompt("/p", "request", &[options, writer]);
+    assert!(prompt.contains("WRITER GOAL"));
+    assert!(!prompt.contains("OPTIONS BOILERPLATE"));
+    assert!(prompt.contains("\"id\":\"w-options\"") && prompt.contains("\"options_for\":\"w\""));
+    assert!(
+        !prompt.contains("\n  \"id\""),
+        "plan JSON is not pretty-printed"
+    );
+}
+
+#[test]
+fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
+    let same = contract(serde_json::json!({
+        "id":"a","title":"A","goal":"UNCHANGED GOAL","kind":"analysis","verifier":{"focus":"f"}
+    }));
+    let before = contract(serde_json::json!({
+        "id":"b","title":"B","goal":"OLD GOAL","kind":"analysis","verifier":{"focus":"f"}
+    }));
+    let after = contract(serde_json::json!({
+        "id":"b","title":"B","goal":"NEW GOAL","kind":"analysis","verifier":{"focus":"f"}
+    }));
+    let baseline = [&same, &before].map(|task| serde_json::to_value(task).unwrap());
+    let plan = [same, after];
+    let first = plan_revision_review_prompt("/p", "", &plan, &baseline, "reason", true);
+    assert!(first.contains("OLD GOAL") && first.contains("NEW GOAL"));
+    assert_eq!(first.matches("UNCHANGED GOAL").count(), 1);
+    assert!(first.contains("You review a plan"));
+    let resumed = plan_revision_review_prompt("/p", "", &plan, &baseline, "reason", false);
+    assert!(!resumed.contains("You review a plan"));
+    assert!(resumed.contains("Reason: reason"));
 }
 
 #[test]

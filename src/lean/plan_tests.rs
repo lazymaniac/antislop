@@ -191,3 +191,25 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
     assert!(!scratch.exists());
     assert_eq!(git::head(root).unwrap(), head);
 }
+
+#[test]
+fn the_owner_verifier_focus_reaches_its_generated_options_check() {
+    let mut writer: TaskContract = serde_json::from_value(json!({
+        "id": "writer", "title": "Implement change", "goal": "Preserve behavior",
+        "kind": "implementation", "writes": true, "scope": ["src/"],
+        "verifier": {"focus": "Check the public API stays source compatible"}
+    }))
+    .unwrap();
+    let options_focus = |writer: &TaskContract| {
+        finalize_plan(vec![writer.clone()], false, true)
+            .into_iter()
+            .find(|spec| spec.options_for.is_some())
+            .unwrap()
+            .verifier
+            .focus
+    };
+    assert!(options_focus(&writer).contains("source compatible"));
+    writer.verifier.focus = "Check a different thing entirely".into();
+    let revised = options_focus(&writer);
+    assert!(revised.contains("different thing") && !revised.contains("source compatible"));
+}

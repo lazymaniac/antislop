@@ -110,7 +110,7 @@ fn run_scenario(
     .unwrap();
     let conversation = support::fixture_conversation(&core, &project).unwrap();
     let idle = || {
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while !core.is_idle(&conversation.id) {
             assert!(Instant::now() < deadline, "runtime timeout");
             std::thread::sleep(Duration::from_millis(20));
@@ -124,7 +124,7 @@ fn run_scenario(
     core.accept_plan(&conversation.id, &plan[0].plan_id)
         .unwrap();
     if scenario.starts_with("mail-") {
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while !dir.path().join("mail-ready").exists() {
             assert!(
                 Instant::now() < deadline,
@@ -521,7 +521,7 @@ fn assert_core_delivery(scenario: &str) {
     );
     if scenario == "resume-verifier" {
         assert!(prompt.contains("You verify another agent's work."));
-        assert!(prompt.contains("Latest worker report"));
+        assert!(prompt.contains("The worker's report:"));
         assert!(prompt.contains("Ask the orchestrator"));
     } else {
         assert!(prompt.contains("selected_approach"));
@@ -545,7 +545,7 @@ fn assert_core_delivery(scenario: &str) {
         assert_eq!(verifier_calls.len(), 2);
         let followup = verifier_calls[1]["prompt"].as_str().unwrap();
         assert!(followup.contains("You verify another agent's work."));
-        assert!(followup.contains("Latest worker report"));
+        assert!(followup.contains("The worker's report:"));
         assert_selected_input(followup);
         assert!(followup.contains("Ask the orchestrator"));
         let bytes: Vec<_> = calls

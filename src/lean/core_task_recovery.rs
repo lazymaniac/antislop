@@ -258,14 +258,10 @@ impl Core {
                     tasks::verifier_turn_prompt(
                         &verifier_project,
                         &spec,
-                        if fresh {
-                            ""
-                        } else {
-                            task.report.as_deref().unwrap_or("")
-                        },
+                        task.report.as_deref().unwrap_or(""),
                         Some(&changes),
                         fresh,
-                        if fresh { "" } else { &upstream },
+                        &upstream,
                     )
                 })?;
                 let Some(answer) = answer else {

@@ -2,6 +2,9 @@ use super::core_feedback_helpers::land;
 use super::core_path_helpers::{task_path_component, worktree_branch, worktree_path};
 use super::*;
 
+/// Worker and verifier rounds one run of a task may take before it is handed back.
+const MAX_ROUNDS_PER_RUN: u32 = 16;
+
 impl Core {
     /// Worker and verifier continue while verified obligations close.
     pub(in crate::lean) fn run_task(
@@ -116,6 +119,17 @@ impl Core {
         let first_round = task.round + 1;
         let mut progress = super::progress::Progress::default();
         for round in first_round.. {
+            // Finding ids are the measure of progress, but a verifier that gives
+            // every round's findings new ids always looks like progress. After
+            // this many rounds in one run the task goes back to the orchestrator,
+            // which can narrow the contract, answer, or ask the user; running it
+            // again starts a new count.
+            if round - first_round >= MAX_ROUNDS_PER_RUN {
+                let why = format!(
+                    "{MAX_ROUNDS_PER_RUN} correction rounds ran without approval; the orchestrator must narrow the contract, supply a new basis or ask the user"
+                );
+                return self.stop(conversation, task, status::COORDINATING, Some(&why));
+            }
             let config = self.config_snapshot();
             task.round = round;
             task.verdict = None;
@@ -174,7 +188,7 @@ impl Core {
             let report = if recheck {
                 Some(self.store.completed_task_output(task)?.to_string())
             } else {
-                self.turn(worker_setup(), cancel, |first| {
+                self.turn(worker_setup(), cancel, |_| {
                     let continuation = if round == 1 {
                         None
                     } else if resumed && round == first_round {
@@ -186,7 +200,7 @@ impl Core {
                         &project_text,
                         &spec,
                         continuation.as_deref(),
-                        if first { "" } else { &upstream },
+                        &upstream,
                     )
                 })?
             };
@@ -199,8 +213,14 @@ impl Core {
             let completion: turn_result::TurnResult = serde_json::from_str(&report)?;
             let (report, summary) = match completion {
                 turn_result::TurnResult::Completed {
-                    report, summary, ..
-                } => (report, summary),
+                    report,
+                    summary,
+                    outputs,
+                    selection,
+                } => (
+                    turn_result::report_with_deliverables(&report, &outputs, selection.as_ref()),
+                    summary,
+                ),
                 turn_result::TurnResult::NeedsInput {
                     request,
                     checkpoint,
@@ -272,10 +292,10 @@ impl Core {
                 let prompt = tasks::verifier_turn_prompt(
                     &verifier_project,
                     &spec,
-                    if first { "" } else { &report },
+                    &report,
                     changes.as_deref(),
                     first || round == 1,
-                    if first { "" } else { &upstream },
+                    &upstream,
                 );
                 format!("{user_checks}{prompt}")
             })?;

@@ -2,7 +2,7 @@ use super::*;
 
 const OPTIONS_NOTE: &str = "Do not compare implementation options during orchestration or before planning. Plan the work from the requirements; options are compared by worker tasks during execution, before their dependent writers begin. The runtime adds a dedicated read-only options task before every writer, after adding optional quality gates and even when required gates are disabled. Every writer has its own local options. Shared architecture decisions are inputs and never substitute for local options. The selected variant binds implementation; departures require explicit evidence and independent verification.";
 
-const NO_PINNING: &str = "Never write commit hashes, branch names or checkout paths into a task contract. The runtime gives every task a checkout of one baseline commit and tells the agent which; a contract that pins a revision turns every later baseline difference into a blocker. Say what to inspect (paths, symbols, behaviour), not at which revision.";
+const NO_PINNING: &str = "Never write commit hashes, tree hashes, branch names or checkout paths into a task contract, acceptance criterion or verifier focus. Tasks work on the allocated checkout in its current state, even when its scoped files differ from an earlier report or adopted snapshot. Do not require snapshot adoption, revision alignment, a clean tree, unchanged scoped paths or proof of a particular commit before implementation, measurements or validation. Describe what to inspect or achieve (paths, symbols, behaviour), not a required repository identity. Historical revision references in existing contracts and reports are context, not execution gates; tell agents to continue on the files they received. A concrete missing or unusable input may need a question; a revision or changed-file mismatch alone never does. Do not add provenance, identity-attestation, receipt or handoff-proof requirements or tasks: a verifier reads the files and the recorded result, and cannot confirm who produced them.";
 
 const ORCHESTRATOR_WORKFLOW: &str = "Follow the runtime session phase in a three-phase workflow:\n\
          1. **Interview**: When the user's request has any ambiguity, missing constraints, \
@@ -76,7 +76,8 @@ const ORCHESTRATOR_TAIL: &str = "An independent plan verifier checks your plan b
          each task's result and an independent audit of whether the request was \
          fully delivered; answer the user, or propose a plan for what is \
          missing.\n\n\
-         Agents communicate with you through MCP questions. Reply within the existing contract; revise that contract when an answer requires different work. Never send task-to-task messages.";
+         Agents communicate with you through MCP questions. Reply within the existing contract; revise that contract when an answer requires different work. Never send task-to-task messages.\n\n\
+         When a verifier demands evidence that cannot exist (proof of who produced a report, a runtime allocation record, a receipt, a different commit than the one it checks), do not revise the plan to supply it: answer with reply_to_agent that the demand is out of scope and the files and recorded result are the evidence. When any agent stops over a commit, tree, adopted-snapshot or changed-file mismatch, tell it to continue the assigned work on its allocated checkout as it is, even when scoped files differ; do not arrange revision alignment or add proof tasks. Revise a contract only when the work itself must change. Never tell an agent to read this tool's runtime state or database.";
 
 /// What the orchestrator knows: the session workflow, the plan format it
 /// revises, and how it answers agents.

@@ -4,6 +4,10 @@ use super::*;
 use rusqlite::OptionalExtension;
 use serde_json::Value;
 
+/// What every role without a task contract finishes with, said whole so a
+/// rejected call can be corrected at once.
+const REPORT_ONLY: &str = "your result is exactly {\"type\":\"report\",\"text\":\"...\"}; put everything else in text, including a ```verdict block for a review or a ```plan or ```question block";
+
 impl Core {
     pub(super) fn agent_tool(
         self: &Arc<Self>,
@@ -72,11 +76,25 @@ impl Core {
                     "state: expected answered or awaiting_user",
                 )?;
                 if args["state"] == "awaiting_user" {
-                    return self.store.defer_question_to_user(
-                        conversation,
-                        &required("request")?,
-                        &required("answer")?,
-                    );
+                    let request = required("request")?;
+                    let explanation = required("answer")?;
+                    let already = self.store.agent_question(conversation, &request, None)?["state"]
+                        == "awaiting_user";
+                    let reply =
+                        self.store
+                            .defer_question_to_user(conversation, &request, &explanation)?;
+                    // Nothing else shows the user that a task waits for them; said
+                    // once, since the orchestrator may refresh its explanation.
+                    if !already {
+                        self.notice(
+                            conversation,
+                            &format!(
+                                "A task is waiting for your decision (request {request}): {} Answer in the chat; the orchestrator passes your answer on.",
+                                tasks::bound(&explanation, 600)
+                            ),
+                        );
+                    }
+                    return Ok(reply);
                 }
                 let reply = self.store.answer_agent_question(
                     conversation,
@@ -107,7 +125,14 @@ impl Core {
                 self.request_replan(conversation, &required("reason")?)
             }
             "finish_turn" => {
-                let result: TurnResult = serde_json::from_value(args["result"].clone())?;
+                let result: TurnResult =
+                    serde_json::from_value(args["result"].clone()).map_err(|error| {
+                        if task_role(role).is_some() {
+                            Error::Json(error)
+                        } else {
+                            Error::Invalid(format!("{error}; {REPORT_ONLY}"))
+                        }
+                    })?;
                 self.validate_agent_result(conversation, role, turn, &result)?;
                 self.store.save_turn_result(turn, &result)?;
                 Ok(json!({"recorded":true}))
@@ -158,7 +183,7 @@ impl Core {
         } else {
             require(
                 matches!(result, TurnResult::Report { .. }),
-                "result.type: use report for this role",
+                &format!("result.type: use report for this role; {REPORT_ONLY}"),
             )?;
         }
         if matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR)

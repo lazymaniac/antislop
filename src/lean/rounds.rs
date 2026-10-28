@@ -14,8 +14,8 @@ mod tests;
 
 #[derive(Debug)]
 pub(crate) struct RoundHandoff {
-    pub task: tasks::TaskContract,
     pub round: u32,
+    pub writes: bool,
     pub worktree: PathBuf,
     pub report: Option<(u32, String)>,
     pub verdict: Option<serde_json::Value>,
@@ -24,7 +24,6 @@ pub(crate) struct RoundHandoff {
     pub result: Option<String>,
     pub interrupted: bool,
     pub interruptions: Vec<RoundInterruption>,
-    pub dependencies: Vec<tasks::DependencyReport>,
     pub requirements: Vec<ledger::LedgerEntry>,
     pub comments: Vec<Comment>,
     pub protected_paths: Vec<String>,
@@ -125,7 +124,7 @@ impl Core {
             .task_by_id(id)?
             .ok_or_else(|| Error::Invalid(format!("task {id} does not exist")))?;
         let spec: tasks::TaskContract = serde_json::from_value(task.spec.clone())?;
-        let mut handoff = self.new_handoff(id, round, cwd, &task, &spec)?;
+        let mut handoff = self.new_handoff(id, round, cwd, &task)?;
         self.add_handoff_requirements(&task, &spec, &mut handoff)?;
         self.add_handoff_comments(&task, &mut handoff)?;
         self.add_protected_paths(&task, &spec, &mut handoff)?;

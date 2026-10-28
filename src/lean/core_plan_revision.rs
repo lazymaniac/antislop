@@ -144,11 +144,23 @@ impl Core {
         plan: &str,
         specs: &[TaskContract],
     ) -> Result<()> {
-        let (allowed,write_allowed): (String,String) = self.store.db().query_row(
+        use rusqlite::OptionalExtension;
+        let authorization: Option<(String, String)> = self.store.db().query_row(
             "SELECT scope,write_scope FROM plan_authorizations WHERE plan_id=?1 AND conversation_id=?2",
             rusqlite::params![plan, conversation],
             |r| Ok((r.get(0)?,r.get(1)?)),
-        )?;
+        ).optional()?;
+        let Some((allowed, write_allowed)) = authorization else {
+            let current = self
+                .store
+                .latest_plan(conversation)?
+                .first()
+                .map(|task| task.plan_id.clone())
+                .unwrap_or_default();
+            return Err(Error::Invalid(format!(
+                "plan {plan} is not the accepted plan (it was replaced or never accepted); revise the current plan {current} using its full ID"
+            )));
+        };
         let write_allowed: Vec<String> = serde_json::from_str(&write_allowed)?;
         let allowed: Vec<String> = serde_json::from_str(&allowed)?;
         validate_authorized_scope(specs, &allowed, &write_allowed)
@@ -164,7 +176,26 @@ impl Core {
         lease: &super::store::RevisionLease<'_>,
     ) -> Result<()> {
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
-        let review = self.review(conversation,PLAN_VERIFIER,Some(&revision.plan),&project,cancel,|_,request|format!("{}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate local inputs/outputs, selected risk coverage, dedicated options for every writer and all quality gates. Reason: {}. Previous contracts: {}",tasks::plan_review_prompt(&project.to_string_lossy(),request,specs),revision.reason,serde_json::to_string(&baseline.iter().map(|t|&t.spec).collect::<Vec<_>>()).unwrap_or_default()))?.map_err(Error::Invalid)?;
+        let previous: Vec<_> = baseline.iter().map(|task| task.spec.clone()).collect();
+        let review = self
+            .review(
+                conversation,
+                PLAN_VERIFIER,
+                Some(&revision.plan),
+                &project,
+                cancel,
+                |initial, request| {
+                    tasks::plan_revision_review_prompt(
+                        &project.to_string_lossy(),
+                        request,
+                        specs,
+                        &previous,
+                        &revision.reason,
+                        initial,
+                    )
+                },
+            )?
+            .map_err(Error::Invalid)?;
         if !review.approved
             && tasks::only_minor_findings(&review)
             && self.store.rejected_revisions_in_a_row(&revision.plan)?

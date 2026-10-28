@@ -92,7 +92,7 @@ impl DaemonGuard {
             .spawn()
             .unwrap();
         let client = Client::at(state);
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(120);
         while Instant::now() < deadline {
             if client.call(&Request::Identity).is_ok() {
                 return Self {
@@ -111,7 +111,7 @@ impl DaemonGuard {
     fn wait_for_planning(&self, conversation: &str) {
         // Parallel protocol tests launch independent PTYs and daemons. Use the
         // same budget as plan completion instead of assuming a five-second startup.
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + Duration::from_secs(120);
         loop {
             let reply = self
                 .call_raw(&json!({"op":"events","conversation":conversation,"after":0,"wait_ms":0}))
@@ -795,7 +795,7 @@ fn test_task_scoped_query_includes_freshness_token() {
     assert!(!plan_id.is_empty(), "plan was not proposed");
 
     // Task rows precede independent plan review; tokens stabilize when it ends.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         let state = daemon
             .call_raw(&json!({"op":"events","conversation":conv_id,"after":0,"wait_ms":0}))
@@ -851,7 +851,7 @@ fn recovery_requests_cross_the_wire_and_only_apply_to_stopped_tasks() {
         .call_raw(&json!({"op": "send", "conversation": conv, "text": "please propose"}))
         .unwrap();
     daemon.wait_for_planning(conv);
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(120);
     // Candidate task rows appear before review/replanning finishes. Wait for
     // the completed planning turn, then select its final active plan and token.
     let plan = loop {

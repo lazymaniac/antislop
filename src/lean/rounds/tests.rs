@@ -261,7 +261,8 @@ fn handoff_recovers_latest_report_after_interruption_without_older_reports() {
     assert!(prompt.contains(&"Latest complete report\n".repeat(2000)));
     assert!(prompt.contains("Keep all context"));
     assert!(prompt.contains("Check everything"));
-    assert!(prompt.contains("file:12"));
+    assert!(prompt.contains("listed above"));
+    assert!(tasks::round_handoff_prompt(&handoff, true).contains("file:12"));
     assert!(!prompt.contains("OLD REPORT MUST NOT APPEAR"));
     assert!(!prompt.contains("HISTORICAL TOOL NEVER IN HANDOFF"));
     assert!(handoff.files.is_empty());
@@ -922,7 +923,6 @@ fn handoff_reads_only_requested_dependency_reports_and_no_dependency_verdicts() 
     let handoff = core
         .round_handoff(&task.id, 1, core.state.parent().unwrap())
         .unwrap();
-    assert!(handoff.dependencies.is_empty());
     let prompt = tasks::round_handoff_prompt(&handoff, false);
     assert!(!prompt.contains(&full_report));
     assert!(!prompt.contains("UNRELATED REPORT"));

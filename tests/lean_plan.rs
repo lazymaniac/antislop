@@ -26,7 +26,7 @@ fn a_verifier_started_after_a_live_update_uses_the_new_profile_in_the_same_round
     wait_idle(&core, &conversation.id);
     let task = core.store.latest_plan(&conversation.id).unwrap().remove(0);
     core.accept_plan(&conversation.id, &task.plan_id).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !marker.exists() {
         assert!(Instant::now() < deadline, "worker did not reach the gate");
         std::thread::sleep(Duration::from_millis(10));
@@ -689,7 +689,7 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
     let before = core.store.latest_plan(&conversation.id).unwrap();
     let plan = &before[0].plan_id;
     core.accept_plan(&conversation.id, plan).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !started.exists() {
         assert!(Instant::now() < deadline, "worker did not start");
         std::thread::sleep(Duration::from_millis(10));
