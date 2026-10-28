@@ -216,7 +216,7 @@ fn a_comment_reaches_the_orchestrator_and_stays_until_the_user_resolves_it() {
     let core = open(
         dir.path(),
         r#"
-answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "continue" in prompt else plan(task("t1", "Parser"))
+answer = "noted" if "[runtime]" in prompt or "[user comment" in prompt or "[user]\ncontinue" in prompt else plan(task("t1", "Parser"))
 "#,
         r#"    answer = "report""#,
     );
@@ -725,14 +725,14 @@ fn turning_the_required_gates_off_is_said_when_a_plan_changes_code() {
 }
 
 #[test]
-fn dependencies_do_not_expose_undeclared_reports() {
+fn a_dependent_gets_the_summary_of_its_dependency_not_its_report() {
     let dir = tempfile::tempdir().unwrap();
     let core = open(
         dir.path(),
         r#"
 answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2", "Gate", ["t1"]), task("t3", "Docs"))
 "#,
-        r#"    answer = "audit found F1 and F2" if "Task id: t1" in prompt else "report""#,
+        r#"    answer = json.dumps({"type": "completed", "summary": "audit summary S1", "report": "audit found F1 and F2"}) if "Task id: t1" in prompt else "report""#,
     );
     let conversation = run(&core, dir.path());
     wait_until("plan finished", || core.is_idle(&conversation));
@@ -746,12 +746,16 @@ answer = "done" if "[runtime]" in prompt else plan(task("t1", "Audit"), task("t2
         .iter()
         .find(|prompt| prompt.contains("Task id: t2"))
         .unwrap();
+    assert!(gate.contains("audit summary S1"), "{gate}");
     assert!(!gate.contains("audit found F1 and F2"), "{gate}");
     let docs = worker_prompts
         .iter()
         .find(|prompt| prompt.contains("Task id: t3"))
         .unwrap();
-    assert!(!docs.contains("audit found"), "only dependents get it");
+    assert!(
+        !docs.contains("audit summary") && !docs.contains("audit found"),
+        "only dependents get it"
+    );
 }
 
 #[test]
@@ -820,7 +824,7 @@ fn direct_agent_messages_resume_work_and_recheck_without_receipt_only_turns() {
         later[before..]
             .iter()
             .any(|(_, prompt)| prompt.contains("recheck correction")
-                && prompt.contains("Your obligations (the task's risks"))
+                && prompt.contains("Your obligations (the task's goal"))
     );
 }
 
@@ -878,7 +882,7 @@ fn a_huge_answer_and_a_long_request_are_kept_whole() {
     let core = open(
         dir.path(),
         r#"
-answer = "ąe\u0301👩‍💻" * 300000
+answer = "ąe\u0301👩‍💻" * 300000 + "\n```plan\n" + json.dumps({"tasks": [task("t1", "Audit")]}) + "\n```"
 "#,
         "    answer = 'unused'",
     );
@@ -900,14 +904,18 @@ answer = "ąe\u0301👩‍💻" * 300000
         expected
     );
     let events = core.store.events_since(&conversation, 0, 500).unwrap();
-    assert_eq!(
+    // The plan's words travel inside the submitted result, whole.
+    let submitted: serde_json::Value = serde_json::from_str(
         events
             .iter()
             .find(|event| event.kind == "agent_final")
             .unwrap()
-            .payload["text"],
-        expected
-    );
+            .payload["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(submitted["document"], expected);
     // The CLI was typed the whole request, whatever its size.
     let typed = prompts(dir.path());
     assert!(typed.iter().any(|(_, prompt)| prompt.contains(&request)));
@@ -1112,7 +1120,8 @@ fn direct_verifier_recheck_keeps_unchanged_dependents_and_rejection_recomputes_t
         prompt.contains("Task id: t1")
             && prompt.contains(&format!("Round: {}", rechecked[0].round + 2))
             && prompt.contains("Latest worker report")
-            && prompt.contains("\"approved\":false")
+            && prompt.contains("Your verifier found problems:")
+            && prompt.contains("The fixture rejected the work")
     }));
 }
 
@@ -1322,7 +1331,7 @@ else:
 }
 
 #[test]
-fn isolated_worker_can_ask_orchestrator_with_the_only_task_slot_occupied() {
+fn isolated_worker_can_ask_the_orchestrator_with_the_only_task_slot_occupied() {
     let dir = tempfile::tempdir().unwrap();
     let core = open_limited(
         dir.path(),
@@ -1330,7 +1339,7 @@ fn isolated_worker_can_ask_orchestrator_with_the_only_task_slot_occupied() {
 import os,re,urllib.request
 if 'Agent question ' in prompt:
     question=re.findall(r'Agent question ([a-f0-9-]+)',prompt)[-1]
-    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'reply_to_agent','arguments':{'turn':os.environ['FIXTURE_TURN'],'request':question,'answer':'Use UTF-8'}}}
+    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'answer_agent','arguments':{'turn':os.environ['FIXTURE_TURN'],'request':question,'answer':'Use UTF-8'}}}
     req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
     reply=json.load(urllib.request.urlopen(req,timeout=10))
     assert not reply['result'].get('isError'),reply
@@ -1346,8 +1355,9 @@ else:
         reply=json.load(urllib.request.urlopen(req,timeout=30))['result']
         assert not reply.get('isError'),reply
         return json.loads(reply['content'][0]['text'])
-    receipt=call('ask_orchestrator',request_key='encoding',question='Which encoding should this local report use?')
-    response=call('await_orchestrator',request=receipt['request'])
+    response=call('ask',question='Which encoding should this local report use?')
+    if response['state']=='pending':
+        response=call('ask',question='Which encoding should this local report use?')
     assert response['state']=='answered',response
     assert response['answer']=='Use UTF-8',response
     answer='Inspected encoding: UTF-8'"#,

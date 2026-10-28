@@ -1,10 +1,10 @@
 use super::*;
 
-pub const VERDICT_FORMAT: &str = "End your answer with a verdict block:\n\
-     ```verdict\n\
-     {\"approved\": true, \"findings\": [{\"id\": \"stable-finding-id\", \"severity\": \"high|medium|low\", \"issue\": \"...\", \"where\": \"path:line\"}]}\n\
-     ```\n\
-     Reuse the same finding id while a defect remains open, even when its wording changes. Approve only when no high or medium findings remain.";
+/// How a plan, audit or code reviewer ends its turn.
+pub const REVIEW_FORMAT: &str = "End with review: your report and the findings, each with \
+     severity, issue and where. The runtime approves only when no finding is critical, high \
+     or medium; give findings that do not block as low. Keep the same `where` while a \
+     problem stays open, so it is recognised across rounds.";
 
 /// What every agent of a task keeps to (design §10.3, §13).
 pub(super) const PROJECT_RULES: &str = "The project's own instructions (AGENTS.md, \
@@ -50,12 +50,8 @@ pub(super) const REVIEW_RULES: &str = "Never run builds, tests, formatters, lint
      never require independent proof of which agent, turn, session or directory made the \
      report, a runtime allocation record, or a receipt of delivery; none exists to give.";
 
-pub(super) const COVERAGE_FORMAT: &str = "Your verdict must also account for every assigned local \
-     criterion and risk by its id: \"coverage\": {\"R1\": {\"status\": \"ok|issue|blocked|n/a\", \
-     \"note\": \"what you checked, or why it does not apply\"}, \"V1\": {...}, \"C1\": {...}}. \
-     Use blocked when you could not settle it (missing data is not ok) and n/a \
-     only with a reason tied to this task. A verdict that leaves one out, or \
-     marks one issue or blocked, does not approve the task. When the task is \
+pub(super) const COVERAGE_FORMAT: &str = "Use blocked for a check you could not settle (missing \
+     data is not ok) and n/a only with a reason tied to this task. When the task is \
      read-only analysis, judge the report, not the code: ok means the report \
      covers the obligation correctly (including defects it rightly reports in \
      the code); issue means the report is wrong, incomplete or unsupported. A command the \
@@ -117,29 +113,6 @@ pub fn findings_text(findings: &[Value]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Read the explicit interview checkpoint, never a plan or incidental prose.
-pub fn requirements_summary(answer: &str) -> Option<String> {
-    let mut in_other_fence = false;
-    let mut lines = answer.lines();
-    while let Some(line) = lines.next() {
-        if !in_other_fence && line.trim() == "```requirements" {
-            let mut summary = Vec::new();
-            for line in lines.by_ref() {
-                if line.trim() == "```" {
-                    let summary = summary.join("\n");
-                    return (!summary.trim().is_empty()).then_some(summary);
-                }
-                summary.push(line);
-            }
-            return None;
-        }
-        if line.trim().starts_with("```") {
-            in_other_fence = !in_other_fence;
-        }
-    }
-    None
 }
 
 /// Readable id + text list of the requirements and criteria a verifier must check.

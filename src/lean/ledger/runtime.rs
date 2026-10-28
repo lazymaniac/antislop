@@ -6,6 +6,8 @@ mod compliance;
 mod ledger_change;
 #[path = "runtime/requirements.rs"]
 mod requirements;
+#[path = "runtime/submissions.rs"]
+mod submissions;
 use crate::{
     Error,
     config::{RoleKind, WorkKind},
@@ -19,6 +21,8 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+pub use submissions::{AuditAssessment, AuditEvidence};
+pub(crate) use submissions::{audit_approves, evidence_id, resolve_evidence};
 
 impl Core {
     pub fn ledger_fingerprint(&self, conversation: &str) -> Result<String> {

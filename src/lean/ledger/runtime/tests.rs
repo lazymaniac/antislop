@@ -75,9 +75,9 @@ if True:
     assert 'ORCHESTRATOR_ROUTE_ONLY' not in prompt
     n=int(open('attempts').read()) if os.path.exists('attempts') else 0
     open('attempts','w').write(str(n+1))
-    if n == 1:
+    if n >= 1:
+        # submit_ledger refused the first submission within the turn.
         assert 'entry p has unknown parent missing' in prompt, prompt
-        assert 'Previous response:' in prompt
     source=json.loads(lines[1].removeprefix('Sources: '))[0]['id']
     base={'source':{'source_id':source,'start':0,'end':4},'interpretation':'Keep scope','criteria':[{'id':'r.c','text':'Check scope','mandatory':True,'integration':True}]}
     r=dict(base,id='r')
@@ -128,7 +128,7 @@ print(json.dumps({'type':'turn.completed','usage':{}}))
         );
         assert_eq!(
             std::fs::read_to_string(dir.path().join("attempts")).unwrap(),
-            "2"
+            if repairs { "2" } else { "3" }
         );
         let run = core.store.latest_run(&conversation).unwrap().unwrap();
         let entries = core

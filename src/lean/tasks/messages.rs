@@ -1,25 +1,3 @@
-pub(in crate::lean) fn fenced<'a>(text: &'a str, tag: &str) -> Option<(String, &'a str)> {
-    let open = format!("```{tag}");
-    let start = text.rfind(&open)?;
-    let body_start = start + open.len();
-    let rest = &text[body_start..];
-    if !rest.starts_with(['\n', '\r', ' ']) {
-        return None;
-    }
-    // The closing fence stands on its own line; a ``` inside the body (in a
-    // JSON string, say) does not end it. A one-line block closes at the first.
-    let end = rest
-        .find("\n```")
-        .map_or_else(|| rest.find("```"), |at| Some(at + 1))?;
-    let mut remaining = text[..start].trim_end().to_owned();
-    let after = rest[end + 3..].trim();
-    if !after.is_empty() {
-        remaining.push_str("\n\n");
-        remaining.push_str(after);
-    }
-    Some((remaining, rest[..end].trim()))
-}
-
 /// Messages delivered into a turn, before its own prompt.
 pub fn inbox_text(mail: &[crate::lean::store::Mail]) -> String {
     inbox_text_from(mail.iter())

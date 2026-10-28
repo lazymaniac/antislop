@@ -1,6 +1,7 @@
 use super::*;
 
-/// What an agent that writes plans answered: its words and the plan block, if any.
+/// What an agent that writes plans answered: its words and the plan it
+/// submitted, if any.
 pub(in crate::lean) struct PlanAnswer<'a> {
     pub(in crate::lean) conversation: &'a str,
     pub(in crate::lean) project: &'a Path,
@@ -14,8 +15,8 @@ pub(in crate::lean) struct PlanAnswer<'a> {
 }
 
 impl Core {
-    /// A well-formed plan is proposed; a malformed one is repaired a bounded
-    /// number of times; words alone only mark the comments they answered.
+    /// A submitted plan is proposed; words alone only mark the comments they
+    /// answered.
     pub(in crate::lean) fn handle_plan_answer(
         self: &Arc<Self>,
         answer: PlanAnswer<'_>,
@@ -44,7 +45,7 @@ impl Core {
                 addressed,
                 cancel,
             ),
-            Some(Err(error)) => self.repair_plan_format(conversation, &error),
+            Some(Err(error)) => self.record_invalid_plan(conversation, &error),
             None => {
                 // Answered in words only: the comments stay open for the user.
                 if is_comment {
@@ -55,19 +56,15 @@ impl Core {
         }
     }
 
-    fn repair_plan_format(&self, conversation: &str, error: &Error) -> Result<()> {
-        let retrying = if let Some(turn) = self.store.last_orchestration_turn(conversation)? {
-            self.store
-                .queue_plan_format_repair(conversation, &turn.id, &error.to_string())?
-        } else {
-            false
-        };
+    /// `submit_plan` refuses a malformed plan within the turn, so this is only
+    /// reached when no plan was submitted or a stored one no longer passes.
+    fn record_invalid_plan(&self, conversation: &str, error: &Error) -> Result<()> {
         self.store.append_event(
             conversation,
             None,
             None,
             "plan_invalid",
-            &json!({"error":error.to_string(),"retrying":retrying,"retry":if retrying {"Correcting the plan format automatically."} else {"The plan could not be decoded after two correction attempts. Send a message to retry; your requirements are preserved."}}),
+            &json!({"error":error.to_string(),"retrying":false,"retry":"Send a message to retry; your requirements are preserved."}),
         )?;
         Ok(())
     }

@@ -498,7 +498,6 @@ fn final_answer_survives_restart_before_round_snapshot_is_updated() {
             &turn_result::TurnResult::Completed {
                 summary: "Complete report".into(),
                 report: "Complete report before scheduler crash".into(),
-                outputs: Default::default(),
                 selection: None,
             },
         )

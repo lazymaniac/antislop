@@ -1,15 +1,14 @@
 use super::*;
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+use crate::lean::turn_result::TurnResult;
+
+/// An audit with the identities the runtime bound its evidence to.
 struct Audit {
     approved: bool,
     findings: Vec<serde_json::Value>,
     evidence: Vec<EvidenceProposal>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Review {
     approved: bool,
     note: String,
@@ -68,7 +67,28 @@ impl Core {
         let prompt = audit_prompt(scope)?;
         let (answer, producer) =
             self.requirements_turn(conversation, &scope.run_id, "audit", false, prompt, cancel)?;
-        let proposal = parse_audit(&answer, &producer, &scope.fingerprint)?;
+        let TurnResult::Audit { findings, evidence } = TurnResult::decode(&answer) else {
+            return Err(Error::Invalid(
+                "the requirements auditor ended its turn without submit_audit".into(),
+            ));
+        };
+        let entries = self
+            .store
+            .ledger_entries(conversation, &scope.run_id, None)?;
+        let evidence = evidence
+            .iter()
+            .map(|item| {
+                let mut proposal = resolve_evidence(item, &entries, &scope.tasks)?;
+                proposal.producer_turn = producer.clone();
+                proposal.integrated_fingerprint = scope.fingerprint.clone();
+                Ok(proposal)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let proposal = Audit {
+            approved: audit_approves(&findings),
+            findings,
+            evidence,
+        };
         Ok((proposal, producer))
     }
 
@@ -82,7 +102,37 @@ impl Core {
         let prompt = review_prompt(scope, proposal)?;
         let (answer, verifier) =
             self.requirements_turn(conversation, &scope.run_id, "audit", true, prompt, cancel)?;
-        Ok((parse_block(&answer, "compliance_verdict")?, verifier))
+        let TurnResult::AuditReview { note, assessments } = TurnResult::decode(&answer) else {
+            return Err(Error::Invalid(
+                "the audit verifier ended its turn without submit_audit_review".into(),
+            ));
+        };
+        let assessments = assessments
+            .into_iter()
+            .map(|assessment| {
+                let evidence = (0..proposal.evidence.len())
+                    .find(|index| evidence_id(*index) == assessment.evidence)
+                    .map(|index| proposal.evidence[index].clone())
+                    .ok_or_else(|| {
+                        Error::Invalid(format!(
+                            "the audit verifier assessed {}, which the audit did not propose",
+                            assessment.evidence
+                        ))
+                    })?;
+                Ok(Assessment {
+                    evidence,
+                    approved: assessment.approved,
+                    note: assessment.note,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let review = Review {
+            approved: assessments.len() == proposal.evidence.len()
+                && assessments.iter().all(|assessment| assessment.approved),
+            note,
+            assessments,
+        };
+        Ok((review, verifier))
     }
 
     fn finish_audit(
@@ -188,31 +238,47 @@ impl Core {
 
 fn audit_prompt(scope: &AuditScope) -> Result<String> {
     Ok(format!(
-        "Audit the integrated project against every full source and the requirements and their task evidence. Search for obligations omitted in extraction. Inspect actual files and run relevant read-only checks. Do not change files. Integrated fingerprint: {}. Task inputs and reports: {}. Return ```compliance JSON {{\"approved\":true|false,\"findings\":[...],\"evidence\":[EvidenceProposal...]}}. Each evidence proposal: entry_id,entry_version,criterion_id,task_id (UUID),generation,attempt (round),producer_turn (leave empty; runtime supplies),result (concrete checks and observed results, never just done),artifact (optional),integrated_fingerprint. Include user-prescribed methods and steps and composite integration criteria. Evidence must concern this integrated tree. Full sources:\n{}",
-        scope.fingerprint,
-        serde_json::to_string(&scope.tasks)?,
+        "Audit the integrated project against every full source and the requirements and their task evidence. Search for obligations omitted in extraction. Inspect actual files and run relevant read-only checks. Do not change files. Tasks of the plan: {}.\n\nSubmit the audit with submit_audit: findings for each problem (severity, issue, where; critical, high and medium reject), and evidence for each acceptance criterion you checked (criterion_id, the task_id that delivered it, and result: the concrete checks you made and what you observed, never just done). Include user-prescribed methods and steps and composite integration criteria. Evidence must concern this integrated tree; the runtime records which tree you audited. Full sources:\n{}",
+        serde_json::to_string(&audit_tasks(&scope.tasks))?,
         scope.sources,
     ))
 }
 
-fn parse_audit(answer: &str, producer: &str, fingerprint: &str) -> Result<Audit> {
-    let mut proposal: Audit = parse_block(answer, "compliance")?;
-    for evidence in &mut proposal.evidence {
-        evidence.producer_turn = producer.to_owned();
-        require(
-            evidence.integrated_fingerprint == fingerprint,
-            "auditor inspected a different integrated result",
-        )?;
-    }
-    Ok(proposal)
+/// What the auditor needs of each task to name it in evidence.
+fn audit_tasks(tasks: &[crate::lean::store::Task]) -> Vec<serde_json::Value> {
+    tasks
+        .iter()
+        .map(|task| {
+            serde_json::json!({
+                "task_id": task.spec["id"],
+                "title": task.spec["title"],
+                "goal": task.spec["goal"],
+                "covers": task.spec["criterion_ids"],
+                "status": task.status,
+            })
+        })
+        .collect()
 }
 
 fn review_prompt(scope: &AuditScope, proposal: &Audit) -> Result<String> {
+    let evidence = proposal
+        .evidence
+        .iter()
+        .enumerate()
+        .map(|(index, evidence)| {
+            serde_json::json!({
+                "id": evidence_id(index),
+                "criterion_id": evidence.criterion_id,
+                "task_id": evidence.task_id,
+                "result": evidence.result,
+                "artifact": evidence.artifact,
+            })
+        })
+        .collect::<Vec<_>>();
     Ok(format!(
-        "Verify this audit independently against ALL full sources, the requirements and their task evidence and actual integrated files. Find omitted obligations. Independently reproduce/check every evidence result. Reject empty, stale, failed or worktree-only evidence. Read-only access. Integrated fingerprint: {}. Analyst findings: {}. Proposed evidence: {}. Return ```compliance_verdict JSON {{\"approved\":true|false,\"note\":\"coverage and gaps\",\"assessments\":[{{\"evidence\":EvidenceProposal,\"approved\":true|false,\"note\":\"independent observation\"}}]}}. Preserve exact proposal fields; runtime owns session identity. Full sources:\n{}",
-        scope.fingerprint,
+        "Verify this audit independently against ALL full sources, the requirements and their task evidence and actual integrated files. Find omitted obligations. Independently reproduce or check every evidence result. Reject empty, stale, failed or worktree-only evidence. Read-only access. Analyst findings: {}.\nProposed evidence (assess each by its id):\n{}\n\nSubmit your review with submit_audit_review: a note on coverage and gaps, and one assessment per proposed evidence id (approved, and a note of what you observed). Full sources:\n{}",
         serde_json::to_string(&proposal.findings)?,
-        serde_json::to_string(&proposal.evidence)?,
+        serde_json::to_string(&evidence)?,
         scope.sources,
     ))
 }

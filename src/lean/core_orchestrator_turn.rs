@@ -59,6 +59,21 @@ impl Core {
         }
         let graph = self.store.latest_plan(conversation)?;
         let editable_graph = !graph.is_empty();
+        // `revise_plan` edits the graph this turn was shown, at the revision
+        // it was shown at; a revision applied meanwhile makes it stale.
+        let view = graph
+            .first()
+            .map(|task| {
+                Ok::<_, Error>((
+                    task.plan_id.clone(),
+                    self.store.plan_revision(&task.plan_id)?,
+                ))
+            })
+            .transpose()?;
+        self.revision_views
+            .lock()
+            .expect("revision views mutex")
+            .insert(conversation.to_owned(), view);
         let graph_json = serde_json::to_string(
             &json!({"base_revision":graph.first().map(|t|self.store.plan_revision(&t.plan_id)).transpose()?,"tasks":graph.iter().map(|task|&task.spec).collect::<Vec<_>>()}),
         )?;
@@ -87,42 +102,34 @@ impl Core {
 
         // A regenerated plan can carry a fresh selective claim too, including
         // after a deferred original comment revision.
-        let (answer, addressed) = feedback::split(&answer);
-
-        let (mut text, mut plan) = tasks::parse_plan(&answer);
-        if interviewing {
-            match interview::parse(&text) {
-                Some(Ok(question)) => {
-                    self.store.ask_interview_question(conversation, &question)?;
-                    text = question.transcript();
-                }
-                Some(Err(error)) => self.notice(
-                    conversation,
-                    &format!("invalid interview question: {error}"),
-                ),
-                None => {
-                    if let Some(summary) = tasks::requirements_summary(&text) {
-                        self.store.interview_summary(conversation, &summary, upto)?;
-                        text = summary;
-                    }
-                }
-            }
-            if plan.is_some() {
-                self.notice(
-                    conversation,
-                    "plan withheld during interview; planning starts after the requirements summary is complete",
-                );
-            }
-            plan = None;
-        }
+        let result = super::turn_result::TurnResult::decode(&answer);
+        let addressed = result.addressed().map(<[u64]>::to_vec);
+        let text = result.text();
+        let mut plan = None;
         let mut awaiting_decision = false;
-        if !interviewing && let Some(question) = interview::parse(&text) {
-            let question = question?;
-            self.store.ask_user_decision(conversation, &question)?;
-            awaiting_decision = true;
-            text = question.transcript();
+        match result {
+            super::turn_result::TurnResult::Plan { tasks, .. } => {
+                plan = Some(tasks::planned_graph(tasks));
+            }
+            super::turn_result::TurnResult::Question { question } if interviewing => {
+                self.store.ask_interview_question(conversation, &question)?;
+            }
             // A question never submits a plan or changes existing permissions.
-            plan = None;
+            super::turn_result::TurnResult::Question { question } => {
+                self.store.ask_user_decision(conversation, &question)?;
+                awaiting_decision = true;
+            }
+            super::turn_result::TurnResult::Requirements { markdown } if interviewing => {
+                self.store
+                    .interview_summary(conversation, &markdown, upto)?;
+            }
+            _ => {}
+        }
+        if interviewing && plan.take().is_some() {
+            self.notice(
+                conversation,
+                "plan withheld during interview; planning starts after the requirements summary is complete",
+            );
         }
         if workflow.planning() && !awaiting_decision {
             self.store.append_event(conversation, None, None, "planning_progress", &json!({"text": if plan.as_ref().is_some_and(|p| p.is_ok()) { "Plan draft ready" } else { "Plan draft requires correction" }}))?;

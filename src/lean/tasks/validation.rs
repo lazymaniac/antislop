@@ -1,56 +1,5 @@
 use super::*;
 
-/// A verdict written as a bare JSON object: the whole answer, or its final block.
-/// It must still parse as a verdict, so prose and other JSON never approve.
-fn bare_verdict(answer: &str) -> Option<Verdict> {
-    let trimmed = answer.trim();
-    serde_json::from_str::<Verdict>(trimmed).ok().or_else(|| {
-        trimmed
-            .match_indices('\n')
-            .filter_map(|(index, _)| {
-                let suffix = trimmed[index + 1..].trim_start();
-                suffix.starts_with('{').then_some(suffix)
-            })
-            .find_map(|suffix| serde_json::from_str::<Verdict>(suffix).ok())
-    })
-}
-
-/// The verdict an answer states in a block or as a bare JSON object, if any.
-/// Prose alone is none, however plainly it says "approved".
-pub fn structured_verdict(answer: &str) -> Option<Verdict> {
-    // A reviewer that fences its verdict as plain `json` still gave a structured
-    // verdict; it must parse as one, so arbitrary JSON is never an approval.
-    fenced(answer, "verdict")
-        .or_else(|| fenced(answer, "json"))
-        .and_then(|(_, body)| {
-            let body = body
-                .strip_prefix("JSON\n")
-                .or_else(|| body.strip_prefix("JSON\r\n"))
-                .unwrap_or(body);
-            serde_json::from_str::<Verdict>(body).ok()
-        })
-        .or_else(|| bare_verdict(answer))
-}
-
-pub fn parse_verdict(answer: &str) -> Verdict {
-    let mut verdict = structured_verdict(answer).unwrap_or_else(|| Verdict {
-        approved: false,
-        findings: vec![Value::String(answer.trim().to_owned())],
-        coverage: serde_json::Map::new(),
-    });
-    let blocking = verdict.findings.iter().any(|finding| {
-        matches!(
-            finding["severity"]
-                .as_str()
-                .map(str::to_ascii_lowercase)
-                .as_deref(),
-            Some("high" | "medium" | "critical")
-        )
-    });
-    verdict.approved &= !blocking;
-    verdict
-}
-
 /// Plan and revision reviews that rejected this many times in a row stop
 /// blocking on findings that are only medium or low: they travel with the plan
 /// as notes. Without this, a reviewer finding something new each round keeps a
@@ -73,41 +22,17 @@ pub fn only_minor_findings(verdict: &Verdict) -> bool {
         })
 }
 
-/// What every verification checks whatever the kind of work (design §7.6,
-/// V02 and V04–V07; the runtime pins the basis and keeps verifiers
-/// independent, V01 and V08, and the coverage itself is V03).
-pub const COMMON_CHECKS: &str = "every requirement of the goal accounted for, \
-     with each qualifier, exception and prohibition; the key claims \
-     checked against actual files and recorded worker evidence without executing commands; a \
-     counterexample or a failing premise looked for, not only the expected \
-     path; nothing beyond the agreed scope and no hidden change of it; \
-     earlier findings resolved on the current version, with evidence; \
-     the touched code is left in a better, cleaner state than it was found";
+/// The id of the obligation to meet the task's own goal.
+pub const GOAL_CHECK: &str = "goal";
 
 /// What a task's verifier must account for in its verdict, with ids: the
-/// risks its task names (`R1`…), the common checks (`V1`…), its kind's
-/// checklist (`C1`…) and the share of the design's risk catalog (`R001`…)
-/// that belongs to its kind.
+/// task's goal (`goal`), each acceptance criterion assigned to it (by its
+/// ledger id) and its kind's share of the risk catalog (`R001`…). Nothing
+/// else: no generated risks and no checks the runtime adds on its own.
 pub fn obligations(task: &TaskContract) -> Vec<(String, String)> {
-    let risks = task
-        .verifier
-        .risks
-        .iter()
-        .enumerate()
-        .map(|(index, risk)| (format!("R{}", index + 1), risk.clone()));
-    let numbered = |prefix: &'static str, list: &'static str| {
-        list.split("; ")
-            .enumerate()
-            .map(move |(index, check)| (format!("{prefix}{}", index + 1), check.to_owned()))
-    };
-    risks
+    std::iter::once((GOAL_CHECK.to_owned(), format!("The goal is met: {}", task.goal)))
         .chain(task.criterion_ids.iter().map(|id|(id.clone(),format!("Evaluate assigned criterion {id} against this task's local deliverable; for options assess the proposed approach, not future implementation"))))
-        .chain(numbered("V", COMMON_CHECKS))
-        .chain(numbered("C", checklist(task.kind)))
-        .chain(
-            crate::lean::risks::for_kind(task.kind)
-                .filter(|(id, _)| task.verifier.risk_ids.contains(id)),
-        )
+        .chain(crate::lean::risks::for_kind(task.kind))
         .collect()
 }
 

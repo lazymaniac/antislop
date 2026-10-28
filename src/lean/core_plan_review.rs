@@ -18,25 +18,13 @@ impl Core {
         let all = self.store.messages_by(conversation, "user", 0)?;
         let upto = all.last().map_or(0, |message| message.seq);
         let setup = review_setup(conversation, role, plan_id, project, &config, upto);
-        let mut answer = self.turn(setup, cancel, |first| {
+        let answer = self.turn(setup, cancel, |first| {
             let initial = first || answered == 0;
             prompt(
                 initial,
                 &review_request(&all, if initial { 0 } else { answered }),
             )
         })?;
-        // A review that states its decision in prose only is not rejected for
-        // it: the reviewer is asked once to put the same decision in the block.
-        if answer
-            .as_deref()
-            .is_some_and(|text| tasks::structured_verdict(text).is_none())
-            && !cancel.load(Ordering::SeqCst)
-        {
-            let setup = review_setup(conversation, role, plan_id, project, &config, upto);
-            if let Some(repaired) = self.turn(setup, cancel, |_| VERDICT_REPAIR.to_owned())? {
-                answer = Some(repaired);
-            }
-        }
         self.review_outcome(conversation, role, answer)
     }
 
@@ -58,7 +46,8 @@ impl Core {
         answer: Option<String>,
     ) -> Result<std::result::Result<Verdict, String>> {
         Ok(match answer {
-            Some(answer) => Ok(tasks::parse_verdict(&answer)),
+            Some(answer) => super::turn_result::TurnResult::review_verdict(&answer)
+                .ok_or_else(|| format!("the {role} ended its turn without a review")),
             None => Err(self
                 .store
                 .last_turn(conversation, role)?
@@ -67,8 +56,6 @@ impl Core {
         })
     }
 }
-
-const VERDICT_REPAIR: &str = "Your last answer did not end with the required verdict block, so it cannot be recorded. Reply with your same decision and findings, ending with ```verdict\n{\"approved\":true|false,\"findings\":[{\"id\":\"stable-id\",\"severity\":\"high|medium|low\",\"issue\":\"...\",\"where\":\"...\"}]}\n```. Do not repeat your analysis.";
 
 fn review_request(messages: &[Message], after: u64) -> String {
     messages

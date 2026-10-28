@@ -62,7 +62,12 @@ impl Core {
         else {
             return Ok(());
         };
-        let (text, plan) = tasks::parse_required_plan(&answer);
+        let (text, plan) = super::turn_result::TurnResult::plan_answer(&answer);
+        let plan = plan.unwrap_or_else(|| {
+            Err(Error::Invalid(
+                "the planner ended its turn without submit_plan".into(),
+            ))
+        });
         self.store.append_event(
             conversation,
             None,

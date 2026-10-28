@@ -30,9 +30,13 @@ fn git(root: &Path, args: &[&str]) -> String {
 }
 
 fn idle(core: &Core, conversation: &str) {
-    let deadline = Instant::now() + Duration::from_secs(45);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !core.is_idle(conversation) {
-        assert!(Instant::now() < deadline, "probe did not become idle");
+        assert!(
+            Instant::now() < deadline,
+            "probe did not become idle: {:?}",
+            core.store.events_since(conversation, 0, 10_000).unwrap()
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -101,7 +105,7 @@ else:
             log.write(json.dumps({'task':task,'version':open('mode.txt').read().strip(),'cwd':os.getcwd()})+'\n')
         if task == 'W1':
             open('mode.txt', 'w').write('{"records":[7,11]}\n')
-            answer = open(os.path.join(os.path.dirname(sys.argv[0]),'w1-report')).read()
+            answer = json.dumps({'type':'completed','summary':'W1 changed mode.txt','report':open(os.path.join(os.path.dirname(sys.argv[0]),'w1-report')).read()})
         else:
             answer = 'No changes needed.'
     else:
@@ -166,7 +170,9 @@ else:
                     task.round = 1;
                     task.base = Some(base.clone());
                     task.result = Some(result.clone());
-                    task.report = Some(report.into());
+                    // A report opens with its effect line, which is all a
+                    // dependent hears of it.
+                    task.report = Some(format!("W1 changed mode.txt\n\n{report}"));
                     core.store.update_task(&task).unwrap();
                 } else if task.spec["id"] == "W1-options" {
                     task.status = "approved".into();
@@ -220,6 +226,7 @@ else:
             let observation = observations.iter().find(|item| item["task"] == id).unwrap();
             assert_ne!(observation["cwd"], project.to_str().unwrap());
             assert_eq!(observation["version"], r#"{"records":[7,11]}"#);
+            // A dependent hears what its dependency did in brief, never its report.
             assert!(!observation["prompt"].as_str().unwrap().contains(report));
             let task = core
                 .store

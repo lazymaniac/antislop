@@ -299,7 +299,7 @@ fn orchestrator_requests_a_user_decision_during_execution_without_reopening_work
         std::fs::write(&script, r#"#!/usr/bin/env python3
 import json, sys
 prompt = sys.argv[-1]
-if 'Interview answer (metadata-scope)' in prompt:
+if 'Interview answer (' in prompt:
     answer = 'Decision received; existing gates remain unchanged.'
 else:
     answer = '```question\n' + json.dumps({'id':'metadata-scope','context':'Allow read-only access to the current project worktree metadata. No writes or historical evidence reconstruction.','question':'Approve this metadata scope?','options':[{'label':'Approve'},{'label':'Reject'}]}) + '\n```'
@@ -332,7 +332,10 @@ print(json.dumps({'type':'turn.completed'}))
             .iter()
             .find(|event| event.kind == "user_decision_requested")
             .expect("execution question is delivered");
-        assert_eq!(question.payload["id"], "metadata-scope");
+        // The runtime names the question; the agent gives only its content.
+        assert_eq!(question.payload["question"], "Approve this metadata scope?");
+        let id = question.payload["id"].as_str().unwrap().to_owned();
+        assert!(!id.is_empty());
         assert!(!events.iter().any(|event| event.kind == "planning_progress"
             && event.payload["text"] == "Plan draft requires correction"));
         assert_eq!(core.store.workflow(&conversation.id).unwrap().phase, phase);
@@ -341,10 +344,12 @@ print(json.dumps({'type':'turn.completed'}))
             "coordinating"
         );
         core.send(
-        &conversation.id,
-        "Interview answer (metadata-scope)\nQuestion: Approve this metadata scope?\nAnswer: Reject",
-    )
-    .unwrap();
+            &conversation.id,
+            &format!(
+                "Interview answer ({id})\nQuestion: Approve this metadata scope?\nAnswer: Reject"
+            ),
+        )
+        .unwrap();
         idle(&core, &conversation.id);
         assert_eq!(
             core.store.task_by_id(&task.id).unwrap().unwrap().status,

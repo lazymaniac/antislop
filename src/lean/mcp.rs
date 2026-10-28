@@ -13,15 +13,69 @@ use std::time::{Duration, Instant};
 
 pub(crate) const SERVER: &str = "antislop";
 pub(crate) const TOOL: &str = "finish_turn";
+/// Ends a planning turn with a task graph checked within the turn.
+pub(crate) const SUBMIT_PLAN: &str = "submit_plan";
+/// Asks the orchestrator a question and waits briefly for the answer.
+pub(crate) const ASK: &str = "ask";
+/// Ends a task turn until the question asked in it is answered.
+pub(crate) const WAIT: &str = "wait_for_answer";
+/// Asks the user a question; ends the orchestrator's turn.
+pub(crate) const ASK_USER: &str = "ask_user";
+/// Ends an interview turn with the requirements summary.
+pub(crate) const SUBMIT_REQUIREMENTS: &str = "submit_requirements";
+/// Ends a review turn with its findings; the runtime derives the verdict.
+pub(crate) const REVIEW: &str = "review";
+/// The tools that end a requirements analyst's turn with its result; the
+/// runtime derives source ranges and evidence identities.
+const LEDGER_RESULTS: [&str; 3] = ["submit_ledger", "submit_audit", "submit_audit_review"];
+/// The tools that end a task turn with its result.
+const TASK_RESULTS: [&str; 3] = ["complete", "select", REVIEW];
 pub(crate) const TOOLS: &[&str] = &[
     TOOL,
-    "ask_orchestrator",
-    "await_orchestrator",
-    "reply_to_agent",
-    "submit_plan_revision",
+    SUBMIT_PLAN,
+    ASK_USER,
+    SUBMIT_REQUIREMENTS,
+    "complete",
+    "select",
+    REVIEW,
+    ASK,
+    WAIT,
+    "answer_agent",
+    "defer_to_user",
+    "revise_plan",
     "request_replan",
-    "task_risks",
+    "submit_ledger",
+    "submit_audit",
+    "submit_audit_review",
 ];
+
+/// Whether a successful call of `name` ends the turn.
+fn is_terminal(name: &str) -> bool {
+    matches!(
+        name,
+        TOOL | SUBMIT_PLAN | WAIT | ASK_USER | SUBMIT_REQUIREMENTS
+    ) || TASK_RESULTS.contains(&name)
+        || LEDGER_RESULTS.contains(&name)
+}
+
+/// The typed result a terminal call records, where the arguments alone
+/// determine it; the handler supplies the rest.
+fn terminal_result(name: &str, args: &Value) -> Result<super::turn_result::TurnResult> {
+    if name == WAIT || LEDGER_RESULTS.contains(&name) {
+        Err(invalid(format!("{name} needs the runtime's handler")))
+    } else {
+        super::turn_result::tool_result(name, args)
+    }
+}
+
+/// What a terminal call is recognised by when the agent repeats it.
+fn receipt_payload(name: &str, args: &Value) -> Value {
+    let mut payload = args.clone();
+    if let Some(fields) = payload.as_object_mut() {
+        fields.remove("turn");
+    }
+    json!({"tool": name, "args": payload})
+}
 pub(crate) type Handler = dyn Fn(&str, &Value) -> Result<Value> + Send + Sync;
 /// The error of a turn the runtime cancelled while it waited.
 pub(crate) const CANCELLED: &str = "agent turn cancelled";
@@ -45,6 +99,8 @@ struct State {
     listed: bool,
     handler: Option<Arc<Handler>>,
     role: String,
+    /// The turn a terminal call ended and that call, so a repeat is
+    /// acknowledged instead of refused.
     receipt: Option<(String, Value)>,
     waiting: Option<Instant>,
     waited: Duration,
@@ -169,7 +225,7 @@ impl Gateway {
                 && at.elapsed() >= Duration::from_secs(60)
             {
                 let error = format!(
-                    "{TOOL} rejected for turn {turn}; no accepted correction within 60 s: {error}"
+                    "result rejected for turn {turn}; no accepted correction within 60 s: {error}"
                 );
                 state.expected = None;
                 return Err(invalid(error));
@@ -184,7 +240,7 @@ impl Gateway {
                         format!("; last rejected submission: {error}")
                     });
                 return Err(Error::Invalid(format!(
-                    "no accepted {TOOL} for turn {turn} within {} s{rejection}",
+                    "no accepted result for turn {turn} within {} s{rejection}",
                     timeout.as_secs()
                 )));
             }
@@ -199,7 +255,7 @@ impl Gateway {
                     .rejected_finish
                     .as_ref()
                     .map_or(String::new(), |(_, reason)| {
-                        format!("; last rejected {TOOL}: {reason}")
+                        format!("; last rejected result: {reason}")
                     });
                 state.expected = None;
                 return Err(invalid(format!("{error}{rejection}")));
@@ -349,37 +405,77 @@ fn serve(shared: &Shared, mut request: tiny_http::Request) -> Result<()> {
     respond(request, 200, Some(reply))
 }
 
+/// The roles that review a plan, audit delivery or review a code change:
+/// findings without per-check coverage.
+fn plain_reviewer(role: &str) -> bool {
+    matches!(role, "plan-verifier" | "auditor") || role.starts_with("code-review:")
+}
+
 fn allowed_tools(role: &str) -> Vec<&'static str> {
-    if super::task_role(role).is_some() {
-        vec![TOOL, "ask_orchestrator", "await_orchestrator"]
+    if let Some((_, verifier)) = super::task_role(role) {
+        if verifier {
+            vec![REVIEW, ASK, WAIT]
+        } else {
+            vec!["complete", "select", ASK, WAIT]
+        }
     } else if matches!(role, "orchestrator" | "comment-orchestrator") {
         vec![
             TOOL,
-            "reply_to_agent",
-            "submit_plan_revision",
+            ASK_USER,
+            SUBMIT_REQUIREMENTS,
+            SUBMIT_PLAN,
+            "answer_agent",
+            "defer_to_user",
+            "revise_plan",
             "request_replan",
-            "task_risks",
         ]
     } else if role == "planner" {
-        vec![TOOL, "task_risks"]
+        vec![SUBMIT_PLAN]
+    } else if plain_reviewer(role) {
+        vec![REVIEW]
+    } else if role == "requirements-extraction-analyst" {
+        vec!["submit_ledger"]
+    } else if role == "requirements-audit-analyst" {
+        vec!["submit_audit"]
+    } else if role == "requirements-audit-verifier" {
+        vec!["submit_audit_review"]
     } else {
         vec![TOOL]
     }
 }
 
+const RETRY: &str = "Stop only after recorded=true; if rejected, fix what the error names and call again within 60 seconds.";
+
 fn tool_list(role: &str) -> Vec<Value> {
+    let orchestrator = matches!(role, "orchestrator" | "comment-orchestrator");
     allowed_tools(role).iter().map(|name| {
-        let (description, fields, required) = match *name {
-            "finish_turn" => ("Record the typed result of the current turn. Stop only after recorded=true; if rejected, correct the error and resubmit within 60 seconds.", json!({"result":{"type":"object","description":"Tasks: completed {summary,report,outputs,selection?}, review {report,verdict}, or needs_input {request,checkpoint}. Other roles: report {text}. Each object requires type."}}), vec!["turn","result"]),
-            "ask_orchestrator" => ("Ask a question about your local task without ending your turn.", json!({"request_key":{"type":"string"},"question":{"type":"string"}}), vec!["turn","request_key","question"]),
-            "await_orchestrator" => ("Wait up to 25 seconds for your answer; pending does not mean failure.", json!({"request":{"type":"string","description":"Question ID returned by ask_orchestrator, not question text"}}), vec!["turn","request"]),
-            "task_risks" => ("Read the domain catalog before selecting relevant verifier.risk_ids for a local contract.", json!({"kind":{"type":"string"}}),vec!["turn","kind"]),
-            "reply_to_agent" => ("Orchestrator only: answer a pending question. Answers cannot change contracts or permissions.", json!({"request":{"type":"string","description":"Question ID returned by ask_orchestrator, not question text"},"answer":{"type":"string"},"state":{"enum":["answered","awaiting_user"]}}), vec!["turn","request","answer"]),
-            "request_replan" => ("Orchestrator only: ask the planner to redraft the whole plan when contract repairs are not enough. It is reviewed like any new plan.", json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn","reason"]),
-            _ => ("Orchestrator only: submit a complete plan revision for independent review.", json!({"request_key":{"type":"string"},"revision":schema::revision()}), vec!["turn","request_key","revision"]),
+        let (description, fields, required): (String, Value, Vec<&str>) = match *name {
+            "finish_turn" if orchestrator => (format!("End the turn with your answer to the user. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"},"addressed":schema::addressed()}), vec!["turn","text"]),
+            "finish_turn" => (format!("End the turn with your answer. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"}}), vec!["turn","text"]),
+            "ask_user" => (format!("Ask the user one question with 2–6 choices; this ends your turn and the answer arrives as the user's next message. {RETRY}"), schema::question(), vec!["turn","context","question","options"]),
+            "submit_requirements" => (format!("Interview only: end the turn with the requirements summary for the user to approve: the goal and its acceptance criteria. {RETRY}"), json!({"markdown":{"type":"string","description":"The summary in Markdown"}}), vec!["turn","markdown"]),
+            "complete" => (format!("Finish your task; this ends your turn. {RETRY}"), json!({"summary":{"type":"string","description":"A few sentences on what was delivered; tasks that depend on this one receive only this"},"report":{"type":"string","description":"The full result your verifier checks: what you did, where, and how you checked it"}}), vec!["turn","summary","report"]),
+            "select" => (format!("Options tasks only: record the approach you chose among 2–4 alternatives; this ends your turn. {RETRY}"), schema::selection(), vec!["turn","alternatives","selected","rationale"]),
+            "review" if plain_reviewer(role) => (format!("Record your review; this ends your turn. The runtime approves when no finding is critical, high or medium. {RETRY}"), schema::plain_review(), vec!["turn","report","findings"]),
+            "review" => (format!("Record your review of the task; this ends your turn. The runtime approves the task when every check is ok or n/a and no finding is critical, high or medium. {RETRY}"), schema::review(), vec!["turn","report","checks","findings"]),
+            "ask" => ("Ask the orchestrator a question about your task without ending your turn. Waits up to 25 seconds and returns the answer if one came; asking the same question again returns its state.".into(), json!({"question":{"type":"string"}}), vec!["turn","question"]),
+            "wait_for_answer" => ("End your turn until the question you asked is answered; your work so far is kept and the task resumes with the answer.".into(), json!({"note":{"type":"string","description":"Where you stopped, for when you resume"}}), vec!["turn"]),
+            "submit_plan" => {
+                let mut fields = json!({"document":{"type":"string","description":"The plan for the user in Markdown: approach, task order and what each task delivers"},"tasks":{"type":"array","minItems":1,"items":schema::planned_task()}});
+                if orchestrator {
+                    fields["addressed"] = schema::addressed();
+                }
+                ("Submit the complete task plan; this ends your turn. The runtime checks it at once: if it is rejected, fix what the error names and submit the whole plan again within 60 seconds. Stop only after recorded=true.".into(), fields, vec!["turn","document","tasks"])
+            }
+            "submit_ledger" => (format!("Submit the requirements you extracted; this ends your turn. The runtime finds each quote in the sources and checks the requirements at once. {RETRY}"), json!({"entries":{"type":"array","items":schema::ledger_entry()}}), vec!["turn","entries"]),
+            "submit_audit" => (format!("Submit the audit; this ends your turn. It approves unless a finding is critical, high or medium. {RETRY}"), schema::audit(), vec!["turn","findings","evidence"]),
+            "submit_audit_review" => (format!("Submit your review of the audit; this ends your turn. Assess every proposed evidence id. {RETRY}"), schema::audit_review(), vec!["turn","note","assessments"]),
+            "answer_agent" => ("Answer a task agent's pending question. Answers cannot change contracts or permissions.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"answer":{"type":"string"}}), vec!["turn","request","answer"]),
+            "defer_to_user" => ("Hand a task agent's question to the user when only the user can decide; the task waits and you pass the user's answer on with answer_agent.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"explanation":{"type":"string","description":"What the user must decide and why, for the user"}}), vec!["turn","request","explanation"]),
+            "request_replan" => ("Ask the planner to redraft the whole plan when contract repairs are not enough. It is reviewed like any new plan.".into(), json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn","reason"]),
+            _ => ("Change the running plan you were shown. Give only the tasks that change or are added, in full; the others stay as they are. The revision is reviewed independently before it applies.".into(), schema::revision(), vec!["turn","reason","tasks","retire"]),
         };
         let mut properties = fields.as_object().unwrap().clone();
-        if *name == TOOL { properties.insert("result".into(),schema::result(role)); }
         properties.insert("turn".into(),json!({"type":"string"}));
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
     }).collect()
@@ -391,7 +487,7 @@ fn call(shared: &Shared, params: &Value) -> Value {
     match outcome {
         Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}]}),
         Err(error) => {
-            if params["name"] == TOOL
+            if is_terminal(params["name"].as_str().unwrap_or_default())
                 && let Ok(mut state) = shared.state.lock()
                 && state.expected.as_deref() == params["arguments"]["turn"].as_str()
                 && state.expected.is_some()
@@ -427,12 +523,12 @@ fn dispatch(shared: &Shared, params: &Value) -> Result<Value> {
                 state.session.get_or_insert_with(|| id.into());
             }
         }
-        if name == TOOL
+        if is_terminal(name)
             && let Some((recorded, result)) = &state.receipt
             && recorded == turn
         {
             crate::require(
-                result == &args["result"],
+                result == &receipt_payload(name, args),
                 "turn already recorded with another result",
             )?;
             return Ok(json!({"recorded":true}));
@@ -442,7 +538,7 @@ fn dispatch(shared: &Shared, params: &Value) -> Result<Value> {
             "turn is not open; use the current prompt's turn",
         )?;
         crate::require(state.finished.is_none(), "turn is already finished")?;
-        if name == "await_orchestrator" {
+        if name == ASK {
             crate::require(
                 state.waiting.is_none(),
                 "only one answer wait may be active",
@@ -453,32 +549,29 @@ fn dispatch(shared: &Shared, params: &Value) -> Result<Value> {
     };
     let response = match handler {
         Some(handler) => handler(name, args),
-        None if name == TOOL => {
-            serde_json::from_value::<super::turn_result::TurnResult>(args["result"].clone())
-                .map(|_| json!({"recorded":true}))
-                .map_err(Into::into)
-        }
+        None if is_terminal(name) => terminal_result(name, args).map(|_| json!({"recorded":true})),
         None => Err(invalid("agent tool handler is not installed")),
     };
     let mut state = shared.state.lock().map_err(invalid)?;
-    if name == "await_orchestrator"
+    if name == ASK
         && let Some(at) = state.waiting.take()
     {
         state.waited += at.elapsed();
     }
-    let response = response?;
+    let mut response = response?;
     crate::require(
         state.expected.as_deref() == Some(turn),
         "turn closed while the tool was executing",
     )?;
-    if name == TOOL {
-        let result: super::turn_result::TurnResult =
-            serde_json::from_value(args["result"].clone())?;
-        state.receipt = Some((turn.into(), args["result"].clone()));
-        let text = match result {
-            super::turn_result::TurnResult::Report { text } => text,
-            other => serde_json::to_string(&other)?,
+    if is_terminal(name) {
+        // A handler that derived more than the arguments say (the open
+        // question a wait is for) hands the result back with its receipt.
+        let result = match response.as_object_mut().and_then(|r| r.remove("result")) {
+            Some(result) => serde_json::from_value(result)?,
+            None => terminal_result(name, args)?,
         };
+        state.receipt = Some((turn.into(), receipt_payload(name, args)));
+        let text = result.encode()?;
         state.finished = Some(Finish { text });
         shared.changed.notify_all();
     }
@@ -517,7 +610,7 @@ mod tests {
 
     fn finish(turn: &str, text: &str) -> Value {
         json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-            "name":TOOL,"arguments":{"turn":turn,"result":{"type":"report","text":text}}}})
+            "name":TOOL,"arguments":{"turn":turn,"text":text}}})
     }
 
     #[test]
@@ -583,7 +676,7 @@ mod tests {
             &gateway,
             &token,
             json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
-                "name":TOOL,"arguments":{"turn":"t1","result":{"type":"report","text":"ok"}},
+                "name":TOOL,"arguments":{"turn":"t1","text":"ok"},
                 "_meta":{"threadId":"thread-7"}}}),
         );
         assert_eq!(gateway.session().as_deref(), Some("thread-7"));
@@ -598,7 +691,7 @@ mod tests {
             json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
             json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
             json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
-                "name":TOOL,"arguments":{"turn":"t1","result":{"type":"report","text":"from agy"}}}}),
+                "name":TOOL,"arguments":{"turn":"t1","text":"from agy"}}}),
         ]
         .iter()
         .map(|message| format!("{message}\n"))
@@ -671,44 +764,127 @@ mod role_tests {
 
     #[test]
     fn tools_and_result_schemas_are_role_scoped() {
-        for role in ["worker:task", "verifier:task"] {
+        for (role, expected) in [
+            (
+                "worker:task",
+                vec!["complete", "select", "ask", "wait_for_answer"],
+            ),
+            ("verifier:task", vec!["review", "ask", "wait_for_answer"]),
+        ] {
             let tools = tool_list(role);
             let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-            assert_eq!(
-                names,
-                vec!["finish_turn", "ask_orchestrator", "await_orchestrator"]
-            );
-            assert!(tools[0]["inputSchema"]["properties"]["result"]["oneOf"].is_array());
-            assert!(!allowed_tools(role).contains(&"submit_plan_revision"));
+            assert_eq!(names, expected);
+            assert!(!allowed_tools(role).contains(&"revise_plan"));
+        }
+        let review = &tool_list("verifier:task")[0]["inputSchema"];
+        assert_eq!(
+            review["required"],
+            json!(["turn", "report", "checks", "findings"])
+        );
+        let finding = &review["properties"]["findings"]["items"];
+        for derived in ["id", "approved"] {
+            assert!(finding["properties"][derived].is_null(), "{derived}");
+            assert!(review["properties"][derived].is_null(), "{derived}");
         }
         assert_eq!(
             allowed_tools("orchestrator"),
             vec![
                 "finish_turn",
-                "reply_to_agent",
-                "submit_plan_revision",
+                "ask_user",
+                "submit_requirements",
+                "submit_plan",
+                "answer_agent",
+                "defer_to_user",
+                "revise_plan",
                 "request_replan",
-                "task_risks"
             ]
         );
-        assert_eq!(allowed_tools("planner"), vec!["finish_turn", "task_risks"]);
-        assert_eq!(allowed_tools("auditor"), vec!["finish_turn"]);
-        assert!(
-            schema::revision()["properties"]["tasks"]["items"]["properties"]["inputs"].is_object()
+        assert_eq!(allowed_tools("planner"), vec!["submit_plan"]);
+        for reviewer in ["auditor", "plan-verifier", "code-review:t1"] {
+            assert_eq!(allowed_tools(reviewer), vec!["review"], "{reviewer}");
+            let review = &tool_list(reviewer)[0]["inputSchema"];
+            assert_eq!(review["required"], json!(["turn", "report", "findings"]));
+            assert!(review["properties"]["checks"].is_null());
+        }
+        for (role, tool) in [
+            ("requirements-extraction-analyst", "submit_ledger"),
+            ("requirements-audit-analyst", "submit_audit"),
+            ("requirements-audit-verifier", "submit_audit_review"),
+        ] {
+            assert_eq!(allowed_tools(role), vec![tool], "{role}");
+            assert!(is_terminal(tool));
+        }
+        let entry = &tool_list("requirements-extraction-analyst")[0]["inputSchema"]["properties"]["entries"]
+            ["items"];
+        assert_eq!(
+            entry["required"],
+            json!(["id", "quote", "interpretation", "criteria"])
         );
+        for gone in [
+            "start",
+            "end",
+            "position",
+            "disposition",
+            "implementation_owners",
+        ] {
+            assert!(entry["properties"][gone].is_null(), "{gone}");
+        }
+        let evidence = &tool_list("requirements-audit-analyst")[0]["inputSchema"]["properties"]["evidence"]
+            ["items"];
+        for gone in [
+            "entry_id",
+            "entry_version",
+            "generation",
+            "integrated_fingerprint",
+        ] {
+            assert!(evidence["properties"][gone].is_null(), "{gone}");
+        }
+        assert_eq!(allowed_tools("anyone-else"), vec!["finish_turn"]);
+        let finish = &tool_list("orchestrator")[0]["inputSchema"];
+        assert_eq!(finish["required"], json!(["turn", "text"]));
+        assert!(finish["properties"]["addressed"].is_object());
+        assert!(tool_list("auditor")[0]["inputSchema"]["properties"]["addressed"].is_null());
+        let task = &schema::revision()["tasks"]["items"];
+        assert_eq!(task["required"], json!(["id", "title", "goal", "kind"]));
+        for gone in ["inputs", "outputs", "verifier", "requirement_ids"] {
+            assert!(task["properties"][gone].is_null(), "{gone}");
+        }
+        let planner = tool_list("planner");
+        assert_eq!(
+            planner[0]["inputSchema"]["required"],
+            json!(["turn", "document", "tasks"])
+        );
+    }
+
+    #[test]
+    fn a_submitted_plan_ends_the_turn_and_a_repeat_is_acknowledged() {
+        let shared = shared("planner");
+        shared.state.lock().unwrap().expected = Some("t1".into());
+        let call = json!({"name":"submit_plan","arguments":{"turn":"t1","document":"# Plan","tasks":[{"id":"t1","title":"Do","goal":"Do it","kind":"implementation"}]}});
+        assert_eq!(dispatch(&shared, &call).unwrap(), json!({"recorded":true}));
+        let finish = shared.state.lock().unwrap().finished.clone().unwrap();
+        let (text, plan) = super::super::turn_result::TurnResult::plan_answer(&finish.text);
+        assert_eq!(text, "# Plan");
+        assert!(plan.unwrap().unwrap()[0].writes);
+        shared.state.lock().unwrap().finished = None;
+        assert_eq!(dispatch(&shared, &call).unwrap(), json!({"recorded":true}));
+        let mut other = call.clone();
+        other["arguments"]["document"] = json!("# Other");
+        assert!(dispatch(&shared, &other).is_err());
     }
 
     #[test]
     fn stale_leases_and_foreign_role_commands_are_rejected_before_dispatch() {
         let shared = shared("worker:task");
-        let stale = json!({"name":"finish_turn","arguments":{"turn":"old","result":{"type":"report","text":"done"}}});
+        let stale =
+            json!({"name":"complete","arguments":{"turn":"old","summary":"done","report":"done"}});
         assert!(
             dispatch(&shared, &stale)
                 .unwrap_err()
                 .to_string()
                 .contains("turn is not open")
         );
-        let foreign = json!({"name":"reply_to_agent","arguments":{"turn":"current","request":"q","answer":"ok"}});
+        let foreign = json!({"name":"answer_agent","arguments":{"turn":"current","request":"q","answer":"ok"}});
         assert!(
             dispatch(&shared, &foreign)
                 .unwrap_err()
@@ -721,7 +897,7 @@ mod role_tests {
     #[test]
     fn finish_receipt_is_idempotent_after_the_result_is_consumed() {
         let shared = shared("orchestrator");
-        let submission = json!({"name":"finish_turn","arguments":{"turn":"current","result":{"type":"report","text":"done"}}});
+        let submission = json!({"name":"finish_turn","arguments":{"turn":"current","text":"done"}});
         assert_eq!(dispatch(&shared, &submission).unwrap()["recorded"], true);
         {
             let mut state = shared.state.lock().unwrap();
@@ -730,7 +906,7 @@ mod role_tests {
         }
         assert_eq!(dispatch(&shared, &submission).unwrap()["recorded"], true);
         let mut conflict = submission;
-        conflict["arguments"]["result"]["text"] = json!("different");
+        conflict["arguments"]["text"] = json!("different");
         assert!(dispatch(&shared, &conflict).is_err());
     }
 }
@@ -740,7 +916,7 @@ mod rejection_tests {
     use super::*;
 
     fn submission(turn: &str) -> Value {
-        json!({"name":TOOL,"arguments":{"turn":turn,"result":{"type":"report","text":"done"}}})
+        json!({"name":TOOL,"arguments":{"turn":turn,"text":"done"}})
     }
 
     #[test]
@@ -854,7 +1030,7 @@ mod rejection_tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("CLI exited (1)"));
-        assert!(error.contains("last rejected finish_turn: bad checkpoint"));
+        assert!(error.contains("last rejected result: bad checkpoint"));
         assert!(gateway.shared.state.lock().unwrap().expected.is_none());
     }
 

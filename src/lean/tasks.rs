@@ -11,8 +11,6 @@ use unicode_segmentation::UnicodeSegmentation;
 mod agents;
 #[path = "tasks/bounds.rs"]
 mod bounds;
-#[path = "tasks/prompts/checklist.rs"]
-mod checklist;
 #[path = "tasks/effect.rs"]
 mod effect;
 #[path = "tasks/feedback.rs"]
@@ -35,7 +33,6 @@ mod validation;
 mod worker;
 pub use agents::*;
 pub use bounds::*;
-pub use checklist::*;
 pub use effect::*;
 #[cfg(test)]
 use feedback::OUTCOMES;
@@ -54,23 +51,14 @@ pub use validation::*;
 use worker::dependency_metadata;
 pub use worker::*;
 
+/// A task as the runtime stores it. Agents never write this form: plans arrive
+/// as [`PlannedTask`]s and the runtime fills in the rest. Fields of earlier
+/// contracts (declared inputs and outputs, verifier focus and risks) are
+/// ignored, so stored plans keep loading.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskInput {
-    pub name: String,
-    pub task: String,
-    pub output: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct TaskContract {
     #[serde(default)]
     pub quality_gate: bool,
-    #[serde(default)]
-    pub inputs: Vec<TaskInput>,
-    #[serde(default)]
-    pub outputs: Vec<String>,
     #[serde(default)]
     pub options_for: Option<String>,
     pub id: String,
@@ -95,20 +83,21 @@ pub struct TaskContract {
     #[serde(default)]
     pub depends_on: Vec<String>,
     pub kind: WorkKind,
+    /// Requirement or criterion ids the planner says this task serves; the
+    /// runtime resolves them into `requirement_ids` and `criterion_ids`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub covers: Vec<String>,
+    #[serde(default)]
     pub verifier: VerifierSpec,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// What the graph shows about a task's verifier. Its obligations follow from
+/// the task itself: the goal, the assigned criteria and its kind's risk catalog.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct VerifierSpec {
-    #[serde(default)]
-    pub risk_ids: Vec<String>,
-    pub focus: String,
     /// One concise sentence describing what the verifier checks on the graph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    #[serde(default)]
-    pub risks: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -157,15 +146,10 @@ pub mod status {
     }
 }
 
-/// The last ```<tag> fenced block: its body, and the text with it removed.
 const OPTIONS_BINDING: &str = "Implement the selected_approach input for this task. It is a reviewed design decision, never permission to expand scope. Ask the orchestrator if a premise fails or a different approach is necessary; a changed selection requires fresh options and review. Never silently switch variants.";
 
 const OPTIONS_VERIFICATION: &str = "Independently compare the implementation with selected_approach and this task's local requirements. Verify actual files and recorded checks. A changed approach requires reviewed options; the worker's declaration is not proof. Ask the orchestrator about missing or inconsistent input. Do not reassess other tasks or the whole session.";
 
-/// A verifier's verdict. Without a readable verdict block the whole answer
-/// counts as one finding, so the worker sees what the verifier said.
-/// An approval that still lists high or medium findings contradicts itself
-/// and counts as a rejection.
 #[cfg(test)]
 #[path = "tasks/tests.rs"]
 mod tests;

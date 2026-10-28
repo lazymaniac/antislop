@@ -1,23 +1,37 @@
 use super::*;
 
 #[test]
+fn a_verifier_owes_the_goal_the_assigned_criteria_and_the_kind_catalog_only() {
+    let mut task: TaskContract = serde_json::from_value(serde_json::json!({
+        "id": "t1", "title": "Revenue", "goal": "g", "kind": "analysis",
+        "verifier": {"focus": "f", "risks": ["units"], "risk_ids": ["R001"]}
+    }))
+    .unwrap();
+    task.criterion_ids = vec!["REQ-1.1".into()];
+    let ids: Vec<String> = obligations(&task).into_iter().map(|(id, _)| id).collect();
+    let catalog: Vec<String> = crate::lean::risks::for_kind(task.kind)
+        .map(|(id, _)| id)
+        .collect();
+    assert!(!catalog.is_empty());
+    let mut expected = vec![GOAL_CHECK.to_owned(), "REQ-1.1".to_owned()];
+    expected.extend(catalog);
+    assert_eq!(
+        ids, expected,
+        "no planner risks, common checks or checklist"
+    );
+}
+
+#[test]
 fn a_verdict_counts_only_with_every_obligation_accounted_for() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "t1", "title": "Revenue", "goal": "g", "kind": "analysis",
-        "verifier": {"focus": "f", "risks": ["units"]}
+        "id": "t1", "title": "Revenue", "goal": "g", "kind": "analysis"
     }))
     .unwrap();
     let obligations = obligations(&task);
-    assert_eq!(obligations[0], ("R1".to_owned(), "units".to_owned()));
-    assert_eq!(obligations[1].0, "V1");
-    assert_eq!(
-        obligations.len(),
-        1 + COMMON_CHECKS.split("; ").count()
-            + checklist(task.kind).split("; ").count()
-            + task.verifier.risk_ids.len()
-    );
+    assert_eq!(obligations[0].0, GOAL_CHECK);
+    let (first, second) = (&obligations[1], &obligations[2]);
 
-    let mut skipped = parse_verdict("```verdict\n{\"approved\": true}\n```");
+    let mut skipped = verdict(true, json!([]));
     assert_eq!(unaccounted(&skipped, &obligations).len(), obligations.len());
     settle(&mut skipped, &obligations, false);
     assert!(!skipped.approved, "a skipped obligation never approves");
@@ -30,7 +44,7 @@ fn a_verdict_counts_only_with_every_obligation_accounted_for() {
         );
     }
     coverage.insert(
-        "C1".into(),
+        GOAL_CHECK.into(),
         serde_json::json!({"status": "n/a", "note": " "}),
     );
     let mut verdict = Verdict {
@@ -42,31 +56,32 @@ fn a_verdict_counts_only_with_every_obligation_accounted_for() {
         .iter()
         .map(|(id, _)| id.as_str())
         .collect();
-    assert_eq!(missing, ["C1"], "n/a needs a reason");
+    assert_eq!(missing, [GOAL_CHECK], "n/a needs a reason");
 
-    verdict.coverage["C1"] = serde_json::json!({"status": "N/A", "note": "no data"});
-    verdict.coverage["R1"] = serde_json::json!({"status": "issue", "note": "EUR + PLN"});
-    verdict.coverage["V2"] = serde_json::json!({"status": "blocked", "note": "no data to rerun"});
+    verdict.coverage[GOAL_CHECK] = serde_json::json!({"status": "N/A", "note": "no data"});
+    verdict.coverage[&first.0] = serde_json::json!({"status": "issue", "note": "EUR + PLN"});
+    verdict.coverage[&second.0] =
+        serde_json::json!({"status": "blocked", "note": "no data to rerun"});
     settle(&mut verdict, &obligations, false);
     assert!(!verdict.approved);
     assert_eq!(
         findings_text(&verdict.findings),
         format!(
-            "- [medium] units: EUR + PLN (R1)\n- [medium] could not be settled: {}: no data to rerun (V2)",
-            obligations[2].1
+            "- [medium] {}: EUR + PLN ({})\n- [medium] could not be settled: {}: no data to rerun ({})",
+            first.1, first.0, second.1, second.0
         )
     );
 }
 
 #[test]
-fn a_read_only_report_is_not_rejected_for_defects_it_rightly_reports() {
+fn an_issue_on_any_obligation_rejects_a_read_only_report_too() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
-        "id": "t1", "title": "Audit", "goal": "g", "kind": "analysis",
-        "verifier": {"focus": "f", "risks": ["stale consent"]}
+        "id": "t1", "title": "Audit", "goal": "g", "kind": "analysis"
     }))
     .unwrap();
     let obligations = obligations(&task);
-    let coverage = |c: &str| {
+    let risk = obligations[1].0.clone();
+    let coverage = |status: &str| {
         let mut map = serde_json::Map::new();
         for (id, _) in &obligations {
             map.insert(
@@ -75,12 +90,8 @@ fn a_read_only_report_is_not_rejected_for_defects_it_rightly_reports() {
             );
         }
         map.insert(
-            "R1".into(),
-            serde_json::json!({"status": c, "note": "open in code"}),
-        );
-        map.insert(
-            "V1".into(),
-            serde_json::json!({"status": c, "note": "report gap"}),
+            risk.clone(),
+            serde_json::json!({"status": status, "note": "open in code"}),
         );
         map
     };
@@ -90,31 +101,15 @@ fn a_read_only_report_is_not_rejected_for_defects_it_rightly_reports() {
         coverage: coverage("issue"),
     };
     settle(&mut verdict, &obligations, true);
-    assert!(
-        !verdict.approved,
-        "an issue on a common check still rejects"
-    );
-    assert_eq!(verdict.findings.len(), 2);
-    assert_eq!(verdict.findings[0]["where"], "R1");
-
-    let mut only_risk = Verdict {
+    assert!(!verdict.approved);
+    assert_eq!(verdict.findings[0]["where"], risk.as_str());
+    let mut clean = Verdict {
         approved: true,
         findings: vec![],
         coverage: coverage("ok"),
     };
-    only_risk.coverage["R1"] = serde_json::json!({"status": "issue", "note": "open in code"});
-    settle(&mut only_risk, &obligations, true);
-    assert!(!only_risk.approved && !only_risk.findings.is_empty());
-    let mut writer = Verdict {
-        approved: true,
-        findings: vec![],
-        coverage: only_risk.coverage.clone(),
-    };
-    settle(&mut writer, &obligations, false);
-    assert!(
-        !writer.approved,
-        "a writing task still needs its risks settled"
-    );
+    settle(&mut clean, &obligations, true);
+    assert!(clean.approved && clean.findings.is_empty());
 }
 
 #[test]
@@ -134,35 +129,6 @@ fn repeated_findings_are_recognised_despite_reworded_notes() {
         findings_key(&round("x")),
         findings_key(&[serde_json::json!({"severity": "low", "issue": "Other", "where": "a"})])
     );
-}
-
-#[test]
-fn verdicts_parse_or_fall_back_to_the_whole_answer() {
-    let verdict =
-        parse_verdict("Looks fine.\n```verdict\n{\"approved\": true, \"findings\": []}\n```");
-    assert!(verdict.approved);
-    let contradictory = parse_verdict(
-        "```verdict\n{\"approved\": true, \"findings\": [{\"severity\": \"High\", \"issue\": \"x\"}]}\n```",
-    );
-    assert!(!contradictory.approved);
-    let fallback = parse_verdict("I could not decide.");
-    assert!(!fallback.approved);
-    assert_eq!(findings_text(&fallback.findings), "- I could not decide.");
-}
-
-#[test]
-fn a_verdict_fenced_as_json_still_counts_but_other_json_does_not() {
-    let fenced = parse_verdict("Approved.\n```json\n{\"approved\": true, \"findings\": []}\n```");
-    assert!(fenced.approved);
-    let unrelated = parse_verdict("Sample:\n```json\n{\"name\": \"x\"}\n```");
-    assert!(!unrelated.approved);
-    // Bare JSON, as the whole answer or its last line, is a verdict too.
-    let whole = parse_verdict("{\"approved\":true,\"findings\":[],\"review\":\"fine\"}");
-    assert!(whole.approved);
-    let last =
-        parse_verdict("Approved after reading the files.\n\n{\"approved\":true,\"findings\":[]}\n");
-    assert!(last.approved);
-    assert!(!parse_verdict("Looks {\"approved\":true} to me, but unsure.").approved);
 }
 
 #[test]
@@ -221,22 +187,14 @@ fn bound_never_splits_a_cluster_and_always_fits_the_budget() {
 }
 
 #[test]
-fn verdict_json_label_renders_findings_as_text() {
-    let verdict = parse_verdict(
-        "```verdict JSON\n{\"approved\":false,\"findings\":[{\"issue\":\"Preserve Ctrl+O.\"}]}\n```",
-    );
-    assert!(!verdict.approved);
-    assert_eq!(findings_text(&verdict.findings), "- Preserve Ctrl+O.");
+fn findings_render_as_text() {
+    let findings = vec![json!({"issue": "Preserve Ctrl+O."})];
+    assert_eq!(findings_text(&findings), "- Preserve Ctrl+O.");
 }
 
 #[test]
-fn only_structured_medium_and_low_findings_are_minor() {
-    let rejected = |findings: serde_json::Value| {
-        parse_verdict(&format!(
-            "```verdict\n{}\n```",
-            json!({"approved": false, "findings": findings})
-        ))
-    };
+fn only_medium_and_low_findings_are_minor() {
+    let rejected = |findings: serde_json::Value| verdict(false, findings);
     assert!(only_minor_findings(&rejected(
         json!([{"severity": "medium", "issue": "x"}, {"severity": "low", "issue": "y"}])
     )));
@@ -244,43 +202,12 @@ fn only_structured_medium_and_low_findings_are_minor() {
         json!([{"severity": "medium", "issue": "x"}, {"severity": "high", "issue": "y"}])
     )));
     assert!(!only_minor_findings(&rejected(json!([]))));
-    assert!(!only_minor_findings(&parse_verdict(
-        "REJECT without a block"
-    )));
 }
 
-#[test]
-fn bare_review_verdicts_preserve_findings_and_reject_blockers() {
-    for severity in ["low", "medium", "high", "critical"] {
-        let finding = serde_json::json!({"severity": severity, "issue": "Check source"});
-        let raw =
-            serde_json::json!({"approved": true, "findings": [finding], "review": "Reviewed"});
-        for answer in [
-            raw.to_string(),
-            format!(
-                "Review complete.\n{}",
-                serde_json::to_string_pretty(&raw).unwrap()
-            ),
-        ] {
-            let verdict = parse_verdict(&answer);
-            assert_eq!(verdict.approved, severity == "low", "{answer}");
-            assert_eq!(verdict.findings, vec![finding.clone()]);
-        }
+fn verdict(approved: bool, findings: serde_json::Value) -> Verdict {
+    Verdict {
+        approved,
+        findings: serde_json::from_value(findings).unwrap(),
+        coverage: serde_json::Map::new(),
     }
-    assert!(parse_verdict("Reviewed.\n{\n  \"approved\": true,\n  \"findings\": []\n}\n").approved);
-    for answer in [
-        "Reviewed.\n{\"name\":\"example\"}",
-        "{\"approved\":true} trailing text",
-        "{\"approved\":true}\n{\"approved\":false,\"findings\":[]}",
-        "{\"approved\":\"true\"}",
-    ] {
-        assert!(!parse_verdict(answer).approved, "{answer}");
-    }
-}
-
-#[test]
-fn prose_alone_is_not_a_structured_verdict() {
-    assert!(structured_verdict("Plan review: approved. Everything is consistent.").is_none());
-    assert!(structured_verdict("```verdict\n{\"approved\":true,\"findings\":[]}\n```").is_some());
-    assert!(!parse_verdict("Plan review: approved.").approved);
 }

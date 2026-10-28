@@ -114,17 +114,6 @@ fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
 }
 
 #[test]
-fn interview_checkpoint_requires_a_complete_requirements_fence() {
-    assert_eq!(super::requirements_summary("Question?"), None);
-    assert_eq!(super::requirements_summary("```requirements\nDraft"), None);
-    assert_eq!(super::requirements_summary("```requirements\n \n```"), None);
-    assert_eq!(
-        super::requirements_summary("```requirements\nGoal 👩‍💻\nAcceptance criteria\n```"),
-        Some("Goal 👩‍💻\nAcceptance criteria".into())
-    );
-}
-
-#[test]
 fn upstream_note_carries_full_reports() {
     assert_eq!(upstream_note(&[]), "");
     let long = "é".repeat(60_005);

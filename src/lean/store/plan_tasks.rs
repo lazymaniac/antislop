@@ -24,6 +24,9 @@ fn task_generation(db: &rusqlite::Connection, task: &str) -> Result<i64> {
         .unwrap_or(0))
 }
 
+/// How much of a dependency's summary a dependent task is shown.
+const DEPENDENCY_SUMMARY_LIMIT: usize = 2_000;
+
 #[path = "plan_tasks/checks.rs"]
 mod checks;
 
@@ -69,22 +72,23 @@ impl Store {
         spec: &crate::lean::tasks::TaskContract,
     ) -> Result<Vec<crate::lean::tasks::DependencyReport>> {
         let mut inputs = vec![];
-        for binding in &spec.inputs {
+        for dependency in &spec.depends_on {
             let task = self
-                .task_in_plan_by_id(plan, &binding.task)?
-                .ok_or_else(|| Error::Invalid(format!("missing input task {}", binding.task)))?;
-            crate::require(task.status == "approved", "input task is not verified")?;
-            let result = self.completed_task_output(&task)?;
-            let value = result["outputs"][&binding.output].as_str().ok_or_else(|| {
-                Error::Invalid(format!(
-                    "missing output {}.{}",
-                    binding.task, binding.output
-                ))
-            })?;
+                .task_in_plan_by_id(plan, dependency)?
+                .ok_or_else(|| Error::Invalid(format!("missing dependency {dependency}")))?;
+            // The options prerequisite is handed over below as the selected
+            // approach, not as a summary.
+            if task.spec["options_for"].as_str() == Some(spec.id.as_str()) {
+                continue;
+            }
+            crate::require(task.status == "approved", "dependency is not verified")?;
             inputs.push(crate::lean::tasks::DependencyReport {
-                id: binding.name.clone(),
-                title: binding.name.clone(),
-                report: value.into(),
+                id: dependency.clone(),
+                title: task.spec["title"].as_str().unwrap_or(dependency).to_owned(),
+                report: crate::lean::tasks::bound(
+                    &self.dependency_summary(&task)?,
+                    DEPENDENCY_SUMMARY_LIMIT,
+                ),
             });
         }
         let choices: Vec<String> = self.db().prepare("SELECT id FROM tasks WHERE plan_id=?1 AND json_extract(spec,'$.options_for')=?2 AND status<>'superseded'")?.query_map(params![plan,spec.id],|r|r.get(0))?.collect::<std::result::Result<_,_>>()?;
@@ -99,9 +103,35 @@ impl Store {
                 .as_array()
                 .and_then(|all| all.iter().find(|a| a["id"] == selection["selected"]))
                 .ok_or_else(|| Error::Invalid("local options have no selected variant".into()))?;
-            inputs.push(crate::lean::tasks::DependencyReport{id:"selected_approach".into(),title:"Selected approach for this task".into(),report:serde_json::json!({"variant":variant,"rationale":selection["rationale"],"reconsider_when":selection["reconsider_when"]}).to_string()});
+            inputs.push(crate::lean::tasks::DependencyReport {
+                id: "selected_approach".into(),
+                title: "Selected approach for this task".into(),
+                report: serde_json::json!({"variant":variant,"rationale":selection["rationale"]})
+                    .to_string(),
+            });
         }
         Ok(inputs)
+    }
+
+    /// What a dependency delivered, in brief: its worker's summary, or the
+    /// opening line of its report when it was approved without one (a plan
+    /// stored before summaries, or an approval recorded by hand).
+    fn dependency_summary(&self, task: &Task) -> Result<String> {
+        let summary = self
+            .completed_task_output(task)
+            .map(Some)
+            .or_else(|error| match error {
+                Error::Sql(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                error => Err(error),
+            })?
+            .and_then(|result| result["summary"].as_str().map(str::to_owned));
+        Ok(summary.unwrap_or_else(|| {
+            task.report
+                .as_deref()
+                .and_then(|report| report.lines().find(|line| !line.trim().is_empty()))
+                .unwrap_or_default()
+                .to_owned()
+        }))
     }
 
     pub(in crate::lean) fn completed_task_output(&self, task: &Task) -> Result<Value> {

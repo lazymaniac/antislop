@@ -1,32 +1,72 @@
 use super::*;
+use crate::lean::ledger::Run;
 
 #[path = "helpers/recording.rs"]
 mod recording;
 use recording::*;
 
 impl Core {
-    pub(super) fn prepare_plan(
+    /// The requirements run a new plan is bound to, extracted first if the
+    /// ledger lags behind the conversation; `None` when that failed.
+    pub(super) fn planning_requirements(
         self: &Arc<Self>,
         conversation: &str,
-        specs: &[TaskContract],
         addressed: Option<&[u64]>,
         cancel: &AtomicBool,
-    ) -> Result<Option<PreparedPlan>> {
+    ) -> Result<Option<Run>> {
         record_addressed_comments(&self.store, conversation, addressed)?;
         let feedback_before = self
             .store
             .count_since_requirements_reset(conversation, "requirements-reviewer")?;
-        let run = match self.ensure_requirements(conversation, cancel) {
-            Ok(run) => run,
+        match self.ensure_requirements(conversation, cancel) {
+            Ok(run) => Ok(Some(run)),
             Err(error) => {
                 let retrying = self
                     .store
                     .count_since_requirements_reset(conversation, "requirements-reviewer")?
                     > feedback_before;
                 record_requirements_failure(&self.store, conversation, &error, retrying)?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// The tasks with the requirements and criteria they cover resolved
+    /// against `run`; `None` when one names neither, and the planner is asked
+    /// for the plan again.
+    pub(super) fn covered_plan(
+        &self,
+        conversation: &str,
+        run: &Run,
+        specs: &[TaskContract],
+    ) -> Result<Option<Vec<TaskContract>>> {
+        let entries = self.store.ledger_entries(conversation, &run.id, None)?;
+        let mut resolved = specs.to_vec();
+        for spec in &mut resolved {
+            if let Err(error) = crate::lean::ledger::resolve_covers(spec, &entries) {
+                // Kept as a sent-back draft, like one the ledger binding
+                // refuses, so the correction revises it.
+                let (_, plan) = self.persist_proposed_tasks(conversation, specs)?;
+                self.store.link_plan_run(conversation, &plan, &run.id)?;
+                self.store
+                    .set_plan_status(&plan, status::PROPOSED, status::REVISED)?;
+                self.notice(
+                    conversation,
+                    &format!("plan ledger mapping rejected: {error}"),
+                );
+                self.retry_plan_from_ledger(conversation, &run.id, &error)?;
                 return Ok(None);
             }
-        };
+        }
+        Ok(Some(resolved))
+    }
+
+    pub(super) fn prepare_plan(
+        &self,
+        conversation: &str,
+        specs: &[TaskContract],
+        run: &Run,
+    ) -> Result<Option<PreparedPlan>> {
         let (tasks, id) = self.persist_proposed_tasks(conversation, specs)?;
         self.store.link_plan_run(conversation, &id, &run.id)?;
         if self.bind_proposed_plan(conversation, &id, &run.id)? {

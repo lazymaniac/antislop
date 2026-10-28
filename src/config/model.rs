@@ -47,6 +47,20 @@ pub enum WorkKind {
     Delivery, // Summarizes delivered results, usage instructions, limitations, and remaining risks.
 }
 
+impl WorkKind {
+    /// Whether work of this kind changes files unless the plan says otherwise.
+    pub fn writes_by_default(self) -> bool {
+        matches!(
+            self,
+            Self::Implementation
+                | Self::Refactoring
+                | Self::Testing
+                | Self::StaticAnalysis
+                | Self::Integration
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoleKind {

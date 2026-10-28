@@ -273,9 +273,8 @@ fn orchestrator_plan_is_completed_before_each_writer_runs() {
             .unwrap();
         for text in [
             "2–4",
-            "same explicit criteria",
             "Exclude variants violating requirements",
-            "structured selection",
+            "End with select",
         ] {
             assert!(prompt.contains(text), "{text}");
         }

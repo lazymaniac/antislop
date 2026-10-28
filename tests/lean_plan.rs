@@ -178,9 +178,10 @@ fn plan_summaries_survive_core_storage_and_event_replay() {
     wait_idle(&core, &conversation.id);
     let original = core.store.latest_plan(&conversation.id).unwrap();
     assert_eq!(original[0].spec["summary"], "Assess the storage approach.");
+    // The verifier's summary is the runtime's; a planner no longer writes one.
     assert_eq!(
         original[0].spec["verifier"]["summary"],
-        "Verify the storage findings."
+        "Verify the result meets the goal, its criteria and the domain risks."
     );
     assert!(
         original[1].spec.get("summary").is_none(),
@@ -198,15 +199,14 @@ fn plan_summaries_survive_core_storage_and_event_replay() {
         replay.tasks[0].summary.as_deref(),
         Some("Assess the storage approach.")
     );
-    assert_eq!(
-        replay.tasks[0].verifier_summary.as_deref(),
-        Some("Verify the storage findings.")
-    );
+    for task in &replay.tasks {
+        assert_eq!(
+            task.verifier_summary.as_deref(),
+            Some("Verify the result meets the goal, its criteria and the domain risks.")
+        );
+    }
     assert!(replay.tasks[1].summary.is_none());
-    assert!(replay.tasks[1].verifier_summary.is_none());
     assert_eq!(replay.tasks[0].goal, "Assess storage");
-    assert_eq!(replay.tasks[0].focus, "claims");
-    assert_eq!(replay.tasks[0].risks, ["r-storage"]);
 }
 
 #[test]
@@ -379,14 +379,24 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
         .collect();
     assert!(workers.iter().all(|(_, args)| {
         if args.contains("Task: Storage") {
-            args.contains("r-storage") && !args.contains("r-tui")
+            args.contains("Assess storage") && !args.contains("Assess TUI")
         } else {
-            args.contains("r-tui") && !args.contains("r-storage")
+            args.contains("Assess TUI") && !args.contains("Assess storage")
         }
     }));
     assert!(workers.iter().all(|(_, args)| args.contains("--mode plan")));
+    // The dependent task is told it is unblocked and gets the summary of
+    // what its dependency delivered, not its rounds.
+    let dependent = workers
+        .iter()
+        .find(|(_, args)| args.contains("Task: TUI"))
+        .unwrap();
+    assert!(dependent.1.contains("this task is unblocked"));
+    assert!(dependent.1.contains("fixed report") && !dependent.1.contains("first report"));
     let storage_verifier = &verifiers[0].1;
-    assert!(storage_verifier.contains("r-storage") && !storage_verifier.contains("r-tui"));
+    assert!(
+        storage_verifier.contains("Assess storage") && !storage_verifier.contains("Assess TUI")
+    );
     assert!(
         !verifiers[1].1.contains("--conversation verifier"),
         "a verifier starts fresh in the next round"
@@ -402,7 +412,7 @@ fn a_plan_runs_worker_verifier_pairs_and_reports_back() {
         .collect();
     assert_eq!(reviews, [false, true], "one plan review, then one audit");
     let tui_verifier = &verifiers.last().unwrap().1;
-    assert!(tui_verifier.contains("r-tui") && !tui_verifier.contains("r-storage"));
+    assert!(tui_verifier.contains("Assess TUI") && !tui_verifier.contains("Assess storage"));
 }
 
 #[test]
@@ -461,7 +471,7 @@ fn one_review_sends_all_draft_comments_to_a_single_turn() {
 }
 
 #[test]
-fn malformed_plan_json_is_corrected_automatically_with_a_finite_retry_limit() {
+fn a_malformed_or_missing_plan_is_corrected_within_the_turn_with_a_finite_retry_limit() {
     for (persistent, missing) in [(false, false), (true, false), (false, true), (true, true)] {
         let dir = tempfile::tempdir().unwrap();
         let (codex, agy) = fake_clis(dir.path());
@@ -498,11 +508,10 @@ if not os.path.exists('format-error-sent') or {persistent}:
         core.send(&conversation.id, "Assess storage and TUI")
             .unwrap();
         wait_idle(&core, &conversation.id);
-        let repairs = core
-            .store
-            .messages_by(&conversation.id, "plan-format-repair", 0)
-            .unwrap();
-        assert_eq!(repairs.len(), if persistent { 2 } else { 1 });
+        // The gateway refuses the result within the turn; the agent is asked
+        // again twice, then the turn ends without a plan.
+        let refused = std::fs::read_to_string(dir.path().join("codex.rejections")).unwrap();
+        assert_eq!(refused.lines().count(), if persistent { 3 } else { 1 });
         let plan = core.store.latest_plan(&conversation.id).unwrap();
         if persistent {
             assert!(plan.is_empty());
@@ -521,83 +530,69 @@ if not os.path.exists('format-error-sent') or {persistent}:
     }
 }
 
+/// A planner can only end its turn by submitting a plan, so after a restart
+/// the one answer still waiting for repair is a requirements analysis that
+/// lost its ledger.
 #[test]
-fn restart_recovers_invalid_or_missing_plans_without_a_new_user_message() {
-    for (answer, analyst_failed) in [
-        ("```plan\n{broken JSON}\n```", false),
-        ("```ledger\n{\"entries\":[]}\n```", false),
-        ("I will prepare the plan.", false),
-        (
-            r#"```plan
-{"tasks":[{"id":"t1","title":"Inspect","goal":"Inspect the project","kind":"analysis","verifier":{"focus":"Check findings"}}]}
-```"#,
-            true,
-        ),
-    ] {
-        use antislop::lean::store::{Store, TurnStatus};
-        use serde_json::json;
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("state");
-        std::fs::create_dir(&state).unwrap();
-        std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700))
-            .unwrap();
-        let (codex, agy) = fake_clis(dir.path());
-        let store = Store::open(&state.join("core.db")).unwrap();
-        let conversation = store
-            .create_conversation(dir.path().to_str().unwrap())
-            .unwrap();
-        let message = store
-            .add_message(&conversation.id, "user", "Assess storage and TUI")
-            .unwrap();
-        store
-            .interview_summary(&conversation.id, "Assess storage and TUI", message.seq)
-            .unwrap();
-        let message = store.approve_requirements(&conversation.id).unwrap();
-        let turn = store
-            .start_turn(&conversation.id, "planner", "codex", message.seq, None)
-            .unwrap();
-        store.set_session(&turn.id, "orch").unwrap();
-        store
-            .append_event(
-                &conversation.id,
-                Some(&turn.id),
-                None,
-                "agent_final",
-                &json!({"text":answer}),
-            )
-            .unwrap();
-        store.finish_turn(&turn.id, TurnStatus::Done, None).unwrap();
-        if analyst_failed {
-            store
-                .append_event(
-                    &conversation.id,
-                    None,
-                    None,
-                    "requirements_failed",
-                    &json!({"error":"missing ledger JSON block"}),
-                )
-                .unwrap();
-        }
-        drop(store);
-        let core = Core::open(&state, config(&codex, &agy)).unwrap();
-        wait_idle(&core, &conversation.id);
-        assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
-        assert_eq!(
-            core.store
-                .messages_by(
-                    &conversation.id,
-                    if analyst_failed {
-                        "requirements-format-repair"
-                    } else {
-                        "plan-format-repair"
-                    },
-                    0
-                )
-                .unwrap()
-                .len(),
-            1
-        );
-    }
+fn restart_recovers_a_plan_whose_requirements_failed_without_a_new_user_message() {
+    use antislop::lean::store::{Store, TurnStatus};
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    std::fs::create_dir(&state).unwrap();
+    std::fs::set_permissions(&state, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let store = Store::open(&state.join("core.db")).unwrap();
+    let conversation = store
+        .create_conversation(dir.path().to_str().unwrap())
+        .unwrap();
+    let message = store
+        .add_message(&conversation.id, "user", "Assess storage and TUI")
+        .unwrap();
+    store
+        .interview_summary(&conversation.id, "Assess storage and TUI", message.seq)
+        .unwrap();
+    let message = store.approve_requirements(&conversation.id).unwrap();
+    let turn = store
+        .start_turn(&conversation.id, "planner", "codex", message.seq, None)
+        .unwrap();
+    store.set_session(&turn.id, "orch").unwrap();
+    let plan = json!({"type": "plan", "document": "Plan", "tasks": [
+        {"id": "t1", "title": "Inspect", "goal": "Inspect the project", "kind": "analysis"}]});
+    store
+        .append_event(
+            &conversation.id,
+            Some(&turn.id),
+            None,
+            "agent_final",
+            &json!({"text": plan.to_string()}),
+        )
+        .unwrap();
+    store.finish_turn(&turn.id, TurnStatus::Done, None).unwrap();
+    store
+        .append_event(
+            &conversation.id,
+            None,
+            None,
+            "requirements_failed",
+            &json!({"error":"the requirements analyst ended its turn without submit_ledger"}),
+        )
+        .unwrap();
+    drop(store);
+    let core = Core::open(&state, config(&codex, &agy)).unwrap();
+    wait_idle(&core, &conversation.id);
+    assert!(
+        !core.store.latest_plan(&conversation.id).unwrap().is_empty(),
+        "{:?}",
+        core.store.events_since(&conversation.id, 0, 2000).unwrap()
+    );
+    assert_eq!(
+        core.store
+            .messages_by(&conversation.id, "requirements-format-repair", 0)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -620,13 +615,8 @@ fn repairing_json_after_the_ledger_mapping_reuses_the_requirements() {
     wait_idle(&core, &conversation.id);
     assert!(dir.path().join("post-ledger-format-error").exists());
     assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
-    assert_eq!(
-        core.store
-            .messages_by(&conversation.id, "plan-format-repair", 0)
-            .unwrap()
-            .len(),
-        1
-    );
+    let refused = std::fs::read_to_string(dir.path().join("codex.rejections")).unwrap();
+    assert_eq!(refused.lines().count(), 1, "{refused}");
     let events = core.store.events_since(&conversation.id, 0, 2000).unwrap();
     for (role, expected) in [
         ("requirements-extraction-analyst", 1),
@@ -659,14 +649,18 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
     import re
     base, snapshot = re.search(r'Current task contracts for plan ([-\w]+):\n([^\n]+)', prompt).groups()
     snapshot = json.loads(snapshot)
-    revision = snapshot['base_revision']
     snapshot = snapshot['tasks']
-    extra = dict(snapshot[0])
-    extra.update(id='extra', title='Extra', goal='Assess additional details', kind='analysis', writes=False, depends_on=['t1'])
-    gate = dict(next(task for task in snapshot if task['id'] == 't2'))
+    planned = ('id', 'title', 'goal', 'kind', 'depends_on', 'scope', 'writes', 'covers', 'section', 'summary')
+    def planned_task(task):
+        return {key: task[key] for key in planned if task.get(key) is not None}
+    first = snapshot[0]
+    extra = planned_task(first)
+    extra.update(id='extra', title='Extra', goal='Assess additional details', kind='analysis', writes=False, depends_on=['t1'],
+                 covers=first.get('requirement_ids', []) + first.get('criterion_ids', []))
+    gate = planned_task(next(task for task in snapshot if task['id'] == 't2'))
     gate['depends_on'] = ['extra']
     import os,urllib.request
-    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'submit_plan_revision','arguments':{'turn':os.environ['FIXTURE_TURN'],'request_key':'insert-extra','revision':{'plan':base,'base_revision':revision,'reason':'Add focused analysis before downstream verification','tasks':[extra,gate],'retire':[]}}}}
+    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'revise_plan','arguments':{'turn':os.environ['FIXTURE_TURN'],'reason':'Add focused analysis before downstream verification','tasks':[extra,gate],'retire':[]}}}
     req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
     reply=json.load(urllib.request.urlopen(req,timeout=10))
     assert not reply['result'].get('isError'),reply

@@ -1,12 +1,13 @@
 use super::*;
+use serde_json::json;
 
 #[test]
 fn plans_that_write_get_the_required_quality_gates() {
-    let answer = "```plan\n{\"tasks\":[\
-            {\"id\":\"t1\",\"title\":\"A\",\"goal\":\"g\",\"scope\":[\"src/a.rs\"],\"writes\":true,\"kind\":\"implementation\",\"verifier\":{\"focus\":\"f\"}},\
-            {\"id\":\"t2\",\"title\":\"T\",\"goal\":\"g\",\"scope\":[\"tests/\"],\"writes\":true,\"depends_on\":[\"t1\"],\"kind\":\"testing\",\"verifier\":{\"focus\":\"f\"}}\
-        ]}\n```";
-    let tasks = parse_plan(answer).1.unwrap().unwrap();
+    let tasks = submitted(json!({"tasks":[
+        {"id":"t1","title":"A","goal":"g","scope":["src/a.rs"],"kind":"implementation"},
+        {"id":"t2","title":"T","goal":"g","scope":["tests/"],"depends_on":["t1"],"kind":"testing"}
+    ]}))
+    .unwrap();
     let ids: Vec<_> = missing_quality_agents(&tasks)
         .iter()
         .map(|a| a.id)
@@ -52,22 +53,21 @@ fn plans_that_write_get_the_required_quality_gates() {
     assert!(missing_quality_agents(&full).is_empty());
 
     // A read-only plan needs no gates.
-    let read_only = "```plan\n{\"tasks\":[{\"id\":\"t1\",\"title\":\"a\",\"goal\":\"b\",\
-            \"kind\":\"analysis\",\"verifier\":{\"focus\":\"c\"}}]}\n```";
-    let tasks = parse_plan(read_only).1.unwrap().unwrap();
+    let tasks =
+        submitted(json!({"tasks":[{"id":"t1","title":"a","goal":"b","kind":"analysis"}]})).unwrap();
     assert_eq!(with_required_agents(tasks).len(), 1);
 }
 
 #[test]
 fn plans_with_unknown_dependencies_are_rejected() {
-    let answer = "```plan\n{\"tasks\":[{\"id\":\"t1\",\"title\":\"a\",\"goal\":\"b\",\
-            \"depends_on\":[\"t9\"],\"kind\":\"analysis\",\"verifier\":{\"focus\":\"c\"}}]}\n```";
-    let (_, plan) = parse_plan(answer);
-    assert!(plan.unwrap().unwrap_err().to_string().contains("t9"));
-    assert!(parse_plan("no plan here").1.is_none());
-    let looped = "```plan\n{\"tasks\":[{\"id\":\"t1\",\"title\":\"a\",\"goal\":\"b\",\
-            \"depends_on\":[\"t1\"],\"kind\":\"analysis\",\"verifier\":{\"focus\":\"c\"}}]}\n```";
-    assert!(parse_plan(looped).1.unwrap().is_err());
+    let task = |depends_on: &str| json!({"tasks":[{"id":"t1","title":"a","goal":"b","depends_on":[depends_on],"kind":"analysis"}]});
+    assert!(
+        submitted(task("t9"))
+            .unwrap_err()
+            .to_string()
+            .contains("t9")
+    );
+    assert!(submitted(task("t1")).is_err());
 }
 
 #[test]

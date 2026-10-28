@@ -206,7 +206,8 @@ fn execute_code_review(core: &Core, work: &CodeReview) -> std::result::Result<Ve
         .turn(setup, &work.cancel, |_| review_prompt(work))
         .map_err(|error| error.to_string())?;
     match answer {
-        Some(answer) => Ok(tasks::parse_verdict(&answer)),
+        Some(answer) => super::turn_result::TurnResult::review_verdict(&answer)
+            .ok_or_else(|| "the code review ended without a review".to_owned()),
         None => Err(review_failure(core, work)),
     }
 }

@@ -284,6 +284,14 @@ fn codex(command: &mut CommandBuilder, spec: &Spec, gateway: &Gateway, read_only
         format!("{prefix}.url={}", toml_string(gateway.url())),
         format!("{prefix}.bearer_token_env_var={}", toml_string(TOKEN_ENV)),
         format!("{prefix}.default_tools_approval_mode=\"approve\""),
+        // The user trusted this project in antislop before any agent ran;
+        // without this Codex asks again in every new checkout and the turn
+        // waits on its dialog. Given per launch, never saved: an inline
+        // table, as Codex splits a dotted key at the dots of the path.
+        format!(
+            "projects={{{}={{trust_level=\"trusted\"}}}}",
+            toml_string(&spec.cwd.to_string_lossy())
+        ),
     ] {
         command.args(["-c", &setting]);
     }
@@ -481,6 +489,11 @@ mod tests {
             args.iter()
                 .any(|a| a.starts_with("mcp_servers.antislop.url="))
         );
+        let trusted = format!(
+            "projects={{{}={{trust_level=\"trusted\"}}}}",
+            toml_string(&codex.cwd.to_string_lossy())
+        );
+        assert!(args.contains(&trusted), "{args:?}");
         assert!(
             !args.iter().any(|a| a.contains(gateway.token())),
             "the token travels in the environment, not in argv"

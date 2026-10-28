@@ -215,10 +215,9 @@ impl Core {
                 turn_result::TurnResult::Completed {
                     report,
                     summary,
-                    outputs,
                     selection,
                 } => (
-                    turn_result::report_with_deliverables(&report, &outputs, selection.as_ref()),
+                    turn_result::report_with_deliverables(&report, selection.as_ref()),
                     summary,
                 ),
                 turn_result::TurnResult::NeedsInput {

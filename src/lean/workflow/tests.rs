@@ -170,7 +170,7 @@ fn malformed_requirements_retry_is_idempotent_and_bounded() {
                 None,
                 None,
                 "requirements_failed",
-                &serde_json::json!({"error":"missing ledger JSON block"}),
+                &serde_json::json!({"error":"the requirements analyst ended its turn without submit_ledger"}),
             )
             .unwrap();
         assert_eq!(

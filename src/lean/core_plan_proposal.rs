@@ -5,6 +5,37 @@ mod helpers;
 use super::core_plan_helpers::{finalize_plan, planning_gaps};
 use super::*;
 
+/// The plan the runtime runs: `specs` with its options and quality gates, if
+/// it fits the policy and every task can be carried out as written. The
+/// error is what the planner must change; `submit_plan` returns it at once.
+pub(in crate::lean) fn checked_plan(
+    specs: &[TaskContract],
+    config: &Config,
+) -> std::result::Result<Vec<TaskContract>, String> {
+    if specs.len() > config.policy.max_tasks {
+        return Err(format!(
+            "The plan has {} tasks; at most {} are allowed. Group the work by module or responsibility into fewer, larger tasks (the runtime adds options and quality gates itself) and submit the complete plan again.",
+            specs.len(),
+            config.policy.max_tasks
+        ));
+    }
+    let specs = finalize_plan(
+        specs.to_vec(),
+        config.policy.required_gates,
+        config.policy.local_options,
+    );
+    let findings = feasibility::check(&specs);
+    let blocking: Vec<_> = findings
+        .iter()
+        .filter(|finding| finding.severity == feasibility::Severity::Block)
+        .collect();
+    if blocking.is_empty() {
+        Ok(specs)
+    } else {
+        Err(feasibility::message(&blocking))
+    }
+}
+
 impl Core {
     /// Stores the plan and has it checked. A plan the verifier sends back
     /// goes back to the orchestrator while review confirms progress; otherwise it
@@ -20,43 +51,30 @@ impl Core {
         cancel: &AtomicBool,
     ) -> Result<()> {
         let PlanProposal { config, specs } = proposal;
-        if specs.len() > config.policy.max_tasks {
-            let message = format!(
-                "The plan has {} tasks; at most {} are allowed. Group the work by module or responsibility into fewer, larger tasks (the runtime adds options and quality gates itself) and return the complete plan again.",
-                specs.len(),
-                config.policy.max_tasks
-            );
-            if self.store.count_since_user(conversation, PLAN_LINT)?
-                < tasks::FORMAT_REPAIR_ATTEMPTS as usize
-            {
-                self.store.add_message(conversation, PLAN_LINT, &message)?;
-            } else {
-                self.notice(conversation, &message);
-            }
+        let Some(run) = self.planning_requirements(conversation, addressed, cancel)? else {
             return Ok(());
-        }
-        let specs = finalize_plan(
-            specs.to_vec(),
-            config.policy.required_gates,
-            config.policy.local_options,
-        );
-        let findings = feasibility::check(&specs);
-        let blocking: Vec<_> = findings
-            .iter()
-            .filter(|finding| finding.severity == feasibility::Severity::Block)
-            .collect();
-        if !blocking.is_empty() {
-            let message = feasibility::message(&blocking);
-            if self.store.count_since_user(conversation, PLAN_LINT)?
-                < tasks::FORMAT_REPAIR_ATTEMPTS as usize
-            {
-                self.store.add_message(conversation, PLAN_LINT, &message)?;
-            } else {
-                self.notice(conversation, &message);
-            }
+        };
+        // Options and quality gates copy the links of the tasks they serve,
+        // so `covers` is resolved before they are added.
+        let Some(specs) = self.covered_plan(conversation, &run, specs)? else {
             return Ok(());
-        }
-        let Some(plan) = self.prepare_plan(conversation, &specs, addressed, cancel)? else {
+        };
+        // `submit_plan` already refused a plan that fails these checks; a
+        // stored answer from before a configuration change can still fail.
+        let specs = match checked_plan(&specs, config) {
+            Ok(specs) => specs,
+            Err(message) => {
+                if self.store.count_since_user(conversation, PLAN_LINT)?
+                    < tasks::FORMAT_REPAIR_ATTEMPTS as usize
+                {
+                    self.store.add_message(conversation, PLAN_LINT, &message)?;
+                } else {
+                    self.notice(conversation, &message);
+                }
+                return Ok(());
+            }
+        };
+        let Some(plan) = self.prepare_plan(conversation, &specs, &run)? else {
             return Ok(());
         };
         let review = self.review_plan(conversation, project, &plan, &specs, config, cancel)?;

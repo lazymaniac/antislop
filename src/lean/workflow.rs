@@ -1,7 +1,6 @@
 //! Durable interview checkpoint. Every conversation starts in its interview.
 use super::{Message, Store, now_ms};
 use crate::{Result, require};
-use repair::{queue_plan_repair, repair_is_needed};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 
@@ -36,22 +35,6 @@ impl Store {
         let queued = repair::queue_requirements_format_repair(&tx, conversation)?;
         tx.commit()?;
         Ok(queued)
-    }
-
-    pub fn queue_plan_format_repair(
-        &self,
-        conversation: &str,
-        turn_id: &str,
-        error: &str,
-    ) -> Result<bool> {
-        let mut db = self.db();
-        let tx = db.transaction()?;
-        if !repair_is_needed(&tx, conversation, turn_id)? {
-            return Ok(false);
-        }
-        queue_plan_repair(&tx, conversation, turn_id, error)?;
-        tx.commit()?;
-        Ok(true)
     }
 
     pub fn workflow(&self, conversation: &str) -> Result<Workflow> {

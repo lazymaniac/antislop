@@ -39,9 +39,21 @@ impl Store {
         let role: String =
             tx.query_row("SELECT role FROM turns WHERE id=?1", [turn], |r| r.get(0))?;
         tx.execute("INSERT INTO agent_questions(id,conversation_id,turn_id,request_key,question,state) VALUES(?1,?2,?3,?4,?5,'pending')", params![id,conversation,turn,key,question])?;
-        tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'runtime',?2,?3)",params![conversation,format!("Agent question {id}, source {role}, turn {turn}: {question}\nUse reply_to_agent to answer. An answer does not change the task contract or permissions."),now_ms()])?;
+        tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'runtime',?2,?3)",params![conversation,format!("Agent question {id}, source {role}, turn {turn}: {question}\nAnswer with answer_agent, or hand it to the user with defer_to_user. An answer does not change the task contract or permissions."),now_ms()])?;
         tx.commit()?;
         Ok(id)
+    }
+
+    /// The first question asked in `turn` that still waits for an answer.
+    pub(in crate::lean) fn open_question_of_turn(&self, turn: &str) -> Result<Option<String>> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT id FROM agent_questions WHERE turn_id=?1 AND state IN ('pending','awaiting_user') ORDER BY rowid LIMIT 1",
+                [turn],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     pub(in crate::lean) fn agent_question(
@@ -55,7 +67,7 @@ impl Store {
             "SELECT turn_id,state,answer FROM agent_questions WHERE conversation_id=?1 AND id=?2",
             params![conversation, request],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        ).optional()?.ok_or_else(|| Error::Invalid("request: unknown question ID in this conversation; use the request ID returned by ask_orchestrator, not question text".into()))?;
+        ).optional()?.ok_or_else(|| Error::Invalid("request: unknown question ID in this conversation; use the request ID the agent's question message names, not question text".into()))?;
         if let Some(current) = turn
             && current != owner
         {
@@ -80,7 +92,7 @@ impl Store {
         let (state, previous): (String, Option<String>) = tx.query_row(
             "SELECT state,answer FROM agent_questions WHERE conversation_id=?1 AND id=?2",
             params![conversation, request], |r| Ok((r.get(0)?, r.get(1)?)),
-        ).optional()?.ok_or_else(|| Error::Invalid("request: unknown question ID in this conversation; use the request ID returned by ask_orchestrator".into()))?;
+        ).optional()?.ok_or_else(|| Error::Invalid("request: unknown question ID in this conversation; use the request ID the agent's question message names".into()))?;
         crate::require(
             state != "invalidated",
             "question was invalidated; await a fresh task turn",
@@ -126,6 +138,25 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+
+    /// The result the latest turn of `role` recorded through its tool.
+    pub(in crate::lean) fn latest_role_result(
+        &self,
+        conversation: &str,
+        role: &str,
+    ) -> Result<Option<super::super::turn_result::TurnResult>> {
+        let encoded: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT r.result FROM agent_results r JOIN turns t ON t.id=r.turn_id WHERE t.conversation_id=?1 AND t.role=?2 ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",
+                params![conversation, role],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(encoded
+            .map(|encoded| serde_json::from_str(&encoded))
+            .transpose()?)
+    }
 }
 
 impl Store {
@@ -147,7 +178,7 @@ impl Store {
         let changed = self.db().execute("UPDATE agent_questions SET state='awaiting_user',answer=?3 WHERE conversation_id=?1 AND id=?2 AND state IN ('pending','awaiting_user')",params![conversation,request,explanation])?;
         crate::require(
             changed == 1,
-            "question is not awaiting a decision; answered or invalidated worker questions cannot be reopened. Ask the user with a fenced question block in your final report instead",
+            "question is not awaiting a decision; answered or invalidated worker questions cannot be reopened. Ask the user with ask_user instead",
         )?;
         Ok(serde_json::json!({"request":request,"state":"awaiting_user","answer":explanation}))
     }
@@ -159,7 +190,7 @@ impl Store {
     ) -> Result<String> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let question: String = tx.query_row("SELECT q.state FROM agent_questions q JOIN turn_scopes s ON s.turn_id=q.turn_id WHERE q.id=?1 AND s.task_id=?2",params![request,task.id],|r|r.get(0)).optional()?.ok_or_else(|| Error::Invalid("request: no question belongs to this task; use the request ID returned by ask_orchestrator".into()))?;
+        let question: String = tx.query_row("SELECT q.state FROM agent_questions q JOIN turn_scopes s ON s.turn_id=q.turn_id WHERE q.id=?1 AND s.task_id=?2",params![request,task.id],|r|r.get(0)).optional()?.ok_or_else(|| Error::Invalid("request: no question belongs to this task; use the request ID the agent's question message names".into()))?;
         crate::require(
             matches!(question.as_str(), "pending" | "awaiting_user" | "answered"),
             "question was invalidated",

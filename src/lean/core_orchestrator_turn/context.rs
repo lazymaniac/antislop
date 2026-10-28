@@ -65,11 +65,9 @@ fn append_comment_instructions(context: &mut String) {
          needed; otherwise explain your decision or ask a concrete question. Do not \
          merely acknowledge or wait for plan acceptance. Only comments included in \
          this turn can be addressed.\n\n\
-         End your answer with a ```comments block naming the comments your revised plan \
-         took care of, for example \
-         ```comments {\"addressed\":[{\"id\":3,\"how\":\"what changed\"}]}```. \
-         A comment you only answered, or that needs the user's decision, stays out of \
-         it and stays open.\n",
+         Name the comments your answer or revised plan took care of in `addressed` of \
+         finish_turn or submit_plan, each with its id and how. A comment you only \
+         answered, or that needs the user's decision, stays out of it and stays open.\n",
     );
 }
 

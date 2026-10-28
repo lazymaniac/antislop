@@ -88,6 +88,7 @@ fn make_core(state: &Path, config: Config, store: Store, lock: std::fs::File) ->
         graph_updates: Mutex::new(()),
         revising: Mutex::new(std::collections::BTreeSet::new()),
         revision_jobs: Mutex::new(HashMap::new()),
+        revision_views: Mutex::new(HashMap::new()),
         agent_reviews: Mutex::new(HashMap::new()),
         task_cancels: Mutex::new(HashMap::new()),
         task_restarts: Mutex::new(HashMap::new()),
@@ -135,38 +136,10 @@ fn restore_conversation(core: &Arc<Core>, conversation: &str) -> Result<()> {
     if core.autonomous(conversation)? {
         core.store.finish_interview(conversation)?;
     }
-    queue_format_repair(core, conversation)?;
     if core.unanswered(conversation)?.is_none() {
         core.store.queue_requirements_format_repair(conversation)?;
     }
     wake_pending_work(core, conversation)
-}
-
-fn queue_format_repair(core: &Arc<Core>, conversation: &str) -> Result<()> {
-    let workflow = core.store.workflow(conversation)?;
-    if workflow.interviewing() {
-        return Ok(());
-    }
-    let Some(turn) = core.store.last_orchestration_turn(conversation)? else {
-        return Ok(());
-    };
-    if turn.status != TurnStatus::Done {
-        return Ok(());
-    }
-    let Ok(Some(answer)) = core.store.turn_final_answer(conversation, &turn.id) else {
-        return Ok(());
-    };
-    let required = turn.role == PLANNER && core.store.awaiting_first_plan(conversation)?;
-    let plan = if required {
-        Some(tasks::parse_required_plan(&answer).1)
-    } else {
-        tasks::parse_plan(&answer).1
-    };
-    if let Some(Err(error)) = plan {
-        core.store
-            .queue_plan_format_repair(conversation, &turn.id, &error.to_string())?;
-    }
-    Ok(())
 }
 
 fn wake_pending_work(core: &Arc<Core>, conversation: &str) -> Result<()> {

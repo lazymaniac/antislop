@@ -3,6 +3,8 @@
 mod runtime;
 mod storage;
 
+pub use runtime::{AuditAssessment, AuditEvidence};
+
 use crate::{Result, require};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -208,7 +210,7 @@ pub struct Assessment {
     pub note: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Extraction {
     pub run_id: String,
@@ -216,36 +218,9 @@ pub struct Extraction {
     pub entries: Vec<EntrySpec>,
 }
 
-/// Read-only agent output cannot name its own author/session.
-pub fn parse_block<T: serde::de::DeserializeOwned>(answer: &str, tag: &str) -> Result<T> {
-    let open = format!("```{tag}");
-    let mut body = None;
-    let mut lines = answer.lines();
-    while let Some(line) = lines.next() {
-        let line = line.trim();
-        let matches = line == open
-            || line.strip_prefix(&open).is_some_and(|suffix| {
-                suffix.starts_with(char::is_whitespace)
-                    && suffix.trim().eq_ignore_ascii_case("json")
-            });
-        if !matches {
-            continue;
-        }
-        let mut candidate = Vec::new();
-        let mut closed = false;
-        for line in lines.by_ref() {
-            if line.trim() == "```" {
-                closed = true;
-                break;
-            }
-            candidate.push(line);
-        }
-        body = closed.then(|| candidate.join("\n"));
-    }
-    Ok(serde_json::from_str(&body.ok_or_else(|| {
-        crate::Error::Invalid(format!("missing {tag} JSON block"))
-    })?)?)
-}
+/// The failure of a requirements analysis that ended without its ledger;
+/// the workflow repairs it once per failure.
+pub const MISSING_LEDGER: &str = "the requirements analyst ended its turn without submit_ledger";
 
 /// Approvals bind semantic edits, immutable version identities and their impact;
 /// source documents are never rehashed as part of an approval token.
@@ -253,6 +228,55 @@ pub fn diff_hash(diff: &LedgerDiff) -> Result<String> {
     Ok(crate::hash(serde_json::to_vec(
         &serde_json::json!({"run_id":diff.run_id,"from_revision":diff.from_revision,"to_revision":diff.to_revision,"before":diff.before.iter().map(|e|serde_json::json!({"id":e.spec.id,"version":e.version,"spec_revision":e.spec_revision})).collect::<Vec<_>>(),"after":diff.after,"affected_tasks":diff.affected_tasks}),
     )?))
+}
+
+/// Fills `requirement_ids` and `criterion_ids` from what the planner named in
+/// `covers`: a criterion brings its requirement along, a requirement stands
+/// for itself. Links already present (a stored plan) are kept when `covers`
+/// is empty.
+pub(crate) fn resolve_covers(
+    spec: &mut crate::lean::tasks::TaskContract,
+    entries: &[LedgerEntry],
+) -> Result<()> {
+    if spec.covers.is_empty() {
+        if spec.requirement_ids.is_empty() {
+            return Err(crate::Error::Invalid(format!(
+                "task {}: `covers` is empty; name the acceptance criteria (or requirements) it delivers",
+                spec.id
+            )));
+        }
+        return Ok(());
+    }
+    let active: Vec<_> = entries
+        .iter()
+        .filter(|e| e.spec.disposition == Disposition::Active)
+        .collect();
+    let (mut requirements, mut criteria) = (Vec::new(), Vec::new());
+    for id in &spec.covers {
+        if let Some(entry) = active.iter().find(|e| e.spec.id == *id) {
+            push_unique(&mut requirements, &entry.spec.id);
+        } else if let Some(entry) = active
+            .iter()
+            .find(|e| e.spec.criteria.iter().any(|c| c.id == *id))
+        {
+            push_unique(&mut requirements, &entry.spec.id);
+            push_unique(&mut criteria, id);
+        } else {
+            return Err(crate::Error::Invalid(format!(
+                "task {}: covers names {id}, which is neither an active requirement nor one of its criteria",
+                spec.id
+            )));
+        }
+    }
+    spec.requirement_ids = requirements;
+    spec.criterion_ids = criteria;
+    Ok(())
+}
+
+fn push_unique(ids: &mut Vec<String>, id: &str) {
+    if !ids.iter().any(|known| known == id) {
+        ids.push(id.to_owned());
+    }
 }
 
 /// Shared by initial plans and edits of the running task graph.

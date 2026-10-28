@@ -41,7 +41,6 @@ mod core_prompt_helpers;
 pub mod daemon;
 pub mod diff;
 mod feasibility;
-pub mod feedback;
 pub mod git;
 pub mod interview;
 mod launch;
@@ -220,6 +219,9 @@ pub struct Core {
     graph_updates: Mutex<()>,
     revising: Mutex<std::collections::BTreeSet<String>>,
     revision_jobs: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Per conversation, the plan and revision its orchestrator was last
+    /// shown; `revise_plan` edits exactly that graph.
+    revision_views: Mutex<HashMap<String, Option<(String, i64)>>>,
     agent_reviews: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// Active task processes can be cancelled independently.
     task_cancels: Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,

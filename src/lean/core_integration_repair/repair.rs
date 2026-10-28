@@ -114,7 +114,7 @@ impl<'a> Repair<'a> {
              worktree. The runtime will use {} as the new base and independently verify your \
              repaired result before landing. Do not merge unrelated snapshot paths into your result.\n\
              Resolve mechanical conflicts yourself. If the versions represent an unclear product or \
-             behavior choice, do not guess or silently pick ours/theirs. Use ask_orchestrator with the conflicting intentions and alternatives. Save needs_input when a decision remains pending. Otherwise resolve the \
+             behavior choice, do not guess or silently pick ours/theirs. Use ask with the conflicting intentions and alternatives, and end with wait_for_answer when the decision remains pending. Otherwise resolve the \
              files and report what you preserved and how you tested it.",
             self.files.join(", "),
             self.base,

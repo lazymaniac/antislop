@@ -1,8 +1,8 @@
 //! Daemon-owned interactive agent sessions. Every agent is the provider's own
 //! CLI running in a terminal the daemon owns; people attach to that terminal
 //! and use the CLI as usual. The runtime types each turn's prompt into it and
-//! hears the answer back through one channel only: the `finish_turn` tool of
-//! the session's MCP gateway (`mcp.rs`).
+//! hears the answer back through one channel only: the result tools of the
+//! session's MCP gateway (`mcp.rs`).
 use super::terminal::{self, State};
 use super::{Core, agent, launch, mcp, store};
 use crate::{Error, Result, require};
@@ -427,7 +427,10 @@ impl Session {
                 }
             })
             .map_err(|error| {
-                if error.to_string().contains("finish_turn") {
+                if ["no accepted result", "result rejected"]
+                    .iter()
+                    .any(|cause| error.to_string().contains(cause))
+                {
                     invalid(format!(
                         "{error}; the terminal shows:\n{}",
                         terminal::tail(&self.screen, SCREEN_LINES)
@@ -497,13 +500,12 @@ impl Session {
 /// shape of the result for the agent's role is the tool's own schema.
 fn turn_text(turn: &str, prompt: &str) -> String {
     format!(
-        "{prompt}\n\n---\nWhen this turn is complete, call the `{}` tool of the MCP server \
-         `{}` as your last action, with turn = \"{turn}\" and your typed final result; stop only \
-         after receiving recorded=true. If rejected, correct the reported error and resubmit. \
-         For a saved pending question use type=needs_input with request set to the ID returned \
-         by ask_orchestrator, never question text.",
-        mcp::TOOL,
-        mcp::SERVER
+        "{prompt}\n\n---\nWhen this turn is complete, end it as your last action with the \
+         result tool of the MCP server `{}` that this prompt names (`{}` when it names none), \
+         with turn = \"{turn}\"; stop only after receiving recorded=true. If rejected, correct \
+         the reported error and call it again.",
+        mcp::SERVER,
+        mcp::TOOL
     )
 }
 

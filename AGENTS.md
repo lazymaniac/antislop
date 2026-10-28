@@ -11,7 +11,7 @@ This document specifies the rules, design constraints, and engineering practices
 - **Subsystems**:
   - `src/lean/`: The lean core runtime, SQLite event store, task DAG manager, daemon, and Git worktree coordinator.
   - `src/lean/tui/`: TUI implemented with `ratatui` and `crossterm`.
-  - `src/lean/native.rs`, `launch.rs`, `mcp.rs`, `terminal.rs`: every agent CLI (`claude`, `codex`, `opencode`, `agy`) runs interactively in a daemon-owned PTY; the prompt is typed into it and the result comes back only through the session's MCP `finish_turn` tool. Task agents ask the orchestrator using `ask_orchestrator` / `await_orchestrator`; only the orchestrator can reply or submit plan revisions. There is no JSON, event or transcript view of a session.
+  - `src/lean/native.rs`, `launch.rs`, `mcp.rs`, `terminal.rs`: every agent CLI (`claude`, `codex`, `opencode`, `agy`) runs interactively in a daemon-owned PTY; the prompt is typed into it and the result comes back only through the session's MCP tools, each role with its own (`complete`/`select`/`review` for task agents, `submit_plan`, `ask_user`, `submit_requirements`, `submit_ledger`, `submit_audit`, `finish_turn`, …; see `allowed_tools` in `mcp.rs`). Results are validated within the turn; there are no fenced result blocks. Task agents ask the orchestrator using `ask` / `wait_for_answer`; only the orchestrator can answer (`answer_agent`, `defer_to_user`) or revise plans (`revise_plan`). There is no JSON, event or transcript view of a session.
   - `src/lean/agent.rs` & `src/lean/cli.rs`: Run specification and the command line frontend.
 
 ---

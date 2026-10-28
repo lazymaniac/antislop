@@ -23,7 +23,7 @@ fn load_planning_context<T>(
     run.map(render).transpose()
 }
 
-const LEDGER_INSTRUCTIONS: &str = "\nThe runtime binds this plan to the active requirements run. Each task must include requirement_ids and criterion_ids. Every task serves at least one active requirement. Cover every mandatory criterion across the tasks; supporting tasks need not cover every criterion themselves. Return the complete fenced plan block. Requirements extraction and ledger corrections are performed by the runtime requirements analyst, including after requirements review rejection; do not emit ledger blocks. Resolve task planning findings in the plan. Do not ask the user to copy run or option identifiers.\n";
+const LEDGER_INSTRUCTIONS: &str = "\nThe runtime binds this plan to the active requirements run. In each task's `covers`, name the acceptance criterion ids it delivers; a supporting task that delivers no criterion names the requirement id it serves instead. Every task covers something. Cover every mandatory criterion across the tasks; supporting tasks need not cover every criterion themselves. Requirements extraction and corrections are performed by the runtime requirements analyst, including after requirements review rejection; do not extract or edit requirements yourself. Resolve task planning findings in the plan. Do not ask the user to copy run or option identifiers.\n";
 
 #[cfg(test)]
 mod tests {

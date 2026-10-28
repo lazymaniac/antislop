@@ -445,8 +445,8 @@ fn test_blocked_task_prevents_premature_audit() {
         .collect();
     assert_eq!(reports.len(), 1, "{messages:?}");
     let text = &reports[0].text;
-    assert!(text.contains("reply_to_agent"));
-    assert!(text.contains("submit_plan_revision"));
+    assert!(text.contains("answer_agent"));
+    assert!(text.contains("revise_plan"));
 }
 
 #[test]

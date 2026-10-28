@@ -1,6 +1,8 @@
 # LEDGER_FIXTURE_PROTOCOL
 import re as _lr, os as _lo, uuid as _lu
 _ledger_prompt = prompt
+# A result the gateway refused comes back ahead of the prompt.
+_ledger_head = _lr.sub(r'^\w+ was refused: .*?\n\n', '', prompt, count=1, flags=_lr.S)
 _ledger_json = json.dumps
 _ledger_context = _ledger_prompt.rsplit('Run and ledger inputs (stable identities; keep their versions):\n',1)
 _ledger_run = None
@@ -23,7 +25,7 @@ def _ledger_emit(answer):
     sys.exit(0)
 def _ledger_block(tag, value):
     return '```' + tag + '\n' + _ledger_json(value) + '\n```'
-if _ledger_prompt.startswith('Act as requirements analyst before planning.'):
+if _ledger_head.startswith('Act as requirements analyst before planning.'):
     entries = []
     if not _ledger_entries:
         # Plan revisions also include a rendered-plan document before user sources.
@@ -32,14 +34,9 @@ if _ledger_prompt.startswith('Act as requirements analyst before planning.'):
         full = _lr.split(r'\n(?:Full user source |Interview question context |Interview summary |Run and ledger inputs)', _ledger_prompt.split(marker,1)[1], maxsplit=1)[0].rstrip('\n')
         entries = [{'id':'fixture-requirement','source':{'source_id':source['id'],'start':0,'end':len(full.encode())},'interpretation':'Deliver the fixture user request','criteria':[{'id':'fixture.accept','text':'Independently inspect the actual fixture result','mandatory':True}]}]
     _ledger_emit(_ledger_block('ledger',{'run_id':_ledger_run['id'],'expected_spec_revision':_ledger_run['spec_revision'],'entries':entries}))
-if _ledger_prompt.startswith(('Independently compare the requirement entries','Independently verify implementation options')):
-    _reject_options = _ledger_prompt.startswith('Independently verify implementation options') and _lo.path.exists(_lo.path.join(_lo.path.dirname(sys.argv[0]),'reject-options'))
-    _ledger_emit(_ledger_block('verdict',{'approved':not _reject_options,'findings':[{'issue':'Choice lacks adequate evidence'}] if _reject_options else []}))
-if _ledger_prompt.startswith('Compare implementation options before task planning.'):
-    _ledger_emit(_ledger_block('options',{'run_id':_ledger_run['id'],'spec_revision':_ledger_run['spec_revision'],'criteria':['Coverage','Complexity'],'alternatives':[{'id':'fixture-direct','approach':'Inspect the fixture source directly','evaluations':['Covers the fixture request','Uses the existing fixture tooling'],'risks':'May miss indirect dependencies','validation':'Check actual fixture output'},{'id':'fixture-index','approach':'Build an index before inspecting fixture source','evaluations':['Covers the fixture request through an index','Adds an indexing step'],'risks':'Index can become stale','validation':'Compare index with fixture source'}],'selected':'fixture-direct','rationale':'Direct inspection covers this small fixture without maintaining an extra index.'}))
-if _ledger_prompt.startswith('Audit the integrated project'):
+if _ledger_head.startswith('Audit the integrated project'):
     _ledger_emit(_ledger_block('compliance',{'approved':False,'findings':[{'issue':'No integrated evidence supplied by this worker-only fixture'}],'evidence':[]}))
-if _ledger_prompt.startswith('Verify this audit independently'):
+if _ledger_head.startswith('Verify this audit independently'):
     _ledger_emit(_ledger_block('compliance_verdict',{'approved':False,'note':'Worker-only fixture deliberately leaves integrated evidence open','assessments':[]}))
 # Keep existing task-specific fixture logic independent of appended ledger hints.
 if len(_ledger_context)==2:

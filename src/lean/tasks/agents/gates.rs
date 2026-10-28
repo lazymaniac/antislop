@@ -149,8 +149,6 @@ fn gate_task(
 ) -> TaskContract {
     TaskContract {
         quality_gate: true,
-        inputs: vec![],
-        outputs: vec![],
         options_for: None,
         requirement_ids: requirement_ids.to_vec(),
         criterion_ids: criterion_ids.to_vec(),
@@ -163,13 +161,9 @@ fn gate_task(
         writes: !description.audit,
         depends_on,
         kind: agent.kind,
+        covers: Vec::new(),
         verifier: VerifierSpec {
-            risk_ids: crate::lean::risks::for_kind(agent.kind)
-                .map(|(id, _)| id)
-                .collect(),
-            focus: agent.focus.to_owned(),
             summary: Some(description.verifier_summary.to_owned()),
-            risks: Vec::new(),
         },
     }
 }

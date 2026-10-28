@@ -92,7 +92,6 @@ fn a_submission_is_recorded_once_before_acknowledgement() {
     let result = TurnResult::Completed {
         summary: "API defined".into(),
         report: "Result".into(),
-        outputs: [("api".into(), "Result<T, Error>".into())].into(),
         selection: None,
     };
     store.save_turn_result(&turn.id, &result).unwrap();
@@ -102,7 +101,8 @@ fn a_submission_is_recorded_once_before_acknowledgement() {
             .save_turn_result(
                 &turn.id,
                 &TurnResult::Report {
-                    text: "changed".into()
+                    text: "changed".into(),
+                    addressed: None,
                 }
             )
             .is_err()
@@ -119,26 +119,25 @@ fn a_submission_is_recorded_once_before_acknowledgement() {
 }
 
 #[test]
-fn only_declared_outputs_are_forwarded() {
+fn a_dependent_receives_the_summary_of_its_dependency_not_its_report() {
     let (_dir, store, conversation, mut producer, turn) = fixture();
     store
         .save_turn_result(
             &turn.id,
             &TurnResult::Completed {
-                summary: "API".into(),
+                summary: "Defined Result<T, Error> in src/api.rs".into(),
                 report: "PRIVATE REPORT".into(),
-                outputs: [("api".into(), "Result<T, Error>".into())].into(),
                 selection: None,
             },
         )
         .unwrap();
     producer.status = "approved".into();
     store.update_task(&producer).unwrap();
-    let spec: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"consumer","title":"Use API","goal":"Use API","kind":"implementation","depends_on":["local"],"inputs":[{"name":"interface","task":"local","output":"api"}],"verifier":{"focus":"Inspect use"}})).unwrap();
+    let spec: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"consumer","title":"Use API","goal":"Use API","kind":"implementation","depends_on":["local"]})).unwrap();
     let inputs = store.dependency_inputs(&producer.plan_id, &spec).unwrap();
     assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].id, "interface");
-    assert_eq!(inputs[0].report, "Result<T, Error>");
+    assert_eq!(inputs[0].id, "local");
+    assert_eq!(inputs[0].report, "Defined Result<T, Error> in src/api.rs");
     assert!(!inputs[0].report.contains("PRIVATE"));
     assert_eq!(
         store
@@ -147,6 +146,17 @@ fn only_declared_outputs_are_forwarded() {
             .len(),
         0
     );
+}
+
+#[test]
+fn a_dependency_without_a_summary_hands_over_the_opening_line_of_its_report() {
+    let (_dir, store, _conversation, mut producer, _turn) = fixture();
+    producer.status = "approved".into();
+    producer.report = Some("\nDefined the API\n\nPRIVATE REPORT".into());
+    store.update_task(&producer).unwrap();
+    let spec: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"consumer","title":"Use API","goal":"Use API","kind":"implementation","depends_on":["local"]})).unwrap();
+    let inputs = store.dependency_inputs(&producer.plan_id, &spec).unwrap();
+    assert_eq!(inputs[0].report, "Defined the API");
 }
 
 #[test]
@@ -215,7 +225,6 @@ fn acknowledged_worker_result_is_reused_after_interruption() {
             &TurnResult::Completed {
                 summary: "Done".into(),
                 report: "API defined".into(),
-                outputs: [("api".into(), "Result<T>".into())].into(),
                 selection: None,
             },
         )
@@ -293,7 +302,7 @@ fn unknown_question_ids_are_actionable_and_cannot_cross_conversations() {
         .agent_question(&conversation, text, Some(&turn.id))
         .unwrap_err()
         .to_string();
-    assert!(error.contains("request ID returned by ask_orchestrator"));
+    assert!(error.contains("request ID the agent's question message names"));
     let error = store
         .answer_agent_question(&conversation, text, "Answer")
         .unwrap_err()

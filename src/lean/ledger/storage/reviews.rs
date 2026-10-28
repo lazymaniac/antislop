@@ -226,8 +226,10 @@ impl Store {
             params![run_id, current.spec_revision], |row| row.get(0),
         ).optional()?;
         note.map(|note| {
-            serde_json::to_string(&crate::lean::tasks::parse_verdict(&note).findings)
-                .map_err(Into::into)
+            let findings = crate::lean::turn_result::TurnResult::review_verdict(&note)
+                .map(|verdict| verdict.findings)
+                .unwrap_or_default();
+            serde_json::to_string(&findings).map_err(Into::into)
         })
         .unwrap_or_else(|| Ok("[]".into()))
     }

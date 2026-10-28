@@ -26,7 +26,7 @@ fn options_inherit_writer_context_and_precede_it() {
     assert_eq!(options.criterion_ids, writer.criterion_ids);
     assert_eq!(full[2].depends_on, ["context", "writer-options"]);
     assert!(options.goal.contains("2–4"));
-    assert!(options.goal.contains("structured selection"));
+    assert!(options.goal.contains("End with select"));
     assert!(options.goal.contains("Do not implement"));
 }
 
@@ -110,9 +110,6 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
     let verifier = verifier_prompt("project", &tasks[1], "report", None);
     assert!(verifier.contains("Independently compare the implementation"));
     assert!(verifier.contains("the worker's declaration is not proof"));
-    let checklist = checklist(WorkKind::Options);
-    assert!(checklist.contains("without automatically stopping the plan"));
-    assert!(!checklist.contains("reopens the choice"));
     assert!(orchestrator_instructions().contains("even when required gates are disabled"));
 }
 
@@ -132,20 +129,18 @@ fn automatically_added_quality_gates_have_distinct_concise_summaries() {
         assert!(!verifier_summary.is_empty() && verifier_summary.len() <= 80);
         assert_ne!(summary, verifier_summary);
         assert_ne!(summary, task.goal);
-        assert_ne!(verifier_summary, task.verifier.focus);
     }
 }
 
 #[test]
 fn parallel_peers_detects_independent_non_conflicting_tasks() {
-    let answer = "```plan\n{\"tasks\":[\
-            {\"id\":\"t1\",\"title\":\"Context\",\"section\":\"1. Context\",\"goal\":\"g\",\"scope\":[\"src/\"],\"writes\":false,\"kind\":\"context\",\"verifier\":{\"focus\":\"f\"}},\
-            {\"id\":\"t2\",\"title\":\"Mod A\",\"section\":\"2. Module A\",\"goal\":\"g\",\"scope\":[\"src/a.rs\"],\"writes\":true,\"depends_on\":[\"t1\"],\"kind\":\"implementation\",\"verifier\":{\"focus\":\"f\"}},\
-            {\"id\":\"t3\",\"title\":\"Mod B\",\"section\":\"3. Module B\",\"goal\":\"g\",\"scope\":[\"src/b.rs\"],\"writes\":true,\"depends_on\":[\"t1\"],\"kind\":\"implementation\",\"verifier\":{\"focus\":\"f\"}},\
-            {\"id\":\"t4\",\"title\":\"Mod A2\",\"section\":\"2. Module A\",\"goal\":\"g\",\"scope\":[\"src/a.rs\"],\"writes\":true,\"depends_on\":[\"t1\"],\"kind\":\"refactoring\",\"verifier\":{\"focus\":\"f\"}}\
-        ]}\n```";
-    let (_, plan) = parse_plan(answer);
-    let tasks = plan.unwrap().unwrap();
+    let tasks = submitted(serde_json::json!({"tasks":[
+        {"id":"t1","title":"Context","section":"1. Context","goal":"g","scope":["src/"],"kind":"context"},
+        {"id":"t2","title":"Mod A","section":"2. Module A","goal":"g","scope":["src/a.rs"],"depends_on":["t1"],"kind":"implementation"},
+        {"id":"t3","title":"Mod B","section":"3. Module B","goal":"g","scope":["src/b.rs"],"depends_on":["t1"],"kind":"implementation"},
+        {"id":"t4","title":"Mod A2","section":"2. Module A","goal":"g","scope":["src/a.rs"],"depends_on":["t1"],"kind":"refactoring"}
+    ]}))
+    .unwrap();
     let peers = parallel_peers(&tasks);
     assert!(peers["t1"].is_empty());
     assert_eq!(peers["t2"], vec!["t3"]);
@@ -217,14 +212,14 @@ fn the_planner_gets_the_plan_format_but_not_the_orchestrators_workflow() {
     let planner = planner_instructions();
     let orchestrator = orchestrator_instructions();
     for text in [&planner, &orchestrator] {
-        assert!(text.contains("```plan"));
-        assert!(text.contains("task_risks(kind)"));
+        assert!(text.contains("submit_plan"));
+        assert!(!text.contains("```plan") && !text.contains("task_risks"));
         assert!(text.contains("even when required gates are disabled"));
         assert!(!text.contains("{KIND_NAMES}") && !text.contains("{AGENT_POOL}"));
     }
     for orchestrator_only in [
-        "reply_to_agent",
-        "submit_plan_revision",
+        "answer_agent",
+        "revise_plan",
         "request_replan",
         "**Interview**",
     ] {

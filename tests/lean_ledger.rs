@@ -3,7 +3,7 @@ mod support;
 use antislop::lean::{
     ledger::*,
     store::{Store, TurnStatus},
-    tasks::TaskContract,
+    tasks::{PlannedTask, TaskContract},
 };
 use serde_json::json;
 
@@ -535,9 +535,21 @@ fn removed_entry_and_task_fields_are_rejected() {
         old["disposition"] = json!(disposition);
         assert!(serde_json::from_value::<EntrySpec>(old).is_err());
     }
+    // A stored contract keeps loading with fields of earlier plans; what a
+    // planner submits may not carry them.
     let mut task = f.task("task", &["r"], &[]);
     task["plan_item_ids"] = json!([]);
-    assert!(serde_json::from_value::<TaskContract>(task).is_err());
+    assert!(serde_json::from_value::<TaskContract>(task).is_ok());
+    let planned = json!({"id": "task", "title": "Task", "goal": "Do it", "kind": "analysis"});
+    assert!(serde_json::from_value::<PlannedTask>(planned.clone()).is_ok());
+    for field in ["plan_item_ids", "requirement_ids", "verifier", "inputs"] {
+        let mut old = planned.clone();
+        old[field] = json!([]);
+        assert!(
+            serde_json::from_value::<PlannedTask>(old).is_err(),
+            "{field}"
+        );
+    }
 }
 
 #[test]
@@ -661,16 +673,15 @@ prompt=sys.argv[-1]
 def block(tag,data):return '```'+tag+'\n'+json.dumps(data)+'\n```'
 if prompt.startswith('Audit the integrated project'):
     assert open('observed-result').read()=='delivered'
-    fingerprint=re.search(r'Integrated fingerprint: ([a-f0-9]+)',prompt).group(1)
-    tasks,_=json.JSONDecoder().raw_decode(prompt.split('Task inputs and reports: ',1)[1])
+    tasks,_=json.JSONDecoder().raw_decode(prompt.split('Tasks of the plan: ',1)[1])
     lines=prompt.rsplit('Run and ledger inputs (stable identities; keep their versions):\n',1)[1].splitlines()
     entries=json.loads(lines[2].removeprefix('Entries: '))
     evidence=[]
     for entry in entries:
         spec=entry['spec']
-        task=next(t for t in tasks if spec['id'] in t['spec']['requirement_ids'])
         for criterion in spec['criteria']:
-            evidence.append({'entry_id':spec['id'],'entry_version':entry['version'],'criterion_id':criterion['id'],'task_id':task['id'],'generation':task['input_generation'],'attempt':task['round'],'producer_turn':'','result':'Read observed-result in integrated project: exact expected content delivered','artifact':None,'integrated_fingerprint':fingerprint})
+            task=next(t for t in tasks if criterion['id'] in t['covers'])
+            evidence.append({'criterion_id':criterion['id'],'task_id':task['task_id'],'result':'Read observed-result in integrated project: exact expected content delivered'})
     answer=block('compliance',{'approved':not os.path.exists('audit-gap'),'findings':[{'issue':'obligation omitted during extraction'}] if os.path.exists('audit-gap') else [],'evidence':evidence})
 elif prompt.startswith('Verify this audit independently'):
     if os.path.exists('hold-audit-verifier'):
@@ -678,8 +689,8 @@ elif prompt.startswith('Verify this audit independently'):
         open('audit-verifier-entered','w').close()
         while not os.path.exists('release-audit-verifier'):time.sleep(0.01)
     assert open('observed-result').read()=='delivered'
-    proposals,_=json.JSONDecoder().raw_decode(prompt.split('Proposed evidence: ',1)[1])
-    answer=block('compliance_verdict',{'approved':not os.path.exists('audit-gap'),'note':'Read all sources and reproduced every integrated observation','assessments':[{'evidence':e,'approved':True,'note':'Independently read integrated observed-result; content matches delivered'} for e in proposals]})
+    proposals,_=json.JSONDecoder().raw_decode(prompt.split('Proposed evidence (assess each by its id):\n',1)[1])
+    answer=block('compliance_verdict',{'approved':not os.path.exists('audit-gap'),'note':'Read all sources and reproduced every integrated observation','assessments':[{'evidence':e['id'],'approved':True,'note':'Independently read integrated observed-result; content matches delivered'} for e in proposals]})
 else:answer=block('verdict',{'approved':True,'findings':[]})
 session=str(uuid.uuid4())
 print(json.dumps({'type':'thread.started','thread_id':session}))

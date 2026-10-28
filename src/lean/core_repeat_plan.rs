@@ -31,7 +31,8 @@ impl Core {
         Ok(before == now)
     }
 
-    /// Only named outputs and the selected local approach, as task data.
+    /// The summaries of the direct dependencies and the selected local
+    /// approach, as task data.
     pub(in crate::lean) fn upstream(&self, plan_id: &str, spec: &TaskContract) -> Result<String> {
         let reports = self.store.dependency_inputs(plan_id, spec)?;
         Ok(tasks::dependency_reports_note(&reports))

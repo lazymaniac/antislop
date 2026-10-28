@@ -848,7 +848,7 @@ impl Details {
                 (_, None) => records.push(Rc::new(DetailRecord {
                     lines: vec![(
                         dim(),
-                        "Tasks have checks: task risks and its kind's checklist, accounted for by the verifier. [no check data in history]".into(),
+                        "Tasks have checks: the goal, its acceptance criteria and its kind's risks, accounted for by the verifier. [no check data in history]".into(),
                     )],
                     search_text: "tasks have checks".into(),
                 })),
@@ -1720,8 +1720,8 @@ pub struct CheckRow {
     pub note: Option<String>,
 }
 
-/// The verifier's obligations (the task's risks, the common checks, then its
-/// kind's checklist) and how far each is: what the verifier reported while it
+/// The verifier's obligations (the goal, the task's acceptance criteria, then
+/// its kind's risks) and how far each is: what the verifier reported while it
 /// works, else how the latest verdict accounted for it.
 pub fn check_rows(stored: &Value) -> Vec<CheckRow> {
     let Ok(spec) = serde_json::from_value::<TaskContract>(stored["spec"].clone()) else {
@@ -1891,8 +1891,7 @@ mod tests {
 
     fn verifier_task(extra: Value) -> Value {
         let mut task = serde_json::json!({
-            "spec": {"id": "t1", "title": "T", "goal": "g", "kind": "analysis",
-                     "verifier": {"focus": "f", "risks": ["a risk"]}},
+            "spec": {"id": "t1", "title": "T", "goal": "g", "kind": "analysis"},
         });
         task.as_object_mut()
             .unwrap()
@@ -1903,8 +1902,8 @@ mod tests {
     #[test]
     fn checks_show_live_progress_before_any_verdict() {
         let task = verifier_task(serde_json::json!({"checks": [
-            {"id": "R1", "state": "settled", "status": "ok", "note": "a.rs:3"},
-            {"id": "V1", "state": "checking", "status": null, "note": ""},
+            {"id": "goal", "state": "settled", "status": "ok", "note": "a.rs:3"},
+            {"id": "R085", "state": "checking", "status": null, "note": ""},
         ]}));
         let rows = check_rows(&task);
         assert_eq!(rows[0].state, "settled");
@@ -1916,7 +1915,7 @@ mod tests {
     #[test]
     fn checks_fall_back_to_the_verdict_and_flag_what_it_skipped() {
         let task = verifier_task(serde_json::json!({"verdict": {"coverage": {
-            "R1": {"status": "issue", "note": "broken"}}}}));
+            "goal": {"status": "issue", "note": "broken"}}}}));
         let rows = check_rows(&task);
         assert_eq!(rows[0].status.as_deref(), Some("issue"));
         assert_eq!(rows[0].note.as_deref(), Some("broken"));

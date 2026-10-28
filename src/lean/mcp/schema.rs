@@ -5,87 +5,170 @@ fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
 }
 
-fn tagged(kind: &str, mut fields: Value, required: &[&str]) -> Value {
-    fields["type"] = json!({"const":kind});
-    let mut required = required.to_vec();
-    required.push("type");
-    object(fields, &required)
+/// `addressed`: the open comments an orchestrator's answer settles.
+pub(super) fn addressed() -> Value {
+    json!({"type":"array","items":object(
+        json!({"id":{"type":"integer","description":"The comment number"},"how":{"type":"string","description":"What the answer or revised plan changed for it"}}),
+        &["id", "how"],
+    ),"description":"Comments this answer settles; a comment you only answered stays open for the user"})
 }
 
-pub(super) fn result(role: &str) -> Value {
-    let pending = tagged(
-        "needs_input",
-        json!({"request":{"type":"string","description":"Existing question ID returned as request by ask_orchestrator, never question text. Save a checkpoint while that question is pending or awaiting_user; an answered question resumes the task."},"checkpoint":{"type":"string"}}),
-        &["request", "checkpoint"],
+/// `ask_user`: a question with the choices the user picks from.
+pub(super) fn question() -> Value {
+    let choice = object(
+        json!({"label":{"type":"string"},"description":{"type":"string","description":"What choosing it means"}}),
+        &["label"],
     );
-    if role.starts_with("verifier:") {
-        let assessment = object(
-            json!({"status":{"enum":["ok","issue","blocked","n/a"]},"note":{"type":"string"}}),
-            &["status", "note"],
-        );
-        let finding = object(
-            json!({"id":{"type":"string"},"check":{"type":"string"},"severity":{"enum":["critical","high","medium","low"]},"issue":{"type":"string"},"where":{"type":"string"}}),
-            &["id", "check", "severity", "issue", "where"],
-        );
-        let verdict = object(
-            json!({"approved":{"type":"boolean"},"findings":{"type":"array","items":finding},"coverage":{"type":"object","additionalProperties":assessment}}),
-            &["approved", "findings", "coverage"],
-        );
-        let review = tagged(
-            "review",
-            json!({"report":{"type":"string"},"verdict":verdict}),
-            &["report", "verdict"],
-        );
-        return json!({"oneOf":[review,pending]});
-    }
-    if role.starts_with("worker:") {
-        let alternative = object(
-            json!({"id":{"type":"string"},"approach":{"type":"string"},"evaluations":{"type":"array","items":{"type":"string"}},"eligible":{"type":"boolean"},"tradeoffs":{"type":"string"}}),
-            &["id", "approach", "evaluations", "eligible", "tradeoffs"],
-        );
-        let selection = object(
-            json!({"criteria":{"type":"array","items":{"type":"string"}},"alternatives":{"type":"array","minItems":2,"maxItems":4,"items":alternative},"selected":{"type":"string"},"rationale":{"type":"string"},"reconsider_when":{"type":"string"}}),
-            &[
-                "criteria",
-                "alternatives",
-                "selected",
-                "rationale",
-                "reconsider_when",
-            ],
-        );
-        let completion = tagged(
-            "completed",
-            json!({"summary":{"type":"string"},"report":{"type":"string"},"outputs":{"type":"object","additionalProperties":{"type":"string"}},"selection":selection}),
-            &["summary", "report", "outputs"],
-        );
-        return json!({"oneOf":[completion,pending]});
-    }
-    tagged("report", json!({"text":{"type":"string"}}), &["text"])
+    json!({
+        "context":{"type":"string","description":"Why the answer matters, in a few sentences"},
+        "question":{"type":"string"},
+        "options":{"type":"array","minItems":2,"maxItems":6,"items":choice}
+    })
 }
 
-pub(super) fn revision() -> Value {
-    let strings = json!({"type":"array","items":{"type":"string"}});
-    let input = object(
-        json!({"name":{"type":"string"},"task":{"type":"string"},"output":{"type":"string"}}),
-        &["name", "task", "output"],
+/// `select`: the options an options task weighed and the one it chose.
+pub(super) fn selection() -> Value {
+    let alternative = object(
+        json!({"id":{"type":"string","description":"Short id, e.g. A"},"approach":{"type":"string"},"tradeoffs":{"type":"string","description":"What this approach costs or risks"}}),
+        &["id", "approach", "tradeoffs"],
     );
-    let verifier = object(
-        json!({"focus":{"type":"string"},"summary":{"type":["string","null"]},"risks":strings,"risk_ids":strings}),
-        &["focus"],
+    json!({
+        "alternatives":{"type":"array","minItems":2,"maxItems":4,"items":alternative},
+        "selected":{"type":"string","description":"The id of the chosen alternative"},
+        "rationale":{"type":"string","description":"Why it fits this task better than the others"}
+    })
+}
+
+/// `review`: one entry per listed check and the problems found; the runtime
+/// derives the verdict.
+pub(super) fn review() -> Value {
+    let check = object(
+        json!({"status":{"enum":["ok","issue","blocked","n/a"]},"note":{"type":"string","description":"What you inspected and found"}}),
+        &["status", "note"],
     );
-    let contract = object(
-        json!({
-            "id":{"type":"string"},"title":{"type":"string"},"goal":{"type":"string"},
-            "summary":{"type":["string","null"]},"section":{"type":["string","null"]},
-            "kind":{"type":"string"},"writes":{"type":"boolean"},"scope":strings,"depends_on":strings,
-            "requirement_ids":strings,"criterion_ids":strings,"outputs":strings,
-            "inputs":{"type":"array","items":input},"verifier":verifier,
-            "quality_gate":{"const":false},"options_for":{"type":"null"}
-        }),
-        &["id", "title", "goal", "kind", "verifier"],
+    let finding = object(
+        json!({"check":{"type":"string","description":"The listed check id the problem breaks"},"severity":{"enum":["critical","high","medium","low"],"description":"critical, high and medium send the task back"},"issue":{"type":"string"},"where":{"type":"string","description":"File and line, or the part of the report"}}),
+        &["check", "severity", "issue", "where"],
+    );
+    json!({
+        "report":{"type":"string","description":"What you verified and how"},
+        "checks":{"type":"object","additionalProperties":check,"description":"Every check id the prompt lists, each with status and note"},
+        "findings":{"type":"array","items":finding}
+    })
+}
+
+/// `review` of a plan, an audit or a code change: the problems found; the
+/// runtime approves when none is critical, high or medium.
+pub(super) fn plain_review() -> Value {
+    let finding = object(
+        json!({"severity":{"enum":["critical","high","medium","low"],"description":"critical, high and medium reject"},"issue":{"type":"string"},"where":{"type":"string","description":"File and line, task id, or the part of the request"}}),
+        &["severity", "issue", "where"],
+    );
+    json!({
+        "report":{"type":"string","description":"What you checked and how"},
+        "findings":{"type":"array","items":finding,"description":"Empty when there is nothing to fix"}
+    })
+}
+
+/// A requirement as the extraction analyst submits it.
+pub(super) fn ledger_entry() -> Value {
+    let criterion = object(
+        json!({"id":{"type":"string","description":"Globally unique, e.g. R1.1"},"text":{"type":"string","description":"How acceptance is checked"},"mandatory":{"type":"boolean","description":"Omit for true"},"integration":{"type":"boolean","description":"Accepts the combined outcomes of the child requirements"}}),
+        &["id", "text"],
     );
     object(
-        json!({"plan":{"type":"string","description":"The plan's full UUID exactly as given in the prompt (e.g. 2e189d24-c1dc-4de2-9c75-b9dfda586b39), never plan text or a shortened ID; the changed tasks go in tasks"},"base_revision":{"type":"integer","minimum":0,"description":"The plan revision the prompt reports"},"reason":{"type":"string"},"tasks":{"type":"array","items":contract},"retire":strings}),
-        &["plan", "base_revision", "reason", "tasks", "retire"],
+        json!({
+            "id":{"type":"string","description":"Stable id, e.g. R1; existing requirements keep theirs"},
+            "quote":{"type":"string","description":"The user's words this comes from, copied exactly; long enough to occur once in its source"},
+            "source":{"type":"string","description":"The source id the quote is in; omit for the first source that has it"},
+            "interpretation":{"type":"string","description":"The obligation in full sentences"},
+            "qualifiers":{"type":"array","items":{"type":"string"},"description":"Exceptions, limits and conditions the user gave"},
+            "parent":{"type":"string","description":"Id of the requirement this one refines"},
+            "depends_on":{"type":"array","items":{"type":"string"}},
+            "mandatory":{"type":"boolean","description":"Omit for true; false for a preference"},
+            "criteria":{"type":"array","items":criterion},
+            "task_ids":{"type":"array","items":{"type":"string"},"description":"Planned task ids, if a plan exists"}
+        }),
+        &["id", "quote", "interpretation", "criteria"],
     )
+}
+
+/// `submit_audit`: problems found and evidence per acceptance criterion.
+pub(super) fn audit() -> Value {
+    let finding = object(
+        json!({"severity":{"enum":["critical","high","medium","low"],"description":"critical, high and medium reject"},"issue":{"type":"string"},"where":{"type":"string","description":"File, requirement or criterion id"}}),
+        &["severity", "issue", "where"],
+    );
+    let evidence = object(
+        json!({"criterion_id":{"type":"string"},"task_id":{"type":"string","description":"The plan's id of the task that delivered it"},"result":{"type":"string","description":"The concrete checks you made and what you observed"},"artifact":{"type":"string","description":"A file or command output that shows it"}}),
+        &["criterion_id", "task_id", "result"],
+    );
+    json!({
+        "findings":{"type":"array","items":finding,"description":"Empty when there is nothing to fix"},
+        "evidence":{"type":"array","items":evidence}
+    })
+}
+
+/// `submit_audit_review`: one assessment per proposed evidence id.
+pub(super) fn audit_review() -> Value {
+    let assessment = object(
+        json!({"evidence":{"type":"string","description":"The proposed evidence id, e.g. E1"},"approved":{"type":"boolean"},"note":{"type":"string","description":"What you checked and observed"}}),
+        &["evidence", "approved", "note"],
+    );
+    json!({
+        "note":{"type":"string","description":"Coverage and gaps of the audit"},
+        "assessments":{"type":"array","items":assessment}
+    })
+}
+
+/// A task as the planner writes it; the runtime derives everything else.
+pub(super) fn planned_task() -> Value {
+    object(
+        json!({
+            "id":{"type":"string","description":"Short unique id, e.g. t1"},
+            "title":{"type":"string"},
+            "goal":{"type":"string","description":"What the task must achieve, in full sentences"},
+            "kind":{"enum":KINDS},
+            "depends_on":{"type":"array","items":{"type":"string"},"description":"Ids of tasks that must be approved first; each dependent receives their summaries"},
+            "scope":{"type":"array","items":{"type":"string"},"description":"Project paths the task works in"},
+            "writes":{"type":"boolean","description":"Omit to follow the kind: implementation, refactoring, testing, static_analysis and integration write"},
+            "covers":{"type":"array","items":{"type":"string"},"description":"Acceptance criterion ids (or requirement ids) from the requirements this task delivers"},
+            "section":{"type":"string"},
+            "summary":{"type":"string"}
+        }),
+        &["id", "title", "goal", "kind"],
+    )
+}
+
+/// The work kinds a planned task may have; orchestration belongs to the
+/// runtime's own role.
+const KINDS: [&str; 18] = [
+    "context",
+    "requirements",
+    "options",
+    "planning",
+    "architecture",
+    "dependencies",
+    "implementation",
+    "refactoring",
+    "static_analysis",
+    "test_design",
+    "testing",
+    "security",
+    "performance",
+    "integration",
+    "research",
+    "writing",
+    "analysis",
+    "delivery",
+];
+
+/// The properties of `revise_plan`; the plan and its revision are the ones
+/// the orchestrator was shown.
+pub(super) fn revision() -> Value {
+    json!({
+        "reason":{"type":"string","description":"What the revision changes and why"},
+        "tasks":{"type":"array","items":planned_task(),"description":"Changed or added tasks, each complete"},
+        "retire":{"type":"array","items":{"type":"string"},"description":"Ids of tasks to drop; their obligations must move to another task"}
+    })
 }

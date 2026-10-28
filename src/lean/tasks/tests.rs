@@ -9,6 +9,14 @@ fn verdict_with(coverage: serde_json::Map<String, serde_json::Value>) -> Verdict
     }
 }
 
+/// A plan as `submit_plan` receives it, checked as the tool checks it.
+fn submitted(plan: serde_json::Value) -> crate::Result<Vec<TaskContract>> {
+    let tasks: Vec<PlannedTask> = serde_json::from_value(plan["tasks"].clone())?;
+    let specs = planned_graph(tasks)?;
+    validate(&specs)?;
+    Ok(specs)
+}
+
 #[path = "tests/card_outcomes.rs"]
 mod card_outcomes;
 #[path = "tests/coverage.rs"]

@@ -191,7 +191,7 @@ pub fn message(findings: &[&Finding]) -> String {
         .collect();
     format!(
         "The runtime checked the proposed plan before any agent started and found tasks that \
-         cannot be carried out as written:\n{}\n\nReturn the complete corrected ```plan block for \
+         cannot be carried out as written:\n{}\n\nSubmit the complete corrected plan for \
          the same requirements, changing only what these findings require: fix the scope, \
          `writes` or dependencies, or move the work that needs it into a task that has the \
          permission and runs first.",
@@ -207,8 +207,6 @@ mod tests {
     fn task(id: &str, kind: WorkKind, writes: bool, depends_on: &[&str]) -> TaskContract {
         TaskContract {
             quality_gate: false,
-            inputs: vec![],
-            outputs: vec![],
             options_for: None,
             id: id.into(),
             requirement_ids: Vec::new(),
@@ -221,12 +219,8 @@ mod tests {
             writes,
             depends_on: depends_on.iter().map(|d| (*d).to_owned()).collect(),
             kind,
-            verifier: VerifierSpec {
-                risk_ids: vec![],
-                focus: "check".into(),
-                summary: None,
-                risks: Vec::new(),
-            },
+            covers: Vec::new(),
+            verifier: VerifierSpec::default(),
         }
     }
 
@@ -295,6 +289,6 @@ mod tests {
         let found = check(&plan);
         let text = message(&found.iter().collect::<Vec<_>>());
         assert!(text.contains("- t1 [implementation-is-read-only]"));
-        assert!(text.contains("```plan"));
+        assert!(text.contains("complete corrected plan"));
     }
 }

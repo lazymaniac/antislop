@@ -1,52 +1,67 @@
 use super::*;
 
-/// Planning cannot complete with prose or a requirements analyst's ledger block.
-pub(crate) fn parse_required_plan(answer: &str) -> (String, Result<Vec<TaskContract>>) {
-    let (text, plan) = parse_plan(answer);
-    (text, plan.unwrap_or_else(|| Err(Error::Invalid(
-        "planning response has no complete fenced plan block; return the complete task plan, not prose or a ledger block. Requirements extraction and ledger corrections belong to the runtime's requirements analyst".into(),
-    ))))
+/// A task as a planner writes it through `submit_plan` or `revise_plan`: what
+/// to do and where. Everything else is the runtime's: whether it writes
+/// follows from its kind unless stated, its verifier checks the goal, the
+/// assigned criteria and the kind's risk catalog, and generated options and
+/// quality gates are added around it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedTask {
+    pub id: String,
+    pub title: String,
+    pub goal: String,
+    pub kind: WorkKind,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub scope: Vec<String>,
+    #[serde(default)]
+    pub writes: Option<bool>,
+    #[serde(default)]
+    pub covers: Vec<String>,
+    #[serde(default)]
+    pub section: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
-/// Splits an orchestrator answer into its text and an optional plan.
-pub fn parse_plan(answer: &str) -> (String, Option<Result<Vec<TaskContract>>>) {
-    let Some((text, body)) = fenced(answer, "plan") else {
-        return (answer.trim().to_owned(), None);
-    };
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Plan {
-        #[serde(default)]
-        run_id: Option<String>,
-        tasks: Vec<TaskContract>,
+impl PlannedTask {
+    pub fn into_contract(self) -> TaskContract {
+        let writes = self.writes.unwrap_or_else(|| self.kind.writes_by_default());
+        TaskContract {
+            quality_gate: false,
+            options_for: None,
+            requirement_ids: Vec::new(),
+            criterion_ids: Vec::new(),
+            verifier: VerifierSpec {
+                summary: Some(verifier_summary(writes).into()),
+            },
+            id: self.id,
+            title: self.title,
+            goal: self.goal,
+            summary: self.summary,
+            section: self.section,
+            scope: self.scope,
+            writes,
+            depends_on: self.depends_on,
+            kind: self.kind,
+            covers: self.covers,
+        }
     }
-    let plan = serde_json::from_str::<Plan>(body)
-        .map_err(Error::from)
-        .and_then(|mut plan| {
-            let _ = plan.run_id;
-            drop_unknown_risks(&mut plan.tasks);
-            crate::require(
-                plan.tasks
-                    .iter()
-                    .all(|t| !t.quality_gate && t.options_for.is_none()),
-                "quality_gate and options_for are assigned by the runtime",
-            )?;
-            // Dependencies written out of order are the planner's slip, not a
-            // reason to lose the plan: order them, and still reject a cycle.
-            order_graph(plan.tasks)
-        });
-    (text, Some(plan))
 }
 
-/// A risk ID from another domain selects nothing; the plan review still checks
-/// the contract's own risks, so the ID is dropped instead of failing the plan.
-fn drop_unknown_risks(tasks: &mut [TaskContract]) {
-    for task in tasks {
-        let available: BTreeSet<_> = crate::lean::risks::for_kind(task.kind)
-            .map(|(id, _)| id)
-            .collect();
-        task.verifier.risk_ids.retain(|id| available.contains(id));
+fn verifier_summary(writes: bool) -> &'static str {
+    if writes {
+        "Verify the change meets the goal, its criteria and the domain risks."
+    } else {
+        "Verify the result meets the goal, its criteria and the domain risks."
     }
+}
+
+/// The runtime's contracts for a submitted plan, in dependency order.
+pub fn planned_graph(tasks: Vec<PlannedTask>) -> Result<Vec<TaskContract>> {
+    order_graph(tasks.into_iter().map(PlannedTask::into_contract).collect())
 }
 
 /// Stable topological order for edits that insert nodes before existing gates.
@@ -76,18 +91,14 @@ pub(crate) fn order_graph(mut remaining: Vec<TaskContract>) -> Result<Vec<TaskCo
             ));
         };
         let task = remaining.remove(position);
-        crate::require(done.insert(task.id.clone()), "duplicate task in graph")?;
+        crate::require(
+            done.insert(task.id.clone()),
+            &format!("task id {} repeats", task.id),
+        )?;
         ordered.push(task);
     }
     validate(&ordered)?;
     Ok(ordered)
-}
-
-/// Explicit run binding in a planner proposal. Runtime checks ownership.
-pub fn proposed_run(answer: &str) -> Option<String> {
-    fenced(answer, "plan")
-        .and_then(|(_, body)| serde_json::from_str::<Value>(body).ok())
-        .and_then(|v| v["run_id"].as_str().map(str::to_owned))
 }
 
 pub(crate) fn validate(tasks: &[TaskContract]) -> Result<()> {
@@ -96,7 +107,10 @@ pub(crate) fn validate(tasks: &[TaskContract]) -> Result<()> {
     for task in tasks {
         validate_task_id(&task.id)?;
         validate_dependencies(task, &seen)?;
-        validate_local_contract(task, tasks)?;
+        crate::require(
+            !task.title.trim().is_empty() && !task.goal.trim().is_empty(),
+            &format!("task {}: title and goal must be nonempty", task.id),
+        )?;
         crate::require(
             seen.insert(task.id.as_str()),
             &format!("task id {} repeats", task.id),
@@ -133,36 +147,4 @@ fn validate_dependencies(
         )?;
     }
     Ok(())
-}
-
-fn validate_local_contract(task: &TaskContract, tasks: &[TaskContract]) -> Result<()> {
-    let available: BTreeSet<_> = crate::lean::risks::for_kind(task.kind)
-        .map(|(id, _)| id)
-        .collect();
-    for id in &task.verifier.risk_ids {
-        crate::require(
-            available.contains(id),
-            &format!("task {}: risk {id} is not in this domain", task.id),
-        )?;
-    }
-    let mut names = BTreeSet::new();
-    for input in &task.inputs {
-        crate::require(
-            names.insert(&input.name) && !input.name.trim().is_empty(),
-            "input names must be unique and nonempty",
-        )?;
-        let source = tasks
-            .iter()
-            .find(|source| source.id == input.task)
-            .ok_or_else(|| Error::Invalid(format!("missing input task {}", input.task)))?;
-        crate::require(
-            task.depends_on.contains(&input.task) && source.outputs.contains(&input.output),
-            "inputs must bind declared outputs of direct dependencies",
-        )?;
-    }
-    crate::require(
-        task.outputs.iter().all(|name| !name.trim().is_empty())
-            && task.outputs.iter().collect::<BTreeSet<_>>().len() == task.outputs.len(),
-        "output names must be unique and nonempty",
-    )
 }

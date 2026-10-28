@@ -31,7 +31,7 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
     prompt.push_str(&format_messages(context.asked));
     if let Some(contracts) = context.replaced {
         prompt.push_str(&format!(
-            "\n\nThe orchestrator asked for a new plan; its reason is above. The plan to replace has these task contracts:\n{contracts}\nReturn the complete replacement plan block, not a patch; the runtime reviews it like any new plan.\n"
+            "\n\nThe orchestrator asked for a new plan; its reason is above. The plan to replace has these task contracts:\n{contracts}\nSubmit the complete replacement plan, not a patch; the runtime reviews it like any new plan.\n"
         ));
     }
     append_ledger(context.ledger_context, &mut prompt);

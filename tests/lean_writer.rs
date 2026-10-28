@@ -464,7 +464,7 @@ fn a_conflict_returns_to_the_writer_and_the_repair_is_verified_before_landing() 
     let calls = std::fs::read_to_string(dir.path().join("calls.jsonl")).unwrap();
     assert!(calls.contains("Automatic integration conflict"));
     assert!(calls.contains("Verify the conflict resolution independently"));
-    assert!(calls.contains("ask_orchestrator"));
+    assert!(calls.contains("end with wait_for_answer"));
     let logged: Vec<Value> = calls
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -747,7 +747,7 @@ fn a_worker_stated_effect_takes_the_card_and_no_extra_model_call_is_spent() {
     let project = project(dir.path());
     let (codex, agy) = fake_clis_answered(
         dir.path(),
-        r#"json.dumps({'type':'completed','summary':'Added a greeting — hello.txt','report':'wrote hello.txt','outputs':{}})"#,
+        r#"json.dumps({'type':'completed','summary':'Added a greeting — hello.txt','report':'wrote hello.txt'})"#,
     );
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
@@ -985,8 +985,8 @@ fn a_read_only_card_says_not_applicable_and_counts_only_real_obligations() {
         serde_json::from_value(task.spec.clone()).unwrap();
     let obligations = antislop::lean::tasks::obligations(&spec);
     assert_eq!(feedback["coverage"]["total"], obligations.len());
-    // The invented id is reported and counted nowhere. The `issue` on the
-    // read-only risk describes the code, so it is counted but does not reject.
+    // The invented id is counted nowhere; a domain risk that does not apply
+    // to a read-only report is marked n/a and still approves.
     assert_eq!(feedback["coverage"]["unknown"], serde_json::json!([]));
     assert_eq!(feedback["coverage"]["unknown_more"], 0);
     assert_eq!(feedback["effect_cut"], serde_json::json!(false));
@@ -1147,7 +1147,7 @@ fn a_cut_stated_effect_is_marked_by_metadata_not_only_by_the_mark() {
     let project = project(dir.path());
     let (codex, agy) = fake_clis_answered(
         dir.path(),
-        r#"json.dumps({'type':'completed','summary':'\U0001F468\u200D\U0001F469\u200D\U0001F467\u200D\U0001F466 '*12,'report':'Full local result','outputs':{}})"#,
+        r#"json.dumps({'type':'completed','summary':'\U0001F468\u200D\U0001F469\u200D\U0001F467\u200D\U0001F466 '*12,'report':'Full local result'})"#,
     );
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
@@ -1197,7 +1197,7 @@ fn an_honest_ellipsis_is_not_reported_as_a_cut() {
     let project = project(dir.path());
     let (codex, agy) = fake_clis_answered(
         dir.path(),
-        r#"json.dumps({'type':'completed','summary':'done…','report':'wrote hello.txt','outputs':{}})"#,
+        r#"json.dumps({'type':'completed','summary':'done…','report':'wrote hello.txt'})"#,
     );
     let core = Core::open(&project.join(".antislop"), config(&codex, &agy)).unwrap();
     let conversation = run_plan(&core, &project);
@@ -1292,8 +1292,7 @@ fn read_only_clis(dir: &std::path::Path) -> (std::path::PathBuf, std::path::Path
     let (codex, agy) = fake_clis(dir);
     let plan = serde_json::json!({"tasks": [
         {"id": "t1", "title": "Audit greetings", "goal": "Report on README",
-         "kind": "analysis", "verifier": {"focus": "coverage of the audit",
-         "risks": ["a missed file"]}}
+         "kind": "analysis"}
     ]});
     let script = std::fs::read_to_string(&codex).unwrap();
     let start = script.find("plan = ").unwrap();
@@ -1314,8 +1313,7 @@ fn read_only_clis(dir: &std::path::Path) -> (std::path::PathBuf, std::path::Path
             r#"data["coverage"] = {i: {"status": "ok", "note": "checked"} for i in ids}"#,
             r#"data["coverage"] = {i: {"status": "ok", "note": "checked"} for i in ids}
     data["coverage"]["X9"] = {"status": "ok", "note": "invented"}
-    data["coverage"]["V1"] = {"status": "n/a", "note": "no build here"}
-    data["coverage"]["R1"] = {"status": "ok", "note": "report correctly identifies an unreadable file"}"#,
+    data["coverage"][next(i for i in ids if i.startswith("R"))] = {"status": "n/a", "note": "no build here"}"#,
         )
         .replace(
             "answer = \"wrote hello.txt\"",

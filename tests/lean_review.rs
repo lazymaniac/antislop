@@ -167,6 +167,7 @@ fn a_plan_no_agent_can_carry_out_goes_back_before_review() {
         r#"
 broken = task("t1", "Change it")
 broken["kind"] = "implementation"
+broken["writes"] = False
 if "checked the proposed plan" in prompt:
     answer = plan(task("t1", "Change it, readable"))
 else:
@@ -179,20 +180,26 @@ if "You review a plan" in prompt or "new plan:" in prompt:
     );
     let conversation = ask(&core, dir.path(), "change the code");
 
-    let messages = core.store.messages_after(&conversation, 0).unwrap();
-    let sent_back = messages
+    // submit_plan refuses the plan within the turn, and the agent corrects it.
+    let refused = ["codex", "agy"]
         .iter()
-        .find(|message| message.author == "plan-lint")
-        .expect("the orchestrator is told before any review");
+        .filter_map(|name| {
+            std::fs::read_to_string(dir.path().join(format!("{name}.rejections"))).ok()
+        })
+        .collect::<String>();
     assert!(
-        sent_back
-            .text
-            .contains("- t1 [implementation-is-read-only]")
+        refused.contains("- t1 [implementation-is-read-only]"),
+        "{refused}"
     );
     let reviews = events(&core, &conversation, "plan_review");
     assert!(reviews.is_empty(), "the verifier never saw the broken plan");
     let proposed = events(&core, &conversation, "plan_proposed");
-    assert_eq!(proposed.len(), 1);
+    assert_eq!(
+        proposed.len(),
+        1,
+        "{refused}\n{:?}",
+        core.store.events_since(&conversation, 0, 2000).unwrap()
+    );
     assert_eq!(proposed[0]["tasks"][0]["title"], "Change it, readable");
 }
 
@@ -286,7 +293,7 @@ elif "found problems" in prompt:
     say("worker", "report")
 elif "You verify" in prompt or "updated report" in prompt:
     n = bump("verdicts")
-    say("verifier", verdict(n >= 5, [] if n >= 5 else [{"severity": "high", "id":"case-%d" % n,"issue": "case %d" % n, "where": "a"}]))
+    say("verifier", verdict(n >= 5, [] if n >= 5 else [{"severity": "high", "id":"case-%d" % n,"issue": "case %d" % n, "where": "a%d" % n}]))
 else:
     say("worker", "report")
 "#,
@@ -352,7 +359,7 @@ elif "found problems" in prompt:
     say("worker", "report")
 elif "You verify" in prompt or "updated report" in prompt:
     n = bump("verdicts")
-    say("verifier", verdict(False, [{"severity": "high", "id": "new-%d" % n, "issue": "problem %d" % n, "where": "a"}]))
+    say("verifier", verdict(False, [{"severity": "high", "id": "new-%d" % n, "issue": "problem %d" % n, "where": "a%d" % n}]))
 else:
     say("worker", "report")
 "#,
@@ -423,7 +430,7 @@ elif "You verify" in prompt or "updated report" in prompt:
     ids = re.findall(r"^- ([A-Za-z0-9_.-]+): ", prompt, re.M)
     cov = {i: {"status": "ok", "note": "checked"} for i in ids}
     if n < 14: cov["V1" if n % 2 else "V2"] = {"status": "issue", "note": "open %d" % n}
-    findings = [{"severity": "high", "id":"case-%d" % n,"issue": "case %d" % n, "where": "a"}]
+    findings = [{"severity": "high", "id":"case-%d" % n,"issue": "case %d" % n, "where": "a%d" % n}]
     say("verifier", "```verdict\n" + json.dumps({"approved": n >= 14, "findings": [] if n >= 14 else findings, "coverage": cov}) + "\n```", False)
 else:
     say("worker", "report")
@@ -490,7 +497,14 @@ else:
 
     let task = &core.store.latest_plan(&conversation).unwrap()[0];
     assert_eq!(task.status, "failed");
-    assert!(task.report.as_deref().unwrap().contains("verdict.coverage"));
+    assert!(
+        task.report
+            .as_deref()
+            .unwrap()
+            .contains("give a status and note for every listed check"),
+        "{:?}",
+        task.report
+    );
     assert!(task.verdict.is_none());
 }
 
@@ -509,7 +523,7 @@ if "You review a plan" in prompt or "You audit" in prompt:
 elif "You verify" in prompt and "fixed: converted" not in prompt:
     # The units check, as an issue: the rest is asked for again.
     lines = re.findall(r"^- ([A-Za-z0-9_.-]+): (.*)$", prompt, re.M)
-    uid = next(i for i, text in lines if "units and denominators" in text)
+    uid = next(i for i, text in lines if "units, denominators" in text)
     coverage = {i:{"status":"ok","note":"checked"} for i in ids}
     coverage[uid] = {"status":"issue","note":"EUR added to PLN"}
     say("verifier", "```verdict\n" + json.dumps({"approved": False, "findings": [], "coverage": coverage}) + "\n```", covered=False)
@@ -711,32 +725,6 @@ if 'You review a plan' in prompt or 'new plan:' in prompt:
     assert_eq!(proposed.len(), 1);
     assert_eq!(proposed[0]["review"]["approved"], true);
     assert_eq!(events(&core, &conversation, "plan_review").len(), 5);
-}
-
-#[test]
-fn a_plan_review_that_only_says_approved_is_asked_for_its_verdict_block() {
-    let dir = tempfile::tempdir().unwrap();
-    let core = open(
-        dir.path(),
-        false,
-        r#"answer=plan(task('t1','Focused plan'))"#,
-        r#"
-if 'required verdict block' in prompt:
-    bump('repairs')
-    say('plan', verdict(True))
-elif 'You review a plan' in prompt or 'new plan:' in prompt:
-    say('plan', 'Plan review: approved. The plan is consistent.', False)
-"#,
-    );
-    let conversation = ask(&core, dir.path(), "Plan the local work");
-    let proposed = events(&core, &conversation, "plan_proposed");
-    assert_eq!(proposed.len(), 1);
-    assert_eq!(proposed[0]["review"]["approved"], true);
-    assert!(events(&core, &conversation, "plan_review").is_empty());
-    assert_eq!(
-        std::fs::read_to_string(dir.path().join("repairs")).unwrap(),
-        "1"
-    );
 }
 
 #[test]

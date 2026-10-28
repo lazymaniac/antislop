@@ -97,7 +97,7 @@ impl Core {
         }
         let existing = self.store.ledger_entries(conversation, &run.id, None)?;
         let feedback = self.requirements_feedback(conversation, run)?;
-        let prompt = extraction::extraction_prompt(run, &feedback, sources);
+        let prompt = extraction::extraction_prompt(&feedback, sources);
         let (change, producer) =
             self.analyze_requirements(conversation, run, &existing, &prompt, cancel)?;
         self.apply_extracted_requirements(conversation, run, &existing, &change, &producer)?;
@@ -124,39 +124,36 @@ impl Core {
         prompt: &str,
         cancel: &AtomicBool,
     ) -> Result<(LedgerChange, String)> {
-        let mut feedback = String::new();
-        loop {
-            extraction::ensure_not_cancelled(cancel)?;
-            let (answer, producer) = self.requirements_turn(
-                conversation,
-                &run.id,
-                "extraction",
-                false,
-                format!("{prompt}{feedback}"),
-                cancel,
-            )?;
-            match self.validate_extraction(conversation, run, existing, &answer) {
-                Ok(change) => return Ok((change, producer)),
-                Err(error @ (Error::Invalid(_) | Error::Json(_))) if feedback.is_empty() => {
-                    self.record_extraction_correction(conversation, &error)?;
-                    feedback = extraction::correction_feedback(&error, &answer);
-                }
-                Err(error) => return Err(error),
-            }
-        }
+        extraction::ensure_not_cancelled(cancel)?;
+        let (answer, producer) = self.requirements_turn(
+            conversation,
+            &run.id,
+            "extraction",
+            false,
+            prompt.to_owned(),
+            cancel,
+        )?;
+        // submit_ledger checked the extraction in the turn; checked again
+        // here in case the run moved on since.
+        let crate::lean::turn_result::TurnResult::Ledger { extraction } =
+            crate::lean::turn_result::TurnResult::decode(&answer)
+        else {
+            return Err(Error::Invalid(MISSING_LEDGER.into()));
+        };
+        let change = self.validate_extraction(conversation, run, existing, extraction)?;
+        Ok((change, producer))
     }
 
-    fn validate_extraction(
+    pub(in crate::lean::ledger::runtime) fn validate_extraction(
         &self,
         conversation: &str,
         run: &Run,
         existing: &[LedgerEntry],
-        answer: &str,
+        mut extraction: Extraction,
     ) -> Result<LedgerChange> {
-        let mut extraction: Extraction = parse_block(answer, "ledger")?;
         require(
             extraction.run_id == run.id && extraction.expected_spec_revision == run.spec_revision,
-            "analyst returned wrong run or revision",
+            "the requirements changed during extraction; extract again",
         )?;
         extraction
             .entries
@@ -170,17 +167,6 @@ impl Core {
             self.store.preview_ledger_change(&change, &self.state)?;
         }
         Ok(change)
-    }
-
-    fn record_extraction_correction(&self, conversation: &str, error: &Error) -> Result<()> {
-        self.store.append_event(
-            conversation,
-            None,
-            None,
-            "planning_progress",
-            &json!({"text": format!("Correcting requirements extraction: {error}")}),
-        )?;
-        Ok(())
     }
 
     fn apply_extracted_requirements(
