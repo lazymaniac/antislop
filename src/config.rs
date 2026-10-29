@@ -1,5 +1,6 @@
 //! Explicit routing and workspace policy for the lean runtime.
 
+mod diagnostics;
 mod model;
 pub use model::*;
 #[cfg(test)]
@@ -71,7 +72,7 @@ impl Config {
 
     pub fn from_toml(source: &str) -> Result<Self> {
         let config: Self =
-            toml::from_str(source).map_err(|error| validation::toml_error(source, error))?;
+            toml::from_str(source).map_err(|error| diagnostics::toml_error(source, error))?;
         config.validate()?;
         Ok(config)
     }
@@ -114,36 +115,46 @@ impl Config {
     }
 
     fn profile_name(&self, work_kind: WorkKind, role: RoleKind) -> Result<&str> {
-        let name = match role {
-            RoleKind::Orchestrator => {
-                require(
-                    work_kind == WorkKind::Orchestration,
-                    "orchestrator role requires orchestration work",
-                )?;
-                &self.orchestrator.profile
-            }
-            RoleKind::Executor | RoleKind::Verifier | RoleKind::Planner => {
-                require(
-                    role != RoleKind::Planner || work_kind == WorkKind::Planning,
-                    "planner role requires planning work",
-                )?;
-                let route = self.routing.get(&work_kind).ok_or_else(|| {
-                    Error::Invalid(
-                        "no explicit route for requested work; provider fallback is forbidden"
-                            .into(),
-                    )
-                })?;
-                match role {
-                    RoleKind::Verifier => &route.verifier,
-                    _ => &route.executor,
-                }
-            }
-        };
+        let name = self.selected_profile(work_kind, role)?;
         require(
             !(work_kind == WorkKind::Orchestration && role == RoleKind::Executor),
             "orchestration execution uses the explicit Orchestrator role",
         )?;
         Ok(name)
+    }
+
+    fn selected_profile(&self, work_kind: WorkKind, role: RoleKind) -> Result<&str> {
+        match role {
+            RoleKind::Orchestrator => self.orchestrator_profile(work_kind),
+            RoleKind::Executor | RoleKind::Verifier | RoleKind::Planner => {
+                self.routed_profile(work_kind, role)
+            }
+        }
+    }
+
+    fn orchestrator_profile(&self, work_kind: WorkKind) -> Result<&str> {
+        require(
+            work_kind == WorkKind::Orchestration,
+            "orchestrator role requires orchestration work",
+        )?;
+        Ok(&self.orchestrator.profile)
+    }
+
+    fn routed_profile(&self, work_kind: WorkKind, role: RoleKind) -> Result<&str> {
+        require(
+            role != RoleKind::Planner || work_kind == WorkKind::Planning,
+            "planner role requires planning work",
+        )?;
+        let route = self.routing.get(&work_kind).ok_or_else(|| {
+            Error::Invalid(
+                "no explicit route for requested work; provider fallback is forbidden".into(),
+            )
+        })?;
+        Ok(if role == RoleKind::Verifier {
+            &route.verifier
+        } else {
+            &route.executor
+        })
     }
 }
 

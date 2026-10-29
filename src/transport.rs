@@ -12,62 +12,58 @@ pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 
 struct Unique(Value);
 
+struct UniqueJson;
+
+impl<'de> Visitor<'de> for UniqueJson {
+    type Value = Unique;
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("JSON with unique object keys")
+    }
+    fn visit_bool<E: serde::de::Error>(self, v: bool) -> std::result::Result<Unique, E> {
+        Ok(Unique(v.into()))
+    }
+    fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<Unique, E> {
+        Ok(Unique(v.into()))
+    }
+    fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<Unique, E> {
+        Ok(Unique(v.into()))
+    }
+    fn visit_f64<E: serde::de::Error>(self, v: f64) -> std::result::Result<Unique, E> {
+        Ok(Unique(
+            serde_json::Number::from_f64(v)
+                .ok_or_else(|| E::custom("invalid number"))?
+                .into(),
+        ))
+    }
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<Unique, E> {
+        Ok(Unique(v.into()))
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Unique, E> {
+        Ok(Unique(Value::Null))
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Unique, A::Error> {
+        let mut values = Vec::new();
+        while let Some(Unique(value)) = seq.next_element()? {
+            values.push(value);
+        }
+        Ok(Unique(Value::Array(values)))
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<Unique, A::Error> {
+        let mut values = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(serde::de::Error::custom("duplicate JSON object key"));
+            }
+            let Unique(value) = map.next_value()?;
+            values.insert(key, value);
+        }
+        Ok(Unique(Value::Object(values)))
+    }
+}
+
 impl<'de> Deserialize<'de> for Unique {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        struct Json;
-        impl<'de> Visitor<'de> for Json {
-            type Value = Unique;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("JSON with unique object keys")
-            }
-            fn visit_bool<E: serde::de::Error>(self, v: bool) -> std::result::Result<Unique, E> {
-                Ok(Unique(v.into()))
-            }
-            fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<Unique, E> {
-                Ok(Unique(v.into()))
-            }
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<Unique, E> {
-                Ok(Unique(v.into()))
-            }
-            fn visit_f64<E: serde::de::Error>(self, v: f64) -> std::result::Result<Unique, E> {
-                Ok(Unique(
-                    serde_json::Number::from_f64(v)
-                        .ok_or_else(|| E::custom("invalid number"))?
-                        .into(),
-                ))
-            }
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<Unique, E> {
-                Ok(Unique(v.into()))
-            }
-            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Unique, E> {
-                Ok(Unique(Value::Null))
-            }
-            fn visit_seq<A: SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> std::result::Result<Unique, A::Error> {
-                let mut values = Vec::new();
-                while let Some(Unique(value)) = seq.next_element()? {
-                    values.push(value);
-                }
-                Ok(Unique(Value::Array(values)))
-            }
-            fn visit_map<A: MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> std::result::Result<Unique, A::Error> {
-                let mut values = serde_json::Map::new();
-                while let Some(key) = map.next_key::<String>()? {
-                    if values.contains_key(&key) {
-                        return Err(serde::de::Error::custom("duplicate JSON object key"));
-                    }
-                    let Unique(value) = map.next_value()?;
-                    values.insert(key, value);
-                }
-                Ok(Unique(Value::Object(values)))
-            }
-        }
-        deserializer.deserialize_any(Json)
+        deserializer.deserialize_any(UniqueJson)
     }
 }
 
@@ -123,31 +119,46 @@ pub fn read<T: serde::de::DeserializeOwned>(reader: &mut impl BufRead) -> Result
     if first.get("antislop_chunk").is_none() {
         return Ok(Some(serde_json::from_value(first)?));
     }
-    let mut frame = first;
+    read_chunks(reader, first).map(Some)
+}
+
+fn read_chunks<T: serde::de::DeserializeOwned>(
+    reader: &mut impl BufRead,
+    mut frame: Value,
+) -> Result<T> {
     let mut text = String::new();
     let mut index = 0u64;
     loop {
         let chunk = &frame["antislop_chunk"];
-        require(
-            frame.as_object().is_some_and(|o| o.len() == 1)
-                && chunk["index"].as_u64() == Some(index),
-            "invalid chunk sequence",
-        )?;
-        text.push_str(
-            chunk["text"]
-                .as_str()
-                .ok_or_else(|| crate::Error::Invalid("missing chunk text".into()))?,
-        );
-        let done = chunk["done"]
-            .as_bool()
-            .ok_or_else(|| crate::Error::Invalid("missing chunk completion flag".into()))?;
-        if done {
-            return Ok(Some(decode(text.as_bytes())?));
+        validate_chunk(&frame, chunk, index)?;
+        text.push_str(chunk_text(chunk)?);
+        if chunk_done(chunk)? {
+            return decode(text.as_bytes());
         }
         frame = read_frame(reader)?
             .ok_or_else(|| crate::Error::Invalid("incomplete chunked message".into()))?;
         index += 1;
     }
+}
+
+fn validate_chunk(frame: &Value, chunk: &Value, index: u64) -> Result<()> {
+    require(
+        frame.as_object().is_some_and(|object| object.len() == 1)
+            && chunk["index"].as_u64() == Some(index),
+        "invalid chunk sequence",
+    )
+}
+
+fn chunk_text(chunk: &Value) -> Result<&str> {
+    chunk["text"]
+        .as_str()
+        .ok_or_else(|| crate::Error::Invalid("missing chunk text".into()))
+}
+
+fn chunk_done(chunk: &Value) -> Result<bool> {
+    chunk["done"]
+        .as_bool()
+        .ok_or_else(|| crate::Error::Invalid("missing chunk completion flag".into()))
 }
 
 #[cfg(test)]
@@ -168,6 +179,13 @@ mod tests {
             read::<Value>(&mut std::io::Cursor::new(wire)).unwrap(),
             Some(original)
         );
+    }
+
+    #[test]
+    fn duplicate_keys_and_oversized_frames_are_rejected() {
+        assert!(decode::<Value>(br#"{"outer":{"key":1,"key":2}}"#).is_err());
+        let oversized = vec![b' '; MAX_FRAME + 1];
+        assert!(read::<Value>(&mut std::io::Cursor::new(oversized)).is_err());
     }
 
     #[test]

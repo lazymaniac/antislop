@@ -82,14 +82,15 @@ def main():
     )
 
     # Physical line boundaries, LF/CRLF, and final newline behavior.
-    ok({"lib.rs": "\n".join(["// line"] * 299) + "\n"}, "no violations")
-    bad({"lib.rs": "\n".join(["// line"] * 300)}, "file is 300 lines")
-    ok({"lib.rs": "\r\n".join(["// line"] * 299) + "\r\n"}, "no violations")
-    bad({"lib.rs": "\r\n".join(["// line"] * 300) + "\r\n"}, "file is 300 lines")
+    ok({"lib.rs": "\n".join(["// line"] * 300) + "\n"}, "no violations")
+    ok({"lib.rs": "\n".join(["// line"] * 300)}, "no violations")
+    bad({"lib.rs": "\n".join(["// line"] * 301)}, "file is 301 lines")
+    ok({"lib.rs": "\r\n".join(["// line"] * 300) + "\r\n"}, "no violations")
+    bad({"lib.rs": "\r\n".join(["// line"] * 301) + "\r\n"}, "file is 301 lines")
 
-    # Exactly 29 versus 30 physical lines in callable bodies.
-    ok({"lib.rs": "fn small() {\n" + "\n".join("    let _ = 1;" for _ in range(27)) + "\n}"})
-    bad({"lib.rs": "fn large() {\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}"}, "callable large is 30 lines")
+    # Exactly 30 versus 31 physical lines in callable bodies.
+    ok({"lib.rs": "fn small() {\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}"})
+    bad({"lib.rs": "fn large() {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}"}, "callable large is 31 lines")
     multiline_restricted = "pub(\n    crate\n)\nfn restricted() {\n" + "\n".join(
         "    let _ = 1;" for _ in range(27)
     ) + "\n}\n"
@@ -104,7 +105,7 @@ trait T { fn declaration(&self); fn defaulted(&self) {} }
 unsafe extern "C" { fn foreign(); }
 '''
     ok({"lib.rs": forms})
-    body = "{\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}"
+    body = "{\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}"
     callable_forms = {
         "free": "fn free() " + body,
         "nested": "fn outer() {\n    fn nested() " + body + "\n}",
@@ -113,10 +114,19 @@ unsafe extern "C" { fn foreign(); }
     }
     for symbol, source in callable_forms.items():
         bad({"lib.rs": source + "\n"}, f"callable {symbol}")
-    long_foreign = "unsafe extern \"C\" {\n" + "\n".join("    // declaration context" for _ in range(29)) + "\n    fn foreign();\n}\n"
+    long_foreign = "unsafe extern \"C\" {\n" + "\n".join("    // declaration context" for _ in range(30)) + "\n    fn foreign();\n}\n"
     bad({"lib.rs": long_foreign}, "callable foreign")
-    long_trait_decl = "trait T {\n" + "\n".join("    // declaration context" for _ in range(29)) + "\n    fn declared(&self);\n}\n"
+    long_trait_decl = "trait T {\n" + "\n".join("    // declaration context" for _ in range(30)) + "\n    fn declared(&self);\n}\n"
     bad({"lib.rs": long_trait_decl}, "callable declared")
+    attached_exact = "// attached\n#[inline]\nfn exactly() {\n" + "\n".join(
+        "    let _ = 1;" for _ in range(26)
+    ) + "\n}\n"
+    ok({"lib.rs": attached_exact}, "no violations")
+    attached_over = "// attached\n#[inline]\nfn over() {\n" + "\n".join(
+        "    let _ = 1;" for _ in range(27)
+    ) + "\n}\n"
+    bad({"lib.rs": attached_over}, "callable over is 31 lines", 1)
+
     # Multiline signatures and attached docs/comments/attributes count from the prefix.
     attached = "/// heading\n// note\n\n#[allow(dead_code)]\npub fn wide(\n    a: u8,\n) {\n}\n"
     ok({"lib.rs": attached})
@@ -128,17 +138,17 @@ unsafe extern "C" { fn foreign(); }
     bad({"lib.rs": block_comment}, "callable documented", 1)
     # A leading dereference is code, not a continuation of an imaginary block comment.
     dereference_before_nested = "fn outer() {\n    *ptr;\n    fn nested() {\n" + "\n".join(
-        "        let _ = 1;" for _ in range(28)
+        "        let _ = 1;" for _ in range(29)
     ) + "\n    }\n}\n"
-    bad({"lib.rs": dereference_before_nested}, "callable nested is 30 lines", 3)
+    bad({"lib.rs": dereference_before_nested}, "callable nested is 31 lines", 3)
     actual_block_before_nested = "fn outer() {\n    /* block\n     * continued\n     */\n    fn nested() {\n" + "\n".join(
         "        let _ = 1;" for _ in range(27)
     ) + "\n    }\n}\n"
     bad({"lib.rs": actual_block_before_nested}, "callable nested", 2)
     multiline_prefix_block = "/* lead\n   block continuation\n*/\nfn block_prefixed() {\n" + "\n".join(
-        "    let _ = 1;" for _ in range(25)
+        "    let _ = 1;" for _ in range(26)
     ) + "\n}\n"
-    bad({"lib.rs": multiline_prefix_block}, "callable block_prefixed is 30 lines", 1)
+    bad({"lib.rs": multiline_prefix_block}, "callable block_prefixed is 31 lines", 1)
     plain_block_before_nested = "fn outer() {\n    /* block\n    continuation without a star\n    */\n    fn nested() {\n" + "\n".join(
         "        let _ = 1;" for _ in range(27)
     ) + "\n    }\n}\n"
@@ -147,37 +157,37 @@ unsafe extern "C" { fn foreign(); }
         'fn outer() {\n    let text = r##"\n'
         '    // this looks like a leading comment but is raw-string content\n'
         '    "##; fn nested() {\n'
-        + "\n".join("        let _ = 1;" for _ in range(28))
+        + "\n".join("        let _ = 1;" for _ in range(29))
         + "\n    }\n}\n"
     )
     bad(
         {"lib.rs": raw_string_before_nested},
-        "src/lib.rs:4: callable nested is 30 lines",
+        "src/lib.rs:4: callable nested is 31 lines",
         4,
     )
     nested_test_code = "#[cfg(not(test))]\nfn outer() {\n    #[cfg(test)]\n    fn nested_test() {\n" + "\n".join(
-        "        let _ = 1;" for _ in range(24)
+        "        let _ = 1;" for _ in range(25)
     ) + "\n    }\n}\n"
     nested_test_result = invoke({"lib.rs": nested_test_code})
     nested_test_output = nested_test_result.stderr + nested_test_result.stdout
-    assert nested_test_result.returncode != 0 and "callable outer is 30 lines" in nested_test_output
+    assert nested_test_result.returncode != 0 and "callable outer is 31 lines" in nested_test_output
     assert "callable nested_test" not in nested_test_output, nested_test_output
     RESULTS.append(("fail", nested_test_result.returncode, "nested test lines remain in outer span", nested_test_output.strip()))
     # Prefix line is the diagnostic start, and a blank-line separator stops attachment.
     prefixed = "// detached\n\nfn f() {\n" + "\n".join("    let _ = 0;" for _ in range(27)) + "\n}\n"
     bad({"lib.rs": prefixed}, "callable f is 31 lines", 1)
-    separated = "// old comment\n\n\n// leading comment\nfn separated() {\n" + "\n".join("    let _ = 1;" for _ in range(27)) + "\n}\n"
-    bad({"lib.rs": separated}, "callable separated is 30 lines", 4)
+    separated = "// old comment\n\n\n// leading comment\nfn separated() {\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}\n"
+    bad({"lib.rs": separated}, "callable separated is 31 lines", 4)
     unrelated = "// unrelated\n\n\nfn independent() {\n" + "\n".join(
-        "    let _ = 1;" for _ in range(28)
+        "    let _ = 1;" for _ in range(29)
     ) + "\n}\n"
-    bad({"lib.rs": unrelated}, "callable independent is 30 lines", 4)
+    bad({"lib.rs": unrelated}, "callable independent is 31 lines", 4)
     contiguous = "// leading\n/// docs\n#[inline]\nfn prefixed() {\n" + "\n".join(
-        "    let _ = 1;" for _ in range(25)
+        "    let _ = 1;" for _ in range(26)
     ) + "\n}\n"
-    bad({"lib.rs": contiguous}, "callable prefixed is 30 lines", 1)
+    bad({"lib.rs": contiguous}, "callable prefixed is 31 lines", 1)
     ok({"lib.rs": "//! inner docs\n\nfn f() {}\n"})
-    inner_docs = "//! crate docs\n\nfn public_api() {\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}\n"
+    inner_docs = "//! crate docs\n\nfn public_api() {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}\n"
     bad({"lib.rs": inner_docs}, "callable public_api", 3)
     file_test = "#![cfg(test)]\nfn test_only() {\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}\n"
     ok({"lib.rs": file_test})
@@ -187,12 +197,12 @@ unsafe extern "C" { fn foreign(); }
     # Test-only contexts, symbolic cfg implication, and test ancestor propagation.
     test_only = "#[cfg(test)]\nmod tests {\n" + "\n".join("fn hidden() {}" for _ in range(40)) + "\n}\n#[test]\nfn unit() {}\n"
     ok({"lib.rs": test_only})
-    mixed_large = "#[cfg(test)]\nmod tests {\n" + "\n".join("fn hidden() {}" for _ in range(297)) + "\n}\n"
-    bad({"lib.rs": mixed_large}, "file is 300 lines")
-    long_fn = "{\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}"
+    mixed_large = "#[cfg(test)]\nmod tests {\n" + "\n".join("fn hidden() {}" for _ in range(298)) + "\n}\n"
+    bad({"lib.rs": mixed_large}, "file is 301 lines")
+    long_fn = "{\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}"
     ok({"lib.rs": "#[cfg(all(test, feature = \"fast\"))]\nfn only_test() " + long_fn + "\n"})
     bad({"lib.rs": "#[cfg(not(test))]\nfn production() " + long_fn + "\n"}, "callable production")
-    bad({"lib.rs": "#[cfg(any(test, feature = \"fast\"))]\nfn production_possible() {\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}\n"}, "callable production_possible")
+    bad({"lib.rs": "#[cfg(any(test, feature = \"fast\"))]\nfn production_possible() {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}\n"}, "callable production_possible")
     # External and inline module handling; unreferenced source files are still included.
     ok({"lib.rs": "#[cfg(test)]\nmod test_child;\n", "test_child.rs": "fn hidden() {}\n"})
     test_child_large = "#[cfg(test)]\nmod test_child;\n"
@@ -205,7 +215,8 @@ unsafe extern "C" { fn foreign(); }
         "test_child.rs": "#![cfg(test)]\nmod nested;\n",
         "test_child/nested.rs": "\n".join(["// nested test-only"] * 350),
     }, "2 maintained Rust files")
-    bad({"generated/output.rs": "\n".join(["// generated-looking"] * 300)}, "file is 300 lines")
+    ok({"generated/output.rs": "\n".join(["// generated output"] * 350)}, "EXCLUDED src/generated/output.rs: generated or vendor source")
+    ok({"vendor/copied.rs": "\n".join(["// vendor source"] * 350)}, "EXCLUDED src/vendor/copied.rs: generated or vendor source")
     ok({"lib.rs": "mod child;\n", "child.rs": "fn visible() {}\n", "orphan.rs": "fn still_production() {}\n"})
     bad({"lib.rs": "mod missing;\n"}, "unresolved module missing")
     bad(
@@ -231,23 +242,31 @@ unsafe extern "C" { fn foreign(); }
     conditional_paths = {
         "lib.rs": '#[cfg(test)]\n#[path = "test_part.rs"]\nmod selected;\n#[cfg(not(test))]\n#[path = "prod_part.rs"]\nmod selected;\n',
         "test_part.rs": "\n".join(["// test-only"] * 350),
-        "prod_part.rs": "\n".join(["// production alternate"] * 300),
+        "prod_part.rs": "\n".join(["// production alternate"] * 301),
     }
-    bad(conditional_paths, "file is 300 lines", 1, "src/prod_part.rs")
+    bad(conditional_paths, "file is 301 lines", 1, "src/prod_part.rs")
     # Every path override on one conditional module declaration is a reference edge.
     # The second path must remain production even though the first path is valid.
     bad(
         {
             "lib.rs": '#[path = "small.rs"]\n#[path = "large.rs"]\nmod selected;\n',
             "small.rs": "fn small() {}\n",
-            "large.rs": "\n".join(["// production alternate"] * 300),
+            "large.rs": "\n".join(["// production alternate"] * 301),
         },
-        "src/large.rs:1: file is 300 lines",
+        "src/large.rs:1: file is 301 lines",
         1,
         "src/large.rs",
     )
+    linked_source = invoke({
+        "bin/entry.rs": '#[path = "../../tools/size_check/helper.rs"]\nmod helper;\n',
+        "@root/tools/size_check/helper.rs": "fn external_helper() {}\n",
+    })
+    linked_output = linked_source.stderr + linked_source.stdout
+    assert linked_source.returncode == 0 and "SOURCE tools/size_check/helper.rs" in linked_output, linked_output
+    RESULTS.append(("pass", linked_source.returncode, "path-linked maintained source is enumerated", linked_output.strip()))
+
     linked_helper = "fn shared_helper() {\n" + "\n".join(
-        "    let _ = 1;" for _ in range(28)
+        "    let _ = 1;" for _ in range(29)
     ) + "\n}\n"
     bad(
         {
@@ -255,10 +274,10 @@ unsafe extern "C" { fn foreign(); }
             "bin/diagnostic.rs": '#[path = "../shared.rs"]\nmod production_shared;\n',
             "shared.rs": linked_helper + "\n".join(["// shared source"] * 270) + "\n",
         },
-        "src/shared.rs:1: callable shared_helper is 30 lines",
+        "src/shared.rs:1: callable shared_helper is 31 lines",
         1,
         "src/shared.rs",
-        extra_needles=("src/shared.rs:1: file is 300 lines", "0 classification errors"),
+        extra_needles=("src/shared.rs:1: file is 301 lines", "0 classification errors"),
         relative_root=True,
     )
     ok(
@@ -283,14 +302,14 @@ unsafe extern "C" { fn foreign(); }
             "lib.rs": '#[cfg(test)]\n#[path = "../shared.rs"]\nmod test_shared;\n',
             "bin/entry.rs": '#[path = "../../shared.rs"]\nmod production_shared;\n',
             "@root/shared.rs": "fn reused_helper() {\n"
-            + "".join("    let _ = 1;\n" for _ in range(28))
+            + "".join("    let _ = 1;\n" for _ in range(29))
             + "}\n"
             + "".join("// shared source\n" for _ in range(270)),
         },
-        "shared.rs:1: callable reused_helper is 30 lines",
+        "shared.rs:1: callable reused_helper is 31 lines",
         1,
         "shared.rs",
-        extra_needles=("shared.rs:1: file is 300 lines", "0 classification errors"),
+        extra_needles=("shared.rs:1: file is 301 lines", "0 classification errors"),
         parent_relative_root=True,
     )
 
@@ -341,6 +360,9 @@ unsafe extern "C" { fn foreign(); }
     missing_root = subprocess.run([str(BINARY), "--root"], text=True, capture_output=True)
     assert missing_root.returncode != 0 and "--root requires" in missing_root.stderr
     RESULTS.append(("fail", missing_root.returncode, "--root requires", missing_root.stderr.strip()))
+    unknown = subprocess.run([str(BINARY), "--unexpected"], text=True, capture_output=True)
+    assert unknown.returncode == 2 and "unknown argument: --unexpected" in unknown.stderr
+    RESULTS.append(("fail", unknown.returncode, "unknown argument", unknown.stderr.strip()))
     repository_run = subprocess.run(
         [str(BINARY), "--root", "."], cwd=ROOT, text=True, capture_output=True
     )

@@ -1,6 +1,7 @@
 use super::*;
+use crate::Error;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn configuration_errors_explain_location_and_repair_without_values() {
@@ -336,4 +337,27 @@ fn local_options_and_task_ceiling_have_defaults_and_bounds() {
         Config::from_toml(&text.replace("local_options = true", "local_options = false")).unwrap();
     assert!(!off.policy.local_options);
     assert!(Config::from_toml(&text.replace("max_tasks = 24", "max_tasks = 0")).is_err());
+}
+
+#[test]
+fn load_and_resolve_preserve_file_error_context_and_role_selection() {
+    let path = PathBuf::from("examples/antislop.toml");
+    let loaded = Config::load(&path).unwrap();
+    assert_eq!(
+        loaded
+            .resolve(WorkKind::Implementation, RoleKind::Executor)
+            .unwrap()
+            .profile,
+        "execution"
+    );
+    assert_ne!(
+        loaded
+            .resolve(WorkKind::Implementation, RoleKind::Verifier)
+            .unwrap()
+            .profile,
+        "execution"
+    );
+
+    let error = Config::load(Path::new("examples/missing-config-test.toml"));
+    assert!(matches!(error, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound));
 }

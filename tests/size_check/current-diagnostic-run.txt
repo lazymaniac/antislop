@@ -1,0 +1,477 @@
+command: .antislop/target/debug/diagnostic-size-check --root . (cwd: repository root)
+exit: 1
+SOURCE src/bin/diagnostic-size-check.rs
+SOURCE src/config/diagnostics.rs
+SOURCE src/config/model.rs
+EXCLUDED src/config/tests.rs: test-only source
+SOURCE src/config/validation.rs
+SOURCE src/config.rs
+SOURCE src/lean/agent.rs
+SOURCE src/lean/agent_tools.rs
+SOURCE src/lean/cli.rs
+SOURCE src/lean/content.rs
+SOURCE src/lean/core/messages.rs
+SOURCE src/lean/core/open.rs
+SOURCE src/lean/core.rs
+SOURCE src/lean/core_agent_review.rs
+SOURCE src/lean/core_agent_turn.rs
+SOURCE src/lean/core_change_review.rs
+SOURCE src/lean/core_comment_at.rs
+SOURCE src/lean/core_comment_helpers.rs
+SOURCE src/lean/core_config_snapshot.rs
+SOURCE src/lean/core_feedback_helpers.rs
+SOURCE src/lean/core_integration/flow.rs
+SOURCE src/lean/core_integration.rs
+SOURCE src/lean/core_integration_repair/repair.rs
+SOURCE src/lean/core_integration_repair.rs
+SOURCE src/lean/core_orchestrator_turn/context.rs
+SOURCE src/lean/core_orchestrator_turn/prompt.rs
+SOURCE src/lean/core_orchestrator_turn.rs
+SOURCE src/lean/core_path_helpers.rs
+SOURCE src/lean/core_plan_answer.rs
+SOURCE src/lean/core_plan_helpers.rs
+SOURCE src/lean/core_plan_proposal/helpers/recording.rs
+SOURCE src/lean/core_plan_proposal/helpers.rs
+SOURCE src/lean/core_plan_proposal.rs
+SOURCE src/lean/core_plan_report.rs
+SOURCE src/lean/core_plan_resume.rs
+SOURCE src/lean/core_plan_review.rs
+SOURCE src/lean/core_plan_revision.rs
+SOURCE src/lean/core_planner_turn/prompt.rs
+SOURCE src/lean/core_planner_turn.rs
+SOURCE src/lean/core_planning_context.rs
+SOURCE src/lean/core_prompt_helpers.rs
+SOURCE src/lean/core_repeat_plan.rs
+SOURCE src/lean/core_start_plan.rs
+SOURCE src/lean/core_task_checks/scheduler.rs
+SOURCE src/lean/core_task_checks.rs
+SOURCE src/lean/core_task_execution.rs
+SOURCE src/lean/core_task_freshness.rs
+SOURCE src/lean/core_task_inputs.rs
+SOURCE src/lean/core_task_recovery.rs
+SOURCE src/lean/core_unanswered.rs
+SOURCE src/lean/core_unblock_dependents.rs
+SOURCE src/lean/core_writer_base.rs
+SOURCE src/lean/daemon.rs
+SOURCE src/lean/diff/parser.rs
+SOURCE src/lean/diff.rs
+SOURCE src/lean/feasibility.rs
+SOURCE src/lean/git/recovery.rs
+SOURCE src/lean/git.rs
+SOURCE src/lean/history/content.rs
+SOURCE src/lean/history/mail/agent.rs
+SOURCE src/lean/history/mail.rs
+SOURCE src/lean/history/messages.rs
+SOURCE src/lean/history/rounds.rs
+EXCLUDED src/lean/history/tests.rs: test-only source
+SOURCE src/lean/history.rs
+SOURCE src/lean/interview.rs
+SOURCE src/lean/launch.rs
+SOURCE src/lean/ledger/mod.rs
+SOURCE src/lean/ledger/runtime/compliance.rs
+SOURCE src/lean/ledger/runtime/ledger_change.rs
+SOURCE src/lean/ledger/runtime/requirements/extraction.rs
+SOURCE src/lean/ledger/runtime/requirements/turn.rs
+SOURCE src/lean/ledger/runtime/requirements.rs
+SOURCE src/lean/ledger/runtime/submissions.rs
+EXCLUDED src/lean/ledger/runtime/tests.rs: test-only source
+SOURCE src/lean/ledger/runtime.rs
+SOURCE src/lean/ledger/storage/changes/apply.rs
+SOURCE src/lean/ledger/storage/changes.rs
+SOURCE src/lean/ledger/storage/entries.rs
+SOURCE src/lean/ledger/storage/evidence/queries.rs
+SOURCE src/lean/ledger/storage/evidence/status.rs
+SOURCE src/lean/ledger/storage/evidence.rs
+SOURCE src/lean/ledger/storage/reviews.rs
+SOURCE src/lean/ledger/storage/runs.rs
+SOURCE src/lean/ledger/storage/sources.rs
+SOURCE src/lean/ledger/storage/turns.rs
+SOURCE src/lean/ledger/storage/validation.rs
+SOURCE src/lean/ledger/storage.rs
+SOURCE src/lean/mail.rs
+SOURCE src/lean/mcp/schema.rs
+SOURCE src/lean/mcp.rs
+SOURCE src/lean/mod.rs
+SOURCE src/lean/native.rs
+SOURCE src/lean/plan_revision.rs
+EXCLUDED src/lean/plan_tests.rs: test-only source
+SOURCE src/lean/progress.rs
+SOURCE src/lean/projects.rs
+EXCLUDED src/lean/reliability_tests.rs: test-only source
+SOURCE src/lean/risks.rs
+SOURCE src/lean/rounds/handoff.rs
+SOURCE src/lean/rounds/session.rs
+EXCLUDED src/lean/rounds/tests.rs: test-only source
+SOURCE src/lean/rounds.rs
+EXCLUDED src/lean/run_context/tests.rs: test-only source
+SOURCE src/lean/run_context.rs
+SOURCE src/lean/store/agent_exchange.rs
+SOURCE src/lean/store/comment_mail_state.rs
+SOURCE src/lean/store/comments_and_mail/comments/insert.rs
+SOURCE src/lean/store/comments_and_mail/comments/updates.rs
+SOURCE src/lean/store/comments_and_mail/comments.rs
+SOURCE src/lean/store/comments_and_mail/mail.rs
+SOURCE src/lean/store/comments_and_mail.rs
+SOURCE src/lean/store/history_queries/plan_pages.rs
+SOURCE src/lean/store/history_queries.rs
+SOURCE src/lean/store/mail_and_events/event_encoding.rs
+SOURCE src/lean/store/mail_and_events.rs
+SOURCE src/lean/store/messages_and_turns.rs
+SOURCE src/lean/store/plan_history.rs
+SOURCE src/lean/store/plan_reviews.rs
+SOURCE src/lean/store/plan_tasks/checks.rs
+SOURCE src/lean/store/plan_tasks.rs
+SOURCE src/lean/store/revision_jobs.rs
+SOURCE src/lean/store/session.rs
+SOURCE src/lean/store/sessions_and_plans/recovery.rs
+SOURCE src/lean/store/sessions_and_plans.rs
+SOURCE src/lean/store/setup_and_conversations/schema.rs
+SOURCE src/lean/store/setup_and_conversations.rs
+EXCLUDED src/lean/store/tests/agent_exchange.rs: test-only source
+EXCLUDED src/lean/store/tests/events_and_recovery.rs: test-only source
+EXCLUDED src/lean/store/tests/plan_revision.rs: test-only source
+EXCLUDED src/lean/store/tests/rows_and_feedback.rs: test-only source
+EXCLUDED src/lean/store/tests/schema_and_comments.rs: test-only source
+EXCLUDED src/lean/store/tests.rs: test-only source
+SOURCE src/lean/store.rs
+SOURCE src/lean/task_failure.rs
+SOURCE src/lean/tasks/agents/gates.rs
+SOURCE src/lean/tasks/agents.rs
+SOURCE src/lean/tasks/bounds.rs
+SOURCE src/lean/tasks/effect.rs
+SOURCE src/lean/tasks/feedback.rs
+SOURCE src/lean/tasks/graph.rs
+SOURCE src/lean/tasks/messages.rs
+SOURCE src/lean/tasks/plan.rs
+SOURCE src/lean/tasks/prompts/instructions.rs
+SOURCE src/lean/tasks/prompts/requirements.rs
+SOURCE src/lean/tasks/prompts/review.rs
+SOURCE src/lean/tasks/prompts/worker.rs
+EXCLUDED src/lean/tasks/tests/card_outcomes.rs: test-only source
+EXCLUDED src/lean/tasks/tests/coverage.rs: test-only source
+EXCLUDED src/lean/tasks/tests/options_and_gates.rs: test-only source
+EXCLUDED src/lean/tasks/tests/parsing_and_validation.rs: test-only source
+EXCLUDED src/lean/tasks/tests/plans_and_messages.rs: test-only source
+EXCLUDED src/lean/tasks/tests/requirements_and_graph.rs: test-only source
+EXCLUDED src/lean/tasks/tests/verdicts_and_bounds.rs: test-only source
+EXCLUDED src/lean/tasks/tests.rs: test-only source
+SOURCE src/lean/tasks/validation.rs
+SOURCE src/lean/tasks.rs
+SOURCE src/lean/terminal.rs
+SOURCE src/lean/trust.rs
+SOURCE src/lean/tui/clipboard.rs
+SOURCE src/lean/tui/config.rs
+SOURCE src/lean/tui/dashboard.rs
+SOURCE src/lean/tui/details.rs
+SOURCE src/lean/tui/diffview.rs
+SOURCE src/lean/tui/document.rs
+SOURCE src/lean/tui/editor.rs
+SOURCE src/lean/tui/graph.rs
+SOURCE src/lean/tui/history.rs
+SOURCE src/lean/tui/inspection.rs
+SOURCE src/lean/tui/interview.rs
+SOURCE src/lean/tui/ledger.rs
+SOURCE src/lean/tui/mod.rs
+SOURCE src/lean/tui/native_view.rs
+SOURCE src/lean/tui/palette.rs
+SOURCE src/lean/tui/planhistory.rs
+SOURCE src/lean/tui/planview.rs
+SOURCE src/lean/tui/sanitize.rs
+SOURCE src/lean/tui/selection.rs
+SOURCE src/lean/tui/taskinfo.rs
+SOURCE src/lean/tui/theme.rs
+SOURCE src/lean/tui/unblock.rs
+SOURCE src/lean/tui/view.rs
+SOURCE src/lean/tui/workspace.rs
+SOURCE src/lean/turn_result.rs
+SOURCE src/lean/workflow/repair.rs
+EXCLUDED src/lean/workflow/tests.rs: test-only source
+SOURCE src/lean/workflow.rs
+SOURCE src/lib.rs
+SOURCE src/main.rs
+SOURCE src/transport.rs
+SOURCE tools/size_check/checker.rs
+SOURCE tools/size_check/classify.rs
+SOURCE tools/size_check/inventory.rs
+SOURCE tools/size_check/runner.rs
+SOURCE tools/size_check/scan.rs
+SOURCE tools/size_check/source.rs
+SOURCE tools/size_check/walker_core.rs
+SOURCE tools/size_check/walker_macros.rs
+SOURCE tools/size_check/walker_modules.rs
+SOURCE tools/size_check/walker_visit.rs
+VIOLATION src/lean/agent.rs:139: callable redact_error is 39 lines (limit 30)
+VIOLATION src/lean/agent.rs:50: callable reap is 43 lines (limit 30)
+VIOLATION src/lean/agent_tools.rs:1: file is 366 lines (limit 300)
+VIOLATION src/lean/agent_tools.rs:27: callable agent_tool is 217 lines (limit 30)
+VIOLATION src/lean/cli.rs:144: callable ensure_trusted is 38 lines (limit 30)
+VIOLATION src/lean/cli.rs:1: file is 592 lines (limit 300)
+VIOLATION src/lean/cli.rs:234: callable chat is 125 lines (limit 30)
+VIOLATION src/lean/cli.rs:368: callable describe is 95 lines (limit 30)
+VIOLATION src/lean/cli.rs:464: callable review_lines is 52 lines (limit 30)
+VIOLATION src/lean/cli.rs:60: callable parse is 45 lines (limit 30)
+VIOLATION src/lean/core/messages.rs:36: callable dispatch_addressed is 50 lines (limit 30)
+VIOLATION src/lean/core_agent_review.rs:5: callable resume_agent_reviews is 93 lines (limit 30)
+VIOLATION src/lean/core_agent_turn.rs:1: file is 340 lines (limit 300)
+VIOLATION src/lean/core_agent_turn.rs:7: callable turn_inner is 333 lines (limit 30)
+VIOLATION src/lean/core_config_snapshot.rs:57: callable send_to_agent is 36 lines (limit 30)
+VIOLATION src/lean/core_integration/flow.rs:115: callable repair_conflict is 36 lines (limit 30)
+VIOLATION src/lean/core_integration_repair/repair.rs:51: callable run is 48 lines (limit 30)
+VIOLATION src/lean/core_orchestrator_turn.rs:11: callable orchestrator_turn is 146 lines (limit 30)
+VIOLATION src/lean/core_plan_answer.rs:18: callable handle_plan_answer is 40 lines (limit 30)
+VIOLATION src/lean/core_plan_proposal.rs:41: callable propose is 51 lines (limit 30)
+VIOLATION src/lean/core_plan_proposal.rs:8: callable checked_plan is 31 lines (limit 30)
+VIOLATION src/lean/core_plan_proposal/helpers.rs:134: callable review_plan is 34 lines (limit 30)
+VIOLATION src/lean/core_plan_proposal/helpers.rs:1: file is 343 lines (limit 300)
+VIOLATION src/lean/core_plan_revision.rs:109: callable prepare_revision is 31 lines (limit 30)
+VIOLATION src/lean/core_plan_revision.rs:141: callable validate_revision_scope is 37 lines (limit 30)
+VIOLATION src/lean/core_plan_revision.rs:14: callable submit_revision is 94 lines (limit 30)
+VIOLATION src/lean/core_plan_revision.rs:179: callable review_and_apply_revision is 93 lines (limit 30)
+VIOLATION src/lean/core_plan_revision.rs:1: file is 455 lines (limit 300)
+VIOLATION src/lean/core_plan_revision.rs:274: callable validate_authorized_scope is 57 lines (limit 30)
+VIOLATION src/lean/core_planner_turn.rs:10: callable planner_turn is 104 lines (limit 30)
+VIOLATION src/lean/core_start_plan.rs:167: callable finish_audited_plan is 43 lines (limit 30)
+VIOLATION src/lean/core_start_plan.rs:1: file is 344 lines (limit 300)
+VIOLATION src/lean/core_start_plan.rs:81: callable plan_runner is 33 lines (limit 30)
+VIOLATION src/lean/core_task_checks/scheduler.rs:77: callable schedule_one is 32 lines (limit 30)
+VIOLATION src/lean/core_task_execution.rs:1: file is 417 lines (limit 300)
+VIOLATION src/lean/core_task_execution.rs:9: callable run_task is 408 lines (limit 30)
+VIOLATION src/lean/core_task_recovery.rs:1: file is 500 lines (limit 300)
+VIOLATION src/lean/core_task_recovery.rs:6: callable recover_task_as is 494 lines (limit 30)
+VIOLATION src/lean/daemon.rs:1191: callable from is 503 lines (limit 30)
+VIOLATION src/lean/daemon.rs:1759: callable serve is 84 lines (limit 30)
+VIOLATION src/lean/daemon.rs:1844: callable handle is 756 lines (limit 30)
+VIOLATION src/lean/daemon.rs:1: file is 3347 lines (limit 300)
+VIOLATION src/lean/daemon.rs:2633: callable handle_events is 41 lines (limit 30)
+VIOLATION src/lean/daemon.rs:2745: callable cleanup_config_temporaries is 47 lines (limit 30)
+VIOLATION src/lean/daemon.rs:2794: callable prepare is 38 lines (limit 30)
+VIOLATION src/lean/daemon.rs:2903: callable stop is 37 lines (limit 30)
+VIOLATION src/lean/daemon.rs:2941: callable connect is 91 lines (limit 30)
+VIOLATION src/lean/daemon.rs:699: callable from is 489 lines (limit 30)
+VIOLATION src/lean/git.rs:132: callable commit_paths is 38 lines (limit 30)
+VIOLATION src/lean/git.rs:1: file is 1176 lines (limit 300)
+VIOLATION src/lean/git.rs:231: callable add_worktree is 31 lines (limit 30)
+VIOLATION src/lean/git.rs:282: callable working_tree_fingerprint is 33 lines (limit 30)
+VIOLATION src/lean/git.rs:344: callable combine is 58 lines (limit 30)
+VIOLATION src/lean/git.rs:36: callable commit_subject is 33 lines (limit 30)
+VIOLATION src/lean/git.rs:450: callable changed_paths is 34 lines (limit 30)
+VIOLATION src/lean/git.rs:517: callable integrate_scoped is 128 lines (limit 30)
+VIOLATION src/lean/git.rs:70: callable snapshot is 61 lines (limit 30)
+VIOLATION src/lean/git/recovery.rs:4: callable recovery_fingerprint is 69 lines (limit 30)
+VIOLATION src/lean/launch.rs:134: callable agy is 37 lines (limit 30)
+VIOLATION src/lean/launch.rs:180: callable claude is 70 lines (limit 30)
+VIOLATION src/lean/launch.rs:1: file is 598 lines (limit 300)
+VIOLATION src/lean/launch.rs:273: callable codex is 43 lines (limit 30)
+VIOLATION src/lean/launch.rs:317: callable opencode is 62 lines (limit 30)
+VIOLATION src/lean/launch.rs:36: callable command is 38 lines (limit 30)
+VIOLATION src/lean/launch.rs:75: callable gemini is 58 lines (limit 30)
+VIOLATION src/lean/ledger/mod.rs:1: file is 334 lines (limit 300)
+VIOLATION src/lean/ledger/mod.rs:233: callable resolve_covers is 42 lines (limit 30)
+VIOLATION src/lean/ledger/runtime/compliance.rs:61: callable produce_audit is 33 lines (limit 30)
+VIOLATION src/lean/ledger/runtime/compliance.rs:95: callable verify_audit is 42 lines (limit 30)
+VIOLATION src/lean/ledger/runtime/requirements.rs:172: callable apply_extracted_requirements is 31 lines (limit 30)
+VIOLATION src/lean/ledger/runtime/requirements.rs:51: callable register_missing_sources is 31 lines (limit 30)
+VIOLATION src/lean/ledger/runtime/submissions.rs:153: callable submitted_audit_review is 65 lines (limit 30)
+VIOLATION src/lean/ledger/runtime/submissions.rs:1: file is 472 lines (limit 300)
+VIOLATION src/lean/ledger/runtime/submissions.rs:233: callable quoted_span is 62 lines (limit 30)
+VIOLATION src/lean/ledger/runtime/submissions.rs:336: callable resolve_evidence is 49 lines (limit 30)
+VIOLATION src/lean/ledger/runtime/submissions.rs:75: callable submitted_extraction is 53 lines (limit 30)
+VIOLATION src/lean/ledger/storage/reviews.rs:1: file is 341 lines (limit 300)
+VIOLATION src/lean/ledger/storage/reviews.rs:301: callable accept_extraction is 35 lines (limit 30)
+VIOLATION src/lean/ledger/storage/turns.rs:1: file is 315 lines (limit 300)
+VIOLATION src/lean/ledger/storage/turns.rs:4: callable reject_ledger_proposal is 92 lines (limit 30)
+VIOLATION src/lean/mcp.rs:123: callable start is 33 lines (limit 30)
+VIOLATION src/lean/mcp.rs:1: file is 1080 lines (limit 300)
+VIOLATION src/lean/mcp.rs:204: callable wait is 61 lines (limit 30)
+VIOLATION src/lean/mcp.rs:292: callable forward is 38 lines (limit 30)
+VIOLATION src/lean/mcp.rs:342: callable serve is 56 lines (limit 30)
+VIOLATION src/lean/mcp.rs:405: callable allowed_tools is 32 lines (limit 30)
+VIOLATION src/lean/mcp.rs:440: callable tool_list is 34 lines (limit 30)
+VIOLATION src/lean/mcp.rs:499: callable dispatch is 77 lines (limit 30)
+VIOLATION src/lean/native.rs:1: file is 761 lines (limit 300)
+VIOLATION src/lean/native.rs:223: callable prepare_scoped is 35 lines (limit 30)
+VIOLATION src/lean/native.rs:334: callable wait_ready is 32 lines (limit 30)
+VIOLATION src/lean/native.rs:406: callable execute is 42 lines (limit 30)
+VIOLATION src/lean/native.rs:97: callable restore is 116 lines (limit 30)
+VIOLATION src/lean/plan_revision.rs:17: callable merge is 46 lines (limit 30)
+VIOLATION src/lean/plan_revision.rs:82: callable apply_plan_revision is 127 lines (limit 30)
+VIOLATION src/lean/store.rs:1: file is 302 lines (limit 300)
+VIOLATION src/lean/store/agent_exchange.rs:5: callable ask_agent_question is 41 lines (limit 30)
+VIOLATION src/lean/store/agent_exchange.rs:83: callable answer_agent_question is 31 lines (limit 30)
+VIOLATION src/lean/store/plan_tasks.rs:69: callable dependency_inputs is 46 lines (limit 30)
+VIOLATION src/lean/store/revision_jobs.rs:5: callable reserve_revision_job is 36 lines (limit 30)
+VIOLATION src/lean/store/sessions_and_plans.rs:118: callable queue_plan is 47 lines (limit 30)
+VIOLATION src/lean/tasks/agents.rs:135: callable resolve_gate_dependencies is 36 lines (limit 30)
+VIOLATION src/lean/tasks/agents.rs:172: callable with_required_agents is 31 lines (limit 30)
+VIOLATION src/lean/tasks/agents/gates.rs:15: callable new is 42 lines (limit 30)
+VIOLATION src/lean/tasks/plan.rs:90: callable order_graph is 36 lines (limit 30)
+VIOLATION src/lean/tasks/prompts/requirements.rs:144: callable round_handoff_prompt is 43 lines (limit 30)
+VIOLATION src/lean/tasks/validation.rs:98: callable append_unsettled_findings is 36 lines (limit 30)
+VIOLATION src/lean/terminal.rs:113: callable spawn is 102 lines (limit 30)
+VIOLATION src/lean/terminal.rs:1: file is 1206 lines (limit 300)
+VIOLATION src/lean/terminal.rs:216: callable snapshot is 80 lines (limit 30)
+VIOLATION src/lean/terminal.rs:297: callable input is 103 lines (limit 30)
+VIOLATION src/lean/terminal.rs:685: callable feed is 121 lines (limit 30)
+VIOLATION src/lean/terminal.rs:806: callable character is 84 lines (limit 30)
+VIOLATION src/lean/terminal.rs:910: callable feed is 73 lines (limit 30)
+VIOLATION src/lean/tui/clipboard.rs:20: callable copy_with_fallback is 37 lines (limit 30)
+VIOLATION src/lean/tui/clipboard.rs:70: callable native_copy is 61 lines (limit 30)
+VIOLATION src/lean/tui/config.rs:145: callable flatten is 34 lines (limit 30)
+VIOLATION src/lean/tui/config.rs:1: file is 747 lines (limit 300)
+VIOLATION src/lean/tui/config.rs:250: callable validate_draft is 37 lines (limit 30)
+VIOLATION src/lean/tui/config.rs:305: callable emit_draft is 53 lines (limit 30)
+VIOLATION src/lean/tui/config.rs:428: callable begin_addition is 40 lines (limit 30)
+VIOLATION src/lean/tui/config.rs:500: callable key is 61 lines (limit 30)
+VIOLATION src/lean/tui/config.rs:573: callable draw_with_theme is 68 lines (limit 30)
+VIOLATION src/lean/tui/dashboard.rs:172: callable hero is 143 lines (limit 30)
+VIOLATION src/lean/tui/dashboard.rs:1: file is 1098 lines (limit 300)
+VIOLATION src/lean/tui/dashboard.rs:316: callable sections is 539 lines (limit 30)
+VIOLATION src/lean/tui/dashboard.rs:905: callable card_lines is 76 lines (limit 30)
+VIOLATION src/lean/tui/dashboard.rs:982: callable draw_dashboard is 103 lines (limit 30)
+VIOLATION src/lean/tui/dashboard.rs:99: callable item is 37 lines (limit 30)
+VIOLATION src/lean/tui/details.rs:1114: callable draw_overview is 162 lines (limit 30)
+VIOLATION src/lean/tui/details.rs:1277: callable draw is 278 lines (limit 30)
+VIOLATION src/lean/tui/details.rs:1588: callable details_footer_hint is 41 lines (limit 30)
+VIOLATION src/lean/tui/details.rs:1630: callable format_tabs is 98 lines (limit 30)
+VIOLATION src/lean/tui/details.rs:1743: callable check_rows is 66 lines (limit 30)
+VIOLATION src/lean/tui/details.rs:1: file is 2167 lines (limit 300)
+VIOLATION src/lean/tui/details.rs:257: callable new is 54 lines (limit 30)
+VIOLATION src/lean/tui/details.rs:542: callable records is 571 lines (limit 30)
+VIOLATION src/lean/tui/diffview.rs:118: callable key is 40 lines (limit 30)
+VIOLATION src/lean/tui/diffview.rs:159: callable draw is 77 lines (limit 30)
+VIOLATION src/lean/tui/diffview.rs:1: file is 573 lines (limit 300)
+VIOLATION src/lean/tui/diffview.rs:237: callable draw_lines is 123 lines (limit 30)
+VIOLATION src/lean/tui/diffview.rs:362: callable diff_header_with_reviewer is 53 lines (limit 30)
+VIOLATION src/lean/tui/diffview.rs:442: callable draw_files is 56 lines (limit 30)
+VIOLATION src/lean/tui/document.rs:149: callable viewport_filtered is 79 lines (limit 30)
+VIOLATION src/lean/tui/document.rs:1: file is 478 lines (limit 300)
+VIOLATION src/lean/tui/document.rs:247: callable range_matches is 49 lines (limit 30)
+VIOLATION src/lean/tui/document.rs:297: callable wrap_range is 79 lines (limit 30)
+VIOLATION src/lean/tui/editor.rs:144: callable edit_key is 32 lines (limit 30)
+VIOLATION src/lean/tui/editor.rs:1: file is 867 lines (limit 300)
+VIOLATION src/lean/tui/editor.rs:30: callable compute_visual_lines is 95 lines (limit 30)
+VIOLATION src/lean/tui/editor.rs:348: callable move_word_left is 32 lines (limit 30)
+VIOLATION src/lean/tui/editor.rs:498: callable visual_cursor is 49 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:1046: callable render_with is 61 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:1119: callable health is 52 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:1198: callable describe is 55 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:1264: callable card_lines is 43 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:1365: callable draw_node is 243 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:1722: callable path is 36 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:1: file is 2676 lines (limit 300)
+VIOLATION src/lean/tui/graph.rs:333: callable get is 44 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:428: callable new_with_viewport is 456 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:894: callable neighbour is 32 lines (limit 30)
+VIOLATION src/lean/tui/graph.rs:927: callable route is 58 lines (limit 30)
+VIOLATION src/lean/tui/inspection.rs:144: callable message_document is 41 lines (limit 30)
+VIOLATION src/lean/tui/inspection.rs:186: callable append_answers is 55 lines (limit 30)
+VIOLATION src/lean/tui/inspection.rs:242: callable run_snapshot is 57 lines (limit 30)
+VIOLATION src/lean/tui/inspection.rs:9: callable task_snapshot is 111 lines (limit 30)
+VIOLATION src/lean/tui/interview.rs:129: callable draw is 137 lines (limit 30)
+VIOLATION src/lean/tui/interview.rs:1: file is 347 lines (limit 300)
+VIOLATION src/lean/tui/interview.rs:51: callable key is 77 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:1062: callable detail_lines is 162 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:1225: callable preview_lines is 58 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:1284: callable draw is 292 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:131: callable spec is 61 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:1620: callable list_diff_lines is 36 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:1657: callable lcs_pairs is 52 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:1710: callable changed_graphemes is 47 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:1758: callable text_diff_lines is 43 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:1: file is 1946 lines (limit 300)
+VIOLATION src/lean/tui/ledger.rs:283: callable new is 48 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:453: callable key is 275 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:728: callable mouse is 125 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:83: callable new is 48 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:853: callable reply is 115 lines (limit 30)
+VIOLATION src/lean/tui/ledger.rs:977: callable draw_form is 85 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:1146: callable recall_history is 40 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:1226: callable submit is 50 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:1277: callable submit_agent_message is 73 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:1351: callable submit_comment is 116 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:1468: callable return_to_main is 33 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:1508: callable ledger_action is 147 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:1672: callable apply_update_inner is 680 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:1: file is 7306 lines (limit 300)
+VIOLATION src/lean/tui/mod.rs:2353: callable dispatch is 148 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2502: callable open_unblock is 45 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2548: callable unblock_choice is 31 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2594: callable register_project is 34 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2629: callable switch_project is 36 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2666: callable open_project is 31 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2698: callable open_projects_picker is 38 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2804: callable picker_key is 89 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2894: callable run is 47 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2942: callable handle_plan_action is 53 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:2996: callable header_line is 39 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:3052: callable config_request is 32 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:3163: callable key_inner is 404 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:344: callable test_app_with_client_and_updates is 81 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:3568: callable graph_key is 93 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:3695: callable set_graph_filter is 42 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:3738: callable open_conversation_picker is 87 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:3857: callable details_key is 263 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:4121: callable paste is 55 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:4177: callable draw is 313 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:4549: callable draw_main is 40 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:4590: callable draw_chat is 133 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:4724: callable draw_transcript is 341 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:497: callable open is 158 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:5066: callable draw_graph is 137 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:5204: callable mouse_scroll is 39 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:5244: callable mouse is 187 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:5457: callable ascii is 55 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:5587: callable recover is 47 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:5635: callable run is 174 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:681: callable refetch_stale_details is 53 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:735: callable fetch_task is 87 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:823: callable fetch_run is 52 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:876: callable open_details is 33 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:910: callable request_confirmation is 31 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:942: callable is_confirmation_stale is 43 lines (limit 30)
+VIOLATION src/lean/tui/mod.rs:986: callable confirm_action is 76 lines (limit 30)
+VIOLATION src/lean/tui/native_view.rs:1: file is 883 lines (limit 300)
+VIOLATION src/lean/tui/native_view.rs:246: callable render is 38 lines (limit 30)
+VIOLATION src/lean/tui/native_view.rs:286: callable sync_native_views is 94 lines (limit 30)
+VIOLATION src/lean/tui/native_view.rs:412: callable recover_native_input is 45 lines (limit 30)
+VIOLATION src/lean/tui/native_view.rs:45: callable start is 184 lines (limit 30)
+VIOLATION src/lean/tui/palette.rs:164: callable items is 108 lines (limit 30)
+VIOLATION src/lean/tui/palette.rs:1: file is 894 lines (limit 300)
+VIOLATION src/lean/tui/palette.rs:277: callable draw_with_cursor is 89 lines (limit 30)
+VIOLATION src/lean/tui/palette.rs:380: callable lines is 96 lines (limit 30)
+VIOLATION src/lean/tui/palette.rs:477: callable lines_for_width is 44 lines (limit 30)
+VIOLATION src/lean/tui/palette.rs:542: callable draw_scroll is 54 lines (limit 30)
+VIOLATION src/lean/tui/planhistory.rs:55: callable key is 32 lines (limit 30)
+VIOLATION src/lean/tui/planhistory.rs:88: callable draw is 102 lines (limit 30)
+VIOLATION src/lean/tui/planview.rs:132: callable build_lines is 52 lines (limit 30)
+VIOLATION src/lean/tui/planview.rs:1: file is 1114 lines (limit 300)
+VIOLATION src/lean/tui/planview.rs:209: callable key is 137 lines (limit 30)
+VIOLATION src/lean/tui/planview.rs:396: callable layout_rows is 129 lines (limit 30)
+VIOLATION src/lean/tui/planview.rs:526: callable draw is 224 lines (limit 30)
+VIOLATION src/lean/tui/planview.rs:752: callable synthesize_document is 40 lines (limit 30)
+VIOLATION src/lean/tui/sanitize.rs:26: callable push is 67 lines (limit 30)
+VIOLATION src/lean/tui/selection.rs:156: callable mouse is 33 lines (limit 30)
+VIOLATION src/lean/tui/selection.rs:190: callable select_word is 34 lines (limit 30)
+VIOLATION src/lean/tui/selection.rs:90: callable update_snapshot is 39 lines (limit 30)
+VIOLATION src/lean/tui/taskinfo.rs:1: file is 804 lines (limit 300)
+VIOLATION src/lean/tui/taskinfo.rs:262: callable coverage_full is 59 lines (limit 30)
+VIOLATION src/lean/tui/theme.rs:1: file is 754 lines (limit 300)
+VIOLATION src/lean/tui/theme.rs:407: callable clean is 44 lines (limit 30)
+VIOLATION src/lean/tui/theme.rs:612: callable card is 49 lines (limit 30)
+VIOLATION src/lean/tui/unblock.rs:170: callable draw is 68 lines (limit 30)
+VIOLATION src/lean/tui/unblock.rs:1: file is 347 lines (limit 300)
+VIOLATION src/lean/tui/unblock.rs:29: callable choices_for is 45 lines (limit 30)
+VIOLATION src/lean/tui/view.rs:1602: callable progress is 59 lines (limit 30)
+VIOLATION src/lean/tui/view.rs:1673: callable target_name is 45 lines (limit 30)
+VIOLATION src/lean/tui/view.rs:1893: callable render_header_with is 117 lines (limit 30)
+VIOLATION src/lean/tui/view.rs:1: file is 3213 lines (limit 300)
+VIOLATION src/lean/tui/view.rs:2011: callable main_footer_hint is 48 lines (limit 30)
+VIOLATION src/lean/tui/view.rs:370: callable stage is 44 lines (limit 30)
+VIOLATION src/lean/tui/view.rs:481: callable report_progress is 66 lines (limit 30)
+VIOLATION src/lean/tui/view.rs:579: callable apply is 968 lines (limit 30)
+VIOLATION src/lean/turn_result.rs:148: callable tool_result is 42 lines (limit 30)
+VIOLATION src/lean/turn_result.rs:1: file is 691 lines (limit 300)
+VIOLATION src/lean/turn_result.rs:236: callable review is 72 lines (limit 30)
+VIOLATION src/lean/turn_result.rs:371: callable validate_task is 112 lines (limit 30)
+VIOLATION src/lean/workflow/repair.rs:6: callable queue_requirements_format_repair is 41 lines (limit 30)
+size diagnostic failed: 0 classification errors, 274 violations
