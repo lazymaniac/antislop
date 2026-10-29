@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 /// line, sleeps on "slow" (longer on "sleepy") and fails on "fail".
 fn fake_codex(dir: &std::path::Path) -> std::path::PathBuf {
     let script = dir.join("codex");
-    let log = dir.join("calls.log");
+    let log = dir.canonicalize().unwrap().join("calls.log");
     std::fs::write(
         &script,
         format!(
@@ -31,7 +31,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     common::interactive(&script);
-    script
+    script.canonicalize().unwrap()
 }
 
 fn config(codex: &std::path::Path) -> Config {
@@ -58,6 +58,7 @@ fn wait_idle(core: &Core, conversation: &str) {
 /// Each new native session gets its own id; resuming preserves that id.
 fn comment_codex(dir: &std::path::Path) -> std::path::PathBuf {
     let script = dir.join("comment-codex");
+    let dir = dir.canonicalize().unwrap();
     std::fs::write(
         &script,
         format!(
@@ -87,13 +88,13 @@ echo '{{"type":"turn.completed"}}'
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     common::interactive(&script);
-    script
+    script.canonicalize().unwrap()
 }
 
 #[test]
 fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
     use antislop::lean::COMMENT_ORCHESTRATOR;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let core = Core::open(
         &dir.path().join("state"),
         config(&comment_codex(dir.path())),
@@ -176,7 +177,7 @@ fn comments_use_an_independent_session_and_arrivals_get_their_own_turns() {
 #[test]
 fn failed_comments_keep_visible_cause_and_reopening_retries_them() {
     use antislop::lean::{COMMENT_ORCHESTRATOR, tui::view::View};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let core = Core::open(
         &dir.path().join("state"),
         config(&comment_codex(dir.path())),
@@ -243,7 +244,7 @@ fn failed_comments_keep_visible_cause_and_reopening_retries_them() {
 #[test]
 fn plan_revision_resolves_only_comments_in_its_answered_snapshot() {
     use antislop::lean::store::{Comment, Store};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("project").unwrap();
     let add = |target: &str| {
@@ -305,7 +306,7 @@ fn interrupted_comment_sessions_resume_after_daemon_restart() {
         store::{Comment, Store},
         tui::view::View,
     };
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let state = dir.path().join("state");
     antislop::lean::daemon::private_directory(&state).unwrap();
     let store = Store::open(&state.join("core.db")).unwrap();
@@ -361,7 +362,7 @@ fn interrupted_comment_sessions_resume_after_daemon_restart() {
 
 #[test]
 fn messages_are_accepted_at_once_and_answered_in_order() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let core = Core::open(&dir.path().join("state"), config(&fake_codex(dir.path()))).unwrap();
@@ -420,7 +421,7 @@ fn messages_are_accepted_at_once_and_answered_in_order() {
 
 #[test]
 fn a_session_resumed_after_a_restart_is_told_its_role_again() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let state = dir.path().join("state");
@@ -448,7 +449,7 @@ fn a_session_resumed_after_a_restart_is_told_its_role_again() {
 
 #[test]
 fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let core = Core::open(&dir.path().join("state"), config(&fake_codex(dir.path()))).unwrap();
@@ -483,7 +484,7 @@ fn a_failed_turn_blocks_nothing_and_its_question_is_asked_again() {
 
 #[test]
 fn a_cli_that_dies_while_starting_is_started_again_and_the_turn_completes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let real = fake_codex(dir.path());
@@ -526,13 +527,14 @@ fn a_cli_that_dies_while_starting_is_started_again_and_the_turn_completes() {
 
 fn chat(dir: &std::path::Path, project: &std::path::Path, message: &str) -> String {
     common::trust(project);
+    common::assert_test_socket(std::path::Path::new("../state"), project);
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
         .current_dir(project)
         .arg("chat")
         .arg("--config")
-        .arg(dir.join("antislop.toml"))
+        .arg(dir.join("antislop.toml").canonicalize().unwrap())
         .arg("--state")
-        .arg(dir.join("state"))
+        .arg("../state")
         .arg(message)
         .stdin(std::process::Stdio::null())
         .output()
@@ -543,11 +545,11 @@ fn chat(dir: &std::path::Path, project: &std::path::Path, message: &str) -> Stri
 
 #[test]
 fn the_cli_talks_to_one_daemon_that_outlives_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let dir = dir.path().canonicalize().unwrap();
+    let dir = common::tempdir();
+    let dir = dir.path();
     let project = dir.join("project");
     std::fs::create_dir(&project).unwrap();
-    let codex = fake_codex(&dir);
+    let codex = fake_codex(dir);
     std::fs::write(
         dir.join("antislop.toml"),
         std::fs::read_to_string(concat!(
@@ -562,7 +564,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     )
     .unwrap();
 
-    let first = chat(&dir, &project, "first");
+    let first = chat(dir, &project, "first");
     assert!(first.contains("answer: first"), "{first}");
     let pid = |state: &std::path::Path| {
         antislop::lean::daemon::Client::at(state)
@@ -572,7 +574,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     };
     let daemon = pid(&dir.join("state"));
     // The second frontend continues the same conversation on the same daemon.
-    let second = chat(&dir, &project, "second");
+    let second = chat(dir, &project, "second");
     assert!(
         second.contains("answer: second") && !second.contains("first"),
         "{second}"
@@ -599,7 +601,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
         .unwrap();
     let stop = |force: bool| {
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"));
-        command.current_dir(&dir).args(["stop", "--state", "state"]);
+        command.current_dir(dir).args(["stop", "--state", "state"]);
         if force {
             command.arg("--force");
         }
@@ -644,7 +646,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     assert!(store.running_processes().unwrap().is_empty());
     drop(store);
     // The saved conversation remains usable after a forced shutdown.
-    assert!(chat(&dir, &project, "after force").contains("answer: after force"));
+    assert!(chat(dir, &project, "after force").contains("answer: after force"));
     // Stopping works even after configuration has been removed.
     std::fs::remove_file(dir.join("antislop.toml")).unwrap();
     let stopped = stop(false);
@@ -662,7 +664,7 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
 
 #[test]
 fn stopping_without_a_daemon_creates_no_state() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     for args in [vec!["stop"], vec!["stop", "--state", "custom"]] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
             .current_dir(dir.path())
@@ -689,7 +691,7 @@ fn stopping_without_a_daemon_creates_no_state() {
 
 #[test]
 fn a_question_cut_off_by_a_restart_is_answered_after_it() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let state = dir.path().join("state");
@@ -736,11 +738,11 @@ fn a_rebuilt_frontend_with_changed_configuration_reconnects_to_running_work() {
 }
 
 fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
-    let dir = tempfile::tempdir().unwrap();
-    let dir = dir.path().canonicalize().unwrap();
+    let dir = common::tempdir();
+    let dir = dir.path();
     let project = dir.join("project");
     std::fs::create_dir(&project).unwrap();
-    let codex = fake_codex(&dir);
+    let codex = fake_codex(dir);
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/examples/antislop.toml"
@@ -765,13 +767,14 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
         std::fs::copy(current_build, &old_build).unwrap();
     }
     let run = |binary: &std::path::Path, message: &str| {
+        common::assert_test_socket(std::path::Path::new("../state"), &project);
         std::process::Command::new(binary)
             .current_dir(&project)
             .arg("chat")
             .arg("--config")
-            .arg(dir.join("antislop.toml"))
+            .arg(dir.join("antislop.toml").canonicalize().unwrap())
             .arg("--state")
-            .arg(&state)
+            .arg("../state")
             .arg(message)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -839,7 +842,7 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     assert!(first.wait_with_output().unwrap().status.success());
 
     // Once the work is done, the next frontend gets the new build/configuration.
-    let third = chat(&dir, &project, "third");
+    let third = chat(dir, &project, "third");
     assert!(third.contains("answer: third"), "{third}");
     assert_ne!(identity().unwrap()["pid"], daemon);
     antislop::lean::daemon::Client::at(&state)
@@ -849,11 +852,11 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
 
 #[test]
 fn a_daemon_whose_state_is_deleted_leaves() {
-    let dir = tempfile::tempdir().unwrap();
-    let dir = dir.path().canonicalize().unwrap();
+    let dir = common::tempdir();
+    let dir = dir.path();
     let project = dir.join("project");
     std::fs::create_dir(&project).unwrap();
-    let codex = fake_codex(&dir);
+    let codex = fake_codex(dir);
     std::fs::write(
         dir.join("antislop.toml"),
         std::fs::read_to_string(concat!(
@@ -867,7 +870,7 @@ fn a_daemon_whose_state_is_deleted_leaves() {
         ),
     )
     .unwrap();
-    chat(&dir, &project, "first");
+    chat(dir, &project, "first");
     let pid = antislop::lean::daemon::Client::at(&dir.join("state"))
         .call(&antislop::lean::daemon::Request::Identity)
         .unwrap()["pid"]
@@ -885,7 +888,7 @@ fn a_daemon_whose_state_is_deleted_leaves() {
 
 #[test]
 fn a_dead_daemons_agent_is_ended_before_its_turn_resumes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let state = dir.path().join("state");
@@ -925,11 +928,11 @@ fn a_dead_daemons_agent_is_ended_before_its_turn_resumes() {
 
 #[test]
 fn a_frontend_outlives_a_daemon_killed_mid_turn() {
-    let dir = tempfile::tempdir().unwrap();
-    let dir = dir.path().canonicalize().unwrap();
+    let dir = common::tempdir();
+    let dir = dir.path();
     let project = dir.join("project");
     std::fs::create_dir(&project).unwrap();
-    let codex = fake_codex(&dir);
+    let codex = fake_codex(dir);
     std::fs::write(
         dir.join("antislop.toml"),
         std::fs::read_to_string(concat!(
@@ -944,13 +947,14 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
     )
     .unwrap();
     common::trust(&project);
+    common::assert_test_socket(std::path::Path::new("../state"), &project);
     let frontend = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"))
         .current_dir(&project)
         .arg("chat")
         .arg("--config")
-        .arg(dir.join("antislop.toml"))
+        .arg(dir.join("antislop.toml").canonicalize().unwrap())
         .arg("--state")
-        .arg(dir.join("state"))
+        .arg("../state")
         .arg("sleepy question")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -991,7 +995,7 @@ fn new_card_feedback_payloads_survive_storage_and_events() {
     use antislop::lean::{store::Store, tasks};
     use serde_json::json;
 
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("proj").unwrap();
     let specs = [
@@ -1102,7 +1106,7 @@ fn new_card_feedback_payloads_survive_storage_and_events() {
 
 #[test]
 fn missing_configuration_reports_project_and_global_candidates() {
-    let root = tempfile::tempdir().unwrap();
+    let root = common::tempdir();
     let project = root.path().join("project");
     let global = root.path().join("user-config");
     std::fs::create_dir(&project).unwrap();
@@ -1124,7 +1128,7 @@ fn missing_configuration_reports_project_and_global_candidates() {
 
 #[test]
 fn configuration_snapshots_survive_live_replacement() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let codex = fake_codex(dir.path());
     let initial = config(&codex);
     let core = Core::open(&dir.path().join(".antislop"), initial.clone()).unwrap();
@@ -1139,7 +1143,7 @@ fn configuration_snapshots_survive_live_replacement() {
 
 #[test]
 fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let codex = fake_codex(dir.path());
     let initial = config(&codex);
     let core = Core::open(&dir.path().join(".antislop"), initial.clone()).unwrap();
@@ -1175,7 +1179,7 @@ fn next_turn_uses_live_profile_while_running_turn_keeps_its_profile() {
 
 #[test]
 fn process_failure_does_not_persist_credentials_from_cli_files() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let script = fake_codex(dir.path());
@@ -1207,7 +1211,7 @@ fn process_failure_does_not_persist_credentials_from_cli_files() {
 
 #[test]
 fn the_orchestrator_restarts_without_a_plan_and_preserves_history() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = common::tempdir();
     let core = Core::open(
         &dir.path().join("state"),
         config(&comment_codex(dir.path())),

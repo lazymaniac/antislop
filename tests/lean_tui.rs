@@ -2,7 +2,7 @@ const LARGE_PASTE_BYTES: usize = 64 * 1024;
 mod common;
 use antislop::lean::{
     comment_label,
-    daemon::{Client, Request, socket},
+    daemon::{Client, Request, socket as daemon_socket},
     diff::ReviewerProfile,
     tui::{
         App, CardProps, ConfirmationAction, ConfirmationCard, ConfirmationStatus, Details,
@@ -34,9 +34,86 @@ use ratatui::{
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
-use std::sync::mpsc;
+use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
 use std::thread;
 use std::time::Duration;
+
+struct TestTempDir {
+    relative: PathBuf,
+    absolute: PathBuf,
+}
+
+impl TestTempDir {
+    fn path(&self) -> &Path {
+        &self.absolute
+    }
+
+    fn relative_path(&self) -> &Path {
+        &self.relative
+    }
+}
+
+impl Drop for TestTempDir {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.relative).unwrap();
+    }
+}
+
+fn test_tempdir() -> TestTempDir {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    std::fs::create_dir_all(".antislop/tmp").unwrap();
+    let path = Path::new(".antislop/tmp").join(format!(
+        "lean-tui-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&path).unwrap();
+    let absolute = std::env::current_dir().unwrap().join(&path);
+    TestTempDir {
+        relative: path,
+        absolute,
+    }
+}
+
+fn test_socket(state: &std::path::Path) -> std::path::PathBuf {
+    let socket = daemon_socket(state);
+    assert!(
+        socket.starts_with(".antislop/tmp"),
+        "test socket escaped the in-worktree fixture root: {}",
+        socket.display()
+    );
+    assert!(
+        socket.as_os_str().len() < 100,
+        "test socket exceeded the Unix socket path limit: {}",
+        socket.display()
+    );
+    socket
+}
+
+#[test]
+fn test_socket_is_project_local_and_removed_with_its_fixture() {
+    let socket;
+    {
+        let dir = test_tempdir();
+        socket = test_socket(dir.relative_path());
+        let listener = UnixListener::bind(&socket).unwrap();
+        assert!(socket.exists(), "the bound fixture socket must exist");
+        eprintln!(
+            "guarded test socket: {} ({} bytes)",
+            socket.display(),
+            socket.as_os_str().len()
+        );
+        drop(listener);
+    }
+    assert!(
+        !socket.exists(),
+        "removing the in-project fixture must remove its socket"
+    );
+}
 
 #[test]
 fn plan_comments_show_queue_current_id_and_raw_failure_inside_the_plan() {
@@ -890,9 +967,27 @@ fn app_modal_ownership_and_isolation() {
 }
 
 #[test]
+fn modal_round_trip_preserves_unicode_draft_and_grapheme_editing() {
+    let mut app = App::test_app();
+    let draft = "draft 👩‍💻e\u{0301}";
+    app.input = InputBuffer::with_text(draft);
+    let cursor = app.input.cursor;
+
+    app.show_help(Help::Chat);
+    app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_eq!(app.input.text, draft);
+    assert_eq!(app.input.cursor, cursor);
+    app.key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert_eq!(app.input.text, "draft 👩‍💻");
+    assert_eq!(app.input.cursor, app.input.text.len());
+}
+
+#[test]
 fn app_fake_request_capture_through_app() {
-    let dir = tempfile::tempdir().unwrap();
-    let sock_path = socket(dir.path());
+    let dir = test_tempdir();
+    let sock_path = test_socket(dir.relative_path());
 
     let listener = UnixListener::bind(&sock_path).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
@@ -912,7 +1007,7 @@ fn app_fake_request_capture_through_app() {
         }
     });
 
-    let client = Client::at(dir.path());
+    let client = Client::at(dir.relative_path());
     let (mut app, rx_updates) = App::test_app_with_client(client);
     let pump_until = |app: &mut App, predicate: fn(&antislop::lean::tui::Update) -> bool| {
         let start = std::time::Instant::now();
@@ -1382,8 +1477,8 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
 
 #[test]
 fn tui_isolated_fake_request_capture() {
-    let dir = tempfile::tempdir().unwrap();
-    let sock_path = socket(dir.path());
+    let dir = test_tempdir();
+    let sock_path = test_socket(dir.relative_path());
 
     let listener = UnixListener::bind(&sock_path).unwrap();
     let (tx, rx) = mpsc::channel::<Value>();
@@ -1404,7 +1499,7 @@ fn tui_isolated_fake_request_capture() {
         }
     });
 
-    let client = Client::at(dir.path());
+    let client = Client::at(dir.relative_path());
 
     // 1. Send
     let res = client.call(&Request::Send {
@@ -3150,8 +3245,8 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
 
 #[test]
 fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retention() {
-    let dir = tempfile::tempdir().unwrap();
-    let sock = socket(dir.path());
+    let dir = test_tempdir();
+    let sock = test_socket(dir.relative_path());
     let listener = UnixListener::bind(&sock).unwrap();
     let (tx, rx) = mpsc::channel();
 
@@ -3198,7 +3293,7 @@ fn test_searchable_conversation_switcher_with_project_filtering_and_draft_retent
         }
     });
 
-    let client = Client::at(dir.path());
+    let client = Client::at(dir.relative_path());
     let (mut app, _rx_updates) = App::test_app_with_client(client);
     app.project = "my-project".into();
     app.conversation = "c-initial".into();
@@ -5396,7 +5491,7 @@ fn an_unblock_announcement_invalidates_the_card_like_a_retry() {
 
 #[test]
 fn sent_history_survives_restart_and_recall_restores_the_draft() {
-    let state = tempfile::tempdir().unwrap();
+    let state = test_tempdir();
     let first = "first message";
     let last = "abąćęł 👩‍💻\ne\u{301} second line";
     {
@@ -5425,7 +5520,7 @@ fn sent_history_survives_restart_and_recall_restores_the_draft() {
 
 #[test]
 fn separate_frontends_append_history_without_losing_each_others_messages() {
-    let state = tempfile::tempdir().unwrap();
+    let state = test_tempdir();
     let mut first = App::test_app();
     let mut second = App::test_app();
     first.load_history(state.path());
@@ -5444,12 +5539,12 @@ fn separate_frontends_append_history_without_losing_each_others_messages() {
 #[test]
 fn project_switches_use_each_daemons_history_directory() {
     use antislop::lean::tui::workspace::ProjectConn;
-    let first = tempfile::tempdir().unwrap();
-    let second = tempfile::tempdir().unwrap();
+    let first = test_tempdir();
+    let second = test_tempdir();
     let mut app = App::test_app();
     app.projects = vec![
-        ProjectConn::new(first.path().into(), Client::at(first.path())),
-        ProjectConn::new(second.path().into(), Client::at(second.path())),
+        ProjectConn::new(first.path().into(), Client::at(first.relative_path())),
+        ProjectConn::new(second.path().into(), Client::at(second.relative_path())),
     ];
     app.load_history(first.path());
     app.record_history("first project");
@@ -5464,7 +5559,7 @@ fn project_switches_use_each_daemons_history_directory() {
 
 #[test]
 fn history_storage_errors_keep_the_input_and_report_the_raw_reason() {
-    let state = tempfile::tempdir().unwrap();
+    let state = test_tempdir();
     let mut app = App::test_app();
     app.load_history(state.path());
     let connection = rusqlite::Connection::open(state.path().join("input-history.db")).unwrap();
@@ -5608,8 +5703,8 @@ fn checks_refetch_after_verdict_without_waiting_for_a_new_task_round() {
 #[test]
 fn configuration_save_shortcut_keeps_draft_after_transport_failure() {
     use antislop::lean::tui::config::ConfigEditor;
-    let dir = tempfile::tempdir().unwrap();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    let dir = test_tempdir();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
     app.config_editor = Some(
         ConfigEditor::new(
             include_str!("../examples/antislop.toml"),
@@ -5637,8 +5732,8 @@ fn configuration_save_shortcut_keeps_draft_after_transport_failure() {
 
 #[test]
 fn configuration_load_and_save_use_live_daemon_requests() {
-    let dir = tempfile::tempdir().unwrap();
-    let listener = UnixListener::bind(socket(dir.path())).unwrap();
+    let dir = test_tempdir();
+    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
     let (captured, requests) = mpsc::channel();
     let server = thread::spawn(move || {
         for save in [false, false, true] {
@@ -5658,7 +5753,7 @@ fn configuration_load_and_save_use_live_daemon_requests() {
             writeln!(stream, "{response}").unwrap();
         }
     });
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
     app.input = InputBuffer::with_text("chat draft");
     app.command("/config");
     assert_eq!(
@@ -5714,6 +5809,7 @@ mod config_editor_acceptance {
     }
     impl Daemon {
         fn start(project: &Path, config: &Path, state: &Path, registry: &Path) -> Self {
+            test_socket(state);
             antislop::lean::trust::Registry::at(registry)
                 .trust(project)
                 .unwrap();
@@ -5865,7 +5961,7 @@ mod config_editor_acceptance {
     #[test]
     fn every_config_field_is_edited_and_written_to_the_selected_file() {
         for global_active in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = test_tempdir();
             let project = dir.path().join("project");
             let registry = dir.path().join("global");
             std::fs::create_dir_all(&project).unwrap();
@@ -5879,7 +5975,8 @@ mod config_editor_acceptance {
             } else {
                 (&local, &global)
             };
-            let daemon = Daemon::start(&project, target, &project.join(".antislop"), &registry);
+            let state = dir.relative_path().join("project/.antislop");
+            let daemon = Daemon::start(&project, target, &state, &registry);
             let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
             app.command("/config");
             pump(&mut app, &updates);
@@ -6009,7 +6106,7 @@ mod config_editor_acceptance {
     fn configuration_render_respects_environment_and_shows_origin_notice_and_field_error() {
         const CHILD: &str = "ANTISLOP_CONFIG_EDITOR_RENDER_CHILD";
         if std::env::var_os(CHILD).is_none() {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = test_tempdir();
             let output = Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "config_editor_acceptance::configuration_render_respects_environment_and_shows_origin_notice_and_field_error", "--nocapture"])
                 .env(CHILD, "1").env("NO_COLOR", "1").env("ANTISLOP_ASCII", "1").env("ANTISLOP_CONFIG_DIR", dir.path()).output().unwrap();
@@ -6066,17 +6163,13 @@ mod config_editor_acceptance {
     }
     #[test]
     fn reload_and_presave_checks_preserve_drafts_and_reject_external_changes() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
         let project = dir.path().join("project");
         std::fs::create_dir(&project).unwrap();
         let path = project.join("antislop.toml");
         std::fs::write(&path, SOURCE).unwrap();
-        let daemon = Daemon::start(
-            &project,
-            &path,
-            &project.join(".antislop"),
-            &dir.path().join("registry"),
-        );
+        let state = dir.relative_path().join("project/.antislop");
+        let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
         let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
         app.command("/config");
         pump(&mut app, &updates);
@@ -6184,7 +6277,7 @@ mod config_editor_acceptance {
 
     #[test]
     fn saved_profile_affects_the_next_turn_and_keeps_the_running_turn() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = test_tempdir();
         let project = dir.path().join("project");
         std::fs::create_dir(&project).unwrap();
         let binary = dir.path().join("fake-codex");
@@ -6216,12 +6309,8 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
             edit(&mut initial, index, text, false);
         }
         std::fs::write(&path, initial.source().unwrap()).unwrap();
-        let daemon = Daemon::start(
-            &project,
-            &path,
-            &project.join(".antislop"),
-            &dir.path().join("registry"),
-        );
+        let state = dir.relative_path().join("project/.antislop");
+        let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
         let conversation = daemon.client.call(&Request::Start).unwrap()["id"]
             .as_str()
             .unwrap()
@@ -6516,8 +6605,8 @@ mod text_selection_acceptance {
 #[test]
 fn checks_retry_failed_fetch_on_next_empty_event_batch() {
     use antislop::lean::tui::details::CHECKS;
-    let dir = tempfile::tempdir().unwrap();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    let dir = test_tempdir();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
     app.apply_update(Update::Events {
         conversation: "test-conv".into(), generation: 1,
         events: vec![json!({"seq":1,"kind":"plan_proposed","payload":{"plan":"p1","tasks":[{"id":"t1","title":"Task"}]}}), json!({"seq":2,"kind":"task","payload":{"id":"t1","task":"u1","status":"working","round":1}})],
@@ -6534,7 +6623,7 @@ fn checks_retry_failed_fetch_on_next_empty_event_batch() {
             .as_ref()
             .is_some_and(|notice| notice.contains('✗'))
     );
-    let listener = UnixListener::bind(socket(dir.path())).unwrap();
+    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut line = String::new();
@@ -6593,9 +6682,9 @@ fn checks_refetch_on_task_verdict_in_the_same_round() {
 #[test]
 fn checks_refresh_uses_existing_snapshot_and_updates_report_and_verdict() {
     use antislop::lean::tui::details::CHECKS;
-    let dir = tempfile::tempdir().unwrap();
-    let listener = UnixListener::bind(socket(dir.path())).unwrap();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    let dir = test_tempdir();
+    let listener = UnixListener::bind(test_socket(dir.relative_path())).unwrap();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
     let server = thread::spawn(move || {
         for index in 0..3 {
             let (mut stream, _) = listener.accept().unwrap();
@@ -6823,8 +6912,8 @@ fn selection_at_minimum_terminal_with_real_ascii_and_no_color_environment() {
 #[test]
 fn persistent_checks_fetch_failure_backs_off_and_does_not_repeat_notice() {
     use antislop::lean::tui::details::CHECKS;
-    let dir = tempfile::tempdir().unwrap();
-    let (mut app, updates) = App::test_app_with_client(Client::at(dir.path()));
+    let dir = test_tempdir();
+    let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
     app.view.plan = Some("p1".into());
     app.view.tasks.push(antislop::lean::tui::view::TaskRow {
         id: "t1".into(),
@@ -7346,7 +7435,7 @@ fn inspector_receipt_uses_delivery_state_from_its_own_conversation() {
 
 #[test]
 fn header_shows_repository_branch_for_old_sessions_and_has_no_empty_separators() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = test_tempdir();
     assert!(
         std::process::Command::new("git")
             .args(["init", "-b", "feature/repo-branch"])

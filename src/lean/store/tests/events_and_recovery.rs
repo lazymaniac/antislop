@@ -1,8 +1,13 @@
 use super::*;
 
+fn test_tempdir() -> tempfile::TempDir {
+    std::fs::create_dir_all(".antislop/tmp").unwrap();
+    tempfile::tempdir_in(".antislop/tmp").unwrap()
+}
+
 #[test]
 fn large_agent_text_is_kept_out_of_the_sqlite_event_row() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = test_tempdir();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("/p").unwrap();
     let text = "x".repeat(200_000);
@@ -48,7 +53,7 @@ fn large_agent_text_is_kept_out_of_the_sqlite_event_row() {
 
 #[test]
 fn running_turns_become_interrupted_on_restart() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = test_tempdir();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("/p").unwrap();
     store
@@ -90,7 +95,7 @@ fn running_turns_become_interrupted_on_restart() {
 
 #[test]
 fn history_budget_keeps_oversized_first_event_and_continues_from_its_sequence() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = test_tempdir();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     let conversation = store.create_conversation("/p").unwrap();
     let after_setup = store.latest_event_seq(&conversation.id).unwrap();
@@ -129,8 +134,40 @@ fn history_budget_keeps_oversized_first_event_and_continues_from_its_sequence() 
 }
 
 #[test]
+fn repeated_events_keep_distinct_sequences_and_exclusive_cursor_order() {
+    let dir = test_tempdir();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("/p").unwrap();
+    let cursor = store.latest_event_seq(&conversation.id).unwrap();
+    let payload = serde_json::json!({"type": "agent_status", "status": "working"});
+
+    let first = store
+        .append_event(&conversation.id, None, None, "agent", &payload)
+        .unwrap();
+    let second = store
+        .append_event(&conversation.id, None, None, "agent", &payload)
+        .unwrap();
+
+    assert!(second > first, "repeated events remain append-only");
+    let events = store.events_since(&conversation.id, cursor, 10).unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!((events[0].seq, events[1].seq), (first, second));
+    assert_eq!(events[0].payload, payload);
+    assert_eq!(events[1].payload, payload);
+    let after_first = store.events_since(&conversation.id, first, 10).unwrap();
+    assert_eq!(after_first.len(), 1);
+    assert_eq!(after_first[0].seq, second);
+    assert!(
+        store
+            .events_since(&conversation.id, second, 10)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn workspace_trust_round_trips() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = test_tempdir();
     let store = Store::open(&dir.path().join("core.db")).unwrap();
     assert!(!store.is_trusted("/workspace/proj1").unwrap());
     store.trust_project("/workspace/proj1").unwrap();

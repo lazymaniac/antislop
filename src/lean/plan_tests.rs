@@ -1,6 +1,20 @@
 use super::core_plan_helpers::*;
 use super::*;
 
+fn test_tempdir() -> tempfile::TempDir {
+    std::fs::create_dir_all(".antislop/tmp").unwrap();
+    tempfile::tempdir_in(".antislop/tmp").unwrap()
+}
+
+#[test]
+fn task_role_recognizes_only_explicit_worker_and_verifier_addresses() {
+    assert_eq!(task_role("worker:task-1"), Some(("task-1", false)));
+    assert_eq!(task_role("verifier:task-1"), Some(("task-1", true)));
+    for key in ["task-1", "orchestrator", "reviewer:task-1"] {
+        assert_eq!(task_role(key), None, "unexpected task role for {key:?}");
+    }
+}
+
 #[test]
 fn finalization_leaves_out_options_when_local_options_are_off() {
     let writer: TaskContract = serde_json::from_value(json!({
@@ -61,7 +75,7 @@ fn finalization_adds_options_with_and_without_required_gates() {
 
 #[test]
 fn writer_base_through_options_includes_both_dependency_chains_and_local_user_changes() {
-    let project = tempfile::tempdir().unwrap();
+    let project = test_tempdir();
     let root = project.path();
     let init = std::process::Command::new("git")
         .args(["init", "--quiet", "-b", "main"])
