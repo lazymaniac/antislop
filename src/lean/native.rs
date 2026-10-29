@@ -66,6 +66,8 @@ pub struct Session {
     /// The CLI died or never connected before any prompt was typed into it,
     /// so the turn did nothing and can be started again without loss.
     startup_failed: AtomicBool,
+    #[cfg(test)]
+    ready_limit: Mutex<Duration>,
     touched: Mutex<Instant>,
 }
 
@@ -301,6 +303,8 @@ impl Session {
             executing: AtomicBool::new(false),
             primed: AtomicBool::new(false),
             startup_failed: AtomicBool::new(false),
+            #[cfg(test)]
+            ready_limit: Mutex::new(READY_LIMIT),
             touched: Mutex::new(Instant::now()),
         })
     }
@@ -335,7 +339,11 @@ impl Session {
     /// Output silence is a courtesy, not a readiness signal: interactive CLIs
     /// may redraw a spinner continuously, including between completed turns.
     fn wait_ready(&self, cancel: &AtomicBool) -> Result<()> {
-        let limit = Instant::now() + READY_LIMIT;
+        #[cfg(test)]
+        let ready_limit = self.ready_limit.lock().map_or(READY_LIMIT, |limit| *limit);
+        #[cfg(not(test))]
+        let ready_limit = READY_LIMIT;
+        let limit = Instant::now() + ready_limit;
         while !self.gateway.connected() {
             if cancel.load(Ordering::SeqCst) {
                 return Err(invalid(mcp::CANCELLED));

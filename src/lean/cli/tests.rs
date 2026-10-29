@@ -3,8 +3,9 @@ use crate::lean::trust::Registry;
 use std::io::Cursor;
 
 fn test_tempdir() -> tempfile::TempDir {
-    std::fs::create_dir_all(".antislop/tmp").unwrap();
-    tempfile::tempdir_in(".antislop/tmp").unwrap()
+    let root = std::env::current_dir().unwrap().join(".antislop/tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    tempfile::tempdir_in(root).unwrap()
 }
 
 fn ask(
@@ -61,8 +62,8 @@ fn the_directory_is_asked_about_once_and_never_without_a_terminal() {
 
 #[test]
 fn parsing_the_options_creates_nothing() {
-    let temp = test_tempdir();
-    let state = temp.path().join("state");
+    let fixture = test_tempdir();
+    let state = fixture.path().join("state");
     assert!(!state.exists(), "test state path must start absent");
     let options = Options::parse(&[
         "--config".into(),
@@ -94,8 +95,14 @@ fn explicit_config_wins_and_a_missing_explicit_path_does_not_fall_back() {
         explicit.canonicalize().unwrap()
     );
 
+    let missing = project.path().join("missing.toml");
     let error = resolve_config(project.path(), Some(Path::new("missing.toml"))).unwrap_err();
-    assert!(error.to_string().contains("missing.toml"));
+    assert!(
+        error
+            .to_string()
+            .contains(missing.to_string_lossy().as_ref())
+    );
+    assert!(!missing.exists());
     assert!(!project.path().join(".antislop").exists());
 }
 

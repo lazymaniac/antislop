@@ -2,8 +2,9 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 
 fn test_tempdir() -> tempfile::TempDir {
-    std::fs::create_dir_all(".antislop/tmp").unwrap();
-    tempfile::tempdir_in(".antislop/tmp").unwrap()
+    let root = std::env::current_dir().unwrap().join(".antislop/tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    tempfile::tempdir_in(root).unwrap()
 }
 
 /// An OpenCode that lists one new session when asked and otherwise
@@ -213,7 +214,7 @@ fn cancelled_gateway_startup_keeps_the_session_retryable() {
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
     let spec = agent::Spec {
         provider: crate::config::ProviderKind::Opencode,
-        binary,
+        binary: binary.canonicalize().unwrap(),
         args: vec![],
         model: None,
         effort: None,
@@ -241,68 +242,136 @@ fn cancelled_gateway_startup_keeps_the_session_retryable() {
     assert!(!session.stop.load(Ordering::SeqCst));
     assert!(!session.primed.load(Ordering::SeqCst));
     assert!(!session.gateway.connected());
+    core.native.shutdown().unwrap();
 }
 
 #[test]
-fn never_connecting_cli_times_out_with_terminal_tail_and_is_reaped() {
+fn failed_fixture_reports_raw_terminal_tail_and_discards_the_session() {
     let dir = test_tempdir();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
     let core = core(dir.path());
-    let binary = dir.path().join("never-connect");
+    let binary = dir.path().join("broken-agent");
     std::fs::write(
-        &binary,
-        "#!/bin/sh\nprintf 'waiting for gateway fixture\\n'\nexec sleep 120\n",
-    )
-    .unwrap();
+            &binary,
+            "#!/usr/bin/env python3\nimport sys\nprint('fixture failure marker', flush=True)\nsys.exit(17)\n",
+        )
+        .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    fixture::interactive(&binary);
     let spec = agent::Spec {
         provider: crate::config::ProviderKind::Opencode,
-        binary,
+        binary: binary.canonicalize().unwrap(),
         args: vec![],
         model: None,
         effort: None,
-        cwd: dir.path().into(),
+        cwd: project,
         add_dirs: vec![],
         access: agent::Access::ReadOnly,
         resume: None,
     };
     let session = core
         .native
-        .prepare_scoped(&core, "c", "orchestrator", &spec, "")
+        .prepare_scoped(&core, "failure", "orchestrator", &spec, "")
         .unwrap();
-    assert!(!session.gateway.connected());
 
-    let cancel = Arc::new(AtomicBool::new(false));
-    let worker_cancel = cancel.clone();
-    let worker_session = session.clone();
-    let worker_core = core.clone();
-    let (send, receive) = std::sync::mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        let result = worker_session.run(
-            &worker_core.native,
-            "never-connect",
-            "must not be typed",
-            &worker_cancel,
-        );
-        let _ = send.send(result);
-    });
+    let error = session
+        .run(
+            &core.native,
+            "failed-turn",
+            "trigger fixture failure",
+            &AtomicBool::new(false),
+        )
+        .unwrap_err()
+        .to_string();
 
-    let received = receive.recv_timeout(Duration::from_secs(75));
-    if received.is_err() {
-        cancel.store(true, Ordering::SeqCst);
-        let _ = receive.recv_timeout(Duration::from_secs(5));
-        panic!("gateway readiness exceeded its timeout watchdog");
-    }
-    let error = received.unwrap().unwrap_err().to_string();
-    worker.join().unwrap();
-
-    assert!(error.contains("did not connect to the antislop MCP gateway within 60 s"));
-    assert!(error.contains("waiting for gateway fixture"), "{error}");
-    assert!(session.failed_before_start());
+    assert!(error.contains(EXECUTION_FAILED), "{error}");
+    assert!(error.contains("fixture failure marker"), "{error}");
+    assert!(error.contains("exited ("), "{error}");
     assert!(session.stop.load(Ordering::SeqCst));
-    assert!(!session.primed.load(Ordering::SeqCst));
+    assert!(session.check_alive().is_err());
+}
 
+#[test]
+fn live_cli_that_never_connects_times_out_and_is_cleaned_up() {
+    let dir = test_tempdir();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let core = core(dir.path());
+    let binary = dir.path().join("never-connect");
+    let pid_file = dir.path().join("never-connect.pid");
+    std::fs::write(
+        &binary,
+        format!(
+            "#!/usr/bin/env python3\nimport os, time\nopen({:?}, 'w').write(str(os.getpid()))\nprint('fixture waiting without MCP', flush=True)\nwhile True: time.sleep(1)\n",
+            pid_file.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let spec = agent::Spec {
+        provider: crate::config::ProviderKind::Opencode,
+        binary: binary.canonicalize().unwrap(),
+        args: vec![],
+        model: None,
+        effort: None,
+        cwd: project,
+        add_dirs: vec![],
+        access: agent::Access::ReadOnly,
+        resume: None,
+    };
+    let session = core
+        .native
+        .prepare_scoped(&core, "never-connect", "orchestrator", &spec, "")
+        .unwrap();
+    let output_deadline = Instant::now() + Duration::from_secs(5);
+    while !terminal::tail(&session.screen, SCREEN_LINES).contains("fixture waiting without MCP") {
+        assert!(Instant::now() < output_deadline, "fixture did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    *session.ready_limit.lock().unwrap() = Duration::from_millis(200);
+
+    let error = session
+        .run(
+            &core.native,
+            "never-connect-turn",
+            "this prompt must not be typed",
+            &AtomicBool::new(false),
+        )
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains(EXECUTION_FAILED), "{error}");
+    assert!(
+        error.contains("did not connect to the antislop MCP gateway"),
+        "{error}"
+    );
+    assert!(error.contains("fixture waiting without MCP"), "{error}");
+    assert!(session.failed_before_start());
+    assert!(!session.primed.load(Ordering::SeqCst));
+    assert!(!session.gateway.connected());
+    assert!(session.stop.load(Ordering::SeqCst));
+    assert!(Arc::ptr_eq(
+        &session,
+        &core
+            .native
+            .get("never-connect", "orchestrator")
+            .unwrap()
+            .unwrap()
+    ));
+
+    let pid: i32 = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
     core.native.shutdown().unwrap();
     drop(session);
+    // Session drop must kill and reap a CLI that stayed alive through the
+    // readiness failure, rather than leaving a daemon child behind.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    assert!(
+        core.native
+            .get("never-connect", "orchestrator")
+            .unwrap()
+            .is_none()
+    );
     let process_rows: i64 = core
         .store
         .db()
@@ -326,7 +395,7 @@ fn exited_cli_error_contains_the_raw_terminal_tail() {
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
     let spec = agent::Spec {
         provider: crate::config::ProviderKind::Opencode,
-        binary,
+        binary: binary.canonicalize().unwrap(),
         args: vec![],
         model: None,
         effort: None,
@@ -353,4 +422,5 @@ fn exited_cli_error_contains_the_raw_terminal_tail() {
     assert!(error.contains("opencode exited ("), "{error}");
     assert!(error.contains("provider detail 73"), "{error}");
     assert!(!error.contains("automatic retry"));
+    core.native.shutdown().unwrap();
 }
