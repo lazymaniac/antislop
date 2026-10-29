@@ -23,15 +23,20 @@ pub(super) fn saved_decision(
         .transpose()
 }
 
+/// Stores a new version of every submitted entry except one resubmitted
+/// exactly as it stands: its version, and the evidence recorded against it,
+/// stay current.
 pub(super) fn persist_entries(
     tx: &rusqlite::Transaction<'_>,
     change: &LedgerChange,
+    before: &[LedgerEntry],
     state: &std::path::Path,
     revision: i64,
 ) -> Result<Vec<serde_json::Value>> {
     change
         .entries
         .iter()
+        .filter(|entry| !before.iter().any(|old| &old.spec == *entry))
         .map(|entry| persist_entry(tx, change, entry, state, revision))
         .collect()
 }
@@ -172,6 +177,34 @@ pub(super) fn mark_affected_tasks(tx: &rusqlite::Transaction<'_>, tasks: &[Strin
             [task],
         )?;
         tx.execute("UPDATE tasks SET status='stale' WHERE id=?1", [task])?;
+    }
+    Ok(())
+}
+
+/// A task the change does not reach was built against the same meaning of
+/// its entries; it moves to their new versions instead of failing its input
+/// check for a resubmission that changed nothing it relies on.
+pub(super) fn carry_unaffected_inputs(
+    tx: &rusqlite::Transaction<'_>,
+    change: &LedgerChange,
+    versions: &[serde_json::Value],
+    affected: &[String],
+) -> Result<()> {
+    for version in versions {
+        let (Some(entry), Some(number)) = (version["id"].as_str(), version["version"].as_i64())
+        else {
+            continue;
+        };
+        let tasks: Vec<String> = tx
+            .prepare("SELECT l.task_id FROM task_ledger_inputs l JOIN task_inputs i ON i.task_id=l.task_id WHERE i.run_id=?1 AND l.entry_id=?2")?
+            .query_map(params![change.run_id, entry], |row| row.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        for task in tasks.iter().filter(|task| !affected.contains(task)) {
+            tx.execute(
+                "UPDATE task_ledger_inputs SET version=?3 WHERE task_id=?1 AND entry_id=?2",
+                params![task, entry, number],
+            )?;
+        }
     }
     Ok(())
 }

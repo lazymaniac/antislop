@@ -1,4 +1,4 @@
-use super::validation::{impact, validate_change};
+use super::validation::{impact, same_meaning, validate_change};
 mod apply;
 use super::*;
 use apply::*;
@@ -94,8 +94,9 @@ impl Store {
         let rejected: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger_rejections x JOIN ledger_proposals p ON p.id=x.proposal_id WHERE json_extract(p.request,'$.operation_id')=?1)", [&change.operation_id], |r|r.get(0))?;
         require(!rejected, "proposal already rejected")?;
         let diff = validate_change(&tx, change, state, user)?;
-        let changed_versions = persist_entries(&tx, change, state, diff.to_revision)?;
+        let changed_versions = persist_entries(&tx, change, &diff.before, state, diff.to_revision)?;
         mark_affected_tasks(&tx, &diff.affected_tasks)?;
+        carry_unaffected_inputs(&tx, change, &changed_versions, &diff.affected_tasks)?;
         let result = ChangeResult {
             run_id: change.run_id.clone(),
             spec_revision: diff.to_revision,
@@ -129,9 +130,10 @@ fn changed_entry_ids(before: &[LedgerEntry], after: &[LedgerEntry]) -> HashSet<S
     after
         .iter()
         .filter(|entry| {
-            !before
-                .iter()
-                .any(|old| old.spec.id == entry.spec.id && old.version == entry.version)
+            !before.iter().any(|old| {
+                old.spec.id == entry.spec.id
+                    && (old.version == entry.version || same_meaning(&old.spec, &entry.spec))
+            })
         })
         .map(|entry| entry.spec.id.clone())
         .collect()

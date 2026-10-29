@@ -102,6 +102,22 @@ pub(super) fn impact(
     Ok(out)
 }
 
+/// Whether two versions of an entry ask for the same thing. The quoted span,
+/// position, owners and linked tasks are bookkeeping; a resubmission that
+/// only moves them changes nothing the approved work was built against.
+pub(super) fn same_meaning(old: &EntrySpec, new: &EntrySpec) -> bool {
+    old.interpretation == new.interpretation
+        && old.qualifiers == new.qualifiers
+        && old.parent == new.parent
+        && old.depends_on == new.depends_on
+        && old.mandatory == new.mandatory
+        && old.criteria == new.criteria
+        && old.disposition == new.disposition
+}
+
+/// Entries whose meaning a change reaches: the changed ones and, downward,
+/// those that depend on them or sit under them. A parent is not reached by
+/// a new or edited child; the child is its own entry with its own tasks.
 fn impacted_entries(changed: &HashSet<String>, all: &[EntrySpec]) -> HashSet<String> {
     let mut ids = changed.clone();
     loop {
@@ -111,9 +127,6 @@ fn impacted_entries(changed: &HashSet<String>, all: &[EntrySpec]) -> HashSet<Str
                 .iter()
                 .chain(e.parent.iter())
                 .any(|id| ids.contains(id))
-                || all
-                    .iter()
-                    .any(|child| child.parent.as_deref() == Some(&e.id) && ids.contains(&child.id))
             {
                 ids.insert(e.id.clone());
             }
@@ -180,9 +193,19 @@ pub(super) fn validate_change(
     let before = entries(db, &r.id, r.spec_revision)?;
     let mut after = existing_specs(&before);
     let changed = apply_entry_changes(db, change, state, user, &mut after)?;
+    let altered: HashSet<String> = changed
+        .iter()
+        .filter(|id| {
+            before
+                .iter()
+                .find(|old| &old.spec.id == *id)
+                .is_none_or(|old| !same_meaning(&old.spec, &after[*id]))
+        })
+        .cloned()
+        .collect();
     let all: Vec<_> = after.into_values().collect();
     checked_graph(&all)?;
-    let affected_tasks = impact(db, &r.id, &changed, &all)?;
+    let affected_tasks = impact(db, &r.id, &altered, &all)?;
     Ok(LedgerDiff {
         run_id: r.id,
         from_revision: r.spec_revision,

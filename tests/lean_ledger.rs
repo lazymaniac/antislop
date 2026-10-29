@@ -317,6 +317,51 @@ fn revision_conflict_idempotency_history_and_user_authority() {
     );
 }
 #[test]
+fn a_new_child_or_an_unchanged_resubmission_keeps_approved_work() {
+    let f = Fixture::new();
+    let composite = || {
+        let mut entry = f.entry("r1");
+        entry.criteria[0].integration = true;
+        entry
+    };
+    f.apply(&f.change(0, vec![composite(), f.entry("r2")]));
+    let tasks = f.plan(vec![
+        f.task("a", &["r1"], &[]),
+        f.task("b", &["r2"], &["a"]),
+    ]);
+    let mut child = f.entry("r3");
+    child.parent = Some("r1".into());
+    let result = f.apply(&f.change(1, vec![child, f.entry("r2")]));
+    assert!(
+        result.affected_tasks.is_empty(),
+        "{:?}",
+        result.affected_tasks
+    );
+    f.store.assert_task_inputs(&tasks[0]).unwrap();
+    f.store.assert_task_inputs(&tasks[1]).unwrap();
+    let diff = f
+        .store
+        .ledger_diff(&f.conversation, &f.run.id, 1, 2)
+        .unwrap();
+    assert!(diff.affected_tasks.is_empty(), "{:?}", diff.affected_tasks);
+    let history = f
+        .store
+        .ledger_entry_history(&f.conversation, &f.run.id, "r2")
+        .unwrap();
+    assert_eq!(history.len(), 1, "an exact resubmission keeps its version");
+    // Editing the child still leaves its parent's tasks alone.
+    let mut child = f.entry("r3");
+    child.parent = Some("r1".into());
+    child.qualifiers.push("new qualifier".into());
+    assert!(f.apply(&f.change(2, vec![child])).affected_tasks.is_empty());
+    // Editing the parent reaches its tasks and their dependents.
+    let mut parent = composite();
+    parent.qualifiers.push("new qualifier".into());
+    let result = f.apply(&f.change(3, vec![parent]));
+    assert_eq!(result.affected_tasks.len(), 2);
+}
+
+#[test]
 fn semantic_edit_invalidates_dependency_closure_but_keeps_independent_tasks() {
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1"), f.entry("r2")]));
