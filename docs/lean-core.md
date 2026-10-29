@@ -95,7 +95,9 @@ not an alternate result parser. Configuration is supplied per launch.
 
 Every result reaches the runtime through a tool that ends the turn, checked
 while the turn is still open: a refused call names what to fix and the agent
-calls again. There are no fenced result blocks and no repair turns. Each role
+calls again. Corrections share the turn's configured active-work timeout;
+there is no separate one-minute deadline. Cancellation and CLI exit still
+end the wait immediately. There are no fenced result blocks and no repair turns. Each role
 sees only its own tools:
 
 - task workers: `complete(summary, report)`, or `select(alternatives, selected,

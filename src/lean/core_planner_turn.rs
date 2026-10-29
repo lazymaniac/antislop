@@ -17,6 +17,26 @@ impl Core {
         upto: u64,
         cancel: &AtomicBool,
     ) -> Result<()> {
+        // Planning must use authoritative criterion ids, not guesses made before
+        // extraction. Re-check after the turn too in case the sources change.
+        if self
+            .planning_requirements(conversation, None, cancel)?
+            .is_none()
+        {
+            // Continue only when preparation queued a new repair message.
+            // Otherwise stop until approval or retry; no planner turn has yet
+            // consumed `upto`, so returning Ok would spin on the same message.
+            return if self
+                .unanswered(conversation)?
+                .is_some_and(|next| next > upto)
+            {
+                Ok(())
+            } else {
+                Err(Error::Invalid(
+                    "requirements are not ready for planning".into(),
+                ))
+            };
+        }
         let config = self.config_snapshot();
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let answered = self.store.last_orchestration_answered(conversation)?;

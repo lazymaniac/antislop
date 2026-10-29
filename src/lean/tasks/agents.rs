@@ -132,6 +132,43 @@ fn reserve_task_id(base: &str, ids: &mut BTreeSet<String>) -> String {
     id
 }
 
+/// Canonical gate names also refer to explicitly declared checks of that kind.
+/// A declared canonical id stays literal; otherwise all matching checks must pass.
+pub(crate) fn resolve_gate_dependencies(tasks: &mut [TaskContract]) {
+    let aliases: Vec<_> = PREDEFINED_AGENT_POOL
+        .iter()
+        .filter(|agent| GATE_KINDS.contains(&agent.kind))
+        .filter(|agent| !tasks.iter().any(|task| task.id == agent.id))
+        .map(|agent| {
+            (
+                agent.id,
+                tasks
+                    .iter()
+                    .filter(|task| task.kind == agent.kind)
+                    .map(|task| task.id.clone())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .filter(|(_, ids)| !ids.is_empty())
+        .collect();
+    for task in tasks {
+        let mut dependencies = Vec::new();
+        for dependency in std::mem::take(&mut task.depends_on) {
+            let targets = aliases
+                .iter()
+                .find(|(id, _)| *id == dependency)
+                .map(|(_, ids)| ids.clone())
+                .unwrap_or_else(|| vec![dependency]);
+            for target in targets {
+                if !dependencies.contains(&target) {
+                    dependencies.push(target);
+                }
+            }
+        }
+        task.depends_on = dependencies;
+    }
+}
+
 /// The plan with every missing required quality gate appended, so a plan that
 /// changes code is always statically checked, tested and checked against the
 /// user's requirements, and audited for structure, security and performance.
@@ -150,6 +187,7 @@ pub fn with_required_agents(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     for task in &mut tasks {
         task.depends_on.retain(|id| !generated.contains(id));
     }
+    resolve_gate_dependencies(&mut tasks);
     let missing = missing_quality_agents(&tasks);
     if missing.is_empty() {
         return tasks;

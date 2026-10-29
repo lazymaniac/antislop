@@ -221,15 +221,6 @@ impl Gateway {
                 state.expected = None;
                 return Err(Error::Invalid(CANCELLED.into()));
             }
-            if let Some((at, error)) = &state.rejected_finish
-                && at.elapsed() >= Duration::from_secs(60)
-            {
-                let error = format!(
-                    "result rejected for turn {turn}; no accepted correction within 60 s: {error}"
-                );
-                state.expected = None;
-                return Err(invalid(error));
-            }
             let waiting = state.waited + state.waiting.map_or(Duration::ZERO, |at| at.elapsed());
             if started.elapsed().saturating_sub(waiting) >= timeout {
                 state.expected = None;
@@ -444,7 +435,7 @@ fn allowed_tools(role: &str) -> Vec<&'static str> {
     }
 }
 
-const RETRY: &str = "Stop only after recorded=true; if rejected, fix what the error names and call again within 60 seconds.";
+const RETRY: &str = "Stop only after recorded=true; if rejected, fix what the error names and call again within the remaining turn time.";
 
 fn tool_list(role: &str) -> Vec<Value> {
     let orchestrator = matches!(role, "orchestrator" | "comment-orchestrator");
@@ -465,7 +456,7 @@ fn tool_list(role: &str) -> Vec<Value> {
                 if orchestrator {
                     fields["addressed"] = schema::addressed();
                 }
-                ("Submit the complete task plan; this ends your turn. The runtime checks it at once: if it is rejected, fix what the error names and submit the whole plan again within 60 seconds. Stop only after recorded=true.".into(), fields, vec!["turn","document","tasks"])
+                ("Submit the complete task plan; this ends your turn. The runtime checks it at once: if it is rejected, fix what the error names and submit the whole plan again within the remaining turn time. Stop only after recorded=true.".into(), fields, vec!["turn","document","tasks"])
             }
             "submit_ledger" => (format!("Submit the requirements you extracted; this ends your turn. The runtime finds each quote in the sources and checks the requirements at once. {RETRY}"), json!({"entries":{"type":"array","items":schema::ledger_entry()}}), vec!["turn","entries"]),
             "submit_audit" => (format!("Submit the audit; this ends your turn. It approves unless a finding is critical, high or medium. {RETRY}"), schema::audit(), vec!["turn","findings","evidence"]),
@@ -993,7 +984,32 @@ mod rejection_tests {
     }
 
     #[test]
-    fn rejection_has_bounded_recovery_time_and_resets_for_a_new_turn() {
+    fn a_correction_after_sixty_seconds_can_finish_within_the_turn_timeout() {
+        let gateway = Gateway::start().unwrap();
+        gateway.begin("current").unwrap();
+        gateway.shared.state.lock().unwrap().rejected_finish = Some((
+            Instant::now() - Duration::from_secs(61),
+            "old rejection".into(),
+        ));
+        let finish = gateway
+            .wait(
+                "current",
+                &AtomicBool::new(false),
+                Duration::from_secs(1800),
+                || {
+                    assert_eq!(
+                        call(&gateway.shared, &submission("current"))["isError"],
+                        Value::Null
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(finish.text, "done");
+    }
+
+    #[test]
+    fn rejection_keeps_the_turn_timeout_and_resets_for_a_new_turn() {
         let gateway = Gateway::start().unwrap();
         gateway.begin("current").unwrap();
         gateway.shared.state.lock().unwrap().rejected_finish = Some((
@@ -1004,12 +1020,13 @@ mod rejection_tests {
             .wait(
                 "current",
                 &AtomicBool::new(false),
-                Duration::from_secs(1800),
+                Duration::ZERO,
                 || Ok(()),
             )
             .unwrap_err()
             .to_string();
         assert!(error.contains("request: unknown question ID"));
+        assert!(error.contains("no accepted result"), "{error}");
         assert!(gateway.shared.state.lock().unwrap().expected.is_none());
         gateway.begin("next").unwrap();
         assert!(

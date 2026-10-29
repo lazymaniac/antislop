@@ -8,7 +8,7 @@ use recording::*;
 impl Core {
     /// The requirements run a new plan is bound to, extracted first if the
     /// ledger lags behind the conversation; `None` when that failed.
-    pub(super) fn planning_requirements(
+    pub(in crate::lean) fn planning_requirements(
         self: &Arc<Self>,
         conversation: &str,
         addressed: Option<&[u64]>,

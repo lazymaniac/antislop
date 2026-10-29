@@ -29,7 +29,11 @@ plans = {
   "write_chain": [task("w1", "Write file", writes=True), task("w2", "Follow up", ["w1"])],
   "manual_fix": [task("m1", "Manual fix", writes=True)],
 }
-name = next((name for name in sorted(plans, key=len, reverse=True) if name in prompt.splitlines()[-1]), None)
+# A first orchestrator turn can include history after the current request.
+import re
+requests = re.findall(r'\[user\]\n([^\n]+)', prompt)
+request = requests[-1] if requests else prompt.splitlines()[-1]
+name = next((name for name in sorted(plans, key=len, reverse=True) if name in request), None)
 # A plan the ledger mapping sends back for regeneration names no scenario: repeat the last one.
 import os
 last = os.path.join(os.path.dirname(sys.argv[0]), "last-plan")

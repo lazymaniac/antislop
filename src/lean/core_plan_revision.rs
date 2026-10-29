@@ -151,6 +151,16 @@ impl Core {
             |r| Ok((r.get(0)?,r.get(1)?)),
         ).optional()?;
         let Some((allowed, write_allowed)) = authorization else {
+            if self
+                .store
+                .latest_plan(conversation)?
+                .first()
+                .is_some_and(|task| task.plan_id == plan)
+            {
+                return Err(Error::Invalid(format!(
+                    "plan {plan} is not accepted; correct the draft with submit_plan, not revise_plan; revise_plan only edits an accepted plan"
+                )));
+            }
             let current = self
                 .store
                 .latest_plan(conversation)?

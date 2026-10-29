@@ -129,7 +129,7 @@ pub(super) fn planned_task() -> Value {
             "title":{"type":"string"},
             "goal":{"type":"string","description":"What the task must achieve, in full sentences"},
             "kind":{"enum":KINDS},
-            "depends_on":{"type":"array","items":{"type":"string"},"description":"Ids of tasks that must be approved first. With required gates enabled, generated gate ids such as quality-refactoring, static-analyzer and integration-gate are also valid without declaring them. Each dependent receives dependency summaries"},
+            "depends_on":{"type":"array","items":{"type":"string"},"description":"Ids of tasks that must be approved first. With required gates enabled, generated gate ids such as quality-refactoring, static-analyzer and integration-gate are also valid without declaring them. When that kind already has explicitly declared checks, its canonical gate id refers to all of those checks. Each dependent receives dependency summaries"},
             "scope":{"type":"array","items":{"type":"string"},"description":"Project paths the task works in"},
             "writes":{"type":"boolean","description":"Omit to follow the kind: implementation, refactoring, testing, static_analysis and integration write"},
             "covers":{"type":"array","items":{"type":"string"},"description":"Acceptance criterion ids (or requirement ids) from the requirements this task delivers"},

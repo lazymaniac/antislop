@@ -323,3 +323,55 @@ fn generated_gate_references_do_not_hide_unknown_dependencies() {
             .contains("typo")
     );
 }
+
+#[test]
+fn canonical_gate_references_resolve_to_all_declared_checks_of_that_kind() {
+    let submitted = json!([
+        {"id":"writer", "title":"Implement", "goal":"Implement change", "kind":"implementation"},
+        {"id":"tests-a", "title":"Test A", "goal":"Run tests", "kind":"testing", "depends_on":["writer"]},
+        {"id":"tests-b", "title":"Test B", "goal":"Run tests", "kind":"testing", "depends_on":["writer"]},
+        {"id":"whole-change-validation", "title":"Validate", "goal":"Validate whole change", "kind":"integration", "depends_on":["verification-testing"]},
+        {"id":"final-report", "title":"Report", "goal":"Report checks", "kind":"analysis", "depends_on":["integration-gate"]}
+    ]);
+    let specs = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap();
+    let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+    config.policy.required_gates = true;
+    config.policy.local_options = true;
+    let final_plan = super::core_plan_proposal::checked_plan(&specs, &config).unwrap();
+    tasks::validate(&final_plan).unwrap();
+    let task = |id: &str| final_plan.iter().find(|task| task.id == id).unwrap();
+    assert!(
+        task("whole-change-validation")
+            .depends_on
+            .contains(&"tests-a".to_owned())
+    );
+    assert!(
+        task("whole-change-validation")
+            .depends_on
+            .contains(&"tests-b".to_owned())
+    );
+    assert_eq!(task("final-report").depends_on, ["whole-change-validation"]);
+    assert!(
+        task("whole-change-validation-options")
+            .depends_on
+            .contains(&"tests-b".to_owned())
+    );
+    assert!(
+        !final_plan
+            .iter()
+            .any(|task| task.id == "integration-gate" || task.id == "verification-testing")
+    );
+    assert_eq!(
+        final_plan,
+        super::core_plan_proposal::checked_plan(&final_plan, &config).unwrap()
+    );
+}
+
+#[test]
+fn a_gate_alias_cannot_hide_a_self_dependency() {
+    let submitted = json!([
+        {"id":"tests", "title":"Test", "goal":"Run tests", "kind":"testing", "depends_on":["verification-testing"]}
+    ]);
+    let error = tasks::planned_graph(serde_json::from_value(submitted).unwrap()).unwrap_err();
+    assert!(error.to_string().contains("cycle"), "{error}");
+}

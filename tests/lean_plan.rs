@@ -596,14 +596,14 @@ fn restart_recovers_a_plan_whose_requirements_failed_without_a_new_user_message(
 }
 
 #[test]
-fn repairing_json_after_the_ledger_mapping_reuses_the_requirements() {
+fn repairing_json_after_requirements_extraction_reuses_the_ledger() {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let source = std::fs::read_to_string(&codex).unwrap();
     let marker = "def _ledger_answer(answer):";
     assert!(source.contains(marker));
     let hook = r#"def _ledger_answer(answer):
-    if 'Regenerate the task plan from the verified ledger' in _ledger_prompt and '```plan' in answer and not _lo.path.exists('post-ledger-format-error'):
+    if 'The runtime binds this plan to the active requirements run' in _ledger_prompt and '```plan' in answer and not _lo.path.exists('post-ledger-format-error'):
         open('post-ledger-format-error','w').close()
         return '```plan\n{"tasks":[{unquoted: "bad"}]}\n```'
 "#;
@@ -725,14 +725,14 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
         .position(|role| **role == format!("worker:{}", finished[2].id))
         .unwrap();
     assert!(extra < downstream);
-    // The first draft is revised into the ledger-mapped plan; extending the
-    // running graph adds no further plan.
+    // The first draft already uses the ledger; extending the running graph
+    // preserves that plan rather than adding a replacement.
     assert_eq!(
         core.store
             .plans_page(&conversation.id, 0, 10)
             .unwrap()
             .total,
-        2
+        1
     );
 }
 
@@ -769,4 +769,41 @@ fn submit_plan_accepts_generated_gates_before_the_final_report() {
     assert!(position("t12") < position("quality-refactoring"));
     assert!(position("quality-refactoring") < position("static-analyzer"));
     assert!(position("static-analyzer") < position("t13"));
+}
+
+#[test]
+fn the_first_planner_sees_the_extracted_requirements() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let core = Core::open(&dir.path().join("state"), config(&codex, &agy)).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
+    core.send(&conversation.id, "Assess storage and TUI")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let events = core
+        .store
+        .events_since(&conversation.id, 0, 10_000)
+        .unwrap();
+    let extracted = events
+        .iter()
+        .position(|event| {
+            event.kind == "ledger_review"
+                && event.payload["kind"] == "extraction"
+                && event.payload["approved"] == true
+        })
+        .unwrap();
+    let planner = events
+        .iter()
+        .position(|event| event.kind == "turn_started" && event.payload["role"] == "planner")
+        .unwrap();
+    assert!(extracted < planner);
+    assert!(!events.iter().any(|event| {
+        event.kind == "notice"
+            && event.payload["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("plan ledger mapping rejected"))
+    }));
+    let calls = std::fs::read_to_string(dir.path().join(CALLS)).unwrap();
+    assert!(calls.contains("acceptance criterion ids"));
+    assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
 }
