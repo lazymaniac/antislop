@@ -207,6 +207,66 @@ fn writer_base_through_options_includes_both_dependency_chains_and_local_user_ch
 }
 
 #[test]
+fn a_landed_result_releases_the_plan_base_for_later_tasks() {
+    let project = test_tempdir();
+    let root = project.path();
+    let init = std::process::Command::new("git")
+        .args(["init", "--quiet", "-b", "main"])
+        .current_dir(root)
+        .status()
+        .unwrap();
+    assert!(init.success());
+    std::fs::write(root.join(".gitignore"), ".antislop/\n").unwrap();
+    std::fs::write(root.join("a.txt"), "v0\n").unwrap();
+    let head = git::commit_all(root, "initial").unwrap();
+    let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+    let core = Core::open(&root.join(".antislop"), config).unwrap();
+    let conversation = core.start(root).unwrap();
+    let specs: Vec<_> = [("t1", vec![]), ("t2", vec!["t1"])]
+        .into_iter()
+        .map(|(id, deps)| {
+            json!({
+                "id": id, "title": id, "goal": "test", "kind": "implementation",
+                "writes": true, "depends_on": deps, "verifier": {"focus": "inspect diff"}
+            })
+        })
+        .collect();
+    let mut tasks = core.store.add_plan(&conversation.id, &specs).unwrap();
+    let first: TaskContract = serde_json::from_value(tasks[0].spec.clone()).unwrap();
+    let base = core.writer_base(&tasks[0].plan_id, &first, root).unwrap();
+    assert_eq!(base, head);
+
+    // t1 changes a.txt; its result lands, and a later change of the project
+    // edits the same line, so t1's patch no longer applies to the old base.
+    let path = root.join(".antislop/worktrees/t1");
+    git::add_worktree(root, &path, "test/t1", &base).unwrap();
+    std::fs::write(path.join("a.txt"), "v1\n").unwrap();
+    let result = git::commit_all(&path, "t1").unwrap();
+    git::remove_worktree(root, &path, "test/t1").unwrap();
+    tasks[0].base = Some(base);
+    tasks[0].result = Some(result.clone());
+    tasks[0].status = status::APPROVED.into();
+    core.store.update_task(&tasks[0]).unwrap();
+    std::fs::write(root.join("a.txt"), "v2\n").unwrap();
+    let moved = git::commit_all(root, "t1 landed and moved on").unwrap();
+    core.record_plan_landing(&tasks[0].plan_id, &tasks[0].id, &result)
+        .unwrap();
+
+    let second: TaskContract = serde_json::from_value(tasks[1].spec.clone()).unwrap();
+    let base = core.writer_base(&tasks[1].plan_id, &second, root).unwrap();
+    assert_eq!(
+        base, moved,
+        "starts from the project holding the landed result"
+    );
+    // Until the next landing the plan keeps that base.
+    std::fs::write(root.join("a.txt"), "user edit\n").unwrap();
+    assert_eq!(
+        core.writer_base(&tasks[1].plan_id, &second, root).unwrap(),
+        moved
+    );
+}
+
+#[test]
 fn the_owner_goal_reaches_its_generated_options_task() {
     let mut writer: TaskContract = serde_json::from_value(json!({
         "id": "writer", "title": "Implement change",

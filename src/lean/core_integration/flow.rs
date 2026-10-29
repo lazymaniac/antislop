@@ -53,6 +53,13 @@ impl<'a> Integration<'a> {
         }
         let change = self.create_change(&base)?;
         let outcome = self.apply_change(&base, &change)?;
+        if matches!(
+            outcome,
+            git::Integration::Committed(_) | git::Integration::Applied
+        ) {
+            self.core
+                .record_plan_landing(&self.task.plan_id, &self.task.id, &change)?;
+        }
         if self.repair_conflict(lock, &change, &outcome)? {
             return Ok(());
         }
