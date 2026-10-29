@@ -307,13 +307,9 @@ fn validate_authorized_scope(
             "revision write scope must stay inside the project",
         )?;
         require(
-            scope.iter().all(|p| {
-                write_allowed.iter().any(|a| {
-                    a == p
-                        || (a == "." && Path::new(p).is_relative())
-                        || Path::new(p).starts_with(a)
-                })
-            }),
+            scope
+                .iter()
+                .all(|p| write_allowed.iter().any(|a| covers(a, p))),
             "revision expands approved write scope; user approval is required",
         )?;
     }
@@ -327,13 +323,52 @@ fn validate_authorized_scope(
             "revision scope contains parent traversal",
         )?;
         require(
-            allowed.iter().any(|a| {
-                a == path || (a == "." && candidate.is_relative()) || candidate.starts_with(a)
-            }),
+            allowed.iter().any(|a| covers(a, path)),
             "revision expands the approved scope; user approval is required",
         )?;
     }
     Ok(())
+}
+
+/// Whether an approved scope entry covers a task's scope entry. Approved
+/// entries are paths or globs (`src/**`, `src/lean/*.rs`); a path covers
+/// everything below it, `**` any number of directories and `*` or `?` part of
+/// one name. A task entry may itself be a glob and is covered when every path
+/// it names is.
+fn covers(approved: &str, path: &str) -> bool {
+    if approved == path || (approved == "." && Path::new(path).is_relative()) {
+        return true;
+    }
+    let names = |p: &str| -> Vec<String> {
+        Path::new(p)
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect()
+    };
+    covers_names(&names(approved), &names(path))
+}
+
+fn covers_names(approved: &[String], path: &[String]) -> bool {
+    match approved.split_first() {
+        // An approved directory covers what lies below it.
+        None => true,
+        Some((first, rest)) if first == "**" => {
+            (0..=path.len()).any(|skip| covers_names(rest, &path[skip..]))
+        }
+        Some((first, rest)) => path.split_first().is_some_and(|(name, below)| {
+            name_matches(first.as_bytes(), name.as_bytes()) && covers_names(rest, below)
+        }),
+    }
+}
+
+fn name_matches(pattern: &[u8], name: &[u8]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some((b'*', rest)) => (0..=name.len()).any(|skip| name_matches(rest, &name[skip..])),
+        Some((b'?', rest)) => !name.is_empty() && name_matches(rest, &name[1..]),
+        Some((c, rest)) => name.first() == Some(c) && name_matches(rest, &name[1..]),
+    }
 }
 
 /// Tasks a revision sends back to work: those whose contract changes, those
@@ -500,6 +535,24 @@ mod tests {
             .is_ok()
         );
     }
+    #[test]
+    fn approved_globs_cover_the_paths_they_name() {
+        let read: Vec<String> = vec!["**/*".into(), "docs/**".into()];
+        let write: Vec<String> = vec!["src/lean/ledger/**".into(), "tests/*.rs".into()];
+        let ok =
+            |scope: &[&str]| validate_authorized_scope(&[contract(true, scope)], &read, &write);
+        assert!(ok(&["src/lean/ledger/storage/validation.rs"]).is_ok());
+        assert!(ok(&["src/lean/ledger", "tests/lean_ledger.rs"]).is_ok());
+        assert!(ok(&["src/lean/ledger/storage/**"]).is_ok());
+        assert!(ok(&["src/lean/tui/graph.rs"]).is_err());
+        assert!(ok(&["src/lean/**"]).is_err());
+        assert!(ok(&["tests/fixtures/data.rs"]).is_err());
+        assert!(covers("src/**", "src/lean/core_plan_revision.rs"));
+        assert!(covers("src/lean/core*", "src/lean/core_plan_revision.rs"));
+        assert!(!covers("src/lean/core*", "src/lean/store.rs"));
+        assert!(!covers("docs/**", "src/lib.rs"));
+    }
+
     #[test]
     fn preparation_failure_releases_the_durable_revision_slot() {
         let dir = tempfile::tempdir().unwrap();
