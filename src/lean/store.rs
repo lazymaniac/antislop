@@ -69,16 +69,6 @@ pub struct MailTarget {
     pub plan_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnStatus {
-    Running,
-    Done,
-    Failed,
-    Cancelled,
-    Interrupted,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub seq: u64,
@@ -252,28 +242,6 @@ pub fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-impl TurnStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Done => "done",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-            Self::Interrupted => "interrupted",
-        }
-    }
-    fn parse(text: &str) -> Result<Self> {
-        Ok(match text {
-            "running" => Self::Running,
-            "done" => Self::Done,
-            "failed" => Self::Failed,
-            "cancelled" => Self::Cancelled,
-            "interrupted" => Self::Interrupted,
-            _ => return Err(Error::Invalid(format!("unknown turn status {text}"))),
-        })
-    }
-}
-
 /// The layout of `core.db` this build writes (`PRAGMA user_version`).
 /// Incompatible databases are never modified or migrated.
 const SCHEMA: u32 = 14;
@@ -296,6 +264,9 @@ mod plan_tasks;
 mod sessions_and_plans;
 #[path = "store/setup_and_conversations.rs"]
 mod setup_and_conversations;
+#[path = "store/turn_status.rs"]
+mod turn_status;
+pub use turn_status::TurnStatus;
 
 #[cfg(test)]
 #[path = "store/tests.rs"]

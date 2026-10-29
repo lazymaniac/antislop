@@ -134,6 +134,11 @@ fn invalidate_dependent(
     if untouched {
         return Ok(());
     }
+    invalidate_task_input(tx, dependent)?;
+    record_invalidation(tx, dependent, source, plan, conversation, operation, now)
+}
+
+fn invalidate_task_input(tx: &rusqlite::Transaction<'_>, dependent: &str) -> Result<()> {
     tx.execute(
         "UPDATE task_inputs SET generation=generation+1 WHERE task_id=?1",
         [dependent],
@@ -144,7 +149,7 @@ fn invalidate_dependent(
         WHERE id=?1 AND status NOT IN ('proposed','stale','superseded')",
         [dependent],
     )?;
-    record_invalidation(tx, dependent, source, plan, conversation, operation, now)
+    Ok(())
 }
 
 fn record_invalidation(

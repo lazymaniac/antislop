@@ -5,6 +5,58 @@ mod mail_tests {
     use super::*;
 
     #[test]
+    fn queued_mail_survives_reopen_and_delivery_is_read_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("core.db");
+        let store = Store::open(&path).unwrap();
+        let conversation = store.create_conversation("project").unwrap();
+        let queued = store
+            .add_mail(
+                &conversation.id,
+                "worker:task-1",
+                &Mail {
+                    id: 0,
+                    sender: "orchestrator".into(),
+                    recipient: "worker:task-1".into(),
+                    kind: "feedback".into(),
+                    text: "Keep the 👩‍💻 source unchanged".into(),
+                    created_ms: 0,
+                    delivered_turn: None,
+                    delivered_ms: None,
+                    state: "queued".into(),
+                },
+            )
+            .unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let pending = store
+            .pending_mail(&conversation.id, "worker:task-1")
+            .unwrap();
+        assert_eq!(pending, [queued.clone()]);
+        let turn = store
+            .start_turn(&conversation.id, "worker:task-1", "codex", 0, None)
+            .unwrap();
+        store
+            .mark_delivered(&conversation.id, &[queued.id], &turn.id)
+            .unwrap();
+        assert!(
+            store
+                .pending_mail(&conversation.id, "worker:task-1")
+                .unwrap()
+                .is_empty()
+        );
+        let delivered = store.mail(&conversation.id).unwrap();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].text, queued.text);
+        assert_eq!(
+            delivered[0].delivered_turn.as_deref(),
+            Some(turn.id.as_str())
+        );
+        assert_eq!(delivered[0].state, "delivered");
+    }
+
+    #[test]
     fn orchestrator_mail_requires_its_recorded_user_message_source() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(&directory.path().join("core.db")).unwrap();

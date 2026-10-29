@@ -1,6 +1,8 @@
 use super::*;
 
-use crate::lean::turn_result::TurnResult;
+#[path = "compliance/audit_conversion.rs"]
+mod audit_conversion;
+use audit_conversion::{audit_proposal, bind_assessments, decode_audit, decode_audit_review};
 
 /// An audit with the identities the runtime bound its evidence to.
 struct Audit {
@@ -67,28 +69,11 @@ impl Core {
         let prompt = audit_prompt(scope)?;
         let (answer, producer) =
             self.requirements_turn(conversation, &scope.run_id, "audit", false, prompt, cancel)?;
-        let TurnResult::Audit { findings, evidence } = TurnResult::decode(&answer) else {
-            return Err(Error::Invalid(
-                "the requirements auditor ended its turn without submit_audit".into(),
-            ));
-        };
+        let (findings, evidence) = decode_audit(&answer)?;
         let entries = self
             .store
             .ledger_entries(conversation, &scope.run_id, None)?;
-        let evidence = evidence
-            .iter()
-            .map(|item| {
-                let mut proposal = resolve_evidence(item, &entries, &scope.tasks)?;
-                proposal.producer_turn = producer.clone();
-                proposal.integrated_fingerprint = scope.fingerprint.clone();
-                Ok(proposal)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let proposal = Audit {
-            approved: audit_approves(&findings),
-            findings,
-            evidence,
-        };
+        let proposal = audit_proposal(findings, &evidence, &entries, scope, &producer)?;
         Ok((proposal, producer))
     }
 
@@ -102,30 +87,8 @@ impl Core {
         let prompt = review_prompt(scope, proposal)?;
         let (answer, verifier) =
             self.requirements_turn(conversation, &scope.run_id, "audit", true, prompt, cancel)?;
-        let TurnResult::AuditReview { note, assessments } = TurnResult::decode(&answer) else {
-            return Err(Error::Invalid(
-                "the audit verifier ended its turn without submit_audit_review".into(),
-            ));
-        };
-        let assessments = assessments
-            .into_iter()
-            .map(|assessment| {
-                let evidence = (0..proposal.evidence.len())
-                    .find(|index| evidence_id(*index) == assessment.evidence)
-                    .map(|index| proposal.evidence[index].clone())
-                    .ok_or_else(|| {
-                        Error::Invalid(format!(
-                            "the audit verifier assessed {}, which the audit did not propose",
-                            assessment.evidence
-                        ))
-                    })?;
-                Ok(Assessment {
-                    evidence,
-                    approved: assessment.approved,
-                    note: assessment.note,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let (note, assessments) = decode_audit_review(&answer)?;
+        let assessments = bind_assessments(assessments, &proposal.evidence)?;
         let review = Review {
             approved: assessments.len() == proposal.evidence.len()
                 && assessments.iter().all(|assessment| assessment.approved),

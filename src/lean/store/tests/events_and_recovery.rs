@@ -89,6 +89,46 @@ fn running_turns_become_interrupted_on_restart() {
 }
 
 #[test]
+fn history_budget_keeps_oversized_first_event_and_continues_from_its_sequence() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store.create_conversation("/p").unwrap();
+    let after_setup = store.latest_event_seq(&conversation.id).unwrap();
+    let first = store
+        .append_event(
+            &conversation.id,
+            None,
+            None,
+            "message",
+            &serde_json::json!({"text": "é".repeat(80)}),
+        )
+        .unwrap();
+    let second = store
+        .append_event(
+            &conversation.id,
+            None,
+            None,
+            "message",
+            &serde_json::json!({"text": "next"}),
+        )
+        .unwrap();
+
+    let page = store
+        .events_since_budget(&conversation.id, after_setup, 10, 8)
+        .unwrap();
+    assert_eq!(page.len(), 1, "the first event is never dropped for budget");
+    assert_eq!(page[0].seq, first);
+    assert_eq!(page[0].payload["text"], "é".repeat(80));
+    assert_eq!(
+        store
+            .events_since_budget(&conversation.id, page[0].seq, 10, 8)
+            .unwrap()[0]
+            .seq,
+        second
+    );
+}
+
+#[test]
 fn workspace_trust_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("core.db")).unwrap();

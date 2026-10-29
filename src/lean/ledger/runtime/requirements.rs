@@ -59,23 +59,11 @@ impl Core {
         let mut added = false;
         for message in user
             .iter()
-            .filter(|message| message.seq >= run.start_message)
-            .filter(|message| {
-                !decisions.iter().any(|id| {
-                    message
-                        .text
-                        .starts_with(&format!("Interview answer ({id})\n"))
-                })
-            })
+            .filter(|message| missing_source(message, run.start_message, &known, &decisions))
         {
-            if !known
-                .iter()
-                .any(|source| source.message == Some(message.seq))
-            {
-                self.store
-                    .register_message_source(conversation, &run.id, message.seq)?;
-                added = true;
-            }
+            self.store
+                .register_message_source(conversation, &run.id, message.seq)?;
+            added = true;
         }
         Ok(added)
     }
@@ -180,17 +168,8 @@ impl Core {
         if change.entries.is_empty() {
             return Ok(());
         }
-        if self.store.has_rejected_ledger_proposal(&run.id)?
-            || change
-                .entries
-                .iter()
-                .any(|entry| existing.iter().any(|old| old.spec.id == entry.id))
-        {
-            let (proposal, diff) =
-                self.store
-                    .propose_agent_ledger_change(change, &self.state, producer)?;
-            self.store.append_event(conversation, None, None, "ledger_approval_required",
-                &json!({"proposal":proposal,"run":run.id,"revision":run.spec_revision,"affected_tasks":diff.affected_tasks}))?;
+        if requires_user_approval(&self.store, run, existing, change)? {
+            self.propose_extracted_requirements(conversation, run, change, producer)?;
             return Err(Error::Invalid(
                 "requirements proposal awaits user approval".into(),
             ));
@@ -198,6 +177,26 @@ impl Core {
         let _integration = self.integrating.lock().expect("integration mutex");
         self.store
             .apply_analyst_ledger_change(change, &self.state, producer)?;
+        Ok(())
+    }
+
+    fn propose_extracted_requirements(
+        &self,
+        conversation: &str,
+        run: &Run,
+        change: &LedgerChange,
+        producer: &str,
+    ) -> Result<()> {
+        let (proposal, diff) =
+            self.store
+                .propose_agent_ledger_change(change, &self.state, producer)?;
+        self.store.append_event(
+            conversation,
+            None,
+            None,
+            "ledger_approval_required",
+            &json!({"proposal":proposal,"run":run.id,"revision":run.spec_revision,"affected_tasks":diff.affected_tasks}),
+        )?;
         Ok(())
     }
 
@@ -221,4 +220,34 @@ impl Core {
             "requirements extraction is empty",
         )
     }
+}
+
+fn missing_source(
+    message: &crate::lean::store::Message,
+    start_message: u64,
+    known: &[Source],
+    decisions: &[String],
+) -> bool {
+    message.seq >= start_message
+        && !decisions.iter().any(|id| {
+            message
+                .text
+                .starts_with(&format!("Interview answer ({id})\n"))
+        })
+        && !known
+            .iter()
+            .any(|source| source.message == Some(message.seq))
+}
+
+fn requires_user_approval(
+    store: &crate::lean::store::Store,
+    run: &Run,
+    existing: &[LedgerEntry],
+    change: &LedgerChange,
+) -> Result<bool> {
+    Ok(store.has_rejected_ledger_proposal(&run.id)?
+        || change
+            .entries
+            .iter()
+            .any(|entry| existing.iter().any(|old| old.spec.id == entry.id)))
 }

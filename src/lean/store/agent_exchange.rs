@@ -16,30 +16,11 @@ impl Store {
         crate::require(question.len() <= 16384, "question exceeds 16 KiB")?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        let previous: Option<(String, String)> = tx
-            .query_row(
-                "SELECT id,question FROM agent_questions WHERE turn_id=?1 AND request_key=?2",
-                params![turn, key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        if let Some((id, text)) = previous {
-            crate::require(
-                text == question,
-                "request_key already used with another question",
-            )?;
+        if let Some(id) = previous_question(&tx, turn, key, question)? {
             return Ok(id);
         }
-        let pending:i64=tx.query_row("SELECT count(*) FROM agent_questions q JOIN turns old ON old.id=q.turn_id JOIN turns cur ON cur.id=?1 WHERE old.role=cur.role AND old.conversation_id=cur.conversation_id AND q.state IN ('pending','awaiting_user')",[turn],|r|r.get(0))?;
-        crate::require(
-            pending < 8,
-            "resolve an outstanding question before asking more (limit 8)",
-        )?;
-        let id = crate::id();
-        let role: String =
-            tx.query_row("SELECT role FROM turns WHERE id=?1", [turn], |r| r.get(0))?;
-        tx.execute("INSERT INTO agent_questions(id,conversation_id,turn_id,request_key,question,state) VALUES(?1,?2,?3,?4,?5,'pending')", params![id,conversation,turn,key,question])?;
-        tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'runtime',?2,?3)",params![conversation,format!("Agent question {id}, source {role}, turn {turn}: {question}\nAnswer with answer_agent, or hand it to the user with defer_to_user. An answer does not change the task contract or permissions."),now_ms()])?;
+        ensure_question_capacity(&tx, turn)?;
+        let id = insert_agent_question(&tx, conversation, turn, key, question)?;
         tx.commit()?;
         Ok(id)
     }
@@ -89,25 +70,7 @@ impl Store {
         crate::require(!answer.trim().is_empty(), "answer is required")?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        let (state, previous): (String, Option<String>) = tx.query_row(
-            "SELECT state,answer FROM agent_questions WHERE conversation_id=?1 AND id=?2",
-            params![conversation, request], |r| Ok((r.get(0)?, r.get(1)?)),
-        ).optional()?.ok_or_else(|| Error::Invalid("request: unknown question ID in this conversation; use the request ID the agent's question message names".into()))?;
-        crate::require(
-            state != "invalidated",
-            "question was invalidated; await a fresh task turn",
-        )?;
-        let answered = state == "answered";
-        if answered && let Some(previous) = previous {
-            crate::require(
-                previous == answer,
-                "question already has a different answer",
-            )?;
-        } else {
-            tx.execute("UPDATE tasks SET status='queued' WHERE id IN (SELECT task_id FROM turn_scopes WHERE turn_id=(SELECT turn_id FROM agent_questions WHERE id=?1)) AND status='waiting' AND json_extract(feedback,'$.waiting_request')=?1",[request])?;
-            tx.execute("UPDATE agent_questions SET state='answered',answer=?3 WHERE conversation_id=?1 AND id=?2",params![conversation,request,answer])?;
-            tx.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'agent_question_answered',?2,?3)",params![conversation,serde_json::json!({"request":request}).to_string(),now_ms()])?;
-        }
+        answer_question_tx(&tx, conversation, request, answer)?;
         tx.commit()?;
         Ok(serde_json::json!({"request":request,"state":"answered"}))
     }
@@ -157,6 +120,115 @@ impl Store {
             .map(|encoded| serde_json::from_str(&encoded))
             .transpose()?)
     }
+}
+
+fn previous_question(
+    tx: &rusqlite::Transaction<'_>,
+    turn: &str,
+    key: &str,
+    question: &str,
+) -> Result<Option<String>> {
+    let previous: Option<(String, String)> = tx
+        .query_row(
+            "SELECT id,question FROM agent_questions WHERE turn_id=?1 AND request_key=?2",
+            params![turn, key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    previous
+        .map(|(id, text)| {
+            crate::require(
+                text == question,
+                "request_key already used with another question",
+            )?;
+            Ok(id)
+        })
+        .transpose()
+}
+
+fn ensure_question_capacity(tx: &rusqlite::Transaction<'_>, turn: &str) -> Result<()> {
+    let pending: i64 = tx.query_row(
+        "SELECT count(*) FROM agent_questions q JOIN turns old ON old.id=q.turn_id JOIN turns cur ON cur.id=?1 WHERE old.role=cur.role AND old.conversation_id=cur.conversation_id AND q.state IN ('pending','awaiting_user')",
+        [turn],
+        |row| row.get(0),
+    )?;
+    crate::require(
+        pending < 8,
+        "resolve an outstanding question before asking more (limit 8)",
+    )
+}
+
+fn insert_agent_question(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    turn: &str,
+    key: &str,
+    question: &str,
+) -> Result<String> {
+    let id = crate::id();
+    let role: String = tx.query_row("SELECT role FROM turns WHERE id=?1", [turn], |row| {
+        row.get(0)
+    })?;
+    tx.execute("INSERT INTO agent_questions(id,conversation_id,turn_id,request_key,question,state) VALUES(?1,?2,?3,?4,?5,'pending')", params![id,conversation,turn,key,question])?;
+    let message = format!(
+        "Agent question {id}, source {role}, turn {turn}: {question}\nAnswer with answer_agent, or hand it to the user with defer_to_user. An answer does not change the task contract or permissions."
+    );
+    tx.execute(
+        "INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'runtime',?2,?3)",
+        params![conversation, message, now_ms()],
+    )?;
+    Ok(id)
+}
+
+fn answer_question_tx(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    request: &str,
+    answer: &str,
+) -> Result<()> {
+    let (state, previous) = question_answer(tx, conversation, request)?;
+    crate::require(
+        state != "invalidated",
+        "question was invalidated; await a fresh task turn",
+    )?;
+    if state == "answered"
+        && let Some(previous) = previous
+    {
+        crate::require(
+            previous == answer,
+            "question already has a different answer",
+        )?;
+        Ok(())
+    } else {
+        record_question_answer(tx, conversation, request, answer)
+    }
+}
+
+fn question_answer(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    request: &str,
+) -> Result<(String, Option<String>)> {
+    tx.query_row(
+        "SELECT state,answer FROM agent_questions WHERE conversation_id=?1 AND id=?2",
+        params![conversation, request],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional()?.ok_or_else(|| Error::Invalid("request: unknown question ID in this conversation; use the request ID the agent's question message names".into()))
+}
+
+fn record_question_answer(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    request: &str,
+    answer: &str,
+) -> Result<()> {
+    tx.execute("UPDATE tasks SET status='queued' WHERE id IN (SELECT task_id FROM turn_scopes WHERE turn_id=(SELECT turn_id FROM agent_questions WHERE id=?1)) AND status='waiting' AND json_extract(feedback,'$.waiting_request')=?1", [request])?;
+    tx.execute(
+        "UPDATE agent_questions SET state='answered',answer=?3 WHERE conversation_id=?1 AND id=?2",
+        params![conversation, request, answer],
+    )?;
+    tx.execute("INSERT INTO events(conversation_id,kind,payload,created_ms) VALUES(?1,'agent_question_answered',?2,?3)", params![conversation,serde_json::json!({"request":request}).to_string(),now_ms()])?;
+    Ok(())
 }
 
 impl Store {

@@ -73,44 +73,60 @@ impl Store {
     ) -> Result<Vec<crate::lean::tasks::DependencyReport>> {
         let mut inputs = vec![];
         for dependency in &spec.depends_on {
-            let task = self
-                .task_in_plan_by_id(plan, dependency)?
-                .ok_or_else(|| Error::Invalid(format!("missing dependency {dependency}")))?;
-            // The options prerequisite is handed over below as the selected
-            // approach, not as a summary.
-            if task.spec["options_for"].as_str() == Some(spec.id.as_str()) {
-                continue;
+            if let Some(input) = self.dependency_report(plan, spec, dependency)? {
+                inputs.push(input);
             }
-            crate::require(task.status == "approved", "dependency is not verified")?;
-            inputs.push(crate::lean::tasks::DependencyReport {
-                id: dependency.clone(),
-                title: task.spec["title"].as_str().unwrap_or(dependency).to_owned(),
-                report: crate::lean::tasks::bound(
-                    &self.dependency_summary(&task)?,
-                    DEPENDENCY_SUMMARY_LIMIT,
-                ),
-            });
         }
         let choices: Vec<String> = self.db().prepare("SELECT id FROM tasks WHERE plan_id=?1 AND json_extract(spec,'$.options_for')=?2 AND status<>'superseded'")?.query_map(params![plan,spec.id],|r|r.get(0))?.collect::<std::result::Result<_,_>>()?;
         for id in choices {
-            let task = self
-                .task_by_id(&id)?
-                .ok_or_else(|| Error::Invalid("options task disappeared".into()))?;
-            crate::require(task.status == "approved", "local options are not verified")?;
-            let result = self.completed_task_output(&task)?;
-            let selection = &result["selection"];
-            let variant = selection["alternatives"]
-                .as_array()
-                .and_then(|all| all.iter().find(|a| a["id"] == selection["selected"]))
-                .ok_or_else(|| Error::Invalid("local options have no selected variant".into()))?;
-            inputs.push(crate::lean::tasks::DependencyReport {
-                id: "selected_approach".into(),
-                title: "Selected approach for this task".into(),
-                report: serde_json::json!({"variant":variant,"rationale":selection["rationale"]})
-                    .to_string(),
-            });
+            inputs.push(self.selected_approach_report(&id)?);
         }
         Ok(inputs)
+    }
+
+    fn dependency_report(
+        &self,
+        plan: &str,
+        spec: &crate::lean::tasks::TaskContract,
+        dependency: &str,
+    ) -> Result<Option<crate::lean::tasks::DependencyReport>> {
+        let task = self
+            .task_in_plan_by_id(plan, dependency)?
+            .ok_or_else(|| Error::Invalid(format!("missing dependency {dependency}")))?;
+        if task.spec["options_for"].as_str() == Some(spec.id.as_str()) {
+            return Ok(None);
+        }
+        crate::require(task.status == "approved", "dependency is not verified")?;
+        Ok(Some(crate::lean::tasks::DependencyReport {
+            id: dependency.to_owned(),
+            title: task.spec["title"].as_str().unwrap_or(dependency).to_owned(),
+            report: crate::lean::tasks::bound(
+                &self.dependency_summary(&task)?,
+                DEPENDENCY_SUMMARY_LIMIT,
+            ),
+        }))
+    }
+
+    fn selected_approach_report(
+        &self,
+        task_id: &str,
+    ) -> Result<crate::lean::tasks::DependencyReport> {
+        let task = self
+            .task_by_id(task_id)?
+            .ok_or_else(|| Error::Invalid("options task disappeared".into()))?;
+        crate::require(task.status == "approved", "local options are not verified")?;
+        let result = self.completed_task_output(&task)?;
+        let selection = &result["selection"];
+        let variant = selection["alternatives"]
+            .as_array()
+            .and_then(|all| all.iter().find(|item| item["id"] == selection["selected"]))
+            .ok_or_else(|| Error::Invalid("local options have no selected variant".into()))?;
+        Ok(crate::lean::tasks::DependencyReport {
+            id: "selected_approach".into(),
+            title: "Selected approach for this task".into(),
+            report: serde_json::json!({"variant":variant,"rationale":selection["rationale"]})
+                .to_string(),
+        })
     }
 
     /// What a dependency delivered, in brief: its worker's summary, or the

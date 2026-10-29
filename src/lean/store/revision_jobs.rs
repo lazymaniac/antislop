@@ -15,26 +15,12 @@ impl Store {
         let payload = serde_json::to_string(revision)?;
         let mut db = self.db();
         let tx = db.transaction()?;
-        let previous: Option<(String,String,String)> = tx.query_row("SELECT id,proposal,status FROM plan_revision_jobs WHERE conversation_id=?1 AND request_key=?2",params![conversation,key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        if let Some((id, previous, status)) = previous {
-            crate::require(
-                previous == payload,
-                "request_key already names a different revision",
-            )?;
-            let resume = status == "interrupted";
-            if resume {
-                require_no_review(&tx, conversation)?;
-                tx.execute(
-                    "UPDATE plan_revision_jobs SET status='reviewing',error=NULL WHERE id=?1",
-                    [&id],
-                )?;
-            }
+        if let Some(result) = resume_revision_job(&tx, conversation, key, &payload)? {
             tx.commit()?;
-            return Ok((id, resume));
+            return Ok(result);
         }
         require_no_review(&tx, conversation)?;
-        let id = crate::id();
-        tx.execute("INSERT INTO plan_revision_jobs(id,conversation_id,plan_id,request_key,proposal,status) VALUES(?1,?2,?3,?4,?5,'reviewing')",params![id,conversation,revision.plan,key,payload])?;
+        let id = insert_revision_job(&tx, conversation, key, revision, &payload)?;
         tx.commit()?;
         Ok((id, true))
     }
@@ -84,6 +70,50 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+}
+
+fn resume_revision_job(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    key: &str,
+    payload: &str,
+) -> Result<Option<(String, bool)>> {
+    let previous: Option<(String, String, String)> = tx.query_row(
+        "SELECT id,proposal,status FROM plan_revision_jobs WHERE conversation_id=?1 AND request_key=?2",
+        params![conversation,key],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).optional()?;
+    let Some((id, previous, status)) = previous else {
+        return Ok(None);
+    };
+    crate::require(
+        previous == payload,
+        "request_key already names a different revision",
+    )?;
+    let resume = status == "interrupted";
+    if resume {
+        require_no_review(tx, conversation)?;
+        tx.execute(
+            "UPDATE plan_revision_jobs SET status='reviewing',error=NULL WHERE id=?1",
+            [&id],
+        )?;
+    }
+    Ok(Some((id, resume)))
+}
+
+fn insert_revision_job(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    key: &str,
+    revision: &PlanRevision,
+    payload: &str,
+) -> Result<String> {
+    let id = crate::id();
+    tx.execute(
+        "INSERT INTO plan_revision_jobs(id,conversation_id,plan_id,request_key,proposal,status) VALUES(?1,?2,?3,?4,?5,'reviewing')",
+        params![id,conversation,revision.plan,key,payload],
+    )?;
+    Ok(id)
 }
 
 fn require_no_review(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<()> {
