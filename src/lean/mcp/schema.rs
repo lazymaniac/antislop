@@ -169,6 +169,7 @@ pub(super) fn revision() -> Value {
     json!({
         "reason":{"type":"string","description":"What the revision changes and why"},
         "tasks":{"type":"array","items":planned_task(),"description":"Changed or added tasks, each complete"},
-        "retire":{"type":"array","items":{"type":"string"},"description":"Ids of tasks to drop; their obligations must move to another task"}
+        "retire":{"type":"array","items":{"type":"string"},"description":"Ids of tasks to drop; their obligations must move to another task"},
+        "redo":{"type":"array","items":{"type":"string"},"description":"Ids of approved tasks whose work must be done again because their result is wrong. An approved task changed only in its title, goal or summary otherwise keeps its result"}
     })
 }

@@ -100,7 +100,11 @@ pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
          End with a complete report of your result: what you did or found and the evidence, \
          and a short summary of what you delivered; tasks that depend on this one see only \
          that summary. Do not restate the task or dependency data or paste file \
-         contents; the independent verifier checks the report against the files.",
+         contents; the independent verifier checks the report against the files. \
+         Files under paths git ignores (such as .antislop/ or target/) are not part of \
+         your result and never reach the verifier: put each command you rely on and the \
+         part of its output that shows the result in the report itself, and do not point \
+         the verifier to such files.",
         task.title,
         task.id,
         work_kind_name(task.kind),

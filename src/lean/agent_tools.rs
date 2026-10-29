@@ -226,6 +226,10 @@ impl Core {
                 let tasks =
                     self.revised_tasks(conversation, &plan, planned_tasks(&args["tasks"])?)?;
                 let retire = serde_json::from_value(args["retire"].clone())?;
+                let redo = match args.get("redo") {
+                    Some(Value::Null) | None => Vec::new(),
+                    Some(redo) => serde_json::from_value(redo.clone())?,
+                };
                 self.submit_revision(
                     conversation,
                     &request_key,
@@ -235,6 +239,7 @@ impl Core {
                         reason: required("reason")?,
                         tasks,
                         retire,
+                        redo,
                     },
                 )
             }

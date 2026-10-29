@@ -11,6 +11,10 @@ pub struct PlanRevision {
     pub reason: String,
     pub tasks: Vec<TaskContract>,
     pub retire: Vec<String>,
+    /// Approved tasks whose work must be done again. Without it an approved
+    /// task whose contract changes only in wording keeps its result.
+    #[serde(default)]
+    pub redo: Vec<String>,
 }
 
 impl PlanRevision {
@@ -27,6 +31,12 @@ impl PlanRevision {
             crate::require(
                 specs.iter().any(|s| &s.id == id),
                 "retired task does not exist",
+            )?;
+        }
+        for id in &self.redo {
+            crate::require(
+                specs.iter().any(|s| &s.id == id) && !self.retire.contains(id),
+                "redo names a task that does not exist or is retired",
             )?;
         }
         specs.retain(|s| {
@@ -63,6 +73,13 @@ impl PlanRevision {
         }
         order_graph(specs)
     }
+}
+
+fn same_contract(task: &Task, spec: &TaskContract) -> bool {
+    serde_json::from_value::<TaskContract>(task.spec.clone())
+        .ok()
+        .as_ref()
+        == Some(spec)
 }
 
 pub(in crate::lean) struct RevisionLease<'a> {
@@ -152,6 +169,9 @@ impl Store {
             let encoded = serde_json::to_string(spec)?;
             let old = baseline.iter().find(|t| t.spec["id"] == spec.id);
             let id = old.map_or_else(crate::id, |t| t.id.clone());
+            // An unaffected task whose wording changed keeps its result; only
+            // its contract follows the revision.
+            let reworded = old.is_some_and(|t| !affected.contains(&id) && !same_contract(t, spec));
             match old {
                 Some(_) if affected.contains(&id) => {
                     tx.execute("UPDATE tasks SET spec=?2,position=?3,status='queued',verdict=NULL,feedback=NULL,base=NULL,result=NULL WHERE id=?1",params![id,encoded,position as i64])?;
@@ -162,8 +182,8 @@ impl Store {
                 }
                 Some(_) => {
                     tx.execute(
-                        "UPDATE tasks SET position=?2 WHERE id=?1",
-                        params![id, position as i64],
+                        "UPDATE tasks SET spec=CASE WHEN ?3 THEN ?4 ELSE spec END,position=?2 WHERE id=?1",
+                        params![id, position as i64, reworded, encoded],
                     )?;
                 }
                 None => {
@@ -185,6 +205,8 @@ impl Store {
                         params![id, entry.spec.id, entry.version],
                     )?;
                 }
+            }
+            if old.is_none() || affected.contains(&id) || reworded {
                 tx.execute(
                     "INSERT INTO task_contracts(task_id,version,spec) VALUES(?1,?2,?3)",
                     params![id, revision.base_revision + 1, encoded],
@@ -193,10 +215,9 @@ impl Store {
             }
         }
         for spec in specs {
-            if baseline
-                .iter()
-                .any(|old| old.spec["id"] == spec.id && !affected.contains(&old.id))
-            {
+            if baseline.iter().any(|old| {
+                old.spec["id"] == spec.id && !affected.contains(&old.id) && same_contract(old, spec)
+            }) {
                 continue;
             }
             let (id,status,round):(String,String,i64)=tx.query_row("SELECT id,status,round FROM tasks WHERE plan_id=?1 AND json_extract(spec,'$.id')=?2 AND status<>'superseded'",params![revision.plan,spec.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;

@@ -10,21 +10,28 @@ use serde_json::Value;
 use crate::lean::tasks::{Verdict, counted_status};
 
 /// The obligations a verdict leaves open: judged an issue, blocked, or
-/// answered without a note.
+/// answered without a note. A finding against a check already open counts
+/// as that check, since its own id follows its wording and changes every
+/// round; any other finding counts by its id.
 pub fn open_obligations(verdict: &Verdict) -> BTreeSet<String> {
-    verdict
+    let checks: BTreeSet<String> = verdict
         .coverage
         .iter()
         .filter(|(_, entry)| is_open(entry))
         .map(|(id, _)| id.clone())
-        .chain(
-            verdict
-                .findings
-                .iter()
-                .filter(|f| matches!(f["severity"].as_str(), Some("critical" | "high" | "medium")))
-                .filter_map(|f| f["id"].as_str().map(|id| format!("finding:{id}"))),
-        )
-        .collect()
+        .collect();
+    let findings: Vec<String> = verdict
+        .findings
+        .iter()
+        .filter(|f| matches!(f["severity"].as_str(), Some("critical" | "high" | "medium")))
+        .filter(|f| {
+            f["check"]
+                .as_str()
+                .is_none_or(|check| !checks.contains(check))
+        })
+        .filter_map(|f| f["id"].as_str().map(|id| format!("finding:{id}")))
+        .collect();
+    checks.into_iter().chain(findings).collect()
 }
 
 fn is_open(entry: &Value) -> bool {
@@ -115,6 +122,27 @@ mod tests {
     #[test]
     fn a_first_named_obligation_after_an_empty_rejection_is_new_information() {
         assert_eq!(rounds(&[&[], &["a"], &["a"]]), [false, false, true]);
+    }
+
+    #[test]
+    fn reworded_findings_against_the_same_checks_stall_the_worker() {
+        let verdict = |suffix: &str| Verdict {
+            approved: false,
+            findings: vec![
+                json!({"check": "R5.1", "id": format!("R5.1:{suffix}"), "severity": "medium"}),
+                json!({"check": "goal", "id": format!("goal:{suffix}"), "severity": "medium"}),
+            ],
+            coverage: json!({
+                "R5.1": {"status": "issue", "note": "records absent"},
+                "goal": {"status": "issue", "note": "evidence missing"}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        };
+        let mut progress = Progress::default();
+        assert!(!progress.record(open_obligations(&verdict("f0cab199"))));
+        assert!(progress.record(open_obligations(&verdict("a2c82963"))));
     }
 
     #[test]

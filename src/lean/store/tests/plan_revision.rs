@@ -51,6 +51,47 @@ fn fixture_for(dependent: bool) -> (tempfile::TempDir, Store, String, String, Ve
 }
 
 #[test]
+fn a_reworded_approved_task_takes_its_new_contract_and_keeps_its_result() {
+    let (_dir, store, conversation, _, mut baseline) = fixture();
+    baseline[0].status = "approved".into();
+    store.update_task(&baseline[0]).unwrap();
+    let mut specs: Vec<TaskContract> = baseline
+        .iter()
+        .map(|t| serde_json::from_value(t.spec.clone()).unwrap())
+        .collect();
+    specs[0].goal = "Inspect A; the /tmp socket fallback is allowed".into();
+    let revision = PlanRevision {
+        plan: baseline[0].plan_id.clone(),
+        base_revision: 0,
+        reason: "Record an approved exception".into(),
+        tasks: vec![specs[0].clone()],
+        retire: vec![],
+        redo: vec![],
+    };
+    let (request, _) = store
+        .reserve_revision_job(&conversation, "reword", &revision)
+        .unwrap();
+    store
+        .apply_plan_revision(
+            &conversation,
+            &revision,
+            &baseline,
+            &specs,
+            &BTreeSet::new(),
+            &RevisionLease {
+                requirement_revision: 1,
+                request: &request,
+            },
+        )
+        .unwrap();
+    let current = store.plan(&revision.plan).unwrap();
+    assert_eq!(current[0].status, "approved");
+    assert_eq!(current[0].input_generation, baseline[0].input_generation);
+    assert_eq!(current[0].spec["goal"], specs[0].goal.as_str());
+    store.assert_task_inputs(&current[0]).unwrap();
+}
+
+#[test]
 fn revision_commits_contracts_generations_events_and_receipt_together() {
     let (dir, store, conversation, _, mut baseline) = fixture();
     baseline[1].status = "approved".into();
@@ -66,6 +107,7 @@ fn revision_commits_contracts_generations_events_and_receipt_together() {
         reason: "Clarify local contract".into(),
         tasks: vec![specs[0].clone()],
         retire: vec![],
+        redo: vec![],
     };
     let (request, fresh) = store
         .reserve_revision_job(&conversation, "rev1", &revision)
@@ -148,6 +190,7 @@ fn changed_requirements_rollback_revision_and_restart_preserves_proposal() {
         reason: "Review".into(),
         tasks: vec![],
         retire: vec![],
+        redo: vec![],
     };
     let (request, _) = store
         .reserve_revision_job(&conversation, "rev1", &revision)
@@ -205,6 +248,7 @@ fn revision_cannot_retire_a_mandatory_criterion_or_introduce_a_cycle() {
         reason: "Retire".into(),
         tasks: vec![],
         retire: vec!["a".into()],
+        redo: vec![],
     };
     let specs = revision.merge(&baseline).unwrap();
     let (request, _) = store
@@ -231,6 +275,7 @@ fn revision_cannot_retire_a_mandatory_criterion_or_introduce_a_cycle() {
     let revision = PlanRevision {
         tasks: vec![cycle],
         retire: vec![],
+        redo: vec![],
         ..revision
     };
     assert!(revision.merge(&baseline).is_err());
@@ -247,6 +292,7 @@ fn a_revision_cannot_keep_a_task_from_reading_the_project() {
         reason: "Narrow access".into(),
         tasks: vec![task.clone()],
         retire: vec![],
+        redo: vec![],
     };
     let error = revision.merge(&baseline).unwrap_err().to_string();
     assert!(error.contains("nothing is pasted"), "{error}");
@@ -297,6 +343,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
         reason: "Retire supporting work without removing acceptance coverage".into(),
         tasks: vec![],
         retire: vec!["b".into()],
+        redo: vec![],
     };
     let specs = revision.merge(&tasks).unwrap();
     let (request, _) = store
@@ -348,6 +395,7 @@ fn retired_tasks_cannot_reenter_the_queue_through_dependency_corrections_or_mail
         reason: "Explicitly restore supporting work under a fresh execution identity".into(),
         tasks: vec![replacement],
         retire: vec![],
+        redo: vec![],
     };
     let specs = next.merge(&baseline).unwrap();
     let (request, _) = store

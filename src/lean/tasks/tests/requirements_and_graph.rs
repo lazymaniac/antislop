@@ -104,11 +104,11 @@ fn plan_revision_review_repeats_earlier_contracts_only_for_changed_tasks() {
     }));
     let baseline = [&same, &before].map(|task| serde_json::to_value(task).unwrap());
     let plan = [same, after];
-    let first = plan_revision_review_prompt("/p", "", &plan, &baseline, "reason", true);
+    let first = plan_revision_review_prompt("/p", "", &plan, &baseline, &[], "reason", true);
     assert!(first.contains("OLD GOAL") && first.contains("NEW GOAL"));
     assert_eq!(first.matches("UNCHANGED GOAL").count(), 1);
     assert!(first.contains("You review a plan"));
-    let resumed = plan_revision_review_prompt("/p", "", &plan, &baseline, "reason", false);
+    let resumed = plan_revision_review_prompt("/p", "", &plan, &baseline, &[], "reason", false);
     assert!(!resumed.contains("You review a plan"));
     assert!(resumed.contains("Reason: reason"));
 }

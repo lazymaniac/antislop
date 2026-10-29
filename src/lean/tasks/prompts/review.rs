@@ -18,6 +18,10 @@ pub fn verifier_prompt(
          Your obligations (the task's goal, its assigned acceptance criteria, then \
          the catalog risks of this kind of work). \
          Assess each from files and recorded evidence only; do not execute or edit:\n{obligations}\n\n\
+         Command results are recorded evidence: judge them by the command and the output \
+         the report quotes. Files the worker left under paths git ignores (such as \
+         .antislop/ or target/) never reach your checkout; their absence is not a finding. \
+         Raise one only when the report itself lacks the command or output a check needs.\n\n\
          The worker's report:\n<<<\n{report}\n>>>\n\n{}End with review: your report, checks with a status and note for every obligation id above, and findings, each naming the check it breaks, its severity, the issue and where. The runtime approves only when every check is ok or n/a and no finding is critical, high or medium. Suggestions outside this contract belong in the report, not in findings. {COVERAGE_FORMAT}\n\n{blocker}",
         change_note(changes),
     )
@@ -198,6 +202,7 @@ pub fn plan_revision_review_prompt(
     request: &str,
     plan: &[TaskContract],
     baseline: &[Value],
+    approved: &[String],
     reason: &str,
     initial: bool,
 ) -> String {
@@ -215,8 +220,13 @@ pub fn plan_revision_review_prompt(
         plan_review_followup(request, plan)
     };
     format!(
-        "{head}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate dependencies, dedicated options for every writer and all quality gates. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}",
-        serde_json::to_string(&previous).unwrap_or_default()
+        "{head}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate dependencies, dedicated options for every writer and all quality gates. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; a change to its title, goal or summary does not redo its work. When an approved result must be redone, the revision has to name the task in redo.",
+        serde_json::to_string(&previous).unwrap_or_default(),
+        if approved.is_empty() {
+            "none".to_owned()
+        } else {
+            approved.join(", ")
+        }
     )
 }
 

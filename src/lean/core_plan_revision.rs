@@ -187,6 +187,12 @@ impl Core {
     ) -> Result<()> {
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let previous: Vec<_> = baseline.iter().map(|task| task.spec.clone()).collect();
+        let approved: Vec<String> = baseline
+            .iter()
+            .filter(|task| task.status == status::APPROVED)
+            .filter_map(|task| task.spec["id"].as_str().map(str::to_owned))
+            .filter(|id| !revision.redo.contains(id))
+            .collect();
         let review = self
             .review(
                 conversation,
@@ -200,6 +206,7 @@ impl Core {
                         request,
                         specs,
                         &previous,
+                        &approved,
                         &revision.reason,
                         initial,
                     )
@@ -228,7 +235,7 @@ impl Core {
             )?;
         }
         require(!cancel.load(Ordering::SeqCst), "revision cancelled")?;
-        let affected = affected_tasks(baseline, specs);
+        let affected = affected_tasks(baseline, specs, &revision.redo);
         let barrier = {
             let _graph = self.graph_updates.lock().expect("graph update mutex");
             RevisionBarrier::new(self, affected.clone())
@@ -329,13 +336,25 @@ fn validate_authorized_scope(
     Ok(())
 }
 
-fn affected_tasks(baseline: &[Task], specs: &[TaskContract]) -> BTreeSet<String> {
+/// Tasks a revision sends back to work: those whose contract changes, those
+/// it names in `redo`, and everything depending on them. An approved task
+/// changed only in wording keeps its result, and so do its dependents.
+fn affected_tasks(baseline: &[Task], specs: &[TaskContract], redo: &[String]) -> BTreeSet<String> {
     let changed: BTreeSet<_> = baseline
         .iter()
         .filter(|old| {
-            !specs
-                .iter()
-                .any(|s| old.spec == serde_json::to_value(s).unwrap())
+            let id = old.spec["id"].as_str().unwrap_or_default();
+            let Some(new) = specs.iter().find(|s| s.id == id) else {
+                return true;
+            };
+            if redo.iter().any(|r| r == id) {
+                return true;
+            }
+            serde_json::from_value::<TaskContract>(old.spec.clone())
+                .ok()
+                .as_ref()
+                != Some(new)
+                && !(old.status == status::APPROVED && reworded_only(&old.spec, new))
         })
         .filter_map(|t| t.spec["id"].as_str().map(str::to_owned))
         .collect();
@@ -351,6 +370,24 @@ fn affected_tasks(baseline: &[Task], specs: &[TaskContract]) -> BTreeSet<String>
         })
         .map(|t| t.id.clone())
         .collect()
+}
+
+/// Whether a contract differs from the one an approved result was produced
+/// for only in how it is worded: its title, goal, summaries, section or the
+/// requirement ids the planner cited. Its kind, scope, permissions,
+/// dependencies and bound requirements and criteria are what the work was.
+fn reworded_only(old: &serde_json::Value, new: &TaskContract) -> bool {
+    let Ok(old) = serde_json::from_value::<TaskContract>(old.clone()) else {
+        return false;
+    };
+    let mut new = new.clone();
+    new.title = old.title.clone();
+    new.goal = old.goal.clone();
+    new.summary = old.summary.clone();
+    new.section = old.section.clone();
+    new.verifier = old.verifier.clone();
+    new.covers = old.covers.clone();
+    new == old
 }
 
 struct RevisionBarrier<'a> {
@@ -382,6 +419,57 @@ mod tests {
 
     fn contract(writes: bool, paths: &[&str]) -> TaskContract {
         serde_json::from_value(json!({"id":"local","title":"Local","goal":"Inspect local behavior","kind":"implementation","writes":writes,"scope":paths,"verifier":{"focus":"Check local behavior"}})).unwrap()
+    }
+
+    #[test]
+    fn rewording_an_approved_task_keeps_its_result_and_its_dependents() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::lean::store::Store::open(&dir.path().join("core.db")).unwrap();
+        let conversation = store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let mut baseline = store
+            .add_plan(
+                &conversation,
+                &[
+                    json!({"id":"a","title":"A","goal":"Inspect A","kind":"analysis","scope":["src"]}),
+                    json!({"id":"b","title":"B","goal":"Inspect B","kind":"analysis","depends_on":["a"]}),
+                    json!({"id":"c","title":"C","goal":"Inspect C","kind":"analysis"}),
+                ],
+            )
+            .unwrap();
+        for task in &mut baseline[..2] {
+            task.status = status::APPROVED.into();
+        }
+        let specs: Vec<TaskContract> = baseline
+            .iter()
+            .map(|t| serde_json::from_value(t.spec.clone()).unwrap())
+            .collect();
+        let ids = |names: &[&str]| -> BTreeSet<String> {
+            baseline
+                .iter()
+                .filter(|t| names.contains(&t.spec["id"].as_str().unwrap()))
+                .map(|t| t.id.clone())
+                .collect()
+        };
+        let with = |change: &dyn Fn(&mut Vec<TaskContract>)| {
+            let mut specs = specs.clone();
+            change(&mut specs);
+            specs
+        };
+
+        let reworded = with(&|s| s[0].goal = "Inspect A, allowing the /tmp socket".into());
+        assert!(affected_tasks(&baseline, &reworded, &[]).is_empty());
+        assert_eq!(
+            affected_tasks(&baseline, &reworded, &["a".into()]),
+            ids(&["a", "b"])
+        );
+        let rescoped = with(&|s| s[0].scope = vec!["src".into(), "tests".into()]);
+        assert_eq!(affected_tasks(&baseline, &rescoped, &[]), ids(&["a", "b"]));
+        // Work not yet approved follows its contract.
+        let queued = with(&|s| s[2].goal = "Inspect C again".into());
+        assert_eq!(affected_tasks(&baseline, &queued, &[]), ids(&["c"]));
     }
 
     #[test]
@@ -437,6 +525,7 @@ mod tests {
             reason: "Check missing requirement binding".into(),
             tasks: vec![],
             retire: vec![],
+            redo: vec![],
         };
         for key in ["first", "second"] {
             let error = core
