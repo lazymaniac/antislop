@@ -43,6 +43,38 @@ const EXECUTION: [&str; 11] = [
 /// Words before a phrase that turn the request into a prohibition.
 const NEGATIONS: [&str; 5] = ["not ", "n't ", "never ", "without ", "no "];
 
+/// Phrases that leave a worker only what was handed to it. Nothing is ever
+/// pasted: every agent reads the project itself.
+const ONLY_SUPPLIED: [&str; 7] = [
+    "only received",
+    "received source files",
+    "only supplied",
+    "only directly supplied",
+    "only the supplied",
+    "only pasted",
+    "no file access",
+];
+
+/// Bans on commands as such. Some CLIs read files only through a shell, so
+/// these forbid reading too, unless a qualifier narrows them.
+const COMMAND_BANS: [&str; 4] = [
+    "no commands",
+    "no shell",
+    "no command execution",
+    "do not run any command",
+];
+
+/// Words after a command ban that limit it to some commands.
+const QUALIFIERS: [&str; 7] = [
+    " that ",
+    " which ",
+    " other than ",
+    " except",
+    " beyond ",
+    " besides ",
+    " to ",
+];
+
 /// Words that make a task wait for another task's output.
 const WAITING: [&str; 6] = [
     "after ",
@@ -60,6 +92,14 @@ pub fn check(specs: &[TaskContract]) -> Vec<Finding> {
         scope_escape(spec, &mut findings);
         read_only_writer(spec, &mut findings);
         asks_to_execute(spec, &mut findings);
+        if let Some(detail) = forbids_reading(spec) {
+            findings.push(finding(
+                spec,
+                "forbids-reading-files",
+                Severity::Block,
+                detail,
+            ));
+        }
         waits_for_descendant(spec, &descendants, &mut findings);
     }
     findings
@@ -118,6 +158,28 @@ fn asks_to_execute(spec: &TaskContract, out: &mut Vec<Finding>) {
             format!("is read-only but its goal asks for {:?}", phrase.trim()),
         ));
     }
+}
+
+/// Why the goal leaves the worker no way to read the project, if it does.
+/// A worker gets no file contents, so a task limited to what it received, or
+/// barred from every command, can only stop and ask.
+pub(in crate::lean) fn forbids_reading(spec: &TaskContract) -> Option<String> {
+    let goal = spec.goal.to_lowercase();
+    let supplied = ONLY_SUPPLIED.iter().find(|phrase| goal.contains(*phrase));
+    let banned = COMMAND_BANS.iter().find(|phrase| {
+        goal.match_indices(*phrase).any(|(at, _)| {
+            let after = &goal[at + phrase.len()..];
+            !QUALIFIERS.iter().any(|word| after.starts_with(word))
+        })
+    });
+    let phrase = supplied.or(banned)?;
+    Some(format!(
+        "its goal says {:?}, but nothing is pasted for a worker: it reads the project \
+         itself, and for some CLIs reading a file is a shell command. Let it list, read, \
+         search and count the files of its scope; to keep it from executing things, \
+         forbid builds, tests or checkers by name",
+        phrase.trim()
+    ))
 }
 
 /// Whether `phrase` appears in `text` and is not preceded by a negation.
@@ -193,7 +255,7 @@ pub fn message(findings: &[&Finding]) -> String {
         "The runtime checked the proposed plan before any agent started and found tasks that \
          cannot be carried out as written:\n{}\n\nSubmit the complete corrected plan for \
          the same requirements, changing only what these findings require: fix the scope, \
-         `writes` or dependencies, or move the work that needs it into a task that has the \
+         `writes`, dependencies or the goal's wording, or move the work that needs it into a task that has the \
          permission and runs first.",
         lines.join("\n")
     )
@@ -266,6 +328,32 @@ mod tests {
         ask.writes = true;
         ask.goal = "Run cargo test".into();
         assert!(check(&[ask]).is_empty());
+    }
+
+    #[test]
+    fn a_task_may_not_be_kept_from_reading_the_project() {
+        let mut inventory = task("t1", WorkKind::Context, false, &[]);
+        for goal in [
+            "Use only received source files and directly supplied context. List every file.",
+            "Read-only source inspection only: no commands, edits or history retrieval.",
+            "Count lines with no shell access.",
+        ] {
+            inventory.goal = goal.into();
+            assert_eq!(
+                rules(&[inventory.clone()]),
+                ["forbids-reading-files"],
+                "{goal}"
+            );
+            assert_eq!(check(&[inventory.clone()])[0].severity, Severity::Block);
+        }
+        for goal in [
+            "Read the sources; no commands that write, no builds or tests.",
+            "Inspect the files. No commands other than read-only search.",
+            "Do not run cargo test; read and report.",
+        ] {
+            inventory.goal = goal.into();
+            assert!(check(&[inventory.clone()]).is_empty(), "{goal}");
+        }
     }
 
     #[test]

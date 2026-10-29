@@ -52,6 +52,9 @@ impl PlanRevision {
                 seen.insert(&task.id) && !self.retire.contains(&task.id),
                 "revision repeats or retires an updated task",
             )?;
+            if let Some(detail) = crate::lean::feasibility::forbids_reading(task) {
+                return Err(Error::Invalid(format!("task {}: {detail}", task.id)));
+            }
             if let Some(old) = specs.iter_mut().find(|old| old.id == task.id) {
                 *old = task.clone();
             } else {

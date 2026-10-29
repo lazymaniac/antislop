@@ -29,7 +29,9 @@ const PLAN_FORMAT: &str = "Submit the plan with the submit_plan tool; it ends yo
          of about 60–80 characters on what the worker will do, not a copy of the goal. \
          Keep the full instructions in `goal`.\n\n\
          Each task gets a worker that reads the files itself (give scope, not \
-         content) and a verifier that checks the goal, the acceptance criteria the task \
+         content; never limit a task to received or supplied material, and never forbid \
+         the commands it reads with: for some CLIs reading a file is a shell command, so \
+         forbid builds, tests or checkers by name instead) and a verifier that checks the goal, the acceptance criteria the task \
          covers and the risks the runtime keeps for its kind; you do not choose risks. \
          Do not add options tasks: the runtime adds them. When required gates are enabled, you may depend on the generated gate ids quality-refactoring, static-analyzer, verification-testing, security-auditor, performance-auditor and integration-gate without declaring those tasks. A referenced checkpoint follows the upstream tasks, including reviews, and precedes its consumers and their dependents. To place the whole quality pipeline before a final report, make that report depend on integration-gate. You may instead declare explicit quality tasks with ordinary ids and depends_on links; the runtime adds only missing kinds. When required gates are disabled, declare any needed quality tasks explicitly. Verifiers inspect files, diffs and \
          recorded worker results only; never assign them execution, tests, builds, benchmarks \

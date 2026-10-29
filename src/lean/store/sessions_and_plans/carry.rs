@@ -125,10 +125,7 @@ fn carry_notice(kept: &[String], repeated: &[String], why: &str) -> Option<Strin
         ));
     }
     if !repeated.is_empty() {
-        parts.push(format!(
-            "{} run again: {why}",
-            repeated.join(", ")
-        ));
+        parts.push(format!("{} run again: {why}", repeated.join(", ")));
     }
     (!parts.is_empty()).then(|| parts.join("; "))
 }

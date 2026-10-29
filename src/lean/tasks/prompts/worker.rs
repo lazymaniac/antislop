@@ -91,7 +91,10 @@ pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
     format!(
         "You are a worker on a team of agents. The project is your current \
          working directory: {project}. Nothing is pasted for you: read the files \
-         you need yourself with your tools.\n\n\
+         you need yourself with your tools. Listing, reading, searching and counting \
+         the project's files is always allowed, also through shell commands that only \
+         read; no wording of the task (such as \"no commands\" or \"use only received \
+         sources\") takes that away.\n\n\
          Task: {}\nTask id: {}\nKind: {}\nGoal: {}\nScope: {}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          {blocker}\n\n{team_note}\n\n\
          End with a complete report of your result: what you did or found and the evidence, \

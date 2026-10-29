@@ -237,6 +237,28 @@ fn revision_cannot_retire_a_mandatory_criterion_or_introduce_a_cycle() {
 }
 
 #[test]
+fn a_revision_cannot_keep_a_task_from_reading_the_project() {
+    let (_dir, _store, _conversation, _, baseline) = fixture();
+    let mut task: TaskContract = serde_json::from_value(baseline[0].spec.clone()).unwrap();
+    task.goal = "Inventory the sources. Read-only inspection only: no commands.".into();
+    let revision = PlanRevision {
+        plan: baseline[0].plan_id.clone(),
+        base_revision: 0,
+        reason: "Narrow access".into(),
+        tasks: vec![task.clone()],
+        retire: vec![],
+    };
+    let error = revision.merge(&baseline).unwrap_err().to_string();
+    assert!(error.contains("nothing is pasted"), "{error}");
+    task.goal = "Inventory the sources by reading them; no builds or tests.".into();
+    let revision = PlanRevision {
+        tasks: vec![task],
+        ..revision
+    };
+    assert!(revision.merge(&baseline).is_ok());
+}
+
+#[test]
 fn changed_dependency_inputs_discard_partial_commit_references_but_keep_history() {
     for state in ["working", "verifying", "waiting", "failed"] {
         let (_dir, store, conversation, _, mut tasks) = fixture_for(true);
@@ -461,7 +483,9 @@ fn approved_work_answered_other_requirements_runs_again() {
         .add_plan(&conversation, &[first[0].spec.clone()])
         .unwrap();
     let plan = second[0].plan_id.clone();
-    store.link_plan_run(&conversation, &plan, &other.id).unwrap();
+    store
+        .link_plan_run(&conversation, &plan, &other.id)
+        .unwrap();
     store.queue_plan(&conversation, &plan).unwrap();
 
     assert_eq!(store.plan(&plan).unwrap()[0].status, "queued");
