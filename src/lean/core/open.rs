@@ -159,9 +159,20 @@ fn resume_cut_off(core: &Arc<Core>, conversations: &[String]) {
     }
 }
 
+/// Continues the plans whose work the restart interrupted. Only a
+/// conversation's current plan runs again, and only the work that was cut
+/// off: tasks waiting for an answer or handed to the orchestrator or the
+/// user stay as they were.
 fn resume_interrupted(core: &Arc<Core>, plans: &[(String, String)]) {
     for (conversation, plan) in plans {
-        if let Err(error) = core.resume_plan(conversation, plan) {
+        let resumed = core.store.accepted_plan(conversation).and_then(|current| {
+            if current.as_deref() != Some(plan.as_str()) {
+                return Ok(());
+            }
+            core.store.requeue_after_restart(conversation, plan)?;
+            core.maybe_continue_plan(conversation, plan)
+        });
+        if let Err(error) = resumed {
             core.notice(
                 conversation,
                 &format!("could not resume plan {plan}: {error}"),

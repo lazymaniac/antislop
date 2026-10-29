@@ -117,6 +117,33 @@ impl Store {
         )?)
     }
 
+    /// After a restart, queues again the tasks of a plan the daemon was
+    /// running that only waited for it: those it interrupted are queued
+    /// already, and a task waiting for a CLI login or usage limit tries
+    /// again. A task waiting for an answer to its question, or stopped for
+    /// the orchestrator or the user, stays as it was. Returns how many.
+    pub fn requeue_after_restart(&self, conversation: &str, plan_id: &str) -> Result<usize> {
+        Ok(self.db().execute(
+            "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2 AND status='waiting'
+               AND NOT EXISTS (SELECT 1 FROM agent_questions q
+                 WHERE q.id=json_extract(tasks.feedback,'$.waiting_request') AND q.state IN ('pending','awaiting_user'))",
+            params![conversation, plan_id],
+        )?)
+    }
+
+    /// The conversation's most recently accepted plan, the one its work runs on.
+    pub fn accepted_plan(&self, conversation: &str) -> Result<Option<String>> {
+        Ok(self
+            .db()
+            .query_row(
+                "SELECT p.id FROM plans p JOIN plan_authorizations a ON a.plan_id=p.id
+                 WHERE p.conversation_id=?1 ORDER BY p.created_ms DESC,p.rowid DESC LIMIT 1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
     /// Queues every task of a proposed plan, all or none; tasks approved in
     /// the previous plan with the same contract stay approved.
     pub fn queue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {

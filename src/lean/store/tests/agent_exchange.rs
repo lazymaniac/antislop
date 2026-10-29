@@ -100,6 +100,62 @@ fn a_turn_ending_without_waiting_closes_its_open_questions() {
 }
 
 #[test]
+fn a_restart_resumes_a_cli_wait_but_not_a_task_waiting_for_its_answer() {
+    let (_dir, store, conversation, mut task, turn) = fixture();
+    let request = store
+        .ask_agent_question(&conversation, &turn.id, "scope", "May I widen the scope?")
+        .unwrap();
+    store
+        .defer_question_to_user(&conversation, &request, "Needs the user")
+        .unwrap();
+    task.status = "waiting".into();
+    task.feedback = Some(json!({"round": task.round, "waiting_request": request}));
+    store.update_task(&task).unwrap();
+    assert_eq!(
+        store
+            .requeue_after_restart(&conversation, &task.plan_id)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store.task_by_id(&task.id).unwrap().unwrap().status,
+        "waiting"
+    );
+    // A task waiting for a CLI login names no question and tries again.
+    task.feedback = None;
+    store.update_task(&task).unwrap();
+    assert_eq!(
+        store
+            .requeue_after_restart(&conversation, &task.plan_id)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store.task_by_id(&task.id).unwrap().unwrap().status,
+        "queued"
+    );
+}
+
+#[test]
+fn the_accepted_plan_is_the_latest_one_the_user_accepted() {
+    let (_dir, store, conversation, _, _) = fixture();
+    let spec = json!({"id":"next","title":"Next","goal":"Go on","kind":"analysis","verifier":{"focus":"Check"}});
+    let first = store
+        .add_plan(&conversation, std::slice::from_ref(&spec))
+        .unwrap()[0]
+        .plan_id
+        .clone();
+    store.queue_plan(&conversation, &first).unwrap();
+    assert_eq!(
+        store.accepted_plan(&conversation).unwrap(),
+        Some(first.clone())
+    );
+    // A newer draft the user has not accepted does not replace it.
+    store.add_plan(&conversation, &[spec]).unwrap();
+    assert_eq!(store.accepted_plan(&conversation).unwrap(), Some(first));
+}
+
+#[test]
 fn answering_a_checkpoint_resumes_only_its_owner() {
     let (_dir, store, conversation, mut task, turn) = fixture();
     let id = store
