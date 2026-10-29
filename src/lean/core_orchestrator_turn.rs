@@ -109,8 +109,8 @@ impl Core {
         let mut plan = None;
         let mut awaiting_decision = false;
         match result {
-            super::turn_result::TurnResult::Plan { tasks, .. } => {
-                plan = Some(tasks::planned_graph(tasks));
+            super::turn_result::TurnResult::Plan { tasks, keep, .. } => {
+                plan = Some(self.submitted_graph(conversation, tasks, &keep));
             }
             super::turn_result::TurnResult::Question { question } if interviewing => {
                 self.store.ask_interview_question(conversation, &question)?;

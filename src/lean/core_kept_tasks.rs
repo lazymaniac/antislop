@@ -1,0 +1,213 @@
+//! A new plan keeps approved work of the plan that ran instead of repeating it.
+use super::*;
+use crate::lean::tasks::PlannedTask;
+
+impl Core {
+    /// The submitted graph with the contracts of the approved tasks it keeps.
+    pub(in crate::lean) fn submitted_graph(
+        &self,
+        conversation: &str,
+        tasks: Vec<PlannedTask>,
+        keep: &[String],
+    ) -> Result<Vec<TaskContract>> {
+        tasks::planned_graph_with(tasks, self.kept_contracts(conversation, keep)?)
+    }
+
+    /// The approved contracts named in `keep`, unchanged except for edges to
+    /// generated options and gates, which the new plan generates again.
+    fn kept_contracts(&self, conversation: &str, keep: &[String]) -> Result<Vec<TaskContract>> {
+        if keep.is_empty() {
+            return Ok(Vec::new());
+        }
+        let plan = self.store.last_plan_with_approvals(conversation, None)?;
+        let generated: Vec<&str> = plan
+            .iter()
+            .filter(|task| !authored(task))
+            .filter_map(|task| task.spec["id"].as_str())
+            .collect();
+        let approved: Vec<Task> = plan.iter().filter(|task| keepable(task)).cloned().collect();
+        keep.iter()
+            .map(|id| {
+                let task = approved
+                    .iter()
+                    .find(|task| task.spec["id"] == id.as_str())
+                    .ok_or_else(|| Error::Invalid(not_keepable(id, &approved)))?;
+                let mut spec: TaskContract = serde_json::from_value(task.spec.clone())?;
+                spec.depends_on
+                    .retain(|dependency| !generated.contains(&dependency.as_str()));
+                Ok(spec)
+            })
+            .collect()
+    }
+
+    /// What the planner may keep, for its prompt; `None` when nothing is.
+    pub(in crate::lean) fn keepable_tasks_note(
+        &self,
+        conversation: &str,
+    ) -> Result<Option<String>> {
+        let plan = self.store.last_plan_with_approvals(conversation, None)?;
+        let lines: Vec<String> = plan
+            .iter()
+            .filter(|task| keepable(task))
+            .map(|task| {
+                let spec = &task.spec;
+                format!(
+                    "- {} ({}{}): {}",
+                    spec["id"].as_str().unwrap_or_default(),
+                    spec["kind"].as_str().unwrap_or_default(),
+                    if spec["writes"] == true {
+                        ", change integrated"
+                    } else {
+                        ""
+                    },
+                    spec["title"].as_str().unwrap_or_default()
+                )
+            })
+            .collect();
+        Ok((!lines.is_empty()).then(|| {
+            format!(
+                "\n\nThese tasks of the plan that ran are approved:\n{}\nTo keep one's accepted result, list its id in `keep` of submit_plan and leave it out of `tasks`: its approved contract stays as it is, it does not run again and its dependents receive its summary. A task listed in `tasks` runs again from the start, even under the same id; the runtime carries nothing over otherwise. A kept task's dependencies must be kept or planned too.\n",
+                lines.join("\n")
+            )
+        }))
+    }
+}
+
+/// Options and gates follow the tasks they serve; the planner keeps only these.
+fn authored(task: &Task) -> bool {
+    task.spec["quality_gate"] != true && task.spec["options_for"].as_str().is_none()
+}
+
+fn keepable(task: &Task) -> bool {
+    authored(task) && task.status == status::APPROVED
+}
+
+fn not_keepable(id: &str, approved: &[Task]) -> String {
+    let ids: Vec<&str> = approved
+        .iter()
+        .filter_map(|task| task.spec["id"].as_str())
+        .collect();
+    if ids.is_empty() {
+        return format!("keep: {id} cannot be kept; no plan that ran has approved tasks");
+    }
+    format!(
+        "keep: {id} is not an approved task of the plan that ran; approved: {}",
+        ids.join(", ")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::lean::core_plan_proposal::checked_plan;
+    use serde_json::json;
+
+    #[test]
+    fn a_plan_keeps_named_approved_tasks_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let id = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let map = json!({"id":"map","title":"Map","goal":"Map the code","kind":"context","writes":false,"verifier":{"focus":"f"}});
+        let options = json!({"id":"build-options","title":"Options","goal":"Compare","kind":"analysis","options_for":"build","verifier":{"focus":"f"}});
+        let build = json!({"id":"build","title":"Build","goal":"Build it","kind":"implementation","writes":true,"depends_on":["map","build-options"],"verifier":{"focus":"f"}});
+        let plan = core.store.add_plan(&id, &[map, options, build]).unwrap()[0]
+            .plan_id
+            .clone();
+        assert!(core.keepable_tasks_note(&id).unwrap().is_none());
+        core.store
+            .set_plan_status(&plan, status::PROPOSED, status::APPROVED)
+            .unwrap();
+
+        let note = core.keepable_tasks_note(&id).unwrap().unwrap();
+        assert!(note.contains("- map (context): Map"), "{note}");
+        assert!(
+            note.contains("- build (implementation, change integrated): Build"),
+            "{note}"
+        );
+        assert!(!note.contains("build-options"), "{note}");
+
+        let check: PlannedTask = serde_json::from_value(
+            json!({"id":"check","title":"Check","goal":"Check it","kind":"testing","depends_on":["build"]}),
+        )
+        .unwrap();
+        let keep = ["map".to_owned(), "build".to_owned()];
+        let graph = core
+            .submitted_graph(&id, vec![check.clone()], &keep)
+            .unwrap();
+        let ids: Vec<&str> = graph.iter().map(|spec| spec.id.as_str()).collect();
+        assert_eq!(ids, ["map", "build", "check"]);
+        // The options edge is generated again with the plan's options.
+        assert_eq!(graph[1].depends_on, ["map"]);
+        assert_eq!(graph[1].goal, "Build it");
+
+        let error = core
+            .submitted_graph(&id, vec![check.clone()], &["missing".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("approved: map, build"), "{error}");
+        let mut again = check;
+        again.id = "map".into();
+        again.depends_on.clear();
+        let error = core
+            .submitted_graph(&id, vec![again], &["map".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("both kept and planned"), "{error}");
+    }
+
+    #[test]
+    fn kept_tasks_and_their_options_finalize_to_the_approved_contracts() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config.clone()).unwrap();
+        let id = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let planned = |value: serde_json::Value| -> Vec<PlannedTask> {
+            serde_json::from_value(value).unwrap()
+        };
+        let first = planned(json!([
+            {"id":"map","title":"Map","goal":"Map the code","kind":"context"},
+            {"id":"build","title":"Build","goal":"Build it","kind":"implementation","depends_on":["map"],"scope":["src/"]},
+            {"id":"later","title":"Later","goal":"Then this","kind":"implementation","depends_on":["build"],"scope":["src/"]}
+        ]));
+        let first = checked_plan(&tasks::planned_graph(first).unwrap(), &config).unwrap();
+        assert!(first.iter().any(|s| s.id == "build-options"));
+        let values: Vec<_> = first
+            .iter()
+            .map(|s| serde_json::to_value(s).unwrap())
+            .collect();
+        let plan = core.store.add_plan(&id, &values).unwrap()[0]
+            .plan_id
+            .clone();
+        core.store
+            .set_plan_status(&plan, status::PROPOSED, status::APPROVED)
+            .unwrap();
+
+        let rest = planned(json!([
+            {"id":"after","title":"After","goal":"Then that","kind":"implementation","depends_on":["build"],"scope":["src/"]}
+        ]));
+        let keep = ["map".to_owned(), "build".to_owned()];
+        let second = core.submitted_graph(&id, rest, &keep).unwrap();
+        let second = checked_plan(&second, &config).unwrap();
+        for kept in ["map", "build", "build-options"] {
+            let old = first.iter().find(|s| s.id == kept);
+            let new = second.iter().find(|s| s.id == kept);
+            assert!(old.is_some() == new.is_some(), "{kept}");
+            if let (Some(old), Some(mut new)) = (old, new.cloned()) {
+                let mut old = old.clone();
+                old.depends_on.sort();
+                new.depends_on.sort();
+                assert_eq!(old, new, "{kept}");
+            }
+        }
+    }
+}

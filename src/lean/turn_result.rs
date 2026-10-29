@@ -19,6 +19,9 @@ pub enum TurnResult {
     Plan {
         document: String,
         tasks: Vec<PlannedTask>,
+        /// Approved tasks of the plan that ran, kept with their results.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        keep: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         addressed: Option<Vec<u64>>,
     },
@@ -165,6 +168,7 @@ pub fn tool_result(tool: &str, args: &serde_json::Value) -> Result<TurnResult> {
             document: text("document")?,
             tasks: serde_json::from_value(args["tasks"].clone())
                 .map_err(|error| crate::Error::Invalid(format!("tasks: {error}")))?,
+            keep: kept(args)?,
             addressed: addressed(args)?,
         }),
         "ask_user" => {
@@ -200,6 +204,17 @@ fn addressed(args: &serde_json::Value) -> Result<Option<Vec<u64>>> {
     let items: Vec<Addressed> = serde_json::from_value(args["addressed"].clone())
         .map_err(|error| crate::Error::Invalid(format!("addressed: {error}")))?;
     Ok(Some(items.into_iter().map(|item| item.id).collect()))
+}
+
+/// The tasks a plan submitted and the ids of the approved tasks it keeps.
+pub type SubmittedPlan = (Vec<PlannedTask>, Vec<String>);
+
+fn kept(args: &serde_json::Value) -> Result<Vec<String>> {
+    if args["keep"].is_null() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_value(args["keep"].clone())
+        .map_err(|error| crate::Error::Invalid(format!("keep: {error}")))
 }
 
 /// The result of a task tool call.
@@ -339,14 +354,16 @@ impl TurnResult {
             })
     }
 
-    /// The words of a planning answer and the plan it submitted, if any.
-    /// `submit_plan` checked the graph in the turn, so a failure here means
-    /// the stored answer predates a rule change.
-    pub fn plan_answer(text: &str) -> (String, Option<Result<Vec<TaskContract>>>) {
+    /// The words of a planning answer and the plan it submitted, if any: its
+    /// tasks and the approved tasks it keeps.
+    pub fn plan_answer(text: &str) -> (String, Option<SubmittedPlan>) {
         match Self::decode(text) {
             Self::Plan {
-                document, tasks, ..
-            } => (document, Some(super::tasks::planned_graph(tasks))),
+                document,
+                tasks,
+                keep,
+                ..
+            } => (document, Some((tasks, keep))),
             other => (other.text(), None),
         }
     }

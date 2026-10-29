@@ -388,3 +388,91 @@ fn rejected_revision_reviews_are_counted_since_the_last_applied_one() {
     job("e", "rejected", Some("revision review rejected: - z"));
     assert_eq!(store.rejected_revisions_in_a_row(&plan).unwrap(), 1);
 }
+
+#[test]
+fn an_accepted_plan_keeps_approved_tasks_whose_contracts_did_not_change() {
+    let (_dir, store, conversation, run, mut first) = fixture();
+    store.queue_plan(&conversation, &first[0].plan_id).unwrap();
+    for task in &mut first {
+        task.status = "approved".into();
+        task.round = 3;
+        task.report = Some(format!("{} inspected", task.spec["id"]));
+        store.update_task(task).unwrap();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let mut changed = first[1].spec.clone();
+    changed["goal"] = json!("Inspect B again");
+    let second = store
+        .add_plan(&conversation, &[first[0].spec.clone(), changed])
+        .unwrap();
+    let plan = second[0].plan_id.clone();
+    store.link_plan_run(&conversation, &plan, &run).unwrap();
+    store.bind_task_ledger(&conversation, &run, &plan).unwrap();
+    store.queue_plan(&conversation, &plan).unwrap();
+
+    let tasks = store.plan(&plan).unwrap();
+    assert_eq!(tasks[0].status, "approved");
+    assert_eq!(tasks[0].round, 3);
+    assert_eq!(tasks[0].report.as_deref(), Some("\"a\" inspected"));
+    assert_eq!(
+        tasks[0].feedback.as_ref().unwrap()["carried_from"],
+        first[0].id.as_str()
+    );
+    assert_eq!(tasks[1].status, "queued");
+    let notice = store
+        .events_since(&conversation, 0, 1000)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "notice")
+        .unwrap();
+    let text = notice.payload["text"].as_str().unwrap().to_owned();
+    assert!(text.contains("kept the approved results of a"), "{text}");
+    assert!(text.contains("b run again"), "{text}");
+
+    // Kept again, the result still names the task that produced it.
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let third = store
+        .add_plan(&conversation, &[first[0].spec.clone()])
+        .unwrap();
+    store
+        .link_plan_run(&conversation, &third[0].plan_id, &run)
+        .unwrap();
+    store
+        .bind_task_ledger(&conversation, &run, &third[0].plan_id)
+        .unwrap();
+    store.queue_plan(&conversation, &third[0].plan_id).unwrap();
+    let kept = &store.plan(&third[0].plan_id).unwrap()[0];
+    assert_eq!(kept.status, "approved");
+    assert_eq!(
+        kept.feedback.as_ref().unwrap()["carried_from"],
+        first[0].id.as_str()
+    );
+}
+
+#[test]
+fn approved_work_answered_other_requirements_runs_again() {
+    let (_dir, store, conversation, _, mut first) = fixture();
+    store.queue_plan(&conversation, &first[0].plan_id).unwrap();
+    first[0].status = "approved".into();
+    store.update_task(&first[0]).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let other = store.create_run(&conversation, "Other behavior").unwrap();
+    let second = store
+        .add_plan(&conversation, &[first[0].spec.clone()])
+        .unwrap();
+    let plan = second[0].plan_id.clone();
+    store.link_plan_run(&conversation, &plan, &other.id).unwrap();
+    store.queue_plan(&conversation, &plan).unwrap();
+
+    assert_eq!(store.plan(&plan).unwrap()[0].status, "queued");
+    let notice = store
+        .events_since(&conversation, 0, 1000)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "notice")
+        .unwrap();
+    assert_eq!(
+        notice.payload["text"],
+        "a run again: the requirements changed since their approval"
+    );
+}

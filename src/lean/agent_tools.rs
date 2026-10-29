@@ -166,7 +166,11 @@ impl Core {
                 // is decoded.
                 let tasks = planned_tasks(&args["tasks"])?;
                 let result = turn_result::tool_result(tool, args)?;
-                self.check_submitted_plan(conversation, tasks)?;
+                let keep = match &result {
+                    turn_result::TurnResult::Plan { keep, .. } => keep.clone(),
+                    _ => Vec::new(),
+                };
+                self.check_submitted_plan(conversation, tasks, &keep)?;
                 self.record_result(turn, result)
             }
             "submit_ledger" => {
@@ -266,8 +270,13 @@ impl Core {
     /// Refuses within the turn what `propose` would refuse after it: a graph
     /// that does not order, links to criteria the ledger does not have, or a
     /// task the runtime could not run as written.
-    fn check_submitted_plan(&self, conversation: &str, tasks: Vec<PlannedTask>) -> Result<()> {
-        let mut specs = tasks::planned_graph(tasks)?;
+    fn check_submitted_plan(
+        &self,
+        conversation: &str,
+        tasks: Vec<PlannedTask>,
+        keep: &[String],
+    ) -> Result<()> {
+        let mut specs = self.submitted_graph(conversation, tasks, keep)?;
         if let Some(run) = self.store.planning_run(conversation)? {
             let entries = self.store.ledger_entries(conversation, &run.id, None)?;
             if !entries.is_empty() {

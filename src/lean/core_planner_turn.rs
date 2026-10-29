@@ -50,6 +50,7 @@ impl Core {
             &json!({"text": "The planner is drafting the plan"}),
         )?;
         let ledger_context = planning_ledger_context(self, conversation)?;
+        let keepable = self.keepable_tasks_note(conversation)?;
         let replaced = if asked.iter().any(|message| message.author == REPLAN) {
             let graph = self.store.latest_plan(conversation)?;
             Some(serde_json::to_string(
@@ -76,6 +77,7 @@ impl Core {
                 requirements: &requirements,
                 asked: &asked,
                 replaced: replaced.as_deref(),
+                keepable: keepable.as_deref(),
                 ledger_context: ledger_context.as_deref(),
             })
         })?
@@ -83,11 +85,12 @@ impl Core {
             return Ok(());
         };
         let (text, plan) = super::turn_result::TurnResult::plan_answer(&answer);
-        let plan = plan.unwrap_or_else(|| {
-            Err(Error::Invalid(
+        let plan = match plan {
+            Some((tasks, keep)) => self.submitted_graph(conversation, tasks, &keep),
+            None => Err(Error::Invalid(
                 "the planner ended its turn without submit_plan".into(),
-            ))
-        });
+            )),
+        };
         self.store.append_event(
             conversation,
             None,

@@ -1,6 +1,8 @@
 use super::*;
 use crate::lean::tasks::TaskContract;
 
+#[path = "sessions_and_plans/carry.rs"]
+mod carry;
 #[path = "sessions_and_plans/recovery.rs"]
 mod recovery;
 
@@ -115,7 +117,8 @@ impl Store {
         )?)
     }
 
-    /// Queues every task of a proposed plan, all or none.
+    /// Queues every task of a proposed plan, all or none; tasks approved in
+    /// the previous plan with the same contract stay approved.
     pub fn queue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -137,6 +140,12 @@ impl Store {
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2",
             params![conversation, plan_id],
         )?;
+        if let Some(text) = carry::carry_approved(&tx, conversation, plan_id)? {
+            tx.execute(
+                "INSERT INTO events(conversation_id,plan_id,kind,payload,created_ms) VALUES(?1,?2,'notice',?3,?4)",
+                params![conversation, plan_id, serde_json::json!({"text": text}).to_string(), now_ms()],
+            )?;
+        }
         authorize_plan(&tx, conversation, plan_id)?;
         advance_workflow(&tx, conversation, plan_id)?;
         tx.commit()?;

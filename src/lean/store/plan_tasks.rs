@@ -51,6 +51,25 @@ impl Store {
         plan_id.map(|plan_id| self.plan(&plan_id)).transpose()
     }
 
+    /// Every task of the conversation's latest plan with approved work,
+    /// other than `except`; empty when none has any.
+    pub fn last_plan_with_approvals(
+        &self,
+        conversation: &str,
+        except: Option<&str>,
+    ) -> Result<Vec<Task>> {
+        let plan_id: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT plan_id FROM tasks WHERE conversation_id=?1 AND plan_id<>?2
+                   AND status='approved' ORDER BY created_ms DESC, rowid DESC LIMIT 1",
+                params![conversation, except.unwrap_or_default()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        plan_id.map_or_else(|| Ok(Vec::new()), |plan_id| self.plan(&plan_id))
+    }
+
     /// Compact task instructions, without opening report or verdict contents.
     pub(in crate::lean) fn plan_specs(&self, plan: &str) -> Result<Vec<Value>> {
         let db = self.db();
@@ -151,6 +170,14 @@ impl Store {
     }
 
     pub(in crate::lean) fn completed_task_output(&self, task: &Task) -> Result<Value> {
+        // A kept result was produced by the turns of the task it came from.
+        let carried = task
+            .feedback
+            .as_ref()
+            .and_then(|f| f["carried_from"].as_str());
+        if let Some(source) = carried.and_then(|id| self.task_by_id(id).transpose()) {
+            return self.completed_task_output(&source?);
+        }
         let text: String = self.db().query_row("SELECT r.result FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE s.task_id=?1 AND s.round<=?2 AND x.generation=?3 AND json_extract(r.result,'$.type')='completed' AND t.role='worker:'||?1 ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",params![task.id,task.round,task.input_generation], |r|r.get(0))?;
         Ok(serde_json::from_str(&text)?)
     }

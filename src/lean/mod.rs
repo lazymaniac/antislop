@@ -13,6 +13,7 @@ mod core_comment_helpers;
 mod core_config_snapshot;
 mod core_integration;
 mod core_integration_repair;
+mod core_kept_tasks;
 mod core_orchestrator_turn;
 mod core_plan_answer;
 mod core_plan_proposal;

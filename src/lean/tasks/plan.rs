@@ -62,7 +62,25 @@ fn verifier_summary(writes: bool) -> &'static str {
 /// Authored contracts in dependency order, with generated gate references
 /// deferred until policy-aware finalization adds their targets.
 pub fn planned_graph(tasks: Vec<PlannedTask>) -> Result<Vec<TaskContract>> {
+    planned_graph_with(tasks, Vec::new())
+}
+
+/// The same, with the unchanged contracts of approved tasks the plan keeps.
+pub fn planned_graph_with(
+    tasks: Vec<PlannedTask>,
+    kept: Vec<TaskContract>,
+) -> Result<Vec<TaskContract>> {
     let mut tasks: Vec<_> = tasks.into_iter().map(PlannedTask::into_contract).collect();
+    for spec in kept {
+        crate::require(
+            !tasks.iter().any(|task| task.id == spec.id),
+            &format!(
+                "task {} is both kept and planned; a kept task goes only in keep, a task in tasks runs again",
+                spec.id
+            ),
+        )?;
+        tasks.push(spec);
+    }
     resolve_gate_dependencies(&mut tasks);
     // Generated gates are resolved only after policy and coverage are known.
     // Sort and validate the authored graph without these deferred edges.

@@ -452,7 +452,7 @@ fn tool_list(role: &str) -> Vec<Value> {
             "ask" => ("Ask the orchestrator a question about your task without ending your turn. Waits up to 25 seconds and returns the answer if one came; asking the same question again returns its state.".into(), json!({"question":{"type":"string"}}), vec!["turn","question"]),
             "wait_for_answer" => ("End your turn until the question you asked is answered; your work so far is kept and the task resumes with the answer.".into(), json!({"note":{"type":"string","description":"Where you stopped, for when you resume"}}), vec!["turn"]),
             "submit_plan" => {
-                let mut fields = json!({"document":{"type":"string","description":"The plan for the user in Markdown: approach, task order and what each task delivers"},"tasks":{"type":"array","minItems":1,"items":schema::planned_task()}});
+                let mut fields = json!({"document":{"type":"string","description":"The plan for the user in Markdown: approach, task order and what each task delivers"},"tasks":{"type":"array","minItems":1,"items":schema::planned_task()},"keep":{"type":"array","items":{"type":"string"},"description":"Ids of approved tasks of the plan that ran whose accepted results this plan keeps unchanged; they do not run again. Leave them out of tasks: a task in tasks runs again from the start"}});
                 if orchestrator {
                     fields["addressed"] = schema::addressed();
                 }
@@ -861,7 +861,8 @@ mod role_tests {
         let finish = shared.state.lock().unwrap().finished.clone().unwrap();
         let (text, plan) = super::super::turn_result::TurnResult::plan_answer(&finish.text);
         assert_eq!(text, "# Plan");
-        assert!(plan.unwrap().unwrap()[0].writes);
+        let (tasks, keep) = plan.unwrap();
+        assert!(tasks[0].clone().into_contract().writes && keep.is_empty());
         shared.state.lock().unwrap().finished = None;
         assert_eq!(dispatch(&shared, &call).unwrap(), json!({"recorded":true}));
         let mut other = call.clone();

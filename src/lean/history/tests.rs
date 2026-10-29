@@ -33,7 +33,7 @@ mod mail_tests {
         let pending = store
             .pending_mail(&conversation.id, "worker:task-1")
             .unwrap();
-        assert_eq!(pending, [queued.clone()]);
+        assert_eq!(pending, std::slice::from_ref(&queued));
         let turn = store
             .start_turn(&conversation.id, "worker:task-1", "codex", 0, None)
             .unwrap();
