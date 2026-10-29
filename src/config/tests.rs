@@ -131,6 +131,60 @@ fn profile_command_supports_platform_launchers_for_workers_and_verifiers() {
 }
 
 #[test]
+fn command_resolution_preserves_precedence_and_argument_order() {
+    let provider = ProviderConfig {
+        binary: PathBuf::from("provider"),
+        args: vec!["provider-arg".into()],
+        command: None,
+    };
+    let mut profile = Profile {
+        provider: ProviderKind::Codex,
+        binary: None,
+        args: vec!["profile-arg".into()],
+        command: None,
+        model: None,
+        effort: Effort::High,
+    };
+    assert_eq!(
+        resolve_command(&provider, &profile).unwrap(),
+        (
+            PathBuf::from("provider"),
+            vec!["provider-arg".into(), "profile-arg".into()]
+        )
+    );
+
+    let provider = ProviderConfig {
+        command: Some(CommandLine(vec!["provider-wrapper".into(), "base".into()])),
+        ..provider
+    };
+    assert_eq!(
+        resolve_command(&provider, &profile).unwrap(),
+        (
+            PathBuf::from("provider-wrapper"),
+            vec!["base".into(), "provider-arg".into(), "profile-arg".into()]
+        )
+    );
+
+    profile.binary = Some(PathBuf::from("profile-binary"));
+    assert_eq!(
+        resolve_command(&provider, &profile).unwrap(),
+        (PathBuf::from("profile-binary"), vec!["profile-arg".into()])
+    );
+
+    profile.command = Some(CommandLine(vec![
+        "profile-wrapper".into(),
+        "command".into(),
+    ]));
+    assert_eq!(
+        resolve_command(&provider, &profile).unwrap(),
+        (
+            PathBuf::from("profile-wrapper"),
+            vec!["command".into(), "profile-arg".into()]
+        )
+    );
+}
+
+#[test]
 fn a_route_to_a_missing_profile_is_rejected() {
     let mut config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
     config.routing.get_mut(&WorkKind::Context).unwrap().executor = "nobody".into();

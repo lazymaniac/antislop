@@ -2,6 +2,7 @@
 
 mod diagnostics;
 mod model;
+mod resolution;
 pub use model::*;
 #[cfg(test)]
 #[path = "config/tests.rs"]
@@ -11,6 +12,8 @@ mod validation;
 use crate::{Error, Result, require};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+pub(crate) use resolution::resolve_command;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,41 +29,6 @@ pub struct ResolvedProfile {
     pub native_effort: Option<String>,
     pub work_kind: WorkKind,
     pub role: RoleKind,
-}
-
-pub(crate) fn resolve_command(
-    provider: &ProviderConfig,
-    profile: &Profile,
-) -> Result<(PathBuf, Vec<String>)> {
-    if let Some(cmd) = &profile.command {
-        return command_and_args(&cmd.0, &profile.args, "profile");
-    }
-    if let Some(bin) = &profile.binary {
-        return Ok((bin.clone(), profile.args.clone()));
-    }
-    if let Some(cmd) = &provider.command {
-        let (binary, mut args) = command_and_args(&cmd.0, &provider.args, "provider")?;
-        args.extend(profile.args.iter().cloned());
-        return Ok((binary, args));
-    }
-    let mut args = provider.args.clone();
-    args.extend(profile.args.iter().cloned());
-    Ok((provider.binary.clone(), args))
-}
-
-fn command_and_args(
-    command: &[String],
-    extra_args: &[String],
-    source: &str,
-) -> Result<(PathBuf, Vec<String>)> {
-    let Some((binary, command_args)) = command.split_first() else {
-        return Err(Error::Invalid(format!(
-            "{source} command must contain at least an executable"
-        )));
-    };
-    let mut args = command_args.to_vec();
-    args.extend(extra_args.iter().cloned());
-    Ok((PathBuf::from(binary), args))
 }
 
 impl Config {
