@@ -144,8 +144,10 @@ fn read_only_writer(spec: &TaskContract, out: &mut Vec<Finding>) {
     }
 }
 
+/// An options task's goal is the runtime's: it forbids execution itself and
+/// quotes its writer's objective, commands included, as reference data.
 fn asks_to_execute(spec: &TaskContract, out: &mut Vec<Finding>) {
-    if spec.writes {
+    if spec.writes || spec.options_for.is_some() {
         return;
     }
     let goal = spec.goal.to_lowercase();
@@ -328,6 +330,16 @@ mod tests {
         ask.writes = true;
         ask.goal = "Run cargo test".into();
         assert!(check(&[ask]).is_empty());
+    }
+
+    #[test]
+    fn an_options_task_is_not_asked_to_execute_its_writers_commands() {
+        let mut writer = task("checks", WorkKind::Implementation, true, &[]);
+        writer.goal = "Run cargo fmt --check and cargo test --test lean_core".into();
+        let plan = crate::lean::tasks::with_options(vec![writer]);
+        let options = plan.iter().find(|t| t.options_for.is_some()).unwrap();
+        assert!(options.goal.contains("Run cargo fmt"), "{}", options.goal);
+        assert!(check(&plan).is_empty(), "{:?}", check(&plan));
     }
 
     #[test]
