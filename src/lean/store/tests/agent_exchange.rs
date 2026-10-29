@@ -70,6 +70,36 @@ fn questions_are_durable_idempotent_and_scoped() {
 }
 
 #[test]
+fn a_turn_ending_without_waiting_closes_its_open_questions() {
+    let (_dir, store, conversation, _, turn) = fixture();
+    let answered = store
+        .ask_agent_question(&conversation, &turn.id, "api", "Which error type?")
+        .unwrap();
+    store
+        .answer_agent_question(&conversation, &answered, "The existing one")
+        .unwrap();
+    let open = store
+        .ask_agent_question(&conversation, &turn.id, "scope", "Is the revision applied?")
+        .unwrap();
+    let deferred = store
+        .ask_agent_question(&conversation, &turn.id, "user", "May I widen the scope?")
+        .unwrap();
+    store
+        .defer_question_to_user(&conversation, &deferred, "Needs the user")
+        .unwrap();
+
+    assert_eq!(store.invalidate_open_questions(&turn.id).unwrap(), 2);
+    let state = |id: &str| store.agent_question(&conversation, id, None).unwrap()["state"].clone();
+    assert_eq!(state(&answered), "answered");
+    assert_eq!(state(&open), "invalidated");
+    assert_eq!(state(&deferred), "invalidated");
+    let error = store
+        .answer_agent_question(&conversation, &open, "Yes")
+        .unwrap_err();
+    assert!(error.to_string().contains("invalidated"), "{error}");
+}
+
+#[test]
 fn answering_a_checkpoint_resumes_only_its_owner() {
     let (_dir, store, conversation, mut task, turn) = fixture();
     let id = store

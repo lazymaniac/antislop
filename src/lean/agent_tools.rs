@@ -86,6 +86,9 @@ impl Core {
                 self.record_task_result(conversation, role, turn, result)
             }
             "review" | "finish_turn" => {
+                if tool == "finish_turn" && matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR) {
+                    self.require_plan_correction(conversation, turn)?;
+                }
                 let result = turn_result::tool_result(tool, args)?;
                 self.record_result(turn, result)
             }
@@ -264,6 +267,10 @@ impl Core {
     ) -> Result<Value> {
         self.validate_agent_result(conversation, role, turn, &result)?;
         self.store.save_turn_result(turn, &result)?;
+        // A turn that ends without waiting leaves no one to take an answer.
+        if !matches!(result, TurnResult::NeedsInput { .. }) {
+            self.store.invalidate_open_questions(turn)?;
+        }
         Ok(json!({"recorded":true,"result":result}))
     }
 

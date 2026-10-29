@@ -16,6 +16,7 @@ mod core_integration_repair;
 mod core_kept_tasks;
 mod core_orchestrator_turn;
 mod core_plan_answer;
+mod core_plan_correction;
 mod core_plan_proposal;
 mod core_plan_report;
 mod core_plan_resume;

@@ -240,6 +240,17 @@ impl Store {
 }
 
 impl Store {
+    /// Questions of `turn` still open when it ends without waiting for them:
+    /// the turn that would take the answer is gone, so neither the
+    /// orchestrator nor the user is asked any longer.
+    pub(in crate::lean) fn invalidate_open_questions(&self, turn: &str) -> Result<usize> {
+        Ok(self.db().execute(
+            "UPDATE agent_questions SET state='invalidated'
+             WHERE turn_id=?1 AND state IN ('pending','awaiting_user')",
+            [turn],
+        )?)
+    }
+
     pub(in crate::lean) fn defer_question_to_user(
         &self,
         conversation: &str,
