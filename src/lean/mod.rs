@@ -53,6 +53,7 @@ pub mod mcp;
 pub mod native;
 #[cfg(test)]
 mod plan_tests;
+mod process_tree;
 mod progress;
 pub mod projects;
 #[cfg(test)]

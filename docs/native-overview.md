@@ -12,6 +12,12 @@ by resuming it.
 1. The daemon starts the CLI in a PTY with its gateway, permissions and
    working directory passed on the command line or in the environment
    (`src/lean/launch.rs`). Nothing is written to the CLIs' own configuration.
+   The CLI's environment carries an `ANTISLOP_AGENT` marker that every command
+   it starts inherits. When its terminal closes, the daemon kills the CLI's
+   descendants and every process with that marker, also commands that run in
+   their own process group or that the CLI abandoned. After a crash, the next
+   daemon kills the processes an earlier daemon of the same state directory
+   left (`src/lean/process_tree.rs`).
 2. When the CLI has asked the gateway for its tools (every supported CLI does
    so while starting) and its screen is quiet, the prompt is typed into it as
    one bracketed paste followed by Enter (`src/lean/native.rs`).

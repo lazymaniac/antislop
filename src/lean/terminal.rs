@@ -70,6 +70,8 @@ pub struct Session {
     state: Arc<Mutex<State>>,
     handles: HashMap<String, Handle>,
     registration: Option<(std::sync::Weak<Core>, u32)>,
+    /// Tags the CLI and everything it starts; see `process_tree`.
+    marker: String,
 }
 
 #[derive(Clone)]
@@ -113,13 +115,18 @@ impl Session {
     /// Starts `command` in a new terminal that the daemon owns for as long
     /// as the session lives; views only attach to it.
     pub(crate) fn spawn(
-        command: CommandBuilder,
+        mut command: CommandBuilder,
         core: &std::sync::Weak<Core>,
         provider: &str,
         columns: u16,
         rows: u16,
     ) -> Result<Self> {
         let dimensions = size(columns, rows)?;
+        let marker = core
+            .upgrade()
+            .map(|core| super::process_tree::marker(&core.state))
+            .ok_or_else(|| invalid("daemon stopped"))?;
+        command.env(super::process_tree::MARKER, &marker);
         let pair = NativePtySystem::default()
             .openpty(pty_size(columns, rows))
             .map_err(invalid)?;
@@ -210,6 +217,7 @@ impl Session {
             state,
             handles: HashMap::new(),
             registration,
+            marker,
         })
     }
 
@@ -422,7 +430,11 @@ fn mouse_button(button: MouseButton) -> wezterm_term::MouseButton {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none() {
+        let alive = self.child.try_wait().ok().flatten().is_none();
+        // Before the CLI dies and its commands lose their parent link.
+        let pid = self.child.process_id().filter(|_| alive);
+        super::process_tree::kill_descendants(pid.map(|pid| pid as i32), &self.marker);
+        if alive {
             if let Some(pid) = self.child.process_id() {
                 // A PTY child normally leads its own session/process group.
                 // Never signal a group unless it belongs to this child.
@@ -1019,6 +1031,61 @@ mod tests {
         let end = text.find("\x1b[201~").unwrap();
         let _ = terminal.exited();
         text[start..end].to_owned()
+    }
+
+    /// Whether a command the CLI started in its own group outlives the
+    /// session; `cli_waits` keeps the CLI running, otherwise it exits first.
+    fn command_outlives_session(cli_waits: bool) -> bool {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let script = format!(
+            "import subprocess,sys,time\n\
+             p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n\
+             open({pid:?},'w').write(str(p.pid))\ntime.sleep(60 if {cli_waits} else 0)\n",
+            pid = pid_file.to_string_lossy(),
+            cli_waits = if cli_waits { "True" } else { "False" },
+        );
+        let config =
+            crate::config::Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let mut command = CommandBuilder::new("python3");
+        command.args(["-c", &script]);
+        let terminal =
+            Session::spawn(command, core.weak.get().unwrap(), "python3", 120, 40).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let pid = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|text| text.parse::<i32>().ok())
+            {
+                break pid;
+            }
+            assert!(std::time::Instant::now() < deadline, "no command started");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        drop(terminal);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // SAFETY: signal 0 only checks that the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        if alive {
+            // SAFETY: the test's own grandchild.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        alive
+    }
+
+    #[test]
+    fn a_command_in_its_own_group_dies_with_its_session() {
+        assert!(!command_outlives_session(true));
+    }
+
+    #[test]
+    fn a_command_its_exited_cli_abandoned_dies_with_the_session() {
+        assert!(!command_outlives_session(false));
     }
 
     #[test]

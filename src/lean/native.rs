@@ -565,7 +565,7 @@ fn turn_scope(core: &Core, turn: &str) -> Result<Option<(String, u32)>> {
 }
 
 /// After a crash: ends CLIs an earlier daemon left running.
-pub(crate) fn recover(store: &store::Store, _state: &Path) -> Result<()> {
+pub(crate) fn recover(store: &store::Store, state: &Path) -> Result<()> {
     store.db().execute_batch(
         "CREATE TABLE IF NOT EXISTS native_processes(
         pid INTEGER PRIMARY KEY,started_ms INTEGER NOT NULL,provider TEXT NOT NULL)",
@@ -589,6 +589,7 @@ pub(crate) fn recover(store: &store::Store, _state: &Path) -> Result<()> {
             .db()
             .execute("DELETE FROM native_processes WHERE pid=?1", [pid])?;
     }
+    super::process_tree::kill_leftovers(state);
     Ok(())
 }
 
