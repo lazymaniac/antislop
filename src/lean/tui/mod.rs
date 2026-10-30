@@ -12,6 +12,7 @@ pub mod details;
 pub mod diffview;
 pub mod document;
 pub mod editor;
+mod events;
 pub mod graph;
 mod history;
 mod input;
@@ -2483,348 +2484,6 @@ impl App {
         });
     }
 
-    fn key_inner(&mut self, key: event::KeyEvent) -> bool {
-        if self.native_focused() {
-            // Legacy terminals send Ctrl+] as 0x1d, which crossterm decodes
-            // as Ctrl+5. Enhanced keyboard protocols can report Ctrl+] directly.
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && matches!(key.code, KeyCode::Char(']' | '5'))
-            {
-                if let Some(details) = &mut self.details {
-                    details.native_focus = false;
-                }
-            } else {
-                self.native_send(crate::lean::terminal::Input::Key { event: key });
-            }
-            return true;
-        }
-        if let Some(browser) = self.plan_history.as_mut() {
-            let was_loading = browser.loading;
-            if !browser.key(key) {
-                self.plan_history = None;
-            } else if !was_loading && browser.loading {
-                let offset = browser.offset;
-                self.load_plan_history(offset);
-            }
-            return true;
-        }
-        self.sync_interview();
-        if self.ledger_view.as_ref().is_some_and(|v| v.visible) {
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
-                self.open_conversation_picker();
-                return true;
-            }
-            // An open conversation picker owns its keys until it closes.
-            if self.picker.is_some() {
-                return self.picker_key(key);
-            }
-            let action = self
-                .ledger_view
-                .as_mut()
-                .unwrap()
-                .key(key, &self.conversation);
-            if !self.ledger_view.as_ref().unwrap().visible {
-                self.return_to_main();
-            }
-            self.ledger_action(action);
-            return true;
-        }
-        self.text_selection
-            .invalidate_context(&self.selection_context());
-        if key.code == KeyCode::Char('y')
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-            && !self.selection_blocked()
-        {
-            self.pending_clipboard = self.text_selection.text();
-            return true;
-        }
-        if self.config_key(key) {
-            return true;
-        }
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        if self.picker.is_none() {
-            // The search result stays where it is, no longer highlighted.
-            self.found = None;
-        }
-
-        // Global exit
-        if key.code == KeyCode::Char('c') && control {
-            return false;
-        }
-        let editing = self.interview_visible()
-            || self.editor.is_some()
-            || self.picker.is_some()
-            || self
-                .details
-                .as_ref()
-                .is_some_and(|details| details.searching)
-            || (self.focus == Focus::Chat
-                && self.help.is_none()
-                && self.plan_view.is_none()
-                && self.details.is_none()
-                && self.diff.is_none()
-                && !self.input.is_empty());
-        if key.code == KeyCode::Char('q')
-            && !control
-            && !alt
-            && !editing
-            && self.plan_view.is_none()
-        {
-            return false;
-        }
-
-        if self.trust_prompt.is_some() {
-            match key.code {
-                KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    self.accept_trust();
-                    return true;
-                }
-                KeyCode::Esc
-                | KeyCode::Char('n')
-                | KeyCode::Char('N')
-                | KeyCode::Char('q')
-                | KeyCode::Char('Q') => {
-                    return false;
-                }
-                _ => return true,
-            }
-        }
-
-        // Help owns keys while open; closing keys continue through routing.
-        if self.help.is_some() && self.help_key(key) {
-            return true;
-        }
-        if key.code == KeyCode::F(1) {
-            self.show_help(self.help_here());
-            return true;
-        }
-        if self.project_trust.is_some() {
-            self.project_trust_key(key);
-            return true;
-        }
-        if let Some(modal) = &mut self.unblock {
-            match modal.key(key) {
-                unblock::Outcome::None => {}
-                unblock::Outcome::Close => self.unblock = None,
-                unblock::Outcome::Choose(choice) => {
-                    if let Some(state) = self.unblock.take() {
-                        self.unblock_choice(state, choice);
-                    }
-                }
-            }
-            return true;
-        }
-        if self.picker.is_some() {
-            return self.picker_key(key);
-        }
-        if self.editor.is_some() {
-            self.editor_key(key);
-            return true;
-        }
-        if self.interview_visible() {
-            if control && key.code == KeyCode::Char('o') {
-                self.open_conversation_picker();
-                return true;
-            }
-            if control && key.code == KeyCode::Char('p') {
-                self.picker = Some(Picker::new(Kind::Commands));
-                return true;
-            }
-            if let Some(answer) = self
-                .interview_forms
-                .get_mut(&self.conversation)
-                .and_then(|form| form.key(key))
-            {
-                self.send_interview_answer(answer);
-            }
-            return true;
-        }
-        if let Some(pv) = &mut self.plan_view {
-            let action = pv.key(key, &self.view);
-            self.handle_plan_action(action);
-            return true;
-        }
-        if self.diff.is_some() {
-            self.diff_key(key);
-            return true;
-        }
-        if self.details.is_some() {
-            self.details_key(key);
-            return true;
-        }
-
-        if self
-            .confirmation
-            .as_ref()
-            .is_some_and(|c| c.status == ConfirmationStatus::Pending)
-        {
-            match key.code {
-                KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    self.confirm_action();
-                    return true;
-                }
-                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
-                    self.reject_confirmation();
-                    return true;
-                }
-                _ => {}
-            }
-        }
-
-        // Base layout global shortcuts
-        match key.code {
-            KeyCode::Char('p') if control => {
-                self.picker = Some(Picker::new(Kind::Commands));
-                return true;
-            }
-            // Ctrl+M is Enter to a terminal, so the toggle is Ctrl+T.
-            KeyCode::Char('t') if control => {
-                self.command("/mode");
-                return true;
-            }
-            KeyCode::Char('f') if control => {
-                self.picker = Some(Picker::new(Kind::History));
-                return true;
-            }
-            KeyCode::Char('n') if control => {
-                self.new_conversation();
-                return true;
-            }
-            KeyCode::Char('o') if control => {
-                self.open_conversation_picker();
-                return true;
-            }
-            KeyCode::Char('i') if control => {
-                self.open_details("conversation".into());
-                return true;
-            }
-            KeyCode::Char('l') if control => {
-                self.command("/plan");
-                return true;
-            }
-            KeyCode::Char('g') if control => {
-                self.open_projects_picker();
-                return true;
-            }
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.focus = match self.focus {
-                    Focus::Chat => Focus::Graph,
-                    Focus::Graph => Focus::Chat,
-                };
-                return true;
-            }
-            _ => {}
-        }
-
-        if self.focus == Focus::Graph {
-            match key.code {
-                KeyCode::Char('a') if control => self.command("/accept"),
-                KeyCode::Char('x') if control => self.command("/cancel"),
-                KeyCode::Char('r') if control => self.command("/resume"),
-                _ => return self.graph_key(key),
-            }
-            return true;
-        }
-
-        // Focus::Chat input editing & transcript navigation
-        self.chat_key(key)
-    }
-
-    fn graph_key(&mut self, key: event::KeyEvent) -> bool {
-        self.selected = graph::task_node_key(&self.selected);
-        let graph = Graph::new_with_viewport(
-            &self.view,
-            self.graph_filter.as_deref(),
-            &self.graph_collapsed,
-            self.graph_grouping,
-            self.graph_viewport,
-        );
-        if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
-            let height = self.graph_viewport.map_or(10, |(_, height)| height);
-            self.scroll_graph_node(
-                &graph,
-                key.code == KeyCode::PageDown,
-                height.saturating_sub(2).max(1),
-            );
-            return true;
-        }
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char('u' | 'd'))
-        {
-            let height = self.graph_viewport.map_or(10, |(_, height)| height);
-            self.scroll_graph_node(&graph, key.code == KeyCode::Char('d'), (height / 2).max(1));
-            return true;
-        }
-        let step = match key.code {
-            KeyCode::Left => Some((-1, 0)),
-            KeyCode::Right => Some((1, 0)),
-            KeyCode::Up => Some((0, -1)),
-            KeyCode::Down => Some((0, 1)),
-            _ => None,
-        };
-        if let Some((dx, dy)) = step {
-            if graph.node(&self.selected).is_none()
-                || !graph.node(&self.selected).is_some_and(|n| n.visible)
-            {
-                if let Some((_, id)) = self.selected.split_once(':') {
-                    let worker_key = format!("worker:{id}");
-                    if graph.node(&worker_key).is_some_and(|n| n.visible) {
-                        self.selected = worker_key;
-                    } else if let Some(vis) = graph
-                        .nodes
-                        .iter()
-                        .find(|n| n.visible && n.key == ORCHESTRATOR)
-                    {
-                        self.selected = vis.key.clone();
-                    } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
-                        self.selected = first_vis.key.clone();
-                    } else {
-                        self.selected = ORCHESTRATOR.into();
-                    }
-                } else if let Some(vis) = graph
-                    .nodes
-                    .iter()
-                    .find(|n| n.visible && n.key == ORCHESTRATOR)
-                {
-                    self.selected = vis.key.clone();
-                } else if let Some(first_vis) = graph.nodes.iter().find(|n| n.visible) {
-                    self.selected = first_vis.key.clone();
-                } else {
-                    self.selected = ORCHESTRATOR.into();
-                }
-            } else if let Some(next) = graph.neighbour(&self.selected, dx, dy) {
-                self.selected = next;
-            }
-            return true;
-        }
-        match key.code {
-            KeyCode::Esc => self.focus = Focus::Chat,
-            KeyCode::Char('q') => return false,
-            KeyCode::Char('?') => self.show_help(Help::Graph),
-            KeyCode::Char('/') => self.picker = Some(Picker::new(Kind::Agents)),
-            KeyCode::Char('p') => self.command("/plan"),
-            KeyCode::Char('u') => self.open_unblock(None),
-            KeyCode::Char('z') | KeyCode::Char(' ') => self.toggle_selected_collapse(),
-            KeyCode::Char('g') => self.graph_grouping = self.graph_grouping.next(),
-            KeyCode::Char('f') => self.filter = self.filter.next(),
-            KeyCode::Char('d') => {
-                let key = self.selected.clone();
-                self.open_diff(&key);
-            }
-            KeyCode::Char('c') => {
-                let target = self.selected.clone();
-                let input = self.get_comment_draft(&target);
-                self.editor = Some(Editor { target, input });
-            }
-            KeyCode::Enter => {
-                self.open_details(self.selected.clone());
-            }
-            _ => {}
-        }
-        true
-    }
-
     fn scroll_graph_node(&mut self, graph: &Graph, down: bool, amount: u16) {
         if let Some(node) = graph.node(&self.selected) {
             let height = self.graph_viewport.map_or(10, |(_, height)| height);
@@ -4784,6 +4443,25 @@ pub mod tests {
 
     pub fn key_ctrl(ch: char) -> event::KeyEvent {
         event::KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn help_and_picker_keep_ownership_when_routing_keys() {
+        let mut app = test_app();
+        app.input = InputBuffer::with_text("chat draft 👩‍💻");
+        app.picker = Some(Picker::new(Kind::History));
+        app.show_help(Help::Picker);
+
+        assert!(app.key(key_press(KeyCode::Char('x'))));
+        assert_eq!(app.picker.as_ref().unwrap().query, "");
+        assert_eq!(app.input.text, "chat draft 👩‍💻");
+
+        assert!(app.key(key_press(KeyCode::Esc)));
+        assert!(app.help.is_none());
+        assert!(app.picker.is_some());
+        assert!(app.key(key_press(KeyCode::Char('x'))));
+        assert_eq!(app.picker.as_ref().unwrap().query, "x");
+        assert_eq!(app.input.text, "chat draft 👩‍💻");
     }
 
     #[test]
