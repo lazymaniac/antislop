@@ -71,23 +71,25 @@ pub struct Progress {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Run {
     basis: String,
-    /// The round the run began with.
-    pub since: u32,
+    /// Rounds the verifier rejected. A round a restart cut off has no
+    /// verdict and does not count, though it uses up its number.
+    #[serde(default)]
+    pub rejections: u32,
     pub progress: Progress,
     /// The previous round's findings.
     pub findings: Vec<Value>,
 }
 
 impl Run {
-    /// The run a stored record continues, or a new one from `round`.
-    pub fn resume(record: Option<Value>, spec: &Value, generation: i64, round: u32) -> Self {
+    /// The run a stored record continues, or a new one.
+    pub fn resume(record: Option<Value>, spec: &Value, generation: i64) -> Self {
         let basis = basis(spec, generation);
         record
             .and_then(|record| serde_json::from_value::<Run>(record).ok())
             .filter(|run| run.basis == basis)
             .unwrap_or(Run {
                 basis,
-                since: round,
+                rejections: 0,
                 progress: Progress::default(),
                 findings: Vec::new(),
             })
@@ -272,14 +274,14 @@ mod tests {
     #[test]
     fn a_run_continues_on_its_basis_and_starts_over_on_a_new_one() {
         let spec = json!({"id": "a", "goal": "g"});
-        let mut run = Run::resume(None, &spec, 1, 3);
-        assert_eq!(run.since, 3);
+        let mut run = Run::resume(None, &spec, 1);
         assert!(!run.progress.record(open(&["goal"])));
+        run.rejections = 1;
         run.findings = vec![json!({"id": "goal:aaaa", "severity": "medium"})];
         let record = serde_json::to_value(&run).unwrap();
 
-        let mut resumed = Run::resume(Some(record.clone()), &spec, 1, 5);
-        assert_eq!(resumed.since, 3);
+        let mut resumed = Run::resume(Some(record.clone()), &spec, 1);
+        assert_eq!(resumed.rejections, 1);
         assert_eq!(resumed.findings.len(), 1);
         assert!(
             resumed.progress.record(open(&["goal"])),
@@ -287,8 +289,8 @@ mod tests {
         );
 
         let revised = json!({"id": "a", "goal": "narrower"});
-        assert_eq!(Run::resume(Some(record.clone()), &revised, 1, 5).since, 5);
-        assert_eq!(Run::resume(Some(record), &spec, 2, 5).since, 5);
-        assert_eq!(Run::resume(Some(json!("garbage")), &spec, 1, 5).since, 5);
+        assert_eq!(Run::resume(Some(record.clone()), &revised, 1).rejections, 0);
+        assert_eq!(Run::resume(Some(record), &spec, 2).rejections, 0);
+        assert_eq!(Run::resume(Some(json!("garbage")), &spec, 1).rejections, 0);
     }
 }

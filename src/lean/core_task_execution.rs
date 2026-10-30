@@ -122,7 +122,6 @@ impl Core {
             self.store.task_progress(conversation, &task.id)?,
             &task.spec,
             task.input_generation,
-            first_round,
         );
         if findings.is_empty() {
             findings = std::mem::take(&mut run.findings);
@@ -132,8 +131,9 @@ impl Core {
             // every round's findings new ids always looks like progress. After
             // this many rounds in one run the task goes back to the orchestrator,
             // which can narrow the contract, answer, or ask the user; a new
-            // contract or new inputs start a new count, a restart does not.
-            if round.saturating_sub(run.since) >= MAX_ROUNDS_PER_RUN {
+            // contract or new inputs start a new count, a restart does not,
+            // and a round it cut off does not count.
+            if run.rejections >= MAX_ROUNDS_PER_RUN {
                 let why = format!(
                     "{MAX_ROUNDS_PER_RUN} correction rounds ran without approval; the orchestrator must narrow the contract, supply a new basis or ask the user"
                 );
@@ -413,6 +413,7 @@ impl Core {
             let stalled = run
                 .progress
                 .record_round(super::progress::open_obligations(&verdict), fixed);
+            run.rejections += 1;
             run.findings = verdict.findings.clone();
             self.store.record_task_progress(
                 conversation,

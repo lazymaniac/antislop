@@ -569,7 +569,8 @@ fn a_stalled_task_keeps_its_count_in_the_event_log_until_it_stops() {
         .map(|e| e.payload["run"].clone())
         .collect();
     assert_eq!(records.len(), 3, "{records:?}");
-    assert_eq!(records[0]["since"], 1);
+    assert_eq!(records[0]["rejections"], 1);
+    assert_eq!(records[1]["rejections"], 2);
     assert_eq!(records[1]["findings"][0]["check"], "goal");
     assert!(
         records[2].is_null(),
