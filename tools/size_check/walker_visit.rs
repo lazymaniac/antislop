@@ -28,10 +28,13 @@ impl<'ast> Visit<'ast> for Walker<'_> {
         if !self.production || self.test_context {
             return visit::visit_item(self, item);
         }
-        if let Item::Macro(call) = item
-            && self.visit_macro_definition(call)
-        {
-            return;
+        if let Item::Macro(call) = item {
+            if self.attrs(&call.attrs) {
+                return;
+            }
+            if self.visit_macro_definition(call) {
+                return;
+            }
         }
         visit::visit_item(self, item)
     }

@@ -1,6 +1,8 @@
 use super::super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+mod graph_keys;
+
 impl App {
     pub(in crate::lean::tui) fn key_inner(&mut self, key: KeyEvent) -> bool {
         if let Some(result) = self.route_native_or_history(key) {
@@ -281,30 +283,6 @@ impl App {
             KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
             _ => return false,
         }
-        true
-    }
-
-    fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
-            Focus::Chat => Focus::Graph,
-            Focus::Graph => Focus::Chat,
-        };
-    }
-
-    fn route_graph(&mut self, key: KeyEvent) -> bool {
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('a') => return self.graph_command(Command::Accept),
-                KeyCode::Char('x') => return self.graph_command(Command::Cancel),
-                KeyCode::Char('r') => return self.graph_command(Command::Resume),
-                _ => {}
-            }
-        }
-        self.graph_key(key)
-    }
-
-    fn graph_command(&mut self, command: Command) -> bool {
-        self.run_workflow(command);
         true
     }
 }

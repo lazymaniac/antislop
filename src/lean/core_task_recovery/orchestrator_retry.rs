@@ -13,6 +13,38 @@ impl Core {
         name: &str,
         guidance: &str,
     ) -> Result<serde_json::Value> {
+        let request = self.retry_request(conversation, name, guidance)?;
+        self.recover_task_as(request, "orchestrator")?;
+        Ok(json!({"retried": name}))
+    }
+
+    fn retry_request(
+        &self,
+        conversation: &str,
+        name: &str,
+        guidance: &str,
+    ) -> Result<TaskRecoveryRequest> {
+        let (plan, task) = self.failed_task(conversation, name)?;
+        require(
+            task.status == status::FAILED,
+            "task: only a failed task can be retried; repair a stalled one with revise_plan",
+        )?;
+        require(
+            self.orchestrator_retries(conversation, &task.id)? < MAX_ORCHESTRATOR_RETRIES,
+            "task: retried twice already; ask the user with ask_user",
+        )?;
+        Ok(TaskRecoveryRequest {
+            conversation: conversation.into(),
+            plan: plan.clone(),
+            freshness_token: self.task_freshness_token(conversation, &plan, &task.id)?,
+            task: task.id,
+            action: RecoveryAction::RetryWithGuidance,
+            consent_files: None,
+            message: Some(guidance.into()),
+        })
+    }
+
+    fn failed_task(&self, conversation: &str, name: &str) -> Result<(String, Task)> {
         let plan = self
             .store
             .latest_plan(conversation)?
@@ -23,25 +55,7 @@ impl Core {
             .store
             .task_in_plan_by_id(&plan, name)?
             .ok_or_else(|| Error::Invalid(format!("task: no task {name} in the running plan")))?;
-        require(
-            task.status == status::FAILED,
-            "task: only a failed task can be retried; repair a stalled one with revise_plan",
-        )?;
-        require(
-            self.orchestrator_retries(conversation, &task.id)? < MAX_ORCHESTRATOR_RETRIES,
-            "task: retried twice already; ask the user with ask_user",
-        )?;
-        let request = TaskRecoveryRequest {
-            conversation: conversation.into(),
-            plan: plan.clone(),
-            freshness_token: self.task_freshness_token(conversation, &plan, &task.id)?,
-            task: task.id,
-            action: RecoveryAction::RetryWithGuidance,
-            consent_files: None,
-            message: Some(guidance.into()),
-        };
-        self.recover_task_as(request, "orchestrator")?;
-        Ok(json!({"retried": name}))
+        Ok((plan, task))
     }
 
     fn orchestrator_retries(&self, conversation: &str, task: &str) -> Result<i64> {

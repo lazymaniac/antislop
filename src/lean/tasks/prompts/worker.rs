@@ -85,6 +85,20 @@ fn dependency_header(marker: &str) -> String {
 pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
     let (team_note, change_rules, blocker, binding, checks) = worker_prompt_parts(task);
     format!(
+        "{}{}",
+        worker_prompt_opening(project, task, &checks, binding, change_rules),
+        worker_prompt_closing(blocker, team_note),
+    )
+}
+
+fn worker_prompt_opening(
+    project: &str,
+    task: &TaskContract,
+    checks: &str,
+    binding: &str,
+    change_rules: &str,
+) -> String {
+    format!(
         "You are a worker on a team of agents. The project is your current \
          working directory: {project}. Nothing is pasted for you: read the files \
          you need yourself with your tools. Listing, reading, searching and counting \
@@ -92,7 +106,19 @@ pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
          read; no wording of the task (such as \"no commands\" or \"use only received \
          sources\") takes that away.\n\n\
          Task: {}\nTask id: {}\nKind: {}\nGoal: {}\nScope: {}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
-         {blocker}\n\n{team_note}\n\n\
+         ",
+        task.title,
+        task.id,
+        work_kind_name(task.kind),
+        task.goal,
+        scope_text(&task.scope),
+        change_rules
+    )
+}
+
+fn worker_prompt_closing(blocker: &str, team_note: &str) -> String {
+    format!(
+        "{blocker}\n\n{team_note}\n\n\
          Finish the whole goal before you report, however much work it is: your turn has \
          no short limit, and a result that leaves part of the goal undone is rejected and \
          costs a round. Do not stop after one part to hand in progress. When something \
@@ -105,13 +131,7 @@ pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
          Files under paths git ignores (such as .antislop/ or target/) are not part of \
          your result and never reach the verifier: put each command you rely on and the \
          part of its output that shows the result in the report itself, and do not point \
-         the verifier to such files.",
-        task.title,
-        task.id,
-        work_kind_name(task.kind),
-        task.goal,
-        scope_text(&task.scope),
-        change_rules
+         the verifier to such files."
     )
 }
 

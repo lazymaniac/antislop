@@ -73,7 +73,17 @@ impl FilterMenu {
     ) -> Outcome {
         let rows = rows(providers);
         self.cursor = self.cursor.min(rows.len().saturating_sub(1));
-        match key.code {
+        self.apply_key(key.code, &rows, relations, scope)
+    }
+
+    fn apply_key(
+        &mut self,
+        code: KeyCode,
+        rows: &[Row],
+        relations: &mut Relations,
+        scope: &mut Scope,
+    ) -> Outcome {
+        match code {
             KeyCode::Esc | KeyCode::Char('f' | 'q') => return Outcome::Close,
             KeyCode::Up | KeyCode::Char('k') => self.cursor = self.cursor.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
@@ -139,14 +149,7 @@ impl FilterMenu {
         // Three section headings, a blank line before two of them and the
         // footer, inside the border.
         let wanted = rows.len() as u16 + 3 + 2 + 2 + 2;
-        let width = area.width.saturating_sub(4).clamp(12, 44);
-        let height = wanted.min(area.height);
-        let boxed = Rect::new(
-            area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(height) / 2,
-            width,
-            height,
-        );
+        let boxed = menu_area(area, wanted);
         frame.render_widget(Clear, boxed);
         let block = Block::default()
             .borders(Borders::ALL)
@@ -154,14 +157,22 @@ impl FilterMenu {
             .title(" Graph filters ");
         let inner = block.inner(boxed);
         frame.render_widget(block, boxed);
+        let lines = self.draw_rows(&rows, relations, scope, inner);
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    fn draw_rows(
+        &mut self,
+        rows: &[Row],
+        relations: Relations,
+        scope: &Scope,
+        inner: Rect,
+    ) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         self.rows.clear();
         for (index, row) in rows.iter().enumerate() {
-            if let Some(heading) = heading(row, index, &rows) {
-                if !lines.is_empty() {
-                    lines.push(Line::default());
-                }
-                lines.push(Line::styled(heading, Style::default().fg(ayu::DIM)));
+            if let Some(heading) = heading(row, index, rows) {
+                append_heading(&mut lines, heading);
             }
             let y = inner.y + lines.len() as u16;
             if y < inner.y + inner.height {
@@ -178,8 +189,26 @@ impl FilterMenu {
             "space toggle · 1-4 relations · r reset · esc close",
             Style::default().fg(ayu::DIM),
         ));
-        frame.render_widget(Paragraph::new(lines), inner);
+        lines
     }
+}
+
+fn menu_area(area: Rect, wanted: u16) -> Rect {
+    let width = area.width.saturating_sub(4).clamp(12, 44);
+    let height = wanted.min(area.height);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
+fn append_heading(lines: &mut Vec<Line<'static>>, heading: &'static str) {
+    if !lines.is_empty() {
+        lines.push(Line::default());
+    }
+    lines.push(Line::styled(heading, Style::default().fg(ayu::DIM)));
 }
 
 fn heading(row: &Row, index: usize, rows: &[Row]) -> Option<&'static str> {

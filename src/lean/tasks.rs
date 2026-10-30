@@ -23,6 +23,8 @@ mod instructions;
 mod messages;
 #[path = "tasks/plan.rs"]
 mod plan;
+#[path = "tasks/prompts/plan_review.rs"]
+mod plan_review;
 #[path = "tasks/prompts/requirements.rs"]
 mod requirements;
 #[path = "tasks/prompts/review.rs"]
@@ -42,6 +44,7 @@ pub use graph::*;
 pub use instructions::*;
 pub use messages::*;
 pub use plan::*;
+pub use plan_review::*;
 pub use requirements::*;
 use requirements::{COVERAGE_FORMAT, OUTSIDE, PROJECT_RULES, REVIEW_RULES, scope_text};
 pub use review::*;

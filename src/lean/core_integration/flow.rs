@@ -180,6 +180,10 @@ impl<'a> Integration<'a> {
             &outcome,
             &landed,
         )?;
+        self.complete_landing(landing)
+    }
+
+    fn complete_landing(self, landing: super::landing::Landing) -> Result<()> {
         super::super::task_failure::append_integration_report_entry(
             self.task,
             "integration",
