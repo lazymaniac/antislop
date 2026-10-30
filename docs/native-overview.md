@@ -28,9 +28,10 @@ resume after a daemon restart for the first three) are recorded in the evidence
 below.
 
 A call for a turn that is not the open one is refused with a message the model
-can read. A CLI that does not connect within 60 s, exits, or does not end the
-turn within 30 minutes (`ANTISLOP_TURN_TIMEOUT_SECS`) fails the turn with the
-raw reason and the last lines of its terminal. A failure after the prompt was
+can read. A CLI that does not connect within 60 s, exits, prints nothing for
+15 minutes outside a wait for an answer (`ANTISLOP_TURN_IDLE_SECS`), or does
+not end the turn within 2 hours (`ANTISLOP_TURN_TIMEOUT_SECS`) fails the turn
+with the raw reason and the last lines of its terminal. A failure after the prompt was
 typed is never retried automatically.
 
 ## Providers

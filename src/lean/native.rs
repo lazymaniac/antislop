@@ -22,13 +22,24 @@ pub(crate) mod fixture {
 
 pub(crate) const EXECUTION_FAILED: &str =
     "native backend execution failed (automatic retry disabled): ";
-/// A turn that has not ended after this long is reported as failed;
-/// `ANTISLOP_TURN_TIMEOUT_SECS` changes it.
+/// A turn that has not ended after this long is reported as failed, however
+/// busy the agent is; `ANTISLOP_TURN_TIMEOUT_SECS` changes it.
 fn turn_timeout() -> Duration {
-    std::env::var("ANTISLOP_TURN_TIMEOUT_SECS")
-        .ok()
-        .and_then(|seconds| seconds.parse().ok())
-        .map_or(Duration::from_secs(30 * 60), Duration::from_secs)
+    seconds_from_env("ANTISLOP_TURN_TIMEOUT_SECS", 2 * 60 * 60)
+}
+/// A CLI that prints nothing for this long, outside a wait for an answer,
+/// is hung and fails the turn; `ANTISLOP_TURN_IDLE_SECS` changes it. A long
+/// build or test run still redraws the CLI's own progress line.
+fn turn_idle() -> Duration {
+    seconds_from_env("ANTISLOP_TURN_IDLE_SECS", 15 * 60)
+}
+fn seconds_from_env(name: &str, default: u64) -> Duration {
+    Duration::from_secs(
+        std::env::var(name)
+            .ok()
+            .and_then(|seconds| seconds.parse().ok())
+            .unwrap_or(default),
+    )
 }
 /// A session nobody uses or looks at is released; it resumes on demand.
 const IDLE: Duration = Duration::from_secs(10 * 60);
@@ -335,6 +346,21 @@ impl Session {
         Ok(())
     }
 
+    /// Alive, and printed something within `idle` unless it waits for an answer.
+    fn check_active(&self, idle: Duration) -> Result<()> {
+        self.check_alive()?;
+        let quiet = terminal::quiet_for(&self.screen);
+        if quiet < idle || self.gateway.awaiting_answer() {
+            return Ok(());
+        }
+        Err(invalid(format!(
+            "{} printed nothing for {} s: {}",
+            agent::name(self.spec.provider),
+            quiet.as_secs(),
+            terminal::tail(&self.screen, SCREEN_LINES)
+        )))
+    }
+
     /// Require MCP tool discovery, then briefly let startup drawing settle.
     /// Output silence is a courtesy, not a readiness signal: interactive CLIs
     /// may redraw a spinner continuously, including between completed turns.
@@ -428,7 +454,9 @@ impl Session {
         self.primed.store(true, Ordering::SeqCst);
         let finish = self
             .gateway
-            .wait(turn, cancel, turn_timeout(), || self.check_alive())
+            .wait(turn, cancel, turn_timeout(), || {
+                self.check_active(turn_idle())
+            })
             .inspect_err(|error| {
                 if error.to_string() == mcp::CANCELLED {
                     let _ = terminal::Session::interrupt(&self.screen);

@@ -201,6 +201,15 @@ impl Gateway {
         self.shared.state.lock().ok()?.session.clone()
     }
 
+    /// Whether the agent is blocked in `wait_for_answer`: silence then is the
+    /// orchestrator's, not the agent's.
+    pub(crate) fn awaiting_answer(&self) -> bool {
+        self.shared
+            .state
+            .lock()
+            .is_ok_and(|state| state.waiting.is_some())
+    }
+
     /// Waits for the agent to end `turn`. `alive` reports a dead agent as an
     /// error so a crashed CLI does not wait for the full timeout.
     pub(crate) fn wait(
@@ -1060,6 +1069,15 @@ mod rejection_tests {
         assert!(error.contains("CLI exited (1)"));
         assert!(error.contains("last rejected result: bad checkpoint"));
         assert!(gateway.shared.state.lock().unwrap().expected.is_none());
+    }
+
+    #[test]
+    fn an_agent_is_awaiting_an_answer_only_while_its_wait_is_open() {
+        let gateway = Gateway::start().unwrap();
+        gateway.begin("current").unwrap();
+        assert!(!gateway.awaiting_answer());
+        gateway.shared.state.lock().unwrap().waiting = Some(Instant::now());
+        assert!(gateway.awaiting_answer());
     }
 
     #[test]

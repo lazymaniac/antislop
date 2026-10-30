@@ -424,3 +424,42 @@ fn exited_cli_error_contains_the_raw_terminal_tail() {
     assert!(!error.contains("automatic retry"));
     core.native.shutdown().unwrap();
 }
+
+#[test]
+fn a_cli_that_prints_nothing_for_the_idle_limit_is_reported_hung_with_its_tail() {
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let binary = dir.path().join("hung-agent");
+    std::fs::write(&binary, "#!/bin/sh\nprintf 'last words 41\\n'\nsleep 30\n").unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let spec = agent::Spec {
+        provider: crate::config::ProviderKind::Opencode,
+        binary: binary.canonicalize().unwrap(),
+        args: vec![],
+        model: None,
+        effort: None,
+        cwd: dir.path().into(),
+        add_dirs: vec![],
+        access: agent::Access::ReadOnly,
+        resume: None,
+    };
+    let session = core
+        .native
+        .prepare_scoped(&core, "c", "orchestrator", &spec, "")
+        .unwrap();
+
+    let mut observed = None;
+    for _ in 0..80 {
+        if let Err(error) = session.check_active(Duration::from_millis(300)) {
+            observed = Some(error.to_string());
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    let error = observed.expect("a silent CLI should be reported hung");
+    assert!(error.contains("opencode printed nothing for"), "{error}");
+    assert!(error.contains("last words 41"), "{error}");
+    session.check_active(Duration::from_secs(3600)).unwrap();
+    core.native.shutdown().unwrap();
+}
