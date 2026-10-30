@@ -98,33 +98,36 @@ impl TextSelection {
             || self.context != context
             || (self.origin == origin && self.cells != cells);
         if !changed && self.origin != origin {
-            if let Some((start, end)) = self.range() {
-                let position = |index: usize| {
-                    let cell = &self.cells[index];
-                    cell.document_position(self.origin, self.area.y)
-                };
-                self.pinned = self.text().map(|text| PinnedSelection {
-                    start: position(start),
-                    end: position(end),
-                    text,
-                });
-            }
-            self.anchor = None;
-            self.end = None;
-            self.dragging = false;
-            self.last_click = None;
+            self.pin_selection();
+            self.clear_active_selection();
         }
         if changed {
-            self.anchor = None;
-            self.end = None;
-            self.dragging = false;
-            self.last_click = None;
+            self.clear_active_selection();
             self.pinned = None;
         }
         self.origin = origin;
         self.area = area;
         self.context = context;
         self.cells = cells;
+    }
+
+    fn pin_selection(&mut self) {
+        let Some((start, end)) = self.range() else {
+            return;
+        };
+        let position = |index: usize| self.cells[index].document_position(self.origin, self.area.y);
+        self.pinned = self.text().map(|text| PinnedSelection {
+            start: position(start),
+            end: position(end),
+            text,
+        });
+    }
+
+    fn clear_active_selection(&mut self) {
+        self.anchor = None;
+        self.end = None;
+        self.dragging = false;
+        self.last_click = None;
     }
 
     fn highlight(&self, buf: &mut ratatui::buffer::Buffer) {
@@ -155,28 +158,9 @@ impl TextSelection {
 
     pub fn mouse(&mut self, event: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseButton, MouseEventKind};
-        let hit = self
-            .cells
-            .iter()
-            .position(|cell| cell.contains(event.column, event.row));
+        let hit = self.hit_test(event.column, event.row);
         match event.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                self.pinned = None;
-                self.anchor = hit;
-                self.end = None;
-                self.dragging = hit.is_some();
-                if let Some(index) = hit {
-                    let now = std::time::Instant::now();
-                    if self.last_click.is_some_and(|(previous, time)| {
-                        previous == index
-                            && now.duration_since(time) < std::time::Duration::from_millis(450)
-                    }) {
-                        self.select_word(index);
-                        self.dragging = false;
-                    }
-                    self.last_click = Some((index, now));
-                }
-            }
+            MouseEventKind::Down(MouseButton::Left) => self.mouse_down(hit),
             MouseEventKind::Drag(MouseButton::Left) if self.dragging => {
                 if hit.is_some() {
                     self.end = hit;
@@ -187,38 +171,70 @@ impl TextSelection {
         }
     }
 
+    fn hit_test(&self, column: u16, row: u16) -> Option<usize> {
+        self.cells
+            .iter()
+            .position(|cell| cell.contains(column, row))
+    }
+
+    fn mouse_down(&mut self, hit: Option<usize>) {
+        self.pinned = None;
+        self.anchor = hit;
+        self.end = None;
+        self.dragging = hit.is_some();
+        let Some(index) = hit else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if is_double_click(self.last_click, index, now) {
+            self.select_word(index);
+            self.dragging = false;
+        }
+        self.last_click = Some((index, now));
+    }
+
     fn select_word(&mut self, index: usize) {
         let row = self.cells[index].row;
-        let text: String = self
-            .cells
-            .iter()
-            .filter(|c| c.row == row)
-            .map(|c| c.text.as_str())
-            .collect();
-        let first = self
-            .cells
-            .iter()
-            .position(|c| c.row == row)
-            .unwrap_or(index);
+        let first = self.row_start(row, index);
+        let text = self.row_text(row);
         let offset: usize = self.cells[first..index].iter().map(|c| c.text.len()).sum();
         use unicode_segmentation::UnicodeSegmentation;
         for (start, word) in text.split_word_bound_indices() {
             if offset >= start && offset < start + word.len() {
-                let mut byte = 0;
-                for i in first..self.cells.len() {
-                    if self.cells[i].row != row {
-                        break;
-                    }
-                    if byte == start {
-                        self.anchor = Some(i);
-                    }
-                    if byte < start + word.len() {
-                        self.end = Some(i);
-                    }
-                    byte += self.cells[i].text.len();
-                }
+                self.select_word_range(first, row, start, word.len());
                 break;
             }
+        }
+    }
+
+    fn row_start(&self, row: u16, fallback: usize) -> usize {
+        self.cells
+            .iter()
+            .position(|cell| cell.row == row)
+            .unwrap_or(fallback)
+    }
+
+    fn row_text(&self, row: u16) -> String {
+        self.cells
+            .iter()
+            .filter(|cell| cell.row == row)
+            .map(|cell| cell.text.as_str())
+            .collect()
+    }
+
+    fn select_word_range(&mut self, first: usize, row: u16, start: usize, length: usize) {
+        let (mut byte, end) = (0, start + length);
+        for index in first..self.cells.len() {
+            if self.cells[index].row != row {
+                break;
+            }
+            if byte == start {
+                self.anchor = Some(index);
+            }
+            if byte < end {
+                self.end = Some(index);
+            }
+            byte += self.cells[index].text.len();
         }
     }
 
@@ -241,55 +257,16 @@ impl TextSelection {
     }
 }
 
-#[cfg(test)]
-mod selection_tests {
-    use super::*;
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    #[test]
-    fn double_click_word_and_backwards_drag() {
-        let area = ratatui::layout::Rect::new(0, 0, 12, 2);
-        let mut buf = ratatui::buffer::Buffer::empty(area);
-        buf.set_string(0, 0, "one café", ratatui::style::Style::default());
-        buf.set_string(0, 1, "two", ratatui::style::Style::default());
-        let mut selection = TextSelection::default();
-        selection.draw_scrolled(&mut buf, Some(area), "chat".into(), 0);
-        let mouse = |kind, column, row| MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::NONE,
-        };
-        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 6, 0));
-        selection.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 6, 0));
-        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 6, 0));
-        assert_eq!(selection.text().as_deref(), Some("café"));
-        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
-        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 4, 0));
-        assert_eq!(selection.text().as_deref(), Some("café\ntwo"));
-        buf.set_string(0, 0, "changed", ratatui::style::Style::default());
-        selection.draw_scrolled(&mut buf, Some(area), "chat".into(), 0);
-        assert!(selection.text().is_none());
-    }
-    #[test]
-    fn wrapped_rows_keep_whole_clusters_and_viewport_storage() {
-        let area = ratatui::layout::Rect::new(0, 0, 4, 3);
-        let mut buffer = ratatui::buffer::Buffer::empty(area);
-        let rows = super::super::view::wrap("ab👩‍👩‍👧‍👦café", 4);
-        for (y, row) in rows.iter().enumerate() {
-            buffer.set_string(0, y as u16, row, ratatui::style::Style::default());
-        }
-        let mut selection = TextSelection::default();
-        selection.draw_scrolled(&mut buffer, Some(area), "wrapped".into(), 0);
-        let mouse = |kind, column, row| MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::NONE,
-        };
-        // Start on the second display column of the family emoji.
-        selection.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 3, 0));
-        selection.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 3, 1));
-        assert_eq!(selection.text().as_deref(), Some("👩‍👩‍👧‍👦\ncafé"));
-        assert!(selection.cells.len() <= usize::from(area.width) * usize::from(area.height));
-    }
+fn is_double_click(
+    previous: Option<(usize, std::time::Instant)>,
+    index: usize,
+    now: std::time::Instant,
+) -> bool {
+    previous.is_some_and(|(last, time)| {
+        last == index && now.duration_since(time) < std::time::Duration::from_millis(450)
+    })
 }
+
+#[cfg(test)]
+#[path = "selection/tests.rs"]
+mod tests;

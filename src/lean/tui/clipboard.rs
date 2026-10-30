@@ -24,23 +24,13 @@ fn copy_with_fallback(
     text: &str,
     fallback: impl FnOnce(&str) -> io::Result<()>,
 ) -> io::Result<CopyMethod> {
-    if text.len() > MAX_CLIPBOARD_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "selection exceeds the 64 KiB clipboard limit",
-        ));
-    }
+    validate_size(text.len(), "selection exceeds the 64 KiB clipboard limit")?;
     let clean = sanitize(text);
-    if clean.len() > MAX_CLIPBOARD_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "sanitized selection exceeds the 64 KiB clipboard limit",
-        ));
-    }
-    match writer
-        .write_all(clipboard_sequence(&clean).as_bytes())
-        .and_then(|()| writer.flush())
-    {
+    validate_size(
+        clean.len(),
+        "sanitized selection exceeds the 64 KiB clipboard limit",
+    )?;
+    match write_osc52(writer, &clean) {
         Ok(()) => Ok(CopyMethod::Osc52),
         Err(primary) => {
             fallback(&clean).map_err(|secondary| {
@@ -53,6 +43,18 @@ fn copy_with_fallback(
             })
         }
     }
+}
+
+fn validate_size(size: usize, message: &str) -> io::Result<()> {
+    if size > MAX_CLIPBOARD_BYTES {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, message));
+    }
+    Ok(())
+}
+
+fn write_osc52(writer: &mut impl Write, text: &str) -> io::Result<()> {
+    writer.write_all(clipboard_sequence(text).as_bytes())?;
+    writer.flush()
 }
 
 pub fn copy_text(writer: &mut impl Write, text: &str) -> io::Result<CopyMethod> {
@@ -70,49 +72,77 @@ fn native_copy(_: &str) -> io::Result<()> {
 #[cfg(target_os = "macos")]
 fn native_copy(text: &str) -> io::Result<()> {
     use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
     let mut child = Command::new("pbcopy")
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let input = child.stdin.take();
-    let text = text.to_owned();
-    let writer = std::thread::spawn(move || {
-        input
-            .ok_or_else(|| io::Error::other("pbcopy stdin unavailable"))?
-            .write_all(text.as_bytes())
-    });
-    let stderr = child.stderr.take();
-    // Drain errors while waiting, retaining a bounded diagnostic.
-    let errors = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut diagnostic = Vec::new();
-        if let Some(mut stderr) = stderr {
-            let mut chunk = [0; 1024];
-            loop {
-                let count = stderr.read(&mut chunk)?;
-                if count == 0 {
-                    break;
-                }
-                let keep = count.min(4096 - diagnostic.len());
-                diagnostic.extend_from_slice(&chunk[..keep]);
-            }
-        }
-        Ok::<_, io::Error>(String::from_utf8_lossy(&diagnostic).into_owned())
-    });
-    let deadline = Instant::now() + Duration::from_secs(1);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            Ok(None) => break Err(io::Error::new(io::ErrorKind::TimedOut, "pbcopy timed out")),
-            Err(error) => break Err(error),
-        }
-    };
+    let writer = feed_stdin(child.stdin.take(), text.to_owned());
+    let errors = drain_stderr(child.stderr.take());
+    let status = wait_for_exit(&mut child);
     if status.is_err() {
         let _ = child.kill();
         let _ = child.wait();
     }
+    finish_copy(writer, errors, status)
+}
+
+#[cfg(target_os = "macos")]
+fn feed_stdin(
+    input: Option<std::process::ChildStdin>,
+    text: String,
+) -> std::thread::JoinHandle<io::Result<()>> {
+    std::thread::spawn(move || {
+        input
+            .ok_or_else(|| io::Error::other("pbcopy stdin unavailable"))?
+            .write_all(text.as_bytes())
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn drain_stderr(
+    stderr: Option<std::process::ChildStderr>,
+) -> std::thread::JoinHandle<io::Result<String>> {
+    std::thread::spawn(move || read_diagnostic(stderr))
+}
+
+#[cfg(target_os = "macos")]
+fn read_diagnostic(stderr: Option<std::process::ChildStderr>) -> io::Result<String> {
+    use std::io::Read;
+    let mut diagnostic = Vec::new();
+    if let Some(mut stderr) = stderr {
+        let mut chunk = [0; 1024];
+        loop {
+            let count = stderr.read(&mut chunk)?;
+            if count == 0 {
+                break;
+            }
+            diagnostic.extend_from_slice(&chunk[..count.min(4096 - diagnostic.len())]);
+        }
+    }
+    Ok(String::from_utf8_lossy(&diagnostic).into_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_exit(child: &mut std::process::Child) -> io::Result<std::process::ExitStatus> {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "pbcopy timed out"));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn finish_copy(
+    writer: std::thread::JoinHandle<io::Result<()>>,
+    errors: std::thread::JoinHandle<io::Result<String>>,
+    status: io::Result<std::process::ExitStatus>,
+) -> io::Result<()> {
     let written = writer
         .join()
         .map_err(|_| io::Error::other("pbcopy stdin writer panicked"))?;

@@ -3,6 +3,7 @@
 //! poller thread long-polls events and every action runs on its own thread,
 //! so typing, scrolling and sending stay instant.
 
+mod buffer;
 pub mod clipboard;
 pub mod config;
 mod contracts;
@@ -15,9 +16,12 @@ pub mod graph;
 mod history;
 mod inspection;
 pub mod interview;
+mod layout;
 pub mod ledger;
 mod native_view;
+mod navigation;
 pub mod palette;
+mod paste;
 mod planhistory;
 pub mod planview;
 pub mod sanitize;
