@@ -138,16 +138,7 @@ pub(super) fn run(input: WorkerRound<'_>) -> Result<Option<String>> {
 }
 
 fn run_worker_round(input: WorkerRound<'_>) -> Result<Option<String>> {
-    let setup = worker_setup(
-        input.core,
-        input.conversation,
-        input.task,
-        input.spec,
-        input.workdir,
-        input.add_dirs,
-        input.worker,
-        input.round,
-    );
+    let setup = worker_setup(&input);
     run_worker_turn(
         input.core,
         input.cancel,
@@ -173,30 +164,22 @@ fn run_worker_turn(
     })
 }
 
-fn worker_setup<'a>(
-    core: &Core,
-    conversation: &'a str,
-    task: &Task,
-    spec: &TaskContract,
-    workdir: &Path,
-    add_dirs: &[PathBuf],
-    worker: &str,
-    round: u32,
-) -> TurnSetup<'a> {
+fn worker_setup<'a>(input: &WorkerRound<'a>) -> TurnSetup<'a> {
     TurnSetup {
         session_policy: SessionPolicy::TaskRound {
-            task: task.id.clone(),
-            round,
+            task: input.task.id.clone(),
+            round: input.round,
         },
-        conversation,
-        plan_id: Some(task.plan_id.clone()),
-        role: worker.to_owned(),
-        profile: core
+        conversation: input.conversation,
+        plan_id: Some(input.task.plan_id.clone()),
+        role: input.worker.to_owned(),
+        profile: input
+            .core
             .config_snapshot()
-            .resolve(spec.kind, RoleKind::Executor),
-        cwd: workdir.to_path_buf(),
-        add_dirs: worker_dirs(spec, add_dirs),
-        access: worker_access(spec),
+            .resolve(input.spec.kind, RoleKind::Executor),
+        cwd: input.workdir.to_path_buf(),
+        add_dirs: worker_dirs(input.spec, input.add_dirs),
+        access: worker_access(input.spec),
         upto_message: 0,
     }
 }

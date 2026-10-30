@@ -108,13 +108,7 @@ fn persist_simple(
     core.store.update_task(&work.task)?;
     core.announce_task(&work.req.conversation, &work.task, None);
     let payload = recovery_payload(work, action, notice, branch);
-    core.store.append_event(
-        &work.req.conversation,
-        None,
-        Some(&work.req.plan),
-        "task_recovery",
-        &payload,
-    )?;
+    events::append(core, work, &payload)?;
     work.notice = Some(notice.into());
     Ok(())
 }
@@ -142,25 +136,11 @@ fn retry_event(core: &Core, work: &RecoveryWork) -> Result<()> {
         .map(|m| tasks::bound(m, tasks::DETAIL_LIMIT));
     let payload = json!({ "actor": work.actor, "task": work.task.id,
         "action": tasks::action::RETRY_WITH_GUIDANCE, "status": work.task.status, "message": message });
-    core.store.append_event(
-        &work.req.conversation,
-        None,
-        Some(&work.req.plan),
-        "task_recovery",
-        &payload,
-    )?;
-    Ok(())
+    events::append(core, work, &payload)
 }
 
 fn restart_event(core: &Core, work: &RecoveryWork) -> Result<()> {
     let payload = json!({ "actor": work.actor, "task": work.task.id,
         "action": tasks::action::RESTART_AGENT, "status": work.task.status });
-    core.store.append_event(
-        &work.req.conversation,
-        None,
-        Some(&work.req.plan),
-        "task_recovery",
-        &payload,
-    )?;
-    Ok(())
+    events::append(core, work, &payload)
 }

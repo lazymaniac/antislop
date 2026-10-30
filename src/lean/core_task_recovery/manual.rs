@@ -1,3 +1,4 @@
+use super::super::core_task_execution::verifier_setup;
 use super::*;
 
 mod finish;
@@ -81,20 +82,14 @@ fn verifier_setup<'a>(
     let (verifier, reviewdir, branch) = manual_review_paths(core, work);
     git::add_worktree(&work.project, &reviewdir, &branch, snapshot)?;
     let project = reviewdir.to_string_lossy().into_owned();
-    let setup = TurnSetup {
-        session_policy: SessionPolicy::TaskRound {
-            task: work.task.id.clone(),
-            round: work.task.round,
-        },
-        conversation: &work.req.conversation,
-        plan_id: Some(work.task.plan_id.clone()),
-        role: verifier,
-        profile: work.config.resolve(work.spec.kind, RoleKind::Verifier),
-        cwd: reviewdir,
-        add_dirs: vec![],
-        access: agent::Access::ReadOnly,
-        upto_message: 0,
-    };
+    let setup = verifier_setup::build(
+        &work.req.conversation,
+        &work.task,
+        verifier,
+        work.config.resolve(work.spec.kind, RoleKind::Verifier),
+        &reviewdir,
+        vec![],
+    );
     Ok((setup, project))
 }
 

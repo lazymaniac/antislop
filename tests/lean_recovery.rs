@@ -829,6 +829,20 @@ fn test_recover_task_retry_with_guidance() {
         })
         .unwrap();
     assert_eq!(resp.status, "queued");
+    let recovery = core
+        .store
+        .events_since(&conversation, 0, 10_000)
+        .unwrap()
+        .into_iter()
+        .find(|event| {
+            event.kind == "task_recovery"
+                && event.payload["action"] == "retry_with_guidance"
+                && event.payload["task"] == *t1_id
+        })
+        .expect("retry writes its recovery event");
+    assert_eq!(recovery.plan_id.as_deref(), Some(plan.as_str()));
+    assert_eq!(recovery.payload["status"], "queued");
+    assert_eq!(recovery.payload["message"], "retrying after login");
 
     wait_idle(&core, &conversation);
     assert_eq!(statuses(&core, &plan), ["approved", "approved", "approved"]);

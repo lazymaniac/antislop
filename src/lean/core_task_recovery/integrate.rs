@@ -169,12 +169,5 @@ fn integration_event(core: &Core, work: &RecoveryWork, notice: &str) -> Result<(
         "files": event_files(&work.integrated_files),
         "files_more": work.integrated_files.len().saturating_sub(tasks::FILE_LIMIT),
         "detail": tasks::bound(notice, tasks::DETAIL_LIMIT) });
-    core.store.append_event(
-        &work.req.conversation,
-        None,
-        Some(&work.req.plan),
-        "task_recovery",
-        &payload,
-    )?;
-    Ok(())
+    events::append(core, work, &payload)
 }

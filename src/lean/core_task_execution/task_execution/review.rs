@@ -1,5 +1,6 @@
 use super::super::super::core_path_helpers::task_path_component;
 use super::super::super::*;
+use super::super::verifier_setup;
 
 pub(super) struct ReviewRound<'a> {
     pub core: &'a Arc<Core>,
@@ -16,6 +17,31 @@ pub(super) struct ReviewRound<'a> {
     pub findings: &'a [serde_json::Value],
     pub report: &'a str,
     pub changes: Option<&'a str>,
+}
+
+struct ReviewTurn<'a> {
+    core: &'a Core,
+    cancel: &'a AtomicBool,
+    setup: TurnSetup<'a>,
+    reviewdir: &'a Path,
+    spec: &'a TaskContract,
+    report: &'a str,
+    changes: Option<&'a str>,
+    round: u32,
+    upstream: &'a str,
+    findings: &'a [serde_json::Value],
+    user_checks: String,
+}
+
+pub(super) struct VerdictSave<'a> {
+    pub core: &'a Core,
+    pub task: &'a mut Task,
+    pub spec: &'a TaskContract,
+    pub verdict: Verdict,
+    pub report: &'a str,
+    pub changes: Option<&'a str>,
+    pub summary_effect: Option<(String, bool)>,
+    pub repairs: u64,
 }
 
 pub(super) fn run(mut input: ReviewRound<'_>) -> Result<Option<Verdict>> {
@@ -50,57 +76,47 @@ fn request_review(input: &mut ReviewRound<'_>) -> Result<Option<String>> {
 }
 
 fn request_review_turn(input: &ReviewRound<'_>, reviewdir: &Path) -> Result<Option<String>> {
-    let setup = verifier_setup(
-        input.core,
+    let setup = verifier_setup::build(
         input.conversation,
         input.task,
-        input.spec,
+        input.verifier.to_owned(),
+        input
+            .core
+            .config_snapshot()
+            .resolve(input.spec.kind, RoleKind::Verifier),
         reviewdir,
-        input.add_dirs,
-        input.verifier,
+        input.add_dirs.to_vec(),
     );
     let checks = input
         .core
         .check_comments(input.conversation, &input.task.plan_id, &input.spec.id);
-    run_review_turn(
-        input.core,
-        input.cancel,
+    run_review_turn(ReviewTurn {
+        core: input.core,
+        cancel: input.cancel,
         setup,
         reviewdir,
-        input.spec,
-        input.report,
-        input.changes,
-        input.round,
-        input.upstream,
-        input.findings,
-        checks,
-    )
+        spec: input.spec,
+        report: input.report,
+        changes: input.changes,
+        round: input.round,
+        upstream: input.upstream,
+        findings: input.findings,
+        user_checks: checks,
+    })
 }
 
-fn run_review_turn(
-    core: &Core,
-    cancel: &AtomicBool,
-    setup: TurnSetup<'_>,
-    reviewdir: &Path,
-    spec: &TaskContract,
-    report: &str,
-    changes: Option<&str>,
-    round: u32,
-    upstream: &str,
-    findings: &[serde_json::Value],
-    user_checks: String,
-) -> Result<Option<String>> {
-    core.turn(setup, cancel, |first, _| {
+fn run_review_turn(input: ReviewTurn<'_>) -> Result<Option<String>> {
+    input.core.turn(input.setup, input.cancel, |first, _| {
         let prompt = tasks::verifier_turn_prompt(
-            &reviewdir.to_string_lossy(),
-            spec,
-            report,
-            changes,
-            first || round == 1,
-            upstream,
-            findings,
+            &input.reviewdir.to_string_lossy(),
+            input.spec,
+            input.report,
+            input.changes,
+            first || input.round == 1,
+            input.upstream,
+            input.findings,
         );
-        format!("{user_checks}{prompt}")
+        format!("{}{prompt}", input.user_checks)
     })
 }
 
@@ -126,33 +142,6 @@ fn review_worktree(
     );
     git::add_worktree(project, &path, &branch, &result)?;
     Ok(path)
-}
-
-fn verifier_setup<'a>(
-    core: &Core,
-    conversation: &'a str,
-    task: &Task,
-    spec: &TaskContract,
-    reviewdir: &Path,
-    add_dirs: &[PathBuf],
-    verifier: &str,
-) -> TurnSetup<'a> {
-    TurnSetup {
-        session_policy: SessionPolicy::TaskRound {
-            task: task.id.clone(),
-            round: task.round,
-        },
-        conversation,
-        plan_id: Some(task.plan_id.clone()),
-        role: verifier.to_owned(),
-        profile: core
-            .config_snapshot()
-            .resolve(spec.kind, RoleKind::Verifier),
-        cwd: reviewdir.to_path_buf(),
-        add_dirs: add_dirs.to_vec(),
-        access: agent::Access::ReadOnly,
-        upto_message: 0,
-    }
 }
 
 fn parse_verdict(
@@ -214,30 +203,19 @@ fn record_one(core: &Core, conversation: &str, task: &Task, verdict: &Verdict, i
     );
 }
 
-pub(super) fn save_verdict(
-    core: &Core,
-    conversation: &str,
-    task: &mut Task,
-    spec: &TaskContract,
-    mut verdict: Verdict,
-    report: &str,
-    changes: Option<&str>,
-    summary_effect: Option<(String, bool)>,
-    repairs: u64,
-) -> Result<()> {
-    stamp_verdict(task, &mut verdict);
-    task.verdict = Some(serde_json::to_value(&verdict)?);
+pub(super) fn save_verdict(mut input: VerdictSave<'_>) -> Result<()> {
+    stamp_verdict(input.task, &mut input.verdict);
+    input.task.verdict = Some(serde_json::to_value(&input.verdict)?);
     set_feedback(
-        task,
-        spec,
-        &verdict,
-        report,
-        changes,
-        summary_effect,
-        repairs,
+        input.task,
+        input.spec,
+        &input.verdict,
+        input.report,
+        input.changes,
+        input.summary_effect,
+        input.repairs,
     );
-    core.store.update_task(task)?;
-    let _ = conversation;
+    input.core.store.update_task(input.task)?;
     Ok(())
 }
 

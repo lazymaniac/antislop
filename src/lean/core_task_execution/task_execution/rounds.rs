@@ -2,6 +2,12 @@ use super::super::super::*;
 use super::{Execution, RoundState};
 use super::{review, worker};
 
+struct FinishedWorker {
+    report: String,
+    summary: (String, bool),
+    changes: Option<String>,
+}
+
 impl Execution<'_> {
     pub(super) fn run_round(&mut self, round: u32, state: &mut RoundState) -> Result<bool> {
         self.task.round = round;
@@ -10,20 +16,18 @@ impl Execution<'_> {
         let Some(report) = self.worker_or_stop(round, state, recheck)? else {
             return Ok(false);
         };
-        let Some((report, summary, changes)) = self.finish_worker_report(round, report)? else {
+        let Some(finished) = self.finish_worker_report(round, report)? else {
             return Ok(false);
         };
-        let Some(verdict) = self.review_round(round, state, &report, changes.as_deref())? else {
+        let Some(verdict) =
+            self.review_round(round, state, &finished.report, finished.changes.as_deref())?
+        else {
             return Ok(false);
         };
-        self.settle_round(state, verdict, &report, changes.as_deref(), summary)
+        self.settle_round(state, verdict, finished)
     }
 
-    fn finish_worker_report(
-        &mut self,
-        round: u32,
-        raw: String,
-    ) -> Result<Option<(String, (String, bool), Option<String>)>> {
+    fn finish_worker_report(&mut self, round: u32, raw: String) -> Result<Option<FinishedWorker>> {
         let Some((report, summary)) = worker::complete_report(
             self.core,
             self.conversation,
@@ -43,7 +47,11 @@ impl Execution<'_> {
             &report,
             &summary.0,
         )?;
-        Ok(Some((report, summary, changes)))
+        Ok(Some(FinishedWorker {
+            report,
+            summary,
+            changes,
+        }))
     }
 
     fn worker_or_stop(
@@ -141,14 +149,12 @@ impl Execution<'_> {
         &mut self,
         state: &mut RoundState,
         mut verdict: Verdict,
-        report: &str,
-        changes: Option<&str>,
-        summary: (String, bool),
+        finished: FinishedWorker,
     ) -> Result<bool> {
         let obligations = tasks::obligations(&self.spec);
         let incomplete = !tasks::unaccounted(&verdict, &obligations).is_empty();
         tasks::settle(&mut verdict, &obligations, !self.spec.writes);
-        self.save_round_verdict(&verdict, report, changes, summary)?;
+        self.save_round_verdict(&verdict, finished)?;
         if incomplete {
             return self.incomplete();
         }
@@ -159,25 +165,18 @@ impl Execution<'_> {
         self.update_progress(state, verdict)
     }
 
-    fn save_round_verdict(
-        &mut self,
-        verdict: &Verdict,
-        report: &str,
-        changes: Option<&str>,
-        summary: (String, bool),
-    ) -> Result<()> {
+    fn save_round_verdict(&mut self, verdict: &Verdict, finished: FinishedWorker) -> Result<()> {
         review::record_checks(self.core, self.conversation, self.task, &self.spec, verdict)?;
-        review::save_verdict(
-            self.core,
-            self.conversation,
-            self.task,
-            &self.spec,
-            verdict.clone(),
-            report,
-            changes,
-            Some(summary),
-            self.integration_repairs,
-        )
+        review::save_verdict(review::VerdictSave {
+            core: self.core,
+            task: self.task,
+            spec: &self.spec,
+            verdict: verdict.clone(),
+            report: &finished.report,
+            changes: finished.changes.as_deref(),
+            summary_effect: Some(finished.summary),
+            repairs: self.integration_repairs,
+        })
     }
 
     fn incomplete(&mut self) -> Result<bool> {

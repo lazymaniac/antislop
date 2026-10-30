@@ -1,6 +1,7 @@
 use super::*;
 
 mod task_execution;
+pub(in crate::lean) mod verifier_setup;
 
 impl Core {
     /// Runs the task-specific worker and verifier lifecycle.

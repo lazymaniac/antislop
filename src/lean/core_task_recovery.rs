@@ -3,6 +3,7 @@ use super::core_path_helpers::{worktree_branch, worktree_path};
 use super::*;
 
 mod actions;
+mod events;
 mod integrate;
 mod manual;
 mod prepare;

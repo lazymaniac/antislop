@@ -117,12 +117,5 @@ fn manual_event(
     } else {
         payload["result"] = json!(snapshot);
     }
-    core.store.append_event(
-        &work.req.conversation,
-        None,
-        Some(&work.req.plan),
-        "task_recovery",
-        &payload,
-    )?;
-    Ok(())
+    super::super::events::append(core, work, &payload)
 }
