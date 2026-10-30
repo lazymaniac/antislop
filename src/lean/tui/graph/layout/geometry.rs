@@ -19,15 +19,22 @@ fn center_horizontally(graph: &mut Graph, viewport: Option<(u16, u16)>) {
     }
 }
 
+/// Rows follow each other a gap apart, each as tall as its tallest card, so
+/// a row of compact cards takes only the room it needs.
 fn stack_visible_rows(graph: &mut Graph, size: Size) {
-    let mut rows = std::collections::BTreeSet::<u16>::new();
+    let mut rows = std::collections::BTreeMap::<u16, u16>::new();
     for node in graph.nodes.iter().filter(|node| node.visible) {
-        rows.insert(node.y);
+        let height = rows.entry(node.y).or_default();
+        *height = (*height).max(node.height);
     }
+    let mut next = row_y(size, 0);
     let stack: HashMap<_, _> = rows
         .into_iter()
-        .enumerate()
-        .map(|(row, y)| (y, row_y(size, row as u16)))
+        .map(|(y, height)| {
+            let top = next;
+            next = top.saturating_add(height).saturating_add(GAP_Y);
+            (y, top)
+        })
         .collect();
     for node in graph.nodes.iter_mut().filter(|node| node.visible) {
         node.y = stack[&node.y];

@@ -3,17 +3,27 @@ use super::*;
 impl Card<'_> {
     pub(super) fn paint_body(&mut self) {
         let inner = self.inner_width();
+        if is_admin(&self.node.key) {
+            let rows = self.node.height.saturating_sub(ADMIN_BODY_ROW);
+            let branch = self.branch().map(|branch| (branch, rows.saturating_sub(1)));
+            let lines = branch.as_ref().map_or(rows, |(_, row)| *row);
+            self.paint_summary(inner, ADMIN_BODY_ROW, usize::from(lines));
+            if let Some((branch, row)) = branch.filter(|(_, row)| *row < rows) {
+                self.paint_branch_at(ADMIN_BODY_ROW + row, &branch);
+            }
+            return;
+        }
         let (summary_max, effect_max) = self.node.body_lines();
-        self.paint_summary(inner, summary_max);
+        self.paint_summary(inner, BODY_ROW, summary_max);
         self.paint_effect(inner, summary_max, effect_max);
     }
 
-    fn paint_summary(&mut self, inner: usize, max: usize) {
+    fn paint_summary(&mut self, inner: usize, top: u16, max: usize) {
         for (row, line) in summary_lines(self.view, &self.node.key, self.task, inner, max)
             .iter()
             .enumerate()
         {
-            let y = self.node.y + BODY_ROW + row as u16;
+            let y = self.node.y + top + row as u16;
             self.canvas
                 .text(self.node.x + 2, y, line, self.fill.patch(self.theme.text()));
         }

@@ -83,6 +83,13 @@ const BODY_ROW: u16 = BRANCH_ROW + 1;
 const EFFECT_ROW: u16 = BODY_ROW + MAX_SUMMARY_LINES as u16;
 pub const HEIGHT: u16 = EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1;
 const MIN_HEIGHT: u16 = BODY_ROW + 2;
+/// Cards of the session's own agents (orchestrator, planner, verifiers of
+/// the plan, auditor, requirements) carry no task: their fixed one-sentence
+/// description follows the title, provider and state rows directly (a
+/// recorded branch takes its last line), and the card is only as tall as that.
+const ADMIN_BODY_ROW: u16 = 3;
+const ADMIN_SUMMARY_LINES: usize = 2;
+const ADMIN_HEIGHT: u16 = ADMIN_BODY_ROW + ADMIN_SUMMARY_LINES as u16;
 const GAP_X: u16 = 6;
 const GAP_Y: u16 = 3;
 /// Room left of the first column for edges entering it.
@@ -228,6 +235,11 @@ fn column_x(size: Size, column: u16) -> u16 {
 
 fn row_y(size: Size, row: u16) -> u16 {
     row * (size.h + GAP_Y)
+}
+
+/// Agents of the session itself, not of a task; their cards are compact.
+fn is_admin(key: &str) -> bool {
+    !key.contains(':')
 }
 
 pub type EdgeRoute<'a> = (&'a str, &'a str, Vec<(u16, u16)>);

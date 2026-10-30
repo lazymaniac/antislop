@@ -453,12 +453,12 @@ fn missing_or_cleaned_empty_summaries_use_short_legacy_fallbacks() {
             ),
             ["Verify Storage."]
         );
-        assert!(
-            Graph::new(&view)
-                .nodes
-                .iter()
-                .all(|node| node.height == HEIGHT)
-        );
+        assert!(Graph::new(&view).nodes.iter().all(|node| node.height
+            == if is_admin(&node.key) {
+                ADMIN_HEIGHT
+            } else {
+                HEIGHT
+            }));
     }
     let mut row = task("t1", &[]);
     row.title.clear();
@@ -501,12 +501,29 @@ fn summary_only_search_finds_tasks_and_admin_descriptions_stay_fixed() {
         assert!(graph.node("verifier:t1").unwrap().visible);
     }
     for (key, description) in [
-        (ORCHESTRATOR, "Coordinates the plan."),
-        (PLAN_VERIFIER, "Checks the plan."),
-        (AUDITOR, "Audits task results."),
+        (
+            ORCHESTRATOR,
+            &["Agrees requirements with", "you and steers the team."][..],
+        ),
+        (
+            PLAN_VERIFIER,
+            &["Independently checks the", "plan before you see it."],
+        ),
+        (
+            AUDITOR,
+            &["Checks the finished work", "delivers your request."],
+        ),
         (
             super::super::super::COMMENT_ORCHESTRATOR,
-            "Addresses comments.",
+            &["Answers your comments and", "acts on them."],
+        ),
+        (
+            super::super::super::PLANNER,
+            &["Turns agreed requirements", "into a task plan."],
+        ),
+        (
+            "requirements-extraction-analyst",
+            &["Extracts the requirements", "and proposes options."],
         ),
     ] {
         view.agents.insert(
@@ -518,8 +535,11 @@ fn summary_only_search_finds_tasks_and_admin_descriptions_stay_fixed() {
             },
         );
         assert_eq!(
-            card_lines(&view, key, usize::from(WIDTH - 4), MAX_SUMMARY_LINES),
-            [description]
+            card_lines(&view, key, usize::from(WIDTH - 4), ADMIN_SUMMARY_LINES)
+                .iter()
+                .map(|line| line.trim_end())
+                .collect::<Vec<_>>(),
+            description
         );
     }
 }
@@ -589,10 +609,11 @@ fn tasks_sit_in_columns_by_dependency_depth_with_one_card_per_task() {
         let node = graph.node(key).unwrap();
         (node.x, node.y)
     };
-    assert_eq!(at("worker:t1"), (column_x(FULL, 0), row_y(FULL, 1)));
+    let first = ADMIN_HEIGHT + GAP_Y;
+    assert_eq!(at("worker:t1"), (column_x(FULL, 0), first));
     assert_eq!(at("verifier:t1"), at("worker:t1"));
-    assert_eq!(at("worker:t3"), (column_x(FULL, 0), row_y(FULL, 2)));
-    assert_eq!(at("worker:t2"), (column_x(FULL, 1), row_y(FULL, 1)));
+    assert_eq!(at("worker:t3"), (column_x(FULL, 0), first + row_y(FULL, 1)));
+    assert_eq!(at("worker:t2"), (column_x(FULL, 1), first));
     assert_eq!(at(ORCHESTRATOR), (column_x(FULL, 1), 0));
 }
 
@@ -612,7 +633,12 @@ fn cards_are_fixed_and_no_event_moves_a_single_node() {
             .collect()
     };
     let before = geometry(&view);
-    assert!(before.iter().all(|(_, _, _, height, _)| *height == HEIGHT));
+    assert!(
+        before
+            .iter()
+            .all(|(key, _, _, height, _)| *height
+                == if is_admin(key) { ADMIN_HEIGHT } else { HEIGHT })
+    );
 
     // Activity: the round starts and its agent runs — no geometry moves,
     // and the worker's doing text lands on its own line, not behind
@@ -687,7 +713,11 @@ fn cards_are_fixed_and_no_event_moves_a_single_node() {
     assert_eq!(geometry(&view), before, "a retry moves no card");
     // Neither role ever shows a summary line displaced by the other's
     // data: every visible card keeps its fixed slot count.
-    for node in Graph::new(&view).nodes.iter().filter(|node| node.visible) {
+    for node in Graph::new(&view)
+        .nodes
+        .iter()
+        .filter(|node| node.visible && !is_admin(&node.key))
+    {
         assert_eq!(node.height, HEIGHT, "{}", node.key);
         assert!(node.y.saturating_add(HEIGHT) >= HEIGHT);
     }

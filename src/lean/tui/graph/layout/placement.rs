@@ -123,7 +123,7 @@ fn push_admin(builder: &mut Builder<'_>, key: &str, column: u16, row: u16, visib
         },
         y: if visible { row_y(builder.size, row) } else { 0 },
         width: builder.size.w,
-        height: builder.size.h,
+        height: ADMIN_HEIGHT.min(builder.size.h),
         visible,
         group: None,
         collapsed: false,

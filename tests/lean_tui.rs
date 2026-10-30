@@ -331,7 +331,13 @@ fn graph_scrolls_through_many_short_cards() {
         "the final short card must be reachable: {text}"
     );
     let graph = Graph::new(&app.view);
-    assert!(graph.nodes.iter().all(|node| node.height == HEIGHT));
+    assert!(
+        graph
+            .nodes
+            .iter()
+            .filter(|node| node.key.contains(':'))
+            .all(|node| node.height == HEIGHT)
+    );
     assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
     assert_eq!(app.focus, Focus::Chat);
 }
@@ -5172,9 +5178,13 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
             .collect()
     };
     let before = geometry(&view, GroupingMode::Dependency);
-    // Every node — admin, worker and verifier alike — starts at the fixed
-    // height, and stays there through every event below.
-    assert!(before.iter().all(|(_, _, _, h, _)| *h == HEIGHT));
+    // Every task node starts at the fixed height, admin cards at their
+    // compact one, and all stay there through every event below.
+    assert!(
+        before
+            .iter()
+            .all(|(key, _, _, h, _)| (*h == HEIGHT) == key.contains(':'))
+    );
 
     // Activity: the round starts and the agent runs.
     view.apply(&ev(
@@ -5216,7 +5226,11 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
             .collect::<Vec<_>>(),
         "heights never move"
     );
-    assert!(status_now.iter().all(|(_, _, _, h, _)| *h == HEIGHT));
+    assert!(
+        status_now
+            .iter()
+            .all(|(key, _, _, h, _)| (*h == HEIGHT) == key.contains(':'))
+    );
 
     // Effect + verdict: a cut (fragment) effect of the bounded kind.
     let long_effect = format!("{}…", "fixed 👩‍💻 — src/store.rs ".repeat(12));

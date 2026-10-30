@@ -190,11 +190,18 @@ pub(super) fn card_lines(view: &View, key: &str, width: usize, max: usize) -> Ve
 
 fn card_text(view: &View, key: &str) -> Option<String> {
     match key {
-        ORCHESTRATOR => Some("Coordinates the plan.".to_owned()),
-        super::super::super::PLANNER => Some("Drafts the plan.".to_owned()),
-        PLAN_VERIFIER => Some("Checks the plan.".to_owned()),
-        AUDITOR => Some("Audits task results.".to_owned()),
-        super::super::super::COMMENT_ORCHESTRATOR => Some("Addresses comments.".to_owned()),
+        ORCHESTRATOR => Some("Agrees requirements with you and steers the team.".to_owned()),
+        super::super::super::PLANNER => {
+            Some("Turns agreed requirements into a task plan.".to_owned())
+        }
+        PLAN_VERIFIER => Some("Independently checks the plan before you see it.".to_owned()),
+        AUDITOR => Some("Checks the finished work delivers your request.".to_owned()),
+        super::super::super::COMMENT_ORCHESTRATOR => {
+            Some("Answers your comments and acts on them.".to_owned())
+        }
+        _ if requirements_round(key).is_some() => {
+            Some("Extracts the requirements and proposes options.".to_owned())
+        }
         _ => task_card_text(view, key),
     }
 }

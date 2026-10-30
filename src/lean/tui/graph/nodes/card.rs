@@ -78,6 +78,10 @@ impl Card<'_> {
     }
 
     fn paint_contents(&mut self) {
+        if is_admin(&self.node.key) {
+            self.paint_body();
+            return;
+        }
         self.paint_activity();
         self.paint_branch();
         self.paint_body();
@@ -224,20 +228,26 @@ impl Card<'_> {
     }
 
     fn paint_branch(&mut self) {
+        if let Some(branch) = self.branch() {
+            self.paint_branch_at(BRANCH_ROW, &branch);
+        }
+    }
+
+    fn branch(&self) -> Option<String> {
         let branch_key = branch_key(self.view, self.node, self.task);
-        if let Some(branch) = self
-            .view
+        self.view
             .agents
             .get(&branch_key)
-            .and_then(|agent| agent.branch.as_deref())
-        {
-            self.canvas.text(
-                self.node.x + 2,
-                self.node.y + BRANCH_ROW,
-                &truncate(&format!("branch: {branch}"), self.inner_width()),
-                self.fill.patch(self.theme.dim()),
-            );
-        }
+            .and_then(|agent| agent.branch.clone())
+    }
+
+    fn paint_branch_at(&mut self, row: u16, branch: &str) {
+        self.canvas.text(
+            self.node.x + 2,
+            self.node.y + row,
+            &truncate(&format!("branch: {branch}"), self.inner_width()),
+            self.fill.patch(self.theme.dim()),
+        );
     }
 
     fn inner_width(&self) -> usize {
