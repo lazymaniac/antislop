@@ -109,6 +109,10 @@ pub struct Verdict {
     /// `V1`, `C2`): `{"status": "ok|issue|blocked|n/a", "note": "..."}`.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub coverage: serde_json::Map<String, Value>,
+    /// Ids of the previous round's findings that the verifier confirms the
+    /// updated work fixes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved: Vec<String>,
 }
 
 pub const FORMAT_REPAIR_ATTEMPTS: u32 = 3;

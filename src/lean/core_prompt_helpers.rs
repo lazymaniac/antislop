@@ -2,12 +2,46 @@ use super::*;
 
 /// Current local failures and pending questions for orchestration.
 pub(super) fn blocked_report(tasks: &[Task], _autonomous: bool) -> String {
-    let blocked: Vec<_> = tasks.iter().filter(|t| matches!(t.status.as_str(),status::COORDINATING|status::CANCELLED|status::SKIPPED|status::QUEUED|status::NEEDS_USER|status::WAITING|status::FAILED)).map(|t| json!({"task":t.spec["id"],"status":t.status,"reason":t.feedback.as_ref().and_then(|f|f.get("reason")),"waiting_request":t.feedback.as_ref().and_then(|f|f.get("waiting_request")),"findings":t.verdict.as_ref().and_then(|v|v.get("findings"))})).collect();
-    format!(
-        "Tasks need coordination: {}. Answer pending questions with answer_agent. Do not instruct a worker to park on an answered question: answered questions resume tasks. For a user decision on an open worker question, hand it over with defer_to_user. For a separate decision or an answered worker question, call ask_user; never reopen answered questions; do not represent a proposed revision as applied. Repair contracts or dependencies only with revise_plan. Do not approve unperformed work or recreate unavailable historical evidence. When a task stalls because its verifier keeps asking for more than its dependents need, narrow its goal to what they need, or ask the user; never answer a stall by adding deliverables to the contract, which only makes the next round fail on more.",
-        serde_json::to_string(&blocked).unwrap_or_default()
+    let blocked = blocked_entries(tasks, |status| {
+        matches!(
+            status,
+            status::COORDINATING
+                | status::CANCELLED
+                | status::SKIPPED
+                | status::QUEUED
+                | status::NEEDS_USER
+                | status::WAITING
+                | status::FAILED
+        )
+    });
+    format!("Tasks need coordination: {blocked}. {COORDINATION_GUIDANCE}")
+}
+
+/// Tasks that stopped for coordination while the rest of the plan runs on.
+pub(super) fn stopped_report(tasks: &[Task]) -> Option<String> {
+    let stopped = blocked_entries(tasks, stopped_for_coordination);
+    (stopped != "[]").then(|| {
+        format!(
+            "Tasks need coordination while the rest of the plan keeps running: {stopped}. \
+Other tasks have not finished yet; you will get the full report when they do. \
+{COORDINATION_GUIDANCE}"
+        )
+    })
+}
+
+fn stopped_for_coordination(status: &str) -> bool {
+    matches!(
+        status,
+        status::COORDINATING | status::NEEDS_USER | status::WAITING | status::FAILED
     )
 }
+
+fn blocked_entries(tasks: &[Task], include: impl Fn(&str) -> bool) -> String {
+    let blocked: Vec<_> = tasks.iter().filter(|t| include(&t.status)).map(|t| json!({"task":t.spec["id"],"status":t.status,"reason":t.feedback.as_ref().and_then(|f|f.get("reason")),"waiting_request":t.feedback.as_ref().and_then(|f|f.get("waiting_request")),"findings":t.verdict.as_ref().and_then(|v|v.get("findings"))})).collect();
+    serde_json::to_string(&blocked).unwrap_or_default()
+}
+
+const COORDINATION_GUIDANCE: &str = "Answer pending questions with answer_agent. Do not instruct a worker to park on an answered question: answered questions resume tasks. For a user decision on an open worker question, hand it over with defer_to_user. For a separate decision or an answered worker question, call ask_user; never reopen answered questions; do not represent a proposed revision as applied. Repair contracts or dependencies only with revise_plan. Do not approve unperformed work or recreate unavailable historical evidence. When a task stalls because its verifier keeps asking for more than its dependents need, narrow its goal to what they need, or ask the user; never answer a stall by adding deliverables to the contract, which only makes the next round fail on more.";
 
 pub(super) fn orchestrator_prompt(
     project: &Path,

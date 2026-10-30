@@ -262,6 +262,7 @@ impl Core {
                         Some(&changes),
                         fresh,
                         &upstream,
+                        &[],
                     )
                 })?;
                 let Some(answer) = answer else {

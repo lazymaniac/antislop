@@ -28,6 +28,7 @@ plans = {
   "second": [task("b1", "Second plan")],
   "write_chain": [task("w1", "Write file", writes=True), task("w2", "Follow up", ["w1"])],
   "manual_fix": [task("m1", "Manual fix", writes=True)],
+  "parallel": [task("t1", "Fail"), task("s1", "Slow")],
 }
 # A first orchestrator turn can include history after the current request.
 import re
@@ -43,6 +44,8 @@ if name:
 elif "Regenerate the task plan from the verified ledger" in prompt and os.path.exists(last):
     name = open(last).read()
 answer = "Plan.\n```plan\n" + json.dumps({"tasks": plans[name]}) + "\n```" if name else "ok"
+if "Tasks need coordination while the rest of the plan keeps running" in prompt:
+    open(os.path.join(os.path.dirname(sys.argv[0]), "told-while-running"), "w").close()
 # The user has decided (supervised) or nobody watches (autonomous): unblock t1,
 # which only works once the agent is logged in.
 if "The user is not watching" in prompt or prompt.splitlines()[-1] == "retry t1":
@@ -78,6 +81,14 @@ if "Task: Write file" in prompt and "You verify" not in prompt and "You audit" n
             primary.write("user edit\n")
     with open("hello.txt", "w") as f:
         f.write("from worker\n")
+# A slow worker that finishes once the orchestrator has heard of the stopped task.
+if "Task: Slow" in prompt and "You verify" not in prompt and "You audit" not in prompt:
+    import time
+    deadline = time.time() + 30
+    while time.time() < deadline and not os.path.exists(os.path.join(here, "told-while-running")):
+        time.sleep(0.05)
+    if os.path.exists(os.path.join(here, "told-while-running")):
+        open(os.path.join(here, "slow-saw-report"), "w").close()
 if "Task: Manual fix" in prompt and "You verify" not in prompt and "You audit" not in prompt:
     with open("hello.txt", "w") as f:
         f.write("from worker manual\n")
@@ -451,6 +462,31 @@ fn test_blocked_task_prevents_premature_audit() {
     let text = &reports[0].text;
     assert!(text.contains("answer_agent"));
     assert!(text.contains("revise_plan"));
+}
+
+#[test]
+fn a_task_that_stops_wakes_the_orchestrator_while_others_still_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
+    let plan = propose(&core, &conversation, "parallel");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+
+    assert_eq!(statuses(&core, &plan), ["waiting", "approved"]);
+    assert!(
+        dir.path().join("slow-saw-report").exists(),
+        "the orchestrator was told of the stopped task only after the slow one finished"
+    );
+    let messages = core.store.messages_after(&conversation, 0).unwrap();
+    let interim: Vec<_> = messages
+        .iter()
+        .filter(|m| m.author == "runtime" && m.text.contains("keeps running"))
+        .collect();
+    assert_eq!(interim.len(), 1, "{messages:?}");
+    assert!(interim[0].text.contains("\"t1\""));
+    assert!(!interim[0].text.contains("\"s1\""));
 }
 
 #[test]

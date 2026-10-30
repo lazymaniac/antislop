@@ -3,6 +3,7 @@ use serde_json::json;
 
 fn verdict_with(coverage: serde_json::Map<String, serde_json::Value>) -> Verdict {
     Verdict {
+        resolved: Vec::new(),
         approved: false,
         findings: vec![],
         coverage,

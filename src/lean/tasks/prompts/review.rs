@@ -52,6 +52,8 @@ fn verifier_task_context(task: &TaskContract) -> String {
 }
 
 /// Resumed verifiers need the same current dependency evidence as new sessions.
+/// `earlier` holds the previous round's findings, whose fixes the verifier
+/// confirms by id.
 pub fn verifier_turn_prompt(
     project: &str,
     task: &TaskContract,
@@ -59,13 +61,46 @@ pub fn verifier_turn_prompt(
     changes: Option<&str>,
     fresh: bool,
     upstream: &str,
+    earlier: &[Value],
 ) -> String {
     let prompt = if fresh {
         verifier_prompt(project, task, report, changes)
     } else {
         verifier_followup(task, report, changes)
     };
-    prompt + upstream
+    prompt + &earlier_findings(earlier) + upstream
+}
+
+/// The blocking findings of the previous round, so the verifier can name
+/// the ones the updated work fixes: their ids are the runtime's, not its own.
+fn earlier_findings(earlier: &[Value]) -> String {
+    let lines: Vec<String> = earlier
+        .iter()
+        .filter(|f| crate::lean::progress::blocks(f))
+        .map(|f| {
+            let issue: String = f["issue"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(300)
+                .collect();
+            format!(
+                "- {} [{}, {}] {issue}",
+                f["id"].as_str().unwrap_or(""),
+                f["check"].as_str().unwrap_or("finding"),
+                f["severity"].as_str().unwrap_or(""),
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nYour earlier findings that sent this task back:\n{}\nList in resolved the ids of \
+         those the updated work fixes. A defect that remains stays in findings; a new defect \
+         is a new finding, whichever check it falls under.",
+        lines.join("\n")
+    )
 }
 
 pub fn verifier_followup(task: &TaskContract, report: &str, changes: Option<&str>) -> String {
@@ -168,8 +203,12 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      added quality gates may use the interface language; scope names the places that matter, \
      including related projects or services; tasks that change files are marked `writes`; key quality and \
      verification agents from the predefined pool are included so touched code \
-     is left in a better state; each goal can be verified by inspecting files and recorded \
-     evidence only, never by execution or edits. Each verifier checks its task's goal, \
+     is left in a better state; each goal's result can be checked by its verifier from \
+     the files and the worker's recorded evidence, without the verifier executing or editing \
+     anything. This limits verifiers, not workers: a task whose kind writes (implementation, \
+     refactoring, testing, static analysis, integration) runs the builds, tests, audits and \
+     commands its goal names and records their output, so never flag a goal for requiring \
+     its worker to execute. Each verifier checks its task's goal, \
      assigned acceptance criteria and its kind's risk catalog. ";
 
 /// The plan as the reviewer reads it: compact JSON. Tasks the runtime adds

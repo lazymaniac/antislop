@@ -53,7 +53,8 @@ pub(super) fn review() -> Value {
     json!({
         "report":{"type":"string","description":"What you verified and how"},
         "checks":{"type":"object","additionalProperties":check,"description":"Every check id the prompt lists, each with status and note"},
-        "findings":{"type":"array","items":finding}
+        "findings":{"type":"array","items":finding},
+        "resolved":{"type":"array","items":{"type":"string"},"description":"Ids of your earlier findings, as the prompt lists them, that the updated work fixes"}
     })
 }
 

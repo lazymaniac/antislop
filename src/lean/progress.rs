@@ -2,7 +2,10 @@
 //! findings differently every round, so their text says little; the
 //! obligations it leaves open (`V5`, `R2`…) keep their ids. A worker
 //! that leaves mostly the same ones open round after round, without ever
-//! getting below its best so far, is not getting closer.
+//! getting below its best so far, is not getting closer. Broad checks such as
+//! `goal` stay open while the verifier finds one new defect after another, so
+//! the verifier also confirms which of its earlier findings the round fixed;
+//! a fixed finding is progress even when the same checks remain open.
 use std::collections::BTreeSet;
 
 use serde_json::Value;
@@ -23,7 +26,7 @@ pub fn open_obligations(verdict: &Verdict) -> BTreeSet<String> {
     let findings: Vec<String> = verdict
         .findings
         .iter()
-        .filter(|f| matches!(f["severity"].as_str(), Some("critical" | "high" | "medium")))
+        .filter(|f| blocks(f))
         .filter(|f| {
             f["check"]
                 .as_str()
@@ -36,6 +39,24 @@ pub fn open_obligations(verdict: &Verdict) -> BTreeSet<String> {
 
 fn is_open(entry: &Value) -> bool {
     matches!(counted_status(entry), "issue" | "blocked" | "missing")
+}
+
+/// Whether a finding sends the task back.
+pub fn blocks(finding: &Value) -> bool {
+    matches!(
+        finding["severity"].as_str(),
+        Some("critical" | "high" | "medium")
+    )
+}
+
+/// Whether the verdict confirms that a blocking finding of the previous round
+/// is fixed. Ids it names that the previous round never raised do not count.
+pub fn fixed_earlier(earlier: &[Value], verdict: &Verdict) -> bool {
+    earlier
+        .iter()
+        .filter(|f| blocks(f))
+        .filter_map(|f| f["id"].as_str())
+        .any(|id| verdict.resolved.iter().any(|fixed| fixed == id))
 }
 
 #[derive(Debug, Default)]
@@ -52,6 +73,12 @@ impl Progress {
         });
         self.previous = Some(open);
         stalled
+    }
+
+    /// A task round: stalled only when its open obligations show no progress
+    /// and the verifier confirms none of its earlier findings fixed.
+    pub fn record_round(&mut self, open: BTreeSet<String>, fixed_earlier: bool) -> bool {
+        self.record(open) && !fixed_earlier
     }
 }
 
@@ -127,6 +154,7 @@ mod tests {
     #[test]
     fn reworded_findings_against_the_same_checks_stall_the_worker() {
         let verdict = |suffix: &str| Verdict {
+            resolved: Vec::new(),
             approved: false,
             findings: vec![
                 json!({"check": "R5.1", "id": format!("R5.1:{suffix}"), "severity": "medium"}),
@@ -148,6 +176,7 @@ mod tests {
     #[test]
     fn open_means_issue_blocked_or_unexplained() {
         let verdict = Verdict {
+            resolved: Vec::new(),
             approved: false,
             findings: Vec::new(),
             coverage: json!({
@@ -162,5 +191,46 @@ mod tests {
             .clone(),
         };
         assert_eq!(open_obligations(&verdict), open(&["R2", "R3", "R5"]));
+    }
+
+    fn rejected(findings: &[&str], resolved: &[&str]) -> Verdict {
+        Verdict {
+            approved: false,
+            findings: findings
+                .iter()
+                .map(|id| json!({"check": "goal", "id": id, "severity": "medium"}))
+                .collect(),
+            coverage: json!({"goal": {"status": "issue", "note": "incomplete"}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            resolved: resolved.iter().map(|id| (*id).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_fixed_finding_is_progress_while_a_new_one_keeps_the_same_check_open() {
+        let mut progress = Progress::default();
+        let first = rejected(&["goal:aaaa"], &[]);
+        assert!(!progress.record_round(open_obligations(&first), false));
+        let second = rejected(&["goal:bbbb"], &["goal:aaaa"]);
+        let fixed = fixed_earlier(&first.findings, &second);
+        assert!(fixed);
+        assert!(!progress.record_round(open_obligations(&second), fixed));
+        let third = rejected(&["goal:bbbb"], &[]);
+        let fixed = fixed_earlier(&second.findings, &third);
+        assert!(progress.record_round(open_obligations(&third), fixed));
+    }
+
+    #[test]
+    fn only_blocking_findings_of_the_previous_round_count_as_fixed() {
+        let mut earlier = rejected(&["goal:aaaa"], &[]).findings;
+        earlier.push(json!({"check": "goal", "id": "goal:low", "severity": "low"}));
+        assert!(!fixed_earlier(
+            &earlier,
+            &rejected(&[], &["goal:elsewhere"])
+        ));
+        assert!(!fixed_earlier(&earlier, &rejected(&[], &["goal:low"])));
+        assert!(fixed_earlier(&earlier, &rejected(&[], &["goal:aaaa"])));
     }
 }

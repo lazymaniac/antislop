@@ -1,4 +1,4 @@
-use super::core_prompt_helpers::blocked_report;
+use super::core_prompt_helpers::{blocked_report, stopped_report};
 use super::*;
 
 impl Core {
@@ -162,6 +162,31 @@ impl Core {
             self.wake(conversation);
         }
         plans.remove(conversation);
+    }
+
+    /// Tells the orchestrator about tasks that stopped for coordination while
+    /// others still run, so it need not wait for the whole plan to drain.
+    pub(in crate::lean) fn report_stopped_tasks(
+        self: &Arc<Self>,
+        conversation: &str,
+        plan_id: &str,
+    ) {
+        let Some(report) = stopped_report(&self.store.plan(plan_id).unwrap_or_default()) else {
+            return;
+        };
+        let told = self
+            .blocked_seen
+            .lock()
+            .expect("blocked mutex")
+            .insert(conversation.to_owned(), report.clone());
+        if told.as_deref() != Some(report.as_str())
+            && self
+                .store
+                .add_message(conversation, RUNTIME, &report)
+                .is_ok()
+        {
+            self.wake(conversation);
+        }
     }
 
     fn finish_audited_plan(

@@ -77,6 +77,7 @@ fn options_delivery_and_missing_choice_obligation_survive_verifier_followups() {
                 Some("git diff base result"),
                 fresh,
                 &upstream,
+                &[],
             );
             println!("PATH={path}\n{prompt}\nEND PATH={path}");
             assert_eq!(prompt.matches(report).count(), 1, "{path}");
@@ -99,7 +100,7 @@ fn read_only_continuations_preserve_access_without_writer_binding() {
         Some("Apply the scoped user instruction."),
         "",
     );
-    let verifier = tasks::verifier_turn_prompt("project", &task, "report", None, false, "");
+    let verifier = tasks::verifier_turn_prompt("project", &task, "report", None, false, "", &[]);
     assert!(!worker.contains("options report is binding"));
     assert!(!verifier.contains("Independently verify requirements"));
 }

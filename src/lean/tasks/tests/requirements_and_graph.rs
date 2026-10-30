@@ -89,6 +89,9 @@ fn plan_review_is_compact_and_lists_runtime_tasks_without_their_goals() {
         !prompt.contains("\n  \"id\""),
         "plan JSON is not pretty-printed"
     );
+    // Only verifiers are read-only; a writing worker runs what its goal names.
+    assert!(prompt.contains("This limits verifiers, not workers"));
+    assert!(!prompt.contains("never by execution or edits"));
 }
 
 #[test]

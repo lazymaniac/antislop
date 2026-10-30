@@ -295,6 +295,7 @@ impl Core {
                     changes.as_deref(),
                     first || round == 1,
                     &upstream,
+                    &findings,
                 );
                 format!("{user_checks}{prompt}")
             })?;
@@ -399,8 +400,9 @@ impl Core {
                     }
                 };
             }
-            if progress.record(super::progress::open_obligations(&verdict)) {
-                let why = "no previously open obligation was resolved; the orchestrator must supply a new basis or revise the contract";
+            let fixed = super::progress::fixed_earlier(&findings, &verdict);
+            if progress.record_round(super::progress::open_obligations(&verdict), fixed) {
+                let why = "no previously open obligation was resolved and the verifier confirmed none of its earlier findings fixed; the orchestrator must supply a new basis or revise the contract";
                 let report = task.report.take().unwrap_or_default();
                 task.report = Some(format!("{report}\n\n[runtime] {why}"));
                 return self.stop(conversation, task, status::COORDINATING, Some(why));

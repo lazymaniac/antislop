@@ -49,7 +49,14 @@ impl<'a> Scheduler<'a> {
             if settled {
                 continue;
             }
-            if self.in_flight.is_empty() || !self.receive_completion() {
+            if self.in_flight.is_empty() {
+                break;
+            }
+            if !self.cancel.load(Ordering::SeqCst) {
+                self.core
+                    .report_stopped_tasks(self.conversation, self.plan_id);
+            }
+            if !self.receive_completion() {
                 break;
             }
         }

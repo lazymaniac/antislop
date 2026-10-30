@@ -2,6 +2,7 @@ use super::*;
 
 fn verdict_with(coverage: serde_json::Map<String, Value>) -> Verdict {
     Verdict {
+        resolved: Vec::new(),
         approved: true,
         findings: vec![],
         coverage,

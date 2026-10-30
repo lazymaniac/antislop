@@ -48,6 +48,7 @@ fn a_verdict_counts_only_with_every_obligation_accounted_for() {
         serde_json::json!({"status": "n/a", "note": " "}),
     );
     let mut verdict = Verdict {
+        resolved: Vec::new(),
         approved: true,
         findings: vec![],
         coverage,
@@ -96,6 +97,7 @@ fn an_issue_on_any_obligation_rejects_a_read_only_report_too() {
         map
     };
     let mut verdict = Verdict {
+        resolved: Vec::new(),
         approved: true,
         findings: vec![],
         coverage: coverage("issue"),
@@ -104,6 +106,7 @@ fn an_issue_on_any_obligation_rejects_a_read_only_report_too() {
     assert!(!verdict.approved);
     assert_eq!(verdict.findings[0]["where"], risk.as_str());
     let mut clean = Verdict {
+        resolved: Vec::new(),
         approved: true,
         findings: vec![],
         coverage: coverage("ok"),
@@ -206,8 +209,28 @@ fn only_medium_and_low_findings_are_minor() {
 
 fn verdict(approved: bool, findings: serde_json::Value) -> Verdict {
     Verdict {
+        resolved: Vec::new(),
         approved,
         findings: serde_json::from_value(findings).unwrap(),
         coverage: serde_json::Map::new(),
     }
+}
+
+#[test]
+fn a_verifier_is_shown_its_earlier_blocking_findings_by_runtime_id() {
+    let task: TaskContract = serde_json::from_value(serde_json::json!({
+        "id": "w", "title": "Writer", "goal": "Do it", "kind": "implementation",
+        "verifier": {"focus": "f"}
+    }))
+    .unwrap();
+    let earlier = vec![
+        serde_json::json!({"id": "goal:aaaa1111", "check": "goal", "severity": "medium", "issue": "map omits a file", "where": "x"}),
+        serde_json::json!({"id": "goal:low00000", "check": "goal", "severity": "low", "issue": "typo", "where": "y"}),
+    ];
+    let prompt = verifier_turn_prompt("/p", &task, "report", None, false, "", &earlier);
+    assert!(prompt.contains("- goal:aaaa1111 [goal, medium] map omits a file"));
+    assert!(!prompt.contains("goal:low00000"));
+    assert!(prompt.contains("List in resolved"));
+    let first = verifier_turn_prompt("/p", &task, "report", None, true, "", &[]);
+    assert!(!first.contains("List in resolved"));
 }

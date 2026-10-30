@@ -305,6 +305,11 @@ fn review(report: String, args: &serde_json::Value) -> Result<TurnResult> {
         }
         recorded.push(entry);
     }
+    let resolved: Vec<String> = match &args["resolved"] {
+        serde_json::Value::Null => Vec::new(),
+        value => serde_json::from_value(value.clone())
+            .map_err(|error| crate::Error::Invalid(format!("resolved: {error}")))?,
+    };
     let approved = checks
         .values()
         .all(|check| matches!(check["status"].as_str(), Some("ok" | "n/a")))
@@ -317,6 +322,7 @@ fn review(report: String, args: &serde_json::Value) -> Result<TurnResult> {
             approved,
             findings: recorded,
             coverage: checks,
+            resolved,
         },
     })
 }
@@ -618,6 +624,13 @@ mod tests {
             panic!("a review");
         };
         assert!(verdict.approved);
+        assert!(verdict.resolved.is_empty());
+        let mut fixed = args.clone();
+        fixed["resolved"] = json!(["goal:1234abcd"]);
+        let TurnResult::Review { verdict, .. } = task_tool_result("review", &fixed).unwrap() else {
+            panic!("a review");
+        };
+        assert_eq!(verdict.resolved, ["goal:1234abcd"]);
         let finding =
             json!({"check": "goal", "severity": "medium", "issue": "wrong", "where": "src/a.rs:1"});
         let mut blocked = args.clone();
