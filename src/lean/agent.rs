@@ -2,6 +2,12 @@
 //! directory with its own tools; the runtime types the prompt into the CLI's
 //! terminal (`native.rs`) and receives the answer through the MCP gateway.
 
+mod errors;
+pub(crate) use errors::persisted_error;
+#[cfg(test)]
+use errors::redact_error;
+pub use errors::{OUTPUT, clip, clip_tail};
+
 use crate::config::ProviderKind;
 use std::path::PathBuf;
 use std::process::Command;
@@ -55,6 +61,13 @@ pub fn reap(pid: u32, started_ms: i64, provider: &str) -> bool {
     let Ok(pid) = i32::try_from(pid) else {
         return false;
     };
+    if !is_original_cli(pid, started_ms, provider) {
+        return false;
+    }
+    terminate_group(pid)
+}
+
+fn is_original_cli(pid: i32, started_ms: i64, provider: &str) -> bool {
     // SAFETY: getpgid only reads the process table.
     if pid <= 1 || unsafe { libc::getpgid(pid) } != pid {
         return false;
@@ -74,9 +87,10 @@ pub fn reap(pid: u32, started_ms: i64, provider: &str) -> bool {
     let now = super::store::now_ms();
     let began = now - elapsed * 1000;
     // `ps` counts whole seconds and the CLI starts just after its turn.
-    if (began - started_ms).abs() > 5_000 || !command.contains(provider) {
-        return false;
-    }
+    (began - started_ms).abs() <= 5_000 && command.contains(provider)
+}
+
+fn terminate_group(pid: i32) -> bool {
     // SAFETY: signals the process group verified above.
     unsafe { libc::kill(-pid, libc::SIGTERM) };
     for _ in 0..30 {
@@ -112,92 +126,6 @@ pub fn name(provider: ProviderKind) -> &'static str {
         ProviderKind::Gemini => "gemini",
         ProviderKind::Opencode => "opencode",
     }
-}
-
-/// Longest tool output or reasoning kept in an event.
-pub const OUTPUT: usize = 2000;
-
-/// Redact credentials before retaining the actionable CLI failure in the UI,
-/// reports and events. This function has no diagnostic-output side effects.
-/// Unknown, unlabelled secrets cannot be inferred reliably from arbitrary prose.
-pub(crate) fn persisted_error(text: &str) -> String {
-    redact_error(
-        text,
-        std::env::vars_os().filter_map(|(key, value)| {
-            let key = key.to_string_lossy().to_ascii_uppercase();
-            (key.contains("TOKEN")
-                || key.contains("SECRET")
-                || key.contains("PASSWORD")
-                || key.contains("API_KEY")
-                || key.contains("PRIVATE_KEY"))
-            .then(|| value.into_string().ok())
-            .flatten()
-        }),
-    )
-}
-
-fn redact_error(text: &str, secrets: impl Iterator<Item = String>) -> String {
-    let mut secrets: Vec<_> = secrets.filter(|secret| !secret.is_empty()).collect();
-    secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
-    let mut text = text.to_owned();
-    for secret in secrets {
-        text = text.replace(&secret, "[REDACTED]");
-    }
-    let mut result = String::new();
-    let mut credential_next = false;
-    for part in text.split_inclusive(char::is_whitespace) {
-        let word = part.trim_end_matches(char::is_whitespace);
-        let whitespace = &part[word.len()..];
-        if word.is_empty() {
-            result.push_str(whitespace);
-            continue;
-        }
-        let lower = word.to_ascii_lowercase();
-        let assignment = lower.split_once('=').or_else(|| lower.split_once(':'));
-        let sensitive = assignment.is_some_and(|(key, _)| {
-            key.contains("token")
-                || key.contains("secret")
-                || key.contains("password")
-                || key.contains("api_key")
-                || key.contains("apikey")
-                || key.contains("authorization")
-        });
-        let label = lower == "bearer"
-            || sensitive
-                && assignment.is_some_and(|(_, value)| value.trim_matches(['\"', '\'']).is_empty());
-        if credential_next || word.contains("://") || sensitive && !label {
-            result.push_str("[REDACTED]");
-        } else {
-            result.push_str(word);
-        }
-        credential_next = label;
-        result.push_str(whitespace);
-    }
-    clip(&result, OUTPUT)
-}
-
-/// The start of `text`, at most `limit` characters, marked when cut.
-pub fn clip(text: &str, limit: usize) -> String {
-    let text = text.trim_end();
-    match text.char_indices().nth(limit) {
-        Some((end, _)) => format!("{}\n…[truncated]", &text[..end]),
-        None => text.to_owned(),
-    }
-}
-
-/// The end of `text`, at most `limit` characters, marked when cut: of a
-/// prompt, the last part is what differs from turn to turn.
-pub fn clip_tail(text: &str, limit: usize) -> String {
-    let text = text.trim();
-    let count = text.chars().count();
-    if count <= limit {
-        return text.to_owned();
-    }
-    let start = text
-        .char_indices()
-        .nth(count - limit)
-        .map_or(0, |(start, _)| start);
-    format!("[truncated]…\n{}", &text[start..])
 }
 
 #[cfg(test)]
