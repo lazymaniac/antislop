@@ -30,46 +30,59 @@ pub struct Choice {
 /// integrated after independent approval. Tasks can be retried with guidance
 /// or cancelled; unresolved requirements remain open.
 pub fn choices_for(task: &TaskRow) -> Vec<Choice> {
-    let choice = |action, label, asks_text| Choice {
+    if matches!(task.status.as_str(), "queued" | "working" | "verifying") {
+        return vec![restart_choice()];
+    }
+    let mut choices = vec![retry_choice()];
+    if task.writes && task.status == "needs_user" {
+        choices.extend(written_recovery_choices());
+    }
+    choices.push(restart_choice());
+    choices
+}
+
+fn choice(action: RecoveryAction, label: &'static str, asks_text: bool) -> Choice {
+    Choice {
         action,
         label,
         asks_text,
-    };
-    if matches!(task.status.as_str(), "queued" | "working" | "verifying") {
-        return vec![choice(
-            RecoveryAction::RestartAgent,
-            "Restart the agent in a fresh session",
-            true,
-        )];
     }
-    let mut choices = vec![choice(
-        RecoveryAction::RetryWithGuidance,
-        "Retry with a hint for the worker",
-        true,
-    )];
-    if task.writes && task.status == "needs_user" {
-        choices.push(choice(
-            RecoveryAction::IntegrateWithConsent,
-            "Integrate the independently verified change",
-            false,
-        ));
-        choices.push(choice(
-            RecoveryAction::KeepOnBranch,
-            "Preserve its change while integration is pending",
-            false,
-        ));
-        choices.push(choice(
-            RecoveryAction::VerifyManualSnapshot,
-            "I fixed it myself: verify my working tree",
-            false,
-        ));
-    }
-    choices.push(choice(
+}
+
+fn restart_choice() -> Choice {
+    choice(
         RecoveryAction::RestartAgent,
         "Restart the agent in a fresh session",
         true,
-    ));
-    choices
+    )
+}
+
+fn retry_choice() -> Choice {
+    choice(
+        RecoveryAction::RetryWithGuidance,
+        "Retry with a hint for the worker",
+        true,
+    )
+}
+
+fn written_recovery_choices() -> [Choice; 3] {
+    [
+        choice(
+            RecoveryAction::IntegrateWithConsent,
+            "Integrate the independently verified change",
+            false,
+        ),
+        choice(
+            RecoveryAction::KeepOnBranch,
+            "Preserve its change while integration is pending",
+            false,
+        ),
+        choice(
+            RecoveryAction::VerifyManualSnapshot,
+            "I fixed it myself: verify my working tree",
+            false,
+        ),
+    ]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,15 +182,7 @@ impl Unblock {
 
     pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
-        let width = area.width.saturating_sub(4).clamp(12, 78);
-        let wanted = self.choices.len() as u16 + 8;
-        let height = wanted.min(area.height);
-        let boxed = Rect::new(
-            area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(height) / 2,
-            width,
-            height,
-        );
+        let boxed = centered_box(area, self.choices.len());
         frame.render_widget(Clear, boxed);
         let block = Block::default()
             .borders(Borders::ALL)
@@ -190,50 +195,99 @@ impl Unblock {
         let inner = block.inner(boxed);
         frame.render_widget(block, boxed);
         let text_width = usize::from(inner.width.saturating_sub(2)).max(1);
-        let mut lines = vec![
-            Line::from(Span::styled(
-                truncate(&clean(&self.title), text_width),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                truncate(&clean(&self.reason).replace('\n', " "), text_width),
-                Style::default().fg(super::theme::ayu::RED),
-            )),
-            Line::raw(""),
-        ];
-        let first_choice = lines.len() as u16;
-        self.rects.clear();
-        for (n, choice) in self.choices.iter().enumerate() {
-            let y = inner.y + first_choice + n as u16;
-            if y >= inner.bottom().saturating_sub(1) {
-                self.rects.push(Rect::default());
-                continue;
+        let lines = self.lines(inner, text_width);
+        frame.render_widget(Paragraph::new(lines), inner);
+    }
+
+    fn lines(&mut self, inner: Rect, text_width: usize) -> Vec<Line<'static>> {
+        let mut lines = title_lines(&self.title, &self.reason, text_width);
+        self.rects = choice_rects(inner, self.choices.len());
+        lines.extend(choice_lines(
+            &self.choices,
+            self.selected,
+            inner,
+            text_width,
+        ));
+        append_footer(&mut lines, inner.height, text_width);
+        lines
+    }
+}
+
+fn centered_box(area: Rect, choices: usize) -> Rect {
+    let width = area.width.saturating_sub(4).clamp(12, 78);
+    let height = (choices as u16 + 8).min(area.height);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
+fn title_lines(title: &str, reason: &str, width: usize) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            truncate(&clean(title), width),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            truncate(&clean(reason).replace('\n', " "), width),
+            Style::default().fg(super::theme::ayu::RED),
+        )),
+        Line::raw(""),
+    ]
+}
+
+fn choice_rects(inner: Rect, count: usize) -> Vec<Rect> {
+    (0..count)
+        .map(|index| {
+            let y = inner.y + 3 + index as u16;
+            if y < inner.bottom().saturating_sub(1) {
+                Rect::new(inner.x, y, inner.width, 1)
+            } else {
+                Rect::default()
             }
-            self.rects.push(Rect::new(inner.x, y, inner.width, 1));
-            let picked = n == self.selected;
+        })
+        .collect()
+}
+
+fn choice_lines(
+    choices: &[Choice],
+    selected: usize,
+    inner: Rect,
+    width: usize,
+) -> Vec<Line<'static>> {
+    choices
+        .iter()
+        .enumerate()
+        .map(|(index, choice)| {
+            let picked = index == selected;
             let marker = if picked { "▸" } else { " " };
             let style = if picked {
                 Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else {
                 Style::default()
             };
-            lines.push(Line::from(Span::styled(
+            let _ = inner;
+            Line::from(Span::styled(
                 truncate(
-                    &format!("{marker} {}. {}", n + 1, choice.label),
-                    text_width + 1,
+                    &format!("{marker} {}. {}", index + 1, choice.label),
+                    width + 1,
                 ),
                 style,
-            )));
-        }
-        if inner.height > lines.len() as u16 {
-            let gap = inner.height - 1 - lines.len() as u16;
-            lines.extend((0..gap).map(|_| Line::raw("")));
-            lines.push(Line::from(Span::styled(
-                truncate("↑/↓ choose · Enter or 1-9 do it · Esc back", text_width),
-                Style::default().fg(super::theme::ayu::DIM),
-            )));
-        }
-        frame.render_widget(Paragraph::new(lines), inner);
+            ))
+        })
+        .collect()
+}
+
+fn append_footer(lines: &mut Vec<Line<'static>>, height: u16, width: usize) {
+    if height > lines.len() as u16 {
+        let gap = height - 1 - lines.len() as u16;
+        lines.extend((0..gap).map(|_| Line::raw("")));
+        lines.push(Line::from(Span::styled(
+            truncate("↑/↓ choose · Enter or 1-9 do it · Esc back", width),
+            Style::default().fg(super::theme::ayu::DIM),
+        )));
     }
 }
 

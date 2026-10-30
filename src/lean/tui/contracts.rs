@@ -111,14 +111,15 @@ pub struct Editor {
     pub input: InputBuffer,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Focus {
+    #[default]
     Chat,
     Graph,
 }
 
 /// Full preserved state of a conversation across switches.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ConversationState {
     pub input: InputBuffer,
     pub editor: Option<Editor>,
@@ -150,4 +151,106 @@ pub struct ConversationState {
     pub details_scroll_memory: std::collections::HashMap<(String, usize), usize>,
     pub details_query_memory: std::collections::HashMap<(String, usize), String>,
     pub graph_viewport: Option<(u16, u16)>,
+}
+
+impl ConversationState {
+    pub(super) fn capture(app: &App) -> Self {
+        let mut state = Self::default();
+        state.capture_composer(app);
+        state.capture_navigation(app);
+        state.capture_overlays(app);
+        state.capture_requests(app);
+        state
+    }
+
+    fn capture_composer(&mut self, app: &App) {
+        self.input = app.input.clone();
+        self.editor = app.editor.clone();
+        self.sending = app.sending;
+        self.pending_send = app.pending_send.clone();
+        self.send_request_id = app.send_request_id;
+        self.failed_send = app.failed_send.clone();
+        self.sending_comment = app.sending_comment;
+        self.pending_comment = app.pending_comment.clone();
+        self.comment_request_id = app.comment_request_id;
+        self.failed_comment = app.failed_comment.clone();
+        self.comment_drafts = app.comment_drafts.clone();
+        self.comment_draft_cursors = app.comment_draft_cursors.clone();
+    }
+
+    fn capture_navigation(&mut self, app: &App) {
+        self.selected = app.selected.clone();
+        self.filter = app.filter;
+        self.offset = app.offset;
+        self.scroll = app.scroll;
+        self.focus = app.focus;
+        self.graph_filter = app.graph_filter.clone();
+        self.graph_collapsed = app.graph_collapsed.clone();
+        self.graph_grouping = app.graph_grouping;
+        self.graph_viewport = app.graph_viewport;
+    }
+
+    fn capture_overlays(&mut self, app: &App) {
+        self.details = app.details.clone();
+        self.diff = app.diff.clone();
+        self.plan_view = app.plan_view.clone();
+        self.ledger_view = app.ledger_view.clone();
+        self.confirmation = app.confirmation.clone();
+    }
+
+    fn capture_requests(&mut self, app: &App) {
+        self.task_request_id = app.task_request_id;
+        self.diff_request_id = app.diff_request_id;
+        self.details_scroll_memory = app.details_scroll_memory.clone();
+        self.details_query_memory = app.details_query_memory.clone();
+    }
+
+    pub(super) fn restore(&self, app: &mut App) {
+        self.restore_composer(app);
+        self.restore_navigation(app);
+        self.restore_overlays(app);
+        self.restore_requests(app);
+    }
+
+    fn restore_composer(&self, app: &mut App) {
+        app.input = self.input.clone();
+        app.editor = self.editor.clone();
+        app.sending = self.sending;
+        app.pending_send = self.pending_send.clone();
+        app.send_request_id = self.send_request_id;
+        app.failed_send = self.failed_send.clone();
+        app.sending_comment = self.sending_comment;
+        app.pending_comment = self.pending_comment.clone();
+        app.comment_request_id = self.comment_request_id;
+        app.failed_comment = self.failed_comment.clone();
+        app.comment_drafts = self.comment_drafts.clone();
+        app.comment_draft_cursors = self.comment_draft_cursors.clone();
+    }
+
+    fn restore_navigation(&self, app: &mut App) {
+        app.selected = self.selected.clone();
+        app.filter = self.filter;
+        app.offset = self.offset;
+        app.scroll = self.scroll;
+        app.focus = self.focus;
+        app.graph_filter = self.graph_filter.clone();
+        app.graph_collapsed = self.graph_collapsed.clone();
+        app.graph_grouping = self.graph_grouping;
+        app.graph_viewport = self.graph_viewport;
+    }
+
+    fn restore_overlays(&self, app: &mut App) {
+        app.details = self.details.clone();
+        app.diff = self.diff.clone();
+        app.plan_view = self.plan_view.clone();
+        app.ledger_view = self.ledger_view.clone();
+        app.confirmation = self.confirmation.clone();
+    }
+
+    fn restore_requests(&self, app: &mut App) {
+        app.task_request_id = self.task_request_id;
+        app.diff_request_id = self.diff_request_id;
+        app.details_scroll_memory = self.details_scroll_memory.clone();
+        app.details_query_memory = self.details_query_memory.clone();
+    }
 }

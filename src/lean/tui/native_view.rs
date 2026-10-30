@@ -7,33 +7,17 @@ pub struct Snapshot {
     pub screen: Option<Screen>,
     pub error: Option<String>,
 }
-enum Command {
+pub(super) enum Command {
     Input(Input),
     Resize(u16, u16),
     Retry,
 }
 
-fn call_input(client: &Client, request: &Request) -> Result<Value> {
-    // TerminalInput is deduplicated by handle and sequence. Reconnect with
-    // the same request if the daemon accepted it but its reply was lost.
-    let mut result = client.call(request);
-    for _ in 0..2 {
-        let transient = match &result {
-            Err(crate::Error::Io(_)) => true,
-            Err(crate::Error::Invalid(message)) => {
-                message == "the daemon disconnected"
-                    || message.starts_with("terminal input not accepted:")
-            }
-            _ => false,
-        };
-        if !transient {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-        result = client.call(request);
-    }
-    result
-}
+mod app;
+mod render;
+mod session;
+pub(super) use self::render::render;
+
 pub(super) struct View {
     state: Arc<std::sync::Mutex<Snapshot>>,
     commands: SyncSender<Command>,
@@ -41,439 +25,17 @@ pub(super) struct View {
     dimensions: (u16, u16),
     identity: String,
 }
-impl View {
-    fn start(
-        client: Client,
-        conversation: String,
-        role: String,
-        columns: u16,
-        rows: u16,
-        updates: mpsc::Sender<Update>,
-        identity: String,
-    ) -> Self {
-        let state = Arc::new(std::sync::Mutex::new(Snapshot::default()));
-        let output = state.clone();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopped = stop.clone();
-        let (commands, received) = mpsc::sync_channel(64);
-        std::thread::spawn(move || {
-            let mut screen: Option<Screen> = None;
-            let mut sequence = 0;
-            let mut dimensions = (columns, rows);
-            let mut retry = false;
-            let mut blocked = None::<String>;
-            loop {
-                // Finish accepted keystrokes before detaching a closed view.
-                let closing = stopped.load(Ordering::SeqCst);
-                if screen.is_none()
-                    && output
-                        .lock()
-                        .expect("native view")
-                        .error
-                        .as_deref()
-                        .is_none_or(|error| {
-                            error.contains("native session has not started")
-                                || error.contains("has not reported this session's identifier")
-                        })
-                {
-                    match client
-                        .call(&Request::TerminalOpen {
-                            conversation: conversation.clone(),
-                            role: role.clone(),
-                            columns: dimensions.0,
-                            rows: dimensions.1,
-                            retry,
-                        })
-                        .and_then(|value| serde_json::from_value(value).map_err(Into::into))
-                    {
-                        Ok(value) => screen = Some(value),
-                        Err(error) => {
-                            output.lock().expect("native view").error = Some(error.to_string())
-                        }
-                    }
-                }
-                let command = if closing {
-                    match received.try_recv() {
-                        Ok(command) => Ok(command),
-                        Err(_) => break,
-                    }
-                } else {
-                    received.recv_timeout(Duration::from_millis(80))
-                };
-                match command {
-                    Ok(Command::Retry) => {
-                        if let Some(old) = screen.take() {
-                            let _ = client.call(&Request::TerminalDetach {
-                                conversation: conversation.clone(),
-                                role: role.clone(),
-                                handle: old.handle,
-                            });
-                        }
-                        *output.lock().expect("native view") = Snapshot::default();
-                        sequence = 0;
-                        blocked = None;
-                        retry = true;
-                        continue;
-                    }
-                    Ok(command) => {
-                        if let Command::Resize(columns, rows) = &command {
-                            dimensions = (*columns, *rows);
-                        }
-                        if let Command::Input(input) = &command
-                            && let Some(error) = &blocked
-                        {
-                            let _ = updates.send(Update::NativeInputRejected {
-                                conversation: conversation.clone(),
-                                role: role.clone(),
-                                input: input.clone(),
-                                error: error.clone(),
-                            });
-                            continue;
-                        }
-                        if let Some(current) = &screen {
-                            let request = match command {
-                                Command::Input(input) => Request::TerminalInput {
-                                    conversation: conversation.clone(),
-                                    role: role.clone(),
-                                    handle: current.handle.clone(),
-                                    sequence: sequence + 1,
-                                    input,
-                                },
-                                Command::Resize(columns, rows) => Request::TerminalResize {
-                                    conversation: conversation.clone(),
-                                    role: role.clone(),
-                                    handle: current.handle.clone(),
-                                    columns,
-                                    rows,
-                                },
-                                Command::Retry => unreachable!(),
-                            };
-                            let result = if matches!(request, Request::TerminalInput { .. }) {
-                                call_input(&client, &request)
-                            } else {
-                                client.call(&request)
-                            };
-                            match result {
-                                Ok(_) => {
-                                    if matches!(request, Request::TerminalInput { .. }) {
-                                        sequence += 1;
-                                    }
-                                    output.lock().expect("native view").error = None;
-                                }
-                                Err(error) => {
-                                    if let Request::TerminalInput { input, .. } = &request {
-                                        blocked = Some(error.to_string());
-                                        let _ = updates.send(Update::NativeInputRejected {
-                                            conversation: conversation.clone(),
-                                            role: role.clone(),
-                                            input: input.clone(),
-                                            error: error.to_string(),
-                                        });
-                                    }
-                                    output.lock().expect("native view").error =
-                                        Some(error.to_string());
-                                }
-                            }
-                        } else if let Command::Input(input) = command {
-                            let _ = updates.send(Update::NativeInputRejected {
-                                conversation: conversation.clone(),
-                                role: role.clone(),
-                                input,
-                                error: "native terminal is not ready".into(),
-                            });
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                }
-                if let Some(current) = &screen {
-                    match client.call(&Request::TerminalRead {
-                        conversation: conversation.clone(),
-                        role: role.clone(),
-                        handle: current.handle.clone(),
-                        after: current.revision,
-                    }) {
-                        Ok(value) if !value.is_null() => {
-                            match serde_json::from_value::<Screen>(value) {
-                                Ok(next) => screen = Some(next),
-                                Err(error) => {
-                                    output.lock().expect("native view").error =
-                                        Some(error.to_string())
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            output.lock().expect("native view").error = Some(error.to_string())
-                        }
-                        _ => {}
-                    }
-                }
-                output.lock().expect("native view").screen = screen.clone();
-            }
-            if let Some(current) = screen {
-                let _ = client.call(&Request::TerminalDetach {
-                    conversation,
-                    role,
-                    handle: current.handle,
-                });
-            }
-        });
-        Self {
-            state,
-            commands,
-            stop,
-            dimensions: (columns, rows),
-            identity,
-        }
-    }
-    fn send(&self, command: Command) -> Result<()> {
-        self.commands.try_send(command).map_err(|_| {
-            crate::Error::Invalid("native terminal input queue is full or disconnected".into())
-        })
-    }
-    fn resize(&mut self, columns: u16, rows: u16) {
-        if self.dimensions != (columns, rows) && self.send(Command::Resize(columns, rows)).is_ok() {
-            self.dimensions = (columns, rows);
-        }
-    }
-}
-impl Drop for View {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-    }
-}
-
-pub(super) fn render(frame: &mut Frame, area: Rect, screen: &Screen, focused: bool) {
-    use ratatui::style::{Color, Modifier, Style};
-    let buffer = frame.buffer_mut();
-    for cell in &screen.cells {
-        if cell.x >= area.width
-            || cell.y >= area.height
-            || cell.x.saturating_add(cell.width) > area.width
-        {
-            continue;
-        }
-        let mut style = Style::default();
-        if let Some([r, g, b]) = cell.foreground {
-            style = style.fg(Color::Rgb(r, g, b));
-        }
-        if let Some([r, g, b]) = cell.background {
-            style = style.bg(Color::Rgb(r, g, b));
-        }
-        for (bit, modifier) in [
-            (1, Modifier::BOLD),
-            (2, Modifier::DIM),
-            (4, Modifier::ITALIC),
-            (8, Modifier::UNDERLINED),
-            (16, Modifier::REVERSED),
-        ] {
-            if cell.modifiers & bit != 0 {
-                style = style.add_modifier(modifier);
-            }
-        }
-        buffer.set_string(area.x + cell.x, area.y + cell.y, &cell.text, style);
-    }
-    if focused
-        && let Some((x, y)) = screen.cursor
-        && x < area.width
-        && y < area.height
-    {
-        frame.set_cursor_position((area.x + x, area.y + y));
-    }
-}
-
-impl App {
-    pub(super) fn sync_native_views(&mut self) {
-        let mut wanted = vec![];
-        // The current round's sessions are shown live; an earlier round's only
-        // when the user asks, and then by resuming it.
-        if let Some(details) = self
-            .details
-            .as_ref()
-            .filter(|d| d.terminal_visible() && (d.selected_round.is_none() || d.resume_round))
-        {
-            for (panel, key) in details.session_keys().iter().enumerate() {
-                let role = details.composer_recipient(key);
-                let area = details.native_areas[panel];
-                if area.is_empty() {
-                    continue;
-                }
-                let (role, identity) = match details.selected_round {
-                    Some(round) => (format!("{role}#r{round}"), format!("round:{round}")),
-                    None => {
-                        // A new provider session (or a new task round) is a new
-                        // terminal: the view attaches to it afresh.
-                        let metadata = details
-                            .task
-                            .as_ref()
-                            .and_then(|task| {
-                                task["native_sessions"]
-                                    .as_array()
-                                    .or_else(|| task["turns"].as_array())
-                            })
-                            .and_then(|turns| turns.iter().rev().find(|turn| turn["role"] == role));
-                        let stored = details
-                            .sessions
-                            .iter()
-                            .rev()
-                            .find(|session| session.role == role)
-                            .filter(|_| details.task.is_none());
-                        let session = metadata
-                            .and_then(|turn| turn["session_id"].as_str())
-                            .or_else(|| stored.and_then(|session| session.session_id.as_deref()));
-                        let round = details
-                            .task
-                            .as_ref()
-                            .filter(|_| crate::lean::task_role(&role).is_some())
-                            .map(|task| task["round"].to_string())
-                            .unwrap_or_default();
-                        (
-                            role.clone(),
-                            format!("{}:{round}", session.unwrap_or("waiting")),
-                        )
-                    }
-                };
-                wanted.push((
-                    role,
-                    key.clone(),
-                    identity,
-                    area.width.max(1),
-                    area.height.max(1),
-                ));
-            }
-        }
-        let prefix = format!("{}:", self.conversation);
-        let mut retired = false;
-        self.native_views.retain(|key, view| {
-            let keep = wanted.iter().any(|(role, _, identity, _, _)| {
-                *key == format!("{prefix}{role}") && view.identity == *identity
-            });
-            retired |= !keep;
-            keep
-        });
-        if let Some(details) = &mut self.details {
-            details.native.clear();
-            if retired {
-                details.native_focus = false;
-            }
-        }
-        for (role, local_key, identity, columns, rows) in wanted {
-            let key = format!("{prefix}{role}");
-            let controller = self.native_views.entry(key).or_insert_with(|| {
-                View::start(
-                    self.client.clone(),
-                    self.conversation.clone(),
-                    role.clone(),
-                    columns,
-                    rows,
-                    self.updates.clone(),
-                    identity,
-                )
-            });
-            controller.resize(columns, rows);
-            let snapshot = controller.state.lock().expect("native view").clone();
-            if let Some(details) = &mut self.details {
-                details.native.insert(local_key, snapshot);
-            }
-        }
-    }
-    fn native_key_role(&self) -> Option<String> {
-        let details = self
-            .details
-            .as_ref()
-            .filter(|d| d.terminal_visible() && (d.selected_round.is_none() || d.resume_round))?;
-        details
-            .session_keys()
-            .get(details.active_panel)
-            .map(|key| details.composer_recipient(key))
-    }
-    pub(super) fn native_focused(&self) -> bool {
-        !self.ledger_view.as_ref().is_some_and(|v| v.visible)
-            && self.details.as_ref().is_some_and(|d| d.native_focus)
-            && self.native_key_role().is_some()
-    }
-    pub(super) fn native_send(&mut self, input: Input) {
-        if let Some(role) = self.native_key_role() {
-            let result = self
-                .native_views
-                .get(&format!("{}:{role}", self.conversation))
-                .ok_or_else(|| crate::Error::Invalid("native terminal is not ready".into()))
-                .and_then(|v| v.send(Command::Input(input.clone())));
-            if let Err(error) = result {
-                self.recover_native_input(
-                    &self.conversation.clone(),
-                    &role,
-                    input,
-                    &error.to_string(),
-                );
-            }
-        }
-    }
-    pub(super) fn recover_native_input(
-        &mut self,
-        conversation: &str,
-        role: &str,
-        input: Input,
-        error: &str,
-    ) {
-        let text = match input {
-            Input::Paste { text } => text,
-            Input::Key { event }
-                if !event
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                match event.code {
-                    KeyCode::Char(ch) => ch.to_string(),
-                    KeyCode::Enter => "\n".into(),
-                    _ => String::new(),
-                }
-            }
-            _ => String::new(),
-        };
-        let message = format!(
-            "Native input could not be confirmed; text recovered in message draft. Check the terminal before resending: {error}"
-        );
-        let mut drafts = self.agent_drafts.borrow_mut();
-        let draft = drafts
-            .entry((conversation.into(), role.into()))
-            .or_default();
-        draft.input.insert_str(&text);
-        draft.error = Some(message.clone());
-        drop(drafts);
-        if self.conversation == conversation {
-            self.notice = Some(message);
-            if let Some(details) = self.details.as_mut()
-                && details
-                    .session_keys()
-                    .iter()
-                    .any(|key| details.composer_recipient(key) == role)
-            {
-                details.native_focus = false;
-                details.editing = true;
-            }
-        }
-    }
-    pub(super) fn native_retry(&mut self) {
-        if let Some(role) = self.native_key_role()
-            && let Some(view) = self
-                .native_views
-                .get(&format!("{}:{role}", self.conversation))
-        {
-            let _ = view.send(Command::Retry);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::session::call_input;
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
     use serde_json::json;
     use std::time::Instant;
     #[test]
     fn resize_while_waiting_for_a_session_is_used_by_the_next_open() {
-        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::create_dir_all(".antislop/tmp").unwrap();
+        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
         let listener =
             std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
                 .unwrap();
@@ -559,7 +121,8 @@ mod tests {
     }
     #[test]
     fn first_attachment_waits_for_the_actual_panel_dimensions() {
-        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::create_dir_all(".antislop/tmp").unwrap();
+        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
         let (mut app, _) = App::test_app_with_client(Client::at(directory.path()));
         let mut details = Details::new("orchestrator".into());
         details.task = Some(json!({"turns":[{"role":"orchestrator","session_id":"managed"}]}));
@@ -627,7 +190,8 @@ mod tests {
     }
     #[test]
     fn a_lost_input_acknowledgement_reuses_the_same_sequence() {
-        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::create_dir_all(".antislop/tmp").unwrap();
+        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
         let listener =
             std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
                 .unwrap();
@@ -667,7 +231,8 @@ mod tests {
     }
     #[test]
     fn closing_a_view_delivers_accepted_input_before_detaching() {
-        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        std::fs::create_dir_all(".antislop/tmp").unwrap();
+        let directory = tempfile::tempdir_in(".antislop/tmp").unwrap();
         let listener =
             std::os::unix::net::UnixListener::bind(crate::lean::daemon::socket(directory.path()))
                 .unwrap();

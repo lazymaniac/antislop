@@ -90,8 +90,9 @@ const MARGIN: u16 = 3;
 /// How long a message keeps its edge highlighted.
 const RECENT: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Filter {
+    #[default]
     All,
     Depends,
     Verifies,
