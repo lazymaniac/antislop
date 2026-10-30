@@ -93,6 +93,11 @@ pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
          sources\") takes that away.\n\n\
          Task: {}\nTask id: {}\nKind: {}\nGoal: {}\nScope: {}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          {blocker}\n\n{team_note}\n\n\
+         Finish the whole goal before you report, however much work it is: your turn has \
+         no short limit, and a result that leaves part of the goal undone is rejected and \
+         costs a round. Do not stop after one part to hand in progress. When something \
+         outside your control blocks the rest, ask the orchestrator instead of handing in \
+         partial work.\n\n\
          End with a complete report of your result: what you did or found and the evidence, \
          and a short summary of what you delivered; tasks that depend on this one see only \
          that summary. Do not restate the task or dependency data or paste file \

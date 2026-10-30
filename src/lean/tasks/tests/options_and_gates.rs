@@ -250,3 +250,12 @@ fn the_planner_gets_the_plan_format_but_not_the_orchestrators_workflow() {
     assert!(planner.contains("You are the planner"));
     assert!(orchestrator.contains("a dedicated planner drafts the plan"));
 }
+
+#[test]
+fn a_worker_is_told_to_finish_the_whole_goal_before_it_reports() {
+    let tasks = with_options(vec![options_test_task("writer", true)]);
+    let worker = worker_prompt("project", &tasks[1]);
+    assert!(worker.contains("Finish the whole goal before you report"));
+    assert!(worker.contains("Do not stop after one part to hand in progress."));
+    assert!(worker.contains("ask the orchestrator instead of handing in partial work"));
+}
