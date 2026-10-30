@@ -48,8 +48,8 @@ fn agents_are_found_by_role_or_task_title() {
     assert_eq!(
         items,
         [(
-            "t1 task · Parser · worker verifier".to_owned(),
-            Action::Select("worker:t1".into())
+            "t1 task · Parser · verifier".to_owned(),
+            Action::Select("verifier:t1".into())
         )]
     );
 }

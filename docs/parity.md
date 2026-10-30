@@ -45,7 +45,7 @@ The table covers the current items in the t12 analytical matrix.
 | 12 | **Sending** | Reliable draft retention: `sending: true`, no text loss on transport/daemon errors, isolated drafts when switching conversations (`Ctrl+O`), `Esc` semantics. | `sending: true`, `pending_send`, `failed_send` in `src/lean/tui/mod.rs`. Transport errors restore `input` or `failed_send`. `Ctrl+O` isolates drafts per conversation. Editor `Esc` restores the draft while browsing history, clears nonempty input (`input.clear()`, not recoverable through `↑`/`↓`), or detaches on empty input. | Full parity with documented runtime semantics | `tests/lean_tui.rs:tui_send_reliability_draft_retention_on_error_and_in_flight_typing`, `tests/lean_tui.rs:test_esc_behavior_and_cleared_draft_counterexample`. |
 | 13 | **Sending** | Recipient selection and broadcast: orchestrator by default, `@all` or a specific agent, editor header. | `@` on empty input or `Ctrl+P > Address message` opens `Picker::new(Kind::Recipients)`. Daemon validates recipients (`mail_rejected`). | Full parity | `tests/lean_tui.rs:test_recipient_selection_and_broadcast`, `tests/lean_protocol.rs:test_message_addressing_validation_and_mail_queue`. |
 | 14 | **Graph** | Stable 2D graph: fixed 28x4 cards, cycle resistance (Kahn's cycle-breaking), stable selection/event positions. | `src/lean/tui/graph.rs`. Positions do not depend on selection or activity (`view.activity`). Cyclic dependencies do not cause infinite loops. | Full parity | `tests/lean_tui.rs:test_spatial_graph_stable_positions_large_and_cyclic_plans`, `tests/lean_tui.rs:test_adaptive_graph_navigation_and_resize_stability`. |
-| 15 | **Graph** | Labeled routed edges: ASCII `V`, `D`, `M`, `▲▼◀▶` arrows, side corridor bypassing same-column cards. | `Graph::edge_routes` in `src/lean/tui/graph.rs`. Nonadjacent same-column routes bypass intervening cards using `(from.right() + GAP_X / 2)`. | Full parity | `tests/lean_tui.rs:test_spatial_graph_vdm_relation_markers_and_visible_only_navigation`, `tests/lean_tui.rs:test_adaptive_graph_non_adjacent_same_column_bypass_routing`. |
+| 15 | **Graph** | Labeled routed edges: ASCII `V`, `D`, `M`, `▲▼◀▶` arrows; each task a framed unit of options, worker and verifier; dependencies between frames on lanes of their own. | `src/lean/tui/graph/layout/units.rs` lays out the units and their edges; other edges route between cards in `src/lean/tui/graph/routing.rs`. | Full parity | `tests/lean_tui.rs:test_spatial_graph_vdm_relation_markers_and_visible_only_navigation`, `graph::tests::a_task_is_a_framed_unit_and_units_stand_in_rows_by_dependency_depth`. |
 | 16 | **Graph** | 2D arrow navigation restricted to nodes visible in the active filter. | `Graph::neighbour()` in `src/lean/tui/graph.rs` filters by `n.visible`. Arrows skip nodes hidden by filters/queries. | Full parity | `tests/lean_tui.rs:test_spatial_graph_vdm_relation_markers_and_visible_only_navigation`. |
 | 17 | **Graph** | Progress-overlay collision avoidance ("now"): switch corners or yield to avoid covering nodes. | `compute_progress_overlay_with_nodes` in `src/lean/tui/graph.rs` checks four corners against the selected node and visible cards, yielding (`None`) if all collide. | Full parity | `tests/lean_tui.rs:test_refresh_updates_and_overlay_collision_avoidance`, `tests/lean_tui.rs:test_adaptive_graph_collision_and_routing_safety`. |
 | 20 | **Tasks** | Detailed orchestration micro-stage in the header. | Transcript header shows exact micro-stage state (`TaskRow.activity`, active-check count, verification phase). | Full parity | `tests/lean_tui.rs:long_activity_labels_fit_the_progress_overlay`. |
@@ -87,29 +87,26 @@ The table covers the current items in the t12 analytical matrix.
 
 ---
 
-## 4. Reproducible graph-panel geometry and routing measurements
+## 4. Graph-panel geometry and routing
 
-To avoid unsupported measurement claims, the following table gives **actual,
-reproducible final-layout results** measured by `tests/lean_tui.rs`:
+Each task is a unit: its options card, worker and verifier side by side in a
+frame titled with the task. Cards shrink so that a unit's three cards fit the
+panel's width; the session's own agents stand two across above the units.
 
-| Terminal | Graph panel (`inner.width x inner.height`) | Complete readable cards without scrolling | Actual columns and rows | Adaptation/compaction effect | Route safety (corridor bypass) |
-|---|---|---|---|---|---|
-| **80x24** (compact) | 78 x 20 | **6 complete cards** | 2 columns (x=3, x=37) x 3 rows (y=0, 6, 12) | Fit fully in height 20; `offset = (0, 0)`; no empty rows | 0 card collisions; bypass Auditor through side corridor |
-| **85x24** (split) | 48 x 20 | **3 complete cards** | 1 column (x=3) x 3 rows (y=0, 6, 12) | Admin nodes in column 0 without clipping; filter recovers row 0 | 0 card collisions; vertical routes along corridor axis |
-| **120x30** (split) | 77 x 26 | **7 complete cards** | 2 columns (x=3, x=37) x 4 rows (y=0, 6, 12, 18) | All 4 row levels used in height 26; `offset = (0, 0)` | 0 card collisions; bypass Verifier through side corridor |
-| **160x50** (split) | 104 x 46 | **11 complete cards** | 3 columns (x=3, x=37, x=71) x 7 rows | 100% of nodes (admin + tasks) visible without scrolling | 0 collisions across all 240 node pairs on a 4x4 grid |
-| **Any** | Any | — | Collapsed verifiers (`z`/Space) | Collapsed verifier occupies 0 rows; tasks move upward (0 empty rows) | Routes follow compacted positions |
-| **Any** | Any | — | Text filter (e.g. "task 1") | Tasks recover row 0; no empty space after admin nodes | Route segments restricted to visible cards |
-
-### Side-corridor bypass routing
-
-For same-column nodes with vertical separation greater than one step (`(from.y - to.y).abs() > HEIGHT + GAP_Y`):
-
-- Do not route directly through the column center, which would intersect intermediate cards.
-- A horizontal segment exits right from `(from.right(), from.mid_y())` to corridor `x = from.right() + GAP_X / 2`.
-- The vertical segment follows free intercolumn space beside intermediate cards.
-- The final segment enters `(to.right(), to.mid_y())` horizontally with arrow `◀`.
-- Zero route intersections with card interiors were verified for every filter (`Supervises`, `Depends`, `Verifies`, `Messages`).
+- Units stand in layers by dependency depth (by state when grouped by state),
+  one row per layer, wrapped where the panel ends; a layer is ordered under
+  its parents.
+- A dependency leaves its parent's frame at the bottom and enters its child's
+  at the top. Between rows that follow each other it runs through the gap
+  between them, on a line of its own; one that skips rows runs down a lane left
+  of every row, and lanes whose rows do not overlap share a column. Gaps grow
+  with the lines through them, and dependencies another path implies are not
+  drawn.
+- Inside a frame, the options card points to the worker and the worker to its
+  verifier.
+- Folding (`z`) and filters compact the layout: folded rows take only their
+  height, filtered units leave no empty rows or columns.
+- No route crosses a card (`tests/lean_tui.rs`, `src/lean/tui/graph/tests.rs`).
 
 ---
 

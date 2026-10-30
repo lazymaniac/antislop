@@ -1,10 +1,12 @@
-//! The team as a two-dimensional graph: one card per task, orthogonal edges for
-//! what relates them. The layout depends only on the plan's shape, so nodes
-//! stay put while events arrive.
+//! The team as a two-dimensional graph: one card per agent, a task's agents
+//! framed together, orthogonal edges for what relates them. The layout
+//! depends only on the plan's shape, so nodes stay put while events arrive.
 
 use super::taskinfo;
 use super::theme::Theme;
-use super::view::{AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, View, agent_name, clean, truncate, wrap};
+use super::view::{
+    AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, TaskRow, View, agent_name, clean, truncate, wrap,
+};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -97,6 +99,8 @@ const GAP_X: u16 = 6;
 const GAP_Y: u16 = 3;
 /// Room left of the first column for edges entering it.
 const MARGIN: u16 = 3;
+/// Columns between a task's frame and its cards.
+const FRAME_X: u16 = 2;
 /// How long a message keeps its edge highlighted.
 const RECENT: Duration = Duration::from_secs(10);
 
@@ -154,11 +158,29 @@ struct Edge {
     to: String,
     kind: Kind,
     label: Option<String>,
+    /// The path laid out with the graph, for edges between and inside
+    /// frames; other edges are routed between their two cards.
+    path: Option<Vec<(u16, u16)>>,
+}
+
+/// The border around one task's cards: its options card, worker and
+/// verifier, titled with the task.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Frame {
+    /// `task:{id}`, the `group` of every card inside.
+    pub key: String,
+    pub task: String,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub visible: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct Graph {
     pub nodes: Vec<Node>,
+    pub frames: Vec<Frame>,
     edges: Vec<Edge>,
     pub width: u16,
     pub height: u16,
@@ -172,16 +194,37 @@ mod filters;
 pub use cache::LayoutCache;
 pub use filters::{RELATIONS, Relations, Scope};
 
-/// Canonical UI identity; role addresses in events and storage stay intact.
-pub fn task_node_key(key: &str) -> String {
-    match crate::lean::task_role(key) {
-        Some((id, true)) => format!("worker:{id}"),
-        _ => key.to_owned(),
-    }
+/// Which of a task's agents a card stands for. A task that only proposes
+/// options is one short exchange, so its worker and verifier share a card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Worker,
+    Verifier,
+    Pair,
 }
 
-/// `task_node_key`, with the requirements rounds folded into their one card.
-fn card_key(view: &View, key: &str) -> String {
+fn is_pair(task: &TaskRow) -> bool {
+    task.kind == "options"
+}
+
+/// The task a card belongs to and the role it shows.
+fn task_card<'a>(view: &'a View, key: &str) -> Option<(&'a TaskRow, Role)> {
+    let (id, verifier) = crate::lean::task_role(key)?;
+    let task = view.tasks.iter().find(|task| task.id == id)?;
+    let role = if is_pair(task) {
+        Role::Pair
+    } else if verifier {
+        Role::Verifier
+    } else {
+        Role::Worker
+    };
+    Some((task, role))
+}
+
+/// The card an agent is shown on: its own, except that the requirements
+/// rounds share one card and so do the two agents of an options task.
+/// Role addresses in events and storage stay intact.
+pub fn card_key(view: &View, key: &str) -> String {
     if requirements_round(key).is_some() {
         return REQUIREMENTS_ROUNDS
             .into_iter()
@@ -189,15 +232,10 @@ fn card_key(view: &View, key: &str) -> String {
             .unwrap_or(key)
             .to_owned();
     }
-    task_node_key(key)
-}
-
-fn column_x(size: Size, column: u16) -> u16 {
-    MARGIN + column * (size.w + GAP_X)
-}
-
-fn row_y(size: Size, row: u16) -> u16 {
-    row * (size.h + GAP_Y)
+    match task_card(view, key) {
+        Some((task, Role::Pair)) => format!("worker:{}", task.id),
+        _ => key.to_owned(),
+    }
 }
 
 /// Agents of the session itself, not of a task; their cards are compact.

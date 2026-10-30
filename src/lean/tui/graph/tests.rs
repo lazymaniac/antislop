@@ -1,10 +1,6 @@
 use super::health::{card_lines, describe, effect_lines};
 use super::nodes::draw_node;
 use super::*;
-const FULL: Size = Size {
-    w: WIDTH,
-    h: HEIGHT,
-};
 
 #[test]
 fn windowed_canvas_storage_is_exactly_the_viewport_area() {
@@ -254,7 +250,7 @@ fn view(tasks: Vec<TaskRow>) -> View {
 }
 
 #[test]
-fn role_aliases_share_one_card_even_when_collapsed_or_filtered() {
+fn a_tasks_agents_have_cards_of_their_own_in_one_frame_even_when_collapsed_or_filtered() {
     let mut row = task("t1", &[]);
     row.status = "verifying".into();
     row.round = 2;
@@ -287,30 +283,46 @@ fn role_aliases_share_one_card_even_when_collapsed_or_filtered() {
         for viewport in [None, Some((78, 20))] {
             let graph =
                 Graph::new_with_viewport(&view, &Scope::default(), &collapsed, grouping, viewport);
-            assert_eq!(graph.nodes.len(), 5);
-            assert!(
-                graph
-                    .nodes
-                    .iter()
-                    .all(|node| !node.key.starts_with("verifier:"))
-            );
+            assert_eq!(graph.nodes.len(), 7);
+            let worker = graph.node("worker:t1").unwrap();
             let node = graph.node("verifier:t1").unwrap();
-            assert_eq!(node, graph.node("worker:t1").unwrap());
-            assert!(node.visible && node.collapsed);
-            let routes = graph.edge_routes(Relations::only(2));
-            assert_eq!(routes.len(), 1);
-            assert_eq!((routes[0].0, routes[0].1), ("worker:t1", "worker:t2"));
-            let mail = graph
+            assert_eq!(node.key, "verifier:t1");
+            assert_eq!(node.group, worker.group);
+            assert!(node.visible && node.collapsed && worker.collapsed);
+            // Messages run between the cards of the agents that sent them.
+            let mail: Vec<_> = graph
                 .edges
                 .iter()
-                .find(|edge| matches!(edge.kind, Kind::Mail { .. }))
-                .unwrap();
-            assert_eq!(mail.label.as_deref(), Some("M✉3"));
-            assert_eq!(mail.kind, Kind::Mail { recent: true });
+                .filter(|edge| matches!(edge.kind, Kind::Mail { .. }))
+                .map(|edge| {
+                    (
+                        edge.from.as_str(),
+                        edge.to.as_str(),
+                        edge.label.as_deref().unwrap_or_default(),
+                        edge.kind,
+                    )
+                })
+                .collect();
+            assert!(mail.contains(&(
+                "verifier:t1",
+                "worker:t2",
+                "M✉1",
+                Kind::Mail { recent: true }
+            )));
+            assert!(mail.contains(&(
+                "worker:t1",
+                "verifier:t2",
+                "M✉2",
+                Kind::Mail { recent: false }
+            )));
+            assert_eq!(graph.edge_routes(Relations::only(2)).len(), mail.len());
             let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, HEIGHT);
             graph.render(&view, &mut canvas, Relations::all(), "verifier:t1");
             let text = canvas.lines().join("\n");
-            assert!(text.contains("verifier r2") && text.contains("checking r2"));
+            assert!(
+                text.contains("verifier") && text.contains("checking r2"),
+                "{text}"
+            );
             assert!(!text.contains("Execute") && !text.contains("Validate"));
             for query in ["verifier:t1", "roundtrips", "checking r2"] {
                 let filtered =
@@ -339,8 +351,7 @@ fn role_aliases_share_one_card_even_when_collapsed_or_filtered() {
                 ..Default::default()
             },
         );
-        assert_eq!(health(&view, "worker:t1"), Health::Problem);
-        assert_eq!(health(&view, "verifier:t1"), Health::Problem);
+        assert_eq!(health(&view, &format!("{role}:t1")), Health::Problem);
     }
 }
 
@@ -359,13 +370,23 @@ fn names_and_work_kinds_remain_visible_on_collapsed_cards() {
             let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
             graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
             let rows = canvas.lines();
-            if node.key == "worker:t1" {
-                assert!(rows[0].contains("Repair storage"), "{rows:?}");
-                assert!(rows[1].contains("- implementation"), "{rows:?}");
-            } else {
-                assert!(rows[1].contains("- orchestration"), "{rows:?}");
+            match node.key.as_str() {
+                "worker:t1" => {
+                    assert!(rows[0].contains("worker"), "{rows:?}");
+                    assert!(rows[1].contains("- implementation"), "{rows:?}");
+                }
+                "verifier:t1" => {
+                    assert!(rows[0].contains("verifier"), "{rows:?}");
+                    assert!(rows[1].contains("- verification"), "{rows:?}");
+                }
+                _ => assert!(rows[1].contains("- orchestration"), "{rows:?}"),
             }
         }
+        // The task's name is the title of its frame.
+        let frame = &graph.frames[0];
+        let mut canvas = Canvas::new_window(frame.x, frame.y, frame.width, 1);
+        graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
+        assert!(canvas.lines()[0].contains("Repair storage"));
     }
 }
 
@@ -414,7 +435,8 @@ fn summaries_are_bounded_and_truncated_at_grapheme_boundaries() {
     assert_eq!(graph.node("worker:t1").unwrap().height, HEIGHT);
     let worker = graph.node("worker:t1").unwrap();
     let verifier = graph.node("verifier:t1").unwrap();
-    assert_eq!(verifier.key, worker.key);
+    assert_ne!(verifier.key, worker.key);
+    assert_eq!(verifier.group, worker.group);
     for (_, _, path) in graph.edge_routes(Relations::all()) {
         assert!(
             graph
@@ -560,7 +582,12 @@ fn health_marks_problems_and_cards_have_no_frame() {
     assert_eq!(health(&view, "verifier:t1"), Health::Problem);
     assert_eq!(health(&view, "worker:t2"), Health::Waiting);
     assert_eq!(health(&view, "worker:t3"), Health::Working);
+    // The verifier waits until the worker hands it a round.
+    assert_eq!(health(&view, "verifier:t3"), Health::Idle);
+    view.tasks[2].status = "verifying".into();
+    assert_eq!(health(&view, "worker:t3"), Health::Done);
     assert_eq!(health(&view, "verifier:t3"), Health::Working);
+    view.tasks[2].status = "working".into();
     assert_eq!(health(&view, "worker:t4"), Health::Done);
     // An orchestrator turn that failed is a problem until it runs again.
     view.agents.insert(
@@ -603,19 +630,62 @@ fn working_cards_animate_with_the_tick_and_stay_ascii_safe() {
 }
 
 #[test]
-fn tasks_sit_in_columns_by_dependency_depth_with_one_card_per_task() {
-    let view = view(vec![task("t1", &[]), task("t2", &["t1"]), task("t3", &[])]);
+fn a_task_is_a_framed_unit_and_units_stand_in_rows_by_dependency_depth() {
+    let mut options = task("t2-options", &["t1"]);
+    options.kind = "options".into();
+    let view = view(vec![
+        task("t1", &[]),
+        task("t2", &["t1", "t2-options"]),
+        task("t3", &[]),
+        options,
+    ]);
     let graph = Graph::new(&view);
-    let at = |key: &str| {
-        let node = graph.node(key).unwrap();
-        (node.x, node.y)
-    };
-    let first = ADMIN_HEIGHT + GAP_Y;
-    assert_eq!(at("worker:t1"), (column_x(FULL, 0), first));
-    assert_eq!(at("verifier:t1"), at("worker:t1"));
-    assert_eq!(at("worker:t3"), (column_x(FULL, 0), first + row_y(FULL, 1)));
-    assert_eq!(at("worker:t2"), (column_x(FULL, 1), first));
-    assert_eq!(at(ORCHESTRATOR), (column_x(FULL, 1), 0));
+    let node = |key: &str| graph.node(key).unwrap();
+    let frame = |id: &str| graph.frames.iter().find(|frame| frame.task == id).unwrap();
+    // Worker and verifier stand side by side in their task's frame.
+    let (worker, verifier) = (node("worker:t1"), node("verifier:t1"));
+    assert_eq!(worker.y, verifier.y);
+    assert_eq!(worker.right() + GAP_X, verifier.x);
+    assert_eq!(worker.group.as_deref(), Some("task:t1"));
+    let t1 = frame("t1");
+    assert!(t1.x < worker.x && verifier.right() < t1.x + t1.width);
+    // Independent tasks share a row; a dependent one stands below them,
+    // its options card first in its frame.
+    assert_eq!(frame("t3").y, t1.y);
+    let t2 = frame("t2");
+    assert!(t2.y >= t1.y + t1.height + GAP_Y);
+    assert_eq!(node("worker:t2-options").group.as_deref(), Some("task:t2"));
+    assert_eq!(
+        node("worker:t2-options").right() + GAP_X,
+        node("worker:t2").x
+    );
+    assert!(graph.frames.iter().all(|frame| frame.task != "t2-options"));
+    assert!(
+        graph
+            .node("verifier:t2-options")
+            .is_some_and(|card| card.key == "worker:t2-options")
+    );
+    // One dependency runs from frame to frame, the options task's own copy
+    // of it folded into its unit.
+    let between: Vec<_> = graph
+        .edge_routes(Relations::only(0))
+        .into_iter()
+        .filter(|(from, _, _)| from.starts_with("task:"))
+        .collect();
+    assert_eq!(between.len(), 1);
+    let (from, to, path) = &between[0];
+    assert_eq!((*from, *to), ("task:t1", "task:t2"));
+    assert_eq!(path.first().unwrap().1, t1.y + t1.height - 1);
+    assert_eq!(path.last().unwrap().1, t2.y);
+    assert!(admin_above(&graph, t1.y));
+}
+
+fn admin_above(graph: &Graph, top: u16) -> bool {
+    graph
+        .nodes
+        .iter()
+        .filter(|node| node.visible && is_admin(&node.key))
+        .all(|node| node.y + node.height < top)
 }
 
 #[test]
@@ -803,12 +873,20 @@ fn arrows_move_to_the_nearest_node_in_that_direction() {
     let view = view(vec![task("t1", &[]), task("t2", &["t1"]), task("t3", &[])]);
     let graph = Graph::new(&view);
     let go = |from: &str, dx, dy| graph.neighbour(from, dx, dy);
-    assert_eq!(go("worker:t1", 1, 0).as_deref(), Some("worker:t2"));
-    assert_eq!(go("worker:t1", 0, 1).as_deref(), Some("worker:t3"));
-    assert_eq!(go("verifier:t1", 0, 1).as_deref(), Some("worker:t3"));
-    assert_eq!(go("worker:t2", -1, 0).as_deref(), Some("worker:t1"));
-    assert_eq!(go(ORCHESTRATOR, 0, 1).as_deref(), Some("worker:t2"));
-    assert_eq!(go(PLAN_VERIFIER, -1, 0), None);
+    let task_of =
+        |key: Option<String>| key.and_then(|key| key.split_once(':').map(|(_, id)| id.to_owned()));
+    // Across a frame, then on to the next one in the row.
+    assert_eq!(go("worker:t1", 1, 0).as_deref(), Some("verifier:t1"));
+    assert_eq!(go("verifier:t1", 1, 0).as_deref(), Some("worker:t3"));
+    assert_eq!(go("worker:t3", -1, 0).as_deref(), Some("verifier:t1"));
+    assert_eq!(go("worker:t1", -1, 0), None);
+    // Down to the dependent row, and back up.
+    assert_eq!(task_of(go("verifier:t1", 0, 1)).as_deref(), Some("t2"));
+    assert!(matches!(
+        task_of(go("worker:t2", 0, -1)).as_deref(),
+        Some("t1" | "t3")
+    ));
+    assert!(go(ORCHESTRATOR, 0, 1).is_some_and(|key| key.contains(':')));
 }
 
 #[test]
@@ -825,27 +903,45 @@ fn edges_join_boxes_without_crossing_them() {
     let mut canvas = Canvas::new(graph.width, graph.height);
     graph.render(&view, &mut canvas, Relations::all(), "worker:t2");
     let lines = canvas.lines();
+    let chars = |y: u16| lines[usize::from(y)].chars().collect::<Vec<char>>();
     let worker = graph.node("worker:t1").unwrap();
+    let verifier = graph.node("verifier:t1").unwrap();
     let next = graph.node("worker:t2").unwrap();
-    let row = &lines[usize::from(worker.mid_y())];
-    let chars: Vec<char> = row.chars().collect();
-    // t1 → t2 straight across the gap, ending in an arrow at t2's border.
-    assert_eq!(chars[usize::from(next.x - 1)], '▶', "{row}");
-    assert_eq!(chars[usize::from(worker.right())], '─', "{row}");
-    assert_eq!(chars[usize::from(next.x)], '█', "the selected card's bar");
-    assert!(lines[usize::from(worker.y)].contains("Task t1"));
+    // Worker → verifier straight across the gap in their frame.
+    let row = chars(worker.y + 1);
+    assert_eq!(row[usize::from(verifier.x - 1)], '▶', "{row:?}");
+    assert_eq!(row[usize::from(worker.right())], '─', "{row:?}");
+    assert_eq!(
+        chars(next.y)[usize::from(next.x)],
+        '█',
+        "the selected card's bar"
+    );
+    // t1's frame → t2's frame, ending in an arrow on t2's top border.
+    let (top, bottom) = (&graph.frames[1], &graph.frames[0]);
+    assert_eq!((bottom.task.as_str(), top.task.as_str()), ("t1", "t2"));
+    assert!(
+        chars(top.y).contains(&'▼'),
+        "{:?}",
+        lines[usize::from(top.y)]
+    );
+    assert!(chars(bottom.y + bottom.height - 1).contains(&'┬'));
+    assert!(lines[usize::from(bottom.y)].contains("Task t1"));
     // A message between them is counted beside the source.
-    assert!(lines[usize::from(worker.mid_y() - 1)].contains("✉2"));
+    assert!(lines.join("\n").contains("✉2"));
     assert!(lines[usize::from(worker.y + 2)].contains("proposed"));
 }
 
 #[test]
 fn all_includes_every_supervision_edge() {
-    let view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
+    let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
+    view.agents
+        .insert(super::super::super::PLANNER.into(), Default::default());
     let graph = Graph::new(&view);
     let all = graph.edge_routes(Relations::all());
+    // The orchestrator supervises the session's agents; tasks stand in
+    // frames of their own.
     let supervision = graph.edge_routes(Relations::only(3));
-    assert_eq!(supervision.len(), 2);
+    assert_eq!(supervision.len(), 1);
     for edge in &supervision {
         assert!(all.contains(edge), "All must include {edge:?}");
     }
@@ -906,11 +1002,13 @@ fn finished_cards_fold_to_their_identity_and_their_row_shrinks() {
     );
     assert!(done.collapsed && done.height == FOLDED_HEIGHT);
     assert!(!next.collapsed && next.height > FOLDED_HEIGHT);
+    let (above, below) = (&graph.frames[0], &graph.frames[1]);
     assert_eq!(
-        next.y,
-        done.y + FOLDED_HEIGHT + GAP_Y,
+        above.height,
+        FOLDED_HEIGHT + 2,
         "the folded row takes only its height"
     );
+    assert_eq!(below.y, above.y + above.height + GAP_Y);
     // z unfolds a finished card and folds a running one.
     let toggled = ["t1".to_owned(), "t2".to_owned()].into_iter().collect();
     let graph = Graph::new_with_viewport(

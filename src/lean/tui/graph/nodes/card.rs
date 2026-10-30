@@ -12,6 +12,7 @@ struct Card<'a> {
     node: &'a Node,
     theme: &'a Theme,
     task: Option<&'a TaskRow>,
+    role: Option<Role>,
     health: Health,
     fill: Style,
     accent: Style,
@@ -38,12 +39,6 @@ fn outside_viewport(canvas: &Canvas, node: &Node) -> bool {
         || node.y.saturating_add(node.height) <= canvas.origin_y
 }
 
-fn task_for<'a>(view: &'a View, node: &Node) -> Option<&'a TaskRow> {
-    node.key
-        .split_once(':')
-        .and_then(|(_, id)| view.tasks.iter().find(|task| task.id == id))
-}
-
 impl Card<'_> {
     fn new<'a>(
         view: &'a View,
@@ -52,13 +47,15 @@ impl Card<'_> {
         selected: bool,
         theme: &'a Theme,
     ) -> Card<'a> {
-        let task = task_for(view, node);
+        let card = task_card(view, &node.key);
+        let task = card.map(|(task, _)| task);
         Card {
             view,
             canvas,
             node,
             theme,
             task,
+            role: card.map(|(_, role)| role),
             health: health(view, &node.key),
             fill: if selected {
                 theme.raised()
@@ -122,11 +119,13 @@ impl Card<'_> {
             _ => self.accent,
         }
         .add_modifier(Modifier::BOLD);
-        let name = self
-            .task
-            .map(|task| clean(&task.title))
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| node_name(&self.node.key));
+        // The frame carries the task's title; a card names its agent.
+        let name = match self.role {
+            Some(Role::Worker) => "worker".to_owned(),
+            Some(Role::Verifier) => "verifier".to_owned(),
+            Some(Role::Pair) => "options".to_owned(),
+            None => node_name(&self.node.key),
+        };
         let title = card_title(&name, inner, self.node.collapsed);
         let (x, y) = (self.node.x, self.node.y);
         self.canvas.text(
@@ -163,7 +162,9 @@ impl Card<'_> {
 
     fn paint_provider(&mut self, inner: usize) {
         let kind = self.task.map_or("orchestration", |task| {
-            if task.kind.is_empty() {
+            if self.role == Some(Role::Verifier) {
+                "verification"
+            } else if task.kind.is_empty() {
                 "unknown"
             } else {
                 task.kind.as_str()
@@ -194,14 +195,23 @@ impl Card<'_> {
         );
     }
 
+    /// A shared options card keeps the verifier's state on a line of its
+    /// own; a verifier's card shows the coverage it has settled.
     fn paint_verifier(&mut self, inner: usize, tone: Style) {
         if let Some(task) = self.task {
             let coverage = task
                 .obligations
                 .as_ref()
-                .map(|_| format!(" · {}", taskinfo::coverage_short(task)))
-                .unwrap_or_default();
-            let text = format!("V: {}{coverage}", taskinfo::verifier_status(task));
+                .map(|_| taskinfo::coverage_short(task));
+            let text = match (self.role, coverage) {
+                (Some(Role::Pair), coverage) => format!(
+                    "V: {}{}",
+                    taskinfo::verifier_status(task),
+                    coverage.map_or_default(|coverage| format!(" · {coverage}"))
+                ),
+                (Some(Role::Verifier), Some(coverage)) => format!("coverage {coverage}"),
+                _ => return,
+            };
             self.canvas.text(
                 self.node.x + 2,
                 self.node.y + 3,
@@ -234,7 +244,7 @@ impl Card<'_> {
     }
 
     fn branch(&self) -> Option<String> {
-        let branch_key = branch_key(self.view, self.node, self.task);
+        let branch_key = branch_key(self.view, self.node, self.task, self.role);
         self.view
             .agents
             .get(&branch_key)
@@ -255,7 +265,10 @@ impl Card<'_> {
     }
 }
 
-fn branch_key(view: &View, node: &Node, task: Option<&TaskRow>) -> String {
+fn branch_key(view: &View, node: &Node, task: Option<&TaskRow>, role: Option<Role>) -> String {
+    if role != Some(Role::Pair) && task.is_some() {
+        return node.key.clone();
+    }
     if let Some(task) = task {
         format!(
             "{}:{}",

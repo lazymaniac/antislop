@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
     pub(in crate::lean::tui) fn graph_key(&mut self, key: KeyEvent) -> bool {
-        self.selected = graph::task_node_key(&self.selected);
+        self.selected = graph::card_key(&self.view, &self.selected);
         let graph = self.graph_for_key();
         if let Some(handled) = self.graph_scroll_key(key, &graph) {
             return handled;

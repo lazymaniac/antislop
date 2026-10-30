@@ -18,9 +18,18 @@ fn agent_items(view: &View) -> Vec<(String, Action)> {
             let task = node
                 .key
                 .split_once(':')
-                .and_then(|(_, id)| view.tasks.iter().find(|task| task.id == id));
+                .and_then(|(role, id)| Some((role, view.tasks.iter().find(|task| task.id == id)?)));
+            // A task's agents have cards of their own, an options task's
+            // two share one.
             let label = task
-                .map(|task| format!("{} task · {} · worker verifier", task.id, task.title))
+                .map(|(role, task)| {
+                    let role = if task.kind == "options" {
+                        "worker verifier"
+                    } else {
+                        role
+                    };
+                    format!("{} task · {} · {role}", task.id, task.title)
+                })
                 .unwrap_or_else(|| agent_name(&node.key));
             (label, Action::Select(node.key.clone()))
         })

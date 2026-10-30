@@ -44,8 +44,11 @@ An invalid or inaccessible project file reports an error instead of falling back
 Resolving a configuration creates nothing. The editor saves to the selected file;
 when using a shared global file, saving also affects future starts of other projects.
 
-Each task has one graph node for its worker and verifier; their runtime sessions
-remain separate. Overview shows each agent's own terminal: the provider's CLI,
+In the graph each task is a frame titled with the task, holding a card for its
+options agent (when the plan asks for options), its worker and its verifier,
+left to right; an options task's two agents share one card. Frames stand in
+rows by dependency depth, and each dependency runs from the bottom of one frame
+to the top of another. Every agent's runtime session remains separate. Overview shows each agent's own terminal: the provider's CLI,
 running in the daemon, which you can use as usual (`i` gives it the keyboard,
 `Ctrl+]` returns to antislop). An earlier round's session is opened on request
 with `o`, by resuming it. Use `m` for the complete task context.

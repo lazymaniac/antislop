@@ -5,9 +5,11 @@ use super::*;
 /// with details through taskinfo, and independent of the
 /// state word and the provider.
 pub(in crate::lean::tui::graph) fn activity_line(view: &View, key: &str) -> Option<String> {
-    let (_, id) = key.split_once(':')?;
-    let task = view.tasks.iter().find(|task| task.id == id)?;
-    taskinfo::task_activity(view, task)
+    match task_card(view, key)? {
+        (task, Role::Worker) => taskinfo::worker_activity(view, task),
+        (task, Role::Verifier) => taskinfo::verifier_activity(view, task),
+        (task, Role::Pair) => taskinfo::task_activity(view, task),
+    }
 }
 
 /// The same bounded, grapheme-safe text drives both layout and rendering.

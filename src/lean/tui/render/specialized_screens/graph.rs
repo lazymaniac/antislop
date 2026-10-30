@@ -2,7 +2,7 @@ use super::super::super::*;
 
 impl App {
     pub(super) fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
-        self.selected = graph::task_node_key(&self.selected);
+        self.selected = graph::card_key(&self.view, &self.selected);
         let (inner, now_area, progress) = self.graph_areas(frame, area);
         let graph = self.graph_layout_cache.get(
             &self.view,

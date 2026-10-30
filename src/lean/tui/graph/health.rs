@@ -1,5 +1,4 @@
 use super::*;
-use crate::lean::tui::view::TaskRow;
 
 mod cards;
 pub(super) use cards::{activity_line, card_lines, effect_lines, fit_lines};
@@ -36,14 +35,65 @@ impl Health {
 }
 
 pub fn health(view: &View, key: &str) -> Health {
-    key.split_once(':')
-        .map_or_else(|| admin_health(view, key), |(_, id)| task_health(view, id))
+    match task_card(view, key) {
+        Some((task, Role::Worker)) => worker_health(view, task),
+        Some((task, Role::Verifier)) => verifier_health(view, task),
+        Some((task, Role::Pair)) => task_health(view, task),
+        None if key.contains(':') => Health::Idle,
+        None => admin_health(view, key),
+    }
 }
 
-fn task_health(view: &View, id: &str) -> Health {
-    let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
-        return Health::Idle;
-    };
+/// Whether the agent runs a turn, and whether its last one went wrong.
+fn agent_flags(view: &View, key: &str) -> (bool, bool) {
+    view.agents.get(key).map_or((false, false), |agent| {
+        (
+            agent.running,
+            agent.activity.starts_with('✗') || agent.activity.starts_with('⚠'),
+        )
+    })
+}
+
+/// The worker is done once its round is handed to the verifier.
+fn worker_health(view: &View, task: &TaskRow) -> Health {
+    let (running, problem) = agent_flags(view, &format!("worker:{}", task.id));
+    if problem
+        || matches!(
+            task.status.as_str(),
+            "failed" | "coordinating" | "needs_user"
+        )
+    {
+        return Health::Problem;
+    }
+    if running {
+        return Health::Working;
+    }
+    match task.status.as_str() {
+        "waiting" => Health::Waiting,
+        "working" => Health::Working,
+        "approved" | "verifying" => Health::Done,
+        _ => Health::Idle,
+    }
+}
+
+/// The verifier waits for the worker until a round reaches it.
+fn verifier_health(view: &View, task: &TaskRow) -> Health {
+    let (running, problem) = agent_flags(view, &format!("verifier:{}", task.id));
+    if problem || matches!(task.status.as_str(), "failed" | "needs_user") {
+        return Health::Problem;
+    }
+    if running {
+        return Health::Working;
+    }
+    match task.status.as_str() {
+        "verifying" => Health::Working,
+        "approved" => Health::Done,
+        _ => Health::Idle,
+    }
+}
+
+fn task_health(view: &View, task: &TaskRow) -> Health {
+    let id = task.id.as_str();
     if task_problem(view, task, id) {
         return Health::Problem;
     }
@@ -99,8 +149,8 @@ fn admin_health(view: &View, key: &str) -> Health {
 /// task cards this is the state word, its round and the provider, read
 /// through the shared interpretation (taskinfo); what the agent is doing
 /// and why it waits have their own line and never crowd the state out.
-/// The CLI that runs this card's agent: the verifier's while a task is
-/// verified, else the worker's, else whichever ran before.
+/// The CLI that runs this card's agent; on a shared options card the
+/// verifier's while it checks, else the worker's, else whichever ran before.
 pub(super) fn provider_of<'a>(view: &'a View, key: &str) -> Option<&'a str> {
     let provider = |key: &str| {
         view.agents
@@ -108,6 +158,11 @@ pub(super) fn provider_of<'a>(view: &'a View, key: &str) -> Option<&'a str> {
             .map(|agent| agent.provider.trim())
             .filter(|provider| !provider.is_empty())
     };
+    match task_card(view, key) {
+        Some((_, Role::Worker | Role::Verifier)) => return provider(key),
+        None if key.contains(':') => return None,
+        _ => {}
+    }
     if let Some((_, id)) = key.split_once(':') {
         let task = view.tasks.iter().find(|task| task.id == id)?;
         let (first, second) = if task.status == "verifying" {
@@ -121,11 +176,12 @@ pub(super) fn provider_of<'a>(view: &'a View, key: &str) -> Option<&'a str> {
     provider(current_round(view, &members).unwrap_or(key))
 }
 
-/// Every provider a card's agents run on: a task's worker and verifier.
+/// Every provider a card's agents run on: both of a shared options card.
 pub(super) fn providers_of<'a>(view: &'a View, key: &str) -> Vec<&'a str> {
-    let Some((_, id)) = key.split_once(':') else {
+    let Some((task, Role::Pair)) = task_card(view, key) else {
         return provider_of(view, key).into_iter().collect();
     };
+    let id = task.id.as_str();
     ["worker", "verifier"]
         .iter()
         .filter_map(|role| view.agents.get(&format!("{role}:{id}")))
@@ -148,31 +204,17 @@ pub fn providers(view: &View) -> Vec<String> {
 }
 
 pub(super) fn describe(view: &View, key: &str) -> String {
-    key.split_once(':').map_or_else(
-        || describe_agent(view, key),
-        |(_, id)| describe_task(view, id),
-    )
-}
-
-fn describe_task(view: &View, id: &str) -> String {
-    let Some(task) = view.tasks.iter().find(|task| task.id == id) else {
-        return "?".into();
-    };
-    let status = if task.status == "verifying" {
-        format!("verifier r{}", task.round)
-    } else {
-        format!("{} · worker", taskinfo::worker_status(task))
-    };
-    let role = if task.status == "verifying" {
-        "verifier"
-    } else {
-        "worker"
-    };
-    let provider = view
-        .agents
-        .get(&format!("{role}:{id}"))
-        .map(|agent| agent.provider.as_str());
-    taskinfo::with_provider(&status, provider)
+    let provider = provider_of(view, key);
+    match task_card(view, key) {
+        Some((task, Role::Worker | Role::Pair)) => {
+            taskinfo::with_provider(&taskinfo::worker_status(task), provider)
+        }
+        Some((task, Role::Verifier)) => {
+            taskinfo::with_provider(&taskinfo::verifier_status(task), provider)
+        }
+        None if key.contains(':') => "?".into(),
+        None => describe_agent(view, key),
+    }
 }
 
 fn describe_agent(view: &View, key: &str) -> String {

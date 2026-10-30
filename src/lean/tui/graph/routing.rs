@@ -2,13 +2,39 @@ use super::nodes::draw_node;
 use super::*;
 
 impl Graph {
+    /// The card of `key`; a verifier sharing its worker's card finds that.
     pub fn node(&self, key: &str) -> Option<&Node> {
-        self.nodes.iter().find(|node| {
-            node.key == key
-                || crate::lean::task_role(key).is_some_and(|(id, verifier)| {
-                    verifier && node.key.strip_prefix("worker:") == Some(id)
-                })
+        self.nodes.iter().find(|node| node.key == key).or_else(|| {
+            let (id, verifier) = crate::lean::task_role(key)?;
+            self.nodes
+                .iter()
+                .find(|node| verifier && node.key.strip_prefix("worker:") == Some(id))
         })
+    }
+
+    /// The frame of `group`, `task:{id}`.
+    fn frame(&self, group: &str) -> Option<&Frame> {
+        self.frames.iter().find(|frame| frame.key == group)
+    }
+
+    /// Where an edge runs, if both its ends are shown: its own path when
+    /// the layout laid one, else a route between its two cards.
+    fn edge_path(&self, edge: &Edge, nodes: &HashMap<&str, &Node>) -> Option<Vec<(u16, u16)>> {
+        let shown = |key: &str| {
+            nodes
+                .get(key)
+                .map(|node| node.visible)
+                .unwrap_or_else(|| self.frame(key).is_some_and(|frame| frame.visible))
+        };
+        if !shown(&edge.from) || !shown(&edge.to) {
+            return None;
+        }
+        if let Some(path) = &edge.path {
+            return Some(path.clone());
+        }
+        let from = nodes.get(edge.from.as_str())?;
+        let to = nodes.get(edge.to.as_str())?;
+        Some(Self::route(from, to))
     }
 
     /// The nearest node from `key` in a direction (dx, dy), each -1, 0 or 1.
@@ -125,12 +151,8 @@ impl Graph {
             .iter()
             .filter(|edge| relations.shows(edge, None))
             .filter_map(|edge| {
-                let from = nodes.get(edge.from.as_str())?;
-                let to = nodes.get(edge.to.as_str())?;
-                if !from.visible || !to.visible {
-                    return None;
-                }
-                Some((edge.from.as_str(), edge.to.as_str(), Self::route(from, to)))
+                let path = self.edge_path(edge, &nodes)?;
+                Some((edge.from.as_str(), edge.to.as_str(), path))
             })
             .collect()
     }
@@ -195,7 +217,8 @@ impl Graph {
             .iter()
             .map(|node| (node.key.as_str(), node))
             .collect();
-        let selected = task_node_key(selected);
+        let selected = card_key(view, selected);
+        self.render_frames(view, canvas, &selected, theme);
         self.render_edges(canvas, relations, &selected, &nodes);
         self.render_nodes(view, canvas, selected, theme, tick);
     }
@@ -209,20 +232,63 @@ impl Graph {
     ) {
         let shown = |edge: &&Edge| relations.shows(edge, Some(selected));
         for edge in self.edges.iter().filter(shown) {
-            let Some((from, to)) = nodes
-                .get(edge.from.as_str())
-                .zip(nodes.get(edge.to.as_str()))
-            else {
-                continue;
-            };
-            if from.visible && to.visible {
-                self.render_edge(canvas, edge, from, to);
+            if let Some(path) = self.edge_path(edge, nodes) {
+                self.render_edge(canvas, edge, &path);
             }
         }
     }
 
-    fn render_edge(&self, canvas: &mut Canvas, edge: &Edge, from: &Node, to: &Node) {
-        let path = Self::route(from, to);
+    /// Each task's frame, titled with the task and its state; the frame
+    /// around the selected card stands out.
+    fn render_frames(&self, view: &View, canvas: &mut Canvas, selected: &str, theme: &Theme) {
+        let group = self
+            .nodes
+            .iter()
+            .find(|node| node.key == selected)
+            .and_then(|node| node.group.as_deref());
+        for frame in self.frames.iter().filter(|frame| frame.visible) {
+            let style = if group == Some(frame.key.as_str()) {
+                theme.accent().add_modifier(Modifier::BOLD)
+            } else {
+                theme.faint()
+            };
+            let (right, bottom) = (
+                frame.x + frame.width - 1,
+                frame.y + frame.height.saturating_sub(1),
+            );
+            canvas.path(
+                &[
+                    (frame.x, frame.y),
+                    (right, frame.y),
+                    (right, bottom),
+                    (frame.x, bottom),
+                    (frame.x, frame.y),
+                ],
+                style,
+            );
+            let Some(task) = view.tasks.iter().find(|task| task.id == frame.task) else {
+                continue;
+            };
+            let (mark, _) = health::mark(&task.status);
+            let title = format!(" {mark} {} ", clean(&task.title));
+            let room = usize::from(frame.width.saturating_sub(4));
+            canvas.text(
+                frame.x + 2,
+                frame.y,
+                &truncate(&title, room),
+                theme
+                    .status(&task.status)
+                    .patch(if group == Some(frame.key.as_str()) {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    }),
+            );
+        }
+    }
+
+    fn render_edge(&self, canvas: &mut Canvas, edge: &Edge, path: &[(u16, u16)]) {
+        let path = path.to_vec();
         canvas.path(&path, edge.kind.style());
         if let Some(&(x, y)) = path.last() {
             canvas.put(x, y, Self::arrow(&path), edge.kind.style());

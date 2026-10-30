@@ -1,16 +1,14 @@
 use super::super::*;
-use super::{columns, edges, geometry, placement};
+use super::{edges, units};
 
 pub(super) struct Builder<'a> {
     pub(super) view: &'a View,
     pub(super) graph: Graph,
     pub(super) size: Size,
     pub(super) index: HashMap<&'a str, usize>,
-    pub(super) columns: Vec<u16>,
     pub(super) admin: Vec<(&'a str, bool)>,
     pub(super) extra_agents: Vec<&'a str>,
     pub(super) viewport: Option<(u16, u16)>,
-    pub(super) placed_tasks: std::collections::HashSet<usize>,
 }
 
 impl<'a> Builder<'a> {
@@ -24,7 +22,6 @@ impl<'a> Builder<'a> {
         let size = Size::fit(viewport);
         let graph = empty_graph(scope, collapsed, grouping);
         let index = task_index(view);
-        let columns = columns::task_columns(view, &index, grouping);
         let extra_agents = extra_agents(view);
         let admin = admin_agents(view, &extra_agents, &graph);
         Self {
@@ -32,20 +29,15 @@ impl<'a> Builder<'a> {
             graph,
             size,
             index,
-            columns,
             admin,
             extra_agents,
             viewport,
-            placed_tasks: std::collections::HashSet::new(),
         }
     }
 
     pub(super) fn build(mut self) -> Graph {
-        let visible = placement::visible_tasks(&self);
-        placement::place_nodes(&mut self, visible);
-        placement::append_hidden_tasks(&mut self);
-        geometry::center_and_stack(&mut self.graph, self.size, self.viewport);
-        edges::add_edges(self.view, &mut self.graph, &self.index, &self.extra_agents);
+        units::place(&mut self);
+        edges::add_edges(self.view, &mut self.graph, &self.extra_agents);
         set_graph_bounds(&mut self.graph);
         self.graph
     }
@@ -62,6 +54,7 @@ fn empty_graph(
 ) -> Graph {
     Graph {
         nodes: Vec::new(),
+        frames: Vec::new(),
         edges: Vec::new(),
         width: 0,
         height: 0,
@@ -164,20 +157,22 @@ fn query_matches(view: &View, query: Option<&str>, key: &str) -> bool {
         || task_matches(view, key, &query)
 }
 
+/// The layout already set the height, which counts the lines of edges
+/// below the last row.
 fn set_graph_bounds(graph: &mut Graph) {
-    graph.width = graph
+    let nodes = graph
         .nodes
         .iter()
         .filter(|node| node.visible)
-        .map(Node::right)
-        .max()
-        .unwrap_or(0)
-        + GAP_X;
-    graph.height = graph
-        .nodes
+        .map(|node| (node.right(), node.y.saturating_add(node.height)));
+    let frames = graph
+        .frames
         .iter()
-        .filter(|node| node.visible)
-        .map(|node| node.y.saturating_add(node.height))
-        .max()
-        .unwrap_or(0);
+        .filter(|frame| frame.visible)
+        .map(|frame| (frame.x + frame.width, frame.y.saturating_add(frame.height)));
+    let (right, bottom) = nodes.chain(frames).fold((0, 0), |(right, bottom), (r, b)| {
+        (right.max(r), bottom.max(b))
+    });
+    graph.width = right + GAP_X;
+    graph.height = graph.height.max(bottom);
 }

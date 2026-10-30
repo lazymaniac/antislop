@@ -26,6 +26,8 @@ pub(super) fn card_title(name: &str, inner: usize, collapsed: bool) -> String {
     }
 }
 
+/// A card's summary: its own agent's, except that a shared options card
+/// splits it between the worker's and the verifier's.
 pub(super) fn summary_lines(
     view: &View,
     key: &str,
@@ -34,9 +36,11 @@ pub(super) fn summary_lines(
     max_lines: usize,
 ) -> Vec<String> {
     if let Some(task) = task.filter(|task| {
-        task.verifier_summary
-            .as_ref()
-            .is_some_and(|summary| !clean(summary).trim().is_empty())
+        super::super::super::is_pair(task)
+            && task
+                .verifier_summary
+                .as_ref()
+                .is_some_and(|summary| !clean(summary).trim().is_empty())
     }) {
         verifier_summary(task, width, max_lines)
     } else {

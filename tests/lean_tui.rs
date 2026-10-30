@@ -238,7 +238,8 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
         let graph = Graph::new(&view);
         let worker = graph.node("worker:t1").unwrap();
         let verifier = graph.node("verifier:t1").unwrap();
-        assert_eq!(verifier.key, worker.key);
+        assert_ne!(verifier.key, worker.key);
+        assert_eq!(verifier.group, worker.group);
         for key in ["worker:t1", "verifier:t1"] {
             let node = graph.node(key).unwrap();
             assert_eq!(
@@ -255,8 +256,12 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
             );
             assert!(!text.contains("src/file.rs"));
             // The state line alone holds state, and the running role's
-            // doing text has a line of its own.
-            assert!(text.contains("doing: exec cargo check"), "{text}");
+            // doing text has a line of its own on that role's card.
+            assert_eq!(
+                text.contains("doing: exec cargo check"),
+                key.starts_with(active_role),
+                "{text}"
+            );
             if key == "worker:t1" {
                 assert!(text.contains("Improve storage"), "{text}");
                 assert!(text.contains("👩‍💻") && text.contains("e\u{301}"), "{text}");
@@ -318,7 +323,20 @@ fn graph_scrolls_through_many_short_cards() {
     }
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(app.offset.1 > start);
-    assert_eq!(app.selected, "worker:t9");
+    let last = Graph::new_with_viewport(
+        &app.view,
+        &Default::default(),
+        &Default::default(),
+        Default::default(),
+        app.graph_viewport,
+    );
+    let bottom = last.nodes.iter().map(|node| node.y).max().unwrap();
+    assert_eq!(
+        last.node(&app.selected).unwrap().y,
+        bottom,
+        "{}",
+        app.selected
+    );
     let text: String = terminal
         .backend()
         .buffer()
@@ -3032,14 +3050,15 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     let w3 = node_pos(&g1, "worker:t3");
     let w4 = node_pos(&g1, "worker:t4");
 
-    // Worker and verifier alignment: verifier sits directly below worker
-    assert_eq!(w1.0, v1.0);
-    assert_eq!(v1, w1);
+    // Worker and verifier stand side by side in their task's frame
+    assert_eq!(w1.1, v1.1);
+    assert!(w1.0 < v1.0);
 
-    // Columns advance with dependency depth: w1.0 < w2.0 <= w4.0
-    assert!(w1.0 < w2.0);
-    assert_eq!(w2.0, w3.0);
-    assert!(w2.0 < w4.0);
+    // Rows advance with dependency depth: t1 above t2 and t3, which share
+    // a row above t4
+    assert!(w1.1 < w2.1);
+    assert_eq!(w2.1, w3.1);
+    assert!(w2.1 < w4.1);
 
     // Fixed supervision positions
     assert_eq!(node_pos(&g1, PLAN_VERIFIER).1, 0);
@@ -3065,7 +3084,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     let mut large_view = View::default();
     large_view.tasks = large_tasks;
     let large_graph = Graph::new(&large_view);
-    assert_eq!(large_graph.nodes.len(), 3 + 500);
+    assert_eq!(large_graph.nodes.len(), 3 + 2 * 500);
     assert!(large_graph.width > 0);
     assert!(large_graph.height > 0);
 
@@ -3103,7 +3122,7 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
     let mut cyclic_view = View::default();
     cyclic_view.tasks = cyclic_tasks;
     let cyclic_graph = Graph::new(&cyclic_view);
-    assert_eq!(cyclic_graph.nodes.len(), 3 + 4);
+    assert_eq!(cyclic_graph.nodes.len(), 3 + 2 * 4);
     for node in &cyclic_graph.nodes {
         assert!(node.visible);
     }
@@ -3146,12 +3165,13 @@ fn test_spatial_graph_stable_positions_large_and_cyclic_plans() {
         GroupingMode::Status,
     );
 
+    // Independent tasks share a row; grouped by state, each state has one.
     assert_eq!(
-        dep_graph.node("worker:s1").unwrap().x,
-        dep_graph.node("worker:s2").unwrap().x
+        dep_graph.node("worker:s1").unwrap().y,
+        dep_graph.node("worker:s2").unwrap().y
     );
-    assert!(stat_graph.node("worker:s1").unwrap().x < stat_graph.node("worker:s2").unwrap().x);
-    assert!(stat_graph.node("worker:s2").unwrap().x < stat_graph.node("worker:s3").unwrap().x);
+    assert!(stat_graph.node("worker:s1").unwrap().y < stat_graph.node("worker:s2").unwrap().y);
+    assert!(stat_graph.node("worker:s2").unwrap().y < stat_graph.node("worker:s3").unwrap().y);
 }
 
 #[test]
@@ -4013,7 +4033,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
         GroupingMode::Dependency,
         Some((92, 20)),
     );
-    assert_eq!(adaptive_cycle.nodes.len(), 3 + 2);
+    assert_eq!(adaptive_cycle.nodes.len(), 3 + 2 * 2);
 
     // 5. Compaction after collapsing and filtering
     let mut collapsed = std::collections::HashSet::new();
@@ -4139,7 +4159,7 @@ fn test_adaptive_graph_collision_and_routing_safety() {
 }
 
 #[test]
-fn task_card_mouse_selection_uses_one_identity_for_both_phases() {
+fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
     use antislop::lean::tui::{graph::Graph, view::TaskRow};
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let mut app = App::test_app();
@@ -4175,15 +4195,15 @@ fn task_card_mouse_selection_uses_one_identity_for_both_phases() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(
-        app.selected, "worker:t2",
-        "clicking verifier state selects its task"
+        app.selected, "verifier:t2",
+        "clicking the verifier's card selects the verifier"
     );
     app.toggle_selected_collapse();
-    app.select_node("verifier:t2".into());
+    app.select_node("worker:t2".into());
     assert_eq!(app.selected, "worker:t2");
     assert!(
         app.graph_collapsed.contains("t2"),
-        "role alias preserves collapse"
+        "folding one agent's card folds its task"
     );
     terminal.draw(|frame| app.draw(frame)).unwrap();
     assert!(app.graph_collapsed.contains("t2"));
@@ -4334,72 +4354,6 @@ fn test_canvas_memory_bounded_for_large_graphs() {
 }
 
 #[test]
-fn test_adaptive_graph_non_adjacent_same_column_bypass_routing() {
-    use antislop::lean::tui::graph::{Graph, GroupingMode, Relations};
-    use antislop::lean::tui::view::{ORCHESTRATOR, TaskRow, View};
-
-    // At 78 columns two cards fit side by side. Row 0 holds the plan verifier
-    // and the orchestrator, row 1 the auditor, then the workers wrap two per row:
-    //    worker:t1 worker:t2 / worker:t3 worker:t4.
-    // The orchestrator and worker:t4 share a column with worker:t2 between them.
-    let mut view = View::default();
-    view.tasks = (1..=4)
-        .map(|i| TaskRow {
-            id: format!("t{i}"),
-            title: format!("T{i}"),
-            ..TaskRow::default()
-        })
-        .collect();
-
-    let graph = Graph::new_with_viewport(
-        &view,
-        &Scope::default(),
-        &Default::default(),
-        GroupingMode::Dependency,
-        Some((92, 20)),
-    );
-
-    let orch = graph.node(ORCHESTRATOR).expect("orchestrator present");
-    let w2 = graph.node("worker:t2").expect("worker:t2 present");
-    let w4 = graph.node("worker:t4").expect("worker:t4 present");
-
-    assert_eq!(orch.x, w2.x, "Orchestrator and worker:t2 in same column");
-    assert_eq!(orch.x, w4.x, "Orchestrator and worker:t4 in same column");
-    assert_eq!(orch.y, 0);
-    assert!(orch.y < w2.y && w2.y < w4.y);
-
-    // Supervision edge route: ORCHESTRATOR -> worker:t4
-    let sup_routes = graph.edge_routes(Relations::only(3));
-    let orch_to_w4 = sup_routes
-        .iter()
-        .find(|(from, to, _)| *from == ORCHESTRATOR && *to == "worker:t4")
-        .expect("supervision edge ORCHESTRATOR -> worker:t4 exists");
-
-    let path = &orch_to_w4.2;
-    // Must bypass worker:t2 via side corridor instead of passing straight through it
-    assert!(
-        !Graph::route_intersects_card(path, w2),
-        "Supervision edge must NOT intersect worker:t2!"
-    );
-    assert!(
-        !Graph::route_intersects_card(path, orch),
-        "Supervision edge must NOT intersect Orchestrator interior!"
-    );
-    assert!(
-        !Graph::route_intersects_card(path, w4),
-        "Supervision edge must NOT intersect worker:t4 interior!"
-    );
-
-    // Check specific path points: corridor must run at from.right() + GAP_X / 2
-    let half = 6 / 2;
-    let expected_lane = orch.x + orch.width + half;
-    assert_eq!(path[0], (orch.x + orch.width, orch.y + orch.height / 2));
-    assert_eq!(path[1], (expected_lane, orch.y + orch.height / 2));
-    assert_eq!(path[2], (expected_lane, w4.y + w4.height / 2));
-    assert_eq!(path[3], (w4.x + w4.width, w4.y + w4.height / 2));
-}
-
-#[test]
 fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
     use antislop::lean::tui::graph::{Graph, GroupingMode};
     use antislop::lean::tui::view::{AUDITOR, ORCHESTRATOR, PLAN_VERIFIER, TaskRow, View};
@@ -4447,11 +4401,14 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
     let w1 = filtered_graph.node("worker:t1").unwrap();
     assert!(w1.visible);
     assert!(w1.x >= 3, "Column 0 used (centered when there is room)");
-    assert_eq!(w1.y, 0, "Compacted to row 0 when admin nodes hidden!");
+    assert_eq!(
+        w1.y, 1,
+        "Compacted to row 0, inside its frame, when admin nodes hidden!"
+    );
 
     let v1 = filtered_graph.node("verifier:t1").unwrap();
     assert!(v1.visible);
-    assert_eq!(v1.y, w1.y, "Verifier address resolves to the task card");
+    assert_eq!(v1.y, w1.y, "The verifier stands beside its worker");
 
     // 2. Column selection according to visible tasks:
     // Only "task 3" visible (raw topological depth was 2).
@@ -4470,7 +4427,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
         "Task 3 compacted to column 0 (no empty preceding columns)!"
     );
     assert_eq!(
-        w3.y, 0,
+        w3.y, 1,
         "Task 3 compacted to row 0 (no empty preceding rows)!"
     );
 
@@ -4536,8 +4493,8 @@ fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
     let mut view = View::default();
     view.tasks = tasks;
 
-    // Terminals: 80x24 (h=20), 120x30 (h=26), 160x62 (h=58 — one screen
-    // tall enough for the fixed-size cards, five rows at their full height)
+    // Terminals: 80x24 (h=20), 120x30 (h=26), and one tall enough for every
+    // framed task at full height: one unit across, six rows of them.
     let g_short = Graph::new_with_viewport(
         &view,
         &Scope::default(),
@@ -4557,12 +4514,12 @@ fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
         &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
-        Some((140, 66)),
+        Some((140, 150)),
     );
 
     let whole_short = count_whole_cards(&g_short, 92, 20);
     let whole_mid = count_whole_cards(&g_mid, 92, 40);
-    let whole_tall = count_whole_cards(&g_tall, 140, 66);
+    let whole_tall = count_whole_cards(&g_tall, 140, 150);
 
     // Height utilization: larger panel height fits strictly more whole readable cards
     assert!(
@@ -4571,14 +4528,14 @@ fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
     );
     assert!(
         whole_tall > whole_mid,
-        "Height 58 ({whole_tall}) must fit more whole cards than height 26 ({whole_mid})"
+        "The tall panel ({whole_tall}) must fit more whole cards than height 26 ({whole_mid})"
     );
 
     // Taller height allows all tasks to be visible without vertical scrolling
     assert_eq!(
         whole_tall,
         g_tall.nodes.iter().filter(|n| n.visible).count(),
-        "On 160x62 all nodes fit completely without scroll"
+        "On the tall terminal all nodes fit completely without scroll"
     );
 }
 
@@ -4751,7 +4708,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
             app.graph_grouping,
             app.graph_viewport,
         );
-        assert_eq!(g_cycle.nodes.len(), 3 + 2);
+        assert_eq!(g_cycle.nodes.len(), 3 + 2 * 2);
 
         // 4. Filtering and compaction through App:
         app.set_graph_filter(Some("cy1".into()));
@@ -4766,7 +4723,10 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         let cy1_w = g_filtered.node("worker:cy1").unwrap();
         assert!(cy1_w.visible);
         assert!(cy1_w.x >= 3, "Filtered cy1 compacted to column 0");
-        assert_eq!(cy1_w.y, 0, "Filtered cy1 compacted to row 0");
+        assert_eq!(
+            cy1_w.y, 1,
+            "Filtered cy1 compacted to row 0, inside its frame"
+        );
 
         // 5. Collapsing:
         app.set_graph_filter(None);
@@ -5019,13 +4979,14 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         },
     );
     let (worker_now, _) = card(&view, "worker:t1");
-    assert!(worker_now.contains("verifier r1"), "{worker_now}");
+    assert!(worker_now.contains("awaiting verdict r1"), "{worker_now}");
     assert!(
-        worker_now.contains("cargo test"),
-        "task shows its active verifier"
+        !worker_now.contains("cargo test"),
+        "the verifier's work shows on its own card: {worker_now}"
     );
     let (verifier_now, _) = card(&view, "verifier:t1");
     assert!(verifier_now.contains("checking r1"), "{verifier_now}");
+    assert!(verifier_now.contains("cargo test"), "{verifier_now}");
     assert!(
         verifier_now.contains("· agy"),
         "verifier shows its own agent: {verifier_now}"
@@ -5166,7 +5127,7 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
              "verifier": {"summary": "Check storage."}},
             {"id": "t2", "title": "API", "depends_on": ["t1"],
              "summary": "Expose the corrected storage behind a small HTTP surface a verifier can read in one pass, with careful unicode 👩‍💻 everywhere.",
-             "verifier": {"summary": "Verify the 👩‍💻 surface wrapped past every card edge twice over turtles e\u{301} until only an ellipsis ends the last visible line."}},
+             "verifier": {"summary": "Verify the 👩‍💻 surface wrapped past every card edge twice over turtles e\u{301} until only an ellipsis ends the last visible line, which a card of its own still cannot hold."}},
         ]}),
     ));
     let geometry = |view: &View, grouping: GroupingMode| -> Vec<(String, u16, u16, u16, bool)> {

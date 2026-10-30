@@ -68,12 +68,14 @@ pub(super) fn body_lines(height: u16) -> (usize, usize) {
     ((body - effect).min(MAX_SUMMARY_LINES), effect)
 }
 
-/// The card size of one layout: full size, or smaller so that two cards fit
-/// across and down the viewport.
+/// The card size of one layout: full size, or smaller so that a unit's
+/// three cards fit across the viewport and two rows down it.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Size {
     pub(super) w: u16,
     pub(super) h: u16,
+    /// The session's own agents stand two across, not three.
+    pub(super) admin_w: u16,
 }
 
 impl Size {
@@ -81,21 +83,17 @@ impl Size {
         let full = Self {
             w: WIDTH,
             h: HEIGHT,
+            admin_w: WIDTH,
         };
         let Some((vp_w, vp_h)) = viewport else {
             return full;
         };
+        // Three cards of a unit side by side, in their frame.
+        let unit = MARGIN + 2 * GAP_X + 2 * FRAME_X;
         Self {
-            w: (vp_w.saturating_sub(MARGIN + 2 * GAP_X) / 2).clamp(MIN_WIDTH, WIDTH),
+            w: (vp_w.saturating_sub(unit) / 3).clamp(MIN_WIDTH, WIDTH),
+            admin_w: (vp_w.saturating_sub(MARGIN + 2 * GAP_X) / 2).clamp(MIN_WIDTH, WIDTH),
             h: (vp_h.saturating_sub(GAP_Y) / 2).clamp(MIN_HEIGHT, HEIGHT),
-        }
-    }
-
-    pub(super) fn node(self, key: String, x: u16, y: u16) -> Node {
-        Node {
-            width: self.w,
-            height: self.h,
-            ..Node::new(key, x, y)
         }
     }
 }

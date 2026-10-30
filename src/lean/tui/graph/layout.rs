@@ -1,10 +1,8 @@
 use super::*;
 mod builder;
-mod columns;
 mod constructors;
 mod edges;
-mod geometry;
-mod placement;
+mod units;
 
 impl Graph {
     pub fn new_with_viewport(

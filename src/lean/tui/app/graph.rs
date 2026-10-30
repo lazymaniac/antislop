@@ -29,7 +29,7 @@ impl App {
     }
 
     pub fn select_node(&mut self, key: String) {
-        self.selected = graph::task_node_key(&key);
+        self.selected = graph::card_key(&self.view, &key);
     }
 
     pub fn toggle_selected_collapse(&mut self) {

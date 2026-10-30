@@ -1,14 +1,10 @@
 use super::super::*;
-use crate::lean::tui::view::TaskRow;
 
-pub(super) fn add_edges(
-    view: &View,
-    graph: &mut Graph,
-    index: &HashMap<&str, usize>,
-    extra_agents: &[&str],
-) {
+/// The edges between the session's own agents and the messages; the
+/// layout of the units already added the dependencies and the arrows
+/// inside each frame.
+pub(super) fn add_edges(view: &View, graph: &mut Graph, extra_agents: &[&str]) {
     add_role_edges(graph, extra_agents);
-    add_task_edges(view, graph, index);
     add_mail_edges(view, graph);
 }
 
@@ -35,34 +31,6 @@ fn add_role_edges(graph: &mut Graph, extra_agents: &[&str]) {
             Kind::Supervises,
             None,
         );
-    }
-}
-
-fn add_task_edges(view: &View, graph: &mut Graph, index: &HashMap<&str, usize>) {
-    for task in &view.tasks {
-        let worker = format!("worker:{}", task.id);
-        push_edge(
-            graph,
-            ORCHESTRATOR.into(),
-            worker.clone(),
-            Kind::Supervises,
-            None,
-        );
-        add_dependencies(graph, task, &worker, index);
-    }
-}
-
-fn add_dependencies(graph: &mut Graph, task: &TaskRow, worker: &str, index: &HashMap<&str, usize>) {
-    for parent in &task.depends_on {
-        if index.contains_key(parent.as_str()) {
-            push_edge(
-                graph,
-                format!("worker:{parent}"),
-                worker.to_owned(),
-                Kind::Depends,
-                Some("D".into()),
-            );
-        }
     }
 }
 
@@ -101,5 +69,6 @@ fn push_edge(graph: &mut Graph, from: String, to: String, kind: Kind, label: Opt
         to,
         kind,
         label,
+        path: None,
     });
 }
