@@ -29,6 +29,7 @@ plans = {
   "write_chain": [task("w1", "Write file", writes=True), task("w2", "Follow up", ["w1"])],
   "manual_fix": [task("m1", "Manual fix", writes=True)],
   "parallel": [task("t1", "Fail"), task("s1", "Slow")],
+  "requeue": [task("t1", "Fail"), task("p1", "Patient")],
 }
 # A first orchestrator turn can include history after the current request.
 import re
@@ -89,6 +90,16 @@ if "Task: Slow" in prompt and "You verify" not in prompt and "You audit" not in 
         time.sleep(0.05)
     if os.path.exists(os.path.join(here, "told-while-running")):
         open(os.path.join(here, "slow-saw-report"), "w").close()
+if worker and "You verify" not in prompt and "You audit" not in prompt:
+    open(os.path.join(here, "fail-ran"), "w").close()
+# A worker that finishes once the failed task has run again.
+if "Task: Patient" in prompt and "You verify" not in prompt and "You audit" not in prompt:
+    import time
+    deadline = time.time() + 30
+    while time.time() < deadline and not os.path.exists(os.path.join(here, "fail-ran")):
+        time.sleep(0.05)
+    if os.path.exists(os.path.join(here, "fail-ran")):
+        open(os.path.join(here, "patient-saw-rerun"), "w").close()
 if "Task: Manual fix" in prompt and "You verify" not in prompt and "You audit" not in prompt:
     with open("hello.txt", "w") as f:
         f.write("from worker manual\n")
@@ -487,6 +498,39 @@ fn a_task_that_stops_wakes_the_orchestrator_while_others_still_run() {
     assert_eq!(interim.len(), 1, "{messages:?}");
     assert!(interim[0].text.contains("\"t1\""));
     assert!(!interim[0].text.contains("\"s1\""));
+}
+
+#[test]
+fn a_task_requeued_while_others_run_starts_without_waiting_for_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
+    let plan = propose(&core, &conversation, "requeue");
+    core.accept_plan(&conversation, &plan).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut failed = loop {
+        let tasks = core.store.plan(&plan).unwrap();
+        if let Some(task) = tasks
+            .into_iter()
+            .find(|t| t.spec["id"] == "t1" && t.status == "waiting")
+        {
+            break task;
+        }
+        assert!(Instant::now() < deadline, "t1 never stopped");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // What a revision does to a stopped task while the plan runs on.
+    std::fs::write(dir.path().join("logged-in"), "").unwrap();
+    failed.status = "queued".into();
+    core.store.update_task(&failed).unwrap();
+    wait_idle(&core, &conversation);
+
+    assert!(
+        dir.path().join("patient-saw-rerun").exists(),
+        "the requeued task waited for the running one to finish"
+    );
+    assert_eq!(statuses(&core, &plan), ["approved", "approved"]);
 }
 
 #[test]

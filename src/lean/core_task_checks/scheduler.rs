@@ -2,6 +2,8 @@ use super::super::*;
 
 type InFlightWriters = HashMap<String, Vec<String>>;
 
+const PLAN_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
 pub(super) fn run(core: &Arc<Core>, conversation: &str, plan_id: &str, cancel: &AtomicBool) {
     std::thread::scope(|scope| {
         let mut scheduler = Scheduler::new(core, conversation, plan_id, cancel);
@@ -184,9 +186,14 @@ impl<'a> Scheduler<'a> {
         });
     }
 
+    /// Waits for a task to finish, but not past `PLAN_POLL`: a plan revised
+    /// while tasks run can requeue others, and they start without waiting
+    /// for the running ones.
     fn receive_completion(&mut self) -> bool {
-        let Ok(finished) = self.done_rx.recv() else {
-            return false;
+        let finished = match self.done_rx.recv_timeout(PLAN_POLL) {
+            Ok(finished) => finished,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return true,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
         };
         self.release(&finished);
         while let Ok(more) = self.done_rx.try_recv() {
