@@ -22,7 +22,7 @@ impl Source {
     pub(super) fn line_count(&self) -> usize {
         physical_lines(&self.text)
     }
-    pub(super) fn production_line_count(&self, ast: &syn::File) -> usize {
+    pub(super) fn test_only_lines(&self, ast: &syn::File) -> Vec<bool> {
         let mut excluded = TestLineCollector { ranges: Vec::new() };
         excluded.visit_file(ast);
         let mut lines = vec![false; self.line_count()];
@@ -33,18 +33,19 @@ impl Source {
                 *line = true;
             }
         }
-        lines.iter().filter(|excluded| !**excluded).count()
+        lines
+    }
+    pub(super) fn production_line_count(&self, ast: &syn::File) -> usize {
+        self.test_only_lines(ast)
+            .iter()
+            .filter(|excluded| !**excluded)
+            .count()
     }
     pub(super) fn offset(&self, line: usize) -> usize {
         self.lines
             .get(line.saturating_sub(1))
             .copied()
             .unwrap_or(self.text.len())
-    }
-    pub(super) fn count_span(&self, start: usize, end: usize) -> usize {
-        let s = self.line(start);
-        let e = self.line(end.saturating_sub(1).max(start));
-        e.saturating_sub(s) + 1
     }
 }
 

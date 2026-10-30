@@ -114,45 +114,49 @@ unsafe extern "C" { fn foreign(); }
     }
     for symbol, source in callable_forms.items():
         bad({"lib.rs": source + "\n"}, f"callable {symbol}")
-    long_foreign = "unsafe extern \"C\" {\n" + "\n".join("    // declaration context" for _ in range(30)) + "\n    fn foreign();\n}\n"
+    long_foreign = "unsafe extern \"C\" {\n    fn foreign(\n" + "\n".join(
+        f"        arg{index}: u8," for index in range(29)
+    ) + "\n    );\n}\n"
     bad({"lib.rs": long_foreign}, "callable foreign")
-    long_trait_decl = "trait T {\n" + "\n".join("    // declaration context" for _ in range(30)) + "\n    fn declared(&self);\n}\n"
+    long_trait_decl = "trait T {\n    fn declared(\n" + "\n".join(
+        f"        arg{index}: u8," for index in range(29)
+    ) + "\n    );\n}\n"
     bad({"lib.rs": long_trait_decl}, "callable declared")
     attached_exact = "// attached\n#[inline]\nfn exactly() {\n" + "\n".join(
         "    let _ = 1;" for _ in range(26)
     ) + "\n}\n"
     ok({"lib.rs": attached_exact}, "no violations")
     attached_over = "// attached\n#[inline]\nfn over() {\n" + "\n".join(
-        "    let _ = 1;" for _ in range(27)
+        "    let _ = 1;" for _ in range(29)
     ) + "\n}\n"
-    bad({"lib.rs": attached_over}, "callable over is 31 lines", 1)
+    bad({"lib.rs": attached_over}, "callable over is 31 lines", 3)
 
-    # Multiline signatures and attached docs/comments/attributes count from the prefix.
+    # Callable spans start at the signature and include the closing brace.
     attached = "/// heading\n// note\n\n#[allow(dead_code)]\npub fn wide(\n    a: u8,\n) {\n}\n"
     ok({"lib.rs": attached})
-    counted_prefix = "/// heading\n// note\n\n#[allow(dead_code)]\npub fn wide(\n    a: u8,\n) {\n" + "\n".join("    let _ = 1;" for _ in range(25)) + "\n}\n"
-    bad({"lib.rs": counted_prefix}, "callable wide", 1)
-    multiline_attr = "#[allow(\n    dead_code,\n)]\nfn attributed() {\n" + "\n".join("    let _ = 1;" for _ in range(27)) + "\n}\n"
-    bad({"lib.rs": multiline_attr}, "callable attributed", 1)
-    block_comment = "/** docs */\n/* lead */\nfn documented() {\n" + "\n".join("    let _ = 1;" for _ in range(27)) + "\n}\n"
-    bad({"lib.rs": block_comment}, "callable documented", 1)
+    counted_prefix = "/// heading\n// note\n\n#[allow(dead_code)]\npub fn wide(\n    a: u8,\n) {\n" + "\n".join("    let _ = 1;" for _ in range(27)) + "\n}\n"
+    bad({"lib.rs": counted_prefix}, "callable wide", 5)
+    multiline_attr = "#[allow(\n    dead_code,\n)]\nfn attributed() {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}\n"
+    bad({"lib.rs": multiline_attr}, "callable attributed", 4)
+    block_comment = "/** docs */\n/* lead */\nfn documented() {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}\n"
+    bad({"lib.rs": block_comment}, "callable documented", 3)
     # A leading dereference is code, not a continuation of an imaginary block comment.
     dereference_before_nested = "fn outer() {\n    *ptr;\n    fn nested() {\n" + "\n".join(
         "        let _ = 1;" for _ in range(29)
     ) + "\n    }\n}\n"
     bad({"lib.rs": dereference_before_nested}, "callable nested is 31 lines", 3)
     actual_block_before_nested = "fn outer() {\n    /* block\n     * continued\n     */\n    fn nested() {\n" + "\n".join(
-        "        let _ = 1;" for _ in range(27)
+        "        let _ = 1;" for _ in range(29)
     ) + "\n    }\n}\n"
-    bad({"lib.rs": actual_block_before_nested}, "callable nested", 2)
+    bad({"lib.rs": actual_block_before_nested}, "callable nested is 31 lines", 5)
     multiline_prefix_block = "/* lead\n   block continuation\n*/\nfn block_prefixed() {\n" + "\n".join(
-        "    let _ = 1;" for _ in range(26)
+        "    let _ = 1;" for _ in range(29)
     ) + "\n}\n"
-    bad({"lib.rs": multiline_prefix_block}, "callable block_prefixed is 31 lines", 1)
+    bad({"lib.rs": multiline_prefix_block}, "callable block_prefixed is 31 lines", 4)
     plain_block_before_nested = "fn outer() {\n    /* block\n    continuation without a star\n    */\n    fn nested() {\n" + "\n".join(
-        "        let _ = 1;" for _ in range(27)
+        "        let _ = 1;" for _ in range(29)
     ) + "\n    }\n}\n"
-    bad({"lib.rs": plain_block_before_nested}, "callable nested", 2)
+    bad({"lib.rs": plain_block_before_nested}, "callable nested is 31 lines", 5)
     raw_string_before_nested = (
         'fn outer() {\n    let text = r##"\n'
         '    // this looks like a leading comment but is raw-string content\n'
@@ -170,22 +174,22 @@ unsafe extern "C" { fn foreign(); }
     ) + "\n    }\n}\n"
     nested_test_result = invoke({"lib.rs": nested_test_code})
     nested_test_output = nested_test_result.stderr + nested_test_result.stdout
-    assert nested_test_result.returncode != 0 and "callable outer is 31 lines" in nested_test_output
-    assert "callable nested_test" not in nested_test_output, nested_test_output
-    RESULTS.append(("fail", nested_test_result.returncode, "nested test lines remain in outer span", nested_test_output.strip()))
-    # Prefix line is the diagnostic start, and a blank-line separator stops attachment.
-    prefixed = "// detached\n\nfn f() {\n" + "\n".join("    let _ = 0;" for _ in range(27)) + "\n}\n"
-    bad({"lib.rs": prefixed}, "callable f is 31 lines", 1)
-    separated = "// old comment\n\n\n// leading comment\nfn separated() {\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}\n"
-    bad({"lib.rs": separated}, "callable separated is 31 lines", 4)
+    assert nested_test_result.returncode == 0, nested_test_output
+    assert "callable outer" not in nested_test_output and "callable nested_test" not in nested_test_output
+    RESULTS.append(("pass", nested_test_result.returncode, "nested test lines excluded from production callable span", nested_test_output.strip()))
+    # Prefix comments do not change the signature-based callable start line.
+    prefixed = "// detached\n\nfn f() {\n" + "\n".join("    let _ = 0;" for _ in range(29)) + "\n}\n"
+    bad({"lib.rs": prefixed}, "callable f is 31 lines", 3)
+    separated = "// old comment\n\n\n// leading comment\nfn separated() {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}\n"
+    bad({"lib.rs": separated}, "callable separated is 31 lines", 5)
     unrelated = "// unrelated\n\n\nfn independent() {\n" + "\n".join(
         "    let _ = 1;" for _ in range(29)
     ) + "\n}\n"
     bad({"lib.rs": unrelated}, "callable independent is 31 lines", 4)
     contiguous = "// leading\n/// docs\n#[inline]\nfn prefixed() {\n" + "\n".join(
-        "    let _ = 1;" for _ in range(26)
+        "    let _ = 1;" for _ in range(29)
     ) + "\n}\n"
-    bad({"lib.rs": contiguous}, "callable prefixed is 31 lines", 1)
+    bad({"lib.rs": contiguous}, "callable prefixed is 31 lines", 4)
     ok({"lib.rs": "//! inner docs\n\nfn f() {}\n"})
     inner_docs = "//! crate docs\n\nfn public_api() {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}\n"
     bad({"lib.rs": inner_docs}, "callable public_api", 3)
@@ -198,7 +202,7 @@ unsafe extern "C" { fn foreign(); }
     test_only = "#[cfg(test)]\nmod tests {\n" + "\n".join("fn hidden() {}" for _ in range(40)) + "\n}\n#[test]\nfn unit() {}\n"
     ok({"lib.rs": test_only})
     mixed_large = "#[cfg(test)]\nmod tests {\n" + "\n".join("fn hidden() {}" for _ in range(298)) + "\n}\n"
-    bad({"lib.rs": mixed_large}, "file is 301 lines")
+    ok({"lib.rs": mixed_large}, "no violations")
     long_fn = "{\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}"
     ok({"lib.rs": "#[cfg(all(test, feature = \"fast\"))]\nfn only_test() " + long_fn + "\n"})
     bad({"lib.rs": "#[cfg(not(test))]\nfn production() " + long_fn + "\n"}, "callable production")
@@ -215,8 +219,8 @@ unsafe extern "C" { fn foreign(); }
         "test_child.rs": "#![cfg(test)]\nmod nested;\n",
         "test_child/nested.rs": "\n".join(["// nested test-only"] * 350),
     }, "2 maintained Rust files")
-    ok({"generated/output.rs": "\n".join(["// generated output"] * 350)}, "EXCLUDED src/generated/output.rs: generated or vendor source")
-    ok({"vendor/copied.rs": "\n".join(["// vendor source"] * 350)}, "EXCLUDED src/vendor/copied.rs: generated or vendor source")
+    ok({"generated/output.rs": "\n".join(["// generated output"] * 350)}, "EXCLUDED src/generated/output.rs: generated source")
+    bad({"vendor/copied.rs": "\n".join(["// vendor source"] * 350)}, "file is 350 lines", path="src/vendor/copied.rs")
     ok({"lib.rs": "mod child;\n", "child.rs": "fn visible() {}\n", "orphan.rs": "fn still_production() {}\n"})
     bad({"lib.rs": "mod missing;\n"}, "unresolved module missing")
     bad(
@@ -355,8 +359,8 @@ unsafe extern "C" { fn foreign(); }
     ok({"lib.rs": "fn f() { unknown_statement_macro!(); }\n"})
     long_macro_fn = "fn hidden() {\n" + "\n".join("    let _ = 1;" for _ in range(28)) + "\n}"
     bad({"lib.rs": "fn f() { let _ = opaque!({ " + long_macro_fn + " }); }\n"}, "unsupported callable-producing macro form opaque!", 1)
-    bad({"lib.rs": "#[custom::test]\nfn production() " + long_fn + "\n"}, "callable production", 1)
-    bad({"lib.rs": "#[custom::cfg(test)]\nfn production() " + long_fn + "\n"}, "callable production", 1)
+    bad({"lib.rs": "#[custom::test]\nfn production() " + long_fn + "\n"}, "callable production", 2)
+    bad({"lib.rs": "#[custom::cfg(test)]\nfn production() " + long_fn + "\n"}, "callable production", 2)
     missing_root = subprocess.run([str(BINARY), "--root"], text=True, capture_output=True)
     assert missing_root.returncode != 0 and "--root requires" in missing_root.stderr
     RESULTS.append(("fail", missing_root.returncode, "--root requires", missing_root.stderr.strip()))

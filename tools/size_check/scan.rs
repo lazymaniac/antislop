@@ -58,11 +58,13 @@ fn walk_source(
     results: &mut Results,
 ) {
     let external_macros = imported_external_macros(ast, external_crates);
+    let test_only_lines = src.test_only_lines(ast);
     let mut w = Walker {
         src,
         module_dir: module_directory(&src.fs_path),
         path_dir: src.fs_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
         production,
+        test_only_lines: &test_only_lines,
         external_crates,
         external_macros,
         test_context: false,

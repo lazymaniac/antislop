@@ -4,6 +4,7 @@ pub(super) struct Walker<'a> {
     pub(super) module_dir: PathBuf,
     pub(super) path_dir: PathBuf,
     pub(super) production: bool,
+    pub(super) test_only_lines: &'a [bool],
     pub(super) external_crates: &'a BTreeSet<String>,
     pub(super) external_macros: BTreeSet<String>,
     pub(super) test_context: bool,
@@ -80,12 +81,15 @@ impl Walker<'_> {
         end: proc_macro2::Span,
     ) -> Option<(usize, usize)> {
         let ast_start = offset(start, self.src);
-        let begin = ast_start;
-        let finish = self.src.offset(end.end().line);
-        Some((
-            self.src.line(begin),
-            self.src.count_span(begin, finish.saturating_add(1)),
-        ))
+        let first_line = self.src.line(ast_start);
+        let last_line = end.end().line.min(self.test_only_lines.len());
+        let count = self
+            .test_only_lines
+            .get(first_line.saturating_sub(1)..last_line)?
+            .iter()
+            .filter(|test_only| !**test_only)
+            .count();
+        Some((first_line, count))
     }
 
     fn report_callable(&mut self, ident: &str, line: usize, count: usize) {
