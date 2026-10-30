@@ -5,13 +5,20 @@
 #[path = "git/recovery.rs"]
 mod recovery;
 pub use recovery::recovery_fingerprint;
+mod changes;
+mod integration;
+mod snapshots;
+mod worktree;
+pub use changes::*;
+pub use integration::*;
+pub use snapshots::*;
+pub use worktree::*;
 
 use crate::{Error, Result};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
+pub(super) fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
     Ok(Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -20,7 +27,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
         .output()?)
 }
 
-fn ok(dir: &Path, args: &[&str]) -> Result<String> {
+pub(super) fn ok(dir: &Path, args: &[&str]) -> Result<String> {
     let output = git(dir, args)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -34,31 +41,9 @@ fn ok(dir: &Path, args: &[&str]) -> Result<String> {
 }
 
 /// Keep generated commits to one Conventional Commits subject, without a body.
-fn commit_subject(message: &str) -> String {
+pub(super) fn commit_subject(message: &str) -> String {
     let subject = message.split_whitespace().collect::<Vec<_>>().join(" ");
-    let conventional = subject
-        .split_once(": ")
-        .is_some_and(|(header, description)| {
-            let header = header.strip_suffix('!').unwrap_or(header);
-            let kind = if let Some((kind, scope)) = header.split_once('(') {
-                if !scope.ends_with(')')
-                    || scope.len() <= 1
-                    || scope
-                        .strip_suffix(')')
-                        .unwrap_or(scope)
-                        .contains(['(', ')', ' '])
-                {
-                    return false;
-                }
-                kind
-            } else {
-                header
-            };
-            !description.is_empty()
-                && !kind.is_empty()
-                && kind.bytes().all(|byte| byte.is_ascii_lowercase())
-        });
-    if conventional {
+    if conventional_subject(&subject) {
         subject
     } else if subject.is_empty() {
         "chore: update task changes".to_owned()
@@ -67,443 +52,34 @@ fn commit_subject(message: &str) -> String {
     }
 }
 
+fn conventional_subject(subject: &str) -> bool {
+    let Some((header, description)) = subject.split_once(": ") else {
+        return false;
+    };
+    let header = header.strip_suffix('!').unwrap_or(header);
+    let kind = match header.split_once('(') {
+        Some((kind, scope)) if valid_scope(scope) => kind,
+        Some(_) => return false,
+        None => header,
+    };
+    !description.is_empty()
+        && !kind.is_empty()
+        && kind.bytes().all(|byte| byte.is_ascii_lowercase())
+}
+
+fn valid_scope(scope: &str) -> bool {
+    scope.ends_with(')')
+        && scope.len() > 1
+        && !scope
+            .strip_suffix(')')
+            .unwrap_or(scope)
+            .contains(['(', ')', ' '])
+}
+
 /// The working tree as it is now (tracked and untracked files, ignored ones
 /// left out) recorded as a commit on top of HEAD, without touching the user's
 /// index, files or branch. A copy of the index keeps git from re-reading
 /// files that did not change, so the cost follows the changes, not the repo.
-pub fn snapshot(dir: &Path, message: &str) -> Result<String> {
-    let subject = commit_subject(message);
-    let message = subject.as_str();
-    let index = PathBuf::from(ok(dir, &["rev-parse", "--git-path", "index"])?);
-    let index = if index.is_absolute() {
-        index
-    } else {
-        dir.join(index)
-    };
-    let scratch = index.with_file_name(format!(
-        "antislop-snapshot-{}-{}.index",
-        std::process::id(),
-        crate::id()
-    ));
-    let result = (|| {
-        if index.exists() {
-            std::fs::copy(&index, &scratch)?;
-        }
-        let with_index = |args: &[&str]| -> Result<String> {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(dir)
-                .args(args)
-                .env("GIT_INDEX_FILE", &scratch)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .output()?;
-            if output.status.success() {
-                Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            } else {
-                Err(Error::Invalid(format!(
-                    "git {}: {}",
-                    args.join(" "),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                )))
-            }
-        };
-        with_index(&["add", "--all", "--", "."])?;
-        let tree = with_index(&["write-tree"])?;
-        ok(
-            dir,
-            &[
-                "-c",
-                "user.name=antislop",
-                "-c",
-                "user.email=antislop@localhost",
-                "commit-tree",
-                &tree,
-                "-p",
-                "HEAD",
-                "-m",
-                message,
-            ],
-        )
-    })();
-    let _ = std::fs::remove_file(&scratch);
-    result
-}
-
-/// Commits exactly `files` as they are in the working tree, whatever else
-/// the user has staged or changed.
-pub fn commit_paths(dir: &Path, files: &[String], message: &str) -> Result<String> {
-    let subject = commit_subject(message);
-    let message = subject.as_str();
-    let mut add = vec!["--literal-pathspecs", "add", "--all", "--"];
-    add.extend(files.iter().map(String::as_str));
-    ok(dir, &add)?;
-    // Committed already, by a run cut off before it recorded that.
-    let mut staged = vec![
-        "--literal-pathspecs",
-        "diff",
-        "--cached",
-        "--quiet",
-        "HEAD",
-        "--",
-    ];
-    staged.extend(files.iter().map(String::as_str));
-    if git(dir, &staged)?.status.success() {
-        return head(dir);
-    }
-    let mut commit = vec![
-        "--literal-pathspecs",
-        "-c",
-        "user.name=antislop",
-        "-c",
-        "user.email=antislop@localhost",
-        "commit",
-        "--quiet",
-        "--only",
-        "-m",
-        message,
-        "--",
-    ];
-    commit.extend(files.iter().map(String::as_str));
-    ok(dir, &commit)?;
-    head(dir)
-}
-
-/// Paths with uncommitted changes, untracked ones included.
-pub fn uncommitted(dir: &Path) -> Result<Vec<String>> {
-    // Not `ok()`: trimming would eat the leading space of " M path".
-    let status = git(dir, &["status", "--porcelain=v1", "-z", "--no-renames"])?;
-    crate::require(
-        status.status.success(),
-        &format!(
-            "git status: {}",
-            String::from_utf8_lossy(&status.stderr).trim()
-        ),
-    )?;
-    Ok(String::from_utf8_lossy(&status.stdout)
-        .split('\0')
-        .filter(|entry| entry.len() > 3)
-        .map(|entry| entry[3..].to_owned())
-        .collect())
-}
-
-pub fn is_repository(dir: &Path) -> bool {
-    git(dir, &["rev-parse", "--is-inside-work-tree"]).is_ok_and(|output| output.status.success())
-}
-
-pub fn session_branch(dir: &Path) -> Result<String> {
-    ok(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).or_else(|_| head(dir))
-}
-
-/// Read only a symbolic branch from an actual worktree, never a detached SHA
-/// or the branch inherited by Git discovery from a parent directory.
-pub fn worktree_branch(path: &Path) -> Result<String> {
-    if !path.join(".git").is_file() {
-        return Err(Error::Invalid(format!(
-            "not a linked worktree: {}",
-            path.display()
-        )));
-    }
-    ok(path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
-}
-
-fn require_worktree_branch(path: &Path, expected: &str) -> Result<()> {
-    let actual = worktree_branch(path)?;
-    if actual != expected {
-        return Err(Error::Invalid(format!(
-            "worktree branch {actual} differs from expected branch {expected}"
-        )));
-    }
-    Ok(())
-}
-
-pub fn head(dir: &Path) -> Result<String> {
-    ok(dir, &["rev-parse", "HEAD"])
-}
-
-pub fn tree_identity(dir: &Path, commit: &str) -> Result<String> {
-    ok(dir, &["rev-parse", &format!("{commit}^{{tree}}")])
-}
-
-pub fn common_base(dir: &Path, left: &str, right: &str) -> Result<String> {
-    ok(dir, &["merge-base", left, right])
-}
-
-/// A worktree on a new branch `branch` at `base`; reused if it exists.
-pub fn add_worktree(project: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
-    if path.exists() {
-        require_worktree_branch(path, branch)?;
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let target = path.to_string_lossy();
-    let reference = format!("refs/heads/{branch}");
-    if git(project, &["show-ref", "--verify", "--quiet", &reference])?
-        .status
-        .success()
-    {
-        // A missing worktree can be reattached only at the requested result.
-        // Never reset a preserved branch, even when its name matches.
-        if ok(project, &["rev-parse", &reference])? != ok(project, &["rev-parse", base])? {
-            return Err(Error::Invalid(format!(
-                "existing branch {branch} differs from requested worktree base {base}"
-            )));
-        }
-        ok(project, &["worktree", "add", "--quiet", &target, branch])?;
-    } else {
-        ok(
-            project,
-            &["worktree", "add", "--quiet", "-b", branch, &target, base],
-        )?;
-    }
-    Ok(())
-}
-
-pub fn remove_worktree(project: &Path, path: &Path, branch: &str) -> Result<()> {
-    require_worktree_branch(path, branch)?;
-    let target = path.to_string_lossy();
-    ok(project, &["worktree", "remove", "--force", &target])?;
-    let _ = git(project, &["branch", "-D", branch]);
-    Ok(())
-}
-
-/// Renames a branch, so the work on it is kept when its name is needed again.
-pub fn rename_branch(project: &Path, from: &str, to: &str) -> Result<()> {
-    ok(project, &["branch", "-m", from, to]).map(|_| ())
-}
-
-pub fn remove_worktree_keep_branch(project: &Path, path: &Path) -> Result<()> {
-    let target = path.to_string_lossy();
-    let _ = git(project, &["worktree", "remove", "--force", &target]);
-    Ok(())
-}
-
-/// Fingerprint of working tree files in `scope` for freshness validation.
-pub fn working_tree_fingerprint(project: &Path, scope: &[String]) -> String {
-    let mut sorted_scope = scope.to_vec();
-    sorted_scope.sort();
-    let mut fp = String::new();
-    for rel_path in &sorted_scope {
-        let full = project.join(rel_path);
-        if full.is_file() {
-            if let Ok(bytes) = std::fs::read(&full) {
-                fp.push_str(rel_path);
-                fp.push(':');
-                fp.push_str(&crate::hash(&bytes));
-                fp.push('\n');
-            }
-        } else if full.is_dir() {
-            if let Ok(status) = Command::new("git")
-                .arg("-C")
-                .arg(project)
-                .args(["status", "--porcelain=v1", "-z", "--", rel_path])
-                .output()
-            {
-                fp.push_str(rel_path);
-                fp.push(':');
-                fp.push_str(&crate::hash(&status.stdout));
-                fp.push('\n');
-            }
-        } else {
-            fp.push_str(rel_path);
-            fp.push_str(":missing\n");
-        }
-    }
-    crate::hash(fp.as_bytes())
-}
-
-/// Commits everything the worker changed. Returns the new HEAD (unchanged if
-/// the worker changed nothing).
-pub fn commit_all(worktree: &Path, message: &str) -> Result<String> {
-    let subject = commit_subject(message);
-    let message = subject.as_str();
-    ok(worktree, &["add", "--all"])?;
-    if !git(worktree, &["diff", "--cached", "--quiet"])?
-        .status
-        .success()
-    {
-        ok(
-            worktree,
-            &[
-                "-c",
-                "user.name=antislop",
-                "-c",
-                "user.email=antislop@localhost",
-                "commit",
-                "--quiet",
-                "--no-verify",
-                "-m",
-                message,
-            ],
-        )?;
-    }
-    head(worktree)
-}
-
-/// A commit with the changes `(base, result)` of several writers laid on
-/// `onto`, made in a scratch worktree. A change already contained in `onto`
-/// (it was integrated and committed) is skipped; one that does not apply is
-/// an error saying which.
-pub fn combine(
-    project: &Path,
-    scratch: &Path,
-    onto: &str,
-    changes: &[(String, String)],
-) -> Result<String> {
-    let branch = format!(
-        "antislop/combine-{}",
-        scratch
-            .file_name()
-            .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
-    );
-    if scratch.exists() {
-        let _ = remove_worktree(project, scratch, &branch);
-    }
-    add_worktree(project, scratch, &branch, onto)?;
-    let file = scratch.with_extension("patch");
-    let result = (|| {
-        for (base, change) in changes {
-            if git(scratch, &["merge-base", "--is-ancestor", change, "HEAD"])?
-                .status
-                .success()
-            {
-                continue;
-            }
-            let patch = patch(project, base, Some(change))?;
-            if patch.trim().is_empty() {
-                continue;
-            }
-            std::fs::write(&file, format!("{patch}\n"))?;
-            let path = file.to_string_lossy();
-            // Check first: a failed three-way apply can leave a conflicted index.
-            if git(scratch, &["apply", "--check", "-R", &path])?
-                .status
-                .success()
-            {
-                continue;
-            }
-            ok(scratch, &["apply", "--3way", "--index", &path]).map_err(|error| {
-                Error::Invalid(format!(
-                    "the change {base}..{change} does not apply to {onto}: {error}"
-                ))
-            })?;
-        }
-        commit_all(scratch, "Results of the tasks this one depends on")
-    })();
-    let _ = std::fs::remove_file(&file);
-    let cleanup = remove_worktree(project, scratch, &branch);
-    if result.is_ok() {
-        cleanup?;
-    }
-
-    result
-}
-
-pub fn diff_stat(dir: &Path, base: &str, result: &str) -> Result<String> {
-    ok(dir, &["diff", "--stat", base, result])
-}
-
-/// The change from `base` to `rev`, or to the working tree when `rev` is
-/// `None`, as a unified patch with unquoted UTF-8 paths and renames.
-pub fn patch(dir: &Path, base: &str, rev: Option<&str>) -> Result<String> {
-    let mut args = vec![
-        "-c",
-        "core.quotePath=false",
-        "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "-M",
-        base,
-    ];
-    args.extend(rev);
-    ok(dir, &args)
-}
-
-pub fn changed_files(dir: &Path, base: &str, result: &str) -> Result<Vec<String>> {
-    changed_paths(dir, base, result, None)
-}
-
-/// Paths with identical content, type and mode in two snapshots. Compare
-/// snapshots rather than the live tree, so a task's starting protection is
-/// stable across its turns and resumes. Literal pathspecs keep filenames
-/// containing glob characters from widening the comparison.
-pub fn matching_paths(
-    dir: &Path,
-    left: &str,
-    right: &str,
-    paths: &[String],
-) -> Result<Vec<String>> {
-    if paths.is_empty() {
-        return Ok(vec![]);
-    }
-    let changed: std::collections::HashSet<String> = changed_paths(dir, left, right, Some(paths))?
-        .into_iter()
-        .collect();
-    Ok(paths
-        .iter()
-        .filter(|path| !changed.contains(*path))
-        .cloned()
-        .collect())
-}
-
-fn changed_paths(
-    dir: &Path,
-    left: &str,
-    right: &str,
-    paths: Option<&[String]>,
-) -> Result<Vec<String>> {
-    let mut args = vec![
-        "--literal-pathspecs",
-        "diff",
-        "--no-renames",
-        "--name-only",
-        "-z",
-        left,
-        right,
-        "--",
-    ];
-    if let Some(paths) = paths {
-        args.extend(paths.iter().map(String::as_str));
-    }
-    let output = git(dir, &args)?;
-    crate::require(
-        output.status.success(),
-        &format!(
-            "git diff: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
-    )?;
-    Ok(std::str::from_utf8(&output.stdout)
-        .map_err(|error| Error::Invalid(format!("git paths: {error}")))?
-        .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(str::to_owned)
-        .collect())
-}
-
-/// One commit holding everything from `base` to `result`, titled `message`.
-pub fn squash(worktree: &Path, base: &str, message: &str) -> Result<String> {
-    let subject = commit_subject(message);
-    let message = subject.as_str();
-    let tree = ok(worktree, &["rev-parse", "HEAD^{tree}"])?;
-    ok(
-        worktree,
-        &[
-            "-c",
-            "user.name=antislop",
-            "-c",
-            "user.email=antislop@localhost",
-            "commit-tree",
-            &tree,
-            "-p",
-            base,
-            "-m",
-            message,
-        ],
-    )
-}
-
 #[derive(Debug, PartialEq)]
 pub enum Integration {
     Committed(String),
@@ -516,210 +92,6 @@ pub enum Integration {
 
 /// Applies the squashed commit `change` (made on `base`) to the project's
 /// current branch, optionally restricted to `allowed_files`.
-pub fn integrate_scoped(
-    project: &Path,
-    base: &str,
-    change: &str,
-    allowed_files: Option<&[String]>,
-    commit: bool,
-) -> Result<Integration> {
-    let files = changed_files(project, base, change)?;
-    let target_files: Vec<String> = if let Some(allowed) = allowed_files {
-        files
-            .iter()
-            .filter(|f| allowed.contains(f))
-            .cloned()
-            .collect()
-    } else {
-        files.clone()
-    };
-    if target_files.is_empty() {
-        return Ok(Integration::Applied);
-    }
-
-    // Landed already, by a run cut off before it recorded that: never twice.
-    if unchanged_since(project, change, &target_files)? {
-        if !commit {
-            return Ok(Integration::Applied);
-        }
-        if blobs(project, "HEAD", &target_files)? == blobs(project, change, &target_files)? {
-            return Ok(Integration::Committed(head(project)?));
-        }
-    }
-
-    // Uncommitted files that are exactly as the worker started from (for
-    // example an earlier task's applied result) are not the user's edits.
-    if !commit && unchanged_since(project, base, &target_files)? {
-        write_files(project, change, &target_files)?;
-        return Ok(Integration::Applied);
-    }
-
-    // Merge the worker's delta from its actual starting snapshot, including
-    // local edits it inherited, into the current working tree. Dirty paths
-    // alone are not conflicts; disjoint edits in the same file can merge.
-    let dirty = uncommitted(project)?;
-    let onto = if dirty.is_empty() {
-        head(project)?
-    } else {
-        snapshot(project, "Working tree before integration")?
-    };
-    let committed_base = common_base(project, base, "HEAD")?;
-    let merge_base = format!("--merge-base={base}");
-    let check = git(
-        project,
-        &[
-            "merge-tree",
-            "--write-tree",
-            "--name-only",
-            &merge_base,
-            &onto,
-            change,
-        ],
-    )?;
-    if check.status.code() == Some(1) {
-        let conflicts: Vec<String> = String::from_utf8_lossy(&check.stdout)
-            .lines()
-            .skip(1)
-            .take_while(|line| !line.is_empty())
-            .filter(|path| target_files.contains(&path.to_string()))
-            .map(str::to_owned)
-            .collect();
-        if !conflicts.is_empty() {
-            if conflicts.iter().any(|path| dirty.contains(path)) {
-                return Ok(Integration::UserEdits(conflicts));
-            }
-            return Ok(Integration::Conflict(conflicts));
-        }
-    }
-    if !check.status.success() && check.status.code() != Some(1) {
-        return Err(Error::Invalid(format!(
-            "git merge-tree: {}",
-            String::from_utf8_lossy(&check.stderr).trim()
-        )));
-    }
-
-    if dirty.is_empty()
-        && allowed_files.is_none()
-        && target_files.len() == files.len()
-        && committed_base == base
-    {
-        if commit {
-            ok(
-                project,
-                &[
-                    "-c",
-                    "user.name=antislop",
-                    "-c",
-                    "user.email=antislop@localhost",
-                    "cherry-pick",
-                    "--allow-empty",
-                    change,
-                ],
-            )?;
-            Ok(Integration::Committed(head(project)?))
-        } else {
-            ok(project, &["cherry-pick", "--no-commit", change])?;
-            // Leave the result as ordinary working-tree changes; unstage only
-            // this change's paths, never what the user staged.
-            let mut args = vec!["--literal-pathspecs", "reset", "--quiet", "--"];
-            args.extend(files.iter().map(String::as_str));
-            let _ = git(project, &args);
-            Ok(Integration::Applied)
-        }
-    } else {
-        let merged_tree = std::str::from_utf8(&check.stdout)
-            .map_err(|error| Error::Invalid(format!("git merge-tree: {error}")))?
-            .lines()
-            .next()
-            .ok_or_else(|| Error::Invalid("git merge-tree returned no tree".into()))?;
-        write_files(project, merged_tree, &target_files)?;
-        if commit {
-            let msg = ok(project, &["log", "-1", "--format=%B", change])?;
-            let committed = commit_paths(project, &target_files, msg.trim())?;
-            Ok(Integration::Committed(committed))
-        } else {
-            Ok(Integration::Applied)
-        }
-    }
-}
-
-/// Rebuild a repaired result on the current project snapshot, carrying only
-/// the writer's changed paths. `worktree` must be the allocated task worktree;
-/// unrelated stale files in it must never revert concurrent project edits.
-pub fn transplant_repair(worktree: &Path, base: &str, onto: &str, message: &str) -> Result<String> {
-    let repaired = commit_all(worktree, message)?;
-    let files = changed_files(worktree, base, &repaired)?;
-    ok(worktree, &["reset", "--hard", onto])?;
-    write_files(worktree, &repaired, &files)?;
-    commit_all(worktree, message)
-}
-
-/// Applies the squashed commit `change` (made on `base`) to the project's
-/// current branch.
-pub fn integrate(project: &Path, base: &str, change: &str, commit: bool) -> Result<Integration> {
-    integrate_scoped(project, base, change, None, commit)
-}
-
-/// Blob ids of `files` at `rev`; files absent there are absent here.
-fn blobs(dir: &Path, rev: &str, files: &[String]) -> Result<HashMap<String, String>> {
-    let mut args = vec!["--literal-pathspecs", "ls-tree", "-r", "-z", rev, "--"];
-    args.extend(files.iter().map(String::as_str));
-    Ok(ok(dir, &args)?
-        .split('\0')
-        .filter_map(|entry| {
-            let (meta, path) = entry.split_once('\t')?;
-            Some((path.to_owned(), meta.split(' ').nth(2)?.to_owned()))
-        })
-        .collect())
-}
-
-/// Whether every one of `files` in the working tree is exactly as at `rev`.
-fn unchanged_since(project: &Path, rev: &str, files: &[String]) -> Result<bool> {
-    let expected = blobs(project, rev, files)?;
-    let present: Vec<&str> = files
-        .iter()
-        .filter(|file| project.join(file).symlink_metadata().is_ok())
-        .map(String::as_str)
-        .collect();
-    if present.len() != expected.len() || present.iter().any(|file| !expected.contains_key(*file)) {
-        return Ok(false);
-    }
-    if present.is_empty() {
-        return Ok(true);
-    }
-    let mut args = vec!["hash-object", "--"];
-    args.extend(&present);
-    let hashes = ok(project, &args)?;
-    Ok(present
-        .iter()
-        .zip(hashes.lines())
-        .all(|(file, hash)| expected[*file] == hash))
-}
-
-/// Writes `files` as they are at `rev` into the working tree only.
-fn write_files(project: &Path, rev: &str, files: &[String]) -> Result<()> {
-    let present = blobs(project, rev, files)?;
-    for file in files.iter().filter(|file| !present.contains_key(*file)) {
-        match std::fs::remove_file(project.join(file)) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
-            _ => {}
-        }
-    }
-    if !present.is_empty() {
-        let source = format!("--source={rev}");
-        let mut args = vec![
-            "--literal-pathspecs",
-            "restore",
-            &source,
-            "--worktree",
-            "--",
-        ];
-        args.extend(present.keys().map(String::as_str));
-        ok(project, &args)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1166,11 +538,4 @@ mod snapshot_tests {
         let again = commit_paths(path, &["a.txt".into(), "c.txt".into()], "task").unwrap();
         assert_eq!(again, commit, "nothing committed twice");
     }
-}
-
-/// Stable identity of the integrated files, including uncommitted content.
-/// Git's copied index reuses unchanged objects; no repository text enters SQLite.
-pub fn integrated_fingerprint(project: &Path) -> Result<String> {
-    let snapshot = snapshot(project, "requirements integrated snapshot")?;
-    ok(project, &["rev-parse", &format!("{snapshot}^{{tree}}")])
 }

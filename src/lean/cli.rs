@@ -7,12 +7,13 @@
 //! work.
 
 use super::daemon::{Client, Request};
-use super::tui::view::clean;
 use crate::{Result, require};
-use serde_json::Value;
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+
+mod chat;
+mod presentation;
+pub use presentation::{describe, review_lines};
 
 /// Select the configuration without creating files or directories.
 /// An explicit path or an existing project file never falls back on error.
@@ -59,34 +60,10 @@ pub struct Options {
 impl Options {
     pub fn parse(args: &[String]) -> Result<Self> {
         let project = std::env::current_dir()?.canonicalize()?;
-        let mut config = None;
-        let mut state = None;
-        let mut conversation = None;
-        let mut new = false;
-        let mut trust = false;
-        let mut words = vec![];
-        let mut args = args.iter();
-        while let Some(arg) = args.next() {
-            let mut value = |flag: &str| {
-                args.next()
-                    .cloned()
-                    .ok_or_else(|| crate::Error::Invalid(format!("{flag} requires a value")))
-            };
-            match arg.as_str() {
-                "--config" => config = Some(PathBuf::from(value(arg)?)),
-                "--state" => state = Some(PathBuf::from(value(arg)?)),
-                "--conversation" => conversation = Some(value(arg)?),
-                "--new" => new = true,
-                "--trust" => trust = true,
-                flag if flag.starts_with("--") => {
-                    return Err(crate::Error::Invalid(format!("unknown option {flag}")));
-                }
-                _ => words.push(arg.clone()),
-            }
-        }
-        let config = resolve_config(&project, config.as_deref())?;
+        let parsed = ParsedArgs::parse(args)?;
+        let config = resolve_config(&project, parsed.config.as_deref())?;
         // Nothing is created yet: the directory may not be trusted.
-        let state = state.unwrap_or_else(|| project.join(".antislop"));
+        let state = parsed.state.unwrap_or_else(|| project.join(".antislop"));
         let state = if state.is_absolute() {
             state
         } else {
@@ -96,10 +73,10 @@ impl Options {
             project,
             config,
             state,
-            conversation,
-            new,
-            trust,
-            message: (!words.is_empty()).then(|| words.join(" ")),
+            conversation: parsed.conversation,
+            new: parsed.new,
+            trust: parsed.trust,
+            message: (!parsed.words.is_empty()).then(|| parsed.words.join(" ")),
         })
     }
 
@@ -145,6 +122,48 @@ impl Options {
     }
 }
 
+#[derive(Default)]
+struct ParsedArgs {
+    config: Option<PathBuf>,
+    state: Option<PathBuf>,
+    conversation: Option<String>,
+    new: bool,
+    trust: bool,
+    words: Vec<String>,
+}
+
+impl ParsedArgs {
+    fn parse(args: &[String]) -> Result<Self> {
+        let mut parsed = Self::default();
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            parsed.apply(arg, &mut args)?;
+        }
+        Ok(parsed)
+    }
+
+    fn apply(&mut self, arg: &str, args: &mut std::slice::Iter<'_, String>) -> Result<()> {
+        match arg {
+            "--config" => self.config = Some(PathBuf::from(option_value(arg, args)?)),
+            "--state" => self.state = Some(PathBuf::from(option_value(arg, args)?)),
+            "--conversation" => self.conversation = Some(option_value(arg, args)?),
+            "--new" => self.new = true,
+            "--trust" => self.trust = true,
+            flag if flag.starts_with("--") => {
+                return Err(crate::Error::Invalid(format!("unknown option {flag}")));
+            }
+            word => self.words.push(word.to_owned()),
+        }
+        Ok(())
+    }
+}
+
+fn option_value(flag: &str, args: &mut std::slice::Iter<'_, String>) -> Result<String> {
+    args.next()
+        .cloned()
+        .ok_or_else(|| crate::Error::Invalid(format!("{flag} requires a value")))
+}
+
 /// Makes sure the user let antislop work in `project`: it is remembered, or
 /// `--trust` says so, or the user answers now. Without a terminal and
 /// without `--trust` there is nobody to ask, so the answer is no.
@@ -153,8 +172,8 @@ pub fn ensure_trusted<R: BufRead, W: Write>(
     project: &std::path::Path,
     trust_flag: bool,
     interactive: bool,
-    mut reader: R,
-    mut writer: W,
+    reader: R,
+    writer: W,
 ) -> Result<()> {
     if registry.is_trusted(project) {
         return Ok(());
@@ -162,6 +181,16 @@ pub fn ensure_trusted<R: BufRead, W: Write>(
     if trust_flag {
         return registry.trust(project);
     }
+    confirm_trust(registry, project, interactive, reader, writer)
+}
+
+fn confirm_trust<R: BufRead, W: Write>(
+    registry: &super::trust::Registry,
+    project: &std::path::Path,
+    interactive: bool,
+    mut reader: R,
+    mut writer: W,
+) -> Result<()> {
     require(
         interactive,
         "this directory is not trusted yet: run antislop here in a terminal to answer, \
@@ -174,14 +203,18 @@ pub fn ensure_trusted<R: BufRead, W: Write>(
     )?;
     write!(writer, "Trust this directory? [y/N]: ")?;
     writer.flush()?;
+    let answer = read_trust_answer(&mut reader)?;
+    require(answer, "workspace directory is not trusted")?;
+    registry.trust(project)
+}
+
+fn read_trust_answer(reader: &mut impl BufRead) -> Result<bool> {
     let mut answer = String::new();
     reader.read_line(&mut answer)?;
-    let answer = answer.trim().to_ascii_lowercase();
-    require(
-        answer == "y" || answer == "yes",
-        "workspace directory is not trusted",
-    )?;
-    registry.trust(project)
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// One-time setup that an agent CLI needs and that only the user should do.
@@ -236,313 +269,7 @@ pub fn stop(args: &[String]) -> Result<()> {
 }
 
 pub fn chat(args: &[String]) -> Result<()> {
-    let mut options = Options::parse(args)?;
-    // Before anything is created or started in this directory.
-    ensure_trusted(
-        &super::trust::Registry::from_env()?,
-        &options.project,
-        options.trust,
-        std::io::stdin().is_terminal(),
-        std::io::stdin().lock(),
-        std::io::stderr(),
-    )?;
-    crate::config::Config::load(&options.config)?;
-    options.prepare()?;
-    let client = Client::connect(&options.project, &options.config, &options.state)?;
-    if options.message.is_none() && std::io::stdin().is_terminal() {
-        return super::tui::run(&options, client);
-    }
-    if let Some(notice) = &client.notice {
-        eprintln!("{notice}");
-    }
-    let conversation = options.conversation(&client)?;
-    eprintln!("conversation {conversation}");
-    let events = |after: u64, wait_ms: u64| -> Result<(Vec<Value>, bool)> {
-        let reply = client.call(&Request::History(
-            crate::lean::daemon::HistoryRequest::Events {
-                conversation: conversation.clone(),
-                after,
-                wait_ms,
-            },
-        ))?;
-        Ok((
-            reply["events"].as_array().cloned().unwrap_or_default(),
-            reply["idle"] == true,
-        ))
-    };
-    // Only what happens from now on, but remember the latest plan so
-    // `/accept` refers to the plan that was shown.
-    let mut last = 0;
-    let mut plan = None;
-    loop {
-        let (page, _) = events(last, 0)?;
-        let Some(event) = page.last() else { break };
-        last = event["seq"].as_u64().unwrap_or(last);
-        plan = latest_plan(&page).or(plan);
-    }
-    if let Some(message) = &options.message {
-        client.call(&Request::Conversation(
-            crate::lean::daemon::ConversationRequest::Send {
-                conversation: conversation.clone(),
-                text: message.clone(),
-            },
-        ))?;
-    }
-    let (lines, typed) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in std::io::stdin().lock().lines() {
-            let Ok(line) = line else { break };
-            if lines.send(line).is_err() {
-                break;
-            }
-        }
-    });
-    let mut input_open = true;
-    loop {
-        loop {
-            let line = match typed.try_recv() {
-                Ok(line) => line,
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    input_open = false;
-                    break;
-                }
-            };
-            let conversation = conversation.clone();
-            let request = match line.trim() {
-                "" => continue,
-                "/accept" => match &plan {
-                    Some(plan) => {
-                        Request::Conversation(crate::lean::daemon::ConversationRequest::Accept {
-                            conversation,
-                            plan: plan.clone(),
-                        })
-                    }
-                    None => {
-                        eprintln!("✗ there is no proposed plan");
-                        continue;
-                    }
-                },
-                "/resume" => match &plan {
-                    Some(plan) => {
-                        Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
-                            conversation,
-                            plan: plan.clone(),
-                        })
-                    }
-                    None => {
-                        eprintln!("✗ there is no plan to resume");
-                        continue;
-                    }
-                },
-                "/cancel" => {
-                    Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel {
-                        conversation,
-                    })
-                }
-                "/pause" => {
-                    Request::Conversation(crate::lean::daemon::ConversationRequest::Pause {
-                        conversation,
-                        paused: true,
-                    })
-                }
-                "/continue" => {
-                    Request::Conversation(crate::lean::daemon::ConversationRequest::Pause {
-                        conversation,
-                        paused: false,
-                    })
-                }
-                "/mode autonomous" | "/mode supervised" => {
-                    Request::Conversation(crate::lean::daemon::ConversationRequest::Mode {
-                        conversation,
-                        autonomous: line.trim().ends_with("autonomous"),
-                    })
-                }
-                text => Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
-                    conversation,
-                    text: text.to_owned(),
-                }),
-            };
-            if let Err(error) = client.call(&request) {
-                eprintln!("✗ {}", clean(&error.to_string()));
-            }
-        }
-        let (page, idle) = events(last, if input_open { 200 } else { 2_000 })?;
-        plan = latest_plan(&page).or(plan);
-        for event in &page {
-            last = event["seq"].as_u64().unwrap_or(last);
-            print(event);
-        }
-        if !input_open && idle && page.is_empty() {
-            return Ok(());
-        }
-    }
-}
-
-fn latest_plan(events: &[Value]) -> Option<String> {
-    events
-        .iter()
-        .rev()
-        .find(|event| event["kind"] == "plan_proposed")
-        .and_then(|event| event["payload"]["plan"].as_str().map(str::to_owned))
-}
-
-/// One terminal line for an event, if it is worth one.
-pub fn describe(event: &Value) -> Option<String> {
-    let payload = &event["payload"];
-    let text = |key: &str| payload[key].as_str().unwrap_or_default().to_owned();
-    Some(match event["kind"].as_str()? {
-        "message" if payload["author"] == "runtime" => {
-            "· task results handed to orchestrator".into()
-        }
-        "message" if payload["author"] == "plan-verifier" => {
-            format!("\nplan verifier sent the plan back:\n{}\n", text("text"))
-        }
-        "message" if payload["author"] != "user" => {
-            format!("\n{}:\n{}\n", text("author"), text("text"))
-        }
-        "turn_started" => format!(
-            "· {} ({}) is working…",
-            text("role").split(':').next().unwrap_or_default(),
-            text("provider")
-        ),
-        "plan_proposed" => {
-            let tasks: Vec<String> = payload["tasks"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|task| {
-                    format!(
-                        "  [{}] {} ({}{})",
-                        task["id"].as_str().unwrap_or_default(),
-                        task["title"].as_str().unwrap_or_default(),
-                        task["kind"].as_str().unwrap_or_default(),
-                        if task["writes"] == true {
-                            ", modifies files"
-                        } else {
-                            ""
-                        }
-                    )
-                })
-                .collect();
-            let mut lines = review_lines("plan verifier", &payload["review"]);
-            lines.insert(0, format!("Plan:\n{}", tasks.join("\n")));
-            lines.push(if payload["automatic"] == true {
-                "Running (autonomous mode).".to_owned()
-            } else {
-                let waiting = payload["waiting"]
-                    .as_str()
-                    .map(|reason| format!("Waiting for you: {reason}. "))
-                    .unwrap_or_default();
-                format!("{waiting}Type /accept to run it.")
-            });
-            lines.join("\n")
-        }
-        "audit" => review_lines("audit", payload).join("\n"),
-        "paused" if payload["paused"] == true => {
-            "⏸ paused: new steps wait, /continue resumes".into()
-        }
-        "paused" => "▶ resumed".into(),
-        "notice" => format!("⚠ {}", text("text")),
-        "mode" if payload["autonomous"] == true => {
-            "⚙ autonomous mode: next plans and rounds start automatically".into()
-        }
-        "mode" => "⚙ supervised mode: next plans wait for /accept".into(),
-        "mail" if payload["kind"] != "copy" => format!(
-            "✉ {} → {} ({}): {}",
-            text("sender"),
-            text("recipient"),
-            text("kind"),
-            text("text")
-        ),
-        "mail_delivered" => format!("✓ delivered messages {}", payload["ids"]),
-        "mail_rejected" => format!(
-            "✗ message to {} undeliverable: {}",
-            text("recipient"),
-            text("reason")
-        ),
-        "plan_invalid" => format!("✗ plan rejected: {}", text("error")),
-        "task" => format!(
-            "· [{}] {}: {} (round {}){}",
-            text("id"),
-            text("title"),
-            text("status"),
-            payload["round"],
-            match payload["reason"].as_str() {
-                Some(reason) if payload["status"] == "waiting" => format!(
-                    " — {reason}; agent CLI is waiting for login or rate limit reset, then /resume"
-                ),
-                Some(reason) => format!(" — {reason}"),
-                None => String::new(),
-            }
-        ),
-        "turn_finished" if payload["status"] != "done" => {
-            format!("✗ {}: {}", text("status"), text("error"))
-        }
-        _ => return None,
-    })
-}
-
-/// What a reviewer (plan verifier, auditor) concluded, for the user.
-pub fn review_lines(who: &str, review: &Value) -> Vec<String> {
-    if review.is_null() {
-        return vec![];
-    }
-    if let Some(error) = review["error"].as_str() {
-        return vec![format!("⚠ {who} failed: {error}")];
-    }
-    let findings: Vec<String> = review["findings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|finding| match finding.as_str() {
-            Some(text) => format!("  - {text}"),
-            None => format!(
-                "  - [{}] {}",
-                finding["severity"].as_str().unwrap_or("?"),
-                finding["issue"].as_str().unwrap_or_default()
-            ),
-        })
-        .collect();
-    let mut lines = vec![if review["approved"] == true {
-        format!("✓ {who}: no issues")
-    } else {
-        format!("⚠ {who}: issues found")
-    }];
-    if review["approved"] == true && !findings.is_empty() {
-        lines[0] = format!("✓ {who}: minor notes");
-    }
-    lines.extend(findings);
-    if let Some(coverage) = review["coverage"].as_object().filter(|map| !map.is_empty()) {
-        lines.push("  Obligation coverage:".into());
-        for (id, entry) in coverage {
-            let mark = match entry["status"]
-                .as_str()
-                .map(str::to_ascii_lowercase)
-                .as_deref()
-            {
-                Some("ok") => "✓",
-                Some("issue") => "✗",
-                Some("blocked") => "!",
-                Some("n/a") => "–",
-                _ => "?",
-            };
-            lines.push(format!(
-                "    {mark} {id}: {}",
-                entry["note"].as_str().unwrap_or_default()
-            ));
-        }
-    }
-    lines
-}
-
-fn print(event: &Value) {
-    if let Some(line) = describe(event) {
-        let mut out = std::io::stdout().lock();
-        // Agents' text may carry terminal escapes (design §13).
-        let _ = writeln!(out, "{}", clean(&line));
-        let _ = out.flush();
-    }
+    chat::run(args)
 }
 
 #[cfg(test)]
