@@ -10,18 +10,15 @@ use super::taskinfo;
 use super::theme::Theme;
 use super::view::{TaskRow, View, agent_name, clean, duration, status_label, wrap};
 use ratatui::{
-    Frame,
-    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 /// Below this the two columns would be narrower than a readable line.
-const TWO_COLUMNS: u16 = 118;
-const GAP: u16 = 3;
+pub(super) const TWO_COLUMNS: u16 = 118;
+pub(super) const GAP: u16 = 3;
 
 /// How much of a card is shown. Enter cycles Preview → Full → Folded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -32,14 +29,14 @@ pub enum Fold {
     Folded,
 }
 
-struct Section {
-    id: &'static str,
-    title: &'static str,
-    meta: Vec<Span<'static>>,
-    body: Vec<Line<'static>>,
+pub(super) struct Section {
+    pub(super) id: &'static str,
+    pub(super) title: &'static str,
+    pub(super) meta: Vec<Span<'static>>,
+    pub(super) body: Vec<Line<'static>>,
     /// Body lines shown before "+N more".
-    preview: usize,
-    right: bool,
+    pub(super) preview: usize,
+    pub(super) right: bool,
 }
 
 /// The hero's gauge, `3/6` of it filled.
@@ -313,7 +310,7 @@ impl Details {
         vec![Line::from(head), join_chips(theme, chips), Line::raw("")]
     }
 
-    fn sections(&self, view: &View, theme: &Theme, width: usize) -> Vec<Section> {
+    pub(super) fn sections(&self, view: &View, theme: &Theme, width: usize) -> Vec<Section> {
         let g = theme.glyphs();
         let row = self.row(view);
         let keys = self.session_keys();
@@ -853,7 +850,7 @@ impl Details {
         out
     }
 
-    fn fold_of(&self, id: &str) -> Fold {
+    pub(super) fn fold_of(&self, id: &str) -> Fold {
         self.dash_fold.get(id).copied().unwrap_or_default()
     }
 
@@ -900,187 +897,6 @@ impl Details {
 
     pub fn dash_scroll(&mut self, delta: isize) {
         self.dash_scroll = (self.dash_scroll as isize + delta).max(0) as usize;
-    }
-
-    /// One card as lines: header, then the visible part of its body.
-    fn card_lines(
-        &self,
-        theme: &Theme,
-        section: &Section,
-        focused: bool,
-        width: usize,
-    ) -> Vec<Line<'static>> {
-        let g = theme.glyphs();
-        let fold = self.fold_of(section.id);
-        let rail_style = if focused {
-            theme.accent()
-        } else {
-            theme.faint()
-        };
-        let shown = match fold {
-            Fold::Folded => 0,
-            Fold::Preview => section.body.len().min(section.preview),
-            Fold::Full => section.body.len(),
-        };
-        let marker = match fold {
-            Fold::Folded => g.arrow_right,
-            _ => "▾",
-        };
-        let marker = if theme.ascii && marker == "▾" {
-            "v"
-        } else {
-            marker
-        };
-        let mut header = vec![
-            Span::styled(
-                format!("{marker} {}", section.title),
-                if focused {
-                    theme.title().add_modifier(Modifier::UNDERLINED)
-                } else {
-                    theme.title()
-                },
-            ),
-            Span::raw("  "),
-        ];
-        header.extend(section.meta.iter().cloned());
-        let mut lines = vec![Line::from(header)];
-        for body in section.body.iter().take(shown) {
-            let mut spans = vec![Span::styled(format!("{} ", g.vertical), rail_style)];
-            spans.extend(body.spans.iter().cloned().map(|mut span| {
-                span.style = body.style.patch(span.style);
-                span
-            }));
-            lines.push(Line::from(spans));
-        }
-        let hidden = section.body.len() - shown;
-        if hidden > 0 && fold != Fold::Folded {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{} ", g.vertical), rail_style),
-                Span::styled(
-                    format!(
-                        "{} +{hidden} more{}",
-                        g.ellipsis,
-                        if focused { " · Enter expands" } else { "" }
-                    ),
-                    theme.dim(),
-                ),
-            ]));
-        } else if fold == Fold::Folded && focused {
-            lines.push(Line::styled(
-                format!(
-                    "  {} {} hidden · Enter unfolds",
-                    g.ellipsis,
-                    section.body.len()
-                ),
-                theme.faint(),
-            ));
-        }
-        let _ = width;
-        lines
-    }
-
-    pub(super) fn draw_dashboard(
-        &mut self,
-        frame: &mut Frame,
-        view: &View,
-        area: Rect,
-        theme: &Theme,
-    ) {
-        self.text_area = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
-        let two = area.width >= TWO_COLUMNS;
-        let usable = usize::from(area.width.saturating_sub(1));
-        let column_width = if two {
-            (usable.saturating_sub(usize::from(GAP))) / 2
-        } else {
-            usable
-        };
-        // Cards keep a rail and a space before their text.
-        let inner = column_width.saturating_sub(2).max(1);
-        let sections = self.sections(view, theme, inner);
-        self.dash_ids = sections.iter().map(|s| s.id).collect();
-        self.dash_focus = self.dash_focus.min(sections.len().saturating_sub(1));
-
-        // Order for navigation follows the screen: left column, then right.
-        let mut order: Vec<usize> = (0..sections.len()).collect();
-        if two {
-            order.sort_by_key(|index| sections[*index].right);
-        }
-        self.dash_ids = order.iter().map(|index| sections[*index].id).collect();
-        let focused_id = self.dash_ids.get(self.dash_focus).copied();
-
-        let mut columns: [Vec<Line<'static>>; 2] = [Vec::new(), Vec::new()];
-        let mut starts: Vec<(usize, usize, usize)> = Vec::new();
-        for index in order {
-            let section = &sections[index];
-            let column = usize::from(two && section.right);
-            if !columns[column].is_empty() {
-                columns[column].extend([Line::raw(""), Line::raw("")]);
-            }
-            let lines =
-                self.card_lines(theme, section, Some(section.id) == focused_id, column_width);
-            starts.push((column, columns[column].len(), lines.len()));
-            columns[column].extend(lines);
-        }
-        let height = usize::from(area.height);
-        let total = columns[0].len().max(columns[1].len());
-        let bottom = total.saturating_sub(height);
-        if std::mem::take(&mut self.dash_reveal)
-            && let Some(&(_, start, len)) = starts.get(self.dash_focus)
-        {
-            if start < self.dash_scroll {
-                self.dash_scroll = start;
-            } else if start + len > self.dash_scroll + height {
-                self.dash_scroll = (start + len).saturating_sub(height).min(start);
-            }
-        }
-        self.dash_scroll = self.dash_scroll.min(bottom);
-
-        let areas: Vec<Rect> = if two {
-            Layout::horizontal([
-                Constraint::Length(column_width as u16),
-                Constraint::Length(GAP),
-                Constraint::Length(column_width as u16),
-            ])
-            .split(Rect::new(
-                area.x,
-                area.y,
-                area.width.saturating_sub(1),
-                area.height,
-            ))
-            .to_vec()
-        } else {
-            vec![Rect::new(
-                area.x,
-                area.y,
-                area.width.saturating_sub(1),
-                area.height,
-            )]
-        };
-        for (column, lines) in columns.iter().enumerate() {
-            if column == 1 && !two {
-                break;
-            }
-            let rect = areas[if column == 1 { 2 } else { 0 }];
-            let end = (self.dash_scroll + height).min(lines.len());
-            let from = self.dash_scroll.min(end);
-            frame.render_widget(Paragraph::new(lines[from..end].to_vec()), rect);
-        }
-        if total > height && area.width > 0 {
-            let mut state = ScrollbarState::new(bottom.saturating_add(1))
-                .position(self.dash_scroll)
-                .viewport_content_length(height);
-            frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                    .begin_symbol(None)
-                    .end_symbol(None)
-                    .track_symbol(Some(theme.glyphs().track))
-                    .thumb_symbol(theme.glyphs().thumb)
-                    .track_style(theme.faint())
-                    .thumb_style(theme.dim()),
-                area,
-                &mut state,
-            );
-        }
     }
 }
 

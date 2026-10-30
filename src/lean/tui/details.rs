@@ -7,14 +7,9 @@ use super::theme::Theme;
 use super::view::{View, agent_name, dim, duration, status_label, wrap};
 use crate::lean::store::SessionInfo;
 use ratatui::{
-    Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
-    },
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -78,7 +73,7 @@ pub struct DetailRecord {
 /// Wrapped output is rebuilt only when records or display options change.
 /// Idle redraws inspect record identities and copy only the visible lines.
 #[derive(Debug, Clone, PartialEq, Default)]
-struct LayoutCache {
+pub(super) struct LayoutCache {
     records: Vec<Rc<DetailRecord>>,
     query: String,
     width: usize,
@@ -86,7 +81,7 @@ struct LayoutCache {
 }
 
 impl LayoutCache {
-    fn update(
+    pub(super) fn update(
         &mut self,
         records: Vec<Rc<DetailRecord>>,
         query: &str,
@@ -209,7 +204,7 @@ pub struct Details {
     pub dash_focus: usize,
     pub dash_reveal: bool,
     pub(super) pending_g: bool,
-    layout_cache: LayoutCache,
+    pub(super) layout_cache: LayoutCache,
 }
 
 impl Details {
@@ -474,7 +469,7 @@ impl Details {
     }
 
     /// Compact header; source prompts remain in the session document.
-    fn summary(&self, view: &View, theme: &Theme) -> Vec<Line<'static>> {
+    pub(super) fn summary(&self, view: &View, theme: &Theme) -> Vec<Line<'static>> {
         self.hero(view, theme)
     }
 
@@ -539,7 +534,7 @@ impl Details {
         out
     }
 
-    fn records(&mut self, view: &View) -> Vec<Rc<DetailRecord>> {
+    pub(super) fn records(&mut self, view: &View) -> Vec<Rc<DetailRecord>> {
         let plain = |text: String| (Style::default(), text);
         let label = |text: &str| {
             (
@@ -1109,470 +1104,6 @@ impl Details {
             },
         }
         records
-    }
-
-    fn draw_overview(&mut self, frame: &mut Frame, view: &View, body: Rect, theme: &Theme) {
-        let keys = self.session_keys();
-        self.active_panel = self.active_panel.min(keys.len().saturating_sub(1));
-        let areas = if keys.len() == 2 && body.width >= 80 {
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(body)
-                .to_vec()
-        } else {
-            vec![body]
-        };
-        for (visible, area) in areas.iter().enumerate() {
-            let panel = if areas.len() == 1 {
-                self.active_panel
-            } else {
-                visible
-            };
-            let key = &keys[panel];
-            let active = panel == self.active_panel;
-            let running = view.agents.get(key).is_some_and(|agent| agent.running);
-            let mut block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(if active { theme.dim() } else { theme.faint() })
-                .title(theme.clean(&format!(
-                    " {}Session · {} · {} ",
-                    if active { "> " } else { "" },
-                    key.split(':').next().unwrap_or(key),
-                    match (self.selected_round, running) {
-                        (Some(round), _) => format!("round {round}"),
-                        (None, true) => "LIVE".to_owned(),
-                        (None, false) => "idle".to_owned(),
-                    }
-                )));
-            if theme.ascii {
-                block = block.border_set(ratatui::symbols::border::Set {
-                    top_left: "+",
-                    top_right: "+",
-                    bottom_left: "+",
-                    bottom_right: "+",
-                    vertical_left: "|",
-                    vertical_right: "|",
-                    horizontal_top: "-",
-                    horizontal_bottom: "-",
-                });
-            }
-            let inner = block.inner(*area);
-            frame.render_widget(block, *area);
-            self.native_areas[panel] = Rect::new(
-                inner.x,
-                inner.y,
-                inner.width,
-                inner.height.saturating_sub(1),
-            );
-            if !self.editing
-                && let Some(snapshot) = self.native.get(key)
-                && let Some(screen) = &snapshot.screen
-            {
-                super::native_view::render(
-                    frame,
-                    self.native_areas[panel],
-                    screen,
-                    self.native_focus && active,
-                );
-                let status = snapshot
-                    .error
-                    .as_deref()
-                    .or(screen.error.as_deref())
-                    .unwrap_or(if self.native_focus && active {
-                        "Ctrl+] antislop"
-                    } else {
-                        "i terminal · a message · r retry"
-                    });
-                frame.render_widget(
-                    Paragraph::new(theme.clean(status)).style(theme.dim()),
-                    Rect::new(
-                        inner.x,
-                        inner.bottom().saturating_sub(1),
-                        inner.width,
-                        1.min(inner.height),
-                    ),
-                );
-                continue;
-            }
-            // No terminal to show: still attaching, failed, or an earlier
-            // round whose session is only opened on request (it is resumed).
-            if active {
-                self.text_area = inner;
-                self.scroll = 0;
-            }
-            let [_, composer_area] =
-                Layout::vertical([Constraint::Min(1), Constraint::Length(4.min(inner.height))])
-                    .areas(inner);
-            let draft_key = (self.conversation.clone(), self.composer_recipient(key));
-            let drafts = self.drafts.borrow();
-            let composer = drafts.get(&draft_key);
-            let input = composer.map(|composer| &composer.input);
-            let status = if composer.is_some_and(|composer| composer.sending) {
-                "Sending..."
-            } else if let Some(error) = composer.and_then(|composer| composer.error.as_deref()) {
-                error
-            } else if active && self.editing {
-                "Enter send · Alt+Enter newline · Esc navigation"
-            } else if let Some(delivery) =
-                composer.and_then(|composer| composer.delivery.as_deref())
-            {
-                delivery
-            } else if let Some(error) = self
-                .native
-                .get(key)
-                .and_then(|snapshot| snapshot.error.as_deref())
-            {
-                error
-            } else if self.selected_round.is_some() {
-                "Earlier round · o resume this session (read-only)"
-            } else {
-                "Attaching terminal… · r retry"
-            };
-            frame.render_widget(
-                Paragraph::new(theme.clean(status)).style(theme.dim()),
-                Rect::new(
-                    composer_area.x,
-                    composer_area.y,
-                    composer_area.width,
-                    1.min(composer_area.height),
-                ),
-            );
-            let input_area = Rect::new(
-                composer_area.x,
-                composer_area.y.saturating_add(1),
-                composer_area.width,
-                composer_area.height.saturating_sub(1),
-            );
-            self.input_width[panel] = usize::from(input_area.width).max(1);
-            if let Some(input) = input {
-                let text = theme.clean(&input.text);
-                let lines = wrap(&text, usize::from(input_area.width));
-                let (column, row) = input.visual_cursor(usize::from(input_area.width));
-                let start = row.saturating_sub(usize::from(input_area.height.saturating_sub(1)));
-                frame.render_widget(
-                    Paragraph::new(
-                        lines
-                            .into_iter()
-                            .skip(start)
-                            .take(usize::from(input_area.height))
-                            .map(Line::raw)
-                            .collect::<Vec<_>>(),
-                    ),
-                    input_area,
-                );
-                if active && self.editing && input_area.width > 0 && input_area.height > 0 {
-                    frame.set_cursor_position((
-                        input_area
-                            .x
-                            .saturating_add(column.min(input_area.width.saturating_sub(1))),
-                        input_area
-                            .y
-                            .saturating_add(row.saturating_sub(start) as u16)
-                            .min(input_area.bottom().saturating_sub(1)),
-                    ));
-                }
-            }
-        }
-    }
-
-    pub fn draw(&mut self, frame: &mut Frame, view: &View) {
-        if !tabs_for(&self.key).contains(&self.tab) {
-            self.tab = 0;
-        }
-        let area = frame.area();
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        let theme = Theme::from_env();
-        let summary = self.summary(view, &theme);
-        // Even a five-row terminal keeps room for session content.
-        let summary_height = if self.overview() {
-            (summary.len() as u16).min(area.height.saturating_sub(6))
-        } else {
-            0
-        };
-        let [header, summary_area, mut body, footer] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(summary_height),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .areas(area);
-
-        let mut tabs_line = format_tabs(&self.key, self.tab, usize::from(header.width));
-        if !self.query.is_empty() {
-            tabs_line.spans.push(Span::styled(
-                format!(" [🔍 \"{}\"]", self.query),
-                Style::default().fg(super::theme::ayu::BLUE),
-            ));
-        }
-        for span in &mut tabs_line.spans {
-            span.content = theme.clean(&span.content).into();
-            if !theme.color {
-                span.style = Style {
-                    fg: None,
-                    bg: None,
-                    ..span.style
-                };
-            }
-        }
-        frame.render_widget(Paragraph::new(tabs_line), header);
-        frame.render_widget(Paragraph::new(summary).style(theme.bar()), summary_area);
-
-        if body.height > 1 && self.key != "conversation" {
-            let latest = self
-                .task_id()
-                .and_then(|id| view.tasks.iter().find(|task| task.id == id))
-                .map_or_else(
-                    || {
-                        self.task
-                            .as_ref()
-                            .and_then(|task| task["round"].as_u64())
-                            .unwrap_or(0)
-                    },
-                    |task| task.round,
-                );
-            let selected = self.selected_round.unwrap_or(latest);
-            let label = format!(
-                "Round {} · {}{} · Left/Right choose · [] tabs",
-                selected,
-                if self.history_unavailable {
-                    "incomplete history · "
-                } else {
-                    ""
-                },
-                if self.selected_round.is_none() {
-                    "current"
-                } else {
-                    "history · return to current to send"
-                }
-            );
-            frame.render_widget(
-                Paragraph::new(theme.clean(&label)).style(theme.dim()),
-                Rect::new(body.x, body.y, body.width, 1),
-            );
-            body.y = body.y.saturating_add(1);
-            body.height = body.height.saturating_sub(1);
-        }
-        self.split = false;
-        if self.overview() && self.key != "conversation" && self.query.is_empty() {
-            // The task's info and its terminal side by side when the screen
-            // is wide, one above the other when it is tall; else `m` swaps.
-            if self.task_id().is_some()
-                && let Some([info, terminal]) = overview_split(body)
-            {
-                self.split = true;
-                self.draw_dashboard(frame, view, info, &theme);
-                self.draw_overview(frame, view, terminal, &theme);
-                let hint = if self.searching {
-                    format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
-                } else if footer.width >= 100 {
-                    "↑/↓ card · Enter fold · e all · i terminal · a message · ←/→ rounds · Ctrl+W worker/verifier · [] tabs · Esc back".into()
-                } else {
-                    "↑/↓ card · Enter fold · i terminal · a message · Esc".into()
-                };
-                frame.render_widget(
-                    Paragraph::new(theme.clean(&hint)).style(theme.dim()),
-                    footer,
-                );
-                return;
-            }
-            if !self.show_info {
-                self.draw_overview(frame, view, body, &theme);
-                let hint = if self.searching {
-                    format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
-                } else {
-                    "i terminal · a message · m task info · o resume earlier round · Ctrl+] release · Esc back"
-                        .into()
-                };
-                frame.render_widget(
-                    Paragraph::new(theme.clean(&hint)).style(theme.dim()),
-                    footer,
-                );
-                return;
-            }
-        }
-
-        if self.dashboard_visible() && body.height >= 4 && body.width >= 24 {
-            self.draw_dashboard(frame, view, body, &theme);
-            let hint = if self.searching {
-                format!("Search: {}_ · Enter confirm · Esc cancel", self.query)
-            } else if footer.width >= 90 {
-                "↑/↓ card · Enter fold/expand · e all · PgUp/PgDn scroll · ←/→ rounds · c comment · / search · m terminals · Esc back".into()
-            } else if footer.width >= 50 {
-                "↑/↓ card · Enter fold · e all · m terminals · Esc".into()
-            } else {
-                "↑/↓ · Enter · m · Esc".into()
-            };
-            frame.render_widget(
-                Paragraph::new(theme.clean(&hint)).style(theme.dim()),
-                footer,
-            );
-            return;
-        }
-
-        let block = if self.overview() {
-            let title = if self.show_info {
-                " Task info · m session "
-            } else if self.follow {
-                " Session · LIVE "
-            } else {
-                " Session · history · G live "
-            };
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(theme.faint())
-                .style(Style::default())
-                .title(title)
-                .padding(Padding::horizontal(u16::from(body.width >= 20)))
-        } else {
-            Block::default().borders(Borders::TOP)
-        };
-        let inner = block.inner(body);
-        frame.render_widget(block, body);
-        self.text_area = Rect::new(
-            inner.x,
-            inner.y,
-            inner.width.saturating_sub(1),
-            inner.height,
-        );
-        let width = usize::from(inner.width.saturating_sub(1));
-        let document_key = match self.tab {
-            1 => Some("messages"),
-            RESULT => Some("result"),
-            REVIEW => Some("review"),
-            _ => None,
-        };
-        if let Some(document) = document_key.and_then(|key| self.documents.get(key)) {
-            match document.viewport_filtered(
-                width,
-                usize::from(inner.height),
-                self.scroll,
-                false,
-                &self.query,
-            ) {
-                Ok(Some(page)) => {
-                    self.scroll = page.scroll;
-                    frame.render_widget(
-                        Paragraph::new(
-                            page.lines
-                                .into_iter()
-                                .map(|(_, text)| Line::raw(theme.clean(&text)))
-                                .collect::<Vec<_>>(),
-                        ),
-                        self.text_area,
-                    );
-                    if page.total > usize::from(inner.height) && inner.width > 0 {
-                        let mut state = ScrollbarState::new(
-                            page.total
-                                .saturating_sub(usize::from(inner.height))
-                                .saturating_add(1),
-                        )
-                        .position(page.scroll)
-                        .viewport_content_length(usize::from(inner.height));
-                        frame.render_stateful_widget(
-                            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                                .begin_symbol(None)
-                                .end_symbol(None),
-                            inner,
-                            &mut state,
-                        );
-                    }
-                }
-                Ok(None) => {
-                    frame.render_widget(
-                        Paragraph::new("Preparing history view...").style(theme.dim()),
-                        self.text_area,
-                    );
-                }
-                Err(error) => {
-                    frame.render_widget(
-                        Paragraph::new(theme.clean(&error.to_string())).style(theme.dim()),
-                        self.text_area,
-                    );
-                }
-            }
-            let hint = details_footer_hint_for(&self.key, self.tab, usize::from(footer.width));
-            frame.render_widget(
-                Paragraph::new(theme.clean(&hint)).style(theme.dim()),
-                footer,
-            );
-            return;
-        }
-
-        let records = self.records(view);
-        let lines = self.layout_cache.update(records, &self.query, width);
-        let height = usize::from(inner.height);
-        let bottom = lines.len().saturating_sub(height);
-        if self.tab == CHECKS
-            && std::mem::take(&mut self.reveal_check)
-            && let Some(at) = lines
-                .iter()
-                .position(|line| line.style.add_modifier.contains(Modifier::REVERSED))
-        {
-            if at < self.scroll {
-                self.scroll = at;
-            } else if at >= self.scroll.saturating_add(height) {
-                self.scroll = at + 1 - height;
-            }
-        }
-        if is_overview(self.tab) && !self.show_info && self.follow {
-            self.scroll = bottom;
-        } else {
-            self.scroll = self.scroll.min(bottom);
-            // Scrolling back down to the end picks the tail up again.
-            self.follow = is_overview(self.tab) && !self.show_info && self.scroll >= bottom;
-        }
-        let end = (self.scroll + height).min(lines.len());
-        frame.render_widget(
-            Paragraph::new(lines[self.scroll..end].to_vec()),
-            self.text_area,
-        );
-        if lines.len() > height && inner.width > 0 {
-            let mut state = ScrollbarState::new(bottom.saturating_add(1))
-                .position(self.scroll)
-                .viewport_content_length(height);
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None)
-                .track_symbol(Some(theme.glyphs().track))
-                .thumb_symbol(theme.glyphs().thumb)
-                .track_style(theme.faint())
-                .thumb_style(theme.dim());
-            frame.render_stateful_widget(scrollbar, inner, &mut state);
-        }
-
-        let hint = if self.searching {
-            format!(
-                "Search records: {}_ (Enter: confirm · Esc: cancel)",
-                self.query
-            )
-        } else {
-            details_footer_hint_for(&self.key, self.tab, usize::from(footer.width))
-        };
-        frame.render_widget(Paragraph::new(Span::styled(hint, dim())), footer);
-    }
-}
-
-/// Info area and terminal area of an Overview, when the body is big enough
-/// for both: side by side from 130 columns, stacked from 34 rows.
-fn overview_split(body: Rect) -> Option<[Rect; 2]> {
-    if body.width >= 130 {
-        let info = (body.width * 2 / 5).clamp(56, 72);
-        let [info, _, terminal] = Layout::horizontal([
-            Constraint::Length(info),
-            Constraint::Length(2),
-            Constraint::Min(60),
-        ])
-        .areas(body);
-        Some([info, terminal])
-    } else if body.height >= 34 {
-        let info = (body.height * 9 / 20).max(14);
-        let [info, terminal] =
-            Layout::vertical([Constraint::Length(info), Constraint::Min(14)]).areas(body);
-        Some([info, terminal])
-    } else {
-        None
     }
 }
 
