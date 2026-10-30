@@ -377,6 +377,7 @@ fn an_approved_writer_lands_in_the_project_without_a_commit() {
 
     let task = &original_tasks(&core, &conversation)[0];
     assert_eq!(task.status, "approved", "{:?}", task.report);
+    assert_eq!(task.verdict.as_ref().unwrap()["approved"], true);
     assert!(task.report.as_deref().unwrap().contains("not committed"));
     // local_commits = false in the example configuration: applied, not committed.
     assert_eq!(git(&project, &["rev-parse", "HEAD"]), base);
