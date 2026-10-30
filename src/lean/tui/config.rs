@@ -1,4 +1,5 @@
 //! Field-based configuration draft. Only a successful daemon reply marks it saved.
+mod app;
 mod draft;
 mod edit;
 mod model;

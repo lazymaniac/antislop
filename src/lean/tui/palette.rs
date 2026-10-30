@@ -1,4 +1,5 @@
 //! Ctrl+P command palette and active-view help overlays.
+mod app;
 mod catalog;
 mod help;
 mod picker;
@@ -20,3 +21,6 @@ pub use help::Help;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod app_tests;

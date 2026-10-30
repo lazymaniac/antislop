@@ -61,7 +61,6 @@ use crate::Result;
 use crossterm::event::{self, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use details::{CHECKS, COMMENTS, RESULT};
 use graph::{Canvas, Graph};
-use palette::{Action, Command};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -1026,7 +1025,7 @@ impl App {
         }
     }
 
-    fn open_ledger(&mut self) {
+    pub(super) fn open_ledger(&mut self) {
         let view = self.ledger_view.get_or_insert_with(ledger::LedgerView::new);
         view.visible = true;
         self.ledger_action(ledger::Action::Fetch);
@@ -2104,7 +2103,7 @@ impl App {
         });
     }
 
-    fn new_conversation(&self) {
+    pub(super) fn new_conversation(&self) {
         let client = self.client.clone();
         let updates = self.updates.clone();
         std::thread::spawn(move || {
@@ -2307,165 +2306,6 @@ impl App {
         self.dispatch(command);
     }
 
-    fn help_here(&self) -> Help {
-        if self.picker.is_some() {
-            Help::Picker
-        } else if self.editor.is_some() {
-            Help::Comment
-        } else if self.diff.is_some() {
-            Help::Diff
-        } else if self.details.is_some() {
-            Help::Details
-        } else if self.focus == Focus::Graph {
-            Help::Graph
-        } else {
-            Help::Chat
-        }
-    }
-
-    pub fn show_help(&mut self, help: Help) {
-        self.help = Some(help);
-        self.help_scroll = 0;
-    }
-
-    /// Returns false when the user quits.
-    fn picker_key(&mut self, key: event::KeyEvent) -> bool {
-        let Some(picker) = &mut self.picker else {
-            return true;
-        };
-        match key.code {
-            KeyCode::Esc => self.picker = None,
-            KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
-            KeyCode::Down => picker.selected += 1,
-            KeyCode::Backspace => {
-                picker.query.pop();
-                picker.selected = 0;
-            }
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                picker.query.push(ch);
-                picker.selected = 0;
-            }
-            KeyCode::Enter => {
-                let action = picker
-                    .items(&self.view)
-                    .into_iter()
-                    .nth(picker.selected)
-                    .map(|(_, action)| action);
-                self.picker = None;
-                return match action {
-                    Some(Action::Run(command)) => self.run(command),
-                    Some(Action::Select(key)) => {
-                        self.details = None;
-                        self.diff = None;
-                        self.plan_view = None;
-                        self.focus = Focus::Graph;
-                        self.select_node(key);
-                        true
-                    }
-                    Some(Action::Show(entry)) => {
-                        self.details = None;
-                        self.diff = None;
-                        self.plan_view = None;
-                        self.focus = Focus::Chat;
-                        self.found = Some(entry);
-                        // Brought to the top at the next draw.
-                        self.scroll = usize::MAX;
-                        true
-                    }
-                    Some(Action::SwitchConversation(id)) => {
-                        if id != self.conversation {
-                            // A conversation of another open project switches to it.
-                            let owner = self.projects.iter().position(|p| {
-                                p.conversations.iter().any(|c| c["id"] == id.as_str())
-                            });
-                            match owner {
-                                Some(index) if index != self.active_project => {
-                                    self.switch_project(index, Some(id));
-                                }
-                                _ => self.open(id),
-                            }
-                        }
-                        true
-                    }
-                    Some(Action::OpenProject(path)) => {
-                        self.open_project(&path);
-                        true
-                    }
-                    Some(Action::Address(recipient)) => {
-                        self.details = None;
-                        self.diff = None;
-                        self.plan_view = None;
-                        self.focus = Focus::Chat;
-                        let formatted = format!("@{recipient} ");
-                        let text = self.input.text.trim_end();
-                        if text.is_empty() {
-                            self.input.clear();
-                            self.input.insert_str(&formatted);
-                        } else if text.ends_with('@') {
-                            self.input.text.truncate(text.len() - 1);
-                            self.input.cursor = self.input.text.len();
-                            self.input.insert_str(&formatted);
-                        } else {
-                            self.input.insert_str(&format!(" @{recipient} "));
-                        }
-                        true
-                    }
-                    None => true,
-                };
-            }
-            _ => {}
-        }
-        true
-    }
-
-    /// Returns false when the user quits.
-    fn run(&mut self, command: Command) -> bool {
-        let selected = self.selected.clone();
-        match command {
-            Command::InterviewQuestion => self.command("/interview"),
-            Command::ApproveRequirements => self.command("/planning"),
-            Command::Accept => self.command("/accept"),
-            Command::Reject => self.command("/reject"),
-            Command::Plan => self.command("/plan"),
-            Command::Plans => self.command("/plans"),
-            Command::Resume => self.command("/resume"),
-            Command::Cancel => self.command("/cancel"),
-            Command::Pause => self.command("/pause"),
-            Command::Continue => self.command("/continue"),
-            Command::Autonomous => self.command("/mode autonomous"),
-            Command::Supervised => self.command("/mode supervised"),
-            Command::NewConversation => self.new_conversation(),
-            Command::SwitchConversation => self.open_conversation_picker(),
-            Command::Find => self.picker = Some(Picker::new(Kind::Agents)),
-            Command::Search => self.picker = Some(Picker::new(Kind::History)),
-            Command::Details => {
-                self.open_details(selected);
-            }
-            Command::ConversationDetails => {
-                self.open_details("conversation".into());
-            }
-            Command::AddressMessage => {
-                self.picker = Some(Picker::new(Kind::Recipients));
-            }
-            Command::Diff => self.open_diff(&selected),
-            Command::Comment => {
-                let target = selected;
-                let input = self.get_comment_draft(&target);
-                self.editor = Some(Editor { target, input });
-            }
-            Command::Filter => self.filter = self.filter.next(),
-            Command::Help => {
-                let help = self.help_here();
-                self.show_help(help);
-            }
-            Command::Requirements => self.open_ledger(),
-            Command::Config => self.open_config(),
-            Command::Projects => self.open_projects_picker(),
-            Command::Quit => return false,
-        }
-        true
-    }
-
     pub fn handle_plan_action(&mut self, action: PlanAction) {
         match action {
             PlanAction::Close => {
@@ -2574,50 +2414,6 @@ impl App {
             view::Stage::Blocked => format!("{} · {status} [Unblock]", stage.label()),
             _ => format!("{} · {status}", stage.label()),
         }
-    }
-
-    fn config_request(&self, request: Request, save: bool) {
-        let client = self.client.clone();
-        let updates = self.updates.clone();
-        let project = self.client.state_dir().to_string_lossy().into_owned();
-        let expected = if save {
-            self.config_editor
-                .as_ref()
-                .map(|e| (e.base_source.clone(), e.path.clone()))
-        } else {
-            None
-        };
-        std::thread::spawn(move || {
-            let reply = (|| {
-                if let Some((source, path)) = expected {
-                    let current = config::ConfigEditor::from_reply(
-                        client
-                            .call(&Request::GetConfig)
-                            .map_err(|e| e.to_string())?,
-                    )?;
-                    if current.base_source != source || current.path != path {
-                        return Err("Configuration changed externally. Reopen /config or use Ctrl+R to reload; draft preserved.".into());
-                    }
-                }
-                client.call(&request).map_err(|e| e.to_string())
-            })();
-            let _ = updates.send(Update::Config {
-                project,
-                save,
-                reply,
-            });
-        });
-    }
-
-    fn open_config(&mut self) {
-        if let Some(editor) = &mut self.config_editor {
-            editor.visible = true;
-            if editor.pending {
-                return;
-            }
-            editor.pending = true;
-        }
-        self.config_request(Request::GetConfig, false);
     }
 
     pub fn key(&mut self, key: event::KeyEvent) -> bool {
@@ -2742,36 +2538,7 @@ impl App {
             self.pending_clipboard = self.text_selection.text();
             return true;
         }
-        if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
-                if !editor.pending {
-                    editor.pending = true;
-                    editor.reload_requested = true;
-                    self.config_request(Request::GetConfig, false);
-                }
-                return true;
-            }
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
-                if !editor.pending {
-                    if let Some(toml) = editor.source() {
-                        editor.pending = true;
-                        editor.status = "Applying...".into();
-                        let expected_revision = crate::hash(&editor.base_source);
-                        self.config_request(
-                            Request::SetConfig {
-                                toml,
-                                expected_revision,
-                            },
-                            true,
-                        );
-                    } else if let Some(index) = editor.fields.iter().position(|f| f.error.is_some())
-                    {
-                        editor.selected = index;
-                    }
-                }
-            } else {
-                editor.key(key);
-            }
+        if self.config_key(key) {
             return true;
         }
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -2824,48 +2591,8 @@ impl App {
             }
         }
 
-        // Modal routing: active modal gets strict key ownership
-        if self.help.is_some() {
-            let max_scroll = self.help_max_scroll();
-            match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.help_scroll = self.help_scroll.saturating_sub(1);
-                    return true;
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.help_scroll = (self.help_scroll + 1).min(max_scroll);
-                    return true;
-                }
-                KeyCode::PageUp => {
-                    self.help_scroll = self.help_scroll.saturating_sub(5);
-                    return true;
-                }
-                KeyCode::PageDown => {
-                    self.help_scroll = (self.help_scroll + 5).min(max_scroll);
-                    return true;
-                }
-                KeyCode::Char('u') if control => {
-                    self.help_scroll = self.help_scroll.saturating_sub(3);
-                    return true;
-                }
-                KeyCode::Char('d') if control => {
-                    self.help_scroll = (self.help_scroll + 3).min(max_scroll);
-                    return true;
-                }
-                KeyCode::Home => {
-                    self.help_scroll = 0;
-                    return true;
-                }
-                KeyCode::End => {
-                    self.help_scroll = max_scroll;
-                    return true;
-                }
-                KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('?') => {
-                    self.help = None;
-                    self.help_scroll = 0;
-                }
-                _ => {}
-            }
+        // Help owns keys while open; closing keys continue through routing.
+        if self.help.is_some() && self.help_key(key) {
             return true;
         }
         if key.code == KeyCode::F(1) {
