@@ -28,6 +28,8 @@ mod agent_exchange;
 mod plan_reviews;
 #[path = "store/revision_jobs.rs"]
 mod revision_jobs;
+#[path = "store/task_progress.rs"]
+mod task_progress;
 
 pub struct Store {
     connection: Mutex<Connection>,

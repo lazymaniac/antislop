@@ -117,14 +117,23 @@ impl Core {
             .any(|mail| mail.kind == "agent_work");
         let resumed = task.round > 0;
         let first_round = task.round + 1;
-        let mut progress = super::progress::Progress::default();
+        // A restart continues the run it cut off, with the earlier findings.
+        let mut run = super::progress::Run::resume(
+            self.store.task_progress(conversation, &task.id)?,
+            &task.spec,
+            task.input_generation,
+            first_round,
+        );
+        if findings.is_empty() {
+            findings = std::mem::take(&mut run.findings);
+        }
         for round in first_round.. {
             // Finding ids are the measure of progress, but a verifier that gives
             // every round's findings new ids always looks like progress. After
             // this many rounds in one run the task goes back to the orchestrator,
-            // which can narrow the contract, answer, or ask the user; running it
-            // again starts a new count.
-            if round - first_round >= MAX_ROUNDS_PER_RUN {
+            // which can narrow the contract, answer, or ask the user; a new
+            // contract or new inputs start a new count, a restart does not.
+            if round.saturating_sub(run.since) >= MAX_ROUNDS_PER_RUN {
                 let why = format!(
                     "{MAX_ROUNDS_PER_RUN} correction rounds ran without approval; the orchestrator must narrow the contract, supply a new basis or ask the user"
                 );
@@ -401,7 +410,16 @@ impl Core {
                 };
             }
             let fixed = super::progress::fixed_earlier(&findings, &verdict);
-            if progress.record_round(super::progress::open_obligations(&verdict), fixed) {
+            let stalled = run
+                .progress
+                .record_round(super::progress::open_obligations(&verdict), fixed);
+            run.findings = verdict.findings.clone();
+            self.store.record_task_progress(
+                conversation,
+                task,
+                Some(&serde_json::to_value(&run)?),
+            )?;
+            if stalled {
                 let why = "no previously open obligation was resolved and the verifier confirmed none of its earlier findings fixed; the orchestrator must supply a new basis or revise the contract";
                 let report = task.report.take().unwrap_or_default();
                 task.report = Some(format!("{report}\n\n[runtime] {why}"));

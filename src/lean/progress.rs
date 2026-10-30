@@ -8,7 +8,9 @@
 //! a fixed finding is progress even when the same checks remain open.
 use std::collections::BTreeSet;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::Digest;
 
 use crate::lean::tasks::{Verdict, counted_status};
 
@@ -59,9 +61,42 @@ pub fn fixed_earlier(earlier: &[Value], verdict: &Verdict) -> bool {
         .any(|id| verdict.resolved.iter().any(|fixed| fixed == id))
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Progress {
     previous: Option<BTreeSet<String>>,
+}
+
+/// A task's rounds since the orchestrator last gave it a basis, kept across a
+/// restart that cuts them off. A new contract or new inputs start a new run.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Run {
+    basis: String,
+    /// The round the run began with.
+    pub since: u32,
+    pub progress: Progress,
+    /// The previous round's findings.
+    pub findings: Vec<Value>,
+}
+
+impl Run {
+    /// The run a stored record continues, or a new one from `round`.
+    pub fn resume(record: Option<Value>, spec: &Value, generation: i64, round: u32) -> Self {
+        let basis = basis(spec, generation);
+        record
+            .and_then(|record| serde_json::from_value::<Run>(record).ok())
+            .filter(|run| run.basis == basis)
+            .unwrap_or(Run {
+                basis,
+                since: round,
+                progress: Progress::default(),
+                findings: Vec::new(),
+            })
+    }
+}
+
+fn basis(spec: &Value, generation: i64) -> String {
+    let digest = sha2::Sha256::digest(format!("{generation}:{spec}"));
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 impl Progress {
     /// The first rejection establishes a baseline; subsequent rejection must close an earlier obligation.
@@ -232,5 +267,28 @@ mod tests {
         ));
         assert!(!fixed_earlier(&earlier, &rejected(&[], &["goal:low"])));
         assert!(fixed_earlier(&earlier, &rejected(&[], &["goal:aaaa"])));
+    }
+
+    #[test]
+    fn a_run_continues_on_its_basis_and_starts_over_on_a_new_one() {
+        let spec = json!({"id": "a", "goal": "g"});
+        let mut run = Run::resume(None, &spec, 1, 3);
+        assert_eq!(run.since, 3);
+        assert!(!run.progress.record(open(&["goal"])));
+        run.findings = vec![json!({"id": "goal:aaaa", "severity": "medium"})];
+        let record = serde_json::to_value(&run).unwrap();
+
+        let mut resumed = Run::resume(Some(record.clone()), &spec, 1, 5);
+        assert_eq!(resumed.since, 3);
+        assert_eq!(resumed.findings.len(), 1);
+        assert!(
+            resumed.progress.record(open(&["goal"])),
+            "the baseline survived"
+        );
+
+        let revised = json!({"id": "a", "goal": "narrower"});
+        assert_eq!(Run::resume(Some(record.clone()), &revised, 1, 5).since, 5);
+        assert_eq!(Run::resume(Some(record), &spec, 2, 5).since, 5);
+        assert_eq!(Run::resume(Some(json!("garbage")), &spec, 1, 5).since, 5);
     }
 }

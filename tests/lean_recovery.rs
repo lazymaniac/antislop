@@ -30,6 +30,7 @@ plans = {
   "manual_fix": [task("m1", "Manual fix", writes=True)],
   "parallel": [task("t1", "Fail"), task("s1", "Slow")],
   "requeue": [task("t1", "Fail"), task("p1", "Patient")],
+  "stubborn": [task("x1", "Stubborn")],
 }
 # A first orchestrator turn can include history after the current request.
 import re
@@ -117,6 +118,14 @@ answer = "```verdict\n{\"approved\": true, \"findings\": []}\n```" if any(m in p
 if "Automatic integration conflict" in prompt:
     answer = "```integration_question\nKeep the concurrent user edit or apply the worker change?\n```"
 answer = cover(answer)
+# A verifier that rejects the same obligation every round.
+if "Task: Stubborn" in prompt and "You verify" in prompt:
+    answer = cover("```verdict\n" + json.dumps({"approved": False, "findings": [
+        {"check": "goal", "id": "x", "severity": "medium", "issue": "still incomplete", "where": "README"}]}) + "\n```")
+    head, body = answer.rsplit("```verdict", 1)
+    data = json.loads(body.split("```")[0])
+    data["coverage"] = {**data.get("coverage", {}), "goal": {"status": "issue", "note": "incomplete"}}
+    answer = head + "```verdict\n" + json.dumps(data) + "\n```"
 print(json.dumps({"event": "result", "result": {"conversation_id": "s", "status": "SUCCESS", "response": answer, "usage": {}}}))
 "#,
     )
@@ -531,6 +540,41 @@ fn a_task_requeued_while_others_run_starts_without_waiting_for_them() {
         "the requeued task waited for the running one to finish"
     );
     assert_eq!(statuses(&core, &plan), ["approved", "approved"]);
+}
+
+#[test]
+fn a_stalled_task_keeps_its_count_in_the_event_log_until_it_stops() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = init_git_project(dir.path());
+    let core = open(dir.path());
+    let conversation = support::fixture_conversation(&core, &project).unwrap().id;
+    let plan = propose(&core, &conversation, "stubborn");
+    core.accept_plan(&conversation, &plan).unwrap();
+    wait_idle(&core, &conversation);
+
+    let task = core
+        .store
+        .plan(&plan)
+        .unwrap()
+        .into_iter()
+        .find(|t| t.spec["id"] == "x1")
+        .unwrap();
+    assert_eq!((task.status.as_str(), task.round), ("coordinating", 2));
+    let records: Vec<_> = core
+        .store
+        .events_since(&conversation, 0, 100_000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "task_progress" && e.payload["task"] == task.id.as_str())
+        .map(|e| e.payload["run"].clone())
+        .collect();
+    assert_eq!(records.len(), 3, "{records:?}");
+    assert_eq!(records[0]["since"], 1);
+    assert_eq!(records[1]["findings"][0]["check"], "goal");
+    assert!(
+        records[2].is_null(),
+        "the stop for coordination closes the run"
+    );
 }
 
 #[test]

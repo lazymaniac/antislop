@@ -99,6 +99,14 @@ impl Core {
             feedback["reason"] = json!(reason);
         }
         self.store.update_task(task)?;
+        // The orchestrator gives a stopped task a new basis: its next run
+        // counts its rounds afresh.
+        if matches!(
+            status,
+            status::COORDINATING | status::NEEDS_USER | status::FAILED | status::CANCELLED
+        ) {
+            self.store.record_task_progress(conversation, task, None)?;
+        }
         self.announce_task(conversation, task, reason);
         Ok(())
     }
