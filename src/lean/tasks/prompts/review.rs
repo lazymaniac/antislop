@@ -73,6 +73,8 @@ pub fn verifier_turn_prompt(
 
 /// The blocking findings of the previous round, so the verifier can name
 /// the ones the updated work fixes: their ids are the runtime's, not its own.
+/// A broad finding the round narrowed counts as fixed and comes back as a
+/// narrower one, or a large task that shrinks every round looks stalled.
 fn earlier_findings(earlier: &[Value]) -> String {
     let lines: Vec<String> = earlier
         .iter()
@@ -97,8 +99,11 @@ fn earlier_findings(earlier: &[Value]) -> String {
     }
     format!(
         "\n\nYour earlier findings that sent this task back:\n{}\nList in resolved the ids of \
-         those the updated work fixes. A defect that remains stays in findings; a new defect \
-         is a new finding, whichever check it falls under.",
+         those the updated work fixes. When it fixed part of one, list that id too and raise a \
+         new finding for only what remains, naming the files, functions or cases still wrong \
+         instead of repeating the earlier wording. An id whose defect is unchanged stays out \
+         of resolved and in findings; a new defect is a new finding, whichever check it falls \
+         under.",
         lines.join("\n")
     )
 }

@@ -231,6 +231,8 @@ fn a_verifier_is_shown_its_earlier_blocking_findings_by_runtime_id() {
     assert!(prompt.contains("- goal:aaaa1111 [goal, medium] map omits a file"));
     assert!(!prompt.contains("goal:low00000"));
     assert!(prompt.contains("List in resolved"));
+    assert!(prompt.contains("When it fixed part of one, list that id too"));
+    assert!(prompt.contains("new finding for only what remains"));
     let first = verifier_turn_prompt("/p", &task, "report", None, true, "", &[]);
     assert!(!first.contains("List in resolved"));
 }

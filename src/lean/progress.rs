@@ -5,7 +5,9 @@
 //! getting below its best so far, is not getting closer. Broad checks such as
 //! `goal` stay open while the verifier finds one new defect after another, so
 //! the verifier also confirms which of its earlier findings the round fixed;
-//! a fixed finding is progress even when the same checks remain open.
+//! a fixed finding is progress even when the same checks remain open. A
+//! finding the round only narrowed counts as fixed, and what remains comes
+//! back as a new, narrower finding.
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
