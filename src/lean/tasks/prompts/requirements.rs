@@ -46,6 +46,10 @@ pub(super) const REVIEW_RULES: &str = "Never run builds, tests, formatters, lint
      Assess the actual files and whether the report accurately describes its observations. \
      Revision, snapshot, path or changed-file mismatches alone are never blocking findings, \
      even when scoped files differ. Identify a concrete defect in the work or its evidence. \
+     When the work breaks a measurable bound (a line, length or size limit, a naming rule, a \
+     forbidden pattern), measure everything the task owns with read-only search and list \
+     every violation, each with its location and size, in one finding; never give examples, \
+     because the worker fixes what you name and each violation left out costs another round. \
      Judge the content of the work, not who produced it: \
      never require independent proof of which agent, turn, session or directory made the \
      report, a runtime allocation record, or a receipt of delivery; none exists to give.";

@@ -233,6 +233,9 @@ fn a_verifier_is_shown_its_earlier_blocking_findings_by_runtime_id() {
     assert!(prompt.contains("List in resolved"));
     assert!(prompt.contains("When it fixed part of one, list that id too"));
     assert!(prompt.contains("new finding for only what remains"));
+    assert!(prompt.contains(
+        "list every violation, each with its location and size, in one finding; never give examples"
+    ));
     let first = verifier_turn_prompt("/p", &task, "report", None, true, "", &[]);
     assert!(!first.contains("List in resolved"));
 }
