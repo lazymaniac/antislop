@@ -25,11 +25,11 @@ fn task_rounds(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::TaskRounds {
+        Request::History(crate::lean::daemon::HistoryRequest::TaskRounds {
             conversation,
             plan,
             id,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             validate_conversation_plan(core, &conversation, &plan)?;
             require(
@@ -47,13 +47,13 @@ fn task_round(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::TaskRound {
+        Request::History(crate::lean::daemon::HistoryRequest::TaskRound {
             conversation,
             plan,
             id,
             round,
             references,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             validate_conversation_plan(core, &conversation, &plan)?;
             require(
@@ -75,7 +75,10 @@ fn run_context(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::RunContext { conversation, turn } => Route::Handled({
+        Request::Session(crate::lean::daemon::SessionRequest::RunContext {
+            conversation,
+            turn,
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             json!(core.store.run_context(&conversation, &turn)?)
         }),
@@ -87,13 +90,13 @@ fn session_events(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::SessionEvents {
+        Request::Session(crate::lean::daemon::SessionRequest::SessionEvents {
             conversation,
             turn,
             after,
             limit,
             include_messages,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.store.session_events_with_messages(
                 &conversation,
@@ -111,11 +114,11 @@ fn history_content(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::HistoryContent {
+        Request::History(crate::lean::daemon::HistoryRequest::HistoryContent {
             conversation,
             owner,
             offset,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             json!(core.store.history_content(&conversation, &owner, offset)?)
         }),
@@ -127,12 +130,12 @@ fn history_messages(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::HistoryMessages {
+        Request::History(crate::lean::daemon::HistoryRequest::HistoryMessages {
             conversation,
             scope,
             after,
             limit,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.store
                 .history_messages(&conversation, &scope, after, limit.unwrap_or(100))?
@@ -145,12 +148,12 @@ fn session_content(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::SessionContent {
+        Request::Session(crate::lean::daemon::SessionRequest::SessionContent {
             conversation,
             event,
             field,
             offset,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             json!(
                 core.store
@@ -164,11 +167,11 @@ fn events(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Events {
+        Request::History(crate::lean::daemon::HistoryRequest::Events {
             conversation,
             after,
             wait_ms,
-        } => Route::Handled(handle_events(
+        }) => Route::Handled(handle_events(
             core,
             project,
             &conversation,
@@ -184,12 +187,12 @@ fn paged_events_and_sessions(context: &Context<'_>, request: Request) -> Result<
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::EventsPaged {
+        Request::History(crate::lean::daemon::HistoryRequest::EventsPaged {
             conversation,
             after,
             wait_ms,
             limit,
-        } => Route::Handled(handle_events(
+        }) => Route::Handled(handle_events(
             core,
             project,
             &conversation,
@@ -197,10 +200,12 @@ fn paged_events_and_sessions(context: &Context<'_>, request: Request) -> Result<
             wait_ms,
             limit,
         )?),
-        Request::Sessions { conversation } => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            json!(core.sessions(&conversation)?)
-        }),
+        Request::Session(crate::lean::daemon::SessionRequest::Sessions { conversation }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                json!(core.sessions(&conversation)?)
+            })
+        }
         request => Route::Unmatched(request),
     })
 }
@@ -209,18 +214,20 @@ fn history_and_mail(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::History {
+        Request::History(crate::lean::daemon::HistoryRequest::History {
             conversation,
             after,
             limit,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             json!(core.history(&conversation, after, limit)?)
         }),
-        Request::Mail { conversation } => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            json!(core.store.mail(&conversation)?)
-        }),
+        Request::History(crate::lean::daemon::HistoryRequest::Mail { conversation }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                json!(core.store.mail(&conversation)?)
+            })
+        }
         request => Route::Unmatched(request),
     })
 }

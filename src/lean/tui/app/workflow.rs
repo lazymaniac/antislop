@@ -56,10 +56,10 @@ impl App {
     fn submit_plan_review(&self) {
         if let Some(plan) = self.view.plan.clone() {
             self.request(
-                Request::ReviewComments {
+                Request::Conversation(crate::lean::daemon::ConversationRequest::ReviewComments {
                     conversation: self.conversation.clone(),
                     plan,
-                },
+                }),
                 Some("comments sent to the agent for review"),
             );
         }

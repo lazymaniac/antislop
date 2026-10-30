@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::lean::daemon::ConversationRequest;
 
 impl App {
     pub fn request_confirmation(&mut self, mut card: ConfirmationCard) {
@@ -127,11 +128,11 @@ impl App {
         };
         self.diff_request_id += 1;
         let request_id = self.diff_request_id;
-        let request = Request::Diff {
+        let request = Request::Conversation(ConversationRequest::Diff {
             conversation: self.conversation.clone(),
             plan: plan.clone(),
             id: diff.task.clone(),
-        };
+        });
         let task = diff.task.clone();
         let plan_id = plan.clone();
         let conversation = self.conversation.clone();
@@ -167,11 +168,11 @@ impl App {
             KeyCode::Char('r') => self.fetch_diff(),
             KeyCode::Char('R') => {
                 if let Some(plan) = self.view.plan.clone() {
-                    let request = Request::Review {
+                    let request = Request::Conversation(ConversationRequest::Review {
                         conversation: self.conversation.clone(),
                         plan,
                         id: diff.task.clone(),
-                    };
+                    });
                     self.request(request, Some("code review started"));
                 }
             }
@@ -195,10 +196,10 @@ fn confirmation_request(
             review_request(card.plan_id, card.task_id, conversation, scope_hash)
         }
         ConfirmationAction::CancelWork => Some((
-            Request::CancelScoped {
+            Request::Conversation(ConversationRequest::CancelScoped {
                 conversation,
                 scope_hash,
-            },
+            }),
             "cancelled",
         )),
     }
@@ -211,11 +212,11 @@ fn accept_request(
 ) -> Option<(Request, &'static str)> {
     plan.map(|plan| {
         (
-            Request::AcceptScoped {
+            Request::Conversation(ConversationRequest::AcceptScoped {
                 conversation,
                 plan,
                 scope_hash,
-            },
+            }),
             "plan accepted",
         )
     })
@@ -228,11 +229,11 @@ fn resume_request(
 ) -> Option<(Request, &'static str)> {
     plan.map(|plan| {
         (
-            Request::ResumeScoped {
+            Request::Conversation(ConversationRequest::ResumeScoped {
                 conversation,
                 plan,
                 scope_hash,
-            },
+            }),
             "plan resumed",
         )
     })
@@ -246,12 +247,12 @@ fn review_request(
 ) -> Option<(Request, &'static str)> {
     plan.zip(task).map(|(plan, id)| {
         (
-            Request::ReviewScoped {
+            Request::Conversation(ConversationRequest::ReviewScoped {
                 conversation,
                 plan,
                 id,
                 scope_hash,
-            },
+            }),
             "changes approved",
         )
     })

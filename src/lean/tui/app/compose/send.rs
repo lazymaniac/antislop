@@ -91,31 +91,37 @@ impl CommentSend {
 
     fn execute_rejection(&self, plan: &str) -> Result<Value> {
         let reason = Some(self.text.trim().to_owned()).filter(|text| !text.is_empty());
-        self.client.call(&Request::Reject {
-            conversation: self.conversation.clone(),
-            plan: plan.to_owned(),
-            reason,
-        })
+        self.client.call(&Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Reject {
+                conversation: self.conversation.clone(),
+                plan: plan.to_owned(),
+                reason,
+            },
+        ))
     }
 
     fn execute_comment(&self) -> Result<Value> {
         let target = self.editor.target.clone();
         if self.round.is_none() && self.run.is_none() {
-            self.client.call(&Request::CommentScoped {
-                conversation: self.conversation.clone(),
-                plan: self.plan.clone(),
-                target,
-                text: self.text.clone(),
-            })
+            self.client.call(&Request::Conversation(
+                crate::lean::daemon::ConversationRequest::CommentScoped {
+                    conversation: self.conversation.clone(),
+                    plan: self.plan.clone(),
+                    target,
+                    text: self.text.clone(),
+                },
+            ))
         } else {
-            self.client.call(&Request::CommentAt {
-                conversation: self.conversation.clone(),
-                plan: self.plan.clone(),
-                target,
-                text: self.text.clone(),
-                round: self.round,
-                run: self.run.clone(),
-            })
+            self.client.call(&Request::Conversation(
+                crate::lean::daemon::ConversationRequest::CommentAt {
+                    conversation: self.conversation.clone(),
+                    plan: self.plan.clone(),
+                    target,
+                    text: self.text.clone(),
+                    round: self.round,
+                    run: self.run.clone(),
+                },
+            ))
         }
     }
 }
@@ -145,17 +151,19 @@ impl AgentMessageSend {
     fn send(self) {
         let result = self
             .client
-            .call(&Request::SendToAgent {
-                message: crate::lean::store::AgentMessage {
-                    conversation: self.target.conversation.clone(),
-                    plan: self.target.plan,
-                    recipient: self.target.addressed,
-                    operation_id: self.operation.clone(),
-                    expected_round: self.target.expected_round,
-                    expected_run: self.target.expected_run,
-                    text: self.text.clone(),
+            .call(&Request::Conversation(
+                crate::lean::daemon::ConversationRequest::SendToAgent {
+                    message: crate::lean::store::AgentMessage {
+                        conversation: self.target.conversation.clone(),
+                        plan: self.target.plan,
+                        recipient: self.target.addressed,
+                        operation_id: self.operation.clone(),
+                        expected_round: self.target.expected_round,
+                        expected_run: self.target.expected_run,
+                        text: self.text.clone(),
+                    },
                 },
-            })
+            ))
             .map_err(|error| error.to_string());
         let _ = self.updates.send(Update::AgentMessage {
             conversation: self.target.conversation,

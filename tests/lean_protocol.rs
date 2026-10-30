@@ -94,7 +94,12 @@ impl DaemonGuard {
         let client = Client::at(state);
         let deadline = Instant::now() + Duration::from_secs(120);
         while Instant::now() < deadline {
-            if client.call(&Request::Identity).is_ok() {
+            if client
+                .call(&Request::Control(
+                    antislop::lean::daemon::ControlRequest::Identity,
+                ))
+                .is_ok()
+            {
                 return Self {
                     child,
                     client,
@@ -152,7 +157,9 @@ impl DaemonGuard {
 
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
-        let _ = self.client.call(&Request::Shutdown);
+        let _ = self.client.call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Shutdown,
+        ));
         let deadline = Instant::now() + Duration::from_millis(500);
         loop {
             if let Ok(Some(_)) = self.child.try_wait() {
@@ -467,10 +474,12 @@ fn test_sessions_structured_data() {
     assert!(sess["finished_ms"].as_u64().unwrap() > 0);
     let context = daemon
         .client
-        .call(&Request::RunContext {
-            conversation: conv_id.into(),
-            turn: sess["turn_id"].as_str().unwrap().into(),
-        })
+        .call(&Request::Session(
+            antislop::lean::daemon::SessionRequest::RunContext {
+                conversation: conv_id.into(),
+                turn: sess["turn_id"].as_str().unwrap().into(),
+            },
+        ))
         .unwrap();
     assert_eq!(context["conversation"], conv_id);
     assert_eq!(context["role"], "orchestrator");
@@ -580,6 +589,86 @@ fn test_scope_hash_verification_and_stale_scope_rejection() {
         review_err.contains("stale_scope"),
         "error was: {review_err}"
     );
+}
+
+#[test]
+fn grouped_requests_reach_each_daemon_dispatch_domain() {
+    use antislop::lean::daemon::{
+        ControlRequest, ConversationRequest, HistoryRequest, LedgerRequest, SessionRequest,
+        TerminalRequest,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let dir_path = dir.path().canonicalize().unwrap();
+    let project = dir_path.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let codex = fake_codex(&dir_path);
+    let agy = fake_agy(&dir_path);
+    let config = write_config(&dir_path, &codex, &agy);
+    let state = dir_path.join("state");
+    let daemon = DaemonGuard::start(&project, &config, &state);
+
+    let identity = daemon
+        .client
+        .call(&Request::Control(ControlRequest::Identity))
+        .unwrap();
+    assert_eq!(identity["project"], project.to_string_lossy().as_ref());
+    let started = daemon
+        .client
+        .call(&Request::Control(ControlRequest::Start))
+        .unwrap();
+    let conversation = started["id"].as_str().unwrap().to_owned();
+
+    assert_eq!(
+        daemon
+            .client
+            .call(&Request::Session(SessionRequest::Sessions {
+                conversation: conversation.clone(),
+            }))
+            .unwrap(),
+        json!([])
+    );
+    assert!(
+        daemon
+            .client
+            .call(&Request::History(HistoryRequest::Events {
+                conversation: conversation.clone(),
+                after: 0,
+                wait_ms: 0,
+            }))
+            .unwrap()["events"]
+            .is_array()
+    );
+    assert!(
+        daemon
+            .client
+            .call(&Request::Ledger(LedgerRequest::ListRuns {
+                conversation: conversation.clone(),
+            }))
+            .unwrap()
+            .is_array()
+    );
+    assert!(
+        daemon
+            .client
+            .call(&Request::Conversation(ConversationRequest::Plans {
+                conversation: conversation.clone(),
+                offset: None,
+                limit: None,
+            }))
+            .unwrap()
+            .is_object()
+    );
+    let terminal_error = daemon
+        .client
+        .call(&Request::Terminal(TerminalRequest::TerminalRead {
+            conversation,
+            role: "writer".into(),
+            handle: "missing-handle".into(),
+            after: 0,
+        }))
+        .unwrap_err();
+    assert!(terminal_error.to_string().contains("native session ended"));
 }
 
 #[test]
@@ -1124,11 +1213,13 @@ fn old_daemon_errors_are_reported_without_a_protocol_fallback() {
         writeln!(stream, "{}", json!({"error":"incompatible protocol"})).unwrap();
     });
     let error = Client::at(dir.path())
-        .call(&Request::TaskChecks {
-            conversation: Some("c".into()),
-            plan: "p".into(),
-            id: "t".into(),
-        })
+        .call(&Request::Conversation(
+            antislop::lean::daemon::ConversationRequest::TaskChecks {
+                conversation: Some("c".into()),
+                plan: "p".into(),
+                id: "t".into(),
+            },
+        ))
         .unwrap_err();
     assert!(error.to_string().contains("incompatible protocol"));
     server.join().unwrap();
@@ -1211,13 +1302,15 @@ fn ledger_protocol_preserves_exact_diff_approval_revision_and_idempotency() {
     let proposal = daemon
         .call_raw(&json!({"op":"propose_ledger_change","change":revised}))
         .unwrap();
-    let request = Request::RejectLedgerProposal {
-        conversation: conversation.clone(),
-        run_id: run_id.into(),
-        proposal_id: proposal["proposal_id"].as_str().unwrap().into(),
-        diff_hash: proposal["diff_hash"].as_str().unwrap().into(),
-        comment: "Keep every qualifier 👩‍💻".into(),
-    };
+    let request = Request::Ledger(
+        antislop::lean::daemon::LedgerRequest::RejectLedgerProposal {
+            conversation: conversation.clone(),
+            run_id: run_id.into(),
+            proposal_id: proposal["proposal_id"].as_str().unwrap().into(),
+            diff_hash: proposal["diff_hash"].as_str().unwrap().into(),
+            comment: "Keep every qualifier 👩‍💻".into(),
+        },
+    );
     assert_eq!(daemon.client.call(&request).unwrap()["rejected"], true);
     assert_eq!(daemon.call_raw(&json!({"op":"reject_ledger_proposal","conversation":conversation,"run_id":run_id,"proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"comment":"Keep every qualifier 👩‍💻"})).unwrap()["rejected"], true);
     assert!(daemon.call_raw(&json!({"op":"apply_ledger_change","proposal_id":proposal["proposal_id"],"diff_hash":proposal["diff_hash"],"change":revised})).is_err());
@@ -1237,35 +1330,46 @@ fn chunked_transport_round_trips_sources_larger_than_four_megabytes() {
     std::fs::create_dir(&project).unwrap();
     let config = write_config(dir.path(), &fake_codex(dir.path()), &fake_agy(dir.path()));
     let daemon = DaemonGuard::start(&project, &config, &dir.path().join("state"));
-    let conversation = daemon.client.call(&Request::Start).unwrap()["id"]
+    let conversation = daemon
+        .client
+        .call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Start,
+        ))
+        .unwrap()["id"]
         .as_str()
         .unwrap()
         .to_owned();
     let run = daemon
         .client
-        .call(&Request::CreateRun {
-            conversation: conversation.clone(),
-            goal: "large source".into(),
-        })
+        .call(&Request::Ledger(
+            antislop::lean::daemon::LedgerRequest::CreateRun {
+                conversation: conversation.clone(),
+                goal: "large source".into(),
+            },
+        ))
         .unwrap();
     let run_id = run["id"].as_str().unwrap().to_owned();
     let text = "👩‍💻e\u{301}\n\"\\".repeat(400_000);
     assert!(text.len() > antislop::transport::MAX_FRAME);
     let source = daemon
         .client
-        .call(&Request::AddLedgerSource {
-            conversation: conversation.clone(),
-            run_id: run_id.clone(),
-            text: text.clone(),
-        })
+        .call(&Request::Ledger(
+            antislop::lean::daemon::LedgerRequest::AddLedgerSource {
+                conversation: conversation.clone(),
+                run_id: run_id.clone(),
+                text: text.clone(),
+            },
+        ))
         .unwrap();
     let restored = daemon
         .client
-        .call(&Request::GetLedgerSource {
-            conversation,
-            run_id,
-            source_id: source["id"].as_str().unwrap().into(),
-        })
+        .call(&Request::Ledger(
+            antislop::lean::daemon::LedgerRequest::GetLedgerSource {
+                conversation,
+                run_id,
+                source_id: source["id"].as_str().unwrap().into(),
+            },
+        ))
         .unwrap();
     assert_eq!(restored["text"], text);
 }
@@ -1341,40 +1445,46 @@ fn history_reference_pages_stream_large_rounds_and_mail_without_hydrating_them()
     let daemon = DaemonGuard::start(&project, &config, &state);
     let snapshot = daemon
         .client
-        .call(&Request::TaskRound {
-            conversation: conversation.clone(),
-            plan: task.plan_id.clone(),
-            id: task.id.clone(),
-            round: 1,
-            references: Some(true),
-        })
+        .call(&Request::History(
+            antislop::lean::daemon::HistoryRequest::TaskRound {
+                conversation: conversation.clone(),
+                plan: task.plan_id.clone(),
+                id: task.id.clone(),
+                round: 1,
+                references: Some(true),
+            },
+        ))
         .unwrap();
     assert!(snapshot.to_string().len() < 4096);
     assert!(snapshot["report"]["session_content"].is_object());
     let events = daemon
         .client
-        .call(&Request::SessionEvents {
-            conversation: conversation.clone(),
-            turn: turn.id.clone(),
-            after: 0,
-            limit: Some(100),
-            include_messages: Some(false),
-        })
+        .call(&Request::Session(
+            antislop::lean::daemon::SessionRequest::SessionEvents {
+                conversation: conversation.clone(),
+                turn: turn.id.clone(),
+                after: 0,
+                limit: Some(100),
+                include_messages: Some(false),
+            },
+        ))
         .unwrap();
     assert!(events.to_string().len() < 4096);
     assert!(events["messages"].as_array().unwrap().is_empty());
     assert_eq!(events["events"][0]["seq"], event);
     let page = daemon
         .client
-        .call(&Request::HistoryMessages {
-            conversation: conversation.clone(),
-            scope: HistoryScope::Round {
-                task: task.id.clone(),
-                round: 1,
+        .call(&Request::History(
+            antislop::lean::daemon::HistoryRequest::HistoryMessages {
+                conversation: conversation.clone(),
+                scope: HistoryScope::Round {
+                    task: task.id.clone(),
+                    round: 1,
+                },
+                after: 0,
+                limit: Some(1),
             },
-            after: 0,
-            limit: Some(1),
-        })
+        ))
         .unwrap();
     assert!(page.to_string().len() < 1024);
     assert_eq!(page["messages"][0]["id"], mail.id);
@@ -1389,11 +1499,13 @@ fn history_reference_pages_stream_large_rounds_and_mail_without_hydrating_them()
         assert!(
             daemon
                 .client
-                .call(&Request::HistoryContent {
-                    conversation: foreign.clone(),
-                    owner: owner.clone(),
-                    offset: 0
-                })
+                .call(&Request::History(
+                    antislop::lean::daemon::HistoryRequest::HistoryContent {
+                        conversation: foreign.clone(),
+                        owner: owner.clone(),
+                        offset: 0
+                    }
+                ))
                 .is_err()
         );
         let mut offset = 0;
@@ -1401,11 +1513,13 @@ fn history_reference_pages_stream_large_rounds_and_mail_without_hydrating_them()
         loop {
             let chunk = daemon
                 .client
-                .call(&Request::HistoryContent {
-                    conversation: conversation.clone(),
-                    owner: owner.clone(),
-                    offset,
-                })
+                .call(&Request::History(
+                    antislop::lean::daemon::HistoryRequest::HistoryContent {
+                        conversation: conversation.clone(),
+                        owner: owner.clone(),
+                        offset,
+                    },
+                ))
                 .unwrap();
             let part = chunk["text"].as_str().unwrap();
             assert!(part.len() <= 64 * 1024);

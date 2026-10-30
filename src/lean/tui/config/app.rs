@@ -27,7 +27,10 @@ impl App {
         if let Some(editor) = self.config_editor.as_mut().filter(|editor| !editor.pending) {
             editor.pending = true;
             editor.reload_requested = true;
-            self.config_request(Request::GetConfig, false);
+            self.config_request(
+                Request::Control(crate::lean::daemon::ControlRequest::GetConfig),
+                false,
+            );
         }
     }
 
@@ -45,10 +48,10 @@ impl App {
         editor.status = "Applying...".into();
         let expected_revision = crate::hash(&editor.base_source);
         self.config_request(
-            Request::SetConfig {
+            Request::Control(crate::lean::daemon::ControlRequest::SetConfig {
                 toml,
                 expected_revision,
-            },
+            }),
             true,
         );
     }
@@ -61,7 +64,10 @@ impl App {
             }
             editor.pending = true;
         }
-        self.config_request(Request::GetConfig, false);
+        self.config_request(
+            Request::Control(crate::lean::daemon::ControlRequest::GetConfig),
+            false,
+        );
     }
 
     fn config_request(&self, request: Request, save: bool) {
@@ -94,7 +100,9 @@ fn config_reply(
     if let Some((source, path)) = expected {
         let current = config::ConfigEditor::from_reply(
             client
-                .call(&Request::GetConfig)
+                .call(&Request::Control(
+                    crate::lean::daemon::ControlRequest::GetConfig,
+                ))
                 .map_err(|error| error.to_string())?,
         )?;
         if current.base_source != source || current.path != path {

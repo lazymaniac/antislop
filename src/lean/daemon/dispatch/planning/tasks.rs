@@ -19,17 +19,20 @@ fn plans_and_plan(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Plans {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Plans {
             conversation,
             offset,
             limit,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             let offset = offset.unwrap_or(0);
             let limit = limit.unwrap_or(50);
             json!(core.plans(&conversation, offset, limit)?)
         }),
-        Request::Plan { conversation, plan } => Route::Handled({
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Plan {
+            conversation,
+            plan,
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             validate_conversation_plan(core, &conversation, &plan)?;
             json!(core.plan_history(&conversation, &plan)?)
@@ -42,12 +45,14 @@ fn task(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Task { plan, id } => Route::Handled({
-            let conv = core.store.plan_conversation(&plan)?;
-            validate_project_conversation(core, project, &conv)?;
-            validate_plan_task(core, &plan, &id)?;
-            json!(core.task(&plan, &id)?)
-        }),
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Task { plan, id }) => {
+            Route::Handled({
+                let conv = core.store.plan_conversation(&plan)?;
+                validate_project_conversation(core, project, &conv)?;
+                validate_plan_task(core, &plan, &id)?;
+                json!(core.task(&plan, &id)?)
+            })
+        }
         request => Route::Unmatched(request),
     })
 }
@@ -56,11 +61,11 @@ fn scoped_task(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::TaskScoped {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::TaskScoped {
             conversation,
             plan,
             id,
-        } => Route::Handled({
+        }) => Route::Handled({
             if let Some(conv) = &conversation {
                 validate_project_conversation(core, project, conv)?;
                 validate_conversation_plan(core, conv, &plan)?;
@@ -79,11 +84,11 @@ fn task_checks(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::TaskChecks {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::TaskChecks {
             conversation,
             plan,
             id,
-        } => Route::Handled({
+        }) => Route::Handled({
             if let Some(conv) = &conversation {
                 validate_project_conversation(core, project, conv)?;
                 validate_conversation_plan(core, conv, &plan)?;
@@ -102,11 +107,11 @@ fn task_diff(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Diff {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Diff {
             conversation,
             plan,
             id,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             validate_conversation_plan(core, &conversation, &plan)?;
             validate_plan_task(core, &plan, &id)?;
@@ -120,11 +125,11 @@ fn review_task(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Review {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Review {
             conversation,
             plan,
             id,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             validate_conversation_plan(core, &conversation, &plan)?;
             validate_plan_task(core, &plan, &id)?;
@@ -139,12 +144,12 @@ fn scoped_task_review(context: &Context<'_>, request: Request) -> Result<Route> 
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::ReviewScoped {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::ReviewScoped {
             conversation,
             plan,
             id,
             scope_hash,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             if let Some(expected) = &scope_hash {
                 match core.diff_scope_hash(&conversation, &plan, &id) {

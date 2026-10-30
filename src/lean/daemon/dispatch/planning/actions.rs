@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::lean::daemon::ConversationRequest;
 pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
     route_pipeline(
         context,
@@ -22,11 +23,13 @@ fn send(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Send { conversation, text } => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            core.submit_addressed(&conversation, &text, None)?
-        }),
-        Request::SendToAgent { message } => Route::Handled({
+        Request::Conversation(ConversationRequest::Send { conversation, text }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                core.submit_addressed(&conversation, &text, None)?
+            })
+        }
+        Request::Conversation(ConversationRequest::SendToAgent { message }) => Route::Handled({
             validate_project_conversation(core, project, &message.conversation)?;
             if let Some(plan) = &message.plan {
                 validate_conversation_plan(core, &message.conversation, plan)?;
@@ -41,19 +44,21 @@ fn addressed_send_and_accept(context: &Context<'_>, request: Request) -> Result<
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::SendAddressed {
+        Request::Conversation(ConversationRequest::SendAddressed {
             conversation,
             text,
             to,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.submit_addressed(&conversation, &text, to.as_deref())?
         }),
-        Request::Accept { conversation, plan } => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            validate_conversation_plan(core, &conversation, &plan)?;
-            json!(core.accept_plan(&conversation, &plan)?.len())
-        }),
+        Request::Conversation(ConversationRequest::Accept { conversation, plan }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                validate_conversation_plan(core, &conversation, &plan)?;
+                json!(core.accept_plan(&conversation, &plan)?.len())
+            })
+        }
         request => Route::Unmatched(request),
     })
 }
@@ -62,11 +67,11 @@ fn scoped_accept(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::AcceptScoped {
+        Request::Conversation(ConversationRequest::AcceptScoped {
             conversation,
             plan,
             scope_hash,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             if let Some(expected) = &scope_hash {
                 match core.plan_scope_hash(&conversation, &plan) {
@@ -85,11 +90,11 @@ fn reject_plan(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Reject {
+        Request::Conversation(ConversationRequest::Reject {
             conversation,
             plan,
             reason,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             validate_conversation_plan(core, &conversation, &plan)?;
             core.reject_plan(&conversation, &plan, reason.as_deref())?;
@@ -103,12 +108,12 @@ fn scoped_reject(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::RejectScoped {
+        Request::Conversation(ConversationRequest::RejectScoped {
             conversation,
             plan,
             reason,
             scope_hash,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             if let Some(expected) = &scope_hash {
                 match core.plan_scope_hash(&conversation, &plan) {
@@ -128,22 +133,26 @@ fn review_recovery_and_resume(context: &Context<'_>, request: Request) -> Result
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::ReviewComments { conversation, plan } => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            validate_conversation_plan(core, &conversation, &plan)?;
-            json!(core.review_comments(&conversation, &plan)?)
-        }),
-        Request::Recover(req) => Route::Handled({
+        Request::Conversation(ConversationRequest::ReviewComments { conversation, plan }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                validate_conversation_plan(core, &conversation, &plan)?;
+                json!(core.review_comments(&conversation, &plan)?)
+            })
+        }
+        Request::Conversation(ConversationRequest::Recover(req)) => Route::Handled({
             validate_project_conversation(core, project, &req.conversation)?;
             validate_conversation_plan(core, &req.conversation, &req.plan)?;
             validate_plan_task(core, &req.plan, &req.task)?;
             json!(core.recover_task(req)?)
         }),
-        Request::Resume { conversation, plan } => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            validate_conversation_plan(core, &conversation, &plan)?;
-            json!(core.resume_plan(&conversation, &plan)?.len())
-        }),
+        Request::Conversation(ConversationRequest::Resume { conversation, plan }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                validate_conversation_plan(core, &conversation, &plan)?;
+                json!(core.resume_plan(&conversation, &plan)?.len())
+            })
+        }
         request => Route::Unmatched(request),
     })
 }
@@ -152,11 +161,11 @@ fn scoped_resume(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::ResumeScoped {
+        Request::Conversation(ConversationRequest::ResumeScoped {
             conversation,
             plan,
             scope_hash,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             if let Some(expected) = &scope_hash {
                 match core.plan_scope_hash(&conversation, &plan) {
@@ -175,12 +184,14 @@ fn restart_and_cancel(context: &Context<'_>, request: Request) -> Result<Route> 
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::RestartOrchestrator { conversation } => Route::Handled({
-            validate_project_conversation(core, project, &conversation)?;
-            core.restart_orchestrator(&conversation)?;
-            json!("restarting the orchestrator in a fresh session")
-        }),
-        Request::Cancel { conversation } => Route::Handled({
+        Request::Conversation(ConversationRequest::RestartOrchestrator { conversation }) => {
+            Route::Handled({
+                validate_project_conversation(core, project, &conversation)?;
+                core.restart_orchestrator(&conversation)?;
+                json!("restarting the orchestrator in a fresh session")
+            })
+        }
+        Request::Conversation(ConversationRequest::Cancel { conversation }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.cancel(&conversation);
             Value::Null
@@ -193,10 +204,10 @@ fn scoped_cancel(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::CancelScoped {
+        Request::Conversation(ConversationRequest::CancelScoped {
             conversation,
             scope_hash,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             if let Some(expected) = &scope_hash {
                 match core.conversation_scope_hash(&conversation) {
@@ -215,18 +226,18 @@ fn pause_and_mode(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Pause {
+        Request::Conversation(ConversationRequest::Pause {
             conversation,
             paused,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.pause(&conversation, paused)?;
             Value::Null
         }),
-        Request::Mode {
+        Request::Conversation(ConversationRequest::Mode {
             conversation,
             autonomous,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             core.set_mode(&conversation, autonomous)?;
             Value::Null

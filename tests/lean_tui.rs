@@ -1502,10 +1502,12 @@ fn tui_isolated_fake_request_capture() {
     let client = Client::at(dir.relative_path());
 
     // 1. Send
-    let res = client.call(&Request::Send {
-        conversation: "conv-1".into(),
-        text: "hello orchestrator".into(),
-    });
+    let res = client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Send {
+            conversation: "conv-1".into(),
+            text: "hello orchestrator".into(),
+        },
+    ));
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "send");
@@ -1513,11 +1515,13 @@ fn tui_isolated_fake_request_capture() {
     assert_eq!(req["text"], "hello orchestrator");
 
     // 2. Comment
-    let res = client.call(&Request::Comment {
-        conversation: "conv-1".into(),
-        target: "worker:t1".into(),
-        text: "code feedback".into(),
-    });
+    let res = client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Comment {
+            conversation: "conv-1".into(),
+            target: "worker:t1".into(),
+            text: "code feedback".into(),
+        },
+    ));
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "comment");
@@ -1525,49 +1529,59 @@ fn tui_isolated_fake_request_capture() {
     assert_eq!(req["text"], "code feedback");
 
     // 3. Accept plan
-    let res = client.call(&Request::Accept {
-        conversation: "conv-1".into(),
-        plan: "p-100".into(),
-    });
+    let res = client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Accept {
+            conversation: "conv-1".into(),
+            plan: "p-100".into(),
+        },
+    ));
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "accept");
     assert_eq!(req["plan"], "p-100");
 
     // 4. Resume plan
-    let res = client.call(&Request::Resume {
-        conversation: "conv-1".into(),
-        plan: "p-100".into(),
-    });
+    let res = client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Resume {
+            conversation: "conv-1".into(),
+            plan: "p-100".into(),
+        },
+    ));
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "resume");
     assert_eq!(req["plan"], "p-100");
 
     // 5. Mode change (canonical autonomous)
-    let res = client.call(&Request::Mode {
-        conversation: "conv-1".into(),
-        autonomous: true,
-    });
+    let res = client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Mode {
+            conversation: "conv-1".into(),
+            autonomous: true,
+        },
+    ));
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "mode");
     assert_eq!(req["autonomous"], true);
 
     // 6. Pause
-    let res = client.call(&Request::Pause {
-        conversation: "conv-1".into(),
-        paused: true,
-    });
+    let res = client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Pause {
+            conversation: "conv-1".into(),
+            paused: true,
+        },
+    ));
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "pause");
     assert_eq!(req["paused"], true);
 
     // 7. Cancel
-    let res = client.call(&Request::Cancel {
-        conversation: "conv-1".into(),
-    });
+    let res = client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Cancel {
+            conversation: "conv-1".into(),
+        },
+    ));
     assert!(res.is_ok());
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "cancel");
@@ -5828,13 +5842,22 @@ mod config_editor_acceptance {
                 child,
                 client: Client::at(state),
             };
-            wait(|| daemon.client.call(&Request::Identity).is_ok());
+            wait(|| {
+                daemon
+                    .client
+                    .call(&Request::Control(
+                        antislop::lean::daemon::ControlRequest::Identity,
+                    ))
+                    .is_ok()
+            });
             daemon
         }
     }
     impl Drop for Daemon {
         fn drop(&mut self) {
-            let _ = self.client.call(&Request::ForceShutdown);
+            let _ = self.client.call(&Request::Control(
+                antislop::lean::daemon::ControlRequest::ForceShutdown,
+            ));
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
@@ -6311,16 +6334,23 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         std::fs::write(&path, initial.source().unwrap()).unwrap();
         let state = dir.relative_path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
-        let conversation = daemon.client.call(&Request::Start).unwrap()["id"]
+        let conversation = daemon
+            .client
+            .call(&Request::Control(
+                antislop::lean::daemon::ControlRequest::Start,
+            ))
+            .unwrap()["id"]
             .as_str()
             .unwrap()
             .to_owned();
         daemon
             .client
-            .call(&Request::Send {
-                conversation: conversation.clone(),
-                text: "first turn".into(),
-            })
+            .call(&Request::Conversation(
+                antislop::lean::daemon::ConversationRequest::Send {
+                    conversation: conversation.clone(),
+                    text: "first turn".into(),
+                },
+            ))
             .unwrap();
         // Wait for the complete record: a long shell printf can be observed
         // after its first write, before the rest of the prompt reaches disk.
@@ -6329,7 +6359,12 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
                 .is_ok_and(|s| s.contains("before-save") && s.ends_with("\n---\n"))
         });
         assert_eq!(
-            daemon.client.call(&Request::Identity).unwrap()["busy"],
+            daemon
+                .client
+                .call(&Request::Control(
+                    antislop::lean::daemon::ControlRequest::Identity
+                ))
+                .unwrap()["busy"],
             true
         );
         let first = std::fs::read_to_string(&log).unwrap();
@@ -6361,7 +6396,15 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
                 .as_deref(),
             Some("after-save")
         );
-        wait(|| daemon.client.call(&Request::Identity).unwrap()["busy"] == false);
+        wait(|| {
+            daemon
+                .client
+                .call(&Request::Control(
+                    antislop::lean::daemon::ControlRequest::Identity,
+                ))
+                .unwrap()["busy"]
+                == false
+        });
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
             first,
@@ -6369,17 +6412,27 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         );
         daemon
             .client
-            .call(&Request::Send {
-                conversation,
-                text: "second turn".into(),
-            })
+            .call(&Request::Conversation(
+                antislop::lean::daemon::ConversationRequest::Send {
+                    conversation,
+                    text: "second turn".into(),
+                },
+            ))
             .unwrap();
         wait(|| {
             std::fs::read_to_string(&log)
                 .unwrap()
                 .contains("after-save")
         });
-        wait(|| daemon.client.call(&Request::Identity).unwrap()["busy"] == false);
+        wait(|| {
+            daemon
+                .client
+                .call(&Request::Control(
+                    antislop::lean::daemon::ControlRequest::Identity,
+                ))
+                .unwrap()["busy"]
+                == false
+        });
         let calls = std::fs::read_to_string(&log).unwrap();
         assert!(calls.starts_with(&first));
         let turns: Vec<_> = calls.split("\n---\n").filter(|s| !s.is_empty()).collect();

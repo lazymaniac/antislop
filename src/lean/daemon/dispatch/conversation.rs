@@ -16,11 +16,11 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
 
 fn comment_route(context: &Context<'_>, request: Request) -> Result<Route> {
     match request {
-        Request::Comment {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Comment {
             conversation,
             target,
             text,
-        } => {
+        }) => {
             validate_project_conversation(context.core, context.project, &conversation)?;
             Ok(Route::Handled(json!(context.core.comment(
                 &conversation,
@@ -34,12 +34,12 @@ fn comment_route(context: &Context<'_>, request: Request) -> Result<Route> {
 
 fn comment_scoped_route(context: &Context<'_>, request: Request) -> Result<Route> {
     match request {
-        Request::CommentScoped {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::CommentScoped {
             conversation,
             plan,
             target,
             text,
-        } => {
+        }) => {
             validate_project_conversation(context.core, context.project, &conversation)?;
             if let Some(plan) = &plan {
                 validate_conversation_plan(context.core, &conversation, plan)?;
@@ -57,11 +57,11 @@ fn comment_scoped_route(context: &Context<'_>, request: Request) -> Result<Route
 
 fn comment_status_route(context: &Context<'_>, request: Request) -> Result<Route> {
     match request {
-        Request::CommentStatus {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::CommentStatus {
             conversation,
             id,
             status,
-        } => {
+        }) => {
             validate_project_conversation(context.core, context.project, &conversation)?;
             Ok(Route::Handled(json!(context.core.set_comment(
                 &conversation,
@@ -75,11 +75,11 @@ fn comment_status_route(context: &Context<'_>, request: Request) -> Result<Route
 
 fn comments_route(context: &Context<'_>, request: Request) -> Result<Route> {
     match request {
-        Request::Comments {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::Comments {
             conversation,
             plan,
             status,
-        } => Ok(Route::Handled(comments(
+        }) => Ok(Route::Handled(comments(
             context,
             conversation,
             plan,
@@ -144,14 +144,14 @@ fn decorate_comment_scopes(
 
 fn comment_at_route(context: &Context<'_>, request: Request) -> Result<Route> {
     match request {
-        Request::CommentAt {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::CommentAt {
             conversation,
             plan,
             target,
             text,
             round,
             run,
-        } => Ok(Route::Handled(comment_at(
+        }) => Ok(Route::Handled(comment_at(
             context,
             conversation,
             plan,

@@ -39,17 +39,17 @@ fn task_id_snapshot(
 fn task_request(conversation: &str, plan: &str, id: &str, checks_only: bool) -> Request {
     let conversation = Some(conversation.into());
     if checks_only {
-        Request::TaskChecks {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::TaskChecks {
             conversation,
             plan: plan.into(),
             id: id.into(),
-        }
+        })
     } else {
-        Request::TaskScoped {
+        Request::Conversation(crate::lean::daemon::ConversationRequest::TaskScoped {
             conversation,
             plan: plan.into(),
             id: id.into(),
-        }
+        })
     }
 }
 
@@ -60,19 +60,23 @@ fn round_snapshot(
     uuid: &str,
     round: Option<u64>,
 ) -> Result<Snapshot> {
-    let rounds = client.call(&Request::TaskRounds {
-        conversation: conversation.into(),
-        plan: plan.into(),
-        id: uuid.into(),
-    })?;
+    let rounds = client.call(&Request::History(
+        crate::lean::daemon::HistoryRequest::TaskRounds {
+            conversation: conversation.into(),
+            plan: plan.into(),
+            id: uuid.into(),
+        },
+    ))?;
     let selected = selected_round(round, &rounds);
-    let mut task = client.call(&Request::TaskRound {
-        conversation: conversation.into(),
-        plan: plan.into(),
-        id: uuid.into(),
-        round: selected as u32,
-        references: Some(true),
-    })?;
+    let mut task = client.call(&Request::History(
+        crate::lean::daemon::HistoryRequest::TaskRound {
+            conversation: conversation.into(),
+            plan: plan.into(),
+            id: uuid.into(),
+            round: selected as u32,
+            references: Some(true),
+        },
+    ))?;
     task["_rounds"] = rounds;
     let documents = round_documents(client, conversation, uuid, selected, &task)?;
     Ok(Snapshot { task, documents })
@@ -201,11 +205,13 @@ fn read_content(
 ) -> Result<()> {
     let mut offset = 0;
     loop {
-        let chunk = client.call(&Request::HistoryContent {
-            conversation: conversation.into(),
-            owner: owner.clone(),
-            offset,
-        })?;
+        let chunk = client.call(&Request::History(
+            crate::lean::daemon::HistoryRequest::HistoryContent {
+                conversation: conversation.into(),
+                owner: owner.clone(),
+                offset,
+            },
+        ))?;
         sink(chunk["text"].as_str().unwrap_or_default())?;
         if chunk["done"] == true {
             return Ok(());
@@ -240,12 +246,14 @@ fn message_page(
     scope: &super::super::super::store::HistoryScope,
     after: u64,
 ) -> Result<Value> {
-    client.call(&Request::HistoryMessages {
-        conversation: conversation.into(),
-        scope: scope.clone(),
-        after,
-        limit: Some(100),
-    })
+    client.call(&Request::History(
+        crate::lean::daemon::HistoryRequest::HistoryMessages {
+            conversation: conversation.into(),
+            scope: scope.clone(),
+            after,
+            limit: Some(100),
+        },
+    ))
 }
 
 fn append_message_page(

@@ -50,11 +50,11 @@ mod tests {
             let request = request.request;
             assert!(matches!(
                 request,
-                Request::TerminalOpen {
+                Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalOpen {
                     columns: 80,
                     rows: 24,
                     ..
-                }
+                })
             ));
             arrived.send(()).unwrap();
             ready.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -73,9 +73,16 @@ mod tests {
                 .unwrap()
                 .unwrap();
                 let request = request.request;
-                let detached = matches!(request, Request::TerminalDetach { .. });
+                let detached = matches!(
+                    request,
+                    Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalDetach { .. })
+                );
                 let value = match request {
-                    Request::TerminalOpen { columns, rows, .. } => {
+                    Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalOpen {
+                        columns,
+                        rows,
+                        ..
+                    }) => {
                         assert_eq!((columns, rows), (40, 8));
                         opened = true;
                         let mut value = screen("ready");
@@ -216,7 +223,7 @@ mod tests {
         });
         call_input(
             &Client::at(directory.path()),
-            &Request::TerminalInput {
+            &Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalInput {
                 conversation: "conversation".into(),
                 role: "worker".into(),
                 handle: "view".into(),
@@ -224,7 +231,7 @@ mod tests {
                 input: Input::Paste {
                     text: "draft 👩‍💻".into(),
                 },
-            },
+            }),
         )
         .unwrap();
         server.join().unwrap();
@@ -247,10 +254,18 @@ mod tests {
                 .unwrap()
                 .unwrap();
                 let request = request.request;
-                let detach = matches!(request, Request::TerminalDetach { .. });
+                let detach = matches!(
+                    request,
+                    Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalDetach { .. })
+                );
                 let data = match request {
-                    Request::TerminalOpen { .. } => serde_json::to_value(screen("ready")).unwrap(),
-                    Request::TerminalInput { sequence, .. } => {
+                    Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalOpen {
+                        ..
+                    }) => serde_json::to_value(screen("ready")).unwrap(),
+                    Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalInput {
+                        sequence,
+                        ..
+                    }) => {
                         sequences.push(sequence);
                         Value::Null
                     }

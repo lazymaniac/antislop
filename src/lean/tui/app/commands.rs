@@ -95,9 +95,11 @@ impl App {
         } else {
             self.send_command(
                 Some("requirements approved; planning started"),
-                |conversation| Request::Send {
-                    conversation,
-                    text: "/planning".into(),
+                |conversation| {
+                    Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
+                        conversation,
+                        text: "/planning".into(),
+                    })
                 },
             );
         }
@@ -115,9 +117,11 @@ impl App {
             return;
         }
         self.plan_view = None;
-        self.send_command(Some("plan accepted"), |conversation| Request::Accept {
-            conversation,
-            plan,
+        self.send_command(Some("plan accepted"), |conversation| {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Accept {
+                conversation,
+                plan,
+            })
         });
     }
 
@@ -127,10 +131,12 @@ impl App {
             return;
         };
         self.plan_view = None;
-        self.send_command(Some("plan rejected"), |conversation| Request::Reject {
-            conversation,
-            plan,
-            reason: None,
+        self.send_command(Some("plan rejected"), |conversation| {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Reject {
+                conversation,
+                plan,
+                reason: None,
+            })
         });
     }
 
@@ -144,22 +150,26 @@ impl App {
             self.notice = Some("✗ there is nothing to resume".into());
             return;
         };
-        self.send_command(Some("plan resumed"), |conversation| Request::Resume {
-            conversation,
-            plan,
+        self.send_command(Some("plan resumed"), |conversation| {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
+                conversation,
+                plan,
+            })
         });
     }
 
     fn request_cancel(&mut self) {
-        self.send_command(Some("cancelled"), |conversation| Request::Cancel {
-            conversation,
+        self.send_command(Some("cancelled"), |conversation| {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel { conversation })
         });
     }
 
     fn set_paused(&mut self, paused: bool) {
-        self.send_command(None, |conversation| Request::Pause {
-            conversation,
-            paused,
+        self.send_command(None, |conversation| {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Pause {
+                conversation,
+                paused,
+            })
         });
     }
 
@@ -169,9 +179,11 @@ impl App {
     }
 
     fn set_mode(&mut self, autonomous: bool) {
-        self.send_command(None, |conversation| Request::Mode {
-            conversation,
-            autonomous,
+        self.send_command(None, |conversation| {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Mode {
+                conversation,
+                autonomous,
+            })
         });
     }
 
@@ -185,9 +197,11 @@ impl App {
     fn send_chat(&mut self, text: &str) {
         self.scroll = 0;
         let message = text.to_owned();
-        self.send_command(None, |conversation| Request::Send {
-            conversation,
-            text: message,
+        self.send_command(None, |conversation| {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
+                conversation,
+                text: message,
+            })
         });
     }
 

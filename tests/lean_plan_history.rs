@@ -82,7 +82,12 @@ impl DaemonGuard {
         let client = Client::at(state);
         let deadline = Instant::now() + Duration::from_secs(120);
         while Instant::now() < deadline {
-            if client.call(&Request::Identity).is_ok() {
+            if client
+                .call(&Request::Control(
+                    antislop::lean::daemon::ControlRequest::Identity,
+                ))
+                .is_ok()
+            {
                 return Self { child, client };
             }
             std::thread::sleep(Duration::from_millis(25));
@@ -95,7 +100,9 @@ impl DaemonGuard {
 
 impl Drop for DaemonGuard {
     fn drop(&mut self) {
-        let _ = self.client.call(&Request::Shutdown);
+        let _ = self.client.call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Shutdown,
+        ));
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -476,7 +483,12 @@ fn daemon_rejects_foreign_scope_requests() {
     let daemon_a = DaemonGuard::start(&project_a, &config_path, &state_a);
 
     // Start conversation in project A
-    let conv_a = daemon_a.client.call(&Request::Start).unwrap();
+    let conv_a = daemon_a
+        .client
+        .call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Start,
+        ))
+        .unwrap();
     let conv_a_id = conv_a["id"].as_str().unwrap().to_string();
 
     // Start a daemon in project B
@@ -488,7 +500,12 @@ fn daemon_rejects_foreign_scope_requests() {
         .unwrap();
 
     // Create a second conversation in project A to test cross-conversation plan access
-    let conv_a2 = daemon_a.client.call(&Request::Start).unwrap();
+    let conv_a2 = daemon_a
+        .client
+        .call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Start,
+        ))
+        .unwrap();
     let conv_a2_id = conv_a2["id"].as_str().unwrap().to_string();
 
     // Send plan proposal into conversation A
@@ -505,11 +522,13 @@ fn daemon_rejects_foreign_scope_requests() {
     let _task_a2_id = tasks_a2[0].id.clone();
 
     // Test 1: Project B daemon rejects request accessing a conversation belonging to Project A
-    let err_foreign_conv = daemon_b.client.call(&Request::Plans {
-        conversation: foreign_in_b.id.clone(),
-        offset: Some(0),
-        limit: Some(10),
-    });
+    let err_foreign_conv = daemon_b.client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Plans {
+            conversation: foreign_in_b.id.clone(),
+            offset: Some(0),
+            limit: Some(10),
+        },
+    ));
     assert!(
         err_foreign_conv.is_err(),
         "Must reject foreign conversation from another project"
@@ -518,21 +537,25 @@ fn daemon_rejects_foreign_scope_requests() {
     assert!(err_msg.contains("does not belong to project"), "{err_msg}");
 
     // Test 2: Project A daemon rejects request accessing plan_a1 under conversation A2
-    let err_foreign_plan = daemon_a.client.call(&Request::Plan {
-        conversation: conv_a2_id.clone(),
-        plan: plan_a1_id.clone(),
-    });
+    let err_foreign_plan = daemon_a.client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Plan {
+            conversation: conv_a2_id.clone(),
+            plan: plan_a1_id.clone(),
+        },
+    ));
     assert!(
         err_foreign_plan.is_err(),
         "Must reject plan belonging to another conversation on daemon A"
     );
 
     // Test 3: Requesting task_a1 with plan_a2 (task belongs to plan A1, not plan A2)
-    let err_task_mismatch = daemon_a.client.call(&Request::TaskScoped {
-        conversation: Some(conv_a_id.clone()),
-        plan: plan_a2_id.clone(),
-        id: task_a1_id.clone(),
-    });
+    let err_task_mismatch = daemon_a.client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::TaskScoped {
+            conversation: Some(conv_a_id.clone()),
+            plan: plan_a2_id.clone(),
+            id: task_a1_id.clone(),
+        },
+    ));
     assert!(
         err_task_mismatch.is_err(),
         "Must reject task belonging to another plan"
@@ -544,41 +567,49 @@ fn daemon_rejects_foreign_scope_requests() {
     );
 
     // Test 4: Requesting diff with task_a1 under plan_a2
-    let err_diff_mismatch = daemon_a.client.call(&Request::Diff {
-        conversation: conv_a_id.clone(),
-        plan: plan_a2_id.clone(),
-        id: task_a1_id.clone(),
-    });
+    let err_diff_mismatch = daemon_a.client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Diff {
+            conversation: conv_a_id.clone(),
+            plan: plan_a2_id.clone(),
+            id: task_a1_id.clone(),
+        },
+    ));
     assert!(
         err_diff_mismatch.is_err(),
         "Diff must reject task belonging to another plan"
     );
 
     // Test 5: Comment scoped with non-existent or foreign plan
-    let err_comment_foreign = daemon_a.client.call(&Request::CommentScoped {
-        conversation: conv_a_id.clone(),
-        plan: Some("non_existent_plan".into()),
-        target: "t1".into(),
-        text: "comment".into(),
-    });
+    let err_comment_foreign = daemon_a.client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::CommentScoped {
+            conversation: conv_a_id.clone(),
+            plan: Some("non_existent_plan".into()),
+            target: "t1".into(),
+            text: "comment".into(),
+        },
+    ));
     assert!(
         err_comment_foreign.is_err(),
         "Must reject comment scoped to invalid plan"
     );
 
     // Test 6: Valid scoped requests succeed
-    let ok_task = daemon_a.client.call(&Request::TaskScoped {
-        conversation: Some(conv_a_id.clone()),
-        plan: plan_a1_id.clone(),
-        id: task_a1_id.clone(),
-    });
+    let ok_task = daemon_a.client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::TaskScoped {
+            conversation: Some(conv_a_id.clone()),
+            plan: plan_a1_id.clone(),
+            id: task_a1_id.clone(),
+        },
+    ));
     assert!(ok_task.is_ok(), "Valid scoped task request must succeed");
 
-    let ok_plans = daemon_a.client.call(&Request::Plans {
-        conversation: conv_a_id.clone(),
-        offset: Some(0),
-        limit: Some(10),
-    });
+    let ok_plans = daemon_a.client.call(&Request::Conversation(
+        antislop::lean::daemon::ConversationRequest::Plans {
+            conversation: conv_a_id.clone(),
+            offset: Some(0),
+            limit: Some(10),
+        },
+    ));
     assert!(ok_plans.is_ok(), "Valid plans request must succeed");
     let plans_page = ok_plans.unwrap();
     assert_eq!(plans_page["total"], 2);

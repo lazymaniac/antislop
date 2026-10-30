@@ -21,13 +21,15 @@ fn append_answers(
 }
 
 fn session_page(client: &Client, conversation: &str, turn: &str, after: u64) -> Result<Value> {
-    client.call(&Request::SessionEvents {
-        conversation: conversation.into(),
-        turn: turn.into(),
-        after,
-        limit: Some(100),
-        include_messages: Some(false),
-    })
+    client.call(&Request::Session(
+        crate::lean::daemon::SessionRequest::SessionEvents {
+            conversation: conversation.into(),
+            turn: turn.into(),
+            after,
+            limit: Some(100),
+            include_messages: Some(false),
+        },
+    ))
 }
 
 fn append_final_events(
@@ -73,12 +75,14 @@ fn append_session_content(
 ) -> Result<()> {
     let mut offset = 0;
     loop {
-        let chunk = client.call(&Request::SessionContent {
-            conversation: conversation.into(),
-            event,
-            field: "text".into(),
-            offset,
-        })?;
+        let chunk = client.call(&Request::Session(
+            crate::lean::daemon::SessionRequest::SessionContent {
+                conversation: conversation.into(),
+                event,
+                field: "text".into(),
+                offset,
+            },
+        ))?;
         sink(chunk["text"].as_str().unwrap_or_default())?;
         if chunk["done"] == true {
             return Ok(());
@@ -114,9 +118,11 @@ pub(in crate::lean::tui) fn run_snapshot(
 }
 
 fn session_runs(client: &Client, conversation: &str, role: &str) -> Result<Vec<Value>> {
-    let sessions = client.call(&Request::Sessions {
-        conversation: conversation.into(),
-    })?;
+    let sessions = client.call(&Request::Session(
+        crate::lean::daemon::SessionRequest::Sessions {
+            conversation: conversation.into(),
+        },
+    ))?;
     Ok(sessions
         .as_array()
         .into_iter()

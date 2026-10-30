@@ -71,7 +71,9 @@ fn trust_prompt(options: &Options, client: &Client) -> Option<String> {
     if options.trust {
         return None;
     }
-    match client.call(&Request::TrustStatus) {
+    match client.call(&Request::Control(
+        crate::lean::daemon::ControlRequest::TrustStatus,
+    )) {
         Ok(value) if value["trusted"] == true => None,
         _ => Some(options.project.to_string_lossy().into_owned()),
     }

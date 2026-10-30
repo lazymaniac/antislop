@@ -41,7 +41,12 @@ pub(super) fn wait_for_daemon(
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if client.call(&Request::Identity).is_ok() {
+        if client
+            .call(&Request::Control(
+                crate::lean::daemon::ControlRequest::Identity,
+            ))
+            .is_ok()
+        {
             return Ok(());
         }
         if let Some(status) = child.try_wait()? {

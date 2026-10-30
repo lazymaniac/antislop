@@ -10,7 +10,7 @@ impl App {
     pub fn accept_trust(&mut self) {
         if self.trust_prompt.take().is_some() {
             self.request(
-                Request::Trust { trusted: true },
+                Request::Control(crate::lean::daemon::ControlRequest::Trust { trusted: true }),
                 Some("workspace directory trusted"),
             );
             self.notice = Some("workspace directory trusted".into());
@@ -142,7 +142,9 @@ impl App {
         let client = self.client.clone();
         let updates = self.updates.clone();
         std::thread::spawn(move || {
-            let update = match client.call(&Request::Start) {
+            let update = match client.call(&Request::Control(
+                crate::lean::daemon::ControlRequest::Start,
+            )) {
                 Ok(conversation) => {
                     Update::Conversation(conversation["id"].as_str().unwrap_or_default().into())
                 }

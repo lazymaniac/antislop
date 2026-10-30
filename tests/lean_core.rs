@@ -568,7 +568,9 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     assert!(first.contains("answer: first"), "{first}");
     let pid = |state: &std::path::Path| {
         antislop::lean::daemon::Client::at(state)
-            .call(&antislop::lean::daemon::Request::Identity)
+            .call(&antislop::lean::daemon::Request::Control(
+                antislop::lean::daemon::ControlRequest::Identity,
+            ))
             .unwrap()["pid"]
             .clone()
     };
@@ -588,16 +590,20 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
 
     let client = antislop::lean::daemon::Client::at(&dir.join("state"));
     let conversation = client
-        .call(&antislop::lean::daemon::Request::Conversations)
+        .call(&antislop::lean::daemon::Request::Control(
+            antislop::lean::daemon::ControlRequest::Conversations,
+        ))
         .unwrap()[0]["id"]
         .as_str()
         .unwrap()
         .to_owned();
     client
-        .call(&antislop::lean::daemon::Request::Send {
-            conversation: conversation.clone(),
-            text: "sleepy".into(),
-        })
+        .call(&antislop::lean::daemon::Request::Conversation(
+            antislop::lean::daemon::ConversationRequest::Send {
+                conversation: conversation.clone(),
+                text: "sleepy".into(),
+            },
+        ))
         .unwrap();
     let stop = |force: bool| {
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_antislop"));
@@ -624,22 +630,28 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     assert!(forced.status.success(), "{forced:?}");
     assert!(
         client
-            .call(&antislop::lean::daemon::Request::Identity)
+            .call(&antislop::lean::daemon::Request::Control(
+                antislop::lean::daemon::ControlRequest::Identity
+            ))
             .is_err()
     );
     // An existing frontend must not automatically restart an explicitly stopped daemon.
     assert!(
         follower
-            .call(&antislop::lean::daemon::Request::Events {
-                conversation,
-                after: 0,
-                wait_ms: 0,
-            })
+            .call(&antislop::lean::daemon::Request::History(
+                antislop::lean::daemon::HistoryRequest::Events {
+                    conversation,
+                    after: 0,
+                    wait_ms: 0,
+                }
+            ))
             .is_err()
     );
     assert!(
         client
-            .call(&antislop::lean::daemon::Request::Identity)
+            .call(&antislop::lean::daemon::Request::Control(
+                antislop::lean::daemon::ControlRequest::Identity
+            ))
             .is_err()
     );
     let store = antislop::lean::store::Store::open(&dir.join("state/core.db")).unwrap();
@@ -654,7 +666,9 @@ fn the_cli_talks_to_one_daemon_that_outlives_it() {
     assert!(String::from_utf8_lossy(&stopped.stdout).contains("daemon stopped"));
     assert!(
         client
-            .call(&antislop::lean::daemon::Request::Identity)
+            .call(&antislop::lean::daemon::Request::Control(
+                antislop::lean::daemon::ControlRequest::Identity
+            ))
             .is_err()
     );
     let again = stop(false);
@@ -756,7 +770,9 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     let state = dir.join("state");
     let identity = || {
         antislop::lean::daemon::Client::at(&state)
-            .call(&antislop::lean::daemon::Request::Identity)
+            .call(&antislop::lean::daemon::Request::Control(
+                antislop::lean::daemon::ControlRequest::Identity,
+            ))
             .ok()
     };
     let current_build = std::path::Path::new(env!("CARGO_BIN_EXE_antislop"));
@@ -846,7 +862,9 @@ fn reconnect_to_busy_daemon(rebuilt: bool, edit_config: bool) {
     assert!(third.contains("answer: third"), "{third}");
     assert_ne!(identity().unwrap()["pid"], daemon);
     antislop::lean::daemon::Client::at(&state)
-        .call(&antislop::lean::daemon::Request::Shutdown)
+        .call(&antislop::lean::daemon::Request::Control(
+            antislop::lean::daemon::ControlRequest::Shutdown,
+        ))
         .unwrap();
 }
 
@@ -872,7 +890,9 @@ fn a_daemon_whose_state_is_deleted_leaves() {
     .unwrap();
     chat(dir, &project, "first");
     let pid = antislop::lean::daemon::Client::at(&dir.join("state"))
-        .call(&antislop::lean::daemon::Request::Identity)
+        .call(&antislop::lean::daemon::Request::Control(
+            antislop::lean::daemon::ControlRequest::Identity,
+        ))
         .unwrap()["pid"]
         .as_i64()
         .unwrap() as libc::pid_t;
@@ -970,7 +990,9 @@ fn a_frontend_outlives_a_daemon_killed_mid_turn() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let daemon = antislop::lean::daemon::Client::at(&dir.join("state"))
-        .call(&antislop::lean::daemon::Request::Identity)
+        .call(&antislop::lean::daemon::Request::Control(
+            antislop::lean::daemon::ControlRequest::Identity,
+        ))
         .unwrap()["pid"]
         .as_i64()
         .unwrap() as libc::pid_t;

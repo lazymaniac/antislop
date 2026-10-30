@@ -51,9 +51,11 @@ fn prepare_change(
     if !source.trim().is_empty() {
         register_source(client, conversation, &mut change, source)?;
     }
-    let proposal = client.call(&Request::ProposeLedgerChange {
-        change: change.clone(),
-    })?;
+    let proposal = client.call(&Request::Ledger(
+        crate::lean::daemon::LedgerRequest::ProposeLedgerChange {
+            change: change.clone(),
+        },
+    ))?;
     Ok(serde_json::json!({"change":change,"proposal":proposal}))
 }
 
@@ -63,11 +65,13 @@ fn register_source(
     change: &mut crate::lean::ledger::LedgerChange,
     source: &str,
 ) -> crate::Result<()> {
-    let registered = client.call(&Request::AddLedgerSource {
-        conversation: conversation.into(),
-        run_id: change.run_id.clone(),
-        text: source.into(),
-    })?;
+    let registered = client.call(&Request::Ledger(
+        crate::lean::daemon::LedgerRequest::AddLedgerSource {
+            conversation: conversation.into(),
+            run_id: change.run_id.clone(),
+            text: source.into(),
+        },
+    ))?;
     let id = registered["id"]
         .as_str()
         .ok_or_else(|| crate::Error::Invalid("source registration returned no identity".into()))?;

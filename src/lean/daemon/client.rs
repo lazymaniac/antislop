@@ -1,4 +1,5 @@
 use super::*;
+use crate::lean::daemon::ControlRequest;
 mod launch;
 use launch::{spawn_daemon, wait_for_daemon};
 
@@ -63,7 +64,7 @@ impl Client {
         match (result, &self.origin) {
             (Err(error), Some((project, config, state)))
                 // State the user deleted stays deleted.
-                if matches!(request, Request::Events { .. } | Request::EventsPaged { .. })
+                if matches!(request, Request::History(crate::lean::daemon::HistoryRequest::Events { .. }) | Request::History(crate::lean::daemon::HistoryRequest::EventsPaged { .. }))
                     && lost(&error)
                     && state.join("core.db").exists()
                     && !state.join("stopped").exists() =>
@@ -78,9 +79,10 @@ impl Client {
     fn call_once(&self, request: &Request) -> Result<Value> {
         let mut stream = UnixStream::connect(&self.socket)?;
         let wait = match request {
-            Request::Events { wait_ms, .. } | Request::EventsPaged { wait_ms, .. } => {
-                Duration::from_millis(*wait_ms).min(LONGEST_WAIT)
-            }
+            Request::History(crate::lean::daemon::HistoryRequest::Events { wait_ms, .. })
+            | Request::History(crate::lean::daemon::HistoryRequest::EventsPaged {
+                wait_ms, ..
+            }) => Duration::from_millis(*wait_ms).min(LONGEST_WAIT),
             _ => Duration::ZERO,
         };
         stream.set_read_timeout(Some(wait + Duration::from_secs(10)))?;
@@ -118,9 +120,9 @@ fn stop_client(state: &Path) -> Result<Option<(PathBuf, Client)>> {
 
 fn send_stop(client: &Client, state: &Path, force: bool) -> Result<bool> {
     let request = if force {
-        Request::ForceShutdown
+        Request::Control(crate::lean::daemon::ControlRequest::ForceShutdown)
     } else {
-        Request::Shutdown
+        Request::Control(crate::lean::daemon::ControlRequest::Shutdown)
     };
     match client.call(&request) {
         Ok(_) => {
@@ -161,7 +163,7 @@ fn reuse_existing(
     state: &Path,
     executable: &Path,
 ) -> Result<bool> {
-    let Ok(identity) = client.call(&Request::Identity) else {
+    let Ok(identity) = client.call(&Request::Control(ControlRequest::Identity)) else {
         return Ok(false);
     };
     let same_build = identity["build"].as_str() == Some(build_identity(executable)?.as_str());
@@ -178,7 +180,7 @@ fn reuse_existing(
             identity["pid"]
         ),
     )?;
-    client.call(&Request::Shutdown)?;
+    client.call(&Request::Control(ControlRequest::Shutdown))?;
     wait_unlocked(state)?;
     Ok(false)
 }

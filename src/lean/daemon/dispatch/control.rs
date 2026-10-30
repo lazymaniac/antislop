@@ -20,7 +20,7 @@ fn identity(context: &Context<'_>, request: Request) -> Result<Route> {
     let project = context.project;
     let config = context.config;
     Ok(match request {
-        Request::Identity => Route::Handled({
+        Request::Control(crate::lean::daemon::ControlRequest::Identity) => Route::Handled({
             let _guard = core
                 .config_update
                 .lock()
@@ -41,7 +41,7 @@ fn identity(context: &Context<'_>, request: Request) -> Result<Route> {
 fn shutdown(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     Ok(match request {
-        Request::Shutdown => Route::Handled({
+        Request::Control(crate::lean::daemon::ControlRequest::Shutdown) => Route::Handled({
             require(
                 !core.busy(),
                 "the daemon is executing work; use antislop stop --force to cancel it",
@@ -57,7 +57,7 @@ fn shutdown(context: &Context<'_>, request: Request) -> Result<Route> {
 fn force_shutdown(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     Ok(match request {
-        Request::ForceShutdown => Route::Handled({
+        Request::Control(crate::lean::daemon::ControlRequest::ForceShutdown) => Route::Handled({
             std::fs::write(core.state.join("stopped"), [])?;
             let deadline = Instant::now() + Duration::from_secs(5);
             while core.busy() && Instant::now() < deadline {
@@ -83,11 +83,15 @@ fn conversations_and_start(context: &Context<'_>, request: Request) -> Result<Ro
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::Conversations => Route::Handled(json!(core.conversations()?)),
-        Request::Start => Route::Handled(json!(core.start(project)?)),
-        Request::StartIn {
+        Request::Control(crate::lean::daemon::ControlRequest::Conversations) => {
+            Route::Handled(json!(core.conversations()?))
+        }
+        Request::Control(crate::lean::daemon::ControlRequest::Start) => {
+            Route::Handled(json!(core.start(project)?))
+        }
+        Request::Control(crate::lean::daemon::ControlRequest::StartIn {
             project: target_project,
-        } => Route::Handled({
+        }) => Route::Handled({
             let target_path = Path::new(&target_project).canonicalize()?;
             require(
                 super::super::super::trust::Registry::from_env()?.is_trusted(&target_path),
@@ -106,7 +110,7 @@ fn conversations_and_start(context: &Context<'_>, request: Request) -> Result<Ro
 fn trust_status(context: &Context<'_>, request: Request) -> Result<Route> {
     let project = context.project;
     Ok(match request {
-        Request::TrustStatus => Route::Handled({
+        Request::Control(crate::lean::daemon::ControlRequest::TrustStatus) => Route::Handled({
             json!({
                 "project": project.to_string_lossy(),
                 "trusted": super::super::super::trust::Registry::from_env()?.is_trusted(project),
@@ -119,18 +123,20 @@ fn trust_status(context: &Context<'_>, request: Request) -> Result<Route> {
 fn trust(context: &Context<'_>, request: Request) -> Result<Route> {
     let project = context.project;
     Ok(match request {
-        Request::Trust { trusted } => Route::Handled({
-            let registry = super::super::super::trust::Registry::from_env()?;
-            if trusted {
-                registry.trust(project)?;
-            } else {
-                registry.untrust(project)?;
-            }
-            json!({
-                "project": project.to_string_lossy(),
-                "trusted": trusted,
+        Request::Control(crate::lean::daemon::ControlRequest::Trust { trusted }) => {
+            Route::Handled({
+                let registry = super::super::super::trust::Registry::from_env()?;
+                if trusted {
+                    registry.trust(project)?;
+                } else {
+                    registry.untrust(project)?;
+                }
+                json!({
+                    "project": project.to_string_lossy(),
+                    "trusted": trusted,
+                })
             })
-        }),
+        }
         request => Route::Unmatched(request),
     })
 }

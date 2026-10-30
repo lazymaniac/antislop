@@ -62,9 +62,11 @@ fn route_navigation(
         ledger::Action::Prepare { .. } => Some(("preview", None)),
         ledger::Action::Runs => Some((
             "runs",
-            Some(Request::ListRuns {
-                conversation: conversation.into(),
-            }),
+            Some(Request::Ledger(
+                crate::lean::daemon::LedgerRequest::ListRuns {
+                    conversation: conversation.into(),
+                },
+            )),
         )),
         ledger::Action::Review(run) => Some(("preview", Some(proposal_request(conversation, run)))),
         ledger::Action::Proposal => view.page.as_ref().map(|page| {
@@ -80,10 +82,10 @@ fn route_navigation(
 }
 
 fn route_create(conversation: &str) -> Option<(&'static str, Option<Request>)> {
-    let request = Request::CreateRun {
+    let request = Request::Ledger(crate::lean::daemon::LedgerRequest::CreateRun {
         conversation: conversation.into(),
         goal: "Manually maintained requirements".into(),
-    };
+    });
     Some(("created", Some(request)))
 }
 
@@ -98,11 +100,13 @@ fn route_apply(action: &ledger::Action) -> Option<(&'static str, Option<Request>
     };
     Some((
         "applied",
-        Some(Request::ApplyLedgerChange {
-            proposal_id: proposal.clone(),
-            diff_hash: hash.clone(),
-            change: change.clone(),
-        }),
+        Some(Request::Ledger(
+            crate::lean::daemon::LedgerRequest::ApplyLedgerChange {
+                proposal_id: proposal.clone(),
+                diff_hash: hash.clone(),
+                change: change.clone(),
+            },
+        )),
     ))
 }
 
@@ -119,13 +123,13 @@ fn route_reject(
     else {
         return None;
     };
-    let request = Request::RejectLedgerProposal {
+    let request = Request::Ledger(crate::lean::daemon::LedgerRequest::RejectLedgerProposal {
         conversation: conversation.into(),
         run_id: run.clone(),
         proposal_id: proposal.clone(),
         diff_hash: hash.clone(),
         comment: comment.clone(),
-    };
+    });
     Some(("rejected", Some(request)))
 }
 
@@ -145,12 +149,14 @@ fn route_detail(view: &LedgerView, conversation: &str) -> Option<(&'static str, 
     let entry = view.selected_entry()?;
     Some((
         "detail",
-        Some(Request::GetLedgerEntry {
-            conversation: conversation.into(),
-            run_id: entry.run_id.clone(),
-            id: entry.spec.id.clone(),
-            revision: None,
-        }),
+        Some(Request::Ledger(
+            crate::lean::daemon::LedgerRequest::GetLedgerEntry {
+                conversation: conversation.into(),
+                run_id: entry.run_id.clone(),
+                id: entry.spec.id.clone(),
+                revision: None,
+            },
+        )),
     ))
 }
 
@@ -158,19 +164,21 @@ fn route_source(view: &LedgerView, conversation: &str) -> Option<(&'static str, 
     let entry = view.selected_entry()?;
     Some((
         "source",
-        Some(Request::GetLedgerSource {
-            conversation: conversation.into(),
-            run_id: entry.run_id.clone(),
-            source_id: entry.spec.source.source_id.clone(),
-        }),
+        Some(Request::Ledger(
+            crate::lean::daemon::LedgerRequest::GetLedgerSource {
+                conversation: conversation.into(),
+                run_id: entry.run_id.clone(),
+                source_id: entry.spec.source.source_id.clone(),
+            },
+        )),
     ))
 }
 
 fn proposal_request(conversation: &str, run: &str) -> Request {
-    Request::GetLedgerProposal {
+    Request::Ledger(crate::lean::daemon::LedgerRequest::GetLedgerProposal {
         conversation: conversation.into(),
         run_id: run.into(),
-    }
+    })
 }
 
 fn mark_pending(view: &mut LedgerView, action: &ledger::Action, kind: &str) {

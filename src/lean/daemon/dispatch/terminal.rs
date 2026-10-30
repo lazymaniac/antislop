@@ -18,13 +18,13 @@ fn terminal_open(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::TerminalOpen {
+        Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalOpen {
             conversation,
             role,
             columns,
             rows,
             retry,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             json!(core.terminal_open(&conversation, &role, columns, rows, retry)?)
         }),
@@ -36,12 +36,12 @@ fn terminal_read(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::TerminalRead {
+        Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalRead {
             conversation,
             role,
             handle,
             after,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             json!(core.terminal_read(&conversation, &role, &handle, after)?)
         }),
@@ -53,13 +53,13 @@ fn terminal_input(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::TerminalInput {
+        Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalInput {
             conversation,
             role,
             handle,
             sequence,
             input,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             json!(core.terminal_input(&conversation, &role, &handle, sequence, input)?)
         }),
@@ -71,13 +71,13 @@ fn terminal_resize(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::TerminalResize {
+        Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalResize {
             conversation,
             role,
             handle,
             columns,
             rows,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             json!(core.terminal_resize(&conversation, &role, &handle, columns, rows)?)
         }),
@@ -89,11 +89,11 @@ fn terminal_detach(context: &Context<'_>, request: Request) -> Result<Route> {
     let core = context.core;
     let project = context.project;
     Ok(match request {
-        Request::TerminalDetach {
+        Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalDetach {
             conversation,
             role,
             handle,
-        } => Route::Handled({
+        }) => Route::Handled({
             validate_project_conversation(core, project, &conversation)?;
             json!(core.terminal_detach(&conversation, &role, &handle)?)
         }),

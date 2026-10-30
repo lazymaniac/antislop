@@ -227,11 +227,13 @@ impl App {
         let updates = self.updates.clone();
         std::thread::spawn(move || {
             let reply = client
-                .call(&crate::lean::daemon::Request::Plans {
-                    conversation: conversation.clone(),
-                    offset: Some(offset),
-                    limit: Some(1),
-                })
+                .call(&crate::lean::daemon::Request::Conversation(
+                    crate::lean::daemon::ConversationRequest::Plans {
+                        conversation: conversation.clone(),
+                        offset: Some(offset),
+                        limit: Some(1),
+                    },
+                ))
                 .and_then(|value| serde_json::from_value(value).map_err(Into::into))
                 .map_err(|error| error.to_string());
             let _ = updates.send(Update::PlanHistory {

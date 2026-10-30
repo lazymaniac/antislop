@@ -29,7 +29,9 @@ fn ensure_accepting(core: &Core, request: &Request) -> Result<()> {
         !core.state.join("stopped").exists()
             || matches!(
                 request,
-                Request::Identity | Request::Shutdown | Request::ForceShutdown
+                Request::Control(crate::lean::daemon::ControlRequest::Identity)
+                    | Request::Control(crate::lean::daemon::ControlRequest::Shutdown)
+                    | Request::Control(crate::lean::daemon::ControlRequest::ForceShutdown)
             ),
         "the daemon is stopping",
     )

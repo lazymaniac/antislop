@@ -44,10 +44,12 @@ impl App {
         let conversation = self.conversation.clone();
         std::thread::spawn(move || {
             let result = client
-                .call(&Request::Send {
-                    conversation: conversation.clone(),
-                    text,
-                })
+                .call(&Request::Conversation(
+                    crate::lean::daemon::ConversationRequest::Send {
+                        conversation: conversation.clone(),
+                        text,
+                    },
+                ))
                 .map(|_| ())
                 .map_err(|error| error.to_string());
             let _ = updates.send(Update::InterviewResult {

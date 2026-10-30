@@ -127,7 +127,11 @@ fn read_request(stream: &UnixStream) -> Result<Option<Request>> {
 }
 
 fn handle(runtime: &Runtime, request: Request) -> ConnectionResponse {
-    let shutdown = matches!(request, Request::Shutdown | Request::ForceShutdown);
+    let shutdown = matches!(
+        request,
+        Request::Control(crate::lean::daemon::ControlRequest::Shutdown)
+            | Request::Control(crate::lean::daemon::ControlRequest::ForceShutdown)
+    );
     let response = match super::handle(&runtime.core, &runtime.project, &runtime.config, request) {
         Ok(data) => Response {
             data: Some(data),

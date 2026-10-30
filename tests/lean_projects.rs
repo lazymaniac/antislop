@@ -77,7 +77,12 @@ impl Daemon {
             .unwrap();
         let client = Client::at(&state);
         let deadline = Instant::now() + Duration::from_secs(120);
-        while client.call(&Request::Identity).is_err() {
+        while client
+            .call(&Request::Control(
+                antislop::lean::daemon::ControlRequest::Identity,
+            ))
+            .is_err()
+        {
             assert!(Instant::now() < deadline, "daemon did not start");
             std::thread::sleep(Duration::from_millis(25));
         }
@@ -90,7 +95,9 @@ impl Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        let _ = self.conn.client.call(&Request::Shutdown);
+        let _ = self.conn.client.call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Shutdown,
+        ));
         std::thread::sleep(Duration::from_millis(100));
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -109,7 +116,9 @@ fn pump(app: &mut App, rx: &mpsc::Receiver<Update>, until: impl Fn(&App) -> bool
 
 fn conversations(conn: &ProjectConn) -> Vec<Value> {
     conn.client
-        .call(&Request::Conversations)
+        .call(&Request::Control(
+            antislop::lean::daemon::ControlRequest::Conversations,
+        ))
         .unwrap()
         .as_array()
         .cloned()

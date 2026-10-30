@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::lean::daemon::ControlRequest;
 
 impl App {
     /// Adds a connected project to the screen, once; its conversations are
@@ -145,7 +146,7 @@ fn spawn_project_poller(
 ) {
     std::thread::spawn(move || {
         loop {
-            if let Ok(list) = client.call(&Request::Conversations) {
+            if let Ok(list) = client.call(&Request::Control(ControlRequest::Conversations)) {
                 let conversations = list
                     .as_array()
                     .into_iter()

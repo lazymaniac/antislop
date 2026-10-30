@@ -220,9 +220,11 @@ fn recover_orchestrator(
     conversation: &str,
 ) -> std::result::Result<String, String> {
     client
-        .call(&Request::RestartOrchestrator {
-            conversation: conversation.into(),
-        })
+        .call(&Request::Conversation(
+            crate::lean::daemon::ConversationRequest::RestartOrchestrator {
+                conversation: conversation.into(),
+            },
+        ))
         .map(|reply| {
             reply
                 .as_str()
@@ -242,25 +244,29 @@ fn recover_task(
 ) -> std::result::Result<String, String> {
     let token = recovery_token(client, plan, task)?;
     let reply = client
-        .call(&Request::Recover(crate::lean::TaskRecoveryRequest {
-            conversation: conversation.to_owned(),
-            plan: plan.to_owned(),
-            task: task.to_owned(),
-            action,
-            consent_files: None,
-            freshness_token: token,
-            message,
-        }))
+        .call(&Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Recover(crate::lean::TaskRecoveryRequest {
+                conversation: conversation.to_owned(),
+                plan: plan.to_owned(),
+                task: task.to_owned(),
+                action,
+                consent_files: None,
+                freshness_token: token,
+                message,
+            }),
+        ))
         .map_err(|e| e.to_string())?;
     Ok(reply["notice"].as_str().unwrap_or("done").to_owned())
 }
 
 fn recovery_token(client: &Client, plan: &str, task: &str) -> std::result::Result<String, String> {
     let stored = client
-        .call(&Request::Task {
-            plan: plan.to_owned(),
-            id: task.to_owned(),
-        })
+        .call(&Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Task {
+                plan: plan.to_owned(),
+                id: task.to_owned(),
+            },
+        ))
         .map_err(|e| e.to_string())?;
     let token = stored["freshness_token"]
         .as_str()

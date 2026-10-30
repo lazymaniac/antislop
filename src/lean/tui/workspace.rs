@@ -92,7 +92,9 @@ pub fn latest_or_new(conn: &ProjectConn) -> Result<String, String> {
     let project = conn.path.to_string_lossy();
     let list = conn
         .client
-        .call(&Request::Conversations)
+        .call(&Request::Control(
+            crate::lean::daemon::ControlRequest::Conversations,
+        ))
         .map_err(|e| e.to_string())?;
     let latest = list
         .as_array()
@@ -105,7 +107,9 @@ pub fn latest_or_new(conn: &ProjectConn) -> Result<String, String> {
         Some(id) => Ok(id),
         None => conn
             .client
-            .call(&Request::Start)
+            .call(&Request::Control(
+                crate::lean::daemon::ControlRequest::Start,
+            ))
             .map_err(|e| e.to_string())
             .map(|c| c["id"].as_str().unwrap_or_default().to_owned()),
     }

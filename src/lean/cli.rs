@@ -122,7 +122,9 @@ impl Options {
         {
             return Ok(id);
         }
-        Ok(client.call(&Request::Start)?["id"]
+        Ok(client.call(&Request::Control(
+            crate::lean::daemon::ControlRequest::Start,
+        ))?["id"]
             .as_str()
             .unwrap_or_default()
             .to_owned())
@@ -131,7 +133,9 @@ impl Options {
     pub fn latest(&self, client: &Client) -> Result<Option<String>> {
         let project = self.project.to_string_lossy();
         Ok(client
-            .call(&Request::Conversations)?
+            .call(&Request::Control(
+                crate::lean::daemon::ControlRequest::Conversations,
+            ))?
             .as_array()
             .into_iter()
             .flatten()
@@ -254,11 +258,13 @@ pub fn chat(args: &[String]) -> Result<()> {
     let conversation = options.conversation(&client)?;
     eprintln!("conversation {conversation}");
     let events = |after: u64, wait_ms: u64| -> Result<(Vec<Value>, bool)> {
-        let reply = client.call(&Request::Events {
-            conversation: conversation.clone(),
-            after,
-            wait_ms,
-        })?;
+        let reply = client.call(&Request::History(
+            crate::lean::daemon::HistoryRequest::Events {
+                conversation: conversation.clone(),
+                after,
+                wait_ms,
+            },
+        ))?;
         Ok((
             reply["events"].as_array().cloned().unwrap_or_default(),
             reply["idle"] == true,
@@ -275,10 +281,12 @@ pub fn chat(args: &[String]) -> Result<()> {
         plan = latest_plan(&page).or(plan);
     }
     if let Some(message) = &options.message {
-        client.call(&Request::Send {
-            conversation: conversation.clone(),
-            text: message.clone(),
-        })?;
+        client.call(&Request::Conversation(
+            crate::lean::daemon::ConversationRequest::Send {
+                conversation: conversation.clone(),
+                text: message.clone(),
+            },
+        ))?;
     }
     let (lines, typed) = mpsc::channel();
     std::thread::spawn(move || {
@@ -304,42 +312,56 @@ pub fn chat(args: &[String]) -> Result<()> {
             let request = match line.trim() {
                 "" => continue,
                 "/accept" => match &plan {
-                    Some(plan) => Request::Accept {
-                        conversation,
-                        plan: plan.clone(),
-                    },
+                    Some(plan) => {
+                        Request::Conversation(crate::lean::daemon::ConversationRequest::Accept {
+                            conversation,
+                            plan: plan.clone(),
+                        })
+                    }
                     None => {
                         eprintln!("✗ there is no proposed plan");
                         continue;
                     }
                 },
                 "/resume" => match &plan {
-                    Some(plan) => Request::Resume {
-                        conversation,
-                        plan: plan.clone(),
-                    },
+                    Some(plan) => {
+                        Request::Conversation(crate::lean::daemon::ConversationRequest::Resume {
+                            conversation,
+                            plan: plan.clone(),
+                        })
+                    }
                     None => {
                         eprintln!("✗ there is no plan to resume");
                         continue;
                     }
                 },
-                "/cancel" => Request::Cancel { conversation },
-                "/pause" => Request::Pause {
-                    conversation,
-                    paused: true,
-                },
-                "/continue" => Request::Pause {
-                    conversation,
-                    paused: false,
-                },
-                "/mode autonomous" | "/mode supervised" => Request::Mode {
-                    conversation,
-                    autonomous: line.trim().ends_with("autonomous"),
-                },
-                text => Request::Send {
+                "/cancel" => {
+                    Request::Conversation(crate::lean::daemon::ConversationRequest::Cancel {
+                        conversation,
+                    })
+                }
+                "/pause" => {
+                    Request::Conversation(crate::lean::daemon::ConversationRequest::Pause {
+                        conversation,
+                        paused: true,
+                    })
+                }
+                "/continue" => {
+                    Request::Conversation(crate::lean::daemon::ConversationRequest::Pause {
+                        conversation,
+                        paused: false,
+                    })
+                }
+                "/mode autonomous" | "/mode supervised" => {
+                    Request::Conversation(crate::lean::daemon::ConversationRequest::Mode {
+                        conversation,
+                        autonomous: line.trim().ends_with("autonomous"),
+                    })
+                }
+                text => Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
                     conversation,
                     text: text.to_owned(),
-                },
+                }),
             };
             if let Err(error) = client.call(&request) {
                 eprintln!("✗ {}", clean(&error.to_string()));

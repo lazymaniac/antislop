@@ -10,10 +10,10 @@ pub(super) fn route(context: &Context<'_>, request: Request) -> Result<Route> {
 
 fn set_config_route(context: &Context<'_>, request: Request) -> Result<Route> {
     match request {
-        Request::SetConfig {
+        Request::Control(crate::lean::daemon::ControlRequest::SetConfig {
             toml,
             expected_revision,
-        } => Ok(Route::Handled(set_config(
+        }) => Ok(Route::Handled(set_config(
             context,
             toml,
             expected_revision,
@@ -106,7 +106,9 @@ fn config_reply(toml: String, config: &Path, warnings: Vec<ConfigUpdateWarning>)
 
 fn get_config_route(context: &Context<'_>, request: Request) -> Result<Route> {
     match request {
-        Request::GetConfig => Ok(Route::Handled(get_config(context)?)),
+        Request::Control(crate::lean::daemon::ControlRequest::GetConfig) => {
+            Ok(Route::Handled(get_config(context)?))
+        }
         request => Ok(Route::Unmatched(request)),
     }
 }

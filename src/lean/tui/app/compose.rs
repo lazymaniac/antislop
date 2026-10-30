@@ -59,10 +59,12 @@ impl App {
         let generation = self.generation;
         std::thread::spawn(move || {
             let result = client
-                .call(&Request::Send {
-                    conversation: conversation.clone(),
-                    text: sent_text.clone(),
-                })
+                .call(&Request::Conversation(
+                    crate::lean::daemon::ConversationRequest::Send {
+                        conversation: conversation.clone(),
+                        text: sent_text.clone(),
+                    },
+                ))
                 .map(|_| ())
                 .map_err(|error| error.to_string());
             let _ = updates.send(Update::SendResult {

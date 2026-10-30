@@ -24,7 +24,9 @@ impl App {
     }
 
     fn daemon_conversations(&self) -> Vec<palette::ConversationItem> {
-        let Ok(Value::Array(list)) = self.client.call(&Request::Conversations) else {
+        let Ok(Value::Array(list)) = self.client.call(&Request::Control(
+            crate::lean::daemon::ControlRequest::Conversations,
+        )) else {
             return Vec::new();
         };
         list.iter()
@@ -103,11 +105,11 @@ impl App {
 
     pub(in crate::lean::tui) fn set_comment(&self, id: u64, status: &str) {
         self.request(
-            Request::CommentStatus {
+            Request::Conversation(crate::lean::daemon::ConversationRequest::CommentStatus {
                 conversation: self.conversation.clone(),
                 id,
                 status: status.into(),
-            },
+            }),
             None,
         );
     }

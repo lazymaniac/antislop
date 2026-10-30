@@ -28,7 +28,7 @@ impl LedgerView {
             task: self.task.clone(),
             ..Default::default()
         };
-        Request::ListRequirements { query }
+        Request::Ledger(crate::lean::daemon::LedgerRequest::ListRequirements { query })
     }
     pub fn filtered(&self) -> Vec<&LedgerEntry> {
         self.page

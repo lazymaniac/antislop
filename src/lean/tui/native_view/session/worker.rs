@@ -79,13 +79,13 @@ impl Worker {
         if self.screen.is_some() || !self.should_open() {
             return;
         }
-        let request = Request::TerminalOpen {
+        let request = Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalOpen {
             conversation: self.conversation.clone(),
             role: self.role.clone(),
             columns: self.dimensions.0,
             rows: self.dimensions.1,
             retry: self.retry,
-        };
+        });
         let opened = self
             .client
             .call(&request)
@@ -110,11 +110,13 @@ impl Worker {
 
     fn retry_session(&mut self) {
         if let Some(old) = self.screen.take() {
-            let _ = self.client.call(&Request::TerminalDetach {
-                conversation: self.conversation.clone(),
-                role: self.role.clone(),
-                handle: old.handle,
-            });
+            let _ = self.client.call(&Request::Terminal(
+                crate::lean::daemon::TerminalRequest::TerminalDetach {
+                    conversation: self.conversation.clone(),
+                    role: self.role.clone(),
+                    handle: old.handle,
+                },
+            ));
         }
         *self.output.lock().expect("native view") = Snapshot::default();
         self.sequence = 0;
@@ -175,20 +177,24 @@ impl Worker {
 
     fn request(&self, command: Command, screen: &Screen) -> Request {
         match command {
-            Command::Input(input) => Request::TerminalInput {
-                conversation: self.conversation.clone(),
-                role: self.role.clone(),
-                handle: screen.handle.clone(),
-                sequence: self.sequence + 1,
-                input,
-            },
-            Command::Resize(columns, rows) => Request::TerminalResize {
-                conversation: self.conversation.clone(),
-                role: self.role.clone(),
-                handle: screen.handle.clone(),
-                columns,
-                rows,
-            },
+            Command::Input(input) => {
+                Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalInput {
+                    conversation: self.conversation.clone(),
+                    role: self.role.clone(),
+                    handle: screen.handle.clone(),
+                    sequence: self.sequence + 1,
+                    input,
+                })
+            }
+            Command::Resize(columns, rows) => {
+                Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalResize {
+                    conversation: self.conversation.clone(),
+                    role: self.role.clone(),
+                    handle: screen.handle.clone(),
+                    columns,
+                    rows,
+                })
+            }
             Command::Retry => unreachable!(),
         }
     }
@@ -219,12 +225,12 @@ impl Worker {
         let Some(screen) = &self.screen else {
             return;
         };
-        let request = Request::TerminalRead {
+        let request = Request::Terminal(crate::lean::daemon::TerminalRequest::TerminalRead {
             conversation: self.conversation.clone(),
             role: self.role.clone(),
             handle: screen.handle.clone(),
             after: screen.revision,
-        };
+        });
         match self.client.call(&request) {
             Ok(value) if !value.is_null() => match serde_json::from_value::<Screen>(value) {
                 Ok(next) => self.screen = Some(next),
@@ -241,11 +247,13 @@ impl Worker {
 
     fn detach(&self) {
         if let Some(screen) = &self.screen {
-            let _ = self.client.call(&Request::TerminalDetach {
-                conversation: self.conversation.clone(),
-                role: self.role.clone(),
-                handle: screen.handle.clone(),
-            });
+            let _ = self.client.call(&Request::Terminal(
+                crate::lean::daemon::TerminalRequest::TerminalDetach {
+                    conversation: self.conversation.clone(),
+                    role: self.role.clone(),
+                    handle: screen.handle.clone(),
+                },
+            ));
         }
     }
 

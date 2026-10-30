@@ -24,11 +24,13 @@ impl Poller {
     }
 
     fn poll_once(&self, after: &mut u64, wait_ms: &mut u64) -> bool {
-        let result = self.client.call(&Request::Events {
-            conversation: self.conversation.clone(),
-            after: *after,
-            wait_ms: *wait_ms,
-        });
+        let result = self.client.call(&Request::History(
+            crate::lean::daemon::HistoryRequest::Events {
+                conversation: self.conversation.clone(),
+                after: *after,
+                wait_ms: *wait_ms,
+            },
+        ));
         let update = self.make_update(result, after, wait_ms);
         !self.stop.load(Ordering::SeqCst) && self.updates.send(update).is_ok()
     }
