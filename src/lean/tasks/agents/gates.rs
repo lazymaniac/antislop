@@ -19,24 +19,7 @@ impl GatePlan {
             .filter(|agent| !tasks.iter().any(|task| task.id == agent.id))
             .map(|agent| agent.id.to_owned())
             .collect();
-        let mut downstream = referenced.clone();
-        loop {
-            let before = downstream.len();
-            for task in tasks {
-                if task.depends_on.iter().any(|id| downstream.contains(id)) {
-                    downstream.insert(task.id.clone());
-                }
-            }
-            if downstream.len() == before {
-                break;
-            }
-        }
-        let placed = tasks.iter().any(|task| downstream.contains(&task.id));
-        let upstream: Vec<_> = tasks
-            .iter()
-            .filter(|task| !downstream.contains(&task.id))
-            .cloned()
-            .collect();
+        let (placed, upstream) = upstream_tasks(tasks, referenced);
         Self {
             // An explicitly referenced checkpoint follows all upstream work,
             // including read-only reviews, but never its own consumers.
@@ -82,6 +65,31 @@ impl GatePlan {
         self.prior_gates.push(id.to_owned());
         dependencies
     }
+}
+
+fn upstream_tasks(
+    tasks: &[TaskContract],
+    referenced: BTreeSet<String>,
+) -> (bool, Vec<TaskContract>) {
+    let mut downstream = referenced;
+    loop {
+        let before = downstream.len();
+        for task in tasks {
+            if task.depends_on.iter().any(|id| downstream.contains(id)) {
+                downstream.insert(task.id.clone());
+            }
+        }
+        if downstream.len() == before {
+            break;
+        }
+    }
+    let placed = tasks.iter().any(|task| downstream.contains(&task.id));
+    let upstream = tasks
+        .iter()
+        .filter(|task| !downstream.contains(&task.id))
+        .cloned()
+        .collect();
+    (placed, upstream)
 }
 
 fn writer_ids(tasks: &[TaskContract]) -> Vec<String> {

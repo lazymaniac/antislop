@@ -152,21 +152,28 @@ pub(crate) fn resolve_gate_dependencies(tasks: &mut [TaskContract]) {
         .filter(|(_, ids)| !ids.is_empty())
         .collect();
     for task in tasks {
-        let mut dependencies = Vec::new();
-        for dependency in std::mem::take(&mut task.depends_on) {
-            let targets = aliases
-                .iter()
-                .find(|(id, _)| *id == dependency)
-                .map(|(_, ids)| ids.clone())
-                .unwrap_or_else(|| vec![dependency]);
-            for target in targets {
-                if !dependencies.contains(&target) {
-                    dependencies.push(target);
-                }
+        task.depends_on = expand_gate_dependencies(&task.depends_on, &aliases);
+    }
+}
+
+fn expand_gate_dependencies(
+    dependencies: &[String],
+    aliases: &[(&str, Vec<String>)],
+) -> Vec<String> {
+    let mut expanded = Vec::new();
+    for dependency in dependencies {
+        let targets = aliases
+            .iter()
+            .find(|(id, _)| *id == dependency)
+            .map(|(_, ids)| ids.clone())
+            .unwrap_or_else(|| vec![dependency.clone()]);
+        for target in targets {
+            if !expanded.contains(&target) {
+                expanded.push(target);
             }
         }
-        task.depends_on = dependencies;
     }
+    expanded
 }
 
 /// The plan with every missing required quality gate appended, so a plan that

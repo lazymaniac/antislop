@@ -58,6 +58,17 @@ impl Core {
         self: &Arc<Self>,
         message: &store::AgentMessage,
     ) -> Result<serde_json::Value> {
+        let reply = self.enqueue_and_refresh(message)?;
+        if reply["state"] != "delivered" {
+            self.resume_after_delivery(message);
+        }
+        Ok(reply)
+    }
+
+    fn enqueue_and_refresh(
+        self: &Arc<Self>,
+        message: &store::AgentMessage,
+    ) -> Result<serde_json::Value> {
         let graph = self.graph_updates.lock().expect("graph update mutex");
         let _scope = self.integrating.lock().expect("integration mutex");
         let before = message
@@ -70,25 +81,38 @@ impl Core {
         if reply["state"] == "delivered" {
             return Ok(reply);
         }
-        if message.recipient.contains(':')
-            && let Some(plan) = &message.plan
-        {
-            let tasks = self.store.plan(plan)?;
-            self.cancel_changed_task_inputs(&before, &tasks);
-            for task in tasks {
-                self.announce_task(&message.conversation, &task, None);
-            }
-            self.maybe_continue_plan(&message.conversation, plan)?;
-        }
+        self.refresh_delivered_tasks(message, &before)?;
         drop(_scope);
         drop(graph);
+        Ok(reply)
+    }
+
+    fn refresh_delivered_tasks(
+        self: &Arc<Self>,
+        message: &store::AgentMessage,
+        before: &[Task],
+    ) -> Result<()> {
+        if !message.recipient.contains(':') {
+            return Ok(());
+        }
+        let Some(plan) = &message.plan else {
+            return Ok(());
+        };
+        let tasks = self.store.plan(plan)?;
+        self.cancel_changed_task_inputs(before, &tasks);
+        for task in tasks {
+            self.announce_task(&message.conversation, &task, None);
+        }
+        self.maybe_continue_plan(&message.conversation, plan)
+    }
+
+    fn resume_after_delivery(self: &Arc<Self>, message: &store::AgentMessage) {
         if matches!(message.recipient.as_str(), PLAN_VERIFIER | AUDITOR) {
             self.resume_agent_reviews(&message.conversation);
         }
         if message.recipient == ORCHESTRATOR {
             self.wake(&message.conversation);
         }
-        Ok(reply)
     }
 
     pub fn conversation_scope_hash(&self, conversation: &str) -> Result<String> {

@@ -112,35 +112,40 @@ fn append_unsettled_findings(
     _read_only: bool,
 ) {
     for (id, text) in obligations {
-        let entry = &verdict
-            .coverage
-            .get(id.as_str())
-            .cloned()
-            .unwrap_or_default();
-        let status = entry["status"].as_str().map(str::to_ascii_lowercase);
-        let unsettled = match status.as_deref() {
-            Some("issue") => "",
-            Some("blocked") => "could not be settled: ",
-            _ => continue,
-        };
-        verdict.approved = false;
-        if verdict.findings.iter().any(|f| {
-            f["check"] == *id
-                && matches!(f["severity"].as_str(), Some("critical" | "high" | "medium"))
-        }) {
-            continue;
-        }
-        verdict.findings.push(serde_json::json!({
-            "id": format!("check:{id}"),
-            "check": id,
-            "severity": "medium",
-            "issue": format!(
-                "{unsettled}{text}: {}",
-                entry["note"].as_str().unwrap_or_default()
-            ),
-            "where": id,
-        }));
+        append_unsettled_finding(verdict, id, text);
     }
+}
+
+fn append_unsettled_finding(verdict: &mut Verdict, id: &str, text: &str) {
+    let entry = verdict.coverage.get(id).cloned().unwrap_or_default();
+    let unsettled = match entry["status"]
+        .as_str()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("issue") => "",
+        Some("blocked") => "could not be settled: ",
+        _ => return,
+    };
+    verdict.approved = false;
+    if has_severe_check_finding(verdict, id) {
+        return;
+    }
+    verdict.findings.push(serde_json::json!({
+        "id": format!("check:{id}"), "check": id, "severity": "medium",
+        "issue": format!("{unsettled}{text}: {}", entry["note"].as_str().unwrap_or_default()),
+        "where": id,
+    }));
+}
+
+fn has_severe_check_finding(verdict: &Verdict, id: &str) -> bool {
+    verdict.findings.iter().any(|finding| {
+        finding["check"] == id
+            && matches!(
+                finding["severity"].as_str(),
+                Some("critical" | "high" | "medium")
+            )
+    })
 }
 
 /// One progress line of a verifier: it started on an obligation (`status`

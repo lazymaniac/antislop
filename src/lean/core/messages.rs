@@ -43,45 +43,77 @@ fn dispatch_addressed(
         return Ok(json!(core.send(conversation, body)?.seq));
     }
     let plan = core.store.latest_plan(conversation)?;
+    dispatch_to_plan(core, conversation, recipient, body, &plan)
+}
+
+fn dispatch_to_plan(
+    core: &Arc<Core>,
+    conversation: &str,
+    recipient: &str,
+    body: &str,
+    plan: &[Task],
+) -> Result<serde_json::Value> {
     if recipient == "all" {
-        if plan.is_empty() {
-            core.store.append_event(conversation,None,None,"mail_rejected",&json!({"sender":"user","recipient":recipient,"text":body,"reason":"no valid recipients for broadcast in current plan"}))?;
-            return Err(Error::Invalid(
-                "no valid recipients for broadcast in current plan".into(),
-            ));
-        }
-        let receipts = plan
-            .iter()
-            .map(|task| {
-                direct_task(
-                    core,
-                    conversation,
-                    task,
-                    &format!("worker:{}", task.id),
-                    body,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-        return Ok(
-            json!({"mail_ids":receipts.iter().map(|r|&r["mail"]).collect::<Vec<_>>(),"state":"queued","recipient":"all","recipient_finished":false}),
-        );
+        return dispatch_broadcast(core, conversation, body, plan);
     }
     if matches!(recipient, PLAN_VERIFIER | AUDITOR) {
-        let run = core.store.last_turn(conversation, recipient)?.map(|t| t.id);
-        return core.send_to_agent(&store::AgentMessage {
-            conversation: conversation.into(),
-            plan: plan.first().map(|t| t.plan_id.clone()),
-            recipient: recipient.into(),
-            operation_id: crate::id(),
-            expected_round: None,
-            expected_run: run,
-            text: body.into(),
-        });
+        return dispatch_reviewer(core, conversation, recipient, body, plan);
     }
-    let Some((task, role)) = core.mail_address_task(conversation, &plan, recipient)? else {
+    let Some((task, role)) = core.mail_address_task(conversation, plan, recipient)? else {
         return reject_recipient(core, conversation, recipient, body);
     };
     direct_task(core, conversation, &task, &role, body)
+}
+
+fn dispatch_broadcast(
+    core: &Arc<Core>,
+    conversation: &str,
+    body: &str,
+    plan: &[Task],
+) -> Result<serde_json::Value> {
+    if plan.is_empty() {
+        core.store.append_event(conversation,None,None,"mail_rejected",&json!({"sender":"user","recipient":"all","text":body,"reason":"no valid recipients for broadcast in current plan"}))?;
+        return Err(Error::Invalid(
+            "no valid recipients for broadcast in current plan".into(),
+        ));
+    }
+    let receipts = plan
+        .iter()
+        .map(|task| {
+            direct_task(
+                core,
+                conversation,
+                task,
+                &format!("worker:{}", task.id),
+                body,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(
+        json!({"mail_ids":receipts.iter().map(|receipt|&receipt["mail"]).collect::<Vec<_>>(),"state":"queued","recipient":"all","recipient_finished":false}),
+    )
+}
+
+fn dispatch_reviewer(
+    core: &Arc<Core>,
+    conversation: &str,
+    recipient: &str,
+    body: &str,
+    plan: &[Task],
+) -> Result<serde_json::Value> {
+    let run = core
+        .store
+        .last_turn(conversation, recipient)?
+        .map(|turn| turn.id);
+    core.send_to_agent(&store::AgentMessage {
+        conversation: conversation.into(),
+        plan: plan.first().map(|task| task.plan_id.clone()),
+        recipient: recipient.into(),
+        operation_id: crate::id(),
+        expected_round: None,
+        expected_run: run,
+        text: body.into(),
+    })
 }
 
 fn direct_task(

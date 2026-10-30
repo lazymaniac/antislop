@@ -83,11 +83,7 @@ fn dependency_header(marker: &str) -> String {
 }
 
 pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
-    let team_note = "Ask the orchestrator through MCP when an input or decision is missing. You know only your task. Do not inspect runtime session state or contact other agents.\n";
-    let change_rules = worker_change_rules(task);
-    let blocker = "For missing input use ask; if the answer has not come, end with wait_for_answer. Do not invent requirements or implement outside this contract.";
-    let binding = if task.writes { OPTIONS_BINDING } else { "" };
-    let checks = worker_checks(task);
+    let (team_note, change_rules, blocker, binding, checks) = worker_prompt_parts(task);
     format!(
         "You are a worker on a team of agents. The project is your current \
          working directory: {project}. Nothing is pasted for you: read the files \
@@ -202,5 +198,26 @@ pub fn changes_text(base: &str, result: &str, stat: &str) -> String {
     format!(
         "The worker's changes are recorded as commits in this repository. \
          Inspect them with `git diff {base} {result}`.\nSummary:\n{stat}"
+    )
+}
+
+fn worker_prompt_parts(
+    task: &TaskContract,
+) -> (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    String,
+) {
+    let team = "Ask the orchestrator through MCP when an input or decision is missing. You know only your task. Do not inspect runtime session state or contact other agents.\n";
+    let blocker = "For missing input use ask; if the answer has not come, end with wait_for_answer. Do not invent requirements or implement outside this contract.";
+    let binding = if task.writes { OPTIONS_BINDING } else { "" };
+    (
+        team,
+        worker_change_rules(task),
+        blocker,
+        binding,
+        worker_checks(task),
     )
 }

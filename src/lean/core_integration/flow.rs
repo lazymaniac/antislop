@@ -125,8 +125,31 @@ impl<'a> Integration<'a> {
         change: &str,
         outcome: &git::Integration,
     ) -> Result<bool> {
-        let Some((kind, files)) = conflict_with_files(outcome) else {
+        let Some((kind, files, onto)) = self.register_conflict_repair(change, outcome)? else {
             return Ok(false);
+        };
+        drop(lock);
+        self.core.repair_integration(
+            self.conversation,
+            self.task,
+            self.spec,
+            self.worktree,
+            &onto,
+            change,
+            kind,
+            &files,
+            self.cancel,
+        )?;
+        Ok(true)
+    }
+
+    fn register_conflict_repair(
+        &self,
+        change: &str,
+        outcome: &git::Integration,
+    ) -> Result<Option<(Outcome, Vec<String>, String)>> {
+        let Some((kind, files)) = conflict_with_files(outcome) else {
+            return Ok(None);
         };
         let onto = git::snapshot(self.project, "Current project for conflict resolution")?;
         let basis = crate::hash(serde_json::to_vec(&(
@@ -139,21 +162,9 @@ impl<'a> Integration<'a> {
             rusqlite::params![self.task.id, self.task.input_generation, basis],
         )?;
         if fresh == 0 {
-            return Ok(false);
+            return Ok(None);
         }
-        drop(lock);
-        self.core.repair_integration(
-            self.conversation,
-            self.task,
-            self.spec,
-            self.worktree,
-            &onto,
-            change,
-            kind,
-            files,
-            self.cancel,
-        )?;
-        Ok(true)
+        Ok(Some((kind, files.to_vec(), onto)))
     }
 
     fn finish_outcome(mut self, base: &str, change: &str, outcome: git::Integration) -> Result<()> {

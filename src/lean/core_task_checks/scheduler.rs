@@ -93,20 +93,11 @@ impl<'a> Scheduler<'a> {
         'a: 'scope,
     {
         let id = task.spec["id"].as_str().unwrap_or_default().to_owned();
-        if self
-            .core
-            .revising
-            .lock()
-            .expect("revision mutex")
-            .contains(&task.id)
-            || !self.is_runnable(task, &id)
-        {
+        if !self.is_schedulable(task, &id) {
             return false;
         }
         if task.status == status::SKIPPED {
-            let _ = self
-                .core
-                .set_status(self.conversation, task, status::QUEUED);
+            self.restore_skipped_task(task);
             return true;
         }
         if self.cancel.load(Ordering::SeqCst) || !dependencies_approved(task, state) {
@@ -114,6 +105,22 @@ impl<'a> Scheduler<'a> {
         }
         self.schedule_if_available(scope, task, id);
         false
+    }
+
+    fn is_schedulable(&self, task: &Task, id: &str) -> bool {
+        !self
+            .core
+            .revising
+            .lock()
+            .expect("revision mutex")
+            .contains(&task.id)
+            && self.is_runnable(task, id)
+    }
+
+    fn restore_skipped_task(&self, task: &mut Task) {
+        let _ = self
+            .core
+            .set_status(self.conversation, task, status::QUEUED);
     }
 
     fn is_runnable(&self, task: &Task, id: &str) -> bool {
@@ -186,9 +193,6 @@ impl<'a> Scheduler<'a> {
         });
     }
 
-    /// Waits for a task to finish, but not past `PLAN_POLL`: a plan revised
-    /// while tasks run can requeue others, and they start without waiting
-    /// for the running ones.
     fn receive_completion(&mut self) -> bool {
         let finished = match self.done_rx.recv_timeout(PLAN_POLL) {
             Ok(finished) => finished,

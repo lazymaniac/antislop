@@ -151,26 +151,7 @@ pub(crate) fn round_handoff_prompt(
     handoff: &crate::lean::rounds::RoundHandoff,
     verifier: bool,
 ) -> String {
-    let protection = handoff_protection(handoff);
-    let to_fix = handoff
-        .verdict
-        .as_ref()
-        .and_then(|verdict| verdict["findings"].as_array())
-        .is_some_and(|findings| !findings.is_empty());
-    let report = if !verifier && (handoff.interrupted || !handoff.writes || !to_fix) {
-        latest_report(handoff)
-    } else {
-        String::new()
-    };
-    // The worker's continuation text already lists the findings to fix.
-    let findings = if !verifier && to_fix {
-        "listed above in this prompt".to_owned()
-    } else {
-        handoff
-            .verdict
-            .as_ref()
-            .map_or("none".into(), ToString::to_string)
-    };
+    let (protection, report, findings) = handoff_sections(handoff, verifier);
     format!(
         "\n\nRound handoff\nWorktree: {}\nRound: {}\nInterrupted before a report: {}\n{}\nPrevious verifier findings: {}\nBase commit: {:?}\nLatest result commit: {:?}\nFiles changed in earlier rounds: {}\nInspect the actual local files. For a writing task, inspect its base/result diff; a read-only task has no writer commits to produce. Earlier-round results are unverified against changed inputs. Preserve user changes and follow repository instructions. A verifier must assess every obligation and the complete task, including areas outside earlier findings.\n{}",
         handoff.worktree.display(),
@@ -183,6 +164,32 @@ pub(crate) fn round_handoff_prompt(
         serde_json::json!(handoff.files),
         handoff_tail(handoff, verifier, &protection),
     )
+}
+
+fn handoff_sections(
+    handoff: &crate::lean::rounds::RoundHandoff,
+    verifier: bool,
+) -> (String, String, String) {
+    let protection = handoff_protection(handoff);
+    let to_fix = handoff
+        .verdict
+        .as_ref()
+        .and_then(|verdict| verdict["findings"].as_array())
+        .is_some_and(|findings| !findings.is_empty());
+    let report = if !verifier && (handoff.interrupted || !handoff.writes || !to_fix) {
+        latest_report(handoff)
+    } else {
+        String::new()
+    };
+    let findings = if !verifier && to_fix {
+        "listed above in this prompt".into()
+    } else {
+        handoff
+            .verdict
+            .as_ref()
+            .map_or("none".into(), ToString::to_string)
+    };
+    (protection, report, findings)
 }
 
 fn handoff_protection(handoff: &crate::lean::rounds::RoundHandoff) -> String {

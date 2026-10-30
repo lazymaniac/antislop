@@ -1,13 +1,39 @@
 //! Reviewed revisions are applied behind a short scheduler barrier.
 use super::store::PlanRevision;
 use super::*;
-use std::collections::BTreeSet;
+
+mod review;
+mod scope;
 
 struct PreparedRevision {
     baseline: Vec<Task>,
     specs: Vec<TaskContract>,
     requirement_revision: i64,
     receipt: serde_json::Value,
+}
+
+struct RevisionRegistration<'a> {
+    _guard: std::sync::MutexGuard<'a, ()>,
+    request: String,
+    fresh: bool,
+}
+
+impl<'a> RevisionRegistration<'a> {
+    fn fresh(guard: std::sync::MutexGuard<'a, ()>, request: String) -> Self {
+        Self {
+            _guard: guard,
+            request,
+            fresh: true,
+        }
+    }
+
+    fn existing(guard: std::sync::MutexGuard<'a, ()>, request: String) -> Self {
+        Self {
+            _guard: guard,
+            request,
+            fresh: false,
+        }
+    }
 }
 
 impl Core {
@@ -17,30 +43,22 @@ impl Core {
         request_key: &str,
         revision: PlanRevision,
     ) -> Result<serde_json::Value> {
-        require(
-            self.store
-                .plan_belongs_to_conversation(conversation, &revision.plan)?,
-            &format!(
-                "revision.plan must be the plan's full UUID from the prompt, not plan text or a shortened ID (got {:?}); put changed tasks in revision.tasks",
-                revision.plan.chars().take(40).collect::<String>()
-            ),
-        )?;
-        // Reservation and in-memory registration share the finalization barrier.
-        // No fallible preparation may leave a durable job without an owner.
-        let registration = self.graph_updates.lock().expect("graph update mutex");
-        let (request, fresh) =
-            self.store
-                .reserve_revision_job(conversation, request_key, &revision)?;
-        if !fresh {
-            return self.store.revision_job(&request);
+        let registration = self.reserve_revision(conversation, request_key, &revision)?;
+        if !registration.fresh {
+            return self.store.revision_job(&registration.request);
         }
+        self.process_fresh_revision(conversation, revision, registration)
+    }
+
+    fn process_fresh_revision(
+        self: &Arc<Self>,
+        conversation: &str,
+        revision: PlanRevision,
+        registration: RevisionRegistration<'_>,
+    ) -> Result<serde_json::Value> {
+        let request = registration.request.clone();
         let prepared = self.prepare_revision(conversation, &request, &revision);
-        let PreparedRevision {
-            baseline,
-            specs,
-            requirement_revision,
-            receipt,
-        } = match prepared {
+        let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.store
@@ -49,6 +67,50 @@ impl Core {
             }
         };
         let cancel = Arc::new(AtomicBool::new(false));
+        let receipt = prepared.receipt.clone();
+        let worker =
+            self.spawn_revision_worker(conversation, request.clone(), revision, prepared, cancel);
+        drop(registration);
+        if let Err(error) = worker {
+            self.store
+                .finish_revision_job(&request, &Err(Error::Invalid(error.to_string())))?;
+            return Err(error);
+        }
+        Ok(receipt)
+    }
+
+    fn reserve_revision(
+        &self,
+        conversation: &str,
+        request_key: &str,
+        revision: &PlanRevision,
+    ) -> Result<RevisionRegistration<'_>> {
+        require(
+            self.store
+                .plan_belongs_to_conversation(conversation, &revision.plan)?,
+            &format!(
+                "revision.plan must be the plan's full UUID from the prompt, not plan text or a shortened ID (got {:?}); put changed tasks in revision.tasks",
+                revision.plan.chars().take(40).collect::<String>()
+            ),
+        )?;
+        let guard = self.graph_updates.lock().expect("graph update mutex");
+        let (request, fresh) =
+            self.store
+                .reserve_revision_job(conversation, request_key, revision)?;
+        if !fresh {
+            return Ok(RevisionRegistration::existing(guard, request));
+        }
+        Ok(RevisionRegistration::fresh(guard, request))
+    }
+
+    fn spawn_revision_worker(
+        self: &Arc<Self>,
+        conversation: &str,
+        request: String,
+        revision: PlanRevision,
+        prepared: PreparedRevision,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<()> {
         self.revision_jobs
             .lock()
             .expect("revision jobs mutex")
@@ -56,54 +118,49 @@ impl Core {
         let core = self.clone();
         let owner = conversation.to_owned();
         let worker_request = request.clone();
-        let worker = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("plan-revision".into())
             .spawn(move || {
-                let outcome = core.review_and_apply_revision(
-                    &owner,
-                    &revision,
-                    &baseline,
-                    &specs,
-                    &cancel,
-                    &super::store::RevisionLease {
-                        requirement_revision,
-                        request: &worker_request,
-                    },
-                );
-                if let Err(error) = core.store.finish_revision_job(&worker_request, &outcome) {
-                    core.notice(
-                        &owner,
-                        &format!("could not record revision {worker_request} outcome: {error}"),
-                    );
-                }
-                core.revision_jobs
+                run_revision_worker(core, owner, revision, prepared, cancel, worker_request)
+            })
+            .map(|_| ())
+            .map_err(|error| {
+                self.revision_jobs
                     .lock()
                     .expect("revision jobs mutex")
-                    .remove(&owner);
-                let mut text = match &outcome {
-                    Ok(()) => format!("Plan revision {worker_request} applied."),
-                    Err(error) => format!("Plan revision {worker_request} rejected: {error}"),
-                };
-                if outcome.is_ok()
-                    && let Err(error) = core.maybe_continue_plan(&owner, &revision.plan)
-                {
-                    text.push_str(&format!(" Execution was not resumed: {error}"));
-                }
-                let _ = core.store.add_message(&owner, RUNTIME, &text);
-                core.wake(&owner);
-            });
-        if let Err(error) = worker {
-            self.revision_jobs
-                .lock()
-                .expect("revision jobs mutex")
-                .remove(conversation);
-            let error = Error::Io(error);
-            self.store
-                .finish_revision_job(&request, &Err(Error::Invalid(error.to_string())))?;
-            return Err(error);
+                    .remove(conversation);
+                Error::Io(error)
+            })
+    }
+
+    fn finish_revision_worker(
+        self: &Arc<Self>,
+        owner: &str,
+        revision: &PlanRevision,
+        request: &str,
+        outcome: Result<()>,
+    ) {
+        if let Err(error) = self.store.finish_revision_job(request, &outcome) {
+            self.notice(
+                owner,
+                &format!("could not record revision {request} outcome: {error}"),
+            );
         }
-        drop(registration);
-        Ok(receipt)
+        self.revision_jobs
+            .lock()
+            .expect("revision jobs mutex")
+            .remove(owner);
+        let mut text = match &outcome {
+            Ok(()) => format!("Plan revision {request} applied."),
+            Err(error) => format!("Plan revision {request} rejected: {error}"),
+        };
+        if outcome.is_ok()
+            && let Err(error) = self.maybe_continue_plan(owner, &revision.plan)
+        {
+            text.push_str(&format!(" Execution was not resumed: {error}"));
+        }
+        let _ = self.store.add_message(owner, RUNTIME, &text);
+        self.wake(owner);
     }
 
     fn prepare_revision(
@@ -116,6 +173,15 @@ impl Core {
             self.store.plan_revision(&revision.plan)? == revision.base_revision,
             "stale plan revision",
         )?;
+        self.prepare_revision_contents(conversation, request, revision)
+    }
+
+    fn prepare_revision_contents(
+        &self,
+        conversation: &str,
+        request: &str,
+        revision: &PlanRevision,
+    ) -> Result<PreparedRevision> {
         let baseline = self.store.plan(&revision.plan)?;
         let specs = super::core_plan_helpers::finalize_plan(
             revision.merge(&baseline)?,
@@ -144,319 +210,44 @@ impl Core {
         plan: &str,
         specs: &[TaskContract],
     ) -> Result<()> {
-        use rusqlite::OptionalExtension;
-        let authorization: Option<(String, String)> = self.store.db().query_row(
-            "SELECT scope,write_scope FROM plan_authorizations WHERE plan_id=?1 AND conversation_id=?2",
-            rusqlite::params![plan, conversation],
-            |r| Ok((r.get(0)?,r.get(1)?)),
-        ).optional()?;
-        let Some((allowed, write_allowed)) = authorization else {
-            if self
-                .store
-                .latest_plan(conversation)?
-                .first()
-                .is_some_and(|task| task.plan_id == plan)
-            {
-                return Err(Error::Invalid(format!(
-                    "plan {plan} is not accepted; correct the draft with submit_plan, not revise_plan; revise_plan only edits an accepted plan"
-                )));
-            }
-            let current = self
-                .store
-                .latest_plan(conversation)?
-                .first()
-                .map(|task| task.plan_id.clone())
-                .unwrap_or_default();
-            return Err(Error::Invalid(format!(
-                "plan {plan} is not the accepted plan (it was replaced or never accepted); revise the current plan {current} using its full ID"
-            )));
+        scope::validate_plan_authorization(self, conversation, plan, specs)
+    }
+}
+
+fn run_revision_worker(
+    core: Arc<Core>,
+    owner: String,
+    revision: PlanRevision,
+    prepared: PreparedRevision,
+    cancel: Arc<AtomicBool>,
+    request: String,
+) {
+    let outcome = core.store.conversation(&owner).and_then(|conversation| {
+        let context = review::ReviewContext {
+            conversation: &owner,
+            revision: &revision,
+            baseline: &prepared.baseline,
+            specs: &prepared.specs,
+            cancel: &cancel,
+            project: PathBuf::from(conversation.project),
         };
-        let write_allowed: Vec<String> = serde_json::from_str(&write_allowed)?;
-        let allowed: Vec<String> = serde_json::from_str(&allowed)?;
-        validate_authorized_scope(specs, &allowed, &write_allowed)
-    }
-
-    fn review_and_apply_revision(
-        self: &Arc<Self>,
-        conversation: &str,
-        revision: &PlanRevision,
-        baseline: &[Task],
-        specs: &[TaskContract],
-        cancel: &AtomicBool,
-        lease: &super::store::RevisionLease<'_>,
-    ) -> Result<()> {
-        let project = PathBuf::from(self.store.conversation(conversation)?.project);
-        let previous: Vec<_> = baseline.iter().map(|task| task.spec.clone()).collect();
-        // What the revision sends back to work, not only what it names in
-        // redo: a changed contract, including one the runtime regenerates for
-        // an options task, redoes an approved task too.
-        let affected = affected_tasks(baseline, specs, &revision.redo);
-        let (redone, approved): (Vec<String>, Vec<String>) = baseline
-            .iter()
-            .filter(|task| task.status == status::APPROVED)
-            .filter_map(|task| task.spec["id"].as_str().map(str::to_owned))
-            .partition(|id| affected.contains(id));
-        let review = self
-            .review(
-                conversation,
-                PLAN_VERIFIER,
-                Some(&revision.plan),
-                &project,
-                cancel,
-                |initial, request| {
-                    tasks::plan_revision_review_prompt(
-                        &project.to_string_lossy(),
-                        request,
-                        specs,
-                        &previous,
-                        tasks::ApprovedWork {
-                            kept: &approved,
-                            redone: &redone,
-                        },
-                        &revision.reason,
-                        initial,
-                    )
-                },
-            )?
-            .map_err(Error::Invalid)?;
-        if !review.approved
-            && tasks::only_minor_findings(&review)
-            && self.store.rejected_revisions_in_a_row(&revision.plan)?
-                >= tasks::TOLERATED_PLAN_REJECTIONS
-        {
-            self.notice(
-                conversation,
-                &format!(
-                    "revision applied with unresolved minor review findings after repeated rejections: {}",
-                    tasks::findings_text(&review.findings)
-                ),
-            );
-        } else {
-            require(
-                review.approved,
-                &format!(
-                    "revision review rejected: {}",
-                    tasks::findings_text(&review.findings)
-                ),
-            )?;
-        }
-        require(!cancel.load(Ordering::SeqCst), "revision cancelled")?;
-        let affected = affected_tasks(baseline, specs, &revision.redo);
-        let barrier = {
-            let _graph = self.graph_updates.lock().expect("graph update mutex");
-            RevisionBarrier::new(self, affected.clone())
-        };
-        for id in &affected {
-            if let Some((_, cancel)) = self.task_cancels.lock().expect("task cancel mutex").get(id)
-            {
-                cancel.store(true, Ordering::SeqCst);
-            }
-        }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while self
-            .task_cancels
-            .lock()
-            .expect("task cancel mutex")
-            .keys()
-            .any(|id| affected.contains(id))
-        {
-            require(!cancel.load(Ordering::SeqCst), "revision cancelled")?;
-            require(
-                std::time::Instant::now() < deadline,
-                "affected task did not stop; revision was not applied",
-            )?;
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        {
-            let _graph = self.graph_updates.lock().expect("graph update mutex");
-            let _integration = self.integrating.lock().expect("integration mutex");
-            self.store.apply_plan_revision(
-                conversation,
-                revision,
-                baseline,
-                specs,
-                &affected,
-                lease,
-            )?;
-        }
-        drop(barrier);
-        Ok(())
-    }
-}
-
-fn validate_authorized_scope(
-    specs: &[TaskContract],
-    allowed: &[String],
-    write_allowed: &[String],
-) -> Result<()> {
-    require(
-        allowed.iter().any(|p| p == ".") || specs.iter().all(|s| !s.scope.is_empty()),
-        "empty scope expands the approved scope",
-    )?;
-    for spec in specs.iter().filter(|s| s.writes) {
-        require(
-            !write_allowed.is_empty(),
-            "revision adds write permission; user approval is required",
-        )?;
-        let scope = if spec.scope.is_empty() {
-            vec![".".to_owned()]
-        } else {
-            spec.scope.clone()
-        };
-        require(
-            scope.iter().all(|p| {
-                Path::new(p).is_relative()
-                    && !Path::new(p)
-                        .components()
-                        .any(|c| matches!(c, std::path::Component::ParentDir))
-            }),
-            "revision write scope must stay inside the project",
-        )?;
-        require(
-            scope
-                .iter()
-                .all(|p| write_allowed.iter().any(|a| covers(a, p))),
-            "revision expands approved write scope; user approval is required",
-        )?;
-    }
-    for path in specs.iter().flat_map(|s| &s.scope) {
-        let candidate = Path::new(path);
-        require(
-            allowed.contains(path)
-                || !candidate
-                    .components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir)),
-            "revision scope contains parent traversal",
-        )?;
-        require(
-            allowed.iter().any(|a| covers(a, path)),
-            "revision expands the approved scope; user approval is required",
-        )?;
-    }
-    Ok(())
-}
-
-/// Whether an approved scope entry covers a task's scope entry. Approved
-/// entries are paths or globs (`src/**`, `src/lean/*.rs`); a path covers
-/// everything below it, `**` any number of directories and `*` or `?` part of
-/// one name. A task entry may itself be a glob and is covered when every path
-/// it names is.
-fn covers(approved: &str, path: &str) -> bool {
-    if approved == path || (approved == "." && Path::new(path).is_relative()) {
-        return true;
-    }
-    let names = |p: &str| -> Vec<String> {
-        Path::new(p)
-            .components()
-            .filter(|c| !matches!(c, std::path::Component::CurDir))
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect()
-    };
-    covers_names(&names(approved), &names(path))
-}
-
-fn covers_names(approved: &[String], path: &[String]) -> bool {
-    match approved.split_first() {
-        // An approved directory covers what lies below it.
-        None => true,
-        Some((first, rest)) if first == "**" => {
-            (0..=path.len()).any(|skip| covers_names(rest, &path[skip..]))
-        }
-        Some((first, rest)) => path.split_first().is_some_and(|(name, below)| {
-            name_matches(first.as_bytes(), name.as_bytes()) && covers_names(rest, below)
-        }),
-    }
-}
-
-fn name_matches(pattern: &[u8], name: &[u8]) -> bool {
-    match pattern.split_first() {
-        None => name.is_empty(),
-        Some((b'*', rest)) => (0..=name.len()).any(|skip| name_matches(rest, &name[skip..])),
-        Some((b'?', rest)) => !name.is_empty() && name_matches(rest, &name[1..]),
-        Some((c, rest)) => name.first() == Some(c) && name_matches(rest, &name[1..]),
-    }
-}
-
-/// Tasks a revision sends back to work: those whose contract changes, those
-/// it names in `redo`, and everything depending on them. An approved task
-/// changed only in wording keeps its result, and so do its dependents.
-fn affected_tasks(baseline: &[Task], specs: &[TaskContract], redo: &[String]) -> BTreeSet<String> {
-    let changed: BTreeSet<_> = baseline
-        .iter()
-        .filter(|old| {
-            let id = old.spec["id"].as_str().unwrap_or_default();
-            let Some(new) = specs.iter().find(|s| s.id == id) else {
-                return true;
-            };
-            if redo.iter().any(|r| r == id) {
-                return true;
-            }
-            serde_json::from_value::<TaskContract>(old.spec.clone())
-                .ok()
-                .as_ref()
-                != Some(new)
-                && !(old.status == status::APPROVED && reworded_only(&old.spec, new))
-        })
-        .filter_map(|t| t.spec["id"].as_str().map(str::to_owned))
-        .collect();
-    baseline
-        .iter()
-        .filter(|t| {
-            t.spec["id"].as_str().is_some_and(|id| {
-                changed.contains(id)
-                    || changed
-                        .iter()
-                        .any(|dep| tasks::depends_transitively(specs, id, dep))
-            })
-        })
-        .map(|t| t.id.clone())
-        .collect()
-}
-
-/// Whether a contract differs from the one an approved result was produced
-/// for only in how it is worded: its title, goal, summaries, section or the
-/// requirement ids the planner cited. Its kind, scope, permissions,
-/// dependencies and bound requirements and criteria are what the work was.
-fn reworded_only(old: &serde_json::Value, new: &TaskContract) -> bool {
-    let Ok(old) = serde_json::from_value::<TaskContract>(old.clone()) else {
-        return false;
-    };
-    let mut new = new.clone();
-    new.title = old.title.clone();
-    new.goal = old.goal.clone();
-    new.summary = old.summary.clone();
-    new.section = old.section.clone();
-    new.verifier = old.verifier.clone();
-    new.covers = old.covers.clone();
-    new == old
-}
-
-struct RevisionBarrier<'a> {
-    core: &'a Core,
-    ids: BTreeSet<String>,
-}
-impl<'a> RevisionBarrier<'a> {
-    fn new(core: &'a Core, ids: BTreeSet<String>) -> Self {
-        core.revising
-            .lock()
-            .expect("revision mutex")
-            .extend(ids.iter().cloned());
-        Self { core, ids }
-    }
-}
-impl Drop for RevisionBarrier<'_> {
-    fn drop(&mut self) {
-        self.core
-            .revising
-            .lock()
-            .expect("revision mutex")
-            .retain(|id| !self.ids.contains(id));
-    }
+        core.review_and_apply_revision(
+            context,
+            &super::store::RevisionLease {
+                requirement_revision: prepared.requirement_revision,
+                request: &request,
+            },
+        )
+    });
+    core.finish_revision_worker(&owner, &revision, &request, outcome);
 }
 
 #[cfg(test)]
 mod tests {
+    use super::review::affected_tasks;
+    use super::scope::{covers, validate_authorized_scope};
     use super::*;
+    use std::collections::BTreeSet;
 
     fn contract(writes: bool, paths: &[&str]) -> TaskContract {
         serde_json::from_value(json!({"id":"local","title":"Local","goal":"Inspect local behavior","kind":"implementation","writes":writes,"scope":paths,"verifier":{"focus":"Check local behavior"}})).unwrap()

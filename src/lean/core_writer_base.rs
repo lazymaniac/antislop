@@ -12,16 +12,7 @@ impl Core {
         let onto = self.plan_base(plan_id, project)?;
         // A result that landed is in the project the base was taken from.
         let landed = self.plan_base_record(plan_id).landed;
-        let changes: Vec<_> = self
-            .dependency_tasks(plan_id, spec)?
-            .into_iter()
-            .filter(|task| {
-                !landed
-                    .iter()
-                    .any(|(id, result)| *id == task.id && task.result.as_ref() == Some(result))
-            })
-            .filter_map(|task| Some((task.base?, task.result?)))
-            .collect();
+        let changes = self.writer_dependency_changes(plan_id, spec, &landed)?;
         if changes.is_empty() {
             return Ok(onto);
         }
@@ -33,6 +24,24 @@ impl Core {
                 spec.id
             ))
         })
+    }
+
+    fn writer_dependency_changes(
+        &self,
+        plan_id: &str,
+        spec: &TaskContract,
+        landed: &[(String, String)],
+    ) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .dependency_tasks(plan_id, spec)?
+            .into_iter()
+            .filter(|task| {
+                !landed
+                    .iter()
+                    .any(|(id, result)| *id == task.id && task.result.as_ref() == Some(result))
+            })
+            .filter_map(|task| Some((task.base?, task.result?)))
+            .collect())
     }
 
     /// The commit every task of a plan starts from. A snapshot is a new commit

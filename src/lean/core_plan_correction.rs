@@ -26,24 +26,26 @@ impl Core {
         let Some(upto) = upto else {
             return Ok(());
         };
-        let answered = self.store.last_orchestration_answered(conversation)?;
-        let asked = self.asked_since(conversation, answered, upto as u64)?;
-        let sent_back = asked.iter().any(|message| message.author == PLAN_VERIFIER);
-        if !sent_back
-            || !self
-                .store
-                .messages_by(conversation, REPLAN, answered)?
-                .is_empty()
-        {
-            return Ok(());
-        }
-        let draft = self.store.latest_plan(conversation)?;
-        let uncorrected =
-            !draft.is_empty() && draft.iter().all(|task| task.status == status::REVISED);
+        let uncorrected = self.has_uncorrected_review_draft(conversation, upto as u64)?;
         require(
             !uncorrected,
             "the plan verifier sent the draft back and it is not corrected yet; finish_turn cannot end this turn. Submit the complete corrected plan with submit_plan (it ends the turn), call request_replan for the planner to redraft it, or ask_user for a decision you need",
         )
+    }
+
+    fn has_uncorrected_review_draft(&self, conversation: &str, upto: u64) -> Result<bool> {
+        let answered = self.store.last_orchestration_answered(conversation)?;
+        let asked = self.asked_since(conversation, answered, upto)?;
+        let sent_back = asked.iter().any(|message| message.author == PLAN_VERIFIER);
+        let has_redraft = !self
+            .store
+            .messages_by(conversation, REPLAN, answered)?
+            .is_empty();
+        if !sent_back || has_redraft {
+            return Ok(false);
+        }
+        let draft = self.store.latest_plan(conversation)?;
+        Ok(!draft.is_empty() && draft.iter().all(|task| task.status == status::REVISED))
     }
 }
 

@@ -37,7 +37,19 @@ fn stopped_for_coordination(status: &str) -> bool {
 }
 
 fn blocked_entries(tasks: &[Task], include: impl Fn(&str) -> bool) -> String {
-    let blocked: Vec<_> = tasks.iter().filter(|t| include(&t.status)).map(|t| json!({"task":t.spec["id"],"status":t.status,"reason":t.feedback.as_ref().and_then(|f|f.get("reason")),"waiting_request":t.feedback.as_ref().and_then(|f|f.get("waiting_request")),"findings":t.verdict.as_ref().and_then(|v|v.get("findings"))})).collect();
+    let blocked: Vec<_> = tasks
+        .iter()
+        .filter(|task| include(&task.status))
+        .map(|task| {
+            json!({
+                "task": task.spec["id"],
+                "status": task.status,
+                "reason": task.feedback.as_ref().and_then(|feedback| feedback.get("reason")),
+                "waiting_request": task.feedback.as_ref().and_then(|feedback| feedback.get("waiting_request")),
+                "findings": task.verdict.as_ref().and_then(|verdict| verdict.get("findings")),
+            })
+        })
+        .collect();
     serde_json::to_string(&blocked).unwrap_or_default()
 }
 
@@ -112,3 +124,41 @@ fn append_open_comments(prompt: &mut String, open: &[Comment]) {
 
 const OPEN_COMMENT_HEADER: &str = "\n\nComments the user has not resolved yet (answer, ask, or propose work for \
 them; a comment is resolved when a checked plan lists it as addressed, or by the user):";
+
+#[cfg(test)]
+mod stopped_report_tests {
+    use super::*;
+
+    fn task(id: &str, task_status: &str) -> Task {
+        serde_json::from_value(json!({
+            "id": id,
+            "plan_id": "plan",
+            "spec": {"id": id},
+            "status": task_status,
+            "round": 1,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn stopped_report_lists_coordination_states_and_notes_remaining_work() {
+        let report = stopped_report(&[
+            task("waiting", status::WAITING),
+            task("queued", status::QUEUED),
+            task("skipped", status::SKIPPED),
+        ])
+        .unwrap();
+        assert!(report.contains("waiting"), "{report}");
+        assert!(
+            report.contains("Other tasks have not finished yet"),
+            "{report}"
+        );
+        assert!(!report.contains("queued"), "{report}");
+        assert!(!report.contains("skipped"), "{report}");
+    }
+
+    #[test]
+    fn stopped_report_is_absent_when_only_queued_tasks_remain() {
+        assert!(stopped_report(&[task("queued", status::QUEUED)]).is_none());
+    }
+}

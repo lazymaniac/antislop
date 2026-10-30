@@ -6,114 +6,204 @@ use prompt::{PlannerPrompt, planner_prompt_text};
 #[path = "core_planner_turn/prompt.rs"]
 mod prompt;
 
+struct PlannerTurnContext<'a> {
+    conversation: &'a str,
+    upto: u64,
+    config: Arc<Config>,
+    project: PathBuf,
+    answered: u64,
+    asked: Vec<store::Message>,
+    requirements: String,
+    ledger_context: Option<String>,
+    keepable: Option<String>,
+    replaced: Option<String>,
+}
+
 impl Core {
-    /// Drafts the first plan from the agreed requirements in the planner's own
-    /// session. Its words reach the user as the orchestrator's, so the
-    /// conversation keeps one voice; the plan then follows the same path as
-    /// any other draft.
     pub(in crate::lean) fn planner_turn(
         self: &Arc<Self>,
         conversation: &str,
         upto: u64,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        // Planning must use authoritative criterion ids, not guesses made before
-        // extraction. Re-check after the turn too in case the sources change.
+        if !self.planning_requirements_ready(conversation, upto, cancel)? {
+            return Ok(());
+        }
+        let context = self.planner_turn_context(conversation, upto)?;
+        let Some(answer) = self.run_planner_turn(&context, cancel)? else {
+            return Ok(());
+        };
+        self.handle_planner_answer(&context, &answer, cancel)
+    }
+
+    fn planning_requirements_ready(
+        self: &Arc<Self>,
+        conversation: &str,
+        upto: u64,
+        cancel: &AtomicBool,
+    ) -> Result<bool> {
         if self
             .planning_requirements(conversation, None, cancel)?
-            .is_none()
+            .is_some()
         {
-            // Continue only when preparation queued a new repair message.
-            // Otherwise stop until approval or retry; no planner turn has yet
-            // consumed `upto`, so returning Ok would spin on the same message.
-            return if self
-                .unanswered(conversation)?
-                .is_some_and(|next| next > upto)
-            {
-                Ok(())
-            } else {
-                Err(Error::Invalid(
-                    "requirements are not ready for planning".into(),
-                ))
-            };
+            return Ok(true);
         }
+        if self
+            .unanswered(conversation)?
+            .is_some_and(|next| next > upto)
+        {
+            return Ok(false);
+        }
+        Err(Error::Invalid(
+            "requirements are not ready for planning".into(),
+        ))
+    }
+
+    fn planner_turn_context<'a>(
+        &self,
+        conversation: &'a str,
+        upto: u64,
+    ) -> Result<PlannerTurnContext<'a>> {
         let config = self.config_snapshot();
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let answered = self.store.last_orchestration_answered(conversation)?;
         let asked = self.asked_since(conversation, answered, upto)?;
         let requirements = self.store.workflow(conversation)?.summary;
-        self.store.append_event(
-            conversation,
-            None,
-            None,
-            "planning_progress",
-            &json!({"text": "The planner is drafting the plan"}),
-        )?;
+        announce_planner_draft(&self.store, conversation)?;
         let ledger_context = planning_ledger_context(self, conversation)?;
         let keepable = self.keepable_tasks_note(conversation)?;
-        let replaced = if asked.iter().any(|message| message.author == REPLAN) {
-            let graph = self.store.latest_plan(conversation)?;
-            Some(serde_json::to_string(
-                &graph.iter().map(|task| &task.spec).collect::<Vec<_>>(),
-            )?)
-        } else {
-            None
-        };
-        let setup = TurnSetup {
-            session_policy: SessionPolicy::Role,
+        let replaced = self.replaced_graph(conversation, &asked)?;
+        Ok(PlannerTurnContext {
             conversation,
-            plan_id: None,
-            role: PLANNER.into(),
-            profile: config.resolve(WorkKind::Planning, RoleKind::Planner),
-            cwd: project.clone(),
-            add_dirs: vec![],
-            access: agent::Access::ReadOnly,
-            upto_message: upto,
-        };
-        let Some(answer) = self.turn(setup, cancel, |first, _| {
-            planner_prompt_text(PlannerPrompt {
-                project: &project,
-                first,
-                requirements: &requirements,
-                asked: &asked,
-                replaced: replaced.as_deref(),
-                keepable: keepable.as_deref(),
-                ledger_context: ledger_context.as_deref(),
-            })
-        })?
-        else {
-            return Ok(());
-        };
-        let (text, plan) = super::turn_result::TurnResult::plan_answer(&answer);
-        let plan = match plan {
-            Some((tasks, keep)) => self.submitted_graph(conversation, tasks, &keep),
-            None => Err(Error::Invalid(
-                "the planner could not draft a plan; its message names what blocks it".into(),
-            )),
-        };
-        self.store.append_event(
-            conversation,
-            None,
-            None,
-            "planning_progress",
-            &json!({"text": if plan.is_ok() { "Plan draft ready" } else { "Plan draft requires correction" }}),
-        )?;
-        self.store.add_message(conversation, ORCHESTRATOR, &text)?;
+            upto,
+            config,
+            project,
+            answered,
+            asked,
+            requirements,
+            ledger_context,
+            keepable,
+            replaced,
+        })
+    }
+
+    fn replaced_graph(
+        &self,
+        conversation: &str,
+        asked: &[store::Message],
+    ) -> Result<Option<String>> {
+        if !asked.iter().any(|message| message.author == REPLAN) {
+            return Ok(None);
+        }
+        let graph = self.store.latest_plan(conversation)?;
+        Ok(Some(serde_json::to_string(
+            &graph.iter().map(|task| &task.spec).collect::<Vec<_>>(),
+        )?))
+    }
+
+    fn run_planner_turn(
+        self: &Arc<Self>,
+        context: &PlannerTurnContext<'_>,
+        cancel: &AtomicBool,
+    ) -> Result<Option<String>> {
+        let setup = planner_setup(context);
+        self.turn(setup, cancel, |first, _| planner_prompt(context, first))
+    }
+
+    fn handle_planner_answer(
+        self: &Arc<Self>,
+        context: &PlannerTurnContext<'_>,
+        answer: &str,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        let (text, plan) = super::turn_result::TurnResult::plan_answer(answer);
+        let plan = self.planner_submitted_plan(context.conversation, plan);
+        record_planner_result(&self.store, context.conversation, plan.is_ok())?;
+        self.store
+            .add_message(context.conversation, ORCHESTRATOR, &text)?;
         self.handle_plan_answer(
             PlanAnswer {
-                conversation,
-                project: &project,
-                config: &config,
+                conversation: context.conversation,
+                project: &context.project,
+                config: &context.config,
                 text: &text,
                 plan: Some(plan),
                 addressed: None,
                 is_comment: false,
-                answered,
-                upto,
+                answered: context.answered,
+                upto: context.upto,
             },
             cancel,
         )
     }
+
+    fn planner_submitted_plan(
+        &self,
+        conversation: &str,
+        plan: Option<super::turn_result::SubmittedPlan>,
+    ) -> Result<Vec<TaskContract>> {
+        match plan {
+            Some((tasks, keep)) => self.submitted_graph(conversation, tasks, &keep),
+            None => Err(Error::Invalid(
+                "the planner could not draft a plan; its message names what blocks it".into(),
+            )),
+        }
+    }
+}
+
+fn planner_setup<'a>(context: &PlannerTurnContext<'a>) -> TurnSetup<'a> {
+    TurnSetup {
+        session_policy: SessionPolicy::Role,
+        conversation: context.conversation,
+        plan_id: None,
+        role: PLANNER.into(),
+        profile: context
+            .config
+            .resolve(WorkKind::Planning, RoleKind::Planner),
+        cwd: context.project.clone(),
+        add_dirs: vec![],
+        access: agent::Access::ReadOnly,
+        upto_message: context.upto,
+    }
+}
+
+fn planner_prompt(context: &PlannerTurnContext<'_>, first: bool) -> String {
+    planner_prompt_text(PlannerPrompt {
+        project: &context.project,
+        first,
+        requirements: &context.requirements,
+        asked: &context.asked,
+        replaced: context.replaced.as_deref(),
+        keepable: context.keepable.as_deref(),
+        ledger_context: context.ledger_context.as_deref(),
+    })
+}
+
+fn announce_planner_draft(store: &Store, conversation: &str) -> Result<()> {
+    store.append_event(
+        conversation,
+        None,
+        None,
+        "planning_progress",
+        &json!({"text":"The planner is drafting the plan"}),
+    )?;
+    Ok(())
+}
+
+fn record_planner_result(store: &Store, conversation: &str, valid: bool) -> Result<()> {
+    let text = if valid {
+        "Plan draft ready"
+    } else {
+        "Plan draft requires correction"
+    };
+    store.append_event(
+        conversation,
+        None,
+        None,
+        "planning_progress",
+        &json!({"text":text}),
+    )?;
+    Ok(())
 }
 
 impl Core {

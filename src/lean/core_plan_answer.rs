@@ -22,38 +22,39 @@ impl Core {
         answer: PlanAnswer<'_>,
         cancel: &AtomicBool,
     ) -> Result<()> {
-        let PlanAnswer {
-            conversation,
-            project,
-            config,
-            text,
-            plan,
-            addressed,
-            is_comment,
-            answered,
-            upto,
-        } = answer;
-        match plan {
+        match answer.plan {
             Some(Ok(specs)) => self.propose(
-                conversation,
-                project,
-                text,
+                answer.conversation,
+                answer.project,
+                answer.text,
                 PlanProposal {
-                    config,
+                    config: answer.config,
                     specs: &specs,
                 },
-                addressed,
+                answer.addressed,
                 cancel,
             ),
-            Some(Err(error)) => self.record_invalid_plan(conversation, &error),
-            None => {
-                // Answered in words only: the comments stay open for the user.
-                if is_comment {
-                    self.record_comment_reply(conversation, answered, upto)?;
-                }
-                Ok(())
-            }
+            Some(Err(error)) => self.record_invalid_plan(answer.conversation, &error),
+            None => self.handle_plan_words(
+                answer.conversation,
+                answer.is_comment,
+                answer.answered,
+                answer.upto,
+            ),
         }
+    }
+
+    fn handle_plan_words(
+        &self,
+        conversation: &str,
+        is_comment: bool,
+        answered: u64,
+        upto: u64,
+    ) -> Result<()> {
+        if is_comment {
+            self.record_comment_reply(conversation, answered, upto)?;
+        }
+        Ok(())
     }
 
     /// `submit_plan` refuses a malformed plan within the turn, so this is only

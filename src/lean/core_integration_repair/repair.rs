@@ -49,52 +49,64 @@ impl<'a> Repair<'a> {
     }
 
     pub(super) fn run(&mut self) -> Result<()> {
+        let Some(report) = self.request_repair()? else {
+            return self.stop_repair();
+        };
+        self.finish_repair_report(report)
+    }
+
+    fn request_repair(&mut self) -> Result<Option<String>> {
         let prompt = self.prompt();
         self.record_attempt();
         self.core
             .set_status(self.conversation, self.task, status::WORKING)?;
-        let Some(report) = self.worker_report(&prompt)? else {
-            let worker = format!("worker:{}", self.task.id);
-            return self
-                .core
-                .stop_task(self.conversation, self.task, &worker, self.cancel);
-        };
+        self.worker_report(&prompt)
+    }
+
+    fn stop_repair(&mut self) -> Result<()> {
+        let worker = format!("worker:{}", self.task.id);
+        self.core
+            .stop_task(self.conversation, self.task, &worker, self.cancel)
+    }
+
+    fn finish_repair_report(&mut self, report: String) -> Result<()> {
         let result: turn_result::TurnResult = serde_json::from_str(&report)?;
-        let report = match result {
-            turn_result::TurnResult::Completed { report, .. } => report,
+        match result {
+            turn_result::TurnResult::Completed { report, .. } => self.apply_repair_report(report),
             turn_result::TurnResult::NeedsInput {
                 request,
                 checkpoint,
-            } => {
-                self.task.result = Some(git::commit_all(
-                    self.worktree,
-                    &format!("{} checkpoint", self.spec.title),
-                )?);
-                let branch =
-                    super::super::core_path_helpers::worktree_branch(&self.core.state, self.task)?;
-                super::super::core_feedback_helpers::land(
-                    self.task,
-                    self.outcome,
-                    "run",
-                    &checkpoint,
-                    None,
-                    Some(&branch),
-                    self.files,
-                );
-                self.task.report = Some(checkpoint);
-                self.task.verdict = None;
-                return self
-                    .core
-                    .wait_for_question(self.conversation, self.task, &request, false);
-            }
-            _ => {
-                return Err(Error::Invalid(
-                    "integration repair requires a worker completion".into(),
-                ));
-            }
-        };
+            } => self.wait_for_repair_input(request, checkpoint),
+            _ => Err(Error::Invalid(
+                "integration repair requires a worker completion".into(),
+            )),
+        }
+    }
+
+    fn apply_repair_report(&mut self, report: String) -> Result<()> {
         self.persist_repair(report)?;
         self.queue_verification()
+    }
+
+    fn wait_for_repair_input(&mut self, request: String, checkpoint: String) -> Result<()> {
+        self.task.result = Some(git::commit_all(
+            self.worktree,
+            &format!("{} checkpoint", self.spec.title),
+        )?);
+        let branch = super::super::core_path_helpers::worktree_branch(&self.core.state, self.task)?;
+        super::super::core_feedback_helpers::land(
+            self.task,
+            self.outcome,
+            "run",
+            &checkpoint,
+            None,
+            Some(&branch),
+            self.files,
+        );
+        self.task.report = Some(checkpoint);
+        self.task.verdict = None;
+        self.core
+            .wait_for_question(self.conversation, self.task, &request, false)
     }
 
     fn record_attempt(&mut self) {

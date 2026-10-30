@@ -82,16 +82,14 @@ pub fn planned_graph_with(
         tasks.push(spec);
     }
     resolve_gate_dependencies(&mut tasks);
-    // Generated gates are resolved only after policy and coverage are known.
-    // Sort and validate the authored graph without these deferred edges.
+    order_authored_graph(tasks)
+}
+
+fn order_authored_graph(tasks: Vec<TaskContract>) -> Result<Vec<TaskContract>> {
     let mut authored = tasks.clone();
     for task in &mut authored {
-        task.depends_on.retain(|dependency| {
-            tasks.iter().any(|other| &other.id == dependency)
-                || !PREDEFINED_AGENT_POOL
-                    .iter()
-                    .any(|agent| GATE_KINDS.contains(&agent.kind) && agent.id == dependency)
-        });
+        task.depends_on
+            .retain(|dependency| known_authored_dependency(&tasks, dependency));
     }
     let mut ordered = order_graph(authored)?;
     for task in &mut ordered {
@@ -105,6 +103,13 @@ pub fn planned_graph_with(
     Ok(ordered)
 }
 
+fn known_authored_dependency(tasks: &[TaskContract], dependency: &str) -> bool {
+    tasks.iter().any(|task| task.id == dependency)
+        || !PREDEFINED_AGENT_POOL
+            .iter()
+            .any(|agent| GATE_KINDS.contains(&agent.kind) && agent.id == dependency)
+}
+
 /// Stable topological order for edits that insert nodes before existing gates.
 pub(crate) fn order_graph(mut remaining: Vec<TaskContract>) -> Result<Vec<TaskContract>> {
     let mut ordered = Vec::with_capacity(remaining.len());
@@ -116,20 +121,7 @@ pub(crate) fn order_graph(mut remaining: Vec<TaskContract>) -> Result<Vec<TaskCo
                 .all(|dependency| done.contains(dependency))
         });
         let Some(position) = position else {
-            let unknown = remaining.iter().find_map(|task| {
-                task.depends_on
-                    .iter()
-                    .find(|dependency| {
-                        !done.contains(*dependency)
-                            && !remaining.iter().any(|other| &other.id == *dependency)
-                    })
-                    .map(|dependency| {
-                        format!("task {} depends on unknown task {dependency}", task.id)
-                    })
-            });
-            return Err(Error::Invalid(
-                unknown.unwrap_or_else(|| "graph contains a dependency cycle".into()),
-            ));
+            return Err(Error::Invalid(graph_failure(&remaining, &done)));
         };
         let task = remaining.remove(position);
         crate::require(
@@ -140,6 +132,21 @@ pub(crate) fn order_graph(mut remaining: Vec<TaskContract>) -> Result<Vec<TaskCo
     }
     validate(&ordered)?;
     Ok(ordered)
+}
+
+fn graph_failure(remaining: &[TaskContract], done: &BTreeSet<String>) -> String {
+    remaining
+        .iter()
+        .find_map(|task| {
+            task.depends_on
+                .iter()
+                .find(|dependency| {
+                    !done.contains(*dependency)
+                        && !remaining.iter().any(|other| &other.id == *dependency)
+                })
+                .map(|dependency| format!("task {} depends on unknown task {dependency}", task.id))
+        })
+        .unwrap_or_else(|| "graph contains a dependency cycle".into())
 }
 
 pub(crate) fn validate(tasks: &[TaskContract]) -> Result<()> {

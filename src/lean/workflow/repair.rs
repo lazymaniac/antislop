@@ -8,27 +8,56 @@ pub(super) fn queue_requirements_format_repair(
     tx: &rusqlite::Transaction<'_>,
     conversation: &str,
 ) -> Result<bool> {
-    use rusqlite::OptionalExtension;
-    let failure: Option<i64> = tx.query_row(
-        "SELECT seq FROM events WHERE conversation_id=?1 AND kind='requirements_failed' AND seq=(SELECT max(seq) FROM events WHERE conversation_id=?1 AND kind='requirements_failed') AND json_extract(payload,'$.error')=?2",
-        params![conversation, crate::lean::ledger::MISSING_LEDGER], |row| row.get(0),
-    ).optional()?;
-    let Some(failure) = failure else {
+    let Some(failure) = latest_missing_ledger_failure(tx, conversation)? else {
         return Ok(false);
     };
-    let handled: bool = tx.query_row(
+    if repair_already_handled(tx, conversation, failure)?
+        || repair_budget_exhausted(tx, conversation)?
+    {
+        return Ok(false);
+    }
+    record_requirements_retry(tx, conversation, failure)?;
+    Ok(true)
+}
+
+fn latest_missing_ledger_failure(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+) -> Result<Option<i64>> {
+    use rusqlite::OptionalExtension;
+    Ok(tx.query_row(
+        "SELECT seq FROM events WHERE conversation_id=?1 AND kind='requirements_failed' AND seq=(SELECT max(seq) FROM events WHERE conversation_id=?1 AND kind='requirements_failed') AND json_extract(payload,'$.error')=?2",
+        params![conversation, crate::lean::ledger::MISSING_LEDGER], |row| row.get(0),
+    ).optional()?)
+}
+
+fn repair_already_handled(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    failure: i64,
+) -> Result<bool> {
+    Ok(tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM events WHERE conversation_id=?1 AND seq>?2 AND kind IN ('turn_started','requirements_format_retry'))",
         params![conversation, failure], |row| row.get(0),
-    )?;
+    )?)
+}
+
+fn repair_budget_exhausted(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<bool> {
     let retries: i64 = tx.query_row(
         "SELECT count(*) FROM messages WHERE conversation_id=?1 AND author='requirements-format-repair' AND seq>(SELECT coalesce(max(seq),0) FROM messages WHERE conversation_id=?1 AND author='user')",
         [conversation], |row| row.get(0),
     )?;
-    if handled || retries >= 2 {
-        return Ok(false);
-    }
+    Ok(retries >= 2)
+}
+
+fn record_requirements_retry(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    failure: i64,
+) -> Result<()> {
     let text = "Resume preparation of the SAME complete task plan, preserving requirements, tasks and dependencies. Submit the complete plan again with submit_plan. The previous requirements analyst ended without submitting the requirements; the runtime will retry that analyst with role-scoped review findings. Do not extract or edit the ledger yourself.";
-    tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'requirements-format-repair',?2,?3)", params![conversation, text, now_ms()])?;
+    tx.execute("INSERT INTO messages(conversation_id,author,text,created_ms) VALUES(?1,'requirements-format-repair',?2,?3)",
+        params![conversation, text, now_ms()])?;
     let seq = tx.last_insert_rowid();
     record_event(
         tx,
@@ -42,5 +71,5 @@ pub(super) fn queue_requirements_format_repair(
         "requirements_format_retry",
         serde_json::json!({"failure":failure}),
     )?;
-    Ok(true)
+    Ok(())
 }
