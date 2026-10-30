@@ -1387,6 +1387,55 @@ else:
 }
 
 #[test]
+fn the_orchestrator_retries_a_failed_task_and_it_finishes() {
+    let dir = tempfile::tempdir().unwrap();
+    let crashed = dir.path().join("worker-crashed");
+    let agent = format!(
+        r#"    import os
+    if 'Task role: worker' in prompt and not os.path.exists({crashed:?}):
+        open({crashed:?},'w').close()
+        sys.exit(3)
+    answer='inspected after retry'"#,
+        crashed = crashed.to_string_lossy()
+    );
+    let core = open(
+        dir.path(),
+        r#"
+import os,urllib.request
+def call(name,**arguments):
+    arguments['turn']=os.environ['FIXTURE_TURN']
+    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':name,'arguments':arguments}}
+    req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
+    return json.load(urllib.request.urlopen(req,timeout=30))['result']
+if '"status":"failed"' in prompt:
+    reply=call('retry_task',task='t1',guidance='check the worktree first')
+    assert not reply.get('isError'),reply
+    again=call('retry_task',task='t1',guidance='again')
+    assert again.get('isError'),again
+    answer='retried t1'
+else:
+    answer='done' if '[runtime]' in prompt else plan(task('t1','Inspection'))
+"#,
+        &agent,
+    );
+    let conversation = run(&core, dir.path());
+    wait_until("the retried task finished", || {
+        core.is_idle(&conversation)
+            && core.store.latest_plan(&conversation).unwrap()[0].status == "approved"
+    });
+    let recoveries = events(&core, &conversation, "task_recovery");
+    assert_eq!(recoveries.len(), 1, "{recoveries:?}");
+    assert_eq!(recoveries[0]["actor"], "orchestrator");
+    assert_eq!(recoveries[0]["message"], "check the worktree first");
+    let retried = prompts(dir.path())
+        .into_iter()
+        .rfind(|(_, p)| p.contains("Task role: worker"))
+        .unwrap()
+        .1;
+    assert!(retried.contains("check the worktree first"), "{retried}");
+}
+
+#[test]
 fn a_dependency_correction_cancels_the_old_consumer_and_releases_its_only_slot() {
     struct ReleaseOnDrop(std::path::PathBuf);
     impl Drop for ReleaseOnDrop {

@@ -6,6 +6,7 @@ mod actions;
 mod events;
 mod integrate;
 mod manual;
+mod orchestrator_retry;
 mod prepare;
 mod response;
 

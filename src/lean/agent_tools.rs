@@ -159,6 +159,13 @@ impl Core {
                 }
                 Ok(reply)
             }
+            "retry_task" => {
+                require(
+                    role == ORCHESTRATOR || role == COMMENT_ORCHESTRATOR,
+                    "only the orchestrator may retry a task",
+                )?;
+                self.retry_failed_task(conversation, &required("task")?, &required("guidance")?)
+            }
             "submit_plan" => {
                 require(
                     ORCHESTRATION_ROLES.contains(&role),

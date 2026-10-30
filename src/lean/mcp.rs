@@ -42,6 +42,7 @@ pub(crate) const TOOLS: &[&str] = &[
     WAIT,
     "answer_agent",
     "defer_to_user",
+    "retry_task",
     "revise_plan",
     "request_replan",
     "submit_ledger",
@@ -426,6 +427,7 @@ fn allowed_tools(role: &str) -> Vec<&'static str> {
             SUBMIT_PLAN,
             "answer_agent",
             "defer_to_user",
+            "retry_task",
             "revise_plan",
             "request_replan",
         ]
@@ -473,6 +475,7 @@ fn tool_list(role: &str) -> Vec<Value> {
             "submit_audit_review" => (format!("Submit your review of the audit; this ends your turn. Assess every proposed evidence id. {RETRY}"), schema::audit_review(), vec!["turn","note","assessments"]),
             "answer_agent" => ("Answer a task agent's pending question. Answers cannot change contracts or permissions.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"answer":{"type":"string"}}), vec!["turn","request","answer"]),
             "defer_to_user" => ("Hand a task agent's question to the user when only the user can decide; the task waits and you pass the user's answer on with answer_agent.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"explanation":{"type":"string","description":"What the user must decide and why, for the user"}}), vec!["turn","request","explanation"]),
+            "retry_task" => ("Run a failed task again in its own worktree, keeping its changes, when it failed for a reason outside its contract (a turn limit, a crashed CLI). A stalled task needs revise_plan instead. At most twice per task; then ask the user.".into(), json!({"task":{"type":"string","description":"The task id in the plan"},"guidance":{"type":"string","description":"What the worker should know, such as checking its worktree before starting over"}}), vec!["turn","task","guidance"]),
             "request_replan" => ("Ask the planner to redraft the whole plan when contract repairs are not enough. It is reviewed like any new plan.".into(), json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn","reason"]),
             _ => ("Change the running plan you were shown. Give only the tasks that change or are added, in full; the others stay as they are. The revision is reviewed independently before it applies.".into(), schema::revision(), vec!["turn","reason","tasks","retire"]),
         };
@@ -801,6 +804,7 @@ mod role_tests {
                 "submit_plan",
                 "answer_agent",
                 "defer_to_user",
+                "retry_task",
                 "revise_plan",
                 "request_replan",
             ]
