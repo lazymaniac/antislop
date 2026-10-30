@@ -1,5 +1,11 @@
 use super::*;
 impl Core {
+    /// Records a scheduled task execution failure with its raw cause.
+    pub(super) fn fail_scheduled_task(&self, conversation: &str, task: &mut Task, error: &Error) {
+        append_report_entry(task, "runtime", &error.to_string());
+        let _ = self.stop(conversation, task, status::FAILED, Some(&error.to_string()));
+    }
+
     /// Ends a task whose agent turn failed or was cancelled, keeping why.
     pub(in crate::lean) fn stop_task(
         &self,
@@ -47,12 +53,31 @@ fn failed_turn_status(error: &str, cancel: &AtomicBool) -> &'static str {
 }
 
 fn append_failed_turn(task: &mut Task, status: &str, role: &str, error: &str) {
+    append_report_entry(task, status, &format!("the {role}'s turn ended: {error}"));
+}
+
+pub(in crate::lean) fn append_report_entry(task: &mut Task, category: &str, text: &str) {
+    append_report(task, category, text, true);
+}
+
+/// Appends an integration note while retaining its established blank prefix
+/// when the task has no earlier report.
+pub(in crate::lean) fn append_integration_report_entry(
+    task: &mut Task,
+    category: &str,
+    text: &str,
+) {
+    append_report(task, category, text, false);
+}
+
+fn append_report(task: &mut Task, category: &str, text: &str, trim_leading: bool) {
     let report = task.report.take().unwrap_or_default();
-    task.report = Some(
-        format!("{report}\n\n[{status}] the {role}'s turn ended: {error}")
-            .trim_start()
-            .to_owned(),
-    );
+    let entry = format!("{report}\n\n[{category}] {text}");
+    task.report = Some(if trim_leading {
+        entry.trim_start().to_owned()
+    } else {
+        entry
+    });
 }
 
 impl Core {
@@ -103,5 +128,62 @@ impl Core {
             Some("awaiting orchestrator or user answer"),
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_entries_keep_prior_evidence_and_raw_failure_text() {
+        let mut task = Task {
+            input_generation: 0,
+            id: "task".into(),
+            plan_id: "plan".into(),
+            spec: json!({"id":"task"}),
+            status: status::FAILED.into(),
+            round: 0,
+            report: Some("worker report".into()),
+            verdict: None,
+            base: None,
+            result: None,
+            feedback: None,
+            freshness_token: None,
+            checks: None,
+        };
+
+        append_report_entry(&mut task, "runtime", "CLI exited with status 7");
+
+        assert_eq!(
+            task.report.as_deref(),
+            Some("worker report\n\n[runtime] CLI exited with status 7")
+        );
+    }
+
+    #[test]
+    fn integration_report_entry_uses_the_shared_separator() {
+        let mut task = Task {
+            input_generation: 0,
+            id: "task".into(),
+            plan_id: "plan".into(),
+            spec: json!({"id":"task"}),
+            status: status::APPROVED.into(),
+            round: 0,
+            report: None,
+            verdict: None,
+            base: None,
+            result: None,
+            feedback: None,
+            freshness_token: None,
+            checks: None,
+        };
+
+        append_integration_report_entry(&mut task, "integration", "committed as abc123");
+
+        assert_eq!(
+            task.report.as_deref(),
+            Some("\n\n[integration] committed as abc123")
+        );
     }
 }

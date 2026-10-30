@@ -18,8 +18,54 @@ struct Scheduler<'a> {
     cancel: &'a AtomicBool,
     done_tx: std::sync::mpsc::Sender<String>,
     done_rx: std::sync::mpsc::Receiver<String>,
-    in_flight: std::collections::HashSet<String>,
+    reservations: Reservations,
+}
+
+#[derive(Default)]
+struct Reservations {
+    tasks: std::collections::HashSet<String>,
     writers: InFlightWriters,
+}
+
+impl Reservations {
+    fn contains(&self, id: &str) -> bool {
+        self.tasks.contains(id)
+    }
+
+    fn can_reserve(&self, task: &Task) -> bool {
+        if !task.spec["writes"].as_bool().unwrap_or(false) {
+            return true;
+        }
+        let scope = task_scope(task);
+        !self
+            .writers
+            .values()
+            .any(|active| tasks::scopes_overlap(&scope, active))
+    }
+
+    fn reserve(&mut self, task: &Task, id: &str) {
+        self.tasks.insert(id.to_owned());
+        if task.spec["writes"].as_bool().unwrap_or(false) {
+            self.writers.insert(id.to_owned(), task_scope(task));
+        }
+    }
+
+    fn release(&mut self, id: &str) {
+        self.tasks.remove(id);
+        self.writers.remove(id);
+    }
+
+    fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+}
+
+fn task_scope(task: &Task) -> Vec<String> {
+    serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default()
 }
 
 impl<'a> Scheduler<'a> {
@@ -37,8 +83,7 @@ impl<'a> Scheduler<'a> {
             cancel,
             done_tx,
             done_rx,
-            in_flight: Default::default(),
-            writers: Default::default(),
+            reservations: Default::default(),
         }
     }
 
@@ -51,7 +96,7 @@ impl<'a> Scheduler<'a> {
             if settled {
                 continue;
             }
-            if self.in_flight.is_empty() {
+            if self.reservations.is_empty() {
                 break;
             }
             if !self.cancel.load(Ordering::SeqCst) {
@@ -125,7 +170,7 @@ impl<'a> Scheduler<'a> {
 
     fn is_runnable(&self, task: &Task, id: &str) -> bool {
         matches!(task.status.as_str(), status::QUEUED | status::SKIPPED)
-            && !self.in_flight.contains(id)
+            && !self.reservations.contains(id)
     }
 
     fn schedule_if_available<'scope, 'env>(
@@ -136,34 +181,15 @@ impl<'a> Scheduler<'a> {
     ) where
         'a: 'scope,
     {
-        if self.at_capacity() || self.conflicts_with_writer(task) {
+        if self.at_capacity() || !self.reservations.can_reserve(task) {
             return;
         }
-        self.reserve(task, &id);
+        self.reservations.reserve(task, &id);
         self.spawn_task(scope, task.clone(), id);
     }
 
     fn at_capacity(&self) -> bool {
-        self.in_flight.len() >= self.core.config_snapshot().policy.max_parallel
-    }
-
-    fn conflicts_with_writer(&self, task: &Task) -> bool {
-        let writes = task.spec["writes"].as_bool().unwrap_or(false);
-        let scope: Vec<String> =
-            serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
-        writes
-            && (self
-                .writers
-                .values()
-                .any(|active| tasks::scopes_overlap(&scope, active)))
-    }
-
-    fn reserve(&mut self, task: &Task, id: &str) {
-        self.in_flight.insert(id.to_owned());
-        if task.spec["writes"].as_bool().unwrap_or(false) {
-            let scope = serde_json::from_value(task.spec["scope"].clone()).unwrap_or_default();
-            self.writers.insert(id.to_owned(), scope);
-        }
+        self.reservations.len() >= self.core.config_snapshot().policy.max_parallel
     }
 
     fn spawn_task<'scope, 'env>(
@@ -207,8 +233,7 @@ impl<'a> Scheduler<'a> {
     }
 
     fn release(&mut self, id: &str) {
-        self.in_flight.remove(id);
-        self.writers.remove(id);
+        self.reservations.release(id);
     }
 }
 
@@ -245,18 +270,8 @@ fn execute_task(
 
 fn fail_task(core: &Arc<Core>, conversation: &str, task: &mut Task, cancel: &AtomicBool) {
     if let Err(error) = core.run_task(conversation, task, cancel) {
-        append_failure(core, conversation, task, &error);
+        core.fail_scheduled_task(conversation, task, &error);
     }
-}
-
-fn append_failure(core: &Arc<Core>, conversation: &str, task: &mut Task, error: &Error) {
-    let report = task.report.take().unwrap_or_default();
-    task.report = Some(
-        format!("{report}\n\n[runtime] {error}")
-            .trim_start()
-            .to_owned(),
-    );
-    let _ = core.stop(conversation, task, status::FAILED, Some(&error.to_string()));
 }
 
 fn restart_agent(core: &Arc<Core>, conversation: &str, task: &Task) {
@@ -278,5 +293,52 @@ fn restart_agent(core: &Arc<Core>, conversation: &str, task: &Task) {
         if let Err(error) = result {
             core.notice(conversation, &format!("agent restart failed: {error}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(id: &str, writes: bool, scope: &[&str]) -> Task {
+        Task {
+            input_generation: 0,
+            id: id.into(),
+            plan_id: "plan".into(),
+            spec: json!({"id":id,"writes":writes,"scope":scope}),
+            status: status::QUEUED.into(),
+            round: 0,
+            report: None,
+            verdict: None,
+            base: None,
+            result: None,
+            feedback: None,
+            freshness_token: None,
+            checks: None,
+        }
+    }
+
+    #[test]
+    fn writer_reservations_block_overlapping_writers_but_not_readers() {
+        let mut reservations = Reservations::default();
+        let writer = task("writer", true, &["src/lean"]);
+        reservations.reserve(&writer, "writer");
+
+        assert!(!reservations.can_reserve(&task("overlap", true, &["src/lean/core.rs"])));
+        assert!(reservations.can_reserve(&task("disjoint", true, &["tests"])));
+        assert!(reservations.can_reserve(&task("reader", false, &["src/lean/core.rs"])));
+        assert_eq!(reservations.len(), 1);
+    }
+
+    #[test]
+    fn releasing_a_task_also_releases_its_writer_scope() {
+        let mut reservations = Reservations::default();
+        reservations.reserve(&task("writer", true, &["src/lean"]), "writer");
+
+        reservations.release("writer");
+
+        assert_eq!(reservations.len(), 0);
+        assert!(!reservations.contains("writer"));
+        assert!(reservations.can_reserve(&task("next", true, &["src/lean/core.rs"])));
     }
 }

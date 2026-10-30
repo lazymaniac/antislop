@@ -3,6 +3,9 @@ use super::prompt::{PromptContext, orchestrator_prompt_text};
 use crate::lean::core_planning_context::planning_ledger_context;
 use crate::lean::core_unanswered::includes_comment;
 
+#[path = "context/plan_view.rs"]
+mod plan_view;
+
 #[path = "context/comments.rs"]
 mod comments;
 use comments::comment_context;
@@ -34,7 +37,7 @@ pub(super) fn prepare<'a>(
     let request = request_context(core, conversation, upto)?;
     let config = core.config_snapshot();
     let project = PathBuf::from(core.store.conversation(conversation)?.project);
-    let (workflow, graph, graph_json) = plan_view(core, conversation)?;
+    let view = plan_view::load(core, conversation)?;
     let (history, ledger_context) = history_context(core, conversation, request.answered)?;
     Ok(OrchestrationContext {
         conversation,
@@ -46,11 +49,11 @@ pub(super) fn prepare<'a>(
         project,
         open: request.open,
         comment_text: request.comment_text,
-        interviewing: workflow.interviewing(),
-        workflow,
-        editable_graph: !graph.is_empty(),
-        graph,
-        graph_json,
+        interviewing: view.workflow.interviewing(),
+        editable_graph: !view.graph.is_empty(),
+        workflow: view.workflow,
+        graph: view.graph,
+        graph_json: view.graph_json,
         history,
         ledger_context,
     })
@@ -113,27 +116,6 @@ fn turn_setup<'a>(
     }
 }
 
-fn plan_view(core: &Core, conversation: &str) -> Result<(store::Workflow, Vec<Task>, String)> {
-    let workflow = load_workflow(core, conversation)?;
-    let (graph, graph_json) = load_graph(core, conversation)?;
-    Ok((workflow, graph, graph_json))
-}
-
-fn load_workflow(core: &Core, conversation: &str) -> Result<store::Workflow> {
-    let workflow = core.store.workflow(conversation)?;
-    if workflow.planning() {
-        announce_planning(core, conversation)?;
-    }
-    Ok(workflow)
-}
-
-fn load_graph(core: &Core, conversation: &str) -> Result<(Vec<Task>, String)> {
-    let graph = core.store.latest_plan(conversation)?;
-    record_revision_view(core, conversation, &graph)?;
-    let encoded = graph_json(core, &graph)?;
-    Ok((graph, encoded))
-}
-
 fn render_prompt(context: &OrchestrationContext<'_>, first: bool, fresh: bool) -> String {
     orchestrator_prompt_text(PromptContext {
         project: &context.project,
@@ -151,42 +133,6 @@ fn render_prompt(context: &OrchestrationContext<'_>, first: bool, fresh: bool) -
         workflow: &context.workflow,
         ledger_context: context.ledger_context.as_deref(),
     })
-}
-
-fn announce_planning(core: &Core, conversation: &str) -> Result<()> {
-    core.store.append_event(
-        conversation,
-        None,
-        None,
-        "planning_progress",
-        &json!({"text":"Working on the plan draft"}),
-    )?;
-    Ok(())
-}
-
-fn record_revision_view(core: &Core, conversation: &str, graph: &[Task]) -> Result<()> {
-    let view = graph
-        .first()
-        .map(|task| {
-            Ok::<_, Error>((
-                task.plan_id.clone(),
-                core.store.plan_revision(&task.plan_id)?,
-            ))
-        })
-        .transpose()?;
-    core.revision_views
-        .lock()
-        .expect("revision views mutex")
-        .insert(conversation.into(), view);
-    Ok(())
-}
-
-fn graph_json(core: &Core, graph: &[Task]) -> Result<String> {
-    let base_revision = graph
-        .first()
-        .map(|task| core.store.plan_revision(&task.plan_id))
-        .transpose()?;
-    serde_json::to_string(&json!({"base_revision":base_revision,"tasks":graph.iter().map(|task|&task.spec).collect::<Vec<_>>()})).map_err(Error::from)
 }
 
 pub(super) fn ask(
