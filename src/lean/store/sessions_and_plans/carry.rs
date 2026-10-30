@@ -22,6 +22,21 @@ pub(super) fn carry_approved(
         "SELECT id,spec,feedback FROM tasks WHERE plan_id=?1 AND status='approved'",
         &source,
     )?;
+    let (kept, repeated) = carry_plan_tasks(tx, plan_id, same_requirements, &approved)?;
+    let why = if same_requirements {
+        "their contracts changed since approval"
+    } else {
+        "the requirements changed since their approval"
+    };
+    Ok(carry_notice(&kept, &repeated, why))
+}
+
+fn carry_plan_tasks(
+    tx: &rusqlite::Transaction<'_>,
+    plan_id: &str,
+    same_requirements: bool,
+    approved: &[Row],
+) -> Result<(Vec<String>, Vec<String>)> {
     let (mut kept, mut repeated) = (vec![], vec![]);
     for (id, spec, _) in rows(
         tx,
@@ -37,12 +52,7 @@ pub(super) fn carry_approved(
             repeated.push(name);
         }
     }
-    let why = if same_requirements {
-        "their contracts changed since approval"
-    } else {
-        "the requirements changed since their approval"
-    };
-    Ok(carry_notice(&kept, &repeated, why))
+    Ok((kept, repeated))
 }
 
 /// The last plan with approved work, and whether it answered the same

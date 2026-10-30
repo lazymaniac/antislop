@@ -149,20 +149,7 @@ impl Store {
     pub fn queue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let proposed: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM tasks WHERE conversation_id=?1 AND plan_id=?2 AND status='proposed'",
-            params![conversation, plan_id],
-            |row| row.get(0),
-        )?;
-        let all: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM tasks WHERE conversation_id=?1 AND plan_id=?2",
-            params![conversation, plan_id],
-            |row| row.get(0),
-        )?;
-        crate::require(
-            all > 0 && proposed == all,
-            "this plan is not waiting for approval",
-        )?;
+        let all = proposed_task_count(&tx, conversation, plan_id)?;
         tx.execute(
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2",
             params![conversation, plan_id],
@@ -224,6 +211,28 @@ impl Store {
             None => Ok(vec![]),
         }
     }
+}
+
+fn proposed_task_count(
+    tx: &rusqlite::Transaction<'_>,
+    conversation: &str,
+    plan_id: &str,
+) -> Result<i64> {
+    let proposed: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE conversation_id=?1 AND plan_id=?2 AND status='proposed'",
+        params![conversation, plan_id],
+        |row| row.get(0),
+    )?;
+    let all: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM tasks WHERE conversation_id=?1 AND plan_id=?2",
+        params![conversation, plan_id],
+        |row| row.get(0),
+    )?;
+    crate::require(
+        all > 0 && proposed == all,
+        "this plan is not waiting for approval",
+    )?;
+    Ok(all)
 }
 
 fn authorize_plan(tx: &rusqlite::Transaction<'_>, conversation: &str, plan_id: &str) -> Result<()> {
