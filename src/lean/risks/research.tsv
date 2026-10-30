@@ -1,10 +1,10 @@
-R081	research	Invented sources, quotes, or measurements.	Independently open sources and read evidence.
-R082	research	A citation does not support its attributed claim.	Map claims to source passages.
-R083	research	Outdated data or applying old results to the present.	Check event, publication, and access dates.
-R084	research	Cherry-picking and apparently independent sources.	Check primary sources and their dependency graph and actively search for evidence against the initial claim.
-R325	research	A source supports a claim but lacks credibility for that subject.	Check author expertise, how information was obtained, supporting evidence, and relevant interests and distinguish provider claims from independent confirmation.
-R326	research	Source findings apply to conditions different from the research question.	Compare versions, populations, environments, configurations, and applicability limits with the task.
-R327	research	A summary, search snippet, or secondary account substitutes for reading the original material.	Open the original and check context, qualifications, and methodology and explicitly disclose access limitations.
-R328	research	Conflicting source findings are ignored or resolved by publication count alone.	Compare disagreements, evidence quality, and source independence and explain differences or retain the question as unresolved.
-R329	research	Failure to find evidence is presented as proof that a phenomenon or solution does not exist.	Check search scope, terminology, and access limitations and distinguish no result found from a supported absence claim.
-R330	research	Research stops before important parts of the question have evidence or explicit unknowns.	Map research questions to evidence and remaining unknowns and justify stopping by coverage rather than source count.
+R081	research	Invented sources, quotes, or measurements.	Open the cited sources and check the quoted evidence is there.
+R082	research	A citation does not support the claim attributed to it.	Compare claims with the source passages they cite.
+R083	research	Outdated data or old results applied to the present.	Check the dates of the events and publications cited.
+R084	research	Cherry-picked or apparently independent sources.	Check that claims rest on primary sources, that seemingly independent sources do not repeat one origin, and that counterevidence was considered.
+R325	research	A source lacks credibility for the subject it is cited on.	Check the author's expertise and interests, and separate provider claims from independent confirmation.
+R326	research	Findings apply to conditions different from the research question.	Compare versions, populations, environments, and configurations in the source with the task.
+R327	research	A summary or snippet substitutes for the original material.	Check that the cited claims come from the original, and that access limitations are disclosed.
+R328	research	Conflicting findings are ignored or settled by counting sources.	Check that disagreements are explained by evidence quality and independence or kept as unresolved.
+R329	research	Failing to find evidence is presented as proof of absence.	Check the search scope and terms and separate no result found from a supported absence claim.
+R330	research	Research stops before important parts of the question have evidence or named unknowns.	Check that each research question has evidence or an explicit unknown.

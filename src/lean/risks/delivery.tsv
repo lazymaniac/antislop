@@ -1,17 +1,12 @@
-R033	delivery	Prematurely declaring completion.	Check the final requirements-to-artifacts map.
-R069	delivery	Excessive user trust in apparent certainty.	Show evidence alongside verdicts and explicit unknowns.
-R095	delivery	False work or message-delivery status.	Derive status from receipts and events.
-R096	delivery	Authorization applies to an old scope.	Check the scope hash and policy revision.
-R097	delivery	Unknown cost is presented as zero.	Check usage provenance and completeness.
-R100	delivery	Unsafe or unreadable terminal output.	Check escape sequences, size, and encoding.
-R194	delivery	A test links to a requirement but does not check it.	Read the oracle, assertions, and execution path.
-R195	delivery	A completion percentage hides a critical omission.	Compare the final status of every obligation.
-R198	delivery	Not applicable conveniently excludes a difficult risk.	Check how the justification relates to actual scope.
-R199	delivery	Changing the checklist removes a finding during work.	Compare pinned versions and history.
-R200	delivery	An agent claims a check without performing it.	Compare the report with evidence and tool history.
-R259	delivery	The delivered result has no clear location or artifact identity.	Open the referenced locations and confirm that they identify the result described for this task.
-R260	delivery	Usage instructions omit prerequisites or required user actions.	Walk through the instructions from the recipient's perspective and check that configuration, working directory, and activation steps are explicit where required.
-R261	delivery	The report omits material behavior changes or obligations imposed on the user.	Compare delivered changes with the explanation of user impact and required configuration, invocation, or data transition steps.
-R262	delivery	The verification summary hides the scope or limitations of the checks performed.	Compare the summary with recorded commands, configurations, results, and omitted or disabled checks.
-R263	delivery	Open issues are listed without consequences or actionable next steps.	For each material issue, check its impact, next action, and any decision or missing information needed to proceed.
-R264	delivery	Usage instructions have undisclosed side effects.	Compare commands' actual effects with their descriptions and check that recipients are told about data overwrites, configuration changes, and publication before execution.
+R033	delivery	Completion is declared while a requirement has no delivered result.	Check that every requirement of the task has a delivered result at a named location.
+R069	delivery	Verdicts appear more certain than their evidence.	Check that verdicts come with their evidence and with the unknowns that remain.
+R194	delivery	A test is cited for a requirement but does not check it.	Read the cited test's assertions and check they would fail if the requirement were not met.
+R195	delivery	An overall status hides a critical omission.	Compare the reported status with the outcome of every obligation.
+R198	delivery	Marking a risk not applicable conveniently excludes a difficult one.	Check that each not applicable has a reason that matches the task's actual scope.
+R200	delivery	The report claims a check that was not performed.	Compare the checks the report claims with the recorded commands and their output.
+R259	delivery	The delivered result has no clear location or identity.	Open the referenced locations and confirm they hold the result described for this task.
+R260	delivery	Usage instructions omit prerequisites or required user actions.	Read the instructions as the recipient and check that configuration, working directory, and activation steps are explicit where required.
+R261	delivery	The report omits behavior changes or obligations imposed on the user.	Compare the delivered changes with the explanation of user impact and required configuration, invocation, or data migration steps.
+R262	delivery	The verification summary hides the scope or limits of the checks performed.	Compare the summary with the recorded commands, configurations, results, and any skipped or disabled checks.
+R263	delivery	Open issues are listed without consequences or next steps.	For each material issue, check its impact, the next action, and any decision or missing information needed to proceed.
+R264	delivery	Usage instructions have undisclosed side effects.	Read what each instructed command does and check the recipient is told about overwrites, configuration changes, and publication before running it.

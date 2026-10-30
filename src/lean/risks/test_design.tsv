@@ -1,14 +1,14 @@
-R141	test_design	Incorrect partitioning into equivalence classes.	Look for differently behaving cases within one class.
-R144	test_design	The test strategy comes only from planned code.	Compare the oracle with requirements and the model.
-R037	test_design	Missing negative and boundary cases.	Map risks and input classes.
+R141	test_design	Equivalence classes are partitioned incorrectly.	Look for cases within one class that the contract treats differently.
+R144	test_design	The test strategy comes only from the planned code.	Check that expected outcomes come from the requirements and contracts, not the implementation.
+R037	test_design	Negative and boundary cases are missing.	Check that the scenarios cover invalid input, error paths, and boundaries the risks point to.
 R213	test_design	Zero, signs, and range boundaries are omitted.	Check minima, maxima, and neighboring values.
-R216	test_design	Combinations of individually valid parameters are unexamined.	Build constraints and interaction scenarios.
-R217	test_design	Pairwise testing is used for a rule depending on many fields.	Compare interaction strength with the rule model.
-R219	test_design	Scenarios omit verification of required handling of duplicate, delayed, and out-of-order events.	Map repetitions, delays, and reorderings to contract-based expected outcomes and report undefined semantics as an open question.
-R220	test_design	Random examples are claimed as complete input verification.	Check class justifications and invariant coverage.
-R331	test_design	A scenario has no expected outcome or way to recognize correctness.	Specify initial conditions, the stimulus, and observable expectations derived from the contract.
-R332	test_design	Cases cover isolated operations but omit important sequences and state transitions.	Map scenarios to states, transitions, and usage histories, including prohibited transitions and repeated operations where relevant.
-R333	test_design	The test plan omits failures at significant points within an operation.	Identify dependency and side-effect failure points and plan checks of state after failure, interruption, and resumption where the contract supports them.
-R334	test_design	Concurrent behavior is left to accidental scheduling instead of distinguishing interleavings.	Identify critical event orderings and a way to control them in tests without relying solely on timed delays.
-R335	test_design	Expectations cover return values but omit required side effects and absence of forbidden changes.	Specify what must and must not change in data, resources, and communication for each relevant scenario.
-R336	test_design	The selected test level cannot expose the risk it is intended to verify.	Map each risk to the system boundary the test must cross and justify the chosen unit, contract, integration, or end-to-end test level.
+R216	test_design	Combinations of individually valid parameters are not examined.	Look for parameter combinations the rule treats differently that no scenario covers.
+R217	test_design	Pairwise combinations are used for a rule that depends on more fields at once.	Compare the interaction strength of the scenarios with the rule.
+R219	test_design	Duplicate, delayed, and out-of-order events are not covered where the contract defines their handling.	Check that repetitions, delays, and reorderings have expected outcomes from the contract, and that undefined semantics are reported as open.
+R220	test_design	Random examples are claimed as complete coverage.	Check that each class of input is justified and that invariants are covered.
+R331	test_design	A scenario has no expected outcome.	Check that each scenario states its initial conditions, stimulus, and observable expectation from the contract.
+R332	test_design	Scenarios cover isolated operations but omit sequences and state transitions.	Check that important sequences, prohibited transitions, and repeated operations are covered where relevant.
+R333	test_design	The plan omits failures partway through an operation.	Check that failures at significant points have scenarios for the state left behind and for recovery where the contract defines it.
+R334	test_design	Concurrent behavior is left to accidental scheduling.	Check that critical orderings are controlled in the scenarios rather than relying on timed delays.
+R335	test_design	Expectations omit required side effects or the absence of forbidden changes.	Check that scenarios state what must and must not change in data, resources, and communication.
+R336	test_design	The chosen test level cannot expose the risk it targets.	Check that each risk's scenario crosses the boundary where the risk lives.

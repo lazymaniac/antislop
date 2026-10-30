@@ -1,17 +1,13 @@
-R117	security	Failing to identify trust and permission boundaries.	Trace data provenance and authorization decisions.
-R051	security	Incorrect authorization or tenant isolation.	Run negative access tests and inspect the permission model.
-R052	security	SQL, command, or template injection and XSS.	Analyze data flow and test payloads.
-R053	security	Path traversal, symlinks, and unsafe temporary files.	Test paths, permissions, and races.
-R054	security	SSRF, unsafe deserialization, or unsafe parsing.	Model inputs and run controlled attack tests.
-R055	security	Secrets in code, logs, or reports.	Run secret scanning and inspect data flow.
-R056	security	Unsafe cryptography, sessions, or defaults.	Review libraries and configuration.
-R058	security	A vulnerable dependency or uncontrolled install script.	Check the lockfile, advisories, and installation scope.
-R059	security	Tests or scripts perform unexpected actions.	Review commands, isolate execution, and observe effects.
-R061	security	Prompt injection hijacks the agent's goal.	Check content provenance and attempts to change instructions.
-R062	security	Misuse of an available tool.	Check operations against the role and authorization.
-R063	security	Identity or privilege escalation.	Ensure every policy change has an authorized author.
-R064	security	Malicious plugins, MCP servers, or supply-chain components.	Maintain an explicit integration list with versions.
-R065	security	Unexpected execution of code from data.	Analyze the data-command boundary.
-R066	security	Poisoned memory or handoff packages.	Check decision provenance and original sources.
-R067	security	Impersonation in agent communication.	Have the daemon assign sender identity.
-R068	security	Cascading propagation of an incorrect decision.	Check the artifact-version dependency graph.
+R117	security	Trust and permission boundaries are not identified.	Trace where untrusted data enters and where authorization decisions are made.
+R051	security	Authorization or tenant isolation is wrong.	Follow each new access path and check that authorization and isolation are checked before the effect.
+R052	security	Injection into queries, commands, templates, or HTML.	Trace external data to queries, commands, templates, and markup and check it is parameterized or escaped.
+R053	security	Path traversal, symlinks, or unsafe temporary files.	Check that paths from input are confined, symlinks are handled, and temporary files are created safely.
+R054	security	Unsafe requests, deserialization, or parsing of untrusted input.	Check that URLs, serialized data, and parsed input from untrusted sources are restricted and validated.
+R055	security	Secrets in code, logs, or reports.	Look for credentials, tokens, and keys in the diff and in what the code logs or reports.
+R056	security	Unsafe cryptography, sessions, or defaults.	Review the cryptographic libraries, session handling, and default settings the change uses.
+R058	security	A vulnerable dependency or uncontrolled install script.	Check the added dependencies against advisories and look for install or build scripts they run.
+R059	security	Tests or scripts perform unexpected actions.	Read the commands the change adds to tests and scripts and check they act only within the project.
+R061	security	Untrusted content reaches a model's instructions.	Where the change passes external content to a model, check it is kept apart from instructions.
+R063	security	A caller gains privileges it was not granted.	Look for paths where identity or permissions can be changed without authorization.
+R064	security	An untrusted plugin, server, or supply-chain component is added.	Check that new plugins, servers, and components come from a known source at a pinned version.
+R065	security	Code is executed from data.	Look for evaluation, dynamic loading, or shell execution of data that crosses a trust boundary.

@@ -1,19 +1,17 @@
-R138	dependencies	Assuming library behavior that is not guaranteed.	Compare the version's contract with an experiment.
-R057	dependencies	Invented packages and slopsquatting.	Check package existence, provenance, and history.
-R060	dependencies	License violations or unclear code provenance.	Track sources and licenses of new material.
-R221	dependencies	An agent writes an available mechanism without checking alternatives.	Reconstruct the search and reuse map.
-R222	dependencies	Library popularity substitutes for fit assessment.	Compare the API with the required contract.
-R223	dependencies	A dependency without a license is treated as freely usable.	Read the relevant files and provenance.
-R224	dependencies	Only the direct dependency's license was checked.	Trace the lockfile, features, and native components.
-R225	dependencies	AND, OR, or a WITH exception is misinterpreted.	Compare the expression with license texts.
-R226	dependencies	The license does not fit the project's delivery model.	Check intended distribution and use.
-R227	dependencies	Notices, attribution, or required code are missing from delivery.	Check the final package against obligations.
-R228	dependencies	Copied or vendored code bypasses license checks.	Compare fragment and file provenance.
-R229	dependencies	Version or feature changes do not reopen assessment.	Compare the graph and report input hashes.
-R230	dependencies	Package existence and no known CVEs create false trust.	Check provenance, maintenance, and scanner scope.
-R265	dependencies	A dependency does not support the required toolchain or target platforms.	Compare compiler and platform requirements of the resolved dependency graph with the project's supported environment matrix.
-R266	dependencies	Default or unified features enable unnecessary mechanisms and dependencies.	Inspect the resolved feature graph and justify enabled options and backends.
-R267	dependencies	A dependency requires undisclosed build tools or system libraries.	Inspect build scripts, native dependencies, and linking requirements and check that the build environment is fully specified.
-R268	dependencies	Technical assessment omits the cost of transitive dependencies.	Compare dependency graphs before and after the change for new packages, duplicate versions, native components, and maintenance requirements.
-R269	dependencies	The assessed dependency version cannot be reliably retrieved and reproduced.	Check source availability, pinned revisions, the lockfile, and required artifacts in a clean environment, including moving references and local paths.
-R270	dependencies	Required dependency patches or upgrades have no feasible maintenance path.	Check unresolved blockers, required patches, the upgrade path, and ownership of any fork or local deviations.
+R138	dependencies	The change relies on library behavior the resolved version does not guarantee.	Check that the behavior relied on is documented for the resolved version or shown by the worker's recorded test.
+R057	dependencies	An invented or look-alike package is added.	Check the package exists under that exact name, from the expected publisher, with a real history.
+R060	dependencies	New material has an unclear license or provenance.	Check where added code or assets come from and under which license.
+R221	dependencies	A dependency is added for something the project or standard library already provides.	Look for existing project or standard library mechanisms the new dependency duplicates.
+R222	dependencies	Popularity substitutes for an assessment of fit.	Compare the library's API and guarantees with the contract the task needs.
+R223	dependencies	A license is misread or missing.	Read the license files and expression, including AND, OR, and WITH exceptions, and check a dependency without a license is not treated as freely usable.
+R224	dependencies	Only the direct dependency's license was checked.	Check the licenses of the transitive dependencies, enabled features, and native components the change brings in.
+R226	dependencies	A license does not fit how the project is distributed.	Compare the license terms with the project's intended distribution and use.
+R227	dependencies	Required notices or attribution are missing from what is delivered.	Check that the delivered package carries the notices and attribution its licenses require.
+R228	dependencies	Copied or vendored code bypasses license checks.	Look for copied files or fragments and check their origin and license.
+R230	dependencies	Package existence and no known vulnerabilities create false trust.	Check provenance, maintenance activity, and what the vulnerability scan actually covered.
+R265	dependencies	A dependency does not support the project's toolchain or target platforms.	Compare the dependency's compiler and platform requirements with the project's toolchain and targets.
+R266	dependencies	Default features enable unnecessary mechanisms and dependencies.	Look at the features enabled in the manifest and lockfile and check each is needed.
+R267	dependencies	A dependency needs undisclosed build tools or system libraries.	Look at build scripts, native dependencies, and linking requirements and check they are documented.
+R268	dependencies	The assessment omits the cost of transitive dependencies.	Look at the lockfile diff for new packages, duplicate versions, and native components.
+R269	dependencies	The dependency version cannot be retrieved reproducibly.	Check that the version is pinned in the lockfile and its source is not a moving reference or a local path.
+R270	dependencies	A required patch or upgrade has no maintenance path.	Check unresolved blockers, required patches, the upgrade path, and who maintains any fork.

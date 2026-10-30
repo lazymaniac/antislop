@@ -10,6 +10,7 @@ pub fn verifier_prompt(
     let blocker = "Ask the orchestrator about ambiguities. Report unrelated problems separately; do not expand this task.";
     let obligations = obligations_text(&obligations(task));
     let binding = verifier_binding(task);
+    let risks = risks_note(task);
     format!(
         "You verify another agent's work. The project is your current working \
          directory: {project}. Check the worker's claims against the actual \
@@ -17,7 +18,7 @@ pub fn verifier_prompt(
          {task_context}\n\n{binding}\n\n\
          Your obligations (the task's goal, its assigned acceptance criteria, then \
          the catalog risks of this kind of work). \
-         Assess each from files and recorded evidence only; do not execute or edit:\n{obligations}\n\n\
+         Assess each from files and recorded evidence only; do not execute or edit:\n{obligations}\n{risks}\n\n\
          Command results are recorded evidence: judge them by the command and the output \
          the report quotes. Files the worker left under paths git ignores (such as \
          .antislop/ or target/) never reach your checkout; their absence is not a finding. \
@@ -72,11 +73,12 @@ pub fn verifier_followup(task: &TaskContract, report: &str, changes: Option<&str
     let binding = verifier_binding(task);
     format!(
         "The worker's updated report:\n<<<\n{report}\n>>>\n\n{}Check it again against \
-         the files. {binding} {REVIEW_RULES} {PROJECT_RULES} account again for your obligations (from files and recorded evidence only):\n{}\n\nEnd with review: your report, checks with a status and note for every obligation id above, and findings, each naming the check it breaks, its severity, the issue and where. The runtime approves only when every check is ok or n/a and no finding is critical, high or medium. Suggestions outside this contract belong in the report, not in findings. {COVERAGE_FORMAT}\n\n{blocker}",
+         the files. {binding} {REVIEW_RULES} {PROJECT_RULES} account again for your obligations (from files and recorded evidence only):\n{}\n{}\n\nEnd with review: your report, checks with a status and note for every obligation id above, and findings, each naming the check it breaks, its severity, the issue and where. The runtime approves only when every check is ok or n/a and no finding is critical, high or medium. Suggestions outside this contract belong in the report, not in findings. {COVERAGE_FORMAT}\n\n{blocker}",
         changes
             .map(|text| format!("{text}\n\n"))
             .unwrap_or_default(),
         obligations_text(&obligations(task)),
+        risks_note(task),
     )
 }
 
@@ -197,12 +199,19 @@ fn plan_entry(task: &TaskContract) -> Value {
 /// Review of a plan revision. A resumed reviewer has the plan already; either
 /// way the earlier contracts are repeated only for tasks the revision changed
 /// or removed, not for the whole plan.
+/// What a revision does with approved work: the tasks it keeps and those it
+/// sends back to work.
+pub struct ApprovedWork<'a> {
+    pub kept: &'a [String],
+    pub redone: &'a [String],
+}
+
 pub fn plan_revision_review_prompt(
     project: &str,
     request: &str,
     plan: &[TaskContract],
     baseline: &[Value],
-    approved: &[String],
+    approved: ApprovedWork<'_>,
     reason: &str,
     initial: bool,
 ) -> String {
@@ -220,14 +229,19 @@ pub fn plan_revision_review_prompt(
         plan_review_followup(request, plan)
     };
     format!(
-        "{head}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate dependencies, dedicated options for every writer and all quality gates. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; a change to its title, goal or summary does not redo its work. When an approved result must be redone, the revision has to name the task in redo.",
+        "{head}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate dependencies, dedicated options for every writer and all quality gates. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; a change to its title, goal or summary does not redo its work. When an approved result must be redone, the revision has to name the task in redo.\n\nApproved tasks this revision sends back to work, because their contract changes or it names them in redo; options tasks are generated from the writer they serve and follow its contract: {}.",
         serde_json::to_string(&previous).unwrap_or_default(),
-        if approved.is_empty() {
-            "none".to_owned()
-        } else {
-            approved.join(", ")
-        }
+        listed(approved.kept),
+        listed(approved.redone)
     )
+}
+
+fn listed(ids: &[String]) -> String {
+    if ids.is_empty() {
+        "none".to_owned()
+    } else {
+        ids.join(", ")
+    }
 }
 
 pub fn plan_rejected(findings: &[Value]) -> String {

@@ -121,8 +121,11 @@ fn a_context_worker_may_run_commands_in_its_throwaway_checkout() {
 }
 
 #[test]
-fn verifiers_are_told_that_checkout_paths_differ_by_design() {
+fn verifiers_never_block_on_path_or_revision_mismatches() {
     let task = task(false);
     let prompt = tasks::verifier_prompt("project", &task, "report", None);
-    assert!(prompt.contains("paths differ by design"), "{prompt}");
+    assert!(
+        prompt.contains("path or changed-file mismatches alone are never blocking findings"),
+        "{prompt}"
+    );
 }

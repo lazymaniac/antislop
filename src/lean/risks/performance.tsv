@@ -1,15 +1,15 @@
-R137	performance	The plan works only at a small data scale.	Assess growth in cost, queues, and persistent data.
-R071	performance	Poor algorithmic complexity.	Measure scaling with growing input.
-R072	performance	N+1, unnecessary I/O, and repeated network calls.	Profile and count operations.
-R073	performance	Unbounded allocations, leaks, and missing streaming.	Profile memory under realistic load.
-R074	performance	Contention, excessive serialization, deadlocks, or starvation prevent required throughput and latency.	Measure waiting and progress under concurrent load and inspect synchronization bottlenecks and the lock graph.
-R075	performance	Blocking the event loop or TUI thread.	Measure input latency and trace long operations.
-R076	performance	Retries amplify load or cancelled work continues consuming resources.	Inject dependency failures and cancel work under load and measure retry volume and resource use until the work stops.
-R077	performance	Incorrect caching and stale data.	Change inputs and check invalidation.
-R079	performance	An unrepresentative benchmark or missing baseline omits relevant operating conditions, including cold start and warmed operation.	Review data, environment, and methodology and separately measure startup, first use, and steady operation with controlled cache state where relevant.
-R080	performance	Optimization breaks semantics or increases code complexity.	Run behavior tests and analyze trade-offs.
-R294	performance	Average results hide unacceptable latency for a subset of operations.	Inspect latency distributions and relevant percentiles for important scenarios against their requirements.
-R295	performance	Work arrives faster than it can be processed and the backlog keeps growing.	Increase arrival rate and measure queue lengths, waiting time, admission control, and recovery after overload.
-R296	performance	Short measurements miss performance degradation during sustained operation.	Run a sufficiently long workload and inspect trends in latency, resource use, and periodic maintenance costs.
-R297	performance	An optimization moves cost outside the measured section instead of reducing the full scenario's cost.	Compare end-to-end work including preparation, background processing, cleanup, and consumption of relevant resources.
-R298	performance	An apparent improvement is measurement noise or an environmental disturbance.	Repeat comparisons under controlled conditions and assess variability and effect size before attributing improvement to the change.
+R137	performance	The solution works only at a small scale.	Check how cost, queues, and stored data grow with input in the design or code.
+R071	performance	Poor algorithmic complexity.	Look for nested loops, repeated scans, or searches over growing data on paths that matter.
+R072	performance	N+1 queries, unnecessary I/O, or repeated network calls.	Look for queries, I/O, or network calls inside loops that one batched call would serve.
+R073	performance	Unbounded allocations, leaks, or missing streaming.	Look for collections, buffers, or caches that grow without bound, and whole-input reads where streaming fits.
+R074	performance	Contention, serialization, deadlock, or starvation prevents required throughput or latency.	Look for locks held across slow work, shared hot spots, and waits that can block each other.
+R075	performance	Blocking the event loop or UI thread.	Look for blocking I/O, waits, or long computations on the event loop or UI thread.
+R076	performance	Retries amplify load or cancelled work keeps consuming resources.	Check that retries back off and stop, and that cancelled work releases its resources.
+R077	performance	A cache returns stale data.	Check that each cache is invalidated when its inputs change.
+R079	performance	A benchmark is unrepresentative or has no baseline.	Check that the recorded benchmark states its data, environment, and baseline, and separates cold start from steady operation where relevant.
+R080	performance	An optimization breaks behavior or adds unjustified complexity.	Check that the worker's recorded tests cover the optimized behavior and that the added complexity is justified by the measured gain.
+R294	performance	An average hides unacceptable latency for some operations.	Check that the recorded results report the percentiles the requirement depends on, not only an average.
+R295	performance	Work can arrive faster than it is processed and the backlog grows without bound.	Where work arrives from outside, look for a bound or admission control on its queue.
+R296	performance	A short measurement misses degradation during sustained operation.	Where sustained operation matters, check the recorded measurement ran long enough to show growth in latency or resource use.
+R297	performance	An optimization moves cost outside the measured section.	Check that the measured section includes preparation, background work, and cleanup, not only the optimized part.
+R298	performance	An apparent improvement is measurement noise.	Check that the recorded improvement was repeated and exceeds the run-to-run variation.

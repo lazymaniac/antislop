@@ -1,32 +1,31 @@
-R021	implementation	Invented symbols, APIs, or library capabilities.	Build, check types, and read actual documentation.
-R022	implementation	Repetitive, redundant code.	Analyze similarity and review the diff.
-R026	implementation	Stubs, TODOs, and hardcoding replace functionality.	Run the user scenario and analyze execution paths.
-R027	implementation	Hiding errors, empty catches, and silent fallbacks.	Test failures and review error handling.
-R029	implementation	Dead code, unnecessary dependencies, and unhelpful comments.	Check symbol uses, the manifest, and the readability rubric.
-R151	implementation	The same rule has inconsistent meanings in different places.	Compare calculations and policies across modules.
-R152	implementation	A function mixes reads, policy, transformation, and effects.	Trace responsibilities and dependencies.
-R153	implementation	A name hides units, scope, or a side effect.	Compare names with contracts and calls.
-R154	implementation	Primitive types allow distinct concepts to be confused.	Swap arguments or units in a counterexample.
-R156	implementation	Inconsistent error and result-handling conventions.	Trace errors from source to consumer.
-R160	implementation	Comments substitute for a correct model and readable code.	Compare comments with behavior and types.
-R161	implementation	Error handling returns apparent success or an empty result.	Force a dependency error and trace the result.
-R162	implementation	A fallback weakens the required contract.	Force the primary path to become unavailable.
-R163	implementation	Reachable invalid input causes uncontrolled termination instead of the required error handling.	Trace input validation and failure paths and check that invalid input produces the specified error outcome.
-R164	implementation	Mutating input surprises the caller.	Check aliases, uses, and post-call state.
-R165	implementation	Poor ownership modeling causes unnecessary copies or allocations.	Trace the data lifecycle and memory profile.
-R166	implementation	An inappropriate abstraction level scatters a simple operation.	Reconstruct the reading path and the reason for each layer.
-R167	implementation	Semantic duplication remains despite different names.	Compare similar rules and transformations.
-R168	implementation	Overaggressive DRY combines similar but independent rules.	Check their different reasons to change.
-R169	implementation	The solution is not idiomatic for the language or framework.	Compare it with applicable standards and official APIs.
-R170	implementation	A temporary spike, debug code, or TODO reaches the product.	Review the final patch and execution paths.
-R211	implementation	A parameter, environment variable, or persistent state has no documented contract.	Compare interfaces and reads with InputDomainMatrix.
-R212	implementation	Missing, null, and empty values are confused.	Check each class separately.
-R214	implementation	Overflow, NaN, or infinity breaks an invariant.	Supply extreme values of the relevant type.
-R215	implementation	Unicode, encoding, or normalization changes meaning.	Check equivalent representations and invalid bytes.
-R218	implementation	Fragmentation, EOF, or large input changes parser behavior.	Test fragment boundaries and sizes.
-R271	implementation	Conditions and branches do not implement the required rule.	Compare execution paths with a decision table and check cases that distinguish the conditions.
-R272	implementation	Processing boundaries cause elements to be skipped or processed unnecessarily.	Trace ranges for empty input, a single element, and the first and last positions.
-R273	implementation	Data conversion silently loses information or changes meaning.	Compare representation ranges, precision, and semantics and check reversibility where lossless conversion is required.
-R274	implementation	An operation reads or changes the wrong object or data scope.	Trace object identity from input to effect and check coexisting objects with similar data.
-R275	implementation	An exit path skips required effects or resource release.	Check postconditions on success, failure, interruption, and early termination paths.
-R276	implementation	An operation is treated as complete before its required effects are confirmed.	Trace work initiation, confirmation, and completion and check behavior under delay and failure.
+R021	implementation	The change uses invented symbols, APIs, or library capabilities.	Check that the symbols and library calls the diff uses exist in the project or the resolved dependency version, and that the worker's recorded build passed.
+R022	implementation	Repetitive, redundant code.	Look for repeated blocks in the diff that one function would serve.
+R026	implementation	Stubs, TODOs, debug code, or hardcoded values replace or accompany the requested behavior.	Look in the diff for placeholders, leftover debugging, hardcoded values, and paths that skip the requested work.
+R027	implementation	Errors are hidden by ignored results, empty catch blocks, or silent fallbacks.	Follow the error paths in the diff and look for failures that disappear.
+R029	implementation	Dead code, unnecessary dependencies, or unhelpful comments.	Check that new symbols and dependencies are used and that comments say something the code does not.
+R151	implementation	The same rule has inconsistent meanings in different places.	Compare calculations and policies for the same rule across the modules the diff touches.
+R152	implementation	A function mixes reads, policy, transformation, and effects.	Look for functions in the diff that decide, transform, and perform effects at once.
+R153	implementation	A name hides units, scope, or a side effect.	Compare names in the diff with what the code does.
+R154	implementation	Primitive types let distinct concepts be confused.	Look for parameters of the same primitive type that mean distinct concepts and could be swapped without an error.
+R156	implementation	Error and result handling conventions are inconsistent.	Compare how the diff reports and propagates errors with the surrounding code.
+R160	implementation	Comments substitute for a correct model and readable code.	Compare comments with the behavior and types they describe.
+R161	implementation	Error handling returns apparent success or an empty result.	Follow each error path in the diff and check it does not end as success or an empty result.
+R162	implementation	A fallback weakens the required contract.	Check what each fallback returns and whether that still meets the contract.
+R163	implementation	Reachable invalid input causes a crash instead of the required error.	Trace input validation and check that invalid input produces the specified error outcome.
+R164	implementation	Mutating input surprises the caller.	Look for arguments the diff modifies and check callers expect it.
+R165	implementation	Poor ownership modeling causes unnecessary copies or allocations.	Look for copies and allocations on hot or per-item paths that borrowing or moving would avoid.
+R166	implementation	An inappropriate abstraction level scatters a simple operation.	Follow the reading path of an operation in the diff and check each layer has a reason.
+R167	implementation	Semantic duplication remains despite different names.	Compare similar rules and transformations in the diff and the code around it.
+R168	implementation	Overaggressive deduplication merges similar but independent rules.	Check that merged code does not serve rules with different reasons to change.
+R169	implementation	The solution is not idiomatic for the language or framework.	Compare it with the language's conventions, the project's style, and official APIs.
+R211	implementation	A parameter, environment variable, or persisted state has no documented contract.	Check that each new parameter, environment variable, or stored value documents its accepted values and default.
+R212	implementation	Missing, null, and empty values are confused.	Check that missing, null, and empty are handled separately where the contract distinguishes them.
+R214	implementation	Overflow, NaN, or infinity breaks an invariant.	Look at arithmetic on external or large values and check how overflow, NaN, and infinity are handled.
+R215	implementation	Text encoding or normalization changes meaning.	Check how the diff compares, slices, and decodes text, including invalid bytes and equivalent representations.
+R218	implementation	Fragmented, truncated, or large input changes parser behavior.	Check that the parser handles input split across reads, end of input, and large input.
+R271	implementation	Conditions and branches do not implement the required rule.	Compare each condition with the rule it implements and look for cases that take the wrong branch.
+R272	implementation	Boundaries cause elements to be skipped or processed twice.	Trace ranges for empty input, a single element, and the first and last positions.
+R273	implementation	Data conversion silently loses information or changes meaning.	Compare the ranges, precision, and semantics of both representations where the diff converts.
+R274	implementation	An operation reads or changes the wrong object or data scope.	Trace object identity from input to effect, especially among objects with similar data.
+R275	implementation	An exit path skips required effects or resource release.	Check postconditions on the success, failure, and early return paths.
+R276	implementation	An operation is treated as complete before its effects are confirmed.	Trace where work starts, is confirmed, and is reported complete, and what happens under delay or failure.

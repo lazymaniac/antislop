@@ -905,16 +905,12 @@ answer = "ąe\u0301👩‍💻" * 300000 + "\n```plan\n" + json.dumps({"tasks": 
     );
     let events = core.store.events_since(&conversation, 0, 500).unwrap();
     // The plan's words travel inside the submitted result, whole.
-    let submitted: serde_json::Value = serde_json::from_str(
-        events
-            .iter()
-            .find(|event| event.kind == "agent_final")
-            .unwrap()
-            .payload["text"]
-            .as_str()
-            .unwrap(),
-    )
-    .unwrap();
+    let submitted: serde_json::Value = events
+        .iter()
+        .filter(|event| event.kind == "agent_final")
+        .filter_map(|event| serde_json::from_str(event.payload["text"].as_str()?).ok())
+        .find(|result: &serde_json::Value| result["type"] == "plan")
+        .unwrap();
     assert_eq!(submitted["document"], expected);
     // The CLI was typed the whole request, whatever its size.
     let typed = prompts(dir.path());

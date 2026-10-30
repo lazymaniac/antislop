@@ -421,7 +421,7 @@ fn allowed_tools(role: &str) -> Vec<&'static str> {
             "request_replan",
         ]
     } else if role == "planner" {
-        vec![SUBMIT_PLAN]
+        vec![SUBMIT_PLAN, TOOL]
     } else if plain_reviewer(role) {
         vec![REVIEW]
     } else if role == "requirements-extraction-analyst" {
@@ -442,6 +442,7 @@ fn tool_list(role: &str) -> Vec<Value> {
     allowed_tools(role).iter().map(|name| {
         let (description, fields, required): (String, Value, Vec<&str>) = match *name {
             "finish_turn" if orchestrator => (format!("End the turn with your answer to the user. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"},"addressed":schema::addressed()}), vec!["turn","text"]),
+            "finish_turn" if role == "planner" => (format!("Only after submit_plan refused a plan of this turn and you cannot correct what it names, for instance because the instructions demand what it refuses: end the turn without a plan and name the blocker; the user sees it at once. {RETRY}"), json!({"text":{"type":"string","description":"What blocks the plan and what would unblock it, in Markdown"}}), vec!["turn","text"]),
             "finish_turn" => (format!("End the turn with your answer. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"}}), vec!["turn","text"]),
             "ask_user" => (format!("Ask the user one question with 2–6 choices; this ends your turn and the answer arrives as the user's next message. {RETRY}"), schema::question(), vec!["turn","context","question","options"]),
             "submit_requirements" => (format!("Interview only: end the turn with the requirements summary for the user to approve: the goal and its acceptance criteria. {RETRY}"), json!({"markdown":{"type":"string","description":"The summary in Markdown"}}), vec!["turn","markdown"]),
@@ -795,7 +796,7 @@ mod role_tests {
                 "request_replan",
             ]
         );
-        assert_eq!(allowed_tools("planner"), vec!["submit_plan"]);
+        assert_eq!(allowed_tools("planner"), vec!["submit_plan", "finish_turn"]);
         for reviewer in ["auditor", "plan-verifier", "code-review:t1"] {
             assert_eq!(allowed_tools(reviewer), vec!["review"], "{reviewer}");
             let review = &tool_list(reviewer)[0]["inputSchema"];

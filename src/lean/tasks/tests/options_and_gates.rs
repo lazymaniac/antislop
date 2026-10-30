@@ -114,6 +114,27 @@ fn options_choice_is_binding_in_prompts_without_silent_reopening() {
 }
 
 #[test]
+fn catalog_risks_are_failures_to_rule_out_and_context_maps_what_dependents_need() {
+    let mut scout: TaskContract = serde_json::from_value(serde_json::json!({
+        "id": "map", "title": "Map", "goal": "Map the storage code.",
+        "kind": "context", "verifier": {"focus": "f"}
+    }))
+    .unwrap();
+    for prompt in [
+        verifier_prompt("project", &scout, "report", None),
+        verifier_followup(&scout, "report", None),
+        worker_prompt("project", &scout),
+    ] {
+        assert!(prompt.contains("not extra deliverables"), "{prompt}");
+        assert!(prompt.contains("what the tasks that depend on it need"));
+    }
+    scout.kind = WorkKind::Implementation;
+    let verifier = verifier_prompt("project", &scout, "report", None);
+    assert!(verifier.contains("not extra deliverables"));
+    assert!(!verifier.contains("This is a context task"));
+}
+
+#[test]
 fn automatically_added_quality_gates_have_distinct_concise_summaries() {
     let task: TaskContract = serde_json::from_value(serde_json::json!({
         "id": "t1", "title": "Change storage", "goal": "Implement and document the change.",

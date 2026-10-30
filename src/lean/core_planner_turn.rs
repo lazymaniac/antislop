@@ -88,7 +88,7 @@ impl Core {
         let plan = match plan {
             Some((tasks, keep)) => self.submitted_graph(conversation, tasks, &keep),
             None => Err(Error::Invalid(
-                "the planner ended its turn without submit_plan".into(),
+                "the planner could not draft a plan; its message names what blocks it".into(),
             )),
         };
         self.store.append_event(
@@ -117,6 +117,25 @@ impl Core {
 }
 
 impl Core {
+    /// A planner ends its turn without a plan only to report what blocks it,
+    /// once submit_plan refused a plan of this turn; otherwise a planner that
+    /// skipped the plan would stop the session until the user writes again.
+    pub(in crate::lean) fn require_refused_plan(
+        &self,
+        conversation: &str,
+        turn: &str,
+    ) -> Result<()> {
+        let refused: i64 = self.store.db().query_row(
+            "SELECT count(*) FROM events WHERE conversation_id=?1 AND turn_id=?2 AND kind='agent_tool_rejected' AND json_extract(payload,'$.tool')='submit_plan'",
+            rusqlite::params![conversation, turn],
+            |row| row.get(0),
+        )?;
+        require(
+            refused > 0,
+            "submit the plan with submit_plan; finish_turn only reports a blocker after submit_plan refused a plan of this turn and you cannot correct what it names",
+        )
+    }
+
     /// Records that the planner must redraft the plan; the next turn is its.
     /// One request stays open until a turn answers it.
     pub(in crate::lean) fn request_replan(
@@ -147,6 +166,38 @@ mod tests {
 
     fn task() -> serde_json::Value {
         json!({"id":"t1","title":"T","goal":"g","kind":"analysis","verifier":{"focus":"f"}})
+    }
+
+    #[test]
+    fn a_planner_reports_a_blocker_only_after_its_plan_was_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&dir.path().join("state"), config).unwrap();
+        let id = core
+            .store
+            .create_conversation(dir.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        let turn = core
+            .store
+            .start_turn(&id, PLANNER, "codex", 0, None)
+            .unwrap();
+        let blocker = json!({"text": "keep refuses the task the instructions say to keep"});
+        let error = core
+            .agent_tool(&id, PLANNER, &turn.id, "finish_turn", &blocker)
+            .unwrap_err();
+        assert!(error.to_string().contains("submit_plan"), "{error}");
+        core.store
+            .append_event(
+                &id,
+                Some(&turn.id),
+                None,
+                "agent_tool_rejected",
+                &json!({"tool": "submit_plan", "error": "keep: x cannot be kept"}),
+            )
+            .unwrap();
+        core.agent_tool(&id, PLANNER, &turn.id, "finish_turn", &blocker)
+            .unwrap();
     }
 
     #[test]

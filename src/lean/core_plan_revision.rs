@@ -187,12 +187,15 @@ impl Core {
     ) -> Result<()> {
         let project = PathBuf::from(self.store.conversation(conversation)?.project);
         let previous: Vec<_> = baseline.iter().map(|task| task.spec.clone()).collect();
-        let approved: Vec<String> = baseline
+        // What the revision sends back to work, not only what it names in
+        // redo: a changed contract, including one the runtime regenerates for
+        // an options task, redoes an approved task too.
+        let affected = affected_tasks(baseline, specs, &revision.redo);
+        let (redone, approved): (Vec<String>, Vec<String>) = baseline
             .iter()
             .filter(|task| task.status == status::APPROVED)
             .filter_map(|task| task.spec["id"].as_str().map(str::to_owned))
-            .filter(|id| !revision.redo.contains(id))
-            .collect();
+            .partition(|id| affected.contains(id));
         let review = self
             .review(
                 conversation,
@@ -206,7 +209,10 @@ impl Core {
                         request,
                         specs,
                         &previous,
-                        &approved,
+                        tasks::ApprovedWork {
+                            kept: &approved,
+                            redone: &redone,
+                        },
                         &revision.reason,
                         initial,
                     )

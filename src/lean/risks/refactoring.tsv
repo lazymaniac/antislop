@@ -1,27 +1,27 @@
-R145	refactoring	Refactoring order makes behavior changes hard to track.	Compare transformation steps and protective tests.
-R024	refactoring	Skipping necessary refactoring.	Find workarounds and duplication forced by old structure.
-R025	refactoring	Unjustified redesign disguised as refactoring.	Compare the diff with the problem and RefactorReport.
-R171	refactoring	Refactoring is planned but never performed.	Compare RefactorPlan, the patch, and RefactorReport.
-R172	refactoring	A transformation implicitly changes observable behavior.	Compare contracts and characterization tests before and after.
-R173	refactoring	A new abstraction has only hypothetical uses.	Check current consumers and requirements.
-R174	refactoring	Refactoring covers only new code despite a blockage in existing code.	Trace the entire changed flow.
-R175	refactoring	Cleanup spreads into unrelated areas.	Compare the problem, impact, and task scope.
-R176	refactoring	No behavior tests before a risky transformation.	Check the baseline and contract protection.
-R177	refactoring	A large one-shot rewrite prevents regression localization.	Compare refactoring steps and intermediate evidence.
-R178	refactoring	Dead paths and old mechanisms remain.	Check uses, configurations, and compatibility.
-R179	refactoring	Mechanically treating a code smell worsens the solution.	Compare complexity and contracts before and after and justify the maintenance benefit rather than relying on size thresholds or a single metric.
-R180	refactoring	The Boy Scout Rule is skipped or reduced to a cosmetic commit.	Check encountered problems and transformation effects.
-R305	refactoring	A long function obscures cohesive operations or mixes responsibilities and abstraction levels.	Trace control flow, local state, and reasons to change and identify meaningful extraction boundaries rather than enforcing a line limit.
-R306	refactoring	A long parameter list obscures a callable's contract.	Compare call sites and parameter relationships and identify independent responsibilities or a missing cohesive concept without merely wrapping arguments.
-R307	refactoring	Recurring groups of values are passed or changed together without an explicit shared concept.	Find repeated data groups and check whether their lifecycle, validation, and meaning justify a common representation.
-R308	refactoring	Equivalent components expose unnecessarily different interfaces.	Compare their responsibilities and caller adaptations and distinguish accidental interface differences from real contract differences.
-R309	refactoring	A specialization inherits a contract it cannot meaningfully fulfill.	Where inheritance or specialization exists, check inherited operations and invariants for rejected behavior and violations of substitutability.
-R310	refactoring	Repeated branching on the same type or state scatters behavior and makes extensions require synchronized edits.	Find repeated discriminators and compare change sites, considering a cohesive dispatch mechanism only when it simplifies actual requirements.
-R311	refactoring	Persistent fields are meaningful only during isolated operations or phases and obscure valid state.	Trace field initialization, reads, and validity periods and assess whether local values or explicit state variants better express the lifecycle.
-R312	refactoring	Parallel hierarchies require corresponding additions or changes for every new variant.	Where related hierarchies exist, trace a representative extension and identify mandatory synchronized changes and their justification.
-R313	refactoring	A passive data holder forces consumers to duplicate rules that belong with its data.	Trace validation and behavior across consumers and distinguish missing encapsulation from intentional transport or persistence records.
-R314	refactoring	A class, module, or equivalent unit has too little cohesive responsibility to justify its separate existence.	Compare its contract and consumers with the cost of navigation and indirection and assess whether merging preserves useful boundaries.
-R315	refactoring	An operation depends predominantly on another component's data rather than its own responsibility.	Compare the data and rules used with component ownership and assess moving behavior without violating intended boundaries.
-R316	refactoring	Components depend on each other's internal representation and change together unnecessarily.	Trace access to internal fields and operations and identify a narrower contract that preserves required collaboration.
-R317	refactoring	Callers traverse chains of collaborators and depend on their internal relationship structure.	Trace navigation chains and assess whether callers need the intermediate objects or only the final capability.
-R318	refactoring	A library's missing capability causes scattered workarounds in consumers.	Find repeated compensating logic and assess a maintained extension or adapter against existing library capabilities and upgrade constraints.
+R145	refactoring	Behavior changes are mixed into structural steps and become hard to track.	Check that behavior changes are kept apart from structural changes in the diff and covered by tests.
+R024	refactoring	A refactoring the task needs is skipped.	Look for workarounds and duplication in the diff forced by the old structure.
+R025	refactoring	A redesign is disguised as refactoring.	Compare the diff with the problem the task names and look for redesign it does not need.
+R171	refactoring	The refactoring the goal names is not performed.	Compare the refactoring the goal names with the diff.
+R172	refactoring	A transformation changes observable behavior.	Compare public contracts before and after, and check that the worker's recorded tests cover the changed code.
+R173	refactoring	A new abstraction has only hypothetical uses.	Check the new abstraction's current consumers and the requirements it serves.
+R174	refactoring	The refactoring covers only new code although existing code blocks the goal.	Trace the changed flow through the existing code it depends on.
+R175	refactoring	Cleanup spreads into unrelated areas.	Compare the changed files with the problem and the task's scope.
+R176	refactoring	A risky transformation has no behavior tests protecting it.	Check that tests covering the changed behavior existed or were added, and that the worker recorded them passing before and after.
+R177	refactoring	A large one-shot rewrite prevents locating regressions.	Check whether the diff could have been split into steps that each keep the tests passing.
+R178	refactoring	Dead paths and old mechanisms remain after the change.	Look for uses, configuration, and compatibility shims of the replaced mechanism.
+R179	refactoring	Mechanically treating a code smell makes the code worse.	Compare complexity and contracts before and after and check the change has a maintenance benefit beyond a size threshold or metric.
+R180	refactoring	Problems the task touched are skipped or fixed only cosmetically.	Look at problems in the code the task changed and check the change addresses them where the goal needs it.
+R305	refactoring	A long function the task changes mixes responsibilities or abstraction levels.	Check that functions the diff touches have cohesive steps, rather than enforcing a line limit.
+R306	refactoring	A long parameter list obscures a callable's contract.	Look at callables the diff touches for parameters that belong to a missing concept, without merely wrapping arguments.
+R307	refactoring	Values passed and changed together have no shared concept.	Look for data groups the diff repeats and check whether their meaning justifies a common type.
+R308	refactoring	Equivalent components expose needlessly different interfaces.	Compare their interfaces and the adaptations callers make, separating accidental differences from real contract differences.
+R309	refactoring	A specialization inherits a contract it cannot fulfill.	Where the diff uses inheritance or specialization, look for inherited operations it rejects or invariants it breaks.
+R310	refactoring	Repeated branching on the same type or state forces synchronized edits.	Look for the same discriminator matched in several places the diff touches.
+R311	refactoring	Fields meaningful only during one phase obscure the valid state.	Look for fields the diff adds or uses that are valid only part of the time.
+R312	refactoring	Parallel hierarchies require matching changes for every new variant.	Where related hierarchies exist, check whether adding a variant forces matching changes elsewhere.
+R313	refactoring	A passive data holder forces consumers to duplicate rules that belong with its data.	Look for the same validation or behavior repeated by consumers of a type, unless it is an intentional transport or storage record.
+R314	refactoring	A unit has too little responsibility to justify existing separately.	Compare its contract and consumers with the indirection it adds.
+R315	refactoring	An operation works mostly on another component's data.	Compare the data and rules an operation uses with the component that owns them.
+R316	refactoring	Components depend on each other's internal representation.	Look for access to another component's internal fields or helpers that a narrower contract could replace.
+R317	refactoring	Callers traverse chains of collaborators.	Look for navigation chains where callers need only the final capability.
+R318	refactoring	A missing library capability causes scattered workarounds.	Look for repeated compensating logic around a library and check whether one adapter would serve.

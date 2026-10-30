@@ -1,15 +1,15 @@
-R231	options	The first correct idea wins without comparison.	Check OptionsAnalysis and search scope.
-R232	options	Alternatives are superficial and deliberately weaker.	Compare mechanism distinctness and practical usability.
-R233	options	Criteria are retrofitted to the preferred option.	Check criterion and decision history.
-R234	options	Options were evaluated on different data or conditions.	Compare benchmarks, contracts, and configurations.
-R235	options	An average score compensates for an unmet requirement.	Check eligibility filtering before ranking.
-R236	options	A rating or advantage is invented without evidence.	Reconstruct sources, measurements, and experiments.
-R237	options	A significant available solution class was omitted, including a feasible minimal change or retaining the existing solution.	Compare the problem space with the search and justify excluding no change, reuse, or the smallest correction where they could meet the goal.
-R238	options	The decision is unstable under small premise changes.	Perform sensitivity analysis.
-R239	options	Sunk implementation cost blocks a better choice.	Compare current evidence and future consequences.
-R240	options	The best examined option is advertised as a global optimum.	Check the claim's scope and study limitations.
-R283	options	The comparison includes implementation cost but omits material lifecycle costs.	Compare rollout, migration, operation, maintenance, and retirement costs over the same time horizon.
-R284	options	Correlated criteria count the same advantage more than once.	Check criterion independence and repeat the ranking without double counting.
-R285	options	Missing evidence about an option is treated as a demonstrated weakness or advantage.	Separate confirmed results from unknowns and determine whether missing evidence could change the selection.
-R286	options	The selection hides material trade-offs and disadvantages of the chosen option.	Compare the justification with the full evaluation and identify benefits of rejected options that were deliberately sacrificed.
-R287	options	The decision has no verifiable condition for reconsideration.	Identify the premises supporting the selection and observable events or results that would justify departing from it.
+R231	options	The first workable idea wins without a comparison.	Check that the report compares the alternatives the problem plausibly allows and says how it looked for them.
+R232	options	Alternatives are superficial or deliberately weaker.	Check that the alternatives use distinct mechanisms and are each practically usable.
+R233	options	Criteria are shaped to fit the preferred option.	Check that the criteria come from the requirements and are not tailored to the chosen option.
+R234	options	Options are judged on different data or conditions.	Check that all options are compared on the same requirements, assumptions, and conditions.
+R235	options	An average score compensates for an unmet requirement.	Check that options failing a requirement are excluded before ranking.
+R236	options	A rating or advantage is asserted without evidence.	Check that each rating cites code, documentation, or other evidence, or is marked as an estimate.
+R237	options	A significant solution class is omitted, including a minimal change or keeping the existing solution.	Check that the report considers no change, reuse, and the smallest correction where they could meet the goal.
+R238	options	The choice hinges on a weakly supported premise.	Check whether the choice still holds if the least supported premise is wrong, and whether the report says so.
+R239	options	Sunk implementation cost blocks a better choice.	Check that the comparison weighs current evidence and future consequences, not effort already spent.
+R240	options	The best examined option is presented as the best possible.	Check that the claim's scope matches the options actually examined.
+R283	options	The comparison counts implementation cost but omits lifecycle costs.	Check that migration, operation, and maintenance costs are compared where they differ materially.
+R284	options	Correlated criteria count the same advantage twice.	Look for criteria that measure the same advantage.
+R285	options	Missing evidence about an option is treated as a weakness or an advantage.	Check that unknowns are kept apart from confirmed facts and whether they could change the choice.
+R286	options	The selection hides the trade-offs of the chosen option.	Check that the report states what the chosen option gives up compared with the rejected ones.
+R287	options	The decision has no condition for reconsidering it.	Check that the report names the premises the choice rests on and what would justify revisiting it.

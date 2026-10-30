@@ -1,13 +1,13 @@
-R001	requirements	Doing a different task from the one requested.	Map requirements to outcomes.
-R005	requirements	Failing to obtain necessary clarification.	Identify unknowns that change acceptance criteria.
-R119	requirements	Missing prohibitions and negative requirements in context.	Compare the complete source with role packages.
-R191	requirements	A requirement disappears during extraction from a long source.	Compare independent extraction with the ledger.
+R001	requirements	The requirements describe a different task from the one requested.	Compare the requirements with what the user asked for.
+R005	requirements	A necessary clarification is not obtained.	Look for unknowns that would change acceptance criteria and check they were asked or recorded as open.
+R119	requirements	Prohibitions and negative requirements are lost.	Compare the source's prohibitions and limits with the extracted requirements.
+R191	requirements	A requirement disappears during extraction from a long source.	Read the source and check each obligation it states appears in the requirements.
 R192	requirements	A partially satisfied requirement is marked complete.	Check every criterion and qualifier separately.
-R193	requirements	A plan step is silently removed or replaced.	Compare source-backed requirements with every mandatory user-prescribed step.
-R197	requirements	An aggregate checkbox hides unexamined subitems.	Check results for atomic items.
-R319	requirements	A requirement permits materially different interpretations.	Construct competing interpretations and check whether the source distinguishes them, clarifying differences that affect acceptance.
-R320	requirements	An acceptance criterion cannot objectively distinguish fulfillment from nonfulfillment.	Identify the observable outcome, checking conditions, and acceptance boundary appropriate to the task without inventing numerical thresholds.
-R321	requirements	Conflicting requirements are retained without an explicit resolution or an open conflict.	Check whether requirements can be satisfied together and record an authorized resolution or explicitly retain the unresolved conflict.
-R322	requirements	A preference, example, or suggested solution is promoted to a mandatory requirement.	Trace each obligation to its source and distinguish mandates from illustrations, preferences, and permitted options.
-R323	requirements	A changed or withdrawn requirement does not update the current acceptance criteria.	Compare current requirements with decision history, identify superseded items, and preserve constraints that still apply.
-R324	requirements	A requirement loses its applicability conditions or scope.	Compare actors, conditions, exceptions, and scope of each requirement with its source.
+R193	requirements	A user-prescribed step is silently removed or replaced.	Compare the requirements with every mandatory step the user prescribed.
+R197	requirements	An aggregate item hides unexamined parts.	Check that each atomic part of an aggregate requirement has its own criterion.
+R319	requirements	A requirement permits materially different interpretations.	Look for competing interpretations that would change acceptance and check the source settles them or they are clarified.
+R320	requirements	An acceptance criterion cannot tell fulfillment from nonfulfillment.	Check that each criterion names an observable outcome and its boundary, without invented numerical thresholds.
+R321	requirements	Conflicting requirements are kept without a resolution or an open conflict.	Check whether the requirements can be satisfied together, and that any conflict is resolved by the user or recorded as open.
+R322	requirements	A preference, example, or suggested solution becomes mandatory.	Trace each obligation to its source and separate mandates from illustrations, preferences, and permitted options.
+R323	requirements	A changed or withdrawn requirement is not reflected in the criteria.	Compare the current requirements with the user's later decisions and check constraints that still apply are kept.
+R324	requirements	A requirement loses its conditions or scope.	Compare the actors, conditions, exceptions, and scope of each requirement with its source.

@@ -27,7 +27,7 @@ pub(super) fn planner_prompt_text(context: PlannerPrompt<'_>) -> String {
         ));
     }
     prompt.push_str(&format!(
-        "\nSESSION PHASE: planning. Collected requirements:\n{}\nDraft the complete plan for review. Never start implementation yourself; the runtime starts it once the reviewed plan is accepted.\n\n",
+        "\nSESSION PHASE: planning. Collected requirements:\n{}\nDraft the complete plan for review. Never start implementation yourself; the runtime starts it once the reviewed plan is accepted. If submit_plan refuses the plan and you cannot correct what it names, because the instructions demand what it refuses, end the turn with finish_turn naming the blocker instead of waiting.\n\n",
         context.requirements
     ));
     prompt.push_str(&format_messages(context.asked));

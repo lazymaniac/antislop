@@ -117,8 +117,9 @@ pub fn worker_prompt(project: &str, task: &TaskContract) -> String {
 /// What the independent verifier will check, so the worker meets it up front.
 fn worker_checks(task: &TaskContract) -> String {
     format!(
-        "Your verifier will check:\n{}\n",
-        obligations_text(&obligations(task))
+        "Your verifier will check:\n{}\n{}\n",
+        obligations_text(&obligations(task)),
+        risks_note(task)
     )
 }
 

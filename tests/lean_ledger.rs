@@ -362,6 +362,36 @@ fn a_new_child_or_an_unchanged_resubmission_keeps_approved_work() {
 }
 
 #[test]
+fn a_criterion_change_reaches_only_the_tasks_covering_it() {
+    let f = Fixture::new();
+    let mut entry = f.entry("r1");
+    entry
+        .criteria
+        .push(serde_json::from_value(json!({"id":"r1.extra","text":"also check this"})).unwrap());
+    f.apply(&f.change(0, vec![entry.clone()]));
+    let mut other = f.task("b", &["r1"], &[]);
+    other["criterion_ids"] = json!(["r1.extra"]);
+    let tasks = f.plan(vec![f.task("a", &["r1"], &[]), other]);
+    // A new criterion and an edited one reach only the task covering it.
+    entry.criteria[1].text = "check this differently".into();
+    entry
+        .criteria
+        .push(serde_json::from_value(json!({"id":"r1.more","text":"and this"})).unwrap());
+    let result = f.apply(&f.change(1, vec![entry.clone()]));
+    assert_eq!(result.affected_tasks, vec![tasks[1].id.clone()]);
+    // A task already stale, or of a replaced plan, is not reported again.
+    let mut whole = f.task("a", &["r1"], &[]);
+    whole["criterion_ids"] = json!(["r1.accept", "r1.extra", "r1.more"]);
+    let again = f.plan(vec![whole]);
+    let mut replaced = f.store.task_by_id(&tasks[0].id).unwrap().unwrap();
+    replaced.status = "superseded".into();
+    f.store.update_task(&replaced).unwrap();
+    entry.interpretation = "Deliver r1 another way".into();
+    let result = f.apply(&f.change(2, vec![entry]));
+    assert_eq!(result.affected_tasks, vec![again[0].id.clone()]);
+}
+
+#[test]
 fn semantic_edit_invalidates_dependency_closure_but_keeps_independent_tasks() {
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1"), f.entry("r2")]));

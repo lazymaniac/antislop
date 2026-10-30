@@ -1,19 +1,14 @@
-R146	integration	Missing integration, rollout, or compatibility.	Trace the entire delivered outcome.
-R028	integration	Backward incompatibility or schema/API drift.	Run contract tests and compare public interfaces.
-R030	integration	A locally correct change breaks system consistency.	Test flows across modules.
-R045	integration	Approving an outdated diff.	Check artifact hashes and input revisions.
-R046	integration	Independent branches break when merged.	Validate the integrated candidate.
-R047	integration	A conflict is resolved with incorrect semantics.	Review the resolution diff and contract tests.
-R048	integration	Overwriting user or another agent's work.	Use snapshots, leases, and pre-write change checks.
-R078	integration	Incorrect transactions or data loss.	Fail between writes and check invariants.
-R091	integration	Incompatible CLI versions or schema drift.	Probe and keep fixtures for supported protocols.
-R092	integration	Missing authentication, network access, or provider quota.	Categorize provider-specific failures.
-R093	integration	Resuming the wrong or a lost session.	Persist provider_session_id and check workspace compatibility.
-R094	integration	Duplicate actions after a crash.	Use idempotency keys and reconcile effects.
-R098	integration	Host overload without application limits.	Check OS errors, memory, process count, and availability.
-R277	integration	An implemented component is not connected to the application's actual execution flow.	Trace a scenario from the public entry point to the expected effect and confirm that registration, routing, and calls reach the new component.
-R278	integration	An adapter changes data meaning across a component boundary.	Compare units, defaults, identifiers, and empty-value semantics on both sides and trace representative data through the actual boundary.
-R279	integration	A component failure does not reach the recipient according to the end-to-end error contract.	Force a dependency failure and check the final outcome, state, and diagnostic for the complete flow.
-R280	integration	The distributed artifact omits required resources or uses a different execution path from the development environment.	Build the package and run it outside the source tree, checking required resources and entry points.
-R281	integration	An upgrade works on a fresh start but fails while supported old and new components or configurations coexist.	Exercise supported version combinations and transitional states during upgrade and reconnection.
-R282	integration	A required rollback fails to restore a working system after an upgrade.	Perform an upgrade and rollback with representative data and check data and configuration compatibility and successful startup.
+R146	integration	The outcome is not wired, rolled out, or compatible end to end.	Trace the delivered outcome from its entry point to its effect and look for missing wiring, rollout, or compatibility steps.
+R028	integration	A public interface, schema, or stored format changes incompatibly.	Compare interfaces, schemas, and stored formats before and after and look for incompatible changes without a migration.
+R030	integration	A locally correct change breaks consistency elsewhere in the system.	Follow a flow that crosses the changed modules and look for assumptions the change breaks in the other modules.
+R046	integration	Changes that work separately break when combined.	Check that the worker's recorded build and tests ran on the combined result, not on each part alone.
+R047	integration	A conflict is resolved with the wrong semantics.	Read the conflict resolution and check both sides' intent survives.
+R048	integration	The change overwrites the user's or another task's work.	Look for changes in the diff that revert or overwrite work outside the task's goal.
+R078	integration	A multi-step write can lose data or leave it inconsistent.	Look for writes without a transaction or recovery and check what a failure between them leaves behind.
+R094	integration	An action repeated after a crash or retry takes effect twice.	Where the flow can retry or resume, check that the repeated action is idempotent or deduplicated.
+R277	integration	An implemented component is not connected to the application's real flow.	Trace a scenario from the public entry point and check that registration, routing, and calls reach the new component.
+R278	integration	An adapter changes data meaning across a component boundary.	Compare units, defaults, identifiers, and empty values on both sides of the boundary.
+R279	integration	A component failure does not reach the recipient as the end-to-end error contract requires.	Follow a dependency failure through the flow and check the final outcome, state, and diagnostic.
+R280	integration	The distributed artifact omits required resources or runs differently from the development tree.	Check that packaging includes the resources and entry points the code loads at runtime.
+R281	integration	An upgrade fails while old and new components or configurations coexist.	Where old and new versions or configurations can coexist, check that the change handles the mixed state.
+R282	integration	A required rollback cannot restore a working system.	Where rollback is required, check that old data and configuration stay readable by the previous version.

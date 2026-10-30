@@ -1,3 +1,3 @@
-R088	writing	Vague, repetitive text without information.	Use a content-value and brief-compliance rubric.
-R089	writing	Contradictory sections after document merging.	Check the shared glossary, requirements, and references.
-R090	writing	Overstated conclusions or missing uncertainty.	Compare recommendations with evidence scope.
+R088	writing	Vague, repetitive text without information.	Look for passages that repeat or say nothing the reader needs for the brief.
+R089	writing	Sections contradict each other.	Check that terms, requirements, and references are used consistently across sections.
+R090	writing	Conclusions are overstated or uncertainty is missing.	Compare recommendations with the scope of their evidence.

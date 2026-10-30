@@ -1,22 +1,21 @@
-R010	architecture	Blindly copying patterns from another project.	Compare proposals with the existing architecture.
-R023	architecture	Excessive abstractions and configuration.	Compare the number of new layers with the need.
-R155	architecture	A public interface exposes unnecessary implementation details.	Check exports and actual consumers.
-R157	architecture	Hidden shared state complicates reasoning and tests.	Find mutable globals, singletons, and implicit dependencies.
-R158	architecture	An intermediate layer adds no contract or value.	Trace forwarding and consumer needs.
-R159	architecture	An oversized class, module, or equivalent unit combines independent responsibilities or reasons to change.	Compare responsibility groups, cohesion, and change history, including unrelated changes repeatedly affecting the same unit.
-R201	architecture	A dependency cycle prevents independent module changes.	Build import and runtime dependency graphs.
-R202	architecture	Domain logic leaks into UI, transport, and persistence.	Trace where rules are implemented.
-R203	architecture	Missing patterns cause duplicated, unreliable mechanics.	Compare the problem with suitable patterns and idioms.
-R204	architecture	A pattern is applied dogmatically without a need.	Compare a simpler option and structural cost.
-R205	architecture	A public API embeds external provider details.	Trace types and errors across boundaries.
-R206	architecture	Duplicated state has no consistency rule.	Compare sources of truth and update points.
-R207	architecture	Apparent modularity hides strong temporal coupling.	Change initialization and call order.
-R208	architecture	Code introduces risk without assessing its impact.	Trace failures to data and consumers.
-R209	architecture	A numerical risk score replaces scenario analysis.	Check score justifications and safeguard effectiveness.
-R210	architecture	Maintenance or rollback risk is ignored.	Analyze migration failures and future contract changes.
-R247	architecture	A rule or invariant has no unambiguous owning component.	Assign each rule to the component that enforces it and trace every path that can change its state.
-R248	architecture	A component's public interface allows callers to bypass its invariants.	Try to violate each invariant through public operations without changing the implementation.
-R249	architecture	Stable domain rules depend on volatile implementation details.	Trace dependency direction and simulate replacing an external provider, transport, or storage mechanism.
-R250	architecture	Module boundaries split a cohesive responsibility across components.	Walk through representative rule changes and identify modules that must change together.
-R251	architecture	Component boundaries allow a failure to disable unrelated capabilities.	Trace the effects of each component becoming unavailable and compare them with required availability of other capabilities.
-R252	architecture	Domain rules cannot be verified independently of the full runtime or live external services.	Identify how to verify component contracts with controlled dependencies and justify any required integrations.
+R010	architecture	A pattern is copied from another project without fitting this one.	Compare the proposal with the existing architecture and conventions.
+R023	architecture	Excessive abstractions and configuration.	Compare the number of new layers and options with what the requirements need.
+R155	architecture	A public interface exposes unnecessary implementation details.	Compare what is exported with what its consumers actually use.
+R157	architecture	Hidden shared state complicates reasoning and tests.	Look for mutable globals, singletons, and implicit dependencies the design introduces or relies on.
+R158	architecture	An intermediate layer adds no contract or value.	Look for layers that only forward calls without a contract of their own.
+R159	architecture	A class, module, or equivalent unit combines independent responsibilities or reasons to change.	Compare the responsibility groups of the units the design touches and look for unrelated changes that would repeatedly hit the same unit.
+R201	architecture	A dependency cycle prevents independent module changes.	Look for import or call cycles between the modules the design touches.
+R202	architecture	Domain logic leaks into UI, transport, or persistence.	Trace where the design places each rule.
+R203	architecture	A missing shared mechanism leaves the same mechanics duplicated and unreliable.	Look for the same mechanism implemented in several places where one shared mechanism fits.
+R204	architecture	A pattern is applied dogmatically without a need.	Compare it with a simpler option and its structural cost.
+R205	architecture	A public API embeds external provider details.	Trace types and errors that cross the boundary to the provider.
+R206	architecture	Duplicated state has no consistency rule.	Compare the sources of truth and the points where each copy is updated.
+R207	architecture	Apparent modularity hides temporal coupling.	Look for components that work only when initialized or called in an order nothing enforces.
+R208	architecture	The design does not say what its failures do to data and consumers.	Trace what a failure of each new or changed component does to the data and to the components that depend on it.
+R210	architecture	Migration or future maintenance is ignored.	Where the design changes stored data or public contracts, look for how existing data and consumers are migrated.
+R247	architecture	A rule or invariant has no unambiguous owning component.	Check that each rule has one component that enforces it, and look for paths that change its state elsewhere.
+R248	architecture	A component's public interface lets callers bypass its invariants.	Look for public operations through which a caller can break an invariant.
+R249	architecture	Stable domain rules depend on volatile implementation details.	Check that dependencies point from providers, transport, and storage towards domain rules, not the reverse.
+R250	architecture	Module boundaries split a cohesive responsibility across components.	Take a representative rule change and count the modules that must change together.
+R251	architecture	A failure in one component disables unrelated capabilities.	Trace what becomes unavailable when each component fails and compare it with what must keep working.
+R252	architecture	Domain rules cannot be verified without the full runtime or live external services.	Check that component contracts can be verified with controlled dependencies, and that any required live integration is justified.

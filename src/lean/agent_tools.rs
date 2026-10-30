@@ -89,6 +89,9 @@ impl Core {
                 if tool == "finish_turn" && matches!(role, ORCHESTRATOR | COMMENT_ORCHESTRATOR) {
                     self.require_plan_correction(conversation, turn)?;
                 }
+                if tool == "finish_turn" && role == PLANNER {
+                    self.require_refused_plan(conversation, turn)?;
+                }
                 let result = turn_result::tool_result(tool, args)?;
                 self.record_result(turn, result)
             }

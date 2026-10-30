@@ -1,28 +1,23 @@
-R006	planning	Presenting assumptions as requirements.	Track decisions and hypotheses separately.
-R007	planning	A plan without tests, integration, or migration.	Use a plan rubric and risk map.
-R008	planning	Tasks are too large or too fragmented.	Check shared context size and handoff count.
-R126	planning	Operations lack preconditions or postconditions.	Check every model operation.
-R127	planning	Module contracts are individually correct but do not compose.	Simulate data and error handoffs between modules.
-R128	planning	An event has no defined transition in a given state.	Walk through the state-by-event table.
-R129	planning	The representation permits impossible or contradictory states.	Try constructing all field combinations.
-R130	planning	The model describes results but omits side effects.	List writes, messages, and external actions.
-R131	planning	No analysis of failure between two writes.	Inject failure after every significant effect.
-R132	planning	A retry can duplicate an effect.	Simulate missing confirmation after execution.
-R133	planning	Correctness depends on ordering that is not guaranteed.	Reverse and delay events.
-R134	planning	Checking safety without checking progress.	Look for blocking, starvation, and infinite loops.
-R135	planning	Resource ownership and release time are undefined.	Trace ownership through every branch.
-R136	planning	Cancellation leaves inconsistent intermediate state.	Interrupt every significant model phase.
-R139	planning	Circular correctness arguments between components.	Check dependencies between premises.
-R140	planning	Pseudocode hides difficulty behind 'handle correctly'.	Expand the steps that determine the contract.
-R142	planning	Simulation repeats the author's reasoning without counterexamples.	Compare author and verifier scenarios.
-R143	planning	No model of partial states and checkpoints.	Simulate resuming from every persistent stage.
-R147	planning	No reverse mapping from model elements to goals.	Check the justification for every operation and entity.
-R148	planning	An added feature expands scope in the name of completeness.	Compare the model with requirements and the Boy Scout Rule.
-R149	planning	An unproven assumption is critical to the simulation result.	Challenge the premises of every scenario.
-R150	planning	Implementation departs from the model without revising it.	Compare the patch with contracts and simulations.
-R299	planning	A requirement has no task that delivers its realization.	Map each requirement to a task that produces the required result and a way to verify its fulfillment, rather than investigation or verification alone.
-R300	planning	A task describes an activity without a recognizable result or completion criterion.	Check whether an independent recipient can determine completion from the task's output and stated criteria.
-R301	planning	A task's assigned scope or permissions cannot deliver its goal.	Compare the goal with required artifacts, assigned scope, work kind, and permitted actions and identify necessary supporting tasks.
-R302	planning	The task graph omits a real dependency or imposes unnecessary ordering.	Identify the result passed by each dependency and trace the source of every required task input.
-R303	planning	A consequential unresolved assumption is checked only after costly dependent work.	Identify assumptions that could invalidate the plan and schedule their resolution before dependent commitments.
-R304	planning	The plan assumes an external prerequisite will be available without arranging how to obtain it.	Check task entry conditions and identify how and when required access, data, environments, and user decisions will be secured.
+R006	planning	Assumptions are presented as requirements.	Look for plan statements the requirements do not support and check they are marked as assumptions.
+R007	planning	The plan has no verification, integration, or migration where the goal needs them.	Check that the plan says how its result is verified and connected, and how existing data or users are migrated when they are affected.
+R008	planning	Tasks are too large or too fragmented.	Look for tasks that bundle independent results, and for chains of tasks that only hand context to each other.
+R126	planning	Operations lack preconditions or results.	For each operation a later step depends on, check that the plan states what it requires and what it guarantees.
+R127	planning	Individually correct component contracts do not compose.	Follow the data and errors handed between components in the plan and look for mismatched assumptions.
+R128	planning	An event has no defined outcome in some state.	Where the plan defines states, check that each relevant event has an outcome in each state.
+R129	planning	The representation permits impossible or contradictory states.	Look for combinations of fields the representation allows but the plan never defines.
+R130	planning	The plan describes results but omits side effects.	Look for writes, messages, and external actions the plan's steps imply but do not list.
+R131	planning	The plan does not say what happens when work fails, is cancelled, or resumes between two effects.	For each step with more than one persistent effect, check that the plan states the state left behind and how work recovers.
+R132	planning	A retry can duplicate an effect.	Where the plan retries, check whether the retried action is safe to repeat after it already took effect.
+R133	planning	Correctness depends on an ordering that is not guaranteed.	Look for steps whose correctness assumes an order nothing in the plan enforces.
+R134	planning	The plan checks safety but not progress.	Look for waits, loops, or retries in the plan without an end condition.
+R135	planning	Resource ownership and release are undefined.	Check who releases each resource the plan acquires, including on failure.
+R139	planning	Components justify their correctness by each other.	Look for components whose correctness each assumes from the other.
+R140	planning	A step hides difficulty behind words like handle correctly.	Look for steps that say handle, ensure, or properly without saying how, where they decide the contract.
+R148	planning	Plan elements serve no requirement, or scope grows in the name of completeness.	Trace each operation and entity to a requirement and look for features nobody asked for.
+R149	planning	A key decision rests on an unquestioned assumption.	Identify the premises the plan's key decisions rely on and check each is supported or flagged.
+R299	planning	A requirement has no task that delivers it.	Check that each requirement has a task producing its result and a way to verify it, not only investigation or verification.
+R300	planning	A task describes an activity without a recognizable result or completion criterion.	Check whether someone else could tell from the task's output and criteria that it is complete.
+R301	planning	A task's scope or permissions cannot deliver its goal.	Compare the goal with the artifacts it needs, its scope, its kind of work, and its permitted actions.
+R302	planning	The task graph omits a real dependency or imposes an unnecessary one.	Check what result each dependency passes on and where each task gets the inputs it needs.
+R303	planning	A consequential assumption is checked only after costly dependent work.	Look for assumptions that could invalidate the plan and check they are resolved before the work that depends on them.
+R304	planning	The plan assumes an external prerequisite without arranging it.	Check how and when required access, data, environments, and user decisions are obtained.

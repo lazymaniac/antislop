@@ -1,25 +1,8 @@
-R003	orchestration	Losing agreements after compaction.	Compare the handoff package with persistent decisions.
-R011	orchestration	Violating the assigned role.	Compare actions with the role contract.
-R012	orchestration	Repeating the same steps.	Check action history for a lack of new outcomes.
-R013	orchestration	Failing to recognize completion.	Use completion criteria instead of turn counts.
-R014	orchestration	Conversation drifts away from the goal.	Link each thread to a task.
-R015	orchestration	Failing to pass on important information.	Check unresolved dependencies in the handoff.
-R016	orchestration	Ignoring another agent's feedback.	Give findings and responses persistent statuses.
-R017	orchestration	Claims do not match actions.	Compare reports with tool events.
-R018	orchestration	Duplicated work and unnecessary roles.	Check overlapping contracts and outcomes.
-R019	orchestration	Deadlock or a dependency cycle.	Validate the DAG and wait graph.
-R020	orchestration	Message storms and loss of readability.	Check repeated status updates and the delivery queue.
-R032	orchestration	An incorrect reviewer verdict.	Reproduce independently and calibrate assessments.
-R041	orchestration	The executor and verifier share a false assumption.	Use a fresh session, separate sources, and tests.
-R042	orchestration	The reviewer is swayed by the executor's explanation.	Assess the artifact before reading its justification.
-R043	orchestration	The reviewer makes fixes and approves them.	Check artifact provenance and change authorship.
-R044	orchestration	Endless style disputes.	Look for findings without criteria or evidence.
-R070	orchestration	An agent acts outside the agreed team or scope.	Track processes, tools, and native subagents.
-R099	orchestration	Excessive process overhead relative to quality.	Measure time to acceptance and compare the baseline.
-R196	orchestration	A risk has no responsible verifier.	Check complete RiskCoverage against the catalog version.
-R288	orchestration	A dependent task starts before its required inputs are ready and accepted.	Compare launch time with required dependency status, artifact availability, and verification outcomes.
-R289	orchestration	A changed upstream result does not trigger reassessment of dependent tasks and verdicts.	Trace result provenance and identify which downstream tasks require revalidation after an input changes.
-R290	orchestration	A late message or verdict affects the wrong round or a superseded task.	Check response association with the task, attempt, and input revision and trace delayed responses after retries.
-R291	orchestration	Cancelled or superseded assignments continue running in part of the team.	Trace cancellation propagation and confirm that affected work ends and late results are handled without reviving obsolete assignments.
-R292	orchestration	A blocked task has no actionable recovery path despite available coordination actions.	Identify the cause, responsible person or role, and next step for each blocker and check whether independent tasks can proceed.
-R293	orchestration	Parallel assignments rely on conflicting agreements about a shared contract.	Compare delegated contracts, decisions, and responsibility boundaries before launch and after shared agreements change.
+R011	orchestration	An agent acts outside its assigned role.	Compare the agent's actions with its role.
+R012	orchestration	The same steps repeat without new outcomes.	Look for repeated rounds that end with the same findings.
+R016	orchestration	Another agent's feedback is ignored.	Check that each finding received a response or a change.
+R017	orchestration	Claims do not match actions.	Compare reports with the recorded actions.
+R044	orchestration	Disputes continue without criteria or evidence.	Look for findings that cite no requirement, criterion, or evidence.
+R289	orchestration	A changed upstream result does not trigger reassessment of dependent work.	Check which dependent tasks and verdicts relied on a result that changed.
+R292	orchestration	A blocked task has no actionable recovery path.	Check that each blocker names its cause, who can resolve it, and the next step.
+R293	orchestration	Parallel assignments rely on conflicting agreements about a shared contract.	Compare the contracts given to parallel tasks for conflicting assumptions.

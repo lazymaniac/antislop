@@ -1,9 +1,9 @@
-R085	analysis	Presenting correlation as causation.	Review methodology and conclusion strength.
-R086	analysis	Errors in units, denominators, arithmetic, or transformations.	Recalculate independently and test data.
-R087	analysis	Missing data and undisclosed assumptions.	Check data provenance and the missing-data register.
+R085	analysis	Correlation is presented as causation.	Check that the method can tell cause from correlation before the report makes a causal claim.
+R086	analysis	Errors in units, denominators, arithmetic, or transformations.	Spot-check the reported calculations, units, and denominators against the stated inputs.
+R087	analysis	Missing data or assumptions are not disclosed.	Check that the report says where its data came from and what is missing or assumed.
 R241	analysis	A conclusion does not follow from the stated premises.	Reconstruct the inference and look for a counterexample.
 R242	analysis	A conclusion generalizes beyond the cases examined.	Compare each conclusion's scope with the cases and evidence analyzed.
-R243	analysis	A hypothesis or plausible explanation is presented as an established fact.	Check evidence that distinguishes competing explanations.
+R243	analysis	A hypothesis or plausible explanation is presented as an established fact.	Check that the evidence distinguishes the conclusion from competing explanations, or that it is marked as a hypothesis.
 R244	analysis	The method or metric does not answer the analytical question.	Trace how the method's result answers the task's goal.
-R245	analysis	A result depends on an unverified assumption or arbitrary threshold.	Vary assumptions and thresholds over a justified range and compare conclusions.
-R246	analysis	The analysis cannot be independently reproduced.	Repeat the analysis using the stated inputs, versions, method, and parameters.
+R245	analysis	A result depends on an unjustified assumption or arbitrary threshold.	Check that the report justifies its thresholds and says whether its conclusions change within a plausible range of them.
+R246	analysis	The analysis cannot be reproduced from what the report states.	Check that the report names its inputs, versions, method, and parameters well enough to repeat it.

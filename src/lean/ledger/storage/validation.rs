@@ -92,10 +92,17 @@ pub(super) fn impact(
     db: &Connection,
     run: &str,
     changed: &HashSet<String>,
+    before: &[EntrySpec],
     all: &[EntrySpec],
 ) -> Result<Vec<String>> {
-    let ids = impacted_entries(changed, all);
-    let mut tasks = tasks_for_entries(db, run, &ids)?;
+    let reach: HashMap<String, Reach> = impacted_entries(changed, all)
+        .into_iter()
+        .map(|id| {
+            let reach = reach_of(&id, changed, before, all);
+            (id, reach)
+        })
+        .collect();
+    let mut tasks = tasks_for_entries(db, run, &reach)?;
     expand_dependent_tasks(db, run, &mut tasks)?;
     let mut out: Vec<_> = tasks.into_iter().collect();
     out.sort();
@@ -138,14 +145,79 @@ fn impacted_entries(changed: &HashSet<String>, all: &[EntrySpec]) -> HashSet<Str
     ids
 }
 
-fn tasks_for_entries(db: &Connection, run: &str, ids: &HashSet<String>) -> Result<HashSet<String>> {
+/// Tasks a change no longer reaches: already stale, or of a plan replaced,
+/// sent back or cancelled. Marking them again only repeats what is known.
+const RETIRED: &str = "('stale','superseded','revised','cancelled')";
+
+/// How far a change to an entry reaches the tasks linked to it.
+enum Reach {
+    /// Its meaning changed, or a change above it reached it.
+    Whole,
+    /// Only these criteria changed, among all the entry had or has: a task
+    /// covering other criteria of it was built against nothing that changed.
+    Criteria {
+        changed: HashSet<String>,
+        all: HashSet<String>,
+    },
+}
+
+fn reach_of(id: &str, changed: &HashSet<String>, before: &[EntrySpec], all: &[EntrySpec]) -> Reach {
+    let old = before.iter().find(|entry| entry.id == id);
+    let new = all.iter().find(|entry| entry.id == id);
+    let (true, Some(old), Some(new)) = (changed.contains(id), old, new) else {
+        return Reach::Whole;
+    };
+    let mut rest = new.clone();
+    rest.criteria = old.criteria.clone();
+    if !same_meaning(old, &rest) {
+        return Reach::Whole;
+    }
+    let ids: HashSet<String> = old
+        .criteria
+        .iter()
+        .chain(&new.criteria)
+        .map(|criterion| criterion.id.clone())
+        .collect();
+    let find = |list: &[Criterion], id: &str| list.iter().find(|c| c.id == id).cloned();
+    Reach::Criteria {
+        changed: ids
+            .iter()
+            .filter(|id| find(&old.criteria, id) != find(&new.criteria, id))
+            .cloned()
+            .collect(),
+        all: ids,
+    }
+}
+
+fn tasks_for_entries(
+    db: &Connection,
+    run: &str,
+    reach: &HashMap<String, Reach>,
+) -> Result<HashSet<String>> {
     let mut tasks = HashSet::new();
-    let mut stmt=db.prepare("SELECT i.task_id,l.entry_id FROM task_inputs i JOIN task_ledger_inputs l ON i.task_id=l.task_id WHERE i.run_id=?1")?;
+    let mut stmt=db.prepare(&format!("SELECT i.task_id,l.entry_id,t.spec FROM task_inputs i JOIN task_ledger_inputs l ON i.task_id=l.task_id JOIN tasks t ON t.id=i.task_id WHERE i.run_id=?1 AND t.status NOT IN {RETIRED}"))?;
     for row in stmt.query_map([run], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
     })? {
-        let (task, id) = row?;
-        if ids.contains(&id) {
+        let (task, id, spec) = row?;
+        let reached = match reach.get(&id) {
+            None => false,
+            Some(Reach::Whole) => true,
+            Some(Reach::Criteria { changed, all }) => {
+                let covered: Vec<String> = serde_json::from_str::<TaskContract>(&spec)
+                    .map(|spec| spec.criterion_ids)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|criterion| all.contains(criterion))
+                    .collect();
+                covered.is_empty() || covered.iter().any(|criterion| changed.contains(criterion))
+            }
+        };
+        if reached {
             tasks.insert(task);
         }
     }
@@ -177,7 +249,7 @@ fn expand_dependent_tasks(db: &Connection, run: &str, tasks: &mut HashSet<String
 
 fn plan_task_rows(db: &Connection, run: &str) -> Result<Vec<(String, String, String)>> {
     Ok(db
-        .prepare("SELECT t.id,t.plan_id,t.spec FROM tasks t JOIN plan_runs p ON p.plan_id=t.plan_id WHERE p.run_id=?1")?
+        .prepare(&format!("SELECT t.id,t.plan_id,t.spec FROM tasks t JOIN plan_runs p ON p.plan_id=t.plan_id WHERE p.run_id=?1 AND t.status NOT IN {RETIRED}"))?
         .query_map([run], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<std::result::Result<_, _>>()?)
 }
@@ -205,7 +277,8 @@ pub(super) fn validate_change(
         .collect();
     let all: Vec<_> = after.into_values().collect();
     checked_graph(&all)?;
-    let affected_tasks = impact(db, &r.id, &altered, &all)?;
+    let previous: Vec<_> = before.iter().map(|entry| entry.spec.clone()).collect();
+    let affected_tasks = impact(db, &r.id, &altered, &previous, &all)?;
     Ok(LedgerDiff {
         run_id: r.id,
         from_revision: r.spec_revision,

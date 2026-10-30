@@ -119,7 +119,8 @@ impl Store {
         let after = self.ledger_entries(conversation, run_id, Some(to))?;
         let changed = changed_entry_ids(&before, &after);
         let all: Vec<_> = after.iter().map(|e| e.spec.clone()).collect();
-        let tasks = impact(&self.db(), run_id, &changed, &all)?;
+        let previous: Vec<_> = before.iter().map(|e| e.spec.clone()).collect();
+        let tasks = impact(&self.db(), run_id, &changed, &previous, &all)?;
         Ok(ledger_diff_result(
             run_id, from, to, before, after, &changed, tasks,
         ))
