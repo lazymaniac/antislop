@@ -54,14 +54,10 @@ pub use view::{
     ConfirmationAction, ConfirmationCard, ConfirmationStatus, MessageEntry, TranscriptCard,
 };
 
-use super::cli::Options;
 use super::daemon::{Client, Request};
 use super::{projects, trust};
 use crate::Result;
-use crossterm::event::{
-    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
-};
+use crossterm::event::{self, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use details::{CHECKS, COMMENTS, RESULT};
 use graph::{Canvas, Graph};
 use palette::{Action, Command};
