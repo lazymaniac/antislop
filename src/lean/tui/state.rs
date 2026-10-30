@@ -1,6 +1,8 @@
 use super::contracts::*;
 use super::*;
 
+mod update;
+
 /// Layout data for the active conversation, separate from the viewport buffer.
 /// Unchanged cards reuse wrapped rows; only visible rows are copied per frame.
 #[derive(Default)]
