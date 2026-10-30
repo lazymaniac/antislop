@@ -44,8 +44,8 @@ fn idle(core: &Core, conversation: &str) {
 #[test]
 fn options_visibility_for_writer_and_writing_gate() {
     for (case, unmerged, report) in [
-        ("normal-opaque", false, "done"),
-        ("unmerged-opaque", true, "done"),
+        ("normal-opaque", false, "PRIVATE_REPORT_SENTINEL_8d13f2"),
+        ("unmerged-opaque", true, "PRIVATE_REPORT_SENTINEL_8d13f2"),
         (
             "unmerged-accurate",
             true,

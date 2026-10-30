@@ -153,7 +153,7 @@ impl Core {
                 reason: required_text(args, "reason")?,
                 tasks,
                 retire: serde_json::from_value(args["retire"].clone())?,
-                redo: serde_json::from_value(args.get("redo").cloned().unwrap_or(Value::Null))?,
+                redo: serde_json::from_value(args.get("redo").cloned().unwrap_or(json!([])))?,
             },
         ))
     }
