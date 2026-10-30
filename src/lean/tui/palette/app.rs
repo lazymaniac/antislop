@@ -188,48 +188,6 @@ impl App {
     }
 
     fn run_command(&mut self, command: Command) {
-        match command {
-            Command::InterviewQuestion
-            | Command::ApproveRequirements
-            | Command::Accept
-            | Command::Reject
-            | Command::Plan
-            | Command::Plans
-            | Command::Resume
-            | Command::Cancel
-            | Command::Pause
-            | Command::Continue
-            | Command::Autonomous
-            | Command::Supervised
-            | Command::NewConversation
-            | Command::SwitchConversation
-            | Command::Requirements => self.run_workflow_command(command),
-            _ => self.run_view_command(command),
-        }
-    }
-
-    fn run_workflow_command(&mut self, command: Command) {
-        match command {
-            Command::InterviewQuestion => self.command("/interview"),
-            Command::ApproveRequirements => self.command("/planning"),
-            Command::Accept => self.command("/accept"),
-            Command::Reject => self.command("/reject"),
-            Command::Plan => self.command("/plan"),
-            Command::Plans => self.command("/plans"),
-            Command::Resume => self.command("/resume"),
-            Command::Cancel => self.command("/cancel"),
-            Command::Pause => self.command("/pause"),
-            Command::Continue => self.command("/continue"),
-            Command::Autonomous => self.command("/mode autonomous"),
-            Command::Supervised => self.command("/mode supervised"),
-            Command::NewConversation => self.new_conversation(),
-            Command::SwitchConversation => self.open_conversation_picker(),
-            Command::Requirements => self.open_ledger(),
-            _ => unreachable!("view command routed to workflow handler"),
-        }
-    }
-
-    fn run_view_command(&mut self, command: Command) {
         let selected = self.selected.clone();
         match command {
             Command::Find => self.picker = Some(Picker::new(Kind::Agents)),
@@ -239,11 +197,9 @@ impl App {
             Command::AddressMessage => self.picker = Some(Picker::new(Kind::Recipients)),
             Command::Diff => self.open_diff(&selected),
             Command::Comment => self.open_comment(selected),
-            Command::Filter => self.filter = self.filter.next(),
+            Command::Filter => self.open_graph_filters(),
             Command::Help => self.show_help(self.help_here()),
-            Command::Config => self.open_config(),
-            Command::Projects => self.open_projects_picker(),
-            _ => unreachable!("workflow command routed to view handler"),
+            command => self.run_workflow(command),
         }
     }
 

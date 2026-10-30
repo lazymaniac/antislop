@@ -259,8 +259,8 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
 
     assert!(rendered2.contains("cancel running work"));
     assert!(rendered2.contains("pause new steps / continue"));
-    assert!(rendered2.contains("/mode autonomous"));
-    assert!(rendered2.contains("/mode supervised"));
+    assert!(rendered2.contains("autonomous / supervised mode"));
+    assert!(rendered2.contains("always sent as chat"));
     assert!(rendered2.contains("search conversation"));
     assert!(rendered2.contains("command palette"));
     assert!(rendered2.contains("back/clear draft"));
@@ -274,8 +274,7 @@ fn help_at_60x12_renders_all_controls_and_documents_shortcuts() {
 
     let buffer_graph = terminal.backend().buffer();
     let rendered_graph: String = buffer_graph.content.iter().map(|c| c.symbol()).collect();
-    assert!(rendered_graph.contains("relation filter"));
-    assert!(rendered_graph.contains("all"));
+    assert!(rendered_graph.contains("show / hide"));
     assert!(rendered_graph.contains("dependencies"));
     assert!(rendered_graph.contains("verification"));
     assert!(rendered_graph.contains("messages"));

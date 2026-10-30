@@ -119,7 +119,7 @@ contents. Updates publish IDs and versions rather than whole-ledger snapshots.
 
 ## TUI
 
-Use `/requirements` or its command-palette entry. Task
+Use F2 or its command-palette entry. Task
 details have a Requirements tab linking the task's obligation IDs.
 
 - Arrows select records and detail tabs.

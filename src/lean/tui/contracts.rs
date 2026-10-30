@@ -134,7 +134,7 @@ pub struct ConversationState {
     pub comment_drafts: std::collections::HashMap<String, String>,
     pub comment_draft_cursors: std::collections::HashMap<String, (usize, Option<u16>)>,
     pub selected: String,
-    pub filter: Filter,
+    pub relations: Relations,
     pub offset: (u16, u16),
     pub details: Option<Details>,
     pub diff: Option<DiffView>,
@@ -144,7 +144,7 @@ pub struct ConversationState {
     pub task_request_id: u64,
     pub diff_request_id: u64,
     pub focus: Focus,
-    pub graph_filter: Option<String>,
+    pub graph_scope: Scope,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
     pub confirmation: Option<ConfirmationCard>,
@@ -180,11 +180,11 @@ impl ConversationState {
 
     fn capture_navigation(&mut self, app: &App) {
         self.selected = app.selected.clone();
-        self.filter = app.filter;
+        self.relations = app.relations;
         self.offset = app.offset;
         self.scroll = app.scroll;
         self.focus = app.focus;
-        self.graph_filter = app.graph_filter.clone();
+        self.graph_scope = app.graph_scope.clone();
         self.graph_collapsed = app.graph_collapsed.clone();
         self.graph_grouping = app.graph_grouping;
         self.graph_viewport = app.graph_viewport;
@@ -229,11 +229,11 @@ impl ConversationState {
 
     fn restore_navigation(&self, app: &mut App) {
         app.selected = self.selected.clone();
-        app.filter = self.filter;
+        app.relations = self.relations;
         app.offset = self.offset;
         app.scroll = self.scroll;
         app.focus = self.focus;
-        app.graph_filter = self.graph_filter.clone();
+        app.graph_scope = self.graph_scope.clone();
         app.graph_collapsed = self.graph_collapsed.clone();
         app.graph_grouping = self.graph_grouping;
         app.graph_viewport = self.graph_viewport;

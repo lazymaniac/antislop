@@ -128,6 +128,13 @@ pub(super) fn draw_unblock(app: &mut App, frame: &mut Frame) {
     }
 }
 
+pub(super) fn draw_graph_filters(app: &mut App, frame: &mut Frame) {
+    let providers = graph::providers(&app.view);
+    if let Some(menu) = &mut app.graph_filters {
+        menu.draw(frame, &providers, app.relations, &app.graph_scope);
+    }
+}
+
 pub(super) fn draw_trust_prompt(app: &App, frame: &mut Frame) {
     let Some(dir) = &app.trust_prompt else {
         return;

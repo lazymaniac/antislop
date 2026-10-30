@@ -142,7 +142,7 @@ impl App {
             KeyCode::Esc => self.chat_escape(),
             KeyCode::Char('a') if control => self.chat_home_or_accept(),
             KeyCode::Char('r') if control => self.chat_history_or_resume(),
-            KeyCode::Char('x') if control => self.command("/cancel"),
+            KeyCode::Char('x') if control => self.run_workflow(Command::Cancel),
             KeyCode::Char('u') if control && self.input.is_empty() => self.scroll += 5,
             KeyCode::Char('d') if control && self.input.is_empty() => {
                 self.scroll = self.scroll.saturating_sub(5);
@@ -185,7 +185,7 @@ impl App {
             && (self.view.plan_proposed()
                 || self.view.workflow_phase.as_deref() == Some("interview"))
         {
-            self.command("/accept");
+            self.run_workflow(Command::Accept);
         } else {
             self.input.move_home();
         }
@@ -193,7 +193,7 @@ impl App {
 
     fn chat_history_or_resume(&mut self) {
         if self.input.is_empty() && self.view.plan_resumable() {
-            self.command("/resume");
+            self.run_workflow(Command::Resume);
         } else {
             self.picker = Some(Picker::new(Kind::History));
         }

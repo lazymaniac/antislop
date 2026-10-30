@@ -106,7 +106,7 @@ fn config_reply(
                 .map_err(|error| error.to_string())?,
         )?;
         if current.base_source != source || current.path != path {
-            return Err("Configuration changed externally. Reopen /config or use Ctrl+R to reload; draft preserved.".into());
+            return Err("Configuration changed externally. Reopen it (F8) or use Ctrl+R to reload; draft preserved.".into());
         }
     }
     client.call(&request).map_err(|error| error.to_string())

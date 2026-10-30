@@ -2,13 +2,34 @@ use super::*;
 use crate::lean::tui::view::TaskRow;
 
 /// How an agent is doing, which decides its icon and color.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Health {
     Idle,
     Working,
     Waiting,
     Problem,
     Done,
+}
+
+impl Health {
+    /// Every state, in the order the graph filter lists them.
+    pub const ALL: [Self; 5] = [
+        Self::Working,
+        Self::Waiting,
+        Self::Problem,
+        Self::Idle,
+        Self::Done,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Idle => "queued",
+            Self::Working => "working",
+            Self::Waiting => "waiting",
+            Self::Problem => "failed",
+            Self::Done => "done",
+        }
+    }
 }
 
 pub fn health(view: &View, key: &str) -> Health {
@@ -95,6 +116,32 @@ pub(super) fn provider_of<'a>(view: &'a View, key: &str) -> Option<&'a str> {
     }
     let members = card_members(view, key);
     provider(current_round(view, &members).unwrap_or(key))
+}
+
+/// Every provider a card's agents run on: a task's worker and verifier.
+pub(super) fn providers_of<'a>(view: &'a View, key: &str) -> Vec<&'a str> {
+    let Some((_, id)) = key.split_once(':') else {
+        return provider_of(view, key).into_iter().collect();
+    };
+    ["worker", "verifier"]
+        .iter()
+        .filter_map(|role| view.agents.get(&format!("{role}:{id}")))
+        .map(|agent| agent.provider.trim())
+        .filter(|provider| !provider.is_empty())
+        .collect()
+}
+
+/// The providers the team's agents run on, sorted, for the graph filter.
+pub fn providers(view: &View) -> Vec<String> {
+    let mut found: Vec<String> = view
+        .agents
+        .values()
+        .map(|agent| agent.provider.trim().to_owned())
+        .filter(|provider| !provider.is_empty())
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found
 }
 
 pub(super) fn describe(view: &View, key: &str) -> String {

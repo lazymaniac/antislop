@@ -52,7 +52,7 @@ During execution the orchestrator can request a user decision by finishing with
 `context`, `question`, and 2–6 `options` (`label`, optional `description`). The
 question's context names the exact proposed action and why a decision is needed.
 This records a durable `user_decision_requested` event and opens the question
-form (`/question`, also `/interview`). Repeating an identical id and question is
+form (F3). Repeating an identical id and question is
 idempotent; a different question needs a new id. Answers are user messages, not
 plan approval or changes to task permissions. An answered worker question stays
 answered; it cannot be reopened to represent a separate user decision.

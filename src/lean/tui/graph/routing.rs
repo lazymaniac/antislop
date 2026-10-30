@@ -114,8 +114,8 @@ impl Graph {
         path
     }
 
-    /// Returns actual routes for visible edges under the given filter.
-    pub fn edge_routes(&self, filter: Filter) -> Vec<EdgeRoute<'_>> {
+    /// Returns actual routes for visible edges of the given relations.
+    pub fn edge_routes(&self, relations: Relations) -> Vec<EdgeRoute<'_>> {
         let nodes: HashMap<&str, &Node> = self
             .nodes
             .iter()
@@ -123,7 +123,7 @@ impl Graph {
             .collect();
         self.edges
             .iter()
-            .filter(|edge| filter.shows(edge.kind))
+            .filter(|edge| relations.shows(edge, None))
             .filter_map(|edge| {
                 let from = nodes.get(edge.from.as_str())?;
                 let to = nodes.get(edge.to.as_str())?;
@@ -170,15 +170,22 @@ impl Graph {
         }
     }
 
-    pub fn render(&self, view: &View, canvas: &mut Canvas, filter: Filter, selected: &str) {
-        self.render_with(view, canvas, filter, selected, &Theme::new(true, false), 0);
+    pub fn render(&self, view: &View, canvas: &mut Canvas, relations: Relations, selected: &str) {
+        self.render_with(
+            view,
+            canvas,
+            relations,
+            selected,
+            &Theme::new(true, false),
+            0,
+        );
     }
 
     pub fn render_with(
         &self,
         view: &View,
         canvas: &mut Canvas,
-        filter: Filter,
+        relations: Relations,
         selected: &str,
         theme: &Theme,
         tick: u64,
@@ -189,12 +196,19 @@ impl Graph {
             .map(|node| (node.key.as_str(), node))
             .collect();
         let selected = task_node_key(selected);
-        self.render_edges(canvas, filter, &nodes);
+        self.render_edges(canvas, relations, &selected, &nodes);
         self.render_nodes(view, canvas, selected, theme, tick);
     }
 
-    fn render_edges(&self, canvas: &mut Canvas, filter: Filter, nodes: &HashMap<&str, &Node>) {
-        for edge in self.edges.iter().filter(|edge| filter.shows(edge.kind)) {
+    fn render_edges(
+        &self,
+        canvas: &mut Canvas,
+        relations: Relations,
+        selected: &str,
+        nodes: &HashMap<&str, &Node>,
+    ) {
+        let shown = |edge: &&Edge| relations.shows(edge, Some(selected));
+        for edge in self.edges.iter().filter(shown) {
             let Some((from, to)) = nodes
                 .get(edge.from.as_str())
                 .zip(nodes.get(edge.to.as_str()))

@@ -16,6 +16,10 @@ impl Graph {
         collapsed: &std::collections::HashSet<String>,
         grouping: GroupingMode,
     ) -> Self {
-        Self::new_with_viewport(view, filter_query, collapsed, grouping, None)
+        let scope = Scope {
+            query: filter_query.map(str::to_owned),
+            ..Scope::default()
+        };
+        Self::new_with_viewport(view, &scope, collapsed, grouping, None)
     }
 }

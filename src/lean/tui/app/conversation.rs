@@ -87,11 +87,12 @@ impl App {
 
     fn reset_conversation_navigation(&mut self) {
         self.selected = ORCHESTRATOR.into();
-        self.filter = Filter::All;
+        self.relations = Relations::default();
         self.offset = (0, 0);
         self.scroll = 0;
         self.focus = Focus::Chat;
-        self.graph_filter = None;
+        self.graph_scope = Scope::default();
+        self.graph_revealed = None;
         self.graph_collapsed.clear();
         self.graph_grouping = graph::GroupingMode::default();
         self.graph_viewport = None;

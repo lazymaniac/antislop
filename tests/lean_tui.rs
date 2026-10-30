@@ -5,9 +5,9 @@ use antislop::lean::{
     daemon::{Client, Request, socket as daemon_socket},
     diff::ReviewerProfile,
     tui::{
-        App, CardProps, ConfirmationAction, ConfirmationCard, ConfirmationStatus, Details,
-        DiffView, Editor, Filter, Focus, Help, InputBuffer, Kind, Picker, Theme, TranscriptCard,
-        Update, card,
+        App, CardProps, Command, ConfirmationAction, ConfirmationCard, ConfirmationStatus, Details,
+        DiffView, Editor, Focus, Help, InputBuffer, Kind, Picker, Relations, Scope, Theme,
+        TranscriptCard, Update, card,
         diffview::diff_header_with_reviewer,
         draw_rows,
         editor::{
@@ -246,7 +246,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
                 "every card is exactly as tall as the budget"
             );
             let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-            graph.render(&view, &mut canvas, Filter::All, key);
+            graph.render(&view, &mut canvas, Relations::all(), key);
             let text = canvas.lines().join("\n");
             assert!(
                 !text.contains("TASK_END")
@@ -281,7 +281,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
                 assert!(full.contains("RISK_END"));
             }
         }
-        for (_, _, path) in graph.edge_routes(Filter::All) {
+        for (_, _, path) in graph.edge_routes(Relations::all()) {
             for node in graph.nodes.iter().filter(|node| node.visible) {
                 assert!(!Graph::route_intersects_card(&path, node));
             }
@@ -1042,31 +1042,31 @@ fn app_fake_request_capture_through_app() {
     });
 
     // 2. Canonical /mode autonomous and supervised
-    app.command("/mode autonomous");
+    app.run_workflow(Command::Autonomous);
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "mode");
     assert_eq!(req["conversation"], "test-conv");
     assert_eq!(req["autonomous"], true);
 
-    app.command("/mode supervised");
+    app.run_workflow(Command::Supervised);
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "mode");
     assert_eq!(req["conversation"], "test-conv");
     assert_eq!(req["autonomous"], false);
 
     // 3. Pause and continue
-    app.command("/pause");
+    app.run_workflow(Command::Pause);
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "pause");
     assert_eq!(req["paused"], true);
 
-    app.command("/continue");
+    app.run_workflow(Command::Continue);
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "pause");
     assert_eq!(req["paused"], false);
 
     // 4. Cancel
-    app.command("/cancel");
+    app.run_workflow(Command::Cancel);
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "cancel");
     assert_eq!(req["conversation"], "test-conv");
@@ -1082,7 +1082,7 @@ fn app_fake_request_capture_through_app() {
             ]
         }
     }));
-    app.command("/accept");
+    app.run_workflow(Command::Accept);
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "accept");
     assert_eq!(req["conversation"], "test-conv");
@@ -1097,7 +1097,7 @@ fn app_fake_request_capture_through_app() {
             "status": "failed"
         }
     }));
-    app.command("/resume");
+    app.run_workflow(Command::Resume);
     let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(req["op"], "resume");
     assert_eq!(req["conversation"], "test-conv");
@@ -1178,18 +1178,17 @@ fn app_graph_details_diff_navigation_and_search() {
     app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(app.focus, Focus::Graph);
 
-    // Filter cycling in Graph
-    assert_eq!(app.filter, Filter::All);
+    // Relations switch on and off one at a time; f opens the filter menu.
+    assert_eq!(app.relations, Relations::default());
+    app.key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE));
+    assert_eq!(app.relations, Relations::all());
+    app.key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+    assert!(!app.relations.depends && app.relations.supervises);
     app.key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
-    assert_eq!(app.filter, Filter::Depends);
-    app.key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
-    assert_eq!(app.filter, Filter::Verifies);
-    app.key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
-    assert_eq!(app.filter, Filter::Mail);
-    app.key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
-    assert_eq!(app.filter, Filter::Supervises);
-    app.key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
-    assert_eq!(app.filter, Filter::All);
+    app.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(app.relations, Relations::default());
+    assert_eq!(app.focus, Focus::Graph, "Esc closed only the menu");
 
     // Arrow navigation in Graph
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
@@ -1449,7 +1448,7 @@ fn app_resizing_cursor_bounds_picker_overlay_ascii_no_color() {
         .iter()
         .map(|c| c.symbol())
         .collect();
-    assert!(text_overlay.contains("team · filter:"));
+    assert!(text_overlay.contains("team · relations:"));
     assert!(text_overlay.contains(" now "));
     assert!(text_overlay.contains("compiling tests"));
 
@@ -3188,7 +3187,7 @@ fn test_spatial_graph_vdm_relation_markers_and_visible_only_navigation() {
     // 1. Edge and node relation markers (V, D, M)
     let graph = Graph::new(&view);
     let mut canvas = Canvas::new(graph.width, graph.height);
-    graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+    graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
     let lines = canvas.lines();
     let text = lines.join("\n");
 
@@ -3887,7 +3886,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
 
     let legacy_par = Graph::new_with_viewport(
         &par_view,
-        None,
+        &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
         None,
@@ -3896,7 +3895,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
     for &(name, w, h) in &terminals {
         let adaptive_par = Graph::new_with_viewport(
             &par_view,
-            None,
+            &Scope::default(),
             &Default::default(),
             GroupingMode::Dependency,
             Some((w, h)),
@@ -3941,7 +3940,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
     for &(name, w, _) in &terminals {
         let adaptive_chain = Graph::new_with_viewport(
             &chain_view,
-            None,
+            &Scope::default(),
             &Default::default(),
             GroupingMode::Dependency,
             Some((w, 20)),
@@ -3983,7 +3982,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
     branch_view.tasks = branch_tasks;
     let adaptive_branch = Graph::new_with_viewport(
         &branch_view,
-        None,
+        &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
         Some((92, 20)),
@@ -4009,7 +4008,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
     cycle_view.tasks = cycle_tasks;
     let adaptive_cycle = Graph::new_with_viewport(
         &cycle_view,
-        None,
+        &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
         Some((92, 20)),
@@ -4021,7 +4020,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
     collapsed.insert("p1".into());
     let collapsed_graph = Graph::new_with_viewport(
         &par_view,
-        None,
+        &Scope::default(),
         &collapsed,
         GroupingMode::Dependency,
         Some((92, 20)),
@@ -4034,7 +4033,7 @@ fn test_adaptive_graph_screen_utilization_and_compaction_matrix() {
     // Filter compaction
     let filtered_graph = Graph::new_with_viewport(
         &par_view,
-        Some("p1"),
+        &scoped("p1"),
         &Default::default(),
         GroupingMode::Dependency,
         Some((92, 20)),
@@ -4087,7 +4086,7 @@ fn test_adaptive_graph_collision_and_routing_safety() {
     for &(w, h) in &[(78, 20), (48, 20), (77, 26), (104, 46)] {
         let graph = Graph::new_with_viewport(
             &view,
-            None,
+            &Scope::default(),
             &Default::default(),
             GroupingMode::Dependency,
             Some((w, h)),
@@ -4113,11 +4112,11 @@ fn test_adaptive_graph_collision_and_routing_safety() {
 
         // 2. Routing safety: Every visible edge route under every filter must never intersect any visible card
         for filter in [
-            Filter::All,
-            Filter::Supervises,
-            Filter::Depends,
-            Filter::Verifies,
-            Filter::Mail,
+            Relations::all(),
+            Relations::only(3),
+            Relations::only(0),
+            Relations::only(1),
+            Relations::only(2),
         ] {
             let routes = graph.edge_routes(filter);
             for (from, to, path) in routes {
@@ -4135,7 +4134,7 @@ fn test_adaptive_graph_collision_and_routing_safety() {
 
         // 3. Rendering into Canvas and verifying bounded window
         let mut canvas = Canvas::new_window(0, 0, w, h);
-        graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+        graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
     }
 }
 
@@ -4163,7 +4162,7 @@ fn task_card_mouse_selection_uses_one_identity_for_both_phases() {
     let inner = app.graph_area.unwrap();
     let graph = Graph::new_with_viewport(
         &app.view,
-        None,
+        &Scope::default(),
         &app.graph_collapsed,
         app.graph_grouping,
         app.graph_viewport,
@@ -4253,7 +4252,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
     // Capture node coordinates
     let g1 = Graph::new_with_viewport(
         &app.view,
-        None,
+        &Scope::default(),
         &app.graph_collapsed,
         app.graph_grouping,
         app.graph_viewport,
@@ -4268,7 +4267,7 @@ fn test_adaptive_graph_navigation_and_resize_stability() {
 
     let g2 = Graph::new_with_viewport(
         &app.view,
-        None,
+        &Scope::default(),
         &app.graph_collapsed,
         app.graph_grouping,
         app.graph_viewport,
@@ -4316,7 +4315,7 @@ fn test_canvas_memory_bounded_for_large_graphs() {
     // Viewport-based layout for 120x30 terminal (inner: 77x26)
     let graph = Graph::new_with_viewport(
         &view,
-        None,
+        &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
         Some((92, 40)),
@@ -4324,7 +4323,7 @@ fn test_canvas_memory_bounded_for_large_graphs() {
 
     // Windowed canvas allocates strictly O(inner.width * inner.height) = 77 * 26 = 2002 cells
     let mut window_canvas = Canvas::new_window(0, 0, 77, 26);
-    graph.render(&view, &mut window_canvas, Filter::All, "worker:task_0");
+    graph.render(&view, &mut window_canvas, Relations::all(), "worker:task_0");
 
     let lines = window_canvas.lines();
     assert_eq!(lines.len(), 26);
@@ -4336,7 +4335,7 @@ fn test_canvas_memory_bounded_for_large_graphs() {
 
 #[test]
 fn test_adaptive_graph_non_adjacent_same_column_bypass_routing() {
-    use antislop::lean::tui::graph::{Filter, Graph, GroupingMode};
+    use antislop::lean::tui::graph::{Graph, GroupingMode, Relations};
     use antislop::lean::tui::view::{ORCHESTRATOR, TaskRow, View};
 
     // At 78 columns two cards fit side by side. Row 0 holds the plan verifier
@@ -4354,7 +4353,7 @@ fn test_adaptive_graph_non_adjacent_same_column_bypass_routing() {
 
     let graph = Graph::new_with_viewport(
         &view,
-        None,
+        &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
         Some((92, 20)),
@@ -4370,7 +4369,7 @@ fn test_adaptive_graph_non_adjacent_same_column_bypass_routing() {
     assert!(orch.y < w2.y && w2.y < w4.y);
 
     // Supervision edge route: ORCHESTRATOR -> worker:t4
-    let sup_routes = graph.edge_routes(Filter::Supervises);
+    let sup_routes = graph.edge_routes(Relations::only(3));
     let orch_to_w4 = sup_routes
         .iter()
         .find(|(from, to, _)| *from == ORCHESTRATOR && *to == "worker:t4")
@@ -4435,7 +4434,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
     // When admin nodes are hidden, row 0 must be compacted: worker:t1 sits at row 0
     let filtered_graph = Graph::new_with_viewport(
         &view,
-        Some("task 1"),
+        &scoped("task 1"),
         &Default::default(),
         GroupingMode::Dependency,
         Some((92, 20)),
@@ -4459,7 +4458,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
     // Visible task selection compacts active column depth to column 0!
     let t3_graph = Graph::new_with_viewport(
         &view,
-        Some("task 3"),
+        &scoped("task 3"),
         &Default::default(),
         GroupingMode::Dependency,
         Some((92, 20)),
@@ -4480,7 +4479,7 @@ fn test_adaptive_graph_admin_and_task_compaction_and_column_selection() {
     // Must be compacted to column 0!
     let status_graph = Graph::new_with_viewport(
         &view,
-        Some("approved"),
+        &scoped("approved"),
         &Default::default(),
         GroupingMode::Status,
         Some((92, 20)),
@@ -4541,21 +4540,21 @@ fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
     // tall enough for the fixed-size cards, five rows at their full height)
     let g_short = Graph::new_with_viewport(
         &view,
-        None,
+        &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
         Some((92, 20)),
     );
     let g_mid = Graph::new_with_viewport(
         &view,
-        None,
+        &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
         Some((92, 40)),
     );
     let g_tall = Graph::new_with_viewport(
         &view,
-        None,
+        &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
         Some((140, 66)),
@@ -4585,7 +4584,7 @@ fn test_adaptive_graph_height_utilization_and_scroll_limitation() {
 
 #[test]
 fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
-    use antislop::lean::tui::graph::{Filter, Graph};
+    use antislop::lean::tui::graph::{Graph, Relations};
     use antislop::lean::tui::view::TaskRow;
 
     // Terminal sizes to test:
@@ -4650,7 +4649,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
 
         let g_chain = Graph::new_with_viewport(
             &app.view,
-            app.graph_filter.as_deref(),
+            &app.graph_scope,
             &app.graph_collapsed,
             app.graph_grouping,
             app.graph_viewport,
@@ -4659,10 +4658,10 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
 
         // Verify routing safety on chains
         for filter in [
-            Filter::All,
-            Filter::Supervises,
-            Filter::Depends,
-            Filter::Verifies,
+            Relations::all(),
+            Relations::only(3),
+            Relations::only(0),
+            Relations::only(1),
         ] {
             for (from, to, path) in g_chain.edge_routes(filter) {
                 for node in &visible_chain {
@@ -4705,7 +4704,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         term.draw(|f| app.draw(f)).unwrap();
         let g_branch = Graph::new_with_viewport(
             &app.view,
-            app.graph_filter.as_deref(),
+            &app.graph_scope,
             &app.graph_collapsed,
             app.graph_grouping,
             app.graph_viewport,
@@ -4713,10 +4712,10 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         let visible_branch: Vec<_> = g_branch.nodes.iter().filter(|n| n.visible).collect();
 
         for filter in [
-            Filter::All,
-            Filter::Supervises,
-            Filter::Depends,
-            Filter::Verifies,
+            Relations::all(),
+            Relations::only(3),
+            Relations::only(0),
+            Relations::only(1),
         ] {
             for (from, to, path) in g_branch.edge_routes(filter) {
                 for node in &visible_branch {
@@ -4747,7 +4746,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         term.draw(|f| app.draw(f)).unwrap();
         let g_cycle = Graph::new_with_viewport(
             &app.view,
-            app.graph_filter.as_deref(),
+            &app.graph_scope,
             &app.graph_collapsed,
             app.graph_grouping,
             app.graph_viewport,
@@ -4759,7 +4758,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         term.draw(|f| app.draw(f)).unwrap();
         let g_filtered = Graph::new_with_viewport(
             &app.view,
-            app.graph_filter.as_deref(),
+            &app.graph_scope,
             &app.graph_collapsed,
             app.graph_grouping,
             app.graph_viewport,
@@ -4775,7 +4774,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         term.draw(|f| app.draw(f)).unwrap();
         let g_collapsed = Graph::new_with_viewport(
             &app.view,
-            app.graph_filter.as_deref(),
+            &app.graph_scope,
             &app.graph_collapsed,
             app.graph_grouping,
             app.graph_viewport,
@@ -4797,7 +4796,7 @@ fn test_adaptive_graph_app_comprehensive_matrix_across_all_terminals() {
         term.draw(|f| app.draw(f)).unwrap();
         let after_coords: Vec<_> = Graph::new_with_viewport(
             &app.view,
-            app.graph_filter.as_deref(),
+            &app.graph_scope,
             &app.graph_collapsed,
             app.graph_grouping,
             app.graph_viewport,
@@ -4952,7 +4951,7 @@ fn task_events_attach_feedback_only_for_their_round_and_recovery_clears_it() {
 fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     use antislop::lean::tui::{
         Details,
-        graph::{Canvas, Filter, Graph, HEIGHT, WIDTH},
+        graph::{Canvas, Graph, HEIGHT, Relations, WIDTH},
         view::{Agent, View},
     };
     let mut view = View::default();
@@ -4967,11 +4966,11 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         ]}),
     ));
     let card = |view: &View, key: &str| -> (String, u16) {
-        let graph = Graph::new(view);
+        let graph = open_cards(view, Default::default());
         let node = graph.node(key).expect("node");
         let height = node.height;
         let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, height);
-        graph.render(view, &mut canvas, Filter::All, key);
+        graph.render(view, &mut canvas, Relations::all(), key);
         (canvas.lines().join("\n"), height)
     };
     // Before any round starts, no card claims one.
@@ -5056,7 +5055,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     assert!(verifier.contains("2/3"), "coverage counters: {verifier}");
     assert!(verifier.contains("committed"), "{verifier}");
     assert_eq!(verifier_h, HEIGHT);
-    for (_, _, path) in Graph::new(&view).edge_routes(Filter::All) {
+    for (_, _, path) in Graph::new(&view).edge_routes(Relations::all()) {
         for node in Graph::new(&view).nodes.iter().filter(|n| n.visible) {
             assert!(!antislop::lean::tui::graph::Graph::route_intersects_card(
                 &path, node
@@ -5154,7 +5153,7 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
 #[test]
 fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_events() {
     use antislop::lean::tui::{
-        graph::{Canvas, Filter, Graph, GroupingMode, HEIGHT, WIDTH},
+        graph::{Canvas, Graph, GroupingMode, HEIGHT, Relations, WIDTH},
         view::{Agent, View},
     };
     let ev = |seq: u64, kind: &str, payload: Value| json!({"seq": seq, "kind": kind, "payload": payload});
@@ -5171,7 +5170,7 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
         ]}),
     ));
     let geometry = |view: &View, grouping: GroupingMode| -> Vec<(String, u16, u16, u16, bool)> {
-        Graph::new_with_options(view, None, &Default::default(), grouping)
+        open_cards(view, grouping)
             .nodes
             .iter()
             .map(|node| (node.key.clone(), node.x, node.y, node.height, node.visible))
@@ -5247,10 +5246,10 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
         before,
         "an effect and a verdict move no card"
     );
-    let graph = Graph::new(&view);
+    let graph = open_cards(&view, GroupingMode::Dependency);
     let node = graph.node("worker:t1").unwrap();
     let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-    graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+    graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
     let text = canvas.lines().join(" ");
     assert!(
         text.contains("effect: [fragment]"),
@@ -5294,14 +5293,14 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
         let graph = Graph::new(&view);
         let node = graph.node("verifier:t1").unwrap();
         let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-        graph.render(&view, &mut canvas, Filter::All, "verifier:t1");
+        graph.render(&view, &mut canvas, Relations::all(), "verifier:t1");
         (canvas.lines().join("\n"), node.height)
     };
     let (long_text, long_h) = {
         let graph = Graph::new(&view);
         let node = graph.node("verifier:t2").unwrap();
         let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-        graph.render(&view, &mut canvas, Filter::All, "verifier:t2");
+        graph.render(&view, &mut canvas, Relations::all(), "verifier:t2");
         (canvas.lines().join("\n"), node.height)
     };
     assert_eq!(short_h, HEIGHT);
@@ -5315,7 +5314,7 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
         long_text.contains('👩'),
         "emoji survive the cut: {long_text}"
     );
-    for (_, _, path) in Graph::new(&view).edge_routes(Filter::All) {
+    for (_, _, path) in Graph::new(&view).edge_routes(Relations::all()) {
         for node in Graph::new(&view).nodes.iter().filter(|n| n.visible) {
             assert!(
                 !Graph::route_intersects_card(&path, node),
@@ -5454,7 +5453,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
 fn every_reported_landing_earns_its_real_label_on_the_card() {
     use antislop::lean::tasks::Outcome;
     use antislop::lean::tui::{
-        graph::{Canvas, Filter, Graph, WIDTH},
+        graph::{Canvas, Relations, WIDTH},
         view::View,
     };
     let mut view = View::default();
@@ -5478,10 +5477,10 @@ fn every_reported_landing_earns_its_real_label_on_the_card() {
             "feedback": {"round": 1, "effect": "1 file changed — src/a.rs",
                          "integration": {"outcome": name, "detail": "kept whole"}}}}));
         assert_eq!(view.tasks[0].integration.as_ref().unwrap()["outcome"], name);
-        let graph = Graph::new(&view);
+        let graph = open_cards(&view, Default::default());
         let node = graph.node("worker:t1").expect("node");
         let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-        graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+        graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
         let text = canvas.lines().join(" ");
         assert!(
             text.contains(label),
@@ -5655,7 +5654,7 @@ fn configuration_modal_preserves_chat_and_failed_draft_and_handles_tiny_terminal
     }
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(!app.config_editor.as_ref().unwrap().visible);
-    app.command("/config");
+    app.run_workflow(antislop::lean::tui::Command::Config);
     assert!(app.config_editor.as_ref().unwrap().visible);
 }
 
@@ -5667,7 +5666,7 @@ fn configuration_palette_and_profile_actions_are_available() {
         picker
             .items(&Default::default())
             .iter()
-            .any(|(label, _)| label.contains("/config"))
+            .any(|(label, _)| label.contains("configuration live · F8"))
     );
     let mut editor = ConfigEditor::new(
         include_str!("../examples/antislop.toml"),
@@ -5783,7 +5782,7 @@ fn configuration_load_and_save_use_live_daemon_requests() {
     });
     let (mut app, updates) = App::test_app_with_client(Client::at(dir.relative_path()));
     app.input = InputBuffer::with_text("chat draft");
-    app.command("/config");
+    app.run_workflow(antislop::lean::tui::Command::Config);
     assert_eq!(
         requests.recv_timeout(Duration::from_secs(3)).unwrap()["op"],
         "get_config"
@@ -6015,7 +6014,7 @@ mod config_editor_acceptance {
             let state = dir.relative_path().join("project/.antislop");
             let daemon = Daemon::start(&project, target, &state, &registry);
             let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
-            app.command("/config");
+            app.run_workflow(antislop::lean::tui::Command::Config);
             pump(&mut app, &updates);
             let editor = app.config_editor.as_mut().unwrap();
             let expected_paths = serialized_config_field_paths();
@@ -6208,7 +6207,7 @@ mod config_editor_acceptance {
         let state = dir.relative_path().join("project/.antislop");
         let daemon = Daemon::start(&project, &path, &state, &dir.path().join("registry"));
         let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
-        app.command("/config");
+        app.run_workflow(antislop::lean::tui::Command::Config);
         pump(&mut app, &updates);
         let index = app
             .config_editor
@@ -6222,7 +6221,7 @@ mod config_editor_acceptance {
         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let external = SOURCE.replace("max_parallel = 4", "max_parallel = 10");
         std::fs::write(&path, &external).unwrap();
-        app.command("/config");
+        app.run_workflow(antislop::lean::tui::Command::Config);
         pump(&mut app, &updates);
         assert!(app.config_editor.as_ref().unwrap().conflict);
         assert_eq!(
@@ -6383,7 +6382,7 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         );
         let first = std::fs::read_to_string(&log).unwrap();
         let (mut app, updates) = App::test_app_with_client(daemon.client.clone());
-        app.command("/config");
+        app.run_workflow(antislop::lean::tui::Command::Config);
         pump(&mut app, &updates);
         let editor = app.config_editor.as_mut().unwrap();
         let index = editor
@@ -7677,4 +7676,30 @@ fn the_task_dashboard_shows_the_story_of_a_task_and_folds_on_demand() {
         dashboard_screen(w, h, 0, |_| {});
         dashboard_screen(w, h, VERIFIER, |_| {});
     }
+}
+
+fn scoped(query: &str) -> antislop::lean::tui::Scope {
+    antislop::lean::tui::Scope {
+        query: Some(query.to_owned()),
+        ..Default::default()
+    }
+}
+
+/// The graph with every finished card unfolded, for tests of card slots.
+fn open_cards(
+    view: &antislop::lean::tui::view::View,
+    grouping: antislop::lean::tui::graph::GroupingMode,
+) -> antislop::lean::tui::graph::Graph {
+    let toggled = view
+        .tasks
+        .iter()
+        .filter(|task| {
+            matches!(
+                task.status.as_str(),
+                "approved" | "skipped" | "cancelled" | "revised"
+            )
+        })
+        .map(|task| task.id.clone())
+        .collect();
+    antislop::lean::tui::graph::Graph::new_with_options(view, None, &toggled, grouping)
 }

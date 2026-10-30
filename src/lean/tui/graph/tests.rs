@@ -21,7 +21,7 @@ fn small_viewports_shrink_cards_to_two_by_two_and_wide_ones_center_them() {
     let layout = |vp| {
         Graph::new_with_viewport(
             &view,
-            None,
+            &Scope::default(),
             &Default::default(),
             GroupingMode::Dependency,
             Some(vp),
@@ -52,7 +52,7 @@ fn agent_card_shows_recorded_branch() {
     let graph = Graph::new(&view);
     let node = graph.node(ORCHESTRATOR).unwrap();
     let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, HEIGHT);
-    graph.render(&view, &mut canvas, Filter::All, ORCHESTRATOR);
+    graph.render(&view, &mut canvas, Relations::all(), ORCHESTRATOR);
     assert!(canvas.lines().join("\n").contains("branch: feature/tasks"));
 }
 
@@ -64,7 +64,7 @@ fn requirements_rounds_share_one_card_that_fits() {
     }
     let graph = Graph::new_with_viewport(
         &view,
-        None,
+        &Scope::default(),
         &Default::default(),
         GroupingMode::Dependency,
         None,
@@ -94,7 +94,7 @@ fn graph_includes_planning_agents_in_every_layout() {
     for viewport in [None, Some((60, 30)), Some((180, 40))] {
         let graph = Graph::new_with_viewport(
             &view,
-            None,
+            &Scope::default(),
             &Default::default(),
             GroupingMode::Dependency,
             viewport,
@@ -127,7 +127,7 @@ fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
     let first = cache.get(
         &view,
         1,
-        None,
+        &Scope::default(),
         &collapsed,
         super::GroupingMode::Dependency,
         Some((80, 24)),
@@ -135,7 +135,7 @@ fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
     let idle = cache.get(
         &view,
         1,
-        None,
+        &Scope::default(),
         &collapsed,
         super::GroupingMode::Dependency,
         Some((80, 24)),
@@ -148,7 +148,7 @@ fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
     let updated = cache.get(
         &view,
         1,
-        None,
+        &Scope::default(),
         &collapsed,
         super::GroupingMode::Dependency,
         Some((80, 24)),
@@ -157,7 +157,7 @@ fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
     let resized = cache.get(
         &view,
         1,
-        None,
+        &Scope::default(),
         &collapsed,
         super::GroupingMode::Dependency,
         Some((40, 12)),
@@ -167,7 +167,7 @@ fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
     let folded = cache.get(
         &view,
         1,
-        None,
+        &Scope::default(),
         &collapsed,
         super::GroupingMode::Status,
         Some((40, 12)),
@@ -176,7 +176,7 @@ fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
     let searched = cache.get(
         &view,
         1,
-        Some("first"),
+        &scoped("first"),
         &collapsed,
         super::GroupingMode::Status,
         Some((40, 12)),
@@ -185,7 +185,7 @@ fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
     let switched = cache.get(
         &view,
         2,
-        Some("first"),
+        &scoped("first"),
         &collapsed,
         super::GroupingMode::Status,
         Some((40, 12)),
@@ -196,7 +196,7 @@ fn cached_layout_reuses_idle_frames_and_invalidates_changed_inputs() {
     let expired = cache.get(
         &view,
         2,
-        Some("first"),
+        &scoped("first"),
         &collapsed,
         super::GroupingMode::Status,
         Some((40, 12)),
@@ -285,7 +285,8 @@ fn role_aliases_share_one_card_even_when_collapsed_or_filtered() {
     let collapsed = std::collections::HashSet::from(["t1".to_owned()]);
     for grouping in [GroupingMode::Dependency, GroupingMode::Status] {
         for viewport in [None, Some((78, 20))] {
-            let graph = Graph::new_with_viewport(&view, None, &collapsed, grouping, viewport);
+            let graph =
+                Graph::new_with_viewport(&view, &Scope::default(), &collapsed, grouping, viewport);
             assert_eq!(graph.nodes.len(), 5);
             assert!(
                 graph
@@ -296,7 +297,7 @@ fn role_aliases_share_one_card_even_when_collapsed_or_filtered() {
             let node = graph.node("verifier:t1").unwrap();
             assert_eq!(node, graph.node("worker:t1").unwrap());
             assert!(node.visible && node.collapsed);
-            let routes = graph.edge_routes(Filter::Mail);
+            let routes = graph.edge_routes(Relations::only(2));
             assert_eq!(routes.len(), 1);
             assert_eq!((routes[0].0, routes[0].1), ("worker:t1", "worker:t2"));
             let mail = graph
@@ -307,13 +308,13 @@ fn role_aliases_share_one_card_even_when_collapsed_or_filtered() {
             assert_eq!(mail.label.as_deref(), Some("M✉3"));
             assert_eq!(mail.kind, Kind::Mail { recent: true });
             let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, HEIGHT);
-            graph.render(&view, &mut canvas, Filter::All, "verifier:t1");
+            graph.render(&view, &mut canvas, Relations::all(), "verifier:t1");
             let text = canvas.lines().join("\n");
             assert!(text.contains("verifier r2") && text.contains("checking r2"));
             assert!(!text.contains("Execute") && !text.contains("Validate"));
             for query in ["verifier:t1", "roundtrips", "checking r2"] {
                 let filtered =
-                    Graph::new_with_viewport(&view, Some(query), &collapsed, grouping, viewport);
+                    Graph::new_with_viewport(&view, &scoped(query), &collapsed, grouping, viewport);
                 assert!(filtered.node("worker:t1").unwrap().visible);
                 assert!(!filtered.node("worker:t2").unwrap().visible);
             }
@@ -356,7 +357,7 @@ fn names_and_work_kinds_remain_visible_on_collapsed_cards() {
         let graph = Graph::new_with_options(&view, None, &collapsed, GroupingMode::Dependency);
         for node in graph.nodes.iter().filter(|node| node.visible) {
             let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-            graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+            graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
             let rows = canvas.lines();
             if node.key == "worker:t1" {
                 assert!(rows[0].contains("Repair storage"), "{rows:?}");
@@ -414,7 +415,7 @@ fn summaries_are_bounded_and_truncated_at_grapheme_boundaries() {
     let worker = graph.node("worker:t1").unwrap();
     let verifier = graph.node("verifier:t1").unwrap();
     assert_eq!(verifier.key, worker.key);
-    for (_, _, path) in graph.edge_routes(Filter::All) {
+    for (_, _, path) in graph.edge_routes(Relations::all()) {
         assert!(
             graph
                 .nodes
@@ -575,7 +576,7 @@ fn health_marks_problems_and_cards_have_no_frame() {
     let graph = Graph::new(&view);
     let mut canvas = Canvas::new(graph.width, graph.height);
     let theme = Theme::new(true, false);
-    graph.render_with(&view, &mut canvas, Filter::All, "worker:t1", &theme, 0);
+    graph.render_with(&view, &mut canvas, Relations::all(), "worker:t1", &theme, 0);
     let text = canvas.lines().join("\n");
     for frame in ['╭', '╮', '╰', '╯', '╔', '╗', '╚', '╝', '║'] {
         assert!(!text.contains(frame), "{frame} in\n{text}");
@@ -591,7 +592,7 @@ fn working_cards_animate_with_the_tick_and_stay_ascii_safe() {
     let graph = Graph::new(&view);
     let frame = |theme: &Theme, tick| {
         let mut canvas = Canvas::new(graph.width, graph.height);
-        graph.render_with(&view, &mut canvas, Filter::All, "", theme, tick);
+        graph.render_with(&view, &mut canvas, Relations::all(), "", theme, tick);
         canvas.lines().join("\n")
     };
     let unicode = Theme::new(true, false);
@@ -626,7 +627,7 @@ fn cards_are_fixed_and_no_event_moves_a_single_node() {
     worker.summary = Some("Fix the storage path so writes survive a restart.".into());
     let mut view = view(vec![worker, task("t2", &["t1"])]);
     let geometry = |view: &View| -> Vec<(String, u16, u16, u16, bool)> {
-        Graph::new(view)
+        open_cards(view)
             .nodes
             .iter()
             .map(|node| (node.key.clone(), node.x, node.y, node.height, node.visible))
@@ -655,10 +656,10 @@ fn cards_are_fixed_and_no_event_moves_a_single_node() {
         },
     );
     assert_eq!(geometry(&view), before, "activity moves no card");
-    let graph = Graph::new(&view);
+    let graph = open_cards(&view);
     let node = graph.node("worker:t1").unwrap();
     let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-    graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+    graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
     let rows = canvas.lines();
     assert!(rows[2].contains("working r1"), "{}", rows[2]);
     assert!(!rows[2].contains("cargo check"), "state alone: {}", rows[2]);
@@ -686,10 +687,10 @@ fn cards_are_fixed_and_no_event_moves_a_single_node() {
     view.tasks[0].obligations = Some(json!({"total": 2, "ok": 2, "missing": 0}));
     view.tasks[0].integration = Some(json!({"outcome": "committed", "detail": "as abc123"}));
     assert_eq!(geometry(&view), before, "a verdict moves no card");
-    let graph = Graph::new(&view);
+    let graph = open_cards(&view);
     let node = graph.node("worker:t1").unwrap();
     let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-    graph.render(&view, &mut canvas, Filter::All, "worker:t1");
+    graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
     let rows = canvas.lines();
     assert!(
         rows[..BODY_ROW as usize + MAX_SUMMARY_LINES]
@@ -713,7 +714,7 @@ fn cards_are_fixed_and_no_event_moves_a_single_node() {
     assert_eq!(geometry(&view), before, "a retry moves no card");
     // Neither role ever shows a summary line displaced by the other's
     // data: every visible card keeps its fixed slot count.
-    for node in Graph::new(&view)
+    for node in open_cards(&view)
         .nodes
         .iter()
         .filter(|node| node.visible && !is_admin(&node.key))
@@ -738,10 +739,10 @@ fn every_card_block_stays_in_its_own_slot() {
         Some("Repair the storage engine so a restart never loses a queued write, at all.".into());
     let mut view = view(vec![task("t0", &[]), row]);
     let render = |view: &View| -> Vec<String> {
-        let graph = Graph::new(view);
+        let graph = open_cards(view);
         let node = graph.node("worker:t1").unwrap();
         let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-        graph.render(view, &mut canvas, Filter::All, "worker:t1");
+        graph.render(view, &mut canvas, Relations::all(), "worker:t1");
         canvas.lines()
     };
     // Working: the doing text sits on the activity row, alone, and no
@@ -822,7 +823,7 @@ fn edges_join_boxes_without_crossing_them() {
     );
     let graph = Graph::new(&view);
     let mut canvas = Canvas::new(graph.width, graph.height);
-    graph.render(&view, &mut canvas, Filter::All, "worker:t2");
+    graph.render(&view, &mut canvas, Relations::all(), "worker:t2");
     let lines = canvas.lines();
     let worker = graph.node("worker:t1").unwrap();
     let next = graph.node("worker:t2").unwrap();
@@ -842,15 +843,15 @@ fn edges_join_boxes_without_crossing_them() {
 fn all_includes_every_supervision_edge() {
     let view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
     let graph = Graph::new(&view);
-    let all = graph.edge_routes(Filter::All);
-    let supervision = graph.edge_routes(Filter::Supervises);
+    let all = graph.edge_routes(Relations::all());
+    let supervision = graph.edge_routes(Relations::only(3));
     assert_eq!(supervision.len(), 2);
     for edge in &supervision {
         assert!(all.contains(edge), "All must include {edge:?}");
     }
     assert!(
         graph
-            .edge_routes(Filter::Depends)
+            .edge_routes(Relations::only(0))
             .iter()
             .all(|edge| !supervision.contains(edge))
     );
@@ -863,4 +864,62 @@ fn crossings_get_box_drawing_joints() {
     canvas.path(&[(2, 0), (2, 4)], Style::default());
     canvas.path(&[(0, 0), (1, 0), (1, 1)], Style::default());
     assert_eq!(canvas.lines(), ["─┐│", " ││", "──┼──", "  │", "  │"]);
+}
+
+fn scoped(query: &str) -> Scope {
+    Scope {
+        query: Some(query.to_owned()),
+        ..Scope::default()
+    }
+}
+
+/// The graph with every finished card unfolded, for tests of card slots.
+fn open_cards(view: &View) -> Graph {
+    let toggled = view
+        .tasks
+        .iter()
+        .filter(|task| {
+            matches!(
+                task.status.as_str(),
+                "approved" | "skipped" | "cancelled" | "revised"
+            )
+        })
+        .map(|task| task.id.clone())
+        .collect();
+    Graph::new_with_options(view, None, &toggled, GroupingMode::Dependency)
+}
+
+#[test]
+fn finished_cards_fold_to_their_identity_and_their_row_shrinks() {
+    let mut view = view(vec![task("t1", &[]), task("t2", &["t1"])]);
+    view.tasks[0].status = "approved".into();
+    let graph = Graph::new_with_viewport(
+        &view,
+        &Scope::default(),
+        &Default::default(),
+        GroupingMode::Dependency,
+        Some((40, 200)),
+    );
+    let (done, next) = (
+        graph.node("worker:t1").unwrap(),
+        graph.node("worker:t2").unwrap(),
+    );
+    assert!(done.collapsed && done.height == FOLDED_HEIGHT);
+    assert!(!next.collapsed && next.height > FOLDED_HEIGHT);
+    assert_eq!(
+        next.y,
+        done.y + FOLDED_HEIGHT + GAP_Y,
+        "the folded row takes only its height"
+    );
+    // z unfolds a finished card and folds a running one.
+    let toggled = ["t1".to_owned(), "t2".to_owned()].into_iter().collect();
+    let graph = Graph::new_with_viewport(
+        &view,
+        &Scope::default(),
+        &toggled,
+        GroupingMode::Dependency,
+        Some((40, 200)),
+    );
+    assert!(!graph.node("worker:t1").unwrap().collapsed);
+    assert!(graph.node("worker:t2").unwrap().collapsed);
 }

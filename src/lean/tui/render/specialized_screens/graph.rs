@@ -7,7 +7,7 @@ impl App {
         let graph = self.graph_layout_cache.get(
             &self.view,
             self.generation,
-            self.graph_filter.as_deref(),
+            &self.graph_scope,
             &self.graph_collapsed,
             self.graph_grouping,
             self.graph_viewport,
@@ -18,7 +18,7 @@ impl App {
         graph.render_with(
             &self.view,
             &mut canvas,
-            self.filter,
+            self.relations,
             &self.selected,
             &Theme::from_env(),
             self.tick,
@@ -43,7 +43,11 @@ impl App {
         } else {
             dim()
         };
-        let title = graph_title(self.filter.name(), self.graph_grouping.name());
+        let title = graph_title(
+            &self.relations.name(),
+            self.graph_scope.is_filtered(),
+            self.graph_grouping.name(),
+        );
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(border)
@@ -56,7 +60,12 @@ impl App {
     fn keep_graph_selection_visible(&mut self, graph: &Graph) {
         self.repair_graph_selection(graph);
         self.fit_graph_offset(graph);
-        self.reveal_selected_node(graph);
+        // The view follows the selection only when it moves, so the user
+        // can scroll away from it.
+        if self.graph_revealed.as_deref() != Some(self.selected.as_str()) {
+            self.reveal_selected_node(graph);
+            self.graph_revealed = Some(self.selected.clone());
+        }
     }
 
     fn repair_graph_selection(&mut self, graph: &Graph) {
@@ -90,12 +99,8 @@ impl App {
         let Some((width, height)) = self.graph_viewport else {
             return;
         };
-        if graph.width <= width {
-            self.offset.0 = 0;
-        }
-        if graph.height <= height {
-            self.offset.1 = 0;
-        }
+        self.offset.0 = self.offset.0.min(graph.width.saturating_sub(width));
+        self.offset.1 = self.offset.1.min(graph.height.saturating_sub(height));
     }
 
     fn reveal_selected_node(&mut self, graph: &Graph) {
@@ -141,8 +146,9 @@ impl App {
     }
 }
 
-fn graph_title(filter: &str, grouping: &str) -> String {
-    format!(" team · filter: {filter} (f) · groups: {grouping} (g) · [V] ver [D] dep [M] msg ")
+fn graph_title(relations: &str, filtered: bool, grouping: &str) -> String {
+    let cards = if filtered { "some" } else { "all" };
+    format!(" team · relations: {relations} (1-4) · cards: {cards} (f) · groups: {grouping} (g) ")
 }
 
 fn graph_progress_areas(area: Rect, progress_lines: usize) -> (Rect, Option<Rect>) {

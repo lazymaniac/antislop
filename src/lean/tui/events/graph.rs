@@ -18,7 +18,7 @@ impl App {
     fn graph_for_key(&self) -> Graph {
         Graph::new_with_viewport(
             &self.view,
-            self.graph_filter.as_deref(),
+            &self.graph_scope,
             &self.graph_collapsed,
             self.graph_grouping,
             self.graph_viewport,
@@ -39,7 +39,7 @@ impl App {
         } else {
             (height / 2).max(1)
         };
-        self.scroll_graph_node(graph, down, amount);
+        self.pan_graph(graph, down, amount, false);
         Some(true)
     }
 
@@ -75,11 +75,14 @@ impl App {
             KeyCode::Char('q') => return false,
             KeyCode::Char('?') => self.show_help(Help::Graph),
             KeyCode::Char('/') => self.picker = Some(Picker::new(Kind::Agents)),
-            KeyCode::Char('p') => self.command("/plan"),
+            KeyCode::Char('p') => self.run_workflow(Command::Plan),
             KeyCode::Char('u') => self.open_unblock(None),
             KeyCode::Char('z' | ' ') => self.toggle_selected_collapse(),
             KeyCode::Char('g') => self.graph_grouping = self.graph_grouping.next(),
-            KeyCode::Char('f') => self.filter = self.filter.next(),
+            KeyCode::Char('f') => self.open_graph_filters(),
+            KeyCode::Char(digit @ '1'..='4') => {
+                self.relations.toggle(usize::from(digit as u8 - b'1'));
+            }
             KeyCode::Char('d') => self.open_diff(&self.selected.clone()),
             KeyCode::Char('c') => self.open_graph_comment(),
             KeyCode::Enter => self.open_details(self.selected.clone()),

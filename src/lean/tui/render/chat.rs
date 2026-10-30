@@ -19,7 +19,12 @@ impl App {
         let input_height =
             (lines.len().clamp(1, 6) as u16 + 2).min(area.height.saturating_sub(1).max(1));
         let status_height = u16::from(self.sending);
-        let action_height = u16::from(self.phase_action().is_some());
+        // A framed button three rows high, when there is room for it.
+        let action_height = match self.phase_action() {
+            Some(_) if area.height >= input_height + 8 => 3,
+            Some(_) => 1,
+            None => 0,
+        };
         let areas = Layout::vertical([
             Constraint::Min(0),
             Constraint::Length(status_height),
@@ -32,29 +37,46 @@ impl App {
         (lines, areas)
     }
 
-    fn phase_action(&self) -> Option<(&'static str, &'static str)> {
+    fn phase_action(&self) -> Option<(&'static str, Command)> {
         if self.view.requirements_approval_run.is_some() {
-            Some(("Review requirements changes", "/requirements"))
+            Some(("Review requirements changes · F2", Command::Requirements))
         } else if self.view.workflow_phase.as_deref() == Some("interview")
             && !self.view.requirements_summary.is_empty()
         {
-            Some(("Proceed to planning", "/planning"))
+            Some(("Proceed to planning · Ctrl+A", Command::ApproveRequirements))
         } else if self.view.plan_proposed() {
-            Some(("Proceed to implementation", "/accept"))
+            Some(("Proceed to implementation · Ctrl+A", Command::Accept))
         } else {
             None
         }
     }
 
     fn draw_phase_action(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        if let Some((label, command)) = self.phase_action() {
-            let text = format!("  {label} {}  ", if theme.ascii { ">" } else { "▶" });
-            let width = (text.chars().count() as u16).min(area.width);
-            let button = Rect::new(area.x + 1.min(area.width - width), area.y, width, 1);
-            self.phase_action_area = Some(button);
-            self.phase_action_command = Some(command);
-            frame.render_widget(Paragraph::new(text).style(theme.button()), button);
+        let Some((label, command)) = self.phase_action() else {
+            return;
+        };
+        let text = format!("  {label} {}  ", if theme.ascii { ">" } else { "▶" });
+        let framed = area.height >= 3;
+        let width = (unicode_width::UnicodeWidthStr::width(text.as_str()) as u16
+            + 2 * u16::from(framed))
+        .min(area.width);
+        let button = Rect::new(
+            area.x + 1.min(area.width - width),
+            area.y,
+            width,
+            area.height,
+        );
+        self.phase_action_area = Some(button);
+        self.phase_action_command = Some(command);
+        let mut widget = Paragraph::new(text).style(theme.button());
+        if framed {
+            widget = widget.block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(theme.button()),
+            );
         }
+        frame.render_widget(widget, button);
     }
 
     fn draw_sending(&self, frame: &mut Frame, area: Rect, theme: &Theme) {

@@ -75,8 +75,9 @@ const MIN_WIDTH: u16 = 16;
 /// line, the working branch, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
 /// effect lines and the meta line at the bottom. The height is that same
 /// arithmetic's end, so frame and slots are one rule that cannot drift
-/// apart: heights and positions depend only on the plan's shape, filters
-/// and grouping — never on activity, an effect, a verdict or a retry.
+/// apart: heights and positions depend only on the plan's shape, filters,
+/// grouping and which cards are folded — never on activity, an effect, a
+/// verdict or a retry.
 const ACTIVITY_ROW: u16 = 4;
 const BRANCH_ROW: u16 = ACTIVITY_ROW + 1;
 const BODY_ROW: u16 = BRANCH_ROW + 1;
@@ -90,6 +91,8 @@ const MIN_HEIGHT: u16 = BODY_ROW + 2;
 const ADMIN_BODY_ROW: u16 = 3;
 const ADMIN_SUMMARY_LINES: usize = 2;
 const ADMIN_HEIGHT: u16 = ADMIN_BODY_ROW + ADMIN_SUMMARY_LINES as u16;
+/// A folded card keeps only the rows above its activity line.
+const FOLDED_HEIGHT: u16 = ACTIVITY_ROW;
 const GAP_X: u16 = 6;
 const GAP_Y: u16 = 3;
 /// Room left of the first column for edges entering it.
@@ -97,45 +100,116 @@ const MARGIN: u16 = 3;
 /// How long a message keeps its edge highlighted.
 const RECENT: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Filter {
-    #[default]
-    All,
-    Depends,
-    Verifies,
-    Mail,
-    Supervises,
+/// Which relations the graph draws; each is switched on and off by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Relations {
+    pub depends: bool,
+    pub verifies: bool,
+    /// Messages to and from the selected card, and any sent just now.
+    pub mail: bool,
+    pub supervises: bool,
 }
 
-impl Filter {
-    pub fn next(self) -> Self {
-        match self {
-            Self::All => Self::Depends,
-            Self::Depends => Self::Verifies,
-            Self::Verifies => Self::Mail,
-            Self::Mail => Self::Supervises,
-            Self::Supervises => Self::All,
+impl Default for Relations {
+    fn default() -> Self {
+        Self {
+            depends: true,
+            verifies: true,
+            mail: true,
+            supervises: false,
+        }
+    }
+}
+
+/// The relations in the order of their keys, 1 to 4.
+pub const RELATIONS: [&str; 4] = ["dependencies", "verification", "messages", "supervision"];
+
+impl Relations {
+    pub fn all() -> Self {
+        Self {
+            depends: true,
+            verifies: true,
+            mail: true,
+            supervises: true,
         }
     }
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Depends => "dependencies",
-            Self::Verifies => "verification",
-            Self::Mail => "messages",
-            Self::Supervises => "supervision",
+    /// Only the relation with key `index` (0 to 3).
+    pub fn only(index: usize) -> Self {
+        let mut relations = Self {
+            depends: false,
+            verifies: false,
+            mail: false,
+            supervises: false,
+        };
+        relations.toggle(index);
+        relations
+    }
+
+    pub fn toggle(&mut self, index: usize) {
+        if let Some(flag) = self.flag(index) {
+            *flag = !*flag;
         }
     }
 
-    fn shows(self, kind: Kind) -> bool {
-        match self {
-            Self::All => true,
-            Self::Depends => kind == Kind::Depends,
-            Self::Verifies => kind == Kind::Verifies,
-            Self::Mail => matches!(kind, Kind::Mail { .. }),
-            Self::Supervises => kind == Kind::Supervises,
+    pub fn shown(self, index: usize) -> bool {
+        [self.depends, self.verifies, self.mail, self.supervises]
+            .get(index)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    fn flag(&mut self, index: usize) -> Option<&mut bool> {
+        match index {
+            0 => Some(&mut self.depends),
+            1 => Some(&mut self.verifies),
+            2 => Some(&mut self.mail),
+            3 => Some(&mut self.supervises),
+            _ => None,
         }
+    }
+
+    /// The relations drawn, by their initials, for the panel title.
+    pub fn name(self) -> String {
+        let shown: Vec<_> = ["D", "V", "M", "S"]
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| self.shown(*index))
+            .map(|(_, initial)| initial)
+            .collect();
+        if shown.is_empty() {
+            "none".into()
+        } else {
+            shown.join("")
+        }
+    }
+
+    /// Whether `edge` is drawn; with a selection, only its own messages
+    /// and recent ones are.
+    fn shows(self, edge: &Edge, selected: Option<&str>) -> bool {
+        match edge.kind {
+            Kind::Depends => self.depends,
+            Kind::Verifies => self.verifies,
+            Kind::Mail { recent } => {
+                self.mail && selected.is_none_or(|key| recent || edge.from == key || edge.to == key)
+            }
+            Kind::Supervises => self.supervises,
+        }
+    }
+}
+
+/// Which cards the graph shows: those matching the text query, in one of
+/// `states` and run by one of `providers`; an empty set keeps every card.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Scope {
+    pub query: Option<String>,
+    pub states: std::collections::BTreeSet<Health>,
+    pub providers: std::collections::BTreeSet<String>,
+}
+
+impl Scope {
+    pub fn is_filtered(&self) -> bool {
+        !self.states.is_empty() || !self.providers.is_empty()
     }
 }
 
@@ -201,7 +275,7 @@ pub struct Graph {
     edges: Vec<Edge>,
     pub width: u16,
     pub height: u16,
-    pub filter_query: Option<String>,
+    pub scope: Scope,
     pub collapsed: std::collections::HashSet<String>,
     pub grouping: GroupingMode,
 }
@@ -251,7 +325,7 @@ mod nodes;
 mod routing;
 
 pub use canvas::Canvas;
-pub use health::{Health, health, mark};
+pub use health::{Health, health, mark, providers};
 #[cfg(test)]
 #[path = "graph/tests.rs"]
 mod tests;

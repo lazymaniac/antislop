@@ -8,9 +8,6 @@ impl App {
         if self.reject_duplicate_send() || self.input.text.trim().is_empty() {
             return;
         }
-        if self.submit_command() {
-            return;
-        }
         self.begin_chat_send();
     }
 
@@ -19,16 +16,6 @@ impl App {
             return false;
         }
         self.notice = Some("Sending in progress; draft preserved.".into());
-        true
-    }
-
-    fn submit_command(&mut self) -> bool {
-        if !self.input.text.trim().starts_with('/') {
-            return false;
-        }
-        let command = std::mem::take(&mut self.input.text);
-        self.reset_input_cursor();
-        self.dispatch(command.trim());
         true
     }
 

@@ -40,7 +40,7 @@ impl App {
             return;
         }
         if self.focus == Focus::Graph {
-            self.scroll_graph(down);
+            self.scroll_graph(down, false);
         } else {
             self.scroll_chat(down);
         }
@@ -74,15 +74,26 @@ impl App {
         true
     }
 
-    fn scroll_graph(&mut self, down: bool) {
+    /// Whether the pointer is over the graph while no overlay covers it.
+    fn over_graph(&self, column: u16, row: u16) -> bool {
+        self.help.is_none()
+            && self.plan_view.is_none()
+            && self.diff.is_none()
+            && self.details.is_none()
+            && self
+                .graph_area
+                .is_some_and(|area| area.contains(ratatui::layout::Position::new(column, row)))
+    }
+
+    fn scroll_graph(&mut self, down: bool, sideways: bool) {
         let graph = Graph::new_with_viewport(
             &self.view,
-            self.graph_filter.as_deref(),
+            &self.graph_scope,
             &self.graph_collapsed,
             self.graph_grouping,
             self.graph_viewport,
         );
-        self.scroll_graph_node(&graph, down, 3);
+        self.pan_graph(&graph, down, if sideways { 6 } else { 3 }, sideways);
     }
 
     fn scroll_chat(&mut self, down: bool) {
@@ -114,6 +125,17 @@ impl App {
             self.text_selection.mouse(mouse);
         }
         match mouse.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if self.over_graph(mouse.column, mouse.row) =>
+            {
+                let sideways = mouse.modifiers.contains(KeyModifiers::SHIFT);
+                self.scroll_graph(mouse.kind == MouseEventKind::ScrollDown, sideways);
+            }
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight
+                if self.over_graph(mouse.column, mouse.row) =>
+            {
+                self.scroll_graph(mouse.kind == MouseEventKind::ScrollRight, true);
+            }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 self.mouse_scroll(mouse.kind == MouseEventKind::ScrollDown);
             }
@@ -147,6 +169,7 @@ impl App {
         }
         self.update_selection_context();
         if self.modal_blocks_mouse() {
+            self.click_graph_filters(mouse);
             self.click_unblock(mouse);
             return true;
         }
@@ -168,7 +191,28 @@ impl App {
             || self.trust_prompt.is_some()
             || self.project_trust.is_some()
             || self.unblock.is_some()
+            || self.graph_filters.is_some()
             || self.interview_visible()
+    }
+
+    fn click_graph_filters(&mut self, mouse: event::MouseEvent) {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return;
+        }
+        let providers = graph::providers(&self.view);
+        let Some(menu) = self.graph_filters.as_mut() else {
+            return;
+        };
+        let outcome = menu.click(
+            mouse.column,
+            mouse.row,
+            &providers,
+            &mut self.relations,
+            &mut self.graph_scope,
+        );
+        if outcome == graph_filters::Outcome::Close {
+            self.graph_filters = None;
+        }
     }
 
     fn click_unblock(&mut self, mouse: event::MouseEvent) {
@@ -230,7 +274,7 @@ impl App {
             return false;
         }
         if let Some(command) = self.phase_action_command {
-            self.command(command);
+            self.run_workflow(command);
         }
         true
     }
@@ -256,7 +300,7 @@ impl App {
         };
         let graph = Graph::new_with_viewport(
             &self.view,
-            self.graph_filter.as_deref(),
+            &self.graph_scope,
             &self.graph_collapsed,
             self.graph_grouping,
             self.graph_viewport,
@@ -276,9 +320,9 @@ impl App {
         true
     }
 
+    /// Any row of the bar: its buttons fill all of them.
     fn on_header(&self, col: u16, row: u16, bar: Rect) -> bool {
-        row == bar.y + (Self::bar_height(self.terminal_area) - 1) / 2
-            && bar.contains((col, row).into())
+        bar.contains((col, row).into())
     }
 
     fn click_header(&mut self, col: u16, bar: Rect) {

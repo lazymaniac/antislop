@@ -137,22 +137,36 @@ fn push_task(builder: &mut Builder<'_>, index: usize, column: u16, row: u16) {
         column_x(builder.size, column),
         row_y(builder.size, row),
     );
-    node.collapsed = builder.graph.collapsed.contains(id)
-        || builder.graph.collapsed.contains(&format!("task:{id}"));
+    node.collapsed = folded(builder, index);
+    if node.collapsed {
+        node.height = node.height.min(FOLDED_HEIGHT);
+    }
     node.group = Some(format!("task:{id}"));
     node.visible = builder.matches_query(&format!("worker:{id}"))
         || builder.matches_query(&format!("verifier:{id}"));
     builder.graph.nodes.push(node);
 }
 
+/// A finished task's card is folded to its identity rows; toggling a card
+/// (`z`) flips that, unfolding a finished one or folding a running one.
+fn folded(builder: &Builder<'_>, index: usize) -> bool {
+    let task = &builder.view.tasks[index];
+    let toggled = builder.graph.collapsed.contains(&task.id)
+        || builder
+            .graph
+            .collapsed
+            .contains(&format!("task:{}", task.id));
+    let finished = matches!(
+        task.status.as_str(),
+        "approved" | "skipped" | "cancelled" | "revised"
+    );
+    finished != toggled
+}
+
 pub(super) fn append_hidden_tasks(builder: &mut Builder<'_>) {
     for (index, task) in builder.view.tasks.iter().enumerate() {
         if !builder.placed_tasks.contains(&index) {
-            let collapsed = builder.graph.collapsed.contains(&task.id)
-                || builder
-                    .graph
-                    .collapsed
-                    .contains(&format!("task:{}", task.id));
+            let collapsed = folded(builder, index);
             builder.graph.nodes.push(Node {
                 key: format!("worker:{}", task.id),
                 x: 0,

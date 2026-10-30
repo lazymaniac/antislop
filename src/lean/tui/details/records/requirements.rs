@@ -13,7 +13,7 @@ fn ledger_lines(details: &Details) -> Vec<(Style, String)> {
     if let Some(stored) = &details.task {
         append_requirements(&mut lines, &stored["requirements"]);
     }
-    lines.push(plain("Open /requirements for sources, evidence and version history. Task approval alone does not verify requirements.".into()));
+    lines.push(plain("Open the requirements (F2) for sources, evidence and version history. Task approval alone does not verify requirements.".into()));
     lines
 }
 

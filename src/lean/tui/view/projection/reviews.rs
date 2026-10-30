@@ -37,7 +37,7 @@ pub(super) fn on_paused(view: &mut View, event: &Value, payload: &Value, key: St
     let _ = (event, &key, turn, &text);
     view.paused = payload["paused"] == true;
     let txt = if view.paused {
-        "⏸ paused: new steps wait (/continue resumes)"
+        "⏸ paused: new steps wait (F6 continues)"
     } else {
         "▶ resumed"
     };

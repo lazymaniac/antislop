@@ -135,7 +135,7 @@ impl Browser {
     fn draw_graph(&mut self, frame: &mut Frame, area: Rect) {
         let graph = Graph::new_with_viewport(
             &self.view,
-            None,
+            &Default::default(),
             &Default::default(),
             GroupingMode::default(),
             Some((area.width, area.height)),
@@ -148,7 +148,7 @@ impl Browser {
         graph.render_with(
             &self.view,
             &mut canvas,
-            Filter::All,
+            Relations::default(),
             &self.selected,
             &Theme::from_env(),
             0,

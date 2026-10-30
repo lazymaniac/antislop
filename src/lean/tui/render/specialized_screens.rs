@@ -54,10 +54,17 @@ impl App {
         let [status, help] =
             Layout::horizontal([Constraint::Length(content_width), Constraint::Length(4)])
                 .areas(text_area);
-        frame.render_widget(
-            Paragraph::new(self.header_line(content_width)).style(theme.bar()),
-            status,
-        );
+        let line = self.header_line(content_width);
+        // A taller bar makes its buttons taller too: each is filled on the
+        // rows around its label.
+        let buttons = button_rows(&line);
+        for y in footer.y..footer.y + bar_height {
+            if y != status.y {
+                let row = Rect::new(status.x, y, status.width, 1);
+                frame.render_widget(Paragraph::new(buttons.clone()).style(theme.bar()), row);
+            }
+        }
+        frame.render_widget(Paragraph::new(line).style(theme.bar()), status);
         frame.render_widget(
             Paragraph::new(Span::styled(" [?]", theme.title())).style(theme.bar()),
             help,
@@ -91,4 +98,15 @@ impl App {
 
         self.draw_footer(frame, footer, bar_height, &theme);
     }
+}
+
+/// The bar line with every label blanked, keeping only the buttons' fill.
+fn button_rows(line: &Line<'static>) -> Line<'static> {
+    let spans = line.spans.iter().map(|span| {
+        let width = unicode_width::UnicodeWidthStr::width(span.content.as_ref());
+        let button = span.content.starts_with('[') && span.content.ends_with(']');
+        let style = if button { span.style } else { Style::default() };
+        Span::styled(" ".repeat(width), style)
+    });
+    Line::from(spans.collect::<Vec<_>>())
 }

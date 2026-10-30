@@ -273,7 +273,7 @@ fn transcript_comment(app: &App, entry: &TranscriptCard) -> Option<(String, Opti
 fn workflow_card_text(view: &View) -> Option<(&'static str, String)> {
     view.workflow_phase.as_ref()?;
     Some(match view.stage() {
-        view::Stage::Interview if view.interview_question.is_some() => ("Phase 1/3: Answer the interview question", "The orchestrator is waiting for your decision. /interview opens the question, suggested options and your own answer field.".to_owned()),
+        view::Stage::Interview if view.interview_question.is_some() => ("Phase 1/3: Answer the interview question", "The orchestrator is waiting for your decision. F3 opens the question, suggested options and your own answer field.".to_owned()),
         view::Stage::Interview if view.requirements_summary.is_empty() => ("Phase 1/3: Interview and requirements", "Describe your goal and answer the orchestrator's questions. Agree on scope, constraints and acceptance criteria. A requirements summary will appear here for approval.".to_owned()),
         view::Stage::Interview => ("Phase 1/3: Review requirements", format!("{}\n\nReview the summary. Add comments in chat or choose Proceed to planning.", view.requirements_summary)),
         view::Stage::Planning => ("Phase 2/3: Planning", "The orchestrator is preparing the plan from approved requirements. The next step is your review and comments.".to_owned()),

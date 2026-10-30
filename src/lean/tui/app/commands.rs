@@ -3,55 +3,34 @@ use super::super::*;
 mod recovery;
 
 impl App {
-    /// Routes commands to the operation that owns their state changes.
-    pub(in crate::lean::tui) fn dispatch(&mut self, text: &str) {
-        if self.dispatch_project_command(text) {
-            return;
-        }
-        match text {
-            "" => {}
-            "/requirements" => self.open_ledger(),
-            "/interview" | "/question" => self.open_interview_answer(),
-            "/plans" => self.open_plan_history(),
-            "/plan" => self.open_current_plan(),
-            "/accept" if self.view.workflow_phase.as_deref() == Some("interview") => {
-                self.dispatch("/planning");
+    /// Runs a workflow action of the UI; every one has a shortcut, and the
+    /// command palette (Ctrl+P) lists them all. Typed text is always chat.
+    pub fn run_workflow(&mut self, command: Command) {
+        match command {
+            Command::Requirements => self.open_ledger(),
+            Command::InterviewQuestion => self.open_interview_answer(),
+            Command::Plans => self.open_plan_history(),
+            Command::Plan => self.open_current_plan(),
+            Command::Accept if self.view.workflow_phase.as_deref() == Some("interview") => {
+                self.start_planning();
             }
-            "/planning" => self.start_planning(),
-            "/accept" => self.accept_plan(),
-            "/reject" => self.reject_plan(),
-            "/resume" => self.resume_plan(),
-            "/cancel" => self.request_cancel(),
-            "/pause" => self.set_paused(true),
-            "/continue" => self.set_paused(false),
-            "/mode" => self.toggle_mode(),
-            "/mode autonomous" | "/mode supervised" => {
-                self.set_mode(text.ends_with("autonomous"));
-            }
-            "/config" => self.open_config(),
-            _ => self.send_chat(text),
-        }
-    }
-
-    fn dispatch_project_command(&mut self, text: &str) -> bool {
-        if text == "/unblock" {
-            self.open_unblock(None);
-            return true;
-        }
-        if let Some(task) = text.strip_prefix("/unblock ") {
-            self.open_unblock(Some(task.trim().to_owned()));
-            return true;
-        }
-        match text {
-            "/project" => {
-                self.open_projects_picker();
-                true
-            }
-            _ if text.starts_with("/project ") => {
-                self.open_project_command(text);
-                true
-            }
-            _ => false,
+            Command::ApproveRequirements => self.start_planning(),
+            Command::Accept => self.accept_plan(),
+            Command::Reject => self.reject_plan(),
+            Command::Resume => self.resume_plan(),
+            Command::Cancel => self.request_cancel(),
+            Command::Pause => self.set_paused(true),
+            Command::Continue => self.set_paused(false),
+            Command::PauseOrContinue => self.set_paused(!self.view.paused),
+            Command::ToggleMode => self.toggle_mode(),
+            Command::Autonomous => self.set_mode(true),
+            Command::Supervised => self.set_mode(false),
+            Command::Config => self.open_config(),
+            Command::TaskActions => self.open_unblock(None),
+            Command::NewConversation => self.new_conversation(),
+            Command::SwitchConversation => self.open_conversation_picker(),
+            Command::Projects => self.open_projects_picker(),
+            _ => {}
         }
     }
 
@@ -183,24 +162,6 @@ impl App {
             Request::Conversation(crate::lean::daemon::ConversationRequest::Mode {
                 conversation,
                 autonomous,
-            })
-        });
-    }
-
-    fn open_project_command(&mut self, text: &str) {
-        let project = text.trim_start_matches("/project ").trim();
-        if !project.is_empty() {
-            self.open_project(project);
-        }
-    }
-
-    fn send_chat(&mut self, text: &str) {
-        self.scroll = 0;
-        let message = text.to_owned();
-        self.send_command(None, |conversation| {
-            Request::Conversation(crate::lean::daemon::ConversationRequest::Send {
-                conversation,
-                text: message,
             })
         });
     }

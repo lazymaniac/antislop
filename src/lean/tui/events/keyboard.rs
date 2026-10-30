@@ -108,6 +108,7 @@ impl App {
 
     fn is_editing(&self) -> bool {
         self.interview_visible()
+            || self.graph_filters.is_some()
             || self.editor.is_some()
             || self.picker.is_some()
             || self
@@ -137,7 +138,20 @@ impl App {
             self.project_trust_key(key);
             return Some(true);
         }
+        if let Some(handled) = self.route_graph_filters(key) {
+            return Some(handled);
+        }
         self.route_unblock(key)
+    }
+
+    fn route_graph_filters(&mut self, key: KeyEvent) -> Option<bool> {
+        let menu = self.graph_filters.as_mut()?;
+        let providers = graph::providers(&self.view);
+        let outcome = menu.key(key, &providers, &mut self.relations, &mut self.graph_scope);
+        if outcome == graph_filters::Outcome::Close {
+            self.graph_filters = None;
+        }
+        Some(true)
     }
 
     fn route_trust_prompt(&mut self, key: KeyEvent) -> bool {
@@ -250,12 +264,19 @@ impl App {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('p') if control => self.picker = Some(Picker::new(Kind::Commands)),
-            KeyCode::Char('t') if control => self.command("/mode"),
+            KeyCode::Char('t') if control => self.run_workflow(Command::ToggleMode),
             KeyCode::Char('f') if control => self.picker = Some(Picker::new(Kind::History)),
             KeyCode::Char('n') if control => self.new_conversation(),
             KeyCode::Char('o') if control => self.open_conversation_picker(),
             KeyCode::Char('i') if control => self.open_details("conversation".into()),
-            KeyCode::Char('l') if control => self.command("/plan"),
+            KeyCode::Char('l') if control => self.run_workflow(Command::Plan),
+            KeyCode::F(2) => self.run_workflow(Command::Requirements),
+            KeyCode::F(3) => self.run_workflow(Command::InterviewQuestion),
+            KeyCode::F(4) => self.run_workflow(Command::Plans),
+            KeyCode::F(5) => self.run_workflow(Command::TaskActions),
+            KeyCode::F(6) => self.run_workflow(Command::PauseOrContinue),
+            KeyCode::F(7) => self.run_workflow(Command::Reject),
+            KeyCode::F(8) => self.run_workflow(Command::Config),
             KeyCode::Char('g') if control => self.open_projects_picker(),
             KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
             _ => return false,
@@ -273,17 +294,17 @@ impl App {
     fn route_graph(&mut self, key: KeyEvent) -> bool {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('a') => return self.graph_command("/accept"),
-                KeyCode::Char('x') => return self.graph_command("/cancel"),
-                KeyCode::Char('r') => return self.graph_command("/resume"),
+                KeyCode::Char('a') => return self.graph_command(Command::Accept),
+                KeyCode::Char('x') => return self.graph_command(Command::Cancel),
+                KeyCode::Char('r') => return self.graph_command(Command::Resume),
                 _ => {}
             }
         }
         self.graph_key(key)
     }
 
-    fn graph_command(&mut self, command: &str) -> bool {
-        self.command(command);
+    fn graph_command(&mut self, command: Command) -> bool {
+        self.run_workflow(command);
         true
     }
 }

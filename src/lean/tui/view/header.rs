@@ -2,6 +2,28 @@ use super::*;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+/// The bar's buttons: padded with an icon on wide terminals, plain words
+/// on medium ones and icons alone on narrow ones. A click finds them by
+/// their brackets.
+pub const PAUSE: &str = "[ ‖ Pause ]";
+pub const CONTINUE: &str = "[ ▶ Continue ]";
+pub const RESUME: &str = "[ ↻ Resume ]";
+pub const CANCEL: &str = "[ ✕ Cancel ]";
+pub const PLAN: &str = "[Plan]";
+pub const NEW: &str = "[ + New ]";
+pub const PAUSE_SHORT: &str = "[Pause]";
+pub const CONTINUE_SHORT: &str = "[Continue]";
+pub const RESUME_SHORT: &str = "[Resume]";
+pub const CANCEL_SHORT: &str = "[Cancel]";
+pub const NEW_SHORT: &str = "[+ New]";
+pub const PAUSE_ICON: &str = "[‖]";
+pub const CONTINUE_ICON: &str = "[▶]";
+pub const RESUME_ICON: &str = "[↻]";
+pub const CANCEL_ICON: &str = "[✕]";
+pub const NEW_ICON: &str = "[+]";
+/// From this width the buttons carry their icon and padding.
+const BIG_BUTTONS: u16 = 140;
+
 /// Builds the responsive header according to width, mode, status, and available actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Controls {
@@ -138,7 +160,7 @@ fn append_identity(
         spans.push(Span::styled(format!(" · {short}{mode} "), secondary));
     }
     if (50..95).contains(&width) {
-        spans.push(Span::styled("[Plan] ", active));
+        spans.push(Span::styled(format!("{PLAN} "), active));
     }
     if (35..50).contains(&width) {
         match mode {
@@ -178,7 +200,7 @@ fn append_status_and_actions(
         ));
     }
     if width >= 95 {
-        append_full_actions(spans, controls, theme, secondary);
+        append_full_actions(spans, controls, width, theme, secondary);
     } else if width >= 45 {
         append_short_actions(spans, controls, theme, secondary);
     }
@@ -187,20 +209,31 @@ fn append_status_and_actions(
 fn append_full_actions(
     spans: &mut Vec<Span<'static>>,
     controls: Controls,
+    width: u16,
     theme: &crate::lean::tui::theme::Theme,
     secondary: Style,
 ) {
+    let big = width >= BIG_BUTTONS;
     spans.push(Span::styled(" · ", secondary));
-    for (label, enabled) in [
-        ("[/pause]", controls.pause),
-        ("[/continue]", controls.resume_paused),
-        ("[/resume]", controls.resume_plan),
-        ("[/cancel]", controls.cancel),
-    ] {
+    let labels = if big {
+        [PAUSE, CONTINUE, RESUME, CANCEL]
+    } else {
+        [PAUSE_SHORT, CONTINUE_SHORT, RESUME_SHORT, CANCEL_SHORT]
+    };
+    let enabled = [
+        controls.pause,
+        controls.resume_paused,
+        controls.resume_plan,
+        controls.cancel,
+    ];
+    for (label, enabled) in labels.into_iter().zip(enabled) {
         spans.push(button(label, enabled, theme, secondary));
         spans.push(Span::raw(" "));
     }
-    spans.push(Span::styled("[Plan]", active_style(theme)));
+    spans.push(Span::styled(PLAN, active_style(theme)));
+    spans.push(Span::raw(" "));
+    let new = if big { NEW } else { NEW_SHORT };
+    spans.push(Span::styled(new, active_style(theme)));
 }
 
 fn append_short_actions(
@@ -210,13 +243,14 @@ fn append_short_actions(
     secondary: Style,
 ) {
     let (label, enabled) = if controls.resume_paused {
-        ("[▶]", true)
+        (CONTINUE_ICON, true)
     } else {
-        ("[‖]", controls.pause)
+        (PAUSE_ICON, controls.pause)
     };
     spans.push(button(label, enabled, theme, secondary));
-    spans.push(button("[↻]", controls.resume_plan, theme, secondary));
-    spans.push(button("[✕]", controls.cancel, theme, secondary));
+    spans.push(button(RESUME_ICON, controls.resume_plan, theme, secondary));
+    spans.push(button(CANCEL_ICON, controls.cancel, theme, secondary));
+    spans.push(button(NEW_ICON, true, theme, secondary));
     spans.push(Span::raw(" "));
 }
 

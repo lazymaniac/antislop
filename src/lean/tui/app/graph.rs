@@ -1,25 +1,31 @@
 use super::super::*;
 
 impl App {
-    pub(in crate::lean::tui) fn scroll_graph_node(
+    pub(in crate::lean::tui) fn open_graph_filters(&mut self) {
+        self.graph_filters = Some(Default::default());
+    }
+
+    /// Moves the view over the whole graph by `amount` rows, or columns
+    /// when `sideways`; the selection stays where it is.
+    pub(in crate::lean::tui) fn pan_graph(
         &mut self,
         graph: &Graph,
-        down: bool,
+        forward: bool,
         amount: u16,
+        sideways: bool,
     ) {
-        if let Some(node) = graph.node(&self.selected) {
-            let height = self.graph_viewport.map_or(10, |(_, height)| height);
-            let max = node
-                .y
-                .saturating_add(node.height)
-                .saturating_sub(height)
-                .max(node.y);
-            self.offset.1 = if down {
-                self.offset.1.saturating_add(amount).clamp(node.y, max)
-            } else {
-                self.offset.1.saturating_sub(amount).clamp(node.y, max)
-            };
+        let (width, height) = self.graph_viewport.unwrap_or((40, 10));
+        let (offset, max) = if sideways {
+            (&mut self.offset.0, graph.width.saturating_sub(width))
+        } else {
+            (&mut self.offset.1, graph.height.saturating_sub(height))
+        };
+        *offset = if forward {
+            offset.saturating_add(amount)
+        } else {
+            offset.saturating_sub(amount)
         }
+        .min(max);
     }
 
     pub fn select_node(&mut self, key: String) {
@@ -40,7 +46,7 @@ impl App {
     }
 
     pub fn set_graph_filter(&mut self, query: Option<String>) {
-        self.graph_filter = query;
+        self.graph_scope.query = query;
         let graph = self.current_graph();
         if !graph
             .nodes
@@ -54,7 +60,7 @@ impl App {
     fn current_graph(&self) -> Graph {
         Graph::new_with_viewport(
             &self.view,
-            self.graph_filter.as_deref(),
+            &self.graph_scope,
             &self.graph_collapsed,
             self.graph_grouping,
             self.graph_viewport,

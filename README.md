@@ -60,7 +60,7 @@ is already stopped. It refuses to stop while agents are working unless `--force`
 is passed. Forced shutdown cancels running agents and preserves conversation history.
 
 Several projects can be open in one screen: `Ctrl+G` switches between them and
-opens another by path (`/project PATH`); each keeps its own configuration,
+opens another by typing its path; each keeps its own configuration,
 `.antislop/` and daemon, and the header shows what the others are doing.
 
 ## How a request runs
@@ -108,7 +108,7 @@ scripts/cargo.sh clippy --all-targets -- -D warnings
 Tests use small fake CLIs written in Python (`python3` must be on `PATH`); they
 consume no provider usage.
 
-Open `/config` (also in Ctrl+P) to edit the active project or global configuration.
+Open the configuration with F8 (also in Ctrl+P) to edit the active project or global configuration.
 Tab/Shift+Tab select fields; Enter cycles enum and boolean values. Arrays use JSON
 string-array syntax, including command tokens. Empty optional fields remove overrides.
 Ctrl+N adds an entry in the selected providers, profiles, or routing section (else a profile).
@@ -118,7 +118,7 @@ binary; routes default to existing profiles (orchestrator profile for orchestrat
 Ctrl+D removes the selected provider, profile, or route. Invalid deletions show
 field errors on save and retain the draft, including removal of orchestration.
 Ctrl+S validates, saves, and applies the configuration live. Running turns finish
-with their old profile. Errors retain the draft; Esc closes it and `/config` reopens it.
+with their old profile. Errors retain the draft; Esc closes it and F8 reopens it.
 
 Reopening refreshes the configuration. If another client changed it, the draft is
 preserved and saving is blocked. Ctrl+R explicitly reloads and discards edits.

@@ -1,10 +1,6 @@
 use super::super::*;
 
 impl App {
-    pub fn command(&mut self, command: &str) {
-        self.dispatch(command);
-    }
-
     pub fn handle_plan_action(&mut self, action: PlanAction) {
         match action {
             PlanAction::Close => self.plan_view = None,
@@ -23,7 +19,7 @@ impl App {
     fn accept_plan_from_view(&mut self) {
         if self.view.open_plan_comments().is_empty() {
             self.plan_view = None;
-            self.command("/accept");
+            self.run_workflow(Command::Accept);
         } else {
             self.notice = Some("✗ resolve all plan comments before accepting the plan".into());
         }

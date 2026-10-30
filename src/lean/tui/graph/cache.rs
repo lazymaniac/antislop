@@ -18,7 +18,7 @@ pub(super) struct CachedGraph {
 struct CacheRequest<'a> {
     view: &'a View,
     generation: u64,
-    query: Option<&'a str>,
+    scope: &'a Scope,
     collapsed: &'a std::collections::HashSet<String>,
     grouping: GroupingMode,
     viewport: Option<(u16, u16)>,
@@ -29,7 +29,7 @@ impl LayoutCache {
         &mut self,
         view: &View,
         generation: u64,
-        query: Option<&str>,
+        scope: &Scope,
         collapsed: &std::collections::HashSet<String>,
         grouping: GroupingMode,
         viewport: Option<(u16, u16)>,
@@ -37,7 +37,7 @@ impl LayoutCache {
         let request = CacheRequest {
             view,
             generation,
-            query,
+            scope,
             collapsed,
             grouping,
             viewport,
@@ -57,7 +57,7 @@ impl LayoutCache {
                 && entry.counts == counts(view)
                 && entry.idle == view.idle
                 && entry.viewport == request.viewport
-                && entry.graph.filter_query.as_deref() == request.query
+                && &entry.graph.scope == request.scope
                 && &entry.graph.collapsed == request.collapsed
                 && entry.graph.grouping == request.grouping
                 && entry.expires.is_none_or(|expiry| now < expiry)
@@ -72,7 +72,7 @@ impl LayoutCache {
         let view = request.view;
         let graph = std::rc::Rc::new(Graph::new_with_viewport(
             view,
-            request.query,
+            request.scope,
             request.collapsed,
             request.grouping,
             request.viewport,

@@ -517,7 +517,7 @@ fn interview_shortcut_guides_approval_and_preserves_unsent_answers() {
     ));
     assert_eq!(app.input.text, "Correction 👩‍💻");
     assert_eq!(app.input.cursor, 0);
-    app.command("/planning");
+    app.run_workflow(Command::ApproveRequirements);
     assert!(app.notice.as_deref().unwrap().contains("send your answers"));
     assert_eq!(app.input.text, "Correction 👩‍💻");
 }
@@ -971,8 +971,8 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
 
     assert!(text2.contains("cancel running work"));
     assert!(text2.contains("pause new steps / continue"));
-    assert!(text2.contains("/mode autonomous"));
-    assert!(text2.contains("/mode supervised"));
+    assert!(text2.contains("autonomous / supervised mode"));
+    assert!(text2.contains("always sent as chat"));
     assert!(text2.contains("search conversation"));
     assert!(text2.contains("command palette"));
     assert!(text2.contains("back/clear draft"));
@@ -1030,8 +1030,7 @@ fn ac_help_app_draw_all_shortcuts_accessible_at_60x12() {
         .unwrap();
     let buffer_graph = terminal.backend().buffer();
     let text_graph: String = buffer_graph.content.iter().map(|c| c.symbol()).collect();
-    assert!(text_graph.contains("relation filter:"));
-    assert!(text_graph.contains("all"));
+    assert!(text_graph.contains("show / hide"));
     assert!(text_graph.contains("dependencies"));
     assert!(text_graph.contains("verification"));
     assert!(text_graph.contains("messages"));
@@ -1367,7 +1366,7 @@ fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
     };
     app.view.tasks = vec![task("t1", "approved")];
     app.selected = "worker:t1".into();
-    app.command("/unblock");
+    app.run_workflow(Command::TaskActions);
     assert!(app.unblock.is_none());
     assert!(
         app.notice
@@ -1382,11 +1381,11 @@ fn a_stopped_step_can_be_unblocked_from_a_key_a_command_and_the_header() {
         task("t3", "skipped"),
     ];
     // The first stopped step that is not just skipped comes first.
-    app.command("/unblock");
+    app.run_workflow(Command::TaskActions);
     assert_eq!(app.unblock.as_ref().unwrap().task, "t2");
     app.key(key_press(KeyCode::Esc));
     assert!(app.unblock.is_none());
-    app.command("/unblock t3");
+    app.open_unblock(Some("t3".into()));
     assert_eq!(app.unblock.as_ref().unwrap().task, "t3");
     app.key(key_press(KeyCode::Esc));
 
@@ -1479,14 +1478,26 @@ fn click_header(app: &mut App, width: u16, token: &str) {
 fn the_header_buttons_exist_on_narrow_terminals_and_know_what_they_can_do() {
     let mut app = test_app();
     app.view.idle = true;
-    for width in [45, 60, 94, 95, 140] {
+    for width in [45, 60, 94, 95, 140, 160] {
         let text = header_text(&app, width);
-        let (pause, resume, cancel) = if width >= 95 {
-            ("[/pause]", "[/resume]", "[/cancel]")
+        let tokens = if width >= 140 {
+            [view::PAUSE, view::RESUME, view::CANCEL, view::NEW]
+        } else if width >= 95 {
+            [
+                view::PAUSE_SHORT,
+                view::RESUME_SHORT,
+                view::CANCEL_SHORT,
+                view::NEW_SHORT,
+            ]
         } else {
-            ("[‖]", "[↻]", "[✕]")
+            [
+                view::PAUSE_ICON,
+                view::RESUME_ICON,
+                view::CANCEL_ICON,
+                view::NEW_ICON,
+            ]
         };
-        for token in [pause, resume, cancel] {
+        for token in tokens {
             assert!(text.contains(token), "{width}: {text}");
         }
     }
@@ -1596,7 +1607,7 @@ fn panels_and_buttons_in_the_header_can_be_clicked() {
     assert_eq!(app.focus, Focus::Chat);
     // The mode does not flip until the daemon says so.
     app.view.autonomous = Some(false);
-    app.command("/mode");
+    app.run_workflow(Command::ToggleMode);
     assert_eq!(app.view.autonomous, Some(false));
     app.key(key_ctrl('t'));
     assert_eq!(app.view.autonomous, Some(false));
@@ -1642,4 +1653,39 @@ fn copy_shortcut_queues_text_for_the_rendering_thread() {
     );
     assert_eq!(output, b"\x1b]52;c;c2FmZQ==\x07");
     assert!(app.pending_clipboard.is_none());
+}
+
+#[test]
+fn the_wheel_scrolls_the_graph_it_is_over_and_the_view_stays_where_the_user_left_it() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = test_app();
+    app.view.tasks = (0..12)
+        .map(|n| view::TaskRow {
+            id: format!("t{n}"),
+            title: format!("Task {n}"),
+            status: "working".into(),
+            ..view::TaskRow::default()
+        })
+        .collect();
+    app.view.layout_revision += 1;
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let area = app.graph_area.expect("graph drawn beside the chat");
+    assert_eq!(app.focus, Focus::Chat);
+    for _ in 0..3 {
+        app.mouse(event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: area.x + 1,
+            row: area.y + 1,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+    let scrolled = app.offset.1;
+    assert!(scrolled > 0, "the wheel over the graph pans it");
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert_eq!(
+        app.offset.1, scrolled,
+        "the selection does not pull it back"
+    );
+    assert_eq!(app.focus, Focus::Chat, "scrolling moves no focus");
 }

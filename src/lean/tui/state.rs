@@ -54,7 +54,8 @@ pub struct App {
     pub focus: Focus,
     /// The selected graph node, by key, so it survives new events.
     pub selected: String,
-    pub filter: Filter,
+    /// The relations the graph draws.
+    pub relations: graph::Relations,
     /// The graph's top-left corner shown in its panel.
     pub offset: (u16, u16),
     pub details: Option<Details>,
@@ -87,7 +88,11 @@ pub struct App {
     pub comment_drafts: std::collections::HashMap<String, String>,
     pub comment_draft_cursors: std::collections::HashMap<String, (usize, Option<u16>)>,
     pub conversation_states: std::collections::HashMap<String, ConversationState>,
-    pub graph_filter: Option<String>,
+    /// Which cards the graph shows.
+    pub graph_scope: graph::Scope,
+    /// The card last scrolled into view; the graph follows the selection
+    /// only when it changes, so the user can scroll away from it.
+    pub graph_revealed: Option<String>,
     pub graph_collapsed: std::collections::HashSet<String>,
     pub graph_grouping: graph::GroupingMode,
     pub confirmation: Option<ConfirmationCard>,
@@ -96,12 +101,14 @@ pub struct App {
     /// The last rendered graph viewport in terminal coordinates, for hit testing.
     pub graph_area: Option<Rect>,
     pub phase_action_area: Option<Rect>,
-    pub phase_action_command: Option<&'static str>,
+    pub phase_action_command: Option<Command>,
     pub chat_area: Rect,
     pub graph_viewport: Option<(u16, u16)>,
     pub trust_prompt: Option<String>,
     /// The way out for a stopped step, while the user picks one.
     pub(super) unblock: Option<unblock::Unblock>,
+    /// The graph filter menu, while it is open.
+    pub(super) graph_filters: Option<super::graph_filters::FilterMenu>,
     /// The projects the screen is connected to; the active one's client is
     /// `client`.
     pub projects: Vec<workspace::ProjectConn>,
@@ -141,7 +148,7 @@ macro_rules! initial_app {
             updates: $updates,
             focus: Focus::Chat,
             selected: ORCHESTRATOR.into(),
-            filter: Filter::All,
+            relations: graph::Relations::default(),
             offset: (0, 0),
             details: None,
             native_views: std::collections::HashMap::new(),
@@ -174,7 +181,8 @@ macro_rules! initial_app {
             comment_drafts: std::collections::HashMap::new(),
             comment_draft_cursors: std::collections::HashMap::new(),
             conversation_states: std::collections::HashMap::new(),
-            graph_filter: None,
+            graph_scope: graph::Scope::default(),
+            graph_revealed: None,
             graph_collapsed: std::collections::HashSet::new(),
             graph_grouping: graph::GroupingMode::default(),
             confirmation: None,
@@ -187,6 +195,7 @@ macro_rules! initial_app {
             chat_area: Rect::default(),
             trust_prompt: None,
             unblock: None,
+            graph_filters: None,
             projects: Vec::new(),
             active_project: 0,
             project_trust: None,

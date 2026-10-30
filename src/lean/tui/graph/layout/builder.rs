@@ -16,13 +16,13 @@ pub(super) struct Builder<'a> {
 impl<'a> Builder<'a> {
     pub(super) fn new(
         view: &'a View,
-        filter: Option<&str>,
+        scope: &Scope,
         collapsed: &std::collections::HashSet<String>,
         grouping: GroupingMode,
         viewport: Option<(u16, u16)>,
     ) -> Self {
         let size = Size::fit(viewport);
-        let graph = empty_graph(filter, collapsed, grouping);
+        let graph = empty_graph(scope, collapsed, grouping);
         let index = task_index(view);
         let columns = columns::task_columns(view, &index, grouping);
         let extra_agents = extra_agents(view);
@@ -51,12 +51,12 @@ impl<'a> Builder<'a> {
     }
 
     pub(super) fn matches_query(&self, key: &str) -> bool {
-        query_matches(self.view, self.graph.filter_query.as_deref(), key)
+        scope_matches(self.view, &self.graph.scope, key)
     }
 }
 
 fn empty_graph(
-    filter: Option<&str>,
+    scope: &Scope,
     collapsed: &std::collections::HashSet<String>,
     grouping: GroupingMode,
 ) -> Graph {
@@ -65,7 +65,7 @@ fn empty_graph(
         edges: Vec::new(),
         width: 0,
         height: 0,
-        filter_query: filter.map(str::to_string),
+        scope: scope.clone(),
         collapsed: collapsed.clone(),
         grouping,
     }
@@ -99,7 +99,7 @@ fn extra_agents(view: &View) -> Vec<&str> {
 }
 
 fn admin_agents<'a>(view: &View, extra: &[&'a str], builder: &Graph) -> Vec<(&'a str, bool)> {
-    let visible = |key| query_matches(view, builder.filter_query.as_deref(), key);
+    let visible = |key| scope_matches(view, &builder.scope, key);
     let mut agents = vec![
         (PLAN_VERIFIER, visible(PLAN_VERIFIER)),
         (ORCHESTRATOR, visible(ORCHESTRATOR)),
@@ -142,6 +142,16 @@ fn task_fields_match(task: &super::super::super::view::TaskRow, query: &str) -> 
     ]
     .iter()
     .any(|text| text.contains(query))
+}
+
+/// Whether a card passes every part of the scope.
+fn scope_matches(view: &View, scope: &Scope, key: &str) -> bool {
+    query_matches(view, scope.query.as_deref(), key)
+        && (scope.states.is_empty() || scope.states.contains(&health(view, key)))
+        && (scope.providers.is_empty()
+            || super::super::health::providers_of(view, key)
+                .iter()
+                .any(|provider| scope.providers.contains(*provider)))
 }
 
 fn query_matches(view: &View, query: Option<&str>, key: &str) -> bool {

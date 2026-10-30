@@ -14,6 +14,7 @@ pub(super) fn draw_remaining(app: &mut App, frame: &mut Frame) {
     modal::draw_confirmation(app, frame);
     modal::draw_project_trust(app, frame);
     modal::draw_unblock(app, frame);
+    modal::draw_graph_filters(app, frame);
     modal::draw_trust_prompt(app, frame);
 }
 
