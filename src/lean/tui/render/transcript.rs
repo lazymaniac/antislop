@@ -267,13 +267,7 @@ fn transcript_comment(app: &App, entry: &TranscriptCard) -> Option<(String, Opti
     let TranscriptCard::Comment { id, status, .. } = entry else {
         return None;
     };
-    let state = app
-        .view
-        .comments
-        .get(id)
-        .map_or(status.as_str(), |_| app.view.comment_state(*id))
-        .to_owned();
-    Some((state, app.view.comment_error(*id).map(str::to_owned)))
+    Some(super::transcript_cards::comment_status(app, *id, status))
 }
 
 fn workflow_card_text(view: &View) -> Option<(&'static str, String)> {

@@ -28,25 +28,29 @@ impl App {
         width: u16,
         theme: &Theme,
     ) -> Vec<Row> {
-        let state = self.comment_card_state(comment.id, comment.status);
-        let body = comment_body(self, comment.id, comment.text);
+        let (state, error) = comment_status(self, comment.id, comment.status);
+        let body = comment_body(comment.text, error.as_deref());
         comment_card(
             comment.id,
             comment.target,
             &body,
-            state,
+            &state,
             found,
             width,
             theme,
         )
     }
+}
 
-    fn comment_card_state<'a>(&'a self, id: u64, status: &'a str) -> &'a str {
-        self.view
-            .comments
-            .get(&id)
-            .map_or(status, |_| self.view.comment_state(id))
-    }
+pub(super) fn comment_status(app: &App, id: u64, status: &str) -> (String, Option<String>) {
+    let state = app
+        .view
+        .comments
+        .get(&id)
+        .map_or(status, |_| app.view.comment_state(id))
+        .to_owned();
+    let error = app.view.comment_error(id).map(str::to_owned);
+    (state, error)
 }
 
 fn comment_card_ref(entry: &TranscriptCard) -> Option<CommentCardRef<'_>> {
@@ -231,8 +235,8 @@ fn tone_style(tone: &Tone, theme: &Theme) -> Style {
     }
 }
 
-fn comment_body(app: &App, id: u64, text: &str) -> String {
-    match app.view.comment_error(id) {
+fn comment_body(text: &str, error: Option<&str>) -> String {
+    match error {
         Some(error) => format!("{text}\nError: {error}"),
         None => text.to_owned(),
     }

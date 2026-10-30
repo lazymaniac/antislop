@@ -4643,6 +4643,55 @@ pub mod tests {
     }
 
     #[test]
+    fn transcript_zero_area_preserves_viewport_state() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut app = test_app();
+        app.scroll = 7;
+        app.text_area = Some(Rect::new(1, 2, 3, 4));
+        let area = Rect::new(0, 0, 0, 10);
+        let mut term = Terminal::new(TestBackend::new(10, 10)).unwrap();
+        term.draw(|frame| app.draw_transcript(frame, area, &Theme::new(true, false)))
+            .unwrap();
+        assert_eq!(app.scroll, 7);
+        assert_eq!(app.text_area, Some(Rect::new(1, 2, 3, 4)));
+    }
+
+    #[test]
+    fn transcript_narrow_area_renders_legacy_rows_safely() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut app = test_app();
+        app.view.transcript.push(view::Entry {
+            style: Style::default(),
+            text: "legacy transcript".into(),
+        });
+        let area = Rect::new(0, 0, 2, 1);
+        let mut term = Terminal::new(TestBackend::new(2, 1)).unwrap();
+        term.draw(|frame| app.draw_transcript(frame, area, &Theme::new(false, true)))
+            .unwrap();
+        assert_eq!(app.text_area, Some(Rect::new(0, 0, 1, 1)));
+        assert_eq!(term.backend().buffer().content.len(), 2);
+    }
+
+    #[test]
+    fn transcript_workflow_fallback_replaces_empty_message() {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut app = test_app();
+        app.view.workflow_phase = Some("interview".into());
+        let mut term = Terminal::new(TestBackend::new(70, 20)).unwrap();
+        term.draw(|frame| app.draw_transcript(frame, frame.area(), &Theme::new(true, false)))
+            .unwrap();
+        let text: String = term
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Phase 1/3: Interview and requirements"));
+        assert!(!text.contains("No messages in this conversation"));
+    }
+
+    #[test]
     fn the_chat_shows_that_the_orchestrator_is_sending_then_thinking() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
