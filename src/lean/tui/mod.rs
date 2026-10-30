@@ -14,6 +14,7 @@ pub mod document;
 pub mod editor;
 pub mod graph;
 mod history;
+mod input;
 mod inspection;
 pub mod interview;
 mod layout;
@@ -98,55 +99,6 @@ impl App {
         } else {
             0
         }
-    }
-
-    pub fn comment_key(conversation: &str, plan: Option<&str>, target: &str) -> String {
-        match plan {
-            Some(p) => format!("{conversation}:{p}:{target}"),
-            None => format!("{conversation}::{target}"),
-        }
-    }
-
-    pub fn get_comment_draft(&mut self, target: &str) -> InputBuffer {
-        let key = Self::comment_key(&self.conversation, self.view.plan.as_deref(), target);
-        if let Some(text) = self.comment_drafts.remove(&key) {
-            let (cursor, preferred_col) = self
-                .comment_draft_cursors
-                .remove(&key)
-                .unwrap_or((text.len(), None));
-            let mut buf = InputBuffer::with_text(text);
-            buf.cursor = cursor.min(buf.text.len());
-            buf.preferred_col = preferred_col;
-            return buf;
-        }
-        let fallback_key = format!("{}::{target}", self.conversation);
-        if let Some(text) = self.comment_drafts.remove(&fallback_key) {
-            let (cursor, preferred_col) = self
-                .comment_draft_cursors
-                .remove(&fallback_key)
-                .unwrap_or((text.len(), None));
-            let mut buf = InputBuffer::with_text(text);
-            buf.cursor = cursor.min(buf.text.len());
-            buf.preferred_col = preferred_col;
-            return buf;
-        }
-        InputBuffer::new()
-    }
-
-    pub fn save_comment_draft(&mut self, target: &str, input: InputBuffer) {
-        let key = Self::comment_key(&self.conversation, self.view.plan.as_deref(), target);
-        self.comment_draft_cursors
-            .insert(key.clone(), (input.cursor, input.preferred_col));
-        self.comment_drafts.insert(key, input.text);
-    }
-
-    pub fn remove_comment_draft(&mut self, target: &str) {
-        let key = Self::comment_key(&self.conversation, self.view.plan.as_deref(), target);
-        self.comment_drafts.remove(&key);
-        self.comment_draft_cursors.remove(&key);
-        let fallback_key = format!("{}::{target}", self.conversation);
-        self.comment_drafts.remove(&fallback_key);
-        self.comment_draft_cursors.remove(&fallback_key);
     }
 
     pub fn open(&mut self, conversation: String) {
@@ -795,86 +747,6 @@ impl App {
                 diff.half_page(ch == 'd');
             }
             code => diff.key(code),
-        }
-    }
-
-    pub fn recall_history(&mut self, older: bool) {
-        if self.history.is_empty() {
-            return;
-        }
-        if let Some(curr) = self.history_index {
-            self.history_item_cursors.insert(curr, self.input.cursor);
-        }
-        let index = match (self.history_index, older) {
-            (None, true) => {
-                self.history_draft = self.input.text.clone();
-                self.history_draft_cursor = self.input.cursor;
-                self.history_draft_preferred_col = self.input.preferred_col;
-                Some(self.history.len() - 1)
-            }
-            (None, false) => return,
-            (Some(i), true) => Some(i.saturating_sub(1)),
-            (Some(i), false) if i + 1 < self.history.len() => Some(i + 1),
-            (Some(_), false) => None,
-        };
-        self.history_index = index;
-        match index {
-            Some(i) => {
-                let text = self.history[i].clone();
-                let saved_cursor = self.history_item_cursors.get(&i).copied();
-                let mut buf = InputBuffer::with_text(text);
-                if let Some(c) = saved_cursor {
-                    buf.cursor = c.min(buf.text.len());
-                }
-                self.input = buf;
-            }
-            None => {
-                let text = std::mem::take(&mut self.history_draft);
-                let cursor = self.history_draft_cursor.min(text.len());
-                let mut buf = InputBuffer::with_text(text);
-                buf.cursor = cursor;
-                buf.preferred_col = self.history_draft_preferred_col;
-                self.input = buf;
-            }
-        };
-    }
-
-    /// Restores the project's input history before a conversation is opened.
-    pub fn load_history(&mut self, state: &std::path::Path) {
-        let path = state.join("input-history.db");
-        self.history = match history::load(&path) {
-            Ok(entries) => entries,
-            Err(error) => {
-                self.notice = Some(format!(
-                    "Cannot load input history ({}): {error}",
-                    path.display()
-                ));
-                Vec::new()
-            }
-        };
-        self.history_path = Some(path);
-    }
-
-    pub fn record_history(&mut self, text: &str) {
-        self.history_index = None;
-        self.history_draft.clear();
-        self.history_draft_cursor = 0;
-        self.history_draft_preferred_col = None;
-        self.history_item_cursors.clear();
-        let trimmed = text.trim();
-        if !trimmed.is_empty() && self.history.last().map(String::as_str) != Some(trimmed) {
-            self.history.push(trimmed.to_owned());
-            if self.history.len() > history::LIMIT {
-                self.history.remove(0);
-            }
-            if let Some(path) = &self.history_path
-                && let Err(error) = history::append(path, trimmed)
-            {
-                self.notice = Some(format!(
-                    "Cannot save input history ({}): {error}",
-                    path.display()
-                ));
-            }
         }
     }
 
@@ -3129,95 +3001,7 @@ impl App {
         }
 
         // Focus::Chat input editing & transcript navigation
-        match key.code {
-            KeyCode::Esc => {
-                if self.history_index.is_some() {
-                    self.history_index = None;
-                    let text = std::mem::take(&mut self.history_draft);
-                    let cursor = self.history_draft_cursor.min(text.len());
-                    let mut buf = InputBuffer::with_text(text);
-                    buf.cursor = cursor;
-                    buf.preferred_col = self.history_draft_preferred_col;
-                    self.input = buf;
-                } else if !self.input.is_empty() {
-                    self.history_draft = self.input.text.clone();
-                    self.history_draft_cursor = self.input.cursor;
-                    self.history_draft_preferred_col = self.input.preferred_col;
-                    self.input.clear();
-                    self.input_shown = 0;
-                }
-            }
-            KeyCode::Char('a') if control => {
-                if self.input.is_empty()
-                    && (self.view.plan_proposed()
-                        || self.view.workflow_phase.as_deref() == Some("interview"))
-                {
-                    self.command("/accept");
-                } else {
-                    self.input.move_home();
-                }
-            }
-            KeyCode::Char('r') if control => {
-                if self.input.is_empty() && self.view.plan_resumable() {
-                    self.command("/resume");
-                } else {
-                    self.picker = Some(Picker::new(Kind::History));
-                }
-            }
-            KeyCode::Char('x') if control => self.command("/cancel"),
-            // Vim half-page scrolling while there is no draft to edit; with
-            // text in the box Ctrl+U keeps deleting to the start of the line.
-            KeyCode::Char('u') if control && self.input.is_empty() => self.scroll += 5,
-            KeyCode::Char('d') if control && self.input.is_empty() => {
-                self.scroll = self.scroll.saturating_sub(5);
-            }
-            KeyCode::Char('s') if control => self.submit(),
-            KeyCode::Enter if !alt => self.submit(),
-            KeyCode::End if alt || control => {
-                self.input.move_buffer_end();
-                self.scroll = 0;
-            }
-            KeyCode::PageUp => self.scroll += 10,
-            KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
-            KeyCode::Up => {
-                let width = self.input_width.max(1);
-                if self.input.is_empty() {
-                    if !self.history.is_empty() {
-                        self.recall_history(true);
-                    } else {
-                        self.scroll += 1;
-                    }
-                } else if self.input.on_first_row(width) && !self.history.is_empty() {
-                    self.recall_history(true);
-                } else {
-                    let (_, row) = self.input.visual_cursor(width);
-                    if row > 0 {
-                        self.input.move_up(width);
-                    }
-                }
-            }
-            KeyCode::Down => {
-                let width = self.input_width.max(1);
-                if self.history_index.is_some() && self.input.on_last_row(width) {
-                    self.recall_history(false);
-                } else if self.input.is_empty() {
-                    self.scroll = self.scroll.saturating_sub(1);
-                } else {
-                    let (_, row) = self.input.visual_cursor(width);
-                    let lines = self.input.visual_line_count(width);
-                    if row + 1 < lines {
-                        self.input.move_down(width);
-                    } else if self.scroll > 0 {
-                        self.scroll = self.scroll.saturating_sub(1);
-                    }
-                }
-            }
-            KeyCode::Char('@') if !control && self.input.is_empty() => {
-                self.picker = Some(Picker::new(Kind::Recipients));
-            }
-            _ => self.input.edit_key(key),
-        }
-        true
+        self.chat_key(key)
     }
 
     fn graph_key(&mut self, key: event::KeyEvent) -> bool {
@@ -3476,26 +3260,6 @@ impl App {
         let mut picker = Picker::new(Kind::Conversations);
         picker.conversations = items;
         self.picker = Some(picker);
-    }
-
-    fn editor_key(&mut self, key: event::KeyEvent) {
-        let Some(editor) = &mut self.editor else {
-            return;
-        };
-        let control = key.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        match key.code {
-            KeyCode::Esc => {
-                if let Some(editor) = self.editor.take().filter(|e| !e.input.is_empty()) {
-                    self.save_comment_draft(&editor.target, editor.input);
-                }
-            }
-            KeyCode::Char('s') if control => self.submit_comment(),
-            KeyCode::Enter if !alt => self.submit_comment(),
-            KeyCode::Up => editor.input.move_up(self.editor_width.max(1)),
-            KeyCode::Down => editor.input.move_down(self.editor_width.max(1)),
-            _ => editor.input.edit_key(key),
-        }
     }
 
     fn set_comment(&self, id: u64, status: &str) {
@@ -3770,62 +3534,6 @@ impl App {
             .is_some_and(|details| details.tab == RESULT || details.tab == CHECKS)
         {
             self.fetch_task();
-        }
-    }
-
-    pub fn paste(&mut self, text: &str) {
-        if self.native_focused() {
-            self.native_send(crate::lean::terminal::Input::Paste { text: text.into() });
-            return;
-        }
-        if self.plan_history.is_some() {
-            return;
-        }
-        if self.ledger_view.as_ref().is_some_and(|v| v.visible) && self.picker.is_none() {
-            self.ledger_view.as_mut().unwrap().paste(text);
-            return;
-        }
-        if let Some(editor) = self.config_editor.as_mut().filter(|e| e.visible) {
-            editor.paste(text);
-            return;
-        }
-        if self.help.is_some() || self.trust_prompt.is_some() {
-            return;
-        }
-        self.sync_interview();
-        if self.picker.is_none() && self.editor.is_none() && self.interview_visible() {
-            if let Some(form) = self.interview_forms.get_mut(&self.conversation) {
-                form.paste(text);
-            }
-            return;
-        }
-        if let Some(details) = &mut self.details {
-            if details.editing && details.selected_round.is_none() {
-                let key = details.composer_key();
-                details
-                    .drafts
-                    .borrow_mut()
-                    .entry(key)
-                    .or_default()
-                    .input
-                    .insert_str(&sanitize_paste(text));
-            }
-            return;
-        }
-        if let Some(picker) = &mut self.picker {
-            let clean_text = sanitize_single_line_paste(text);
-            picker.query.push_str(&clean_text);
-            picker.selected = 0;
-        } else if let Some(editor) = &mut self.editor {
-            let clean_text = sanitize_paste(text);
-            editor.input.insert_str(&clean_text);
-        } else if self.focus == Focus::Chat
-            && self.plan_view.is_none()
-            && self.diff.is_none()
-            && self.details.is_none()
-        {
-            let clean_text = sanitize_paste(text);
-            self.input.insert_str(&clean_text);
         }
     }
 
@@ -5393,6 +5101,25 @@ pub mod tests {
     }
 
     #[test]
+    fn chat_history_escape_restores_grapheme_safe_draft_cursor() {
+        let mut app = test_app();
+        let draft = "e\u{301}👩‍💻 draft";
+        let cursor = "e\u{301}👩‍💻".len();
+        app.input = InputBuffer::with_text(draft);
+        app.input.cursor = cursor;
+        app.history = vec!["previous message".into()];
+
+        app.key(key_press(KeyCode::Up));
+        assert_eq!(app.input.text, "previous message");
+        app.key(key_press(KeyCode::Esc));
+
+        assert_eq!(app.input.text, draft);
+        assert_eq!(app.input.cursor, cursor);
+        app.input.backspace();
+        assert_eq!(app.input.text, "e\u{301} draft");
+    }
+
+    #[test]
     fn ac_key_03_multiline_boundary_up() {
         let mut app = test_app();
         app.input = InputBuffer::with_text("line1\nline2");
@@ -5821,6 +5548,24 @@ pub mod tests {
         app.input.cursor = 0;
         app.paste("new ");
         assert_eq!(app.input.text, "new draft");
+    }
+
+    #[test]
+    fn comment_drafts_restore_grapheme_cursor_per_conversation() {
+        let mut app = test_app();
+        app.conversation = "conversation-one".into();
+        let mut input = InputBuffer::with_text("e\u{301}👩‍💻");
+        input.cursor = 1;
+        input.preferred_col = Some(4);
+        app.save_comment_draft("task", input);
+
+        app.conversation = "conversation-two".into();
+        assert!(app.get_comment_draft("task").is_empty());
+        app.conversation = "conversation-one".into();
+        let restored = app.get_comment_draft("task");
+        assert_eq!(restored.text, "e\u{301}👩‍💻");
+        assert_eq!(restored.cursor, "e\u{301}".len());
+        assert_eq!(restored.preferred_col, Some(4));
     }
 
     #[test]

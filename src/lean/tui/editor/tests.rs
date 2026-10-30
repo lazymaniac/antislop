@@ -233,6 +233,34 @@ fn grapheme_zwj_and_combining_characters_editing() {
 }
 
 #[test]
+fn key_editing_keeps_combining_and_zwj_clusters_atomic() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let text = "e\u{301}👩‍💻";
+    let mut buf = InputBuffer::with_text(text);
+    buf.edit_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert_eq!(buf.cursor, "e\u{301}".len());
+    buf.edit_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(buf.cursor, text.len());
+    buf.edit_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert_eq!(buf.text, "e\u{301}");
+    buf.edit_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+    assert!(buf.text.is_empty());
+}
+
+#[test]
+fn pasted_graphemes_remain_intact_at_narrow_wrap_boundaries() {
+    let mut buf = InputBuffer::new();
+    let pasted = "e\u{301}👩‍💻";
+    buf.insert_str(pasted);
+    assert_eq!(buf.text, pasted);
+    assert_eq!(buf.visual_line_count(1), 2);
+    assert!(buf.backspace());
+    assert_eq!(buf.text, "e\u{301}");
+    assert_eq!(buf.cursor, "e\u{301}".len());
+}
+
+#[test]
 fn mutation_clamps_an_interior_cursor_to_a_whole_grapheme() {
     let family = "👨‍👩‍👧‍👦";
     let mut buf = InputBuffer::with_text(format!("e\u{301}{family}x"));
