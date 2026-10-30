@@ -34,10 +34,10 @@ fn execute(root: PathBuf) {
 }
 
 #[derive(Clone, Copy)]
-enum SourceClass {
+pub(super) enum SourceClass {
     Production,
     TestOnly,
-    GeneratedOrVendor,
+    Generated,
 }
 
 impl SourceClass {
@@ -49,12 +49,12 @@ impl SourceClass {
         match self {
             Self::Production => "production source",
             Self::TestOnly => "test-only source",
-            Self::GeneratedOrVendor => "generated or vendor source",
+            Self::Generated => "generated source",
         }
     }
 }
 
-fn inventory(
+pub(super) fn inventory(
     root: &Path,
     errors: &mut Vec<String>,
 ) -> (Vec<PathBuf>, BTreeMap<PathBuf, SourceClass>) {
@@ -73,18 +73,16 @@ fn inventory(
     (files, classifications)
 }
 
-fn source_class(
+pub(super) fn source_class(
     path: &Path,
     source_root: &Path,
     references: &BTreeMap<PathBuf, (bool, bool)>,
 ) -> SourceClass {
-    if path.components().any(|part| {
-        matches!(
-            part.as_os_str().to_str(),
-            Some("generated" | "vendor" | "vendored")
-        )
-    }) {
-        return SourceClass::GeneratedOrVendor;
+    if path
+        .components()
+        .any(|part| matches!(part.as_os_str().to_str(), Some("generated")))
+    {
+        return SourceClass::Generated;
     }
     let (production_ref, test_ref) = references.get(path).copied().unwrap_or((false, false));
     if is_crate_root(path, source_root) || production_ref || !test_ref {

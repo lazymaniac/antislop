@@ -22,36 +22,24 @@ impl Source {
     pub(super) fn line_count(&self) -> usize {
         physical_lines(&self.text)
     }
+    pub(super) fn production_line_count(&self, ast: &syn::File) -> usize {
+        let mut excluded = TestLineCollector { ranges: Vec::new() };
+        excluded.visit_file(ast);
+        let mut lines = vec![false; self.line_count()];
+        for (start, end) in excluded.ranges {
+            let first = start.saturating_sub(1);
+            let last = end.min(lines.len());
+            for line in lines.get_mut(first..last).into_iter().flatten() {
+                *line = true;
+            }
+        }
+        lines.iter().filter(|excluded| !**excluded).count()
+    }
     pub(super) fn offset(&self, line: usize) -> usize {
         self.lines
             .get(line.saturating_sub(1))
             .copied()
             .unwrap_or(self.text.len())
-    }
-    pub(super) fn callable_start(&self, ast_start: usize) -> usize {
-        let ln = self.line(ast_start);
-        let prefix_kinds = prefix_line_kinds(&self.text);
-        let mut first = ln;
-        // Attach contiguous comments/outer attributes, retaining intervening blanks.
-        let mut cursor = ln.saturating_sub(1);
-        while cursor > 0 {
-            let prior = cursor;
-            let line = self.text.lines().nth(prior - 1).unwrap_or("").trim();
-            if line.is_empty() {
-                if prior >= 2 && prefix_kinds[prior - 2] {
-                    cursor -= 1;
-                    continue;
-                }
-                break;
-            }
-            if prefix_kinds[prior - 1] {
-                first = prior;
-                cursor -= 1;
-                continue;
-            }
-            break;
-        }
-        self.offset(first)
     }
     pub(super) fn count_span(&self, start: usize, end: usize) -> usize {
         let s = self.line(start);
@@ -59,183 +47,138 @@ impl Source {
         e.saturating_sub(s) + 1
     }
 }
-#[derive(Clone, Copy)]
-enum LexicalState {
-    Normal,
-    BlockComment { depth: usize, leading: bool },
-    Quoted { quote: u8, escaped: bool },
-    RawString { hashes: usize },
-}
 
-pub(super) fn prefix_line_kinds(source: &str) -> Vec<bool> {
-    let mut state = LexicalState::Normal;
-    source
-        .lines()
-        .map(|raw| scan_prefix_line(raw, &mut state))
-        .collect()
+struct TestLineCollector {
+    ranges: Vec<(usize, usize)>,
 }
-
-fn scan_prefix_line(raw: &str, state: &mut LexicalState) -> bool {
-    let line = raw.trim();
-    let prefix = starts_comment_prefix(line, *state);
-    let attribute = matches!(state, LexicalState::Normal) && line.starts_with("#[");
-    scan_lexical_state(raw.as_bytes(), state);
-    prefix || attribute
-}
-
-fn starts_comment_prefix(line: &str, state: LexicalState) -> bool {
-    match state {
-        LexicalState::BlockComment { leading, .. } => leading,
-        LexicalState::Normal => {
-            (line.starts_with("//") && !line.starts_with("//!"))
-                || (line.starts_with("/*") && !line.starts_with("/*!"))
-        }
-        LexicalState::Quoted { .. } | LexicalState::RawString { .. } => false,
-    }
-}
-
-fn scan_lexical_state(bytes: &[u8], state: &mut LexicalState) {
-    let mut cursor = 0;
-    while cursor < bytes.len() {
-        cursor += advance_lexical_state(bytes, cursor, state);
-    }
-}
-
-fn advance_lexical_state(bytes: &[u8], i: usize, state: &mut LexicalState) -> usize {
-    match *state {
-        LexicalState::Normal => advance_normal(bytes, i, state),
-        LexicalState::BlockComment { .. } => advance_block_comment(bytes, i, state),
-        LexicalState::Quoted { .. } => advance_quoted(bytes, i, state),
-        LexicalState::RawString { .. } => advance_raw_string(bytes, i, state),
-    }
-}
-
-fn advance_normal(bytes: &[u8], i: usize, state: &mut LexicalState) -> usize {
-    if pair_is(bytes, i, b'/', b'/') {
-        return bytes.len() - i;
-    }
-    if pair_is(bytes, i, b'/', b'*') {
-        let leading = bytes[..i].iter().all(u8::is_ascii_whitespace);
-        *state = LexicalState::BlockComment { depth: 1, leading };
-        return 2;
-    }
-    if let Some((_, hashes, width)) = raw_string_start(bytes, i) {
-        *state = LexicalState::RawString { hashes };
-        return width;
-    }
-    if (matches!(bytes[i], b'b' | b'c') && bytes.get(i + 1) == Some(&b'"')) || bytes[i] == b'"' {
-        *state = LexicalState::Quoted {
-            quote: b'"',
-            escaped: false,
-        };
-        return if bytes[i] == b'"' { 1 } else { 2 };
-    }
-    if bytes[i] == b'\'' && looks_like_char_literal(bytes, i) {
-        *state = LexicalState::Quoted {
-            quote: b'\'',
-            escaped: false,
-        };
-    }
-    1
-}
-
-fn advance_block_comment(bytes: &[u8], i: usize, state: &mut LexicalState) -> usize {
-    let LexicalState::BlockComment { depth, leading } = *state else {
-        return 1;
-    };
-    if pair_is(bytes, i, b'/', b'*') {
-        *state = LexicalState::BlockComment {
-            depth: depth + 1,
-            leading,
-        };
-        2
-    } else if pair_is(bytes, i, b'*', b'/') {
-        *state = if depth == 1 {
-            LexicalState::Normal
+impl TestLineCollector {
+    fn exclude(&mut self, attrs: &[Attribute], start: usize, end: usize) -> bool {
+        if attrs_imply_test(attrs).unwrap_or(false) {
+            self.ranges.push((start, end));
+            true
         } else {
-            LexicalState::BlockComment {
-                depth: depth - 1,
-                leading,
-            }
-        };
-        2
-    } else {
-        1
-    }
-}
-
-fn advance_quoted(bytes: &[u8], i: usize, state: &mut LexicalState) -> usize {
-    let LexicalState::Quoted { quote, escaped } = *state else {
-        return 1;
-    };
-    *state = if escaped {
-        LexicalState::Quoted {
-            quote,
-            escaped: false,
+            false
         }
-    } else if bytes[i] == b'\\' {
-        LexicalState::Quoted {
-            quote,
-            escaped: true,
+    }
+}
+impl<'ast> Visit<'ast> for TestLineCollector {
+    fn visit_item(&mut self, item: &'ast Item) {
+        let attrs = item_attrs(item);
+        let start = attrs
+            .iter()
+            .map(Spanned::span)
+            .map(|span| span.start().line)
+            .min()
+            .unwrap_or_else(|| item.span().start().line);
+        if self.exclude(attrs, start, item.span().end().line) {
+            return;
         }
-    } else if bytes[i] == quote {
-        LexicalState::Normal
-    } else {
-        return 1;
-    };
-    1
+        visit::visit_item(self, item);
+    }
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        if let syn::Expr::Block(block) = expr
+            && self.exclude(
+                &block.attrs,
+                expr.span().start().line,
+                expr.span().end().line,
+            )
+        {
+            return;
+        }
+        visit::visit_expr(self, expr);
+    }
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        if self.exclude(&arm.attrs, arm.span().start().line, arm.span().end().line) {
+            return;
+        }
+        visit::visit_arm(self, arm);
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        let (attrs, span) = impl_item_parts(item);
+        if self.exclude(attrs, span.start().line, span.end().line) {
+            return;
+        }
+        visit::visit_impl_item(self, item);
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        let (attrs, span) = trait_item_parts(item);
+        if self.exclude(attrs, span.start().line, span.end().line) {
+            return;
+        }
+        visit::visit_trait_item(self, item);
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        let (attrs, span) = foreign_item_parts(item);
+        if self.exclude(attrs, span.start().line, span.end().line) {
+            return;
+        }
+        visit::visit_foreign_item(self, item);
+    }
 }
 
-fn advance_raw_string(bytes: &[u8], i: usize, state: &mut LexicalState) -> usize {
-    let LexicalState::RawString { hashes } = *state else {
-        return 1;
-    };
-    if bytes[i] == b'"' && (0..hashes).all(|n| bytes.get(i + 1 + n) == Some(&b'#')) {
-        *state = LexicalState::Normal;
-        hashes + 1
-    } else {
-        1
+fn impl_item_parts(item: &syn::ImplItem) -> (&[Attribute], proc_macro2::Span) {
+    match item {
+        syn::ImplItem::Const(item) => (&item.attrs, item.span()),
+        syn::ImplItem::Fn(item) => (&item.attrs, item.span()),
+        syn::ImplItem::Macro(item) => (&item.attrs, item.span()),
+        syn::ImplItem::Type(item) => (&item.attrs, item.span()),
+        _ => (&[], item.span()),
     }
 }
 
-fn pair_is(bytes: &[u8], i: usize, first: u8, second: u8) -> bool {
-    bytes.get(i) == Some(&first) && bytes.get(i + 1) == Some(&second)
+fn trait_item_parts(item: &syn::TraitItem) -> (&[Attribute], proc_macro2::Span) {
+    match item {
+        syn::TraitItem::Const(item) => (&item.attrs, item.span()),
+        syn::TraitItem::Fn(item) => (&item.attrs, item.span()),
+        syn::TraitItem::Macro(item) => (&item.attrs, item.span()),
+        syn::TraitItem::Type(item) => (&item.attrs, item.span()),
+        _ => (&[], item.span()),
+    }
 }
 
-pub(super) fn raw_string_start(bytes: &[u8], start: usize) -> Option<(u8, usize, usize)> {
-    let mut i = start;
-    if bytes.get(i) == Some(&b'b') {
-        i += 1;
+fn foreign_item_parts(item: &syn::ForeignItem) -> (&[Attribute], proc_macro2::Span) {
+    match item {
+        syn::ForeignItem::Fn(item) => (&item.attrs, item.span()),
+        syn::ForeignItem::Static(item) => (&item.attrs, item.span()),
+        syn::ForeignItem::Type(item) => (&item.attrs, item.span()),
+        syn::ForeignItem::Macro(item) => (&item.attrs, item.span()),
+        _ => (&[], item.span()),
     }
-    if bytes.get(i) != Some(&b'r') {
-        return None;
-    }
-    i += 1;
-    let hashes_start = i;
-    while bytes.get(i) == Some(&b'#') {
-        i += 1;
-    }
-    (bytes.get(i) == Some(&b'"')).then_some((b'"', i - hashes_start, i - start + 1))
 }
 
-pub(super) fn looks_like_char_literal(bytes: &[u8], start: usize) -> bool {
-    let mut i = start + 1;
-    if bytes.get(i) == Some(&b'\\') {
-        i += 2;
-    } else {
-        i += 1;
+fn item_attrs(item: &Item) -> &[Attribute] {
+    match item {
+        Item::Const(item) => &item.attrs,
+        Item::Enum(item) => &item.attrs,
+        Item::ExternCrate(item) => &item.attrs,
+        Item::Fn(item) => &item.attrs,
+        Item::ForeignMod(item) => &item.attrs,
+        Item::Impl(item) => &item.attrs,
+        Item::Macro(item) => &item.attrs,
+        Item::Mod(item) => &item.attrs,
+        Item::Static(item) => &item.attrs,
+        Item::Struct(item) => &item.attrs,
+        Item::Trait(item) => &item.attrs,
+        Item::TraitAlias(item) => &item.attrs,
+        Item::Type(item) => &item.attrs,
+        Item::Union(item) => &item.attrs,
+        Item::Use(item) => &item.attrs,
+        _ => &[],
     }
-    bytes.get(i) == Some(&b'\'')
 }
 pub(super) fn line_starts(s: &str) -> Vec<usize> {
-    let mut v = vec![0];
-    for (i, b) in s.bytes().enumerate() {
-        if b == b'\n' && i + 1 < s.len() {
-            v.push(i + 1);
+    let mut lines = vec![0];
+    for (index, byte) in s.bytes().enumerate() {
+        if byte == b'\n' && index + 1 < s.len() {
+            lines.push(index + 1);
         }
     }
-    v
+    lines
 }
+
 pub(super) fn physical_lines(s: &str) -> usize {
     if s.is_empty() {
         0

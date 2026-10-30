@@ -16,12 +16,11 @@ pub(super) fn scan_file(
         }
     };
     let src = Source::new(display_path.to_path_buf(), path.to_path_buf(), text);
-    report_file_size(&src, production, results);
     scan_source(src, production, external_crates, results);
 }
 
-fn report_file_size(src: &Source, production: bool, results: &mut Results) {
-    let count = src.line_count();
+fn report_file_size(src: &Source, ast: &syn::File, production: bool, results: &mut Results) {
+    let count = src.production_line_count(ast);
     if production && count > FILE_LIMIT {
         results.violations.push(format!(
             "{}:1: file is {count} lines (limit {FILE_LIMIT})",
@@ -30,7 +29,7 @@ fn report_file_size(src: &Source, production: bool, results: &mut Results) {
     }
 }
 
-fn scan_source(
+pub(super) fn scan_source(
     src: Source,
     production: bool,
     external_crates: &BTreeSet<String>,
@@ -47,6 +46,7 @@ fn scan_source(
             return;
         }
     };
+    report_file_size(&src, &ast, production, results);
     walk_source(&src, &ast, production, external_crates, results);
 }
 

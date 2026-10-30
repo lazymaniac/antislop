@@ -69,25 +69,18 @@ impl Walker<'_> {
         if !self.production || test_only {
             return;
         }
-        if let Some((line, count)) = self.callable_measure(attrs, start, end) {
+        if let Some((line, count)) = self.callable_measure(start, end) {
             self.report_callable(ident, line, count);
         }
     }
 
     fn callable_measure(
         &self,
-        attrs: &[Attribute],
         start: proc_macro2::Span,
         end: proc_macro2::Span,
     ) -> Option<(usize, usize)> {
         let ast_start = offset(start, self.src);
-        let first_attr = attrs
-            .iter()
-            .map(|a| a.span().start().line)
-            .min()
-            .map(|line| self.src.offset(line))
-            .unwrap_or(ast_start);
-        let begin = self.src.callable_start(first_attr);
+        let begin = ast_start;
         let finish = self.src.offset(end.end().line);
         Some((
             self.src.line(begin),
