@@ -443,6 +443,34 @@ fn test_freshness_token_staleness_and_rejection() {
     // Task remains in needs_user, not cancelled
     let current_task = core.task_unscoped(plan, task_id).unwrap();
     assert_eq!(current_task.status, "needs_user");
+
+    // A fresh token does not make a terminal task recoverable.
+    let mut task_approved = current_task;
+    task_approved.status = "approved".into();
+    core.store.update_task(&task_approved).unwrap();
+    let fresh_token = core
+        .task_freshness_token(&conversation, plan, task_id)
+        .unwrap();
+    let invalid_state = core
+        .recover_task(TaskRecoveryRequest {
+            conversation: conversation.clone(),
+            plan: plan.clone(),
+            task: task_id.clone(),
+            action: RecoveryAction::CancelTask,
+            consent_files: None,
+            freshness_token: fresh_token,
+            message: None,
+        })
+        .unwrap_err();
+    assert!(
+        invalid_state
+            .to_string()
+            .contains("task is not waiting for recovery")
+    );
+    assert_eq!(
+        core.task_unscoped(plan, task_id).unwrap().status,
+        "approved"
+    );
 }
 
 #[test]
