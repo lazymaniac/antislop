@@ -91,6 +91,15 @@ fn release_view(path: &Path, name: &str) -> Result<()> {
 /// left without a checkout, and the worktree records whose directories were
 /// removed by hand.
 pub(super) fn release_settled_views(store: &Store, state: &Path) -> Result<()> {
+    let projects = release_settled_view_checkouts(store, state)?;
+    release_writer_checkouts(store, state)?;
+    prune_settled_view_branches(store, projects)
+}
+
+fn release_settled_view_checkouts(
+    store: &Store,
+    state: &Path,
+) -> Result<std::collections::BTreeSet<PathBuf>> {
     let mut projects: std::collections::BTreeSet<PathBuf> = store
         .conversations()?
         .into_iter()
@@ -111,7 +120,13 @@ pub(super) fn release_settled_views(store: &Store, state: &Path) -> Result<()> {
             }
         }
     }
-    release_writer_checkouts(store, state)?;
+    Ok(projects)
+}
+
+fn prune_settled_view_branches(
+    store: &Store,
+    projects: std::collections::BTreeSet<PathBuf>,
+) -> Result<()> {
     for project in projects {
         let _ = git::prune_worktrees(&project);
         for branch in git::branches(&project, "antislop/").unwrap_or_default() {
@@ -153,29 +168,39 @@ fn release_writer_checkouts(store: &Store, state: &Path) -> Result<()> {
         return Ok(());
     };
     for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some((id, generation)) = name
-            .rsplit_once("-g")
-            .and_then(|(id, generation)| Some((id, generation.parse::<i64>().ok()?)))
-        else {
-            continue;
-        };
-        if view_task(&name).is_some() || task_path_component(id).is_err() {
-            continue;
-        }
-        let Some(task) = store.task_by_id(id)? else {
-            continue;
-        };
-        let left = generation < task.input_generation
-            || matches!(task.status.as_str(), status::STALE | "superseded");
-        let path = entry.path();
-        if left
-            && git::worktree_branch(&path).is_ok_and(|branch| branch == format!("antislop/{name}"))
-            && git::is_clean(&path)
-            && let Ok(project) = git::worktree_project(&path)
-        {
-            let _ = git::remove_worktree_keep_branch(&project, &path);
-        }
+        release_writer_checkout(store, entry.path())?;
     }
     Ok(())
+}
+
+fn release_writer_checkout(store: &Store, path: PathBuf) -> Result<()> {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let Some((id, generation)) = writer_checkout_id(&name) else {
+        return Ok(());
+    };
+    let Some(task) = store.task_by_id(id)? else {
+        return Ok(());
+    };
+    let left = generation < task.input_generation
+        || matches!(task.status.as_str(), status::STALE | "superseded");
+    if !left || !writer_checkout_is_clean(&path, &name) {
+        return Ok(());
+    }
+    if let Ok(project) = git::worktree_project(&path) {
+        let _ = git::remove_worktree_keep_branch(&project, &path);
+    }
+    Ok(())
+}
+
+fn writer_checkout_id(name: &str) -> Option<(&str, i64)> {
+    let (id, generation) = name.rsplit_once("-g")?;
+    if view_task(name).is_some() || task_path_component(id).is_err() {
+        return None;
+    }
+    Some((id, generation.parse().ok()?))
+}
+
+fn writer_checkout_is_clean(path: &Path, name: &str) -> bool {
+    git::worktree_branch(path).is_ok_and(|branch| branch == format!("antislop/{name}"))
+        && git::is_clean(path)
 }

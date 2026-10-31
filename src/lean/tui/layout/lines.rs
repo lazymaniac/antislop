@@ -132,8 +132,54 @@ impl LineBuilder {
 /// Returns the visual text lines corresponding to `compute_visual_lines`.
 pub fn visual_text_lines(text: &str, width: usize) -> Vec<String> {
     let lines = compute_visual_lines(text, width);
+    visual_text_lines_from_layout(text, &lines)
+}
+
+/// Reuses one wrapping pass for both rendered text and cursor projection.
+pub fn visual_text_lines_from_layout(text: &str, lines: &[VisualLineInfo]) -> Vec<String> {
     lines
-        .into_iter()
+        .iter()
         .map(|l| text[l.start_byte..l.end_byte].to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lean::tui::buffer::InputBuffer;
+
+    #[test]
+    fn layout_reuse_matches_wrapping_and_cursor_projection() {
+        for text in ["", "a\n", "alpha beta gamma", "e\u{301} 👩‍💻\n漢字"] {
+            for width in 1..12 {
+                let lines = compute_visual_lines(text, width);
+                assert_eq!(
+                    visual_text_lines_from_layout(text, &lines),
+                    visual_text_lines(text, width)
+                );
+                let input = InputBuffer::with_text(text.to_owned());
+                assert_eq!(
+                    input.visual_cursor_from_lines(&lines),
+                    input.visual_cursor(width)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn layout_reuse_scales_with_large_drafts_and_width_changes() {
+        let text = "word 👩‍💻 e\u{301}\n".repeat(4_000);
+        for width in [1, 8, 40, 120] {
+            let lines = compute_visual_lines(&text, width);
+            let rendered = visual_text_lines_from_layout(&text, &lines);
+            assert_eq!(rendered.len(), lines.len());
+            assert_eq!(rendered, visual_text_lines(&text, width));
+            let mut input = InputBuffer::with_text(text.clone());
+            input.cursor = text.len();
+            assert_eq!(
+                input.visual_cursor_from_lines(&lines),
+                input.visual_cursor(width)
+            );
+        }
+    }
 }

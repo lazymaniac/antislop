@@ -184,14 +184,34 @@ impl Core {
         revision: &PlanRevision,
     ) -> Result<PreparedRevision> {
         let baseline = self.store.plan(&revision.plan)?;
+        let specs = self.revised_specs(revision, &baseline)?;
+        self.ensure_revision_scope(conversation, revision, &specs)?;
+        self.prepared_revision(conversation, request, revision, baseline, specs)
+    }
+
+    fn revised_specs(
+        &self,
+        revision: &PlanRevision,
+        baseline: &[Task],
+    ) -> Result<Vec<TaskContract>> {
+        let config = self.config_snapshot();
         let specs = super::core_plan_helpers::finalize_plan(
-            revision.merge(&baseline)?,
-            self.config_snapshot().policy.required_gates,
-            self.config_snapshot().policy.local_options,
+            revision.merge(baseline)?,
+            config.policy.required_gates,
+            config.policy.local_options,
         );
         tasks::validate(&specs)?;
+        Ok(specs)
+    }
+
+    fn ensure_revision_scope(
+        &self,
+        conversation: &str,
+        revision: &PlanRevision,
+        specs: &[TaskContract],
+    ) -> Result<()> {
         let authorization = scope::plan_authorization(self, conversation, &revision.plan)?;
-        let expansion = scope::scope_expansion(&specs, &authorization.read, &authorization.write)?;
+        let expansion = scope::scope_expansion(specs, &authorization.read, &authorization.write)?;
         if !expansion.is_empty() {
             return Err(self.ask_scope_approval(
                 conversation,
@@ -200,6 +220,17 @@ impl Core {
                 &authorization.write,
             )?);
         }
+        Ok(())
+    }
+
+    fn prepared_revision(
+        &self,
+        conversation: &str,
+        request: &str,
+        revision: &PlanRevision,
+        baseline: Vec<Task>,
+        specs: Vec<TaskContract>,
+    ) -> Result<PreparedRevision> {
         let run = self
             .store
             .plan_run(&revision.plan)?

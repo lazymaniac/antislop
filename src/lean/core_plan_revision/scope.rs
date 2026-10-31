@@ -85,6 +85,16 @@ pub(super) fn scope_expansion(
 ) -> Result<Expansion> {
     validate_nonempty_scopes(specs, allowed, write_allowed)?;
     let mut expansion = Expansion::default();
+    write_expansion(specs, write_allowed, &mut expansion)?;
+    read_expansion(specs, allowed, &mut expansion)?;
+    Ok(expansion)
+}
+
+fn write_expansion(
+    specs: &[TaskContract],
+    write_allowed: &[String],
+    expansion: &mut Expansion,
+) -> Result<()> {
     for spec in specs.iter().filter(|spec| spec.writes) {
         require(
             spec.scope.iter().all(|path| project_relative(path)),
@@ -96,6 +106,14 @@ pub(super) fn scope_expansion(
             .filter(|path| !write_allowed.iter().any(|approved| covers(approved, path)));
         push_new(&mut expansion.write, missing);
     }
+    Ok(())
+}
+
+fn read_expansion(
+    specs: &[TaskContract],
+    allowed: &[String],
+    expansion: &mut Expansion,
+) -> Result<()> {
     for path in specs.iter().flat_map(|spec| &spec.scope) {
         require(
             allowed.contains(path) || project_relative(path),
@@ -107,7 +125,7 @@ pub(super) fn scope_expansion(
         .flat_map(|spec| &spec.scope)
         .filter(|path| !allowed.iter().any(|approved| covers(approved, path)));
     push_new(&mut expansion.read, missing);
-    Ok(expansion)
+    Ok(())
 }
 
 fn push_new<'a>(into: &mut Vec<String>, paths: impl Iterator<Item = &'a String>) {

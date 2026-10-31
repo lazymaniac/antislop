@@ -94,7 +94,11 @@ def main():
     multiline_restricted = "pub(\n    crate\n)\nfn restricted() {\n" + "\n".join(
         "    let _ = 1;" for _ in range(27)
     ) + "\n}\n"
-    bad({"lib.rs": multiline_restricted}, "callable restricted is 32 lines", 1)
+    ok({"lib.rs": multiline_restricted}, "no violations")
+    multiline_restricted_over = "pub(\n    crate\n)\nfn restricted() {\n" + "\n".join(
+        "    let _ = 1;" for _ in range(29)
+    ) + "\n}\n"
+    bad({"lib.rs": multiline_restricted_over}, "callable restricted is 31 lines", 4)
 
     # Free, nested, inherent, trait declaration/default, and foreign declarations.
     forms = '''
@@ -134,8 +138,8 @@ unsafe extern "C" { fn foreign(); }
     # Callable spans start at the signature and include the closing brace.
     attached = "/// heading\n// note\n\n#[allow(dead_code)]\npub fn wide(\n    a: u8,\n) {\n}\n"
     ok({"lib.rs": attached})
-    counted_prefix = "/// heading\n// note\n\n#[allow(dead_code)]\npub fn wide(\n    a: u8,\n) {\n" + "\n".join("    let _ = 1;" for _ in range(27)) + "\n}\n"
-    bad({"lib.rs": counted_prefix}, "callable wide", 5)
+    counted_prefix = "/// heading\n// note\n\n#[allow(dead_code)]\npub fn wide(\n    a: u8,\n) {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}\n"
+    bad({"lib.rs": counted_prefix}, "callable wide is 33 lines", 5)
     multiline_attr = "#[allow(\n    dead_code,\n)]\nfn attributed() {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}\n"
     bad({"lib.rs": multiline_attr}, "callable attributed", 4)
     block_comment = "/** docs */\n/* lead */\nfn documented() {\n" + "\n".join("    let _ = 1;" for _ in range(29)) + "\n}\n"
@@ -375,16 +379,18 @@ unsafe extern "C" { fn foreign(); }
         [str(BINARY), "--root", "."], cwd=ROOT, text=True, capture_output=True
     )
     run_output = repository_run.stderr + repository_run.stdout
-    (ROOT / "tests" / "size_check" / "diagnostic-run.txt").write_text(
+    output_dir = ARTIFACTS / "size-check"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "diagnostic-run.txt").write_text(
         f"command: {BINARY} --root . (cwd: repository root)\nexit: {repository_run.returncode}\n{run_output}"
     )
     RESULTS.append((
         "repository-diagnostic",
         repository_run.returncode,
-        "expected diagnostic run; see diagnostic-run.txt",
+        "expected diagnostic run; see .antislop/size-check/diagnostic-run.txt",
         f"{len(run_output.splitlines())} output lines; exit {repository_run.returncode}",
     ))
-    (ROOT / "tests" / "size_check" / "validation-results.txt").write_text(
+    (output_dir / "validation-results.txt").write_text(
         "\n".join(
             f"{index:03} {status} exit={code} expected={expected!r} output={output!r}"
             for index, (status, code, expected, output) in enumerate(RESULTS, 1)

@@ -1,21 +1,24 @@
 use super::super::*;
+use crate::lean::tui::layout::lines::{compute_visual_lines, visual_text_lines_from_layout};
 
 impl App {
     pub(super) fn draw_chat(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let (input_lines, areas) = self.chat_layout(area);
+        let (input_lines, cursor, areas) = self.chat_layout(area);
         self.draw_phase_action(frame, areas[2], theme);
         self.draw_sending(frame, areas[1], theme);
         self.draw_transcript(frame, areas[0], theme);
-        self.draw_chat_input(frame, areas[3], input_lines, theme);
+        self.draw_chat_input(frame, areas[3], input_lines, cursor, theme);
     }
 
-    fn chat_layout(&mut self, area: Rect) -> (Vec<String>, [Rect; 4]) {
+    fn chat_layout(&mut self, area: Rect) -> (Vec<String>, (u16, usize), [Rect; 4]) {
         let input_width = usize::from(area.width.saturating_sub(3)).max(1);
         self.input_width = input_width;
-        let lines = visual_text_lines(&self.input.text, input_width);
+        let layout = compute_visual_lines(&self.input.text, input_width);
+        let cursor = self.input.visual_cursor_from_lines(&layout);
+        let lines = visual_text_lines_from_layout(&self.input.text, &layout);
         let input_height =
             (lines.len().clamp(1, 6) as u16 + 2).min(area.height.saturating_sub(1).max(1));
         let status_height = u16::from(self.sending);
@@ -34,7 +37,7 @@ impl App {
         .areas(area);
         self.phase_action_area = None;
         self.phase_action_command = None;
-        (lines, areas)
+        (lines, cursor, areas)
     }
 
     fn phase_action(&self) -> Option<(&'static str, Command)> {
@@ -97,10 +100,11 @@ impl App {
         frame: &mut Frame,
         input: Rect,
         input_lines: Vec<String>,
+        cursor: (u16, usize),
         theme: &Theme,
     ) {
         let visible_box_lines = usize::from(input.height.saturating_sub(2)).max(1);
-        let (cursor_col, cursor_row) = self.input.visual_cursor(self.input_width);
+        let (cursor_col, cursor_row) = cursor;
         let shown_lines = self.chat_input_window(&input_lines, cursor_row, visible_box_lines);
         let focused = self.focus == Focus::Chat
             && self.editor.is_none()

@@ -21,38 +21,7 @@ impl Core {
         write_allowed: &[String],
     ) -> Result<Error> {
         let id = format!("scope-{}", &crate::id()[..8]);
-        let mut paths = Vec::new();
-        if !expansion.write.is_empty() {
-            paths.push(format!("Write: {}", expansion.write.join(", ")));
-        }
-        if !expansion.read.is_empty() {
-            paths.push(format!("Read: {}", expansion.read.join(", ")));
-        }
-        let question = Question {
-            id: id.clone(),
-            context: tasks::bound(
-                &format!(
-                    "The plan revision \"{}\" needs paths the accepted plan does not cover.\n{}",
-                    revision.reason,
-                    paths.join("\n")
-                ),
-                4000,
-            ),
-            question: "Add these paths to the plan's approved scope?".into(),
-            options: vec![
-                Choice {
-                    label: APPROVE.into(),
-                    description:
-                        "The paths join the approved scope and the revision goes to its review."
-                            .into(),
-                },
-                Choice {
-                    label: "Reject".into(),
-                    description: "The revision is not applied; work keeps to the approved paths."
-                        .into(),
-                },
-            ],
-        };
+        let question = scope_question(&id, revision, expansion);
         self.store.ask_user_decision(conversation, &question)?;
         self.store.append_event(
             conversation,
@@ -168,6 +137,45 @@ impl Core {
         )?;
         Ok(())
     }
+}
+
+fn scope_question(id: &str, revision: &PlanRevision, expansion: &Expansion) -> Question {
+    let paths = scope_path_lines(expansion);
+    Question {
+        id: id.into(),
+        context: tasks::bound(
+            &format!(
+                "The plan revision \"{}\" needs paths the accepted plan does not cover.\n{}",
+                revision.reason,
+                paths.join("\n")
+            ),
+            4000,
+        ),
+        question: "Add these paths to the plan's approved scope?".into(),
+        options: vec![
+            Choice {
+                label: APPROVE.into(),
+                description:
+                    "The paths join the approved scope and the revision goes to its review.".into(),
+            },
+            Choice {
+                label: "Reject".into(),
+                description: "The revision is not applied; work keeps to the approved paths."
+                    .into(),
+            },
+        ],
+    }
+}
+
+fn scope_path_lines(expansion: &Expansion) -> Vec<String> {
+    let mut paths = Vec::new();
+    if !expansion.write.is_empty() {
+        paths.push(format!("Write: {}", expansion.write.join(", ")));
+    }
+    if !expansion.read.is_empty() {
+        paths.push(format!("Read: {}", expansion.read.join(", ")));
+    }
+    paths
 }
 
 fn extend(approved: &mut Vec<String>, paths: Vec<String>) {

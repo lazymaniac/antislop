@@ -1034,6 +1034,64 @@ fn continuation_reuses_current_approved_inputs_and_task_filter_follows_real_link
 }
 
 #[test]
+fn ledger_list_keeps_empty_filter_and_page_boundaries() {
+    let f = Fixture::new();
+    let query = LedgerQuery {
+        conversation: f.conversation.clone(),
+        run_id: f.run.id.clone(),
+        ..Default::default()
+    };
+    let empty = f.store.list_ledger(&query, "tree").unwrap();
+    assert!(empty.entries.is_empty());
+    assert_eq!(empty.total, 0);
+    assert!(!empty.has_more);
+
+    f.apply(&f.change(0, vec![f.entry("r1"), f.entry("r2"), f.entry("r3")]));
+    let page = f
+        .store
+        .list_ledger(
+            &LedgerQuery {
+                offset: 1,
+                limit: Some(1),
+                ..query.clone()
+            },
+            "tree",
+        )
+        .unwrap();
+    assert_eq!(page.total, 3);
+    assert_eq!(page.entries[0].spec.id, "r2");
+    assert!(page.has_more);
+
+    let past_end = f
+        .store
+        .list_ledger(
+            &LedgerQuery {
+                offset: 3,
+                limit: Some(1),
+                ..query.clone()
+            },
+            "tree",
+        )
+        .unwrap();
+    assert!(past_end.entries.is_empty());
+    assert_eq!(past_end.total, 3);
+    assert!(!past_end.has_more);
+
+    let filtered = f
+        .store
+        .list_ledger(
+            &LedgerQuery {
+                status: Some("verified".into()),
+                ..query
+            },
+            "tree",
+        )
+        .unwrap();
+    assert!(filtered.entries.is_empty());
+    assert_eq!(filtered.total, 0);
+}
+
+#[test]
 fn a_positive_assessment_cannot_hide_a_conflicting_result_on_the_same_inputs() {
     let f = Fixture::new();
     f.apply(&f.change(0, vec![f.entry("r1")]));

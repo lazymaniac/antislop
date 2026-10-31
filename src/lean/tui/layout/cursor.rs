@@ -67,9 +67,13 @@ impl InputBuffer {
     // Rows index the whole draft, which can exceed the terminal's u16 range.
     pub fn visual_cursor(&self, width: usize) -> (u16, usize) {
         let lines = compute_visual_lines(&self.text, width);
+        self.visual_cursor_from_lines(&lines)
+    }
+
+    pub fn visual_cursor_from_lines(&self, lines: &[VisualLineInfo]) -> (u16, usize) {
         let cursor = self.cursor.min(self.text.len());
         for (row, line) in lines.iter().enumerate() {
-            if Self::cursor_on_line(&lines, row, cursor) {
+            if Self::cursor_on_line(lines, row, cursor) {
                 return Self::cursor_column(line, cursor, &self.text, row);
             }
         }

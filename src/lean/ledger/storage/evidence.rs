@@ -1,7 +1,7 @@
 use super::*;
 
 mod status;
-use status::{enforce_dependency_statuses, set_ledger_status};
+use status::{enforce_dependency_statuses, set_ledger_statuses};
 
 fn validate_evidence_content(proposal: &EvidenceProposal, note: &str) -> Result<()> {
     require(
@@ -195,9 +195,7 @@ impl Store {
         let mut all = self.ledger_entries(conversation, run_id, revision)?;
         let evidence = self.ledger_evidence(conversation, run_id, None)?;
         let task_rows = self.ledger_status_tasks(run_id)?;
-        for e in &mut all {
-            set_ledger_status(e, &task_rows, &evidence, fingerprint)?;
-        }
+        set_ledger_statuses(&mut all, &task_rows, &evidence, fingerprint)?;
         enforce_dependency_statuses(&mut all);
         Ok(all)
     }

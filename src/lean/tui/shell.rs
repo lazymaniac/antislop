@@ -180,3 +180,32 @@ fn handle_events(app: &mut App) -> Result<bool> {
         _ => Ok(true),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lean::tui::{Update, update_channel};
+    use std::sync::mpsc;
+
+    #[test]
+    fn ui_drains_replacement_queue_without_blocking_on_its_sender() {
+        let (sender, receiver) = update_channel(1);
+        let client = Client::at(std::path::Path::new("/dev/null"));
+        let mut app = App::test_app_with_client_and_updates(client, sender.clone());
+        sender.send(Update::Notice("first".into())).unwrap();
+
+        let (done, sent) = mpsc::channel();
+        let producer = sender.clone();
+        let join = std::thread::spawn(move || {
+            producer.send(Update::Notice("second".into())).unwrap();
+            done.send(()).unwrap();
+        });
+        apply_pending(&mut app, &receiver);
+        sent.recv_timeout(Duration::from_secs(1)).unwrap();
+        apply_pending(&mut app, &receiver);
+
+        assert_eq!(app.notice.as_deref(), Some("second"));
+        assert!(receiver.try_recv().is_err());
+        join.join().unwrap();
+    }
+}

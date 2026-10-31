@@ -31,8 +31,7 @@ impl Core {
         Ok(conversation)
     }
 
-    /// Records the message and returns at once. The orchestrator answers in
-    /// the background; messages sent meanwhile go into its next turn.
+    /// Records the message at once; the orchestrator answers in the background.
     pub fn send(self: &Arc<Self>, conversation: &str, text: &str) -> Result<Message> {
         self.store.conversation(conversation)?;
         let message = if text.trim() == "/planning" {
@@ -54,8 +53,7 @@ impl Core {
         Ok(message)
     }
 
-    /// A message from the user: with explicit recipient or `@recipient text` prefix,
-    /// validates recipient role, plan, and broadcast targets, reporting real delivery states.
+    /// Sends an addressed or broadcast message after validating recipient, plan, and delivery.
     pub fn submit(self: &Arc<Self>, conversation: &str, text: &str) -> Result<serde_json::Value> {
         self.submit_addressed(conversation, text, None)
     }
@@ -251,9 +249,7 @@ impl Core {
         self.store.history_page(conversation, after, lim)
     }
 
-    /// The user's comment on one element: it reaches the orchestrator as a
-    /// message now (a comment on the plan waits for the review) and stays in
-    /// its prompts until the user resolves it.
+    /// Sends a comment now, except plan comments wait for review; it stays in prompts until resolved.
     pub fn comment(
         self: &Arc<Self>,
         conversation: &str,

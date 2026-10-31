@@ -44,25 +44,26 @@ impl Core {
         reason: Option<&str>,
     ) -> Result<()> {
         task.status = status.into();
-        if let Some(reason) = reason {
-            let feedback = task
-                .feedback
-                .get_or_insert_with(|| json!({"round":task.round}));
-            feedback["reason"] = json!(reason);
-        }
+        record_stop_reason(task, reason);
         self.store.update_task(task)?;
-        if matches!(
-            status,
-            status::COORDINATING | status::NEEDS_USER | status::FAILED | status::CANCELLED
-        ) {
+        self.record_stop_progress(conversation, task, status)?;
+        self.release_finished_views(conversation, task, status);
+        self.announce_task(conversation, task, reason);
+        Ok(())
+    }
+
+    fn record_stop_progress(&self, conversation: &str, task: &Task, status: &str) -> Result<()> {
+        if stop_records_progress(status) {
             self.store.record_task_progress(conversation, task, None)?;
         }
-        if matches!(
-            status,
-            status::APPROVED | status::CANCELLED | status::SKIPPED
-        ) && let Err(error) =
-            super::core_path_helpers::release_views(&self.state, &task.id, None)
-        {
+        Ok(())
+    }
+
+    fn release_finished_views(&self, conversation: &str, task: &Task, status: &str) {
+        if !stop_releases_views(status) {
+            return;
+        }
+        if let Err(error) = super::core_path_helpers::release_views(&self.state, &task.id, None) {
             self.notice(
                 conversation,
                 &format!(
@@ -71,7 +72,28 @@ impl Core {
                 ),
             );
         }
-        self.announce_task(conversation, task, reason);
-        Ok(())
     }
+}
+
+fn record_stop_reason(task: &mut Task, reason: Option<&str>) {
+    if let Some(reason) = reason {
+        let feedback = task
+            .feedback
+            .get_or_insert_with(|| json!({"round":task.round}));
+        feedback["reason"] = json!(reason);
+    }
+}
+
+fn stop_records_progress(status: &str) -> bool {
+    matches!(
+        status,
+        status::COORDINATING | status::NEEDS_USER | status::FAILED | status::CANCELLED
+    )
+}
+
+fn stop_releases_views(status: &str) -> bool {
+    matches!(
+        status,
+        status::APPROVED | status::CANCELLED | status::SKIPPED
+    )
 }

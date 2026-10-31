@@ -1,20 +1,5 @@
 use super::*;
 use quote::ToTokens;
-pub(super) fn callable_token_start(
-    sig: &syn::Signature,
-    visibility: Option<&syn::Visibility>,
-) -> proc_macro2::Span {
-    let sig_start = sig.span();
-    if let Some(visibility @ (syn::Visibility::Public(_) | syn::Visibility::Restricted(_))) =
-        visibility
-    {
-        let visibility_span = visibility.span();
-        if visibility_span.start().line < sig_start.start().line {
-            return visibility_span;
-        }
-    }
-    sig_start
-}
 pub(super) fn meta_expr(m: &Meta) -> String {
     m.to_token_stream().to_string()
 }

@@ -72,7 +72,7 @@ impl<'ast> Visit<'ast> for Walker<'_> {
         self.callable(
             &i.attrs,
             &name,
-            callable_token_start(&i.sig, Some(&i.vis)),
+            i.sig.span(),
             i.block.brace_token.span.close(),
             false,
         );
@@ -86,7 +86,7 @@ impl<'ast> Visit<'ast> for Walker<'_> {
         self.callable(
             &i.attrs,
             &name,
-            callable_token_start(&i.sig, Some(&i.vis)),
+            i.sig.span(),
             i.block.brace_token.span.close(),
             false,
         );
