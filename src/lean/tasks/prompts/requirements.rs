@@ -50,6 +50,10 @@ pub(super) const REVIEW_RULES: &str = "Never run builds, tests, formatters, lint
      forbidden pattern), measure everything the task owns with read-only search and list \
      every violation, each with its location and size, in one finding; never give examples, \
      because the worker fixes what you name and each violation left out costs another round. \
+     A criterion that something did not happen (no write outside the project, no \
+     configuration change, no data sent away) is ok when the files and recorded evidence \
+     show no violation; never require a record proving the absence unless the requirement \
+     itself names that record. \
      Judge the content of the work, not who produced it: \
      never require independent proof of which agent, turn, session or directory made the \
      report, a runtime allocation record, or a receipt of delivery; none exists to give.";

@@ -425,3 +425,53 @@ fn unknown_question_ids_are_actionable_and_cannot_cross_conversations() {
             .contains("invalidated")
     );
 }
+
+#[test]
+fn a_closing_task_also_receives_the_summaries_of_earlier_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("core.db")).unwrap();
+    let conversation = store
+        .create_conversation(dir.path().to_str().unwrap())
+        .unwrap()
+        .id;
+    let task = |id: &str, kind: &str, depends: &[&str]| json!({"id":id,"title":id,"goal":"g","kind":kind,"depends_on":depends,"verifier":{"focus":"f"}});
+    let tasks = store
+        .add_plan(
+            &conversation,
+            &[
+                task("writer", "implementation", &[]),
+                task("context", "context", &["writer"]),
+                task("audit", "performance", &["writer"]),
+                task("lint", "static_analysis", &["writer"]),
+                task("gate", "integration", &["audit", "lint", "context"]),
+            ],
+        )
+        .unwrap();
+    for mut task in tasks.clone() {
+        task.status = "approved".into();
+        task.report = Some(format!("{} finished", task.spec["id"].as_str().unwrap()));
+        store.update_task(&task).unwrap();
+    }
+    let plan = &tasks[0].plan_id;
+    let ids = |spec: serde_json::Value| -> Vec<String> {
+        let spec: crate::lean::tasks::TaskContract = serde_json::from_value(spec).unwrap();
+        store
+            .dependency_inputs(plan, &spec)
+            .unwrap()
+            .into_iter()
+            .map(|input| input.id)
+            .collect()
+    };
+    assert_eq!(
+        ids(task("delivery", "delivery", &["gate"])),
+        ["gate", "audit", "lint"]
+    );
+    assert_eq!(
+        ids(task("after-gate", "writing", &["gate"])),
+        ["gate", "audit", "lint"]
+    );
+    assert_eq!(
+        ids(task("consumer", "implementation", &["audit"])),
+        ["audit"]
+    );
+}

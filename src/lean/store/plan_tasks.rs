@@ -26,6 +26,8 @@ fn task_generation(db: &rusqlite::Connection, task: &str) -> Result<i64> {
 
 /// How much of a dependency's summary a dependent task is shown.
 const DEPENDENCY_SUMMARY_LIMIT: usize = 2_000;
+/// How much of an earlier check's summary a closing task is shown.
+const CHECK_SUMMARY_LIMIT: usize = 800;
 
 #[path = "plan_tasks/checks.rs"]
 mod checks;
@@ -96,6 +98,7 @@ impl Store {
                 inputs.push(input);
             }
         }
+        inputs.extend(self.earlier_check_reports(plan, spec)?);
         let choices: Vec<String> = self.db().prepare("SELECT id FROM tasks WHERE plan_id=?1 AND json_extract(spec,'$.options_for')=?2 AND status<>'superseded'")?.query_map(params![plan,spec.id],|r|r.get(0))?.collect::<std::result::Result<_,_>>()?;
         for id in choices {
             inputs.push(self.selected_approach_report(&id)?);
@@ -124,6 +127,74 @@ impl Store {
                 DEPENDENCY_SUMMARY_LIMIT,
             ),
         }))
+    }
+
+    /// A task that closes the work (delivery, or one following the
+    /// integration gate) judges evidence the gates before it recorded only in
+    /// the store, so it also gets the short summaries of the approved checks
+    /// and audits it depends on through other tasks.
+    fn earlier_check_reports(
+        &self,
+        plan: &str,
+        spec: &crate::lean::tasks::TaskContract,
+    ) -> Result<Vec<crate::lean::tasks::DependencyReport>> {
+        use crate::config::WorkKind;
+        let tasks = self.plan(plan)?;
+        let contract = |task: &Task| {
+            serde_json::from_value::<crate::lean::tasks::TaskContract>(task.spec.clone()).ok()
+        };
+        let by_id: std::collections::HashMap<String, (&Task, crate::lean::tasks::TaskContract)> =
+            tasks
+                .iter()
+                .filter_map(|task| contract(task).map(|spec| (spec.id.clone(), (task, spec))))
+                .collect();
+        let closing = spec.kind == WorkKind::Delivery
+            || spec.depends_on.iter().any(|id| {
+                by_id
+                    .get(id)
+                    .is_some_and(|(_, dependency)| dependency.kind == WorkKind::Integration)
+            });
+        if !closing {
+            return Ok(vec![]);
+        }
+        let mut seen: std::collections::BTreeSet<String> =
+            spec.depends_on.iter().cloned().collect();
+        let mut pending: Vec<String> = spec.depends_on.clone();
+        let mut reports = vec![];
+        while let Some(id) = pending.pop() {
+            let Some((_, dependency)) = by_id.get(&id) else {
+                continue;
+            };
+            for next in &dependency.depends_on {
+                if !seen.insert(next.clone()) {
+                    continue;
+                }
+                pending.push(next.clone());
+                let Some((task, check)) = by_id.get(next) else {
+                    continue;
+                };
+                let evidence = matches!(
+                    check.kind,
+                    WorkKind::StaticAnalysis
+                        | WorkKind::Testing
+                        | WorkKind::Security
+                        | WorkKind::Performance
+                        | WorkKind::Integration
+                );
+                if evidence && check.options_for.is_none() && task.status == "approved" {
+                    reports.push(crate::lean::tasks::DependencyReport {
+                        id: check.id.clone(),
+                        title: format!("{} (earlier check)", check.title),
+                        report: crate::lean::tasks::bound(
+                            &self.dependency_summary(task)?,
+                            CHECK_SUMMARY_LIMIT,
+                        ),
+                    });
+                }
+            }
+        }
+        reports.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(reports)
     }
 
     fn selected_approach_report(
