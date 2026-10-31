@@ -50,22 +50,29 @@ pub(super) fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
 /// commit another branch or the plan already holds.
 const VIEWS: [&str; 2] = ["review", "observation"];
 
-/// Removes `task_id`'s review and observation checkouts and their branches,
-/// apart from `keep`. A session that worked in one is replaced when its next
-/// turn needs another directory, so only the current one is still in use.
+/// Removes `task_id`'s review and observation checkouts and their branches.
+/// With `keep`, only the older checkouts of `keep`'s own kind go: a session
+/// that worked in one is replaced when its next turn needs another
+/// directory, while the worker still works in its observation checkout when
+/// the verifier gets a new review one.
 pub(super) fn release_views(state: &Path, task_id: &str, keep: Option<&Path>) -> Result<()> {
     let id = task_path_component(task_id)?;
     let Ok(entries) = std::fs::read_dir(state.join("worktrees")) else {
         return Ok(());
     };
+    let prefix = |kind: &str| format!("{id}-{kind}-g");
+    let kept_kind = keep.and_then(|keep| {
+        let name = keep.file_name()?.to_string_lossy().into_owned();
+        VIEWS.iter().find(|kind| name.starts_with(&prefix(kind)))
+    });
     let mut first_error = None;
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        let view = VIEWS
-            .iter()
-            .any(|kind| name.starts_with(&format!("{id}-{kind}-g")));
-        if !view || keep == Some(path.as_path()) {
+        let released = VIEWS.iter().any(|kind| {
+            name.starts_with(&prefix(kind)) && kept_kind.is_none_or(|kept| kept == kind)
+        });
+        if !released || keep == Some(path.as_path()) {
             continue;
         }
         if let Err(error) = release_view(&path, &name) {

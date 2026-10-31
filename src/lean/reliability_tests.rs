@@ -218,10 +218,17 @@ fn a_task_keeps_only_its_current_view_and_settling_removes_the_rest() {
             .success()
     };
 
+    let next_observation = view(format!("{task}-observation-g1"));
     release_views(&state, task, Some(&current)).unwrap();
-    assert!(!observed.exists() && !first.exists());
+    assert!(!first.exists());
     assert!(!branch_exists(&format!("{task}-review-g0-1")));
     assert!(current.exists() && foreign.exists() && writer.exists());
+    assert!(
+        observed.exists(),
+        "a new review leaves the worker's checkout"
+    );
+    release_views(&state, task, Some(&next_observation)).unwrap();
+    assert!(!observed.exists() && current.exists() && next_observation.exists());
 
     release_views(&state, task, None).unwrap();
     assert!(!current.exists() && !branch_exists(&format!("{task}-review-g0-2")));
