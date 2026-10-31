@@ -4,9 +4,9 @@ use super::super::super::Health;
 use super::super::super::health::{card_lines, fit_lines};
 use ratatui::style::Style;
 
-pub(super) fn status_style(theme: &Theme, health: Health, tick: u64) -> (String, Style) {
+pub(super) fn status_style(theme: &Theme, health: Health) -> (String, Style) {
     let (icon, tone) = match health {
-        Health::Working => (theme.spinner(tick), theme.status("working")),
+        Health::Working => ("", theme.status("working")),
         Health::Problem => (theme.glyphs().problem, theme.error()),
         Health::Waiting => (theme.glyphs().waiting, theme.warning()),
         Health::Done => (theme.glyphs().done, theme.status("approved")),
@@ -59,7 +59,7 @@ fn verifier_summary(task: &TaskRow, width: usize, max_lines: usize) -> Vec<Strin
     lines.extend(fit_lines(
         &normalize(task.verifier_summary.as_deref().unwrap_or_default()),
         width,
-        half,
+        max_lines.saturating_sub(half),
     ));
     lines.truncate(max_lines);
     lines

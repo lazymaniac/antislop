@@ -320,7 +320,7 @@ fn a_tasks_agents_have_cards_of_their_own_in_one_frame_even_when_collapsed_or_fi
             graph.render(&view, &mut canvas, Relations::all(), "verifier:t1");
             let text = canvas.lines().join("\n");
             assert!(
-                text.contains("verifier") && text.contains("checking r2"),
+                text.contains("verifier") && text.contains("round 2"),
                 "{text}"
             );
             assert!(!text.contains("Execute") && !text.contains("Validate"));
@@ -612,21 +612,101 @@ fn health_marks_problems_and_cards_have_no_frame() {
 }
 
 #[test]
-fn working_cards_animate_with_the_tick_and_stay_ascii_safe() {
+fn card_progress_bounces_on_the_stripe_and_stops_when_queued_or_done() {
     let mut row = task("t1", &[]);
     row.status = "working".into();
-    let view = view(vec![row]);
+    row.round = 2;
+    let mut view = view(vec![row]);
     let graph = Graph::new(&view);
-    let frame = |theme: &Theme, tick| {
-        let mut canvas = Canvas::new(graph.width, graph.height);
-        graph.render_with(&view, &mut canvas, Relations::all(), "", theme, tick);
-        canvas.lines().join("\n")
+    let node = graph.node("worker:t1").unwrap();
+    for theme in [Theme::new(true, false), Theme::new(false, true)] {
+        for selected in [false, true] {
+            let fill = if selected {
+                theme.raised()
+            } else {
+                theme.card()
+            };
+            let frame = |view: &View, tick| {
+                let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
+                draw_node(view, &mut canvas, node, selected, &theme, tick);
+                canvas
+            };
+            let marker_rows = |canvas: &mut Canvas| {
+                (0..node.height)
+                    .filter(|row| {
+                        canvas.cell(node.x, node.y + row).unwrap().style
+                            == fill.patch(theme.progress_marker())
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let last = node.height - 1;
+            for (tick, expected) in [
+                (0, 0),
+                (1, 1),
+                (last as u64, last),
+                (last as u64 + 1, last - 1),
+                (last as u64 * 2, 0),
+            ] {
+                let mut canvas = frame(&view, tick);
+                assert_eq!(marker_rows(&mut canvas), vec![expected]);
+                let cell = canvas.cell(node.x, node.y + expected).unwrap();
+                assert_eq!(cell.style, fill.patch(theme.progress_marker()));
+                assert_eq!(Canvas::glyph(cell), if theme.ascii { "#" } else { "█" });
+                let text = canvas.lines().join("\n");
+                assert!(text.contains("round 2"), "{text}");
+                assert!(!text.contains("working"), "{text}");
+                for spinner in theme.glyphs().spinner {
+                    assert!(!canvas.lines()[2].contains(spinner));
+                }
+            }
+            view.tasks[0].status = "queued".into();
+            assert_eq!(frame(&view, 0).lines(), frame(&view, 7).lines());
+            let mut queued = frame(&view, 0);
+            assert_eq!(
+                Canvas::glyph(queued.cell(node.x, node.y + last / 2).unwrap()),
+                if theme.ascii { "#" } else { "█" }
+            );
+            assert_eq!(marker_rows(&mut queued), vec![last / 2]);
+            for status in ["approved", "skipped", "cancelled", "revised"] {
+                view.tasks[0].status = status.into();
+                assert!(marker_rows(&mut frame(&view, 0)).is_empty(), "{status}");
+            }
+            view.tasks[0].status = "working".into();
+        }
+    }
+}
+
+#[test]
+fn finished_session_agent_has_no_progress_marker() {
+    let mut view = View::default();
+    view.agents.insert(
+        ORCHESTRATOR.into(),
+        super::super::view::Agent {
+            running: true,
+            turns: 2,
+            ..Default::default()
+        },
+    );
+    let graph = Graph::new(&view);
+    let node = graph.node(ORCHESTRATOR).unwrap();
+    let theme = Theme::new(true, false);
+    let frame = |view: &View| {
+        let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
+        draw_node(view, &mut canvas, node, false, &theme, 0);
+        canvas
     };
-    let unicode = Theme::new(true, false);
-    assert_ne!(frame(&unicode, 0), frame(&unicode, 1));
-    assert!(frame(&unicode, 3).contains(unicode.spinner(3)));
-    let ascii = Theme::new(false, true);
-    assert!(frame(&ascii, 2).contains(ascii.spinner(2)));
+    assert!(frame(&view).lines()[2].contains("round 3"));
+    let agent = view.agents.get_mut(ORCHESTRATOR).unwrap();
+    agent.running = false;
+    agent.turns = 3;
+    agent.activity = "✓ turn finished".into();
+    let mut canvas = frame(&view);
+    for row in 0..node.height {
+        assert_ne!(
+            canvas.cell(node.x, node.y + row).unwrap().style.fg,
+            Some(Color::White)
+        );
+    }
 }
 
 #[test]
@@ -731,7 +811,7 @@ fn cards_are_fixed_and_no_event_moves_a_single_node() {
     let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
     graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
     let rows = canvas.lines();
-    assert!(rows[2].contains("working r1"), "{}", rows[2]);
+    assert!(rows[2].contains("round 1"), "{}", rows[2]);
     assert!(!rows[2].contains("cargo check"), "state alone: {}", rows[2]);
     assert!(
         rows[1].contains("codex - "),
@@ -739,15 +819,11 @@ fn cards_are_fixed_and_no_event_moves_a_single_node() {
         rows[1]
     );
     assert!(
-        !rows[usize::from(ACTIVITY_ROW)].contains("codex"),
+        !rows[3].contains("codex"),
         "the activity line is independent of the provider: {}",
-        rows[usize::from(ACTIVITY_ROW)]
+        rows[3]
     );
-    assert!(
-        rows[usize::from(ACTIVITY_ROW)].contains("doing: cargo check"),
-        "{}",
-        rows[usize::from(ACTIVITY_ROW)]
-    );
+    assert!(rows[3].contains("doing: cargo check"), "{}", rows[3]);
 
     // Effect and verdict: the round's card data changes no geometry and
     // takes its own slot without pushing the summary away.
@@ -829,14 +905,11 @@ fn every_card_block_stays_in_its_own_slot() {
     );
     let rows = render(&view);
     assert_eq!(rows.len(), usize::from(HEIGHT));
-    assert!(rows[2].contains("working r1"), "{rows:?}");
+    assert!(rows[2].contains("round 1"), "{rows:?}");
     assert!(!rows[2].contains("cargo"), "state alone: {}", rows[2]);
-    assert!(
-        rows[usize::from(ACTIVITY_ROW)].contains("doing: cargo check"),
-        "{rows:?}"
-    );
+    assert!(rows[3].contains("doing: cargo check"), "{rows:?}");
     for (row, text) in rows.iter().enumerate() {
-        if row != usize::from(ACTIVITY_ROW) {
+        if row != 3 {
             assert!(!text.contains("doing"), "{rows:?}");
         }
         assert!(!text.contains("effect"), "{rows:?}");
@@ -862,10 +935,58 @@ fn every_card_block_stays_in_its_own_slot() {
     for text in &rows[BODY_ROW as usize..usize::from(EFFECT_ROW)] {
         assert!(!text.contains("effect"), "summary keeps its slot: {rows:?}");
     }
-    assert!(rows[BODY_ROW as usize].contains("Repair"), "{rows:?}");
+    assert!(rows[3].contains("Repair"), "{rows:?}");
     let bottom = &rows[usize::from(HEIGHT) - 1];
     assert!(bottom.contains("committed"), "meta at the bottom: {rows:?}");
     assert!(!bottom.contains("effect"), "{rows:?}");
+}
+
+#[test]
+fn descriptions_reclaim_empty_header_rows_and_metadata_has_body_contrast() {
+    use serde_json::json;
+    let summary = "Describe the complete implementation and its validation in detail. ".repeat(12);
+    for (kind, key, top, coverage) in [
+        ("implementation", "worker:t1", 3, None),
+        ("implementation", "verifier:t1", 3, None),
+        (
+            "implementation",
+            "verifier:t1",
+            4,
+            Some(json!({"total": 2, "ok": 2})),
+        ),
+        ("options", "worker:t1", 4, None),
+    ] {
+        let mut row = task("t1", &[]);
+        row.kind = kind.into();
+        row.status = "approved".into();
+        row.summary = Some(summary.clone());
+        row.verifier_summary = Some(summary.clone());
+        row.obligations = coverage;
+        row.effect = Some("Updated implementation".into());
+        row.integration = Some(json!({"outcome": "committed", "detail": "as abc12"}));
+        let view = view(vec![row]);
+        let graph = open_cards(&view);
+        let node = graph.node(key).unwrap();
+        for theme in [Theme::new(true, false), Theme::new(false, true)] {
+            let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
+            draw_node(&view, &mut canvas, node, true, &theme, 0);
+            let rows = canvas.lines();
+            assert!(rows[top].contains("Describe"), "{rows:?}");
+            // A long description uses every reclaimed row up to the effect slot.
+            for row in &rows[top..usize::from(EFFECT_ROW)] {
+                assert!(row.chars().any(|ch| ch.is_alphabetic()), "{rows:?}");
+            }
+            let bottom = canvas.cell(node.x + 2, node.y + node.height - 1).unwrap();
+            assert_eq!(bottom.style, theme.raised().patch(theme.text()));
+            if key == "worker:t1" {
+                assert!(rows.last().unwrap().contains("committed"), "{rows:?}");
+                assert!(
+                    rows[usize::from(EFFECT_ROW)].contains("effect:"),
+                    "{rows:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

@@ -4960,10 +4960,11 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         },
     );
     let (text, _) = card(&view, "worker:t1");
-    assert!(text.contains("working r1"), "{text}");
+    assert!(text.contains("round 1"), "{text}");
     let (text, _) = card(&view, "verifier:t1");
     assert!(text.contains("waits for worker r1"), "{text}");
     // Verifier checking: separate activity lines per role.
+    view.agents.get_mut("worker:t1").unwrap().running = false;
     view.apply(&ev(
         3,
         "task",
@@ -4985,16 +4986,17 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
         "the verifier's work shows on its own card: {worker_now}"
     );
     let (verifier_now, _) = card(&view, "verifier:t1");
-    assert!(verifier_now.contains("checking r1"), "{verifier_now}");
+    assert!(verifier_now.contains("round 1"), "{verifier_now}");
     assert!(verifier_now.contains("cargo test"), "{verifier_now}");
     assert!(
-        verifier_now.contains("· agy"),
+        verifier_now.contains("agy - verification"),
         "verifier shows its own agent: {verifier_now}"
     );
     assert!(
         !verifier_now.contains("codex"),
         "no worker agent on the verifier card"
     );
+    view.agents.get_mut("verifier:t1").unwrap().running = false;
     // Approved with feedback: effect on the worker card, coverage and the
     // one landing label on the bottom line; details keep the same words.
     view.apply(&ev(
@@ -5127,7 +5129,7 @@ fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_even
              "verifier": {"summary": "Check storage."}},
             {"id": "t2", "title": "API", "depends_on": ["t1"],
              "summary": "Expose the corrected storage behind a small HTTP surface a verifier can read in one pass, with careful unicode 👩‍💻 everywhere.",
-             "verifier": {"summary": "Verify the 👩‍💻 surface wrapped past every card edge twice over turtles e\u{301} until only an ellipsis ends the last visible line, which a card of its own still cannot hold."}},
+             "verifier": {"summary": "Verify the 👩‍💻 surface wrapped past every card edge twice over turtles e\u{301} until only an ellipsis ends the last visible line, which a card of its own still cannot hold. ".repeat(2)}},
         ]}),
     ));
     let geometry = |view: &View, grouping: GroupingMode| -> Vec<(String, u16, u16, u16, bool)> {

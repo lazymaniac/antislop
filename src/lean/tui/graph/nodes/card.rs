@@ -68,7 +68,8 @@ impl Card<'_> {
 
     fn paint(&mut self, selected: bool, tick: u64) {
         self.paint_background(selected);
-        self.paint_identity(tick);
+        self.paint_progress(tick);
+        self.paint_identity();
         if !self.node.collapsed {
             self.paint_contents();
         }
@@ -76,12 +77,16 @@ impl Card<'_> {
 
     fn paint_contents(&mut self) {
         if is_admin(&self.node.key) {
-            self.paint_body();
+            self.paint_body(ADMIN_BODY_ROW);
             return;
         }
-        self.paint_activity();
-        self.paint_branch();
-        self.paint_body();
+        let mut top = 3 + u16::from(self.verifier_text().is_some());
+        top += u16::from(self.paint_activity(top));
+        if let Some(branch) = self.branch() {
+            self.paint_branch_at(top, &branch);
+            top += 1;
+        }
+        self.paint_body(top);
         self.paint_metadata();
     }
 
@@ -102,8 +107,39 @@ impl Card<'_> {
         }
     }
 
-    fn paint_identity(&mut self, tick: u64) {
-        let (icon, tone) = status_style(self.theme, self.health, tick);
+    fn paint_progress(&mut self, tick: u64) {
+        // Idle also covers agents whose turn or task has already ended.
+        if self.health == Health::Idle {
+            let finished = match self.task {
+                Some(task) => matches!(task.status.as_str(), "skipped" | "cancelled" | "revised"),
+                None => {
+                    current_round(self.view, &card_members(self.view, &self.node.key)).is_some()
+                }
+            };
+            if finished {
+                return;
+            }
+        }
+        let last = self.node.height.saturating_sub(1);
+        let row = match self.health {
+            Health::Working if last > 0 => {
+                let phase = tick % (u64::from(last) * 2);
+                phase.min(u64::from(last) * 2 - phase) as u16
+            }
+            Health::Working | Health::Idle => last / 2,
+            _ => return,
+        };
+        let marker = if self.theme.ascii { '#' } else { '█' };
+        self.canvas.put(
+            self.node.x,
+            self.node.y.saturating_add(row),
+            marker,
+            self.fill.patch(self.theme.progress_marker()),
+        );
+    }
+
+    fn paint_identity(&mut self) {
+        let (icon, tone) = status_style(self.theme, self.health);
         self.paint_title();
         self.paint_open_comments();
         self.paint_provider(self.inner_width());
@@ -182,11 +218,32 @@ impl Card<'_> {
     fn paint_status(&mut self, inner: usize, icon: &str, tone: Style) {
         let (x, y) = (self.node.x, self.node.y);
         self.canvas.text(x + 2, y + 2, icon, self.fill.patch(tone));
-        let description = describe(self.view, &self.node.key);
+        let description = if self.health == Health::Working {
+            let round = self
+                .task
+                .map(|task| task.round)
+                .filter(|round| *round > 0)
+                .or_else(|| {
+                    let members = card_members(self.view, &self.node.key);
+                    current_round(self.view, &members)
+                        .and_then(requirements_round)
+                        .map(|index| index as u64 + 1)
+                })
+                .or_else(|| {
+                    self.view
+                        .agents
+                        .get(&self.node.key)
+                        .map(|agent| u64::from(agent.turns) + 1)
+                });
+            round.map_or_default(|round| format!("round {round}"))
+        } else {
+            describe(self.view, &self.node.key)
+        };
+        let icon_width = if icon.is_empty() { 0 } else { 2 };
         self.canvas.text(
-            x + 4,
+            x + 2 + icon_width,
             y + 2,
-            &truncate(&description, inner.saturating_sub(2)),
+            &truncate(&description, inner.saturating_sub(usize::from(icon_width))),
             self.fill.patch(if self.health == Health::Idle {
                 self.theme.dim()
             } else {
@@ -198,20 +255,7 @@ impl Card<'_> {
     /// A shared options card keeps the verifier's state on a line of its
     /// own; a verifier's card shows the coverage it has settled.
     fn paint_verifier(&mut self, inner: usize, tone: Style) {
-        if let Some(task) = self.task {
-            let coverage = task
-                .obligations
-                .as_ref()
-                .map(|_| taskinfo::coverage_short(task));
-            let text = match (self.role, coverage) {
-                (Some(Role::Pair), coverage) => format!(
-                    "V: {}{}",
-                    taskinfo::verifier_status(task),
-                    coverage.map_or_default(|coverage| format!(" · {coverage}"))
-                ),
-                (Some(Role::Verifier), Some(coverage)) => format!("coverage {coverage}"),
-                _ => return,
-            };
+        if let Some(text) = self.verifier_text() {
             self.canvas.text(
                 self.node.x + 2,
                 self.node.y + 3,
@@ -221,26 +265,39 @@ impl Card<'_> {
         }
     }
 
-    fn paint_activity(&mut self) {
-        if let Some(line) = activity_line(self.view, &self.node.key) {
-            let style = match self.health {
-                Health::Problem => self.theme.error(),
-                Health::Waiting => self.theme.warning(),
-                _ => self.theme.dim(),
-            };
-            self.canvas.text(
-                self.node.x + 2,
-                self.node.y + ACTIVITY_ROW,
-                &truncate(&line, self.inner_width()),
-                self.fill.patch(style),
-            );
+    fn verifier_text(&self) -> Option<String> {
+        let task = self.task?;
+        let coverage = task
+            .obligations
+            .as_ref()
+            .map(|_| taskinfo::coverage_short(task));
+        match (self.role, coverage) {
+            (Some(Role::Pair), coverage) => Some(format!(
+                "V: {}{}",
+                taskinfo::verifier_status(task),
+                coverage.map_or_default(|coverage| format!(" · {coverage}"))
+            )),
+            (Some(Role::Verifier), Some(coverage)) => Some(format!("coverage {coverage}")),
+            _ => None,
         }
     }
 
-    fn paint_branch(&mut self) {
-        if let Some(branch) = self.branch() {
-            self.paint_branch_at(BRANCH_ROW, &branch);
-        }
+    fn paint_activity(&mut self, row: u16) -> bool {
+        let Some(line) = activity_line(self.view, &self.node.key) else {
+            return false;
+        };
+        let style = match self.health {
+            Health::Problem => self.theme.error(),
+            Health::Waiting => self.theme.warning(),
+            _ => self.theme.dim(),
+        };
+        self.canvas.text(
+            self.node.x + 2,
+            self.node.y + row,
+            &truncate(&line, self.inner_width()),
+            self.fill.patch(style),
+        );
+        true
     }
 
     fn branch(&self) -> Option<String> {

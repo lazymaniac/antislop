@@ -72,14 +72,14 @@ const MAX_EFFECT_LINES: usize = 2;
 /// Smallest card a small screen shrinks to: the header slots, one summary
 /// line and the meta line; narrower than this the text has no room left.
 const MIN_WIDTH: u16 = 16;
-/// Fixed slots inside a card, counted from its top, each starting right
+/// Maximum header slots inside a card, counted from its top, each starting right
 /// where the previous block can end: title, agent and work kind, phase, verifier state, one activity
 /// line, the working branch, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
 /// effect lines and the meta line at the bottom. The height is that same
 /// arithmetic's end, so frame and slots are one rule that cannot drift
 /// apart: heights and positions depend only on the plan's shape, filters,
 /// grouping and which cards are folded — never on activity, an effect, a
-/// verdict or a retry.
+/// verdict or a retry. Empty optional header rows are reclaimed for the summary.
 const ACTIVITY_ROW: u16 = 4;
 const BRANCH_ROW: u16 = ACTIVITY_ROW + 1;
 const BODY_ROW: u16 = BRANCH_ROW + 1;

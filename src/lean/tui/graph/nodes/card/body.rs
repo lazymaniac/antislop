@@ -1,7 +1,7 @@
 use super::*;
 
 impl Card<'_> {
-    pub(super) fn paint_body(&mut self) {
+    pub(super) fn paint_body(&mut self, top: u16) {
         let inner = self.inner_width();
         if is_admin(&self.node.key) {
             let rows = self.node.height.saturating_sub(ADMIN_BODY_ROW);
@@ -14,8 +14,11 @@ impl Card<'_> {
             return;
         }
         let (summary_max, effect_max) = self.node.body_lines();
-        self.paint_summary(inner, BODY_ROW, summary_max);
-        self.paint_effect(inner, summary_max, effect_max);
+        // Empty optional header rows belong to the description. The effect
+        // and metadata keep their anchors, so the card's geometry stays fixed.
+        let summary_max = summary_max + usize::from(BODY_ROW.saturating_sub(top));
+        self.paint_summary(inner, top, summary_max);
+        self.paint_effect(inner, top, summary_max, effect_max);
     }
 
     fn paint_summary(&mut self, inner: usize, top: u16, max: usize) {
@@ -29,12 +32,12 @@ impl Card<'_> {
         }
     }
 
-    fn paint_effect(&mut self, inner: usize, summary_max: usize, effect_max: usize) {
+    fn paint_effect(&mut self, inner: usize, top: u16, summary_max: usize, effect_max: usize) {
         for (row, line) in effect_lines(self.view, &self.node.key, inner, effect_max)
             .iter()
             .enumerate()
         {
-            let y = self.node.y + BODY_ROW + summary_max as u16 + row as u16;
+            let y = self.node.y + top + summary_max as u16 + row as u16;
             self.canvas
                 .text(self.node.x + 2, y, line, self.fill.patch(self.theme.text()));
         }
@@ -56,7 +59,7 @@ impl Card<'_> {
             self.node.x + 2,
             bottom,
             &truncate(&meta, self.inner_width()),
-            self.fill.patch(self.theme.faint()),
+            self.fill.patch(self.theme.text()),
         );
     }
 }

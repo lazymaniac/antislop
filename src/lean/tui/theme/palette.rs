@@ -94,6 +94,14 @@ impl Theme {
         self.pick(fg(ayu::FG), Style::default())
     }
 
+    /// The moving marker on a graph card's role stripe.
+    pub fn progress_marker(&self) -> Style {
+        self.pick(
+            fg(Color::White),
+            Style::default().add_modifier(Modifier::REVERSED),
+        )
+    }
+
     pub fn dim(&self) -> Style {
         self.pick(fg(ayu::DIM), Style::default().add_modifier(Modifier::DIM))
     }
