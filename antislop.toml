@@ -6,6 +6,7 @@ schema_version = 2
 mode = "supervised"
 local_write = true
 local_commits = true
+max_tasks = 30
 
 [providers.codex]
 command = ["codex", "--sandbox", "danger-full-access"]
