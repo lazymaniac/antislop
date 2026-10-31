@@ -1,4 +1,4 @@
-command: /Users/sebastian/workspace/architect/.antislop/worktrees/9f4e9cd0-383d-47e3-876b-cd5263b8231f-g17/.antislop/target/debug/diagnostic-size-check --root . (cwd: repository root)
+command: /Users/sebastian/workspace/architect/.antislop/worktrees/9f4e9cd0-383d-47e3-876b-cd5263b8231f-g35/.antislop/target/debug/diagnostic-size-check --root . (cwd: repository root)
 exit: 0
 SOURCE src/bin/diagnostic-size-check.rs
 SOURCE src/config/diagnostics.rs
@@ -388,17 +388,23 @@ SOURCE src/lean/tui/graph/filters.rs
 SOURCE src/lean/tui/graph/health/cards.rs
 SOURCE src/lean/tui/graph/health.rs
 SOURCE src/lean/tui/graph/layout/builder.rs
-SOURCE src/lean/tui/graph/layout/columns.rs
 SOURCE src/lean/tui/graph/layout/constructors.rs
 SOURCE src/lean/tui/graph/layout/edges.rs
-SOURCE src/lean/tui/graph/layout/geometry.rs
-SOURCE src/lean/tui/graph/layout/placement.rs
+SOURCE src/lean/tui/graph/layout/units/build.rs
+SOURCE src/lean/tui/graph/layout/units/links.rs
+SOURCE src/lean/tui/graph/layout/units/model.rs
+SOURCE src/lean/tui/graph/layout/units/placement.rs
+SOURCE src/lean/tui/graph/layout/units/render/link_render.rs
+SOURCE src/lean/tui/graph/layout/units/render.rs
+SOURCE src/lean/tui/graph/layout/units.rs
 SOURCE src/lean/tui/graph/layout.rs
 SOURCE src/lean/tui/graph/model.rs
 SOURCE src/lean/tui/graph/nodes/card/body.rs
 SOURCE src/lean/tui/graph/nodes/card/content.rs
 SOURCE src/lean/tui/graph/nodes/card.rs
 SOURCE src/lean/tui/graph/nodes.rs
+SOURCE src/lean/tui/graph/routing/render.rs
+SOURCE src/lean/tui/graph/routing/route.rs
 SOURCE src/lean/tui/graph/routing.rs
 EXCLUDED src/lean/tui/graph/tests.rs: test-only source
 SOURCE src/lean/tui/graph.rs
@@ -480,6 +486,7 @@ SOURCE src/lean/tui/render/specialized_overview.rs
 SOURCE src/lean/tui/render/specialized_screens/graph.rs
 SOURCE src/lean/tui/render/specialized_screens.rs
 SOURCE src/lean/tui/render/transcript.rs
+SOURCE src/lean/tui/render/transcript_cache.rs
 SOURCE src/lean/tui/render/transcript_cards.rs
 SOURCE src/lean/tui/sanitize.rs
 EXCLUDED src/lean/tui/selection/tests.rs: test-only source
@@ -501,6 +508,8 @@ SOURCE src/lean/tui/theme/rows.rs
 SOURCE src/lean/tui/theme/tokens.rs
 SOURCE src/lean/tui/theme.rs
 SOURCE src/lean/tui/unblock.rs
+SOURCE src/lean/tui/update_queue/queue.rs
+SOURCE src/lean/tui/update_queue.rs
 SOURCE src/lean/tui/view/comments.rs
 SOURCE src/lean/tui/view/conversation/progress.rs
 SOURCE src/lean/tui/view/conversation.rs
@@ -543,4 +552,4 @@ SOURCE tools/size_check/walker_core.rs
 SOURCE tools/size_check/walker_macros.rs
 SOURCE tools/size_check/walker_modules.rs
 SOURCE tools/size_check/walker_visit.rs
-size diagnostic: 504 maintained Rust files, no violations
+size diagnostic: 513 maintained Rust files, no violations
