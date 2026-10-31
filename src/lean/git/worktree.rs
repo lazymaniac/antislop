@@ -101,6 +101,23 @@ pub fn prune_worktrees(project: &Path) -> Result<()> {
     ok(project, &["worktree", "prune"]).map(|_| ())
 }
 
+/// Local branches whose names start with `prefix`.
+pub fn branches(project: &Path, prefix: &str) -> Result<Vec<String>> {
+    let pattern = format!("refs/heads/{prefix}");
+    Ok(ok(
+        project,
+        &["for-each-ref", "--format=%(refname:short)", &pattern],
+    )?
+    .lines()
+    .map(str::to_owned)
+    .collect())
+}
+
+/// Deletes a branch no worktree has checked out.
+pub fn delete_branch(project: &Path, branch: &str) -> Result<()> {
+    ok(project, &["branch", "-D", branch]).map(|_| ())
+}
+
 /// Renames a branch, so the work on it is kept when its name is needed again.
 pub fn rename_branch(project: &Path, from: &str, to: &str) -> Result<()> {
     ok(project, &["branch", "-m", from, to]).map(|_| ())

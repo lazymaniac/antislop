@@ -80,33 +80,58 @@ fn release_view(path: &Path, name: &str) -> Result<()> {
     git::remove_worktree(&project, path, &format!("antislop/{name}"))
 }
 
-/// Views a restart finds for tasks that are settled or gone, and the
-/// worktree records whose directories were removed by hand.
+/// Views a restart finds for tasks that are settled or gone, their branches
+/// left without a checkout, and the worktree records whose directories were
+/// removed by hand.
 pub(super) fn release_settled_views(store: &Store, state: &Path) -> Result<()> {
-    let Ok(entries) = std::fs::read_dir(state.join("worktrees")) else {
-        return Ok(());
-    };
-    let mut projects = std::collections::BTreeSet::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(task) = VIEWS
-            .iter()
-            .find_map(|kind| name.split_once(&format!("-{kind}-g")).map(|(id, _)| id))
-        else {
-            continue;
-        };
-        let settled = store.task_by_id(task)?.is_none_or(|task| {
-            matches!(task.status.as_str(), status::APPROVED | status::CANCELLED)
-        });
-        if let Ok(project) = git::worktree_project(&entry.path()) {
-            projects.insert(project);
-        }
-        if settled {
-            let _ = release_view(&entry.path(), &name);
+    let mut projects: std::collections::BTreeSet<PathBuf> = store
+        .conversations()?
+        .into_iter()
+        .map(|conversation| PathBuf::from(conversation.project))
+        .filter(|project| git::is_repository(project))
+        .collect();
+    if let Ok(entries) = std::fs::read_dir(state.join("worktrees")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(task) = view_task(&name) else {
+                continue;
+            };
+            if let Ok(project) = git::worktree_project(&entry.path()) {
+                projects.insert(project);
+            }
+            if settled(store, task)? {
+                let _ = release_view(&entry.path(), &name);
+            }
         }
     }
     for project in projects {
         let _ = git::prune_worktrees(&project);
+        for branch in git::branches(&project, "antislop/").unwrap_or_default() {
+            let name = branch.trim_start_matches("antislop/");
+            if let Some(task) = view_task(name)
+                && settled(store, task)?
+            {
+                // Git refuses to delete a branch a worktree still has out.
+                let _ = git::delete_branch(&project, &branch);
+            }
+        }
     }
     Ok(())
+}
+
+fn view_task(name: &str) -> Option<&str> {
+    VIEWS
+        .iter()
+        .find_map(|kind| name.split_once(&format!("-{kind}-g")).map(|(id, _)| id))
+}
+
+/// A task that will not run in its current generation again; a later run
+/// makes its own views.
+fn settled(store: &Store, task: &str) -> Result<bool> {
+    Ok(store.task_by_id(task)?.is_none_or(|task| {
+        matches!(
+            task.status.as_str(),
+            status::APPROVED | status::CANCELLED | status::SKIPPED | status::STALE | "superseded"
+        )
+    }))
 }

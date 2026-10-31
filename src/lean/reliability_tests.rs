@@ -230,3 +230,52 @@ fn a_task_keeps_only_its_current_view_and_settling_removes_the_rest() {
         "only the task's views go"
     );
 }
+
+#[test]
+fn a_restart_releases_the_views_and_branches_of_settled_tasks_only() {
+    let project = tempfile::tempdir().unwrap();
+    let root = project.path().canonicalize().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet", "-b", "main"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(root.join("initial"), "initial").unwrap();
+    let base = git::commit_all(&root, "initial").unwrap();
+    let state = root.join(".antislop");
+    std::fs::create_dir_all(&state).unwrap();
+    let store = Store::open(&state.join("core.db")).unwrap();
+    let conversation = store
+        .create_conversation(root.to_str().unwrap())
+        .unwrap()
+        .id;
+    let task =
+        |id: &str| json!({"id":id,"title":id,"goal":"g","kind":"context","verifier":{"focus":"f"}});
+    let mut tasks = store
+        .add_plan(&conversation, &[task("old"), task("open")])
+        .unwrap();
+    tasks[0].status = "stale".into();
+    tasks[1].status = "coordinating".into();
+    for task in &tasks {
+        store.update_task(task).unwrap();
+    }
+    let view = |name: String| {
+        let path = state.join("worktrees").join(&name);
+        git::add_worktree(&root, &path, &format!("antislop/{name}"), &base).unwrap();
+        path
+    };
+    let stale = view(format!("{}-review-g0-1", tasks[0].id));
+    let open = view(format!("{}-review-g0-1", tasks[1].id));
+    let orphan = format!("antislop/{}-observation-g0", tasks[0].id);
+    git::add_worktree(&root, &state.join("worktrees").join("gone"), &orphan, &base).unwrap();
+    git::remove_worktree_keep_branch(&root, &state.join("worktrees").join("gone")).unwrap();
+
+    release_settled_views(&store, &state).unwrap();
+    assert!(!stale.exists());
+    assert!(open.exists(), "a task that may still run keeps its view");
+    let branches = git::branches(&root, "antislop/").unwrap();
+    assert_eq!(branches, [format!("antislop/{}-review-g0-1", tasks[1].id)]);
+}
