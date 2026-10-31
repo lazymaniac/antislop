@@ -44,3 +44,69 @@ pub(super) fn worktree_branch(state: &Path, task: &Task) -> Result<String> {
     }
     Ok(expected)
 }
+
+/// The kinds of checkout a task only reads through: a verifier's view of a
+/// round's result and a non-writer's view of the plan base. Each shows a
+/// commit another branch or the plan already holds.
+const VIEWS: [&str; 2] = ["review", "observation"];
+
+/// Removes `task_id`'s review and observation checkouts and their branches,
+/// apart from `keep`. A session that worked in one is replaced when its next
+/// turn needs another directory, so only the current one is still in use.
+pub(super) fn release_views(state: &Path, task_id: &str, keep: Option<&Path>) -> Result<()> {
+    let id = task_path_component(task_id)?;
+    let Ok(entries) = std::fs::read_dir(state.join("worktrees")) else {
+        return Ok(());
+    };
+    let mut first_error = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let view = VIEWS
+            .iter()
+            .any(|kind| name.starts_with(&format!("{id}-{kind}-g")));
+        if !view || keep == Some(path.as_path()) {
+            continue;
+        }
+        if let Err(error) = release_view(&path, &name) {
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+fn release_view(path: &Path, name: &str) -> Result<()> {
+    let project = git::worktree_project(path)?;
+    git::remove_worktree(&project, path, &format!("antislop/{name}"))
+}
+
+/// Views a restart finds for tasks that are settled or gone, and the
+/// worktree records whose directories were removed by hand.
+pub(super) fn release_settled_views(store: &Store, state: &Path) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(state.join("worktrees")) else {
+        return Ok(());
+    };
+    let mut projects = std::collections::BTreeSet::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(task) = VIEWS
+            .iter()
+            .find_map(|kind| name.split_once(&format!("-{kind}-g")).map(|(id, _)| id))
+        else {
+            continue;
+        };
+        let settled = store.task_by_id(task)?.is_none_or(|task| {
+            matches!(task.status.as_str(), status::APPROVED | status::CANCELLED)
+        });
+        if let Ok(project) = git::worktree_project(&entry.path()) {
+            projects.insert(project);
+        }
+        if settled {
+            let _ = release_view(&entry.path(), &name);
+        }
+    }
+    for project in projects {
+        let _ = git::prune_worktrees(&project);
+    }
+    Ok(())
+}

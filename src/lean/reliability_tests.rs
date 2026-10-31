@@ -175,3 +175,58 @@ fn scratch_paths_contain_untrusted_ids_and_distinguish_pairs() {
         writer_base_scratch(state, "p", "w1")
     );
 }
+
+#[test]
+fn a_task_keeps_only_its_current_view_and_settling_removes_the_rest() {
+    let project = tempfile::tempdir().unwrap();
+    let root = project.path();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet", "-b", "main"])
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(root.join("initial"), "initial").unwrap();
+    let base = git::commit_all(root, "initial").unwrap();
+    let state = root.join(".antislop");
+    let task = "12345678-1111-4111-8111-111111111111";
+    let other = "12345678-2222-4222-8222-222222222222";
+    let view = |name: String| {
+        let path = state.join("worktrees").join(&name);
+        git::add_worktree(root, &path, &format!("antislop/{name}"), &base).unwrap();
+        path
+    };
+    let observed = view(format!("{task}-observation-g0"));
+    let first = view(format!("{task}-review-g0-1"));
+    let current = view(format!("{task}-review-g0-2"));
+    let foreign = view(format!("{other}-review-g0-1"));
+    let writer = view(format!("{task}-g0"));
+    let branch_exists = |name: &str| {
+        std::process::Command::new("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/antislop/{name}"),
+            ])
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+
+    release_views(&state, task, Some(&current)).unwrap();
+    assert!(!observed.exists() && !first.exists());
+    assert!(!branch_exists(&format!("{task}-review-g0-1")));
+    assert!(current.exists() && foreign.exists() && writer.exists());
+
+    release_views(&state, task, None).unwrap();
+    assert!(!current.exists() && !branch_exists(&format!("{task}-review-g0-2")));
+    assert!(
+        foreign.exists() && writer.exists(),
+        "only the task's views go"
+    );
+}

@@ -81,6 +81,26 @@ pub fn remove_worktree(project: &Path, path: &Path, branch: &str) -> Result<()> 
     Ok(())
 }
 
+/// The repository a linked worktree belongs to, read from the worktree itself.
+pub fn worktree_project(path: &Path) -> Result<PathBuf> {
+    let common = PathBuf::from(ok(
+        path,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?);
+    match (common.file_name(), common.parent()) {
+        (Some(name), Some(project)) if name == ".git" => Ok(project.to_path_buf()),
+        _ => Err(Error::Invalid(format!(
+            "worktree {} belongs to no project checkout",
+            path.display()
+        ))),
+    }
+}
+
+/// Forgets worktrees whose directories are gone.
+pub fn prune_worktrees(project: &Path) -> Result<()> {
+    ok(project, &["worktree", "prune"]).map(|_| ())
+}
+
 /// Renames a branch, so the work on it is kept when its name is needed again.
 pub fn rename_branch(project: &Path, from: &str, to: &str) -> Result<()> {
     ok(project, &["branch", "-m", from, to]).map(|_| ())

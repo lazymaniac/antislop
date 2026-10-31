@@ -57,6 +57,17 @@ impl Core {
         ) {
             self.store.record_task_progress(conversation, task, None)?;
         }
+        if matches!(status, status::APPROVED | status::CANCELLED)
+            && let Err(error) = super::core_path_helpers::release_views(&self.state, &task.id, None)
+        {
+            self.notice(
+                conversation,
+                &format!(
+                    "the review checkouts of task {} were not removed: {error}",
+                    task.id
+                ),
+            );
+        }
         self.announce_task(conversation, task, reason);
         Ok(())
     }

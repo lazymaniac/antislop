@@ -63,6 +63,7 @@ fn observation_worktree(
         "antislop/{}-observation-g{}",
         task.id, task.input_generation
     );
+    let _ = crate::lean::core_path_helpers::release_views(&core.state, &task.id, Some(&path));
     git::add_worktree(project, &path, &branch, &base)?;
     Ok(Some(path))
 }

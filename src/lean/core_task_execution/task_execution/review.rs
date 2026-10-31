@@ -140,6 +140,7 @@ fn review_worktree(
         "antislop/{}-review-g{}-{round}",
         task.id, task.input_generation
     );
+    let _ = crate::lean::core_path_helpers::release_views(&core.state, &task.id, Some(&path));
     git::add_worktree(project, &path, &branch, &result)?;
     Ok(path)
 }
