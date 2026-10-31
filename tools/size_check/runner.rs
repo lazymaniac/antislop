@@ -37,7 +37,6 @@ fn execute(root: PathBuf) {
 pub(super) enum SourceClass {
     Production,
     TestOnly,
-    Generated,
 }
 
 impl SourceClass {
@@ -49,7 +48,6 @@ impl SourceClass {
         match self {
             Self::Production => "production source",
             Self::TestOnly => "test-only source",
-            Self::Generated => "generated source",
         }
     }
 }
@@ -78,12 +76,6 @@ pub(super) fn source_class(
     source_root: &Path,
     references: &BTreeMap<PathBuf, (bool, bool)>,
 ) -> SourceClass {
-    if path
-        .components()
-        .any(|part| matches!(part.as_os_str().to_str(), Some("generated")))
-    {
-        return SourceClass::Generated;
-    }
     let (production_ref, test_ref) = references.get(path).copied().unwrap_or((false, false));
     if is_crate_root(path, source_root) || production_ref || !test_ref {
         SourceClass::Production

@@ -1,7 +1,7 @@
 //! Repository size audit: enumerate `src/**/*.rs`, then follow every parsed
 //! module and `#[path]` edge, including the diagnostic binary's maintained
-//! checker modules outside `src`. Only test-only and generated paths are
-//! excluded, and every decision is printed as `SOURCE` or `EXCLUDED`.
+//! checker modules outside `src`. Only test-only paths are excluded, and
+//! every decision is printed as `SOURCE` or `EXCLUDED`.
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
@@ -93,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_generated_test_only_and_handwritten_vendor_sources() {
+    fn classifies_generated_looking_test_only_and_handwritten_vendor_sources() {
         let source_root = PathBuf::from("src");
         let references = BTreeMap::from([(PathBuf::from("src/test_support.rs"), (false, true))]);
         assert!(matches!(
@@ -102,7 +102,7 @@ mod tests {
                 &source_root,
                 &references
             ),
-            runner::SourceClass::Generated
+            runner::SourceClass::Production
         ));
         assert!(matches!(
             runner::source_class(Path::new("src/test_support.rs"), &source_root, &references),

@@ -219,7 +219,11 @@ unsafe extern "C" { fn foreign(); }
         "test_child.rs": "#![cfg(test)]\nmod nested;\n",
         "test_child/nested.rs": "\n".join(["// nested test-only"] * 350),
     }, "2 maintained Rust files")
-    ok({"generated/output.rs": "\n".join(["// generated output"] * 350)}, "EXCLUDED src/generated/output.rs: generated source")
+    bad(
+        {"generated/output.rs": "\n".join(["// generated-looking output"] * 350)},
+        "file is 350 lines",
+        path="src/generated/output.rs",
+    )
     bad({"vendor/copied.rs": "\n".join(["// vendor source"] * 350)}, "file is 350 lines", path="src/vendor/copied.rs")
     ok({"lib.rs": "mod child;\n", "child.rs": "fn visible() {}\n", "orphan.rs": "fn still_production() {}\n"})
     bad({"lib.rs": "mod missing;\n"}, "unresolved module missing")

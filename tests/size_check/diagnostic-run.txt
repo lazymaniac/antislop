@@ -1,4 +1,4 @@
-command: /Users/sebastian/workspace/architect/.antislop/worktrees/9f4e9cd0-383d-47e3-876b-cd5263b8231f-g35/.antislop/target/debug/diagnostic-size-check --root . (cwd: repository root)
+command: /Users/sebastian/workspace/architect/.antislop/worktrees/c674cdfb-8f2f-4a42-8489-373988ac8a15-g39/.antislop/target/debug/diagnostic-size-check --root . (cwd: repository root)
 exit: 0
 SOURCE src/bin/diagnostic-size-check.rs
 SOURCE src/config/diagnostics.rs
