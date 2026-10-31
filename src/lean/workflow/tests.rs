@@ -59,6 +59,57 @@ fn completed_followup_restarts_interview_without_erasing_history() {
 }
 
 #[test]
+fn a_rejected_final_audit_or_a_decision_answer_keeps_the_goal_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("state.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    let first = store
+        .add_message(&conversation.id, "user", "First goal")
+        .unwrap();
+    store
+        .interview_summary(&conversation.id, "First scope", first.seq)
+        .unwrap();
+    store.finish_interview(&conversation.id).unwrap();
+    let run = store.create_run(&conversation.id, "First goal").unwrap();
+    store
+        .select_planning_run(&conversation.id, &run.id)
+        .unwrap();
+    let tasks = store
+        .add_plan(
+            &conversation.id,
+            &[serde_json::json!({"id":"implementation","title":"Implementation","goal":"Deliver behavior","kind":"implementation","verifier":{"focus":"Inspect behavior"}})],
+        )
+        .unwrap();
+    let plan = &tasks[0].plan_id;
+    store.queue_plan(&conversation.id, plan).unwrap();
+    store.set_plan_status(plan, "queued", "approved").unwrap();
+    let audit = |approved: bool| {
+        store
+            .append_event(
+                &conversation.id,
+                None,
+                Some(plan),
+                "audit",
+                &serde_json::json!({"approved": approved, "plan": plan}),
+            )
+            .unwrap();
+    };
+    let still_open = |text: &str| {
+        store.add_message(&conversation.id, "user", text).unwrap();
+        let workflow = store.workflow(&conversation.id).unwrap();
+        let current = store.planning_run(&conversation.id).unwrap().unwrap();
+        workflow.phase == "implementation" && current.id == run.id
+    };
+    audit(false);
+    assert!(still_open("Fix what the audit found"));
+    audit(true);
+    assert!(still_open(
+        "Interview answer (scope-1a2b)\nQuestion: Add?\nAnswer: Approve"
+    ));
+    assert!(!still_open("Next goal"));
+}
+
+#[test]
 fn acceptance_requires_current_summary_and_survives_reopening() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");

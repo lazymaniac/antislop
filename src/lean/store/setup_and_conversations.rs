@@ -194,7 +194,11 @@ fn maybe_start_requirements_checkpoint(
     text: &str,
     sequence: u64,
 ) -> Result<()> {
-    if author != "user" || text.starts_with(crate::lean::COMMENT_PREFIX) {
+    // An answer to an open decision continues the current goal.
+    if author != "user"
+        || text.starts_with(crate::lean::COMMENT_PREFIX)
+        || text.starts_with("Interview answer (")
+    {
         return Ok(());
     }
     if restart_completed_workflow(tx, conversation)? > 0 {
@@ -203,13 +207,19 @@ fn maybe_start_requirements_checkpoint(
     Ok(())
 }
 
+/// A goal is complete when its latest plan is approved and its final audit,
+/// if one ran, did not reject it; a rejected audit leaves remediation open.
 fn restart_completed_workflow(tx: &rusqlite::Transaction<'_>, conversation: &str) -> Result<usize> {
     Ok(tx.execute(
-        "UPDATE session_workflow SET phase='interview',summary='',upto_message=0
+        "WITH latest(id) AS (SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1)
+         UPDATE session_workflow SET phase='interview',summary='',upto_message=0
          WHERE conversation_id=?1 AND phase='implementation'
-         AND EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1))
-         AND NOT EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM plans WHERE conversation_id=?1 ORDER BY created_ms DESC,rowid DESC LIMIT 1) AND status<>'approved')
-         AND NOT EXISTS(SELECT 1 FROM turns WHERE conversation_id=?1 AND status='running')",
+         AND EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM latest))
+         AND NOT EXISTS(SELECT 1 FROM tasks WHERE plan_id=(SELECT id FROM latest) AND status<>'approved')
+         AND NOT EXISTS(SELECT 1 FROM turns WHERE conversation_id=?1 AND status='running')
+         AND COALESCE((SELECT json_extract(payload,'$.approved') FROM events
+             WHERE conversation_id=?1 AND kind='audit' AND plan_id=(SELECT id FROM latest)
+             ORDER BY seq DESC LIMIT 1),1)=1",
         [conversation],
     )?)
 }

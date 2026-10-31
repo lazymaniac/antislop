@@ -99,6 +99,21 @@ fn events(core: &Core, conversation: &str, kind: &str) -> Vec<Value> {
         .collect()
 }
 
+fn approve_final_audit(core: &Core, conversation: &str) {
+    let plan = core.store.latest_plan(conversation).unwrap()[0]
+        .plan_id
+        .clone();
+    core.store
+        .append_event(
+            conversation,
+            None,
+            Some(&plan),
+            "audit",
+            &serde_json::json!({"approved": true, "findings": [], "plan": plan}),
+        )
+        .unwrap();
+}
+
 fn ask(core: &Arc<Core>, dir: &Path, text: &str) -> String {
     let conversation = support::fixture_conversation(core, &dir.join("project"))
         .unwrap()
@@ -642,6 +657,9 @@ else:
     core.send(&conversation, "next step").unwrap();
     wait_idle(&core, &conversation);
     core.set_mode(&conversation, false).unwrap();
+    // The fixture's agents cannot run the final audit; an approved one is
+    // what ends the goal.
+    approve_final_audit(&core, &conversation);
     core.send(&conversation, "and one more").unwrap();
     wait_idle(&core, &conversation);
 

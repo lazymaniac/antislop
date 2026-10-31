@@ -256,8 +256,21 @@ fn autonomous_mode_accepts_the_checked_plan_after_the_interview() {
             .any(|s| s.role.starts_with("worker:"))
     );
 
-    // The finished plan ends the cycle. The next request interviews again and
+    // The finished plan ends the cycle once its final audit approves (the
+    // fixture's agents cannot run one). The next request interviews again and
     // the planner drafts its plan too, though an older plan exists.
+    let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
+        .plan_id
+        .clone();
+    core.store
+        .append_event(
+            &conversation.id,
+            None,
+            Some(&plan),
+            "audit",
+            &serde_json::json!({"approved": true, "findings": [], "plan": plan}),
+        )
+        .unwrap();
     core.send(&conversation.id, "Inspect the documentation too")
         .unwrap();
     idle(&core, &conversation.id);
