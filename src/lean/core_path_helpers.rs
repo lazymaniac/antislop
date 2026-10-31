@@ -104,6 +104,7 @@ pub(super) fn release_settled_views(store: &Store, state: &Path) -> Result<()> {
             }
         }
     }
+    release_writer_checkouts(store, state)?;
     for project in projects {
         let _ = git::prune_worktrees(&project);
         for branch in git::branches(&project, "antislop/").unwrap_or_default() {
@@ -134,4 +135,40 @@ fn settled(store: &Store, task: &str) -> Result<bool> {
             status::APPROVED | status::CANCELLED | status::SKIPPED | status::STALE | "superseded"
         )
     }))
+}
+
+/// A writer's checkout of a generation the task has left, or of a task that
+/// will not run again, holds no work its branch lacks once it is clean: the
+/// directory (with its build output) goes and the branch keeps the commits.
+/// The current generation stays, since the task may continue in it.
+fn release_writer_checkouts(store: &Store, state: &Path) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(state.join("worktrees")) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some((id, generation)) = name
+            .rsplit_once("-g")
+            .and_then(|(id, generation)| Some((id, generation.parse::<i64>().ok()?)))
+        else {
+            continue;
+        };
+        if view_task(&name).is_some() || task_path_component(id).is_err() {
+            continue;
+        }
+        let Some(task) = store.task_by_id(id)? else {
+            continue;
+        };
+        let left = generation < task.input_generation
+            || matches!(task.status.as_str(), status::STALE | "superseded");
+        let path = entry.path();
+        if left
+            && git::worktree_branch(&path).is_ok_and(|branch| branch == format!("antislop/{name}"))
+            && git::is_clean(&path)
+            && let Ok(project) = git::worktree_project(&path)
+        {
+            let _ = git::remove_worktree_keep_branch(&project, &path);
+        }
+    }
+    Ok(())
 }

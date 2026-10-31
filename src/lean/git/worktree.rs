@@ -101,6 +101,11 @@ pub fn prune_worktrees(project: &Path) -> Result<()> {
     ok(project, &["worktree", "prune"]).map(|_| ())
 }
 
+/// Whether a checkout has no uncommitted change, ignored files aside.
+pub fn is_clean(path: &Path) -> bool {
+    ok(path, &["status", "--porcelain"]).is_ok_and(|status| status.is_empty())
+}
+
 /// Local branches whose names start with `prefix`.
 pub fn branches(project: &Path, prefix: &str) -> Result<Vec<String>> {
     let pattern = format!("refs/heads/{prefix}");

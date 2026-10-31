@@ -273,9 +273,35 @@ fn a_restart_releases_the_views_and_branches_of_settled_tasks_only() {
     git::add_worktree(&root, &state.join("worktrees").join("gone"), &orphan, &base).unwrap();
     git::remove_worktree_keep_branch(&root, &state.join("worktrees").join("gone")).unwrap();
 
+    let left = view(format!("{}-g0", tasks[0].id));
+    let current = view(format!("{}-g0", tasks[1].id));
+    let dirty = view(format!("{}-g1", tasks[0].id));
+    std::fs::write(dirty.join("draft"), "unsaved").unwrap();
+
     release_settled_views(&store, &state).unwrap();
     assert!(!stale.exists());
     assert!(open.exists(), "a task that may still run keeps its view");
+    assert!(
+        !left.exists(),
+        "a clean checkout of a task that will not run goes"
+    );
+    assert!(
+        current.exists(),
+        "the generation a task may continue in stays"
+    );
+    assert!(dirty.exists(), "uncommitted work is never discarded");
     let branches = git::branches(&root, "antislop/").unwrap();
-    assert_eq!(branches, [format!("antislop/{}-review-g0-1", tasks[1].id)]);
+    assert_eq!(
+        branches,
+        [
+            format!("antislop/{}-g0", tasks[0].id),
+            format!("antislop/{}-g1", tasks[0].id),
+            format!("antislop/{}-g0", tasks[1].id),
+            format!("antislop/{}-review-g0-1", tasks[1].id),
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+    );
 }
