@@ -69,7 +69,7 @@ impl PlanRevision {
                         && (old.spec["quality_gate"] == true
                             || old.spec["options_for"].as_str().is_some())
                 }),
-            "generated gates and local options are maintained by the runtime; revise the owning task; its options and gates follow it",
+            "generated gates and local options are maintained by the runtime: revise the task an option belongs to, and answer a gate's findings by revising the tasks they concern or adding a task that fixes them; options and gates follow the plan",
         )?;
         crate::require(
             seen.insert(task.id.clone()) && !self.retire.contains(&task.id),

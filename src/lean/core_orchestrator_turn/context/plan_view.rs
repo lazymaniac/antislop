@@ -12,7 +12,7 @@ pub(super) fn load(core: &Core, conversation: &str) -> Result<PlanView> {
         announce_planning(core, conversation)?;
     }
 
-    let graph = core.store.latest_plan(conversation)?;
+    let graph = editable_plan(core, conversation)?;
     record_revision_view(core, conversation, &graph)?;
     let graph_json = graph_json(core, &graph)?;
     Ok(PlanView {
@@ -20,6 +20,16 @@ pub(super) fn load(core: &Core, conversation: &str) -> Result<PlanView> {
         graph,
         graph_json,
     })
+}
+
+/// The plan `revise_plan` edits: the accepted one, which keeps running while
+/// a replacement draft is drafted, sent back or awaits the user. Before any
+/// plan is accepted, the latest draft.
+fn editable_plan(core: &Core, conversation: &str) -> Result<Vec<Task>> {
+    match core.store.accepted_plan(conversation)? {
+        Some(plan) => core.store.plan(&plan),
+        None => core.store.latest_plan(conversation),
+    }
 }
 
 fn announce_planning(core: &Core, conversation: &str) -> Result<()> {

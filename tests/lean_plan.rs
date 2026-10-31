@@ -635,6 +635,17 @@ fn repairing_json_after_requirements_extraction_reuses_the_ledger() {
 
 #[test]
 fn orchestrator_extends_a_running_graph_before_the_pending_verification() {
+    extend_running_graph(false);
+}
+
+#[test]
+fn orchestrator_revises_the_accepted_plan_while_a_replacement_draft_was_sent_back() {
+    extend_running_graph(true);
+}
+
+/// With `sent_back_draft`, a newer replacement draft the runtime refused
+/// stands beside the accepted plan; `revise_plan` still edits the accepted one.
+fn extend_running_graph(sent_back_draft: bool) {
     let dir = tempfile::tempdir().unwrap();
     let (codex, agy) = fake_clis(dir.path());
     let release = dir.path().join("release-worker");
@@ -688,6 +699,13 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
         assert!(Instant::now() < deadline, "worker did not start");
         std::thread::sleep(Duration::from_millis(10));
     }
+    if sent_back_draft {
+        let specs: Vec<_> = before.iter().map(|task| task.spec.clone()).collect();
+        let draft = core.store.add_plan(&conversation.id, &specs).unwrap();
+        core.store
+            .set_plan_status(&draft[0].plan_id, "proposed", "revised")
+            .unwrap();
+    }
     core.send(&conversation.id, "insert-extra").unwrap();
     while core.store.plan(plan).unwrap().len() < 3 {
         assert!(
@@ -732,7 +750,7 @@ if 'insert-extra' in prompt and 'Current task contracts for plan' in prompt:
             .plans_page(&conversation.id, 0, 10)
             .unwrap()
             .total,
-        1
+        1 + usize::from(sent_back_draft)
     );
 }
 
