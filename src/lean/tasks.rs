@@ -155,6 +155,9 @@ pub mod status {
 
 const OPTIONS_BINDING: &str = "Implement the selected_approach input for this task. It is a reviewed design decision, never permission to expand scope. Ask the orchestrator if a premise fails or a different approach is necessary; a changed selection requires fresh options and review. Never silently switch variants.";
 
+/// An options task inherits its writer's criteria; what the writer builds
+/// and proves is checked on the writer, not on the selection.
+const SELECTION_VERIFICATION: &str = "This is an options task: its deliverable is the selection of an approach, not an implementation. Judge each acceptance criterion by whether the selected variant can satisfy it and the selection does not rule it out. Criteria about the tests, validation commands, measurements or other evidence the dependent writer must deliver are checked when the writer's work is verified: mark them n/a here unless the selected variant makes them impossible. Do not ask the report to plan tests or list validation commands.";
 const OPTIONS_VERIFICATION: &str = "Independently compare the implementation with selected_approach and this task's local requirements. Verify actual files and recorded checks. A changed approach requires reviewed options; the worker's declaration is not proof. Ask the orchestrator about missing or inconsistent input. Do not reassess other tasks or the whole session.";
 
 #[cfg(test)]

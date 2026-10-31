@@ -20,6 +20,8 @@ pub(super) struct PromptContext<'a> {
     pub(super) interviewing: bool,
     pub(super) workflow: &'a Workflow,
     pub(super) ledger_context: Option<&'a str>,
+    /// The open user decision, if any was ever asked.
+    pub(super) decision: Option<&'a Option<crate::lean::interview::Question>>,
 }
 
 pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
@@ -37,6 +39,7 @@ pub(super) fn orchestrator_prompt_text(context: PromptContext<'_>) -> String {
         context.history,
     );
     prompt.push_str(context.comment_context);
+    append_decision(&mut prompt, context.decision);
     append_graph(
         &mut prompt,
         context.editable_graph && !context.interviewing,
@@ -62,11 +65,29 @@ fn append_history(prompt: &mut String, first: bool, answered: u64, history: &[Me
     }
 }
 
+/// Names the one decision an answer can resolve, so an answer is never read
+/// as the reply to an earlier question it does not name.
+fn append_decision(
+    prompt: &mut String,
+    decision: Option<&Option<crate::lean::interview::Question>>,
+) {
+    let rule = "An answer resolves only the decision whose id it names. A decision asked before the newest one and never answered was superseded: it stays unanswered, and you ask it again if it still matters.";
+    match decision {
+        None => {}
+        Some(None) => prompt.push_str(&format!("\nNo user decision is open. {rule}\n")),
+        Some(Some(question)) => prompt.push_str(&format!(
+            "\nOpen user decision {}: {} {rule}\n",
+            question.id,
+            tasks::bound(&question.question, 600)
+        )),
+    }
+}
+
 fn append_graph(prompt: &mut String, editable: bool, graph: &[Task], graph_json: &str) {
     if !editable {
         return;
     }
-    prompt.push_str(&format!("\nCurrent task contracts for plan {}:\n{}\nChange it with revise_plan {{reason,tasks,retire}}: it applies to this plan at this revision. Only changed or added tasks go in tasks, each complete; omitted tasks are preserved, and a task without `covers` keeps the requirements it had. Retire a task only by replacing its obligations. An approved task keeps its result when only its title, goal or summary changes; name it in redo only when its result is wrong and must be done again, which also reruns every task depending on it. Scope and permission expansion require the user's decision. Never emit graph or recover blocks.\n",graph[0].plan_id,graph_json));
+    prompt.push_str(&format!("\nCurrent task contracts for plan {}:\n{}\nChange it with revise_plan {{reason,tasks,retire}}: it applies to this plan at this revision. Only changed or added tasks go in tasks, each complete; omitted tasks are preserved, and a task without `covers` keeps the requirements it had. Retire a task only by replacing its obligations. An approved task keeps its result when only its title, goal or summary changes; name it in redo only when its result is wrong and must be done again, which also reruns every task depending on it. A revision needing paths outside the approved scope is put to the user by the runtime, which resubmits it when they approve; do not ask them about it yourself. Never emit graph or recover blocks.\n",graph[0].plan_id,graph_json));
 }
 
 fn prepend_phase(prompt: &mut String, interviewing: bool, workflow: &Workflow) {

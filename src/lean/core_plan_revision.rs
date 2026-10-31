@@ -2,6 +2,7 @@
 use super::store::PlanRevision;
 use super::*;
 
+mod approval;
 mod review;
 mod scope;
 
@@ -189,7 +190,16 @@ impl Core {
             self.config_snapshot().policy.local_options,
         );
         tasks::validate(&specs)?;
-        self.validate_revision_scope(conversation, &revision.plan, &specs)?;
+        let authorization = scope::plan_authorization(self, conversation, &revision.plan)?;
+        let expansion = scope::scope_expansion(&specs, &authorization.read, &authorization.write)?;
+        if !expansion.is_empty() {
+            return Err(self.ask_scope_approval(
+                conversation,
+                revision,
+                &expansion,
+                &authorization.write,
+            )?);
+        }
         let run = self
             .store
             .plan_run(&revision.plan)?
@@ -202,15 +212,6 @@ impl Core {
             requirement_revision,
             receipt,
         })
-    }
-
-    fn validate_revision_scope(
-        &self,
-        conversation: &str,
-        plan: &str,
-        specs: &[TaskContract],
-    ) -> Result<()> {
-        scope::validate_plan_authorization(self, conversation, plan, specs)
     }
 }
 

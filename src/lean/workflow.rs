@@ -81,6 +81,33 @@ impl Store {
         Ok(())
     }
 
+    /// The decision put to the user now: the newest one, until an answer
+    /// names it. A newer decision supersedes an unanswered older one, which
+    /// the interface no longer shows either. `None` when none was ever asked.
+    pub fn open_user_decision(
+        &self,
+        conversation: &str,
+    ) -> Result<Option<Option<crate::lean::interview::Question>>> {
+        let latest: Option<String> = self
+            .db()
+            .query_row(
+                "SELECT payload FROM events WHERE conversation_id=?1 AND kind='user_decision_requested' ORDER BY seq DESC LIMIT 1",
+                [conversation],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(latest) = latest else {
+            return Ok(None);
+        };
+        let question: crate::lean::interview::Question = serde_json::from_str(&latest)?;
+        let answer = format!("Interview answer ({})\n", question.id);
+        let answered = self
+            .messages_by(conversation, "user", 0)?
+            .iter()
+            .any(|message| message.text.starts_with(&answer));
+        Ok(Some((!answered).then_some(question)))
+    }
+
     /// Whether the planner still owes this planning cycle its first plan: the
     /// conversation is planning, and no plan was drafted since the interview
     /// that led here ended. Plans of earlier cycles do not count.

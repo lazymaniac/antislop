@@ -27,6 +27,7 @@ pub(super) struct OrchestrationContext<'a> {
     graph_json: String,
     history: Vec<store::Message>,
     ledger_context: Option<String>,
+    decision: Option<Option<crate::lean::interview::Question>>,
 }
 
 pub(super) fn prepare<'a>(
@@ -56,6 +57,7 @@ pub(super) fn prepare<'a>(
         graph_json: view.graph_json,
         history,
         ledger_context,
+        decision: core.store.open_user_decision(conversation)?,
     })
 }
 
@@ -132,6 +134,7 @@ fn render_prompt(context: &OrchestrationContext<'_>, first: bool, fresh: bool) -
         interviewing: context.interviewing,
         workflow: &context.workflow,
         ledger_context: context.ledger_context.as_deref(),
+        decision: context.decision.as_ref(),
     })
 }
 

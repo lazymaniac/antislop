@@ -319,3 +319,33 @@ fn every_planning_cycle_awaits_its_own_first_plan() {
     store.add_plan(&conversation.id, &[task]).unwrap();
     assert!(!store.awaiting_first_plan(&conversation.id).unwrap());
 }
+
+#[test]
+fn only_the_newest_unanswered_decision_is_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("state.db")).unwrap();
+    let conversation = store.create_conversation("project").unwrap();
+    assert_eq!(store.open_user_decision(&conversation.id).unwrap(), None);
+    let ask = |id: &str| {
+        let question = serde_json::from_value(serde_json::json!({"id":id,"context":"A remediation needs a decision.","question":format!("Approve {id}?"),"options":[{"label":"Approve"},{"label":"Reject"}]})).unwrap();
+        store
+            .ask_user_decision(&conversation.id, &question)
+            .unwrap();
+    };
+    ask("consolidate");
+    ask("remediate");
+    let open = store.open_user_decision(&conversation.id).unwrap().unwrap();
+    assert_eq!(open.unwrap().id, "remediate");
+    // Answering the newest leaves none open: the older one was superseded.
+    store
+        .add_message(
+            &conversation.id,
+            "user",
+            "Interview answer (remediate)\nQuestion: Approve remediate?\nAnswer: Approve",
+        )
+        .unwrap();
+    assert_eq!(
+        store.open_user_decision(&conversation.id).unwrap(),
+        Some(None)
+    );
+}

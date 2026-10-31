@@ -825,3 +825,98 @@ fn the_first_planner_sees_the_extracted_requirements() {
     assert!(calls.contains("acceptance criterion ids"));
     assert!(!core.store.latest_plan(&conversation.id).unwrap().is_empty());
 }
+
+#[test]
+fn a_task_a_revision_changes_waits_for_its_review_instead_of_starting_on_the_old_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let (codex, agy) = fake_clis(dir.path());
+    let release_worker = dir.path().join("release-worker");
+    let started = dir.path().join("worker-started");
+    let release_review = dir.path().join("release-review");
+    let reviewing = dir.path().join("review-started");
+    let reviewer = std::fs::read_to_string(&agy)
+        .unwrap()
+        .replace(
+            "else:\n    session, answer = \"worker\", \"first report for \"",
+            &format!("else:\n    import os, time\n    if 'Task: Storage' in prompt:\n        open({:?}, 'w').close()\n        while not os.path.exists({:?}): time.sleep(0.01)\n    session, answer = \"worker\", \"first report for \"", started.to_string_lossy(), release_worker.to_string_lossy()),
+        )
+        .replace(
+            "    session = \"reviewer\"\n",
+            &format!("    session = \"reviewer\"\n    if 'Review a revision within accepted requirements' in prompt:\n        import os, time\n        open({:?}, 'w').close()\n        while not os.path.exists({:?}): time.sleep(0.01)\n", reviewing.to_string_lossy(), release_review.to_string_lossy()),
+        );
+    std::fs::write(&agy, reviewer).unwrap();
+    let hook = r#"
+if 'revise-t2' in prompt and 'Current task contracts for plan' in prompt:
+    import re, os, urllib.request
+    snapshot = json.loads(re.search(r'Current task contracts for plan [-\w]+:\n([^\n]+)', prompt).group(1))['tasks']
+    planned = ('id', 'title', 'goal', 'kind', 'depends_on', 'scope', 'writes', 'covers', 'section', 'summary')
+    t2 = {key: value for key, value in next(t for t in snapshot if t['id'] == 't2').items() if key in planned and value is not None}
+    t2['goal'] = 'Assess TUI again'
+    body={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'revise_plan','arguments':{'turn':os.environ['FIXTURE_TURN'],'reason':'Sharpen the TUI assessment','tasks':[t2],'retire':[]}}}
+    req=urllib.request.Request(os.environ['ANTISLOP_MCP_URL'],json.dumps(body).encode(),{'Authorization':'Bearer '+os.environ['ANTISLOP_MCP_TOKEN'],'Content-Type':'application/json'})
+    reply=json.load(urllib.request.urlopen(req,timeout=10))
+    assert not reply['result'].get('isError'),reply
+    print(json.dumps({'type':'thread.started','thread_id':'orch'}))
+    print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'Revision submitted.'}}))
+    print(json.dumps({'type':'turn.completed','usage':{}}))
+    sys.exit(0)
+"#;
+    // t2 does not wait for t1; one slot makes it queue behind t1 instead.
+    let orchestrator = std::fs::read_to_string(&codex)
+        .unwrap()
+        .replace("\"depends_on\": [\"t1\"],\n", "\n")
+        .replace(
+            "plan = {\"tasks\": [",
+            &format!("{hook}\nplan = {{\"tasks\": ["),
+        );
+    std::fs::write(&codex, orchestrator).unwrap();
+    let mut config = config(&codex, &agy);
+    config.policy.max_parallel = 1;
+    let core = Core::open(&dir.path().join("state"), config).unwrap();
+    let conversation = support::fixture_conversation(&core, dir.path()).unwrap();
+    core.send(&conversation.id, "Assess storage and TUI")
+        .unwrap();
+    wait_idle(&core, &conversation.id);
+    let plan = core.store.latest_plan(&conversation.id).unwrap()[0]
+        .plan_id
+        .clone();
+    core.accept_plan(&conversation.id, &plan).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let wait_for = |done: &dyn Fn() -> bool, what: &str| {
+        while !done() {
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    wait_for(&|| started.exists(), "t1 did not start");
+    core.send(&conversation.id, "revise-t2").unwrap();
+    wait_for(&|| reviewing.exists(), "the revision was not reviewed");
+    std::fs::write(&release_worker, "go").unwrap();
+    let status = |id: &str| {
+        core.store
+            .plan(&plan)
+            .unwrap()
+            .into_iter()
+            .find(|task| task.spec["id"] == id)
+            .unwrap()
+    };
+    wait_for(&|| status("t1").status == "approved", "t1 was not approved");
+    // The slot is free, but t2's contract is under review.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(status("t2").status, "queued");
+    std::fs::write(&release_review, "go").unwrap();
+    wait_idle(&core, &conversation.id);
+    let t2 = status("t2");
+    assert_eq!(t2.status, "approved", "{t2:?}");
+    assert_eq!(t2.spec["goal"], "Assess TUI again");
+    let starts = core
+        .store
+        .events_since(&conversation.id, 0, 10000)
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            event.kind == "turn_started" && event.payload["role"] == format!("worker:{}", t2.id)
+        })
+        .count();
+    assert_eq!(starts, 1, "t2 started on the old contract");
+}

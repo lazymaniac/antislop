@@ -1,24 +1,42 @@
 use super::*;
 use std::path::Path;
 
-pub(super) fn validate_plan_authorization(
+pub(super) struct Authorization {
+    pub(super) read: Vec<String>,
+    pub(super) write: Vec<String>,
+}
+
+/// Paths a revision needs beyond what the user approved for the plan.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Expansion {
+    pub(super) read: Vec<String>,
+    pub(super) write: Vec<String>,
+}
+
+impl Expansion {
+    pub(super) fn is_empty(&self) -> bool {
+        self.read.is_empty() && self.write.is_empty()
+    }
+}
+
+pub(super) fn plan_authorization(
     core: &Core,
     conversation: &str,
     plan: &str,
-    specs: &[TaskContract],
-) -> Result<()> {
+) -> Result<Authorization> {
     use rusqlite::OptionalExtension;
     let authorization = core.store.db().query_row(
         "SELECT scope,write_scope FROM plan_authorizations WHERE plan_id=?1 AND conversation_id=?2",
         rusqlite::params![plan, conversation],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
     ).optional()?;
-    let Some((allowed, write_allowed)) = authorization else {
+    let Some((read, write)) = authorization else {
         return Err(unaccepted_plan_error(core, conversation, plan)?);
     };
-    let allowed: Vec<String> = serde_json::from_str(&allowed)?;
-    let write_allowed: Vec<String> = serde_json::from_str(&write_allowed)?;
-    validate_authorized_scope(specs, &allowed, &write_allowed)
+    Ok(Authorization {
+        read: serde_json::from_str(&read)?,
+        write: serde_json::from_str(&write)?,
+    })
 }
 
 fn unaccepted_plan_error(core: &Core, conversation: &str, plan: &str) -> Result<Error> {
@@ -43,65 +61,110 @@ fn unaccepted_plan_error(core: &Core, conversation: &str, plan: &str) -> Result<
     )))
 }
 
+/// Refuses any scope beyond the approved one; see [`scope_expansion`].
+#[cfg(test)]
 pub(super) fn validate_authorized_scope(
     specs: &[TaskContract],
     allowed: &[String],
     write_allowed: &[String],
 ) -> Result<()> {
-    validate_nonempty_scopes(specs, allowed)?;
-    validate_write_scopes(specs, write_allowed)?;
-    validate_read_scopes(specs, allowed)?;
-    Ok(())
-}
-
-fn validate_nonempty_scopes(specs: &[TaskContract], allowed: &[String]) -> Result<()> {
+    let expansion = scope_expansion(specs, allowed, write_allowed)?;
     require(
-        allowed.iter().any(|path| path == ".") || specs.iter().all(|spec| !spec.scope.is_empty()),
-        "empty scope expands the approved scope",
+        expansion.is_empty(),
+        &expansion_text(&expansion, write_allowed),
     )
 }
 
-fn validate_write_scopes(specs: &[TaskContract], write_allowed: &[String]) -> Result<()> {
+/// What the revision needs beyond the approved scope. A task without a scope
+/// or with a path outside the project is refused outright: the user is asked
+/// only about named paths inside it.
+pub(super) fn scope_expansion(
+    specs: &[TaskContract],
+    allowed: &[String],
+    write_allowed: &[String],
+) -> Result<Expansion> {
+    validate_nonempty_scopes(specs, allowed, write_allowed)?;
+    let mut expansion = Expansion::default();
     for spec in specs.iter().filter(|spec| spec.writes) {
         require(
-            !write_allowed.is_empty(),
-            "revision adds write permission; user approval is required",
-        )?;
-        let scope = effective_scope(spec);
-        require(
-            scope.iter().all(|path| project_relative(path)),
+            spec.scope.iter().all(|path| project_relative(path)),
             "revision write scope must stay inside the project",
         )?;
-        require(
-            scope
-                .iter()
-                .all(|path| write_allowed.iter().any(|approved| covers(approved, path))),
-            "revision expands approved write scope; user approval is required",
-        )?;
+        let missing = spec
+            .scope
+            .iter()
+            .filter(|path| !write_allowed.iter().any(|approved| covers(approved, path)));
+        push_new(&mut expansion.write, missing);
     }
-    Ok(())
-}
-
-fn validate_read_scopes(specs: &[TaskContract], allowed: &[String]) -> Result<()> {
     for path in specs.iter().flat_map(|spec| &spec.scope) {
         require(
             allowed.contains(path) || project_relative(path),
             "revision scope contains parent traversal",
         )?;
+    }
+    let missing = specs
+        .iter()
+        .flat_map(|spec| &spec.scope)
+        .filter(|path| !allowed.iter().any(|approved| covers(approved, path)));
+    push_new(&mut expansion.read, missing);
+    Ok(expansion)
+}
+
+fn push_new<'a>(into: &mut Vec<String>, paths: impl Iterator<Item = &'a String>) {
+    for path in paths {
+        if !into.contains(path) {
+            into.push(path.clone());
+        }
+    }
+}
+
+fn validate_nonempty_scopes(
+    specs: &[TaskContract],
+    allowed: &[String],
+    write_allowed: &[String],
+) -> Result<()> {
+    let whole = |approved: &[String]| approved.iter().any(|path| path == ".");
+    for spec in specs.iter().filter(|spec| spec.scope.is_empty()) {
         require(
-            allowed.iter().any(|approved| covers(approved, path)),
-            "revision expands the approved scope; user approval is required",
+            whole(allowed) && (!spec.writes || whole(write_allowed)),
+            &format!(
+                "task {} has no scope, which means the whole project; name the files or globs it works on{}",
+                spec.id,
+                approved_hint(write_allowed)
+            ),
         )?;
     }
     Ok(())
 }
 
-fn effective_scope(spec: &TaskContract) -> Vec<String> {
-    if spec.scope.is_empty() {
-        vec![".".to_owned()]
-    } else {
-        spec.scope.clone()
+/// The refusal names what is missing and what is approved, so a revision
+/// can be narrowed without asking.
+pub(super) fn expansion_text(expansion: &Expansion, write_allowed: &[String]) -> String {
+    let mut parts = Vec::new();
+    if !expansion.write.is_empty() {
+        parts.push(format!("write {}", expansion.write.join(", ")));
     }
+    if !expansion.read.is_empty() {
+        parts.push(format!("read {}", expansion.read.join(", ")));
+    }
+    tasks::bound(
+        &format!(
+            "revision needs paths outside the approved scope ({}); user approval is required, or keep each task's scope inside the approved paths{}",
+            parts.join("; "),
+            approved_hint(write_allowed)
+        ),
+        2000,
+    )
+}
+
+fn approved_hint(write_allowed: &[String]) -> String {
+    if write_allowed.is_empty() {
+        return "; this plan approves no writes".to_owned();
+    }
+    format!(
+        " (approved for writing: {})",
+        tasks::bound(&write_allowed.join(", "), 800)
+    )
 }
 
 fn project_relative(path: &str) -> bool {

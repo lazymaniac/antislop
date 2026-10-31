@@ -31,6 +31,8 @@ pub fn verifier_prompt(
 fn verifier_binding(task: &TaskContract) -> &'static str {
     if task.writes {
         OPTIONS_VERIFICATION
+    } else if task.kind == crate::config::WorkKind::Options {
+        SELECTION_VERIFICATION
     } else {
         ""
     }

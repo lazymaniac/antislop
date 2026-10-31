@@ -44,6 +44,12 @@ impl Core {
         } else {
             self.store.add_message(conversation, "user", text)?
         };
+        if let Err(error) = self.settle_scope_approval(conversation, text) {
+            self.notice(
+                conversation,
+                &format!("scope decision not settled: {error}"),
+            );
+        }
         self.wake(conversation);
         Ok(message)
     }

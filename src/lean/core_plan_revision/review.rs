@@ -23,6 +23,12 @@ impl Core {
     ) -> Result<()> {
         let affected = affected_tasks(context.baseline, context.specs, &context.revision.redo);
         let approved = approved_work(context.baseline, &affected);
+        // Held from the review on: a task the revision changes would start on
+        // the contract it is about to lose and be cancelled when it applies.
+        let _barrier = {
+            let _graph = self.graph_updates.lock().expect("graph update mutex");
+            RevisionBarrier::new(self, affected.clone())
+        };
         self.review_revision(&ReviewData {
             context: &context,
             approved: &approved,
@@ -91,10 +97,6 @@ impl Core {
         lease: &super::store::RevisionLease<'_>,
         affected: BTreeSet<String>,
     ) -> Result<()> {
-        let barrier = {
-            let _graph = self.graph_updates.lock().expect("graph update mutex");
-            RevisionBarrier::new(self, affected.clone())
-        };
         self.cancel_affected_tasks(&affected);
         self.wait_for_affected_tasks(&affected, context.cancel)?;
         let _graph = self.graph_updates.lock().expect("graph update mutex");
@@ -107,7 +109,6 @@ impl Core {
             &affected,
             lease,
         )?;
-        drop(barrier);
         Ok(())
     }
 

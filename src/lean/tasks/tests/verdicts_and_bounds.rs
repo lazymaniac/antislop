@@ -239,3 +239,24 @@ fn a_verifier_is_shown_its_earlier_blocking_findings_by_runtime_id() {
     let first = verifier_turn_prompt("/p", &task, "report", None, true, "", &[]);
     assert!(!first.contains("List in resolved"));
 }
+
+#[test]
+fn an_options_verifier_leaves_the_writers_tests_and_validation_to_the_writer() {
+    let options: TaskContract = serde_json::from_value(serde_json::json!({
+        "id": "w-options", "title": "Options for W", "goal": "g", "kind": "options",
+        "options_for": "w", "verifier": {"focus": "f"}
+    }))
+    .unwrap();
+    let writer: TaskContract = serde_json::from_value(serde_json::json!({
+        "id": "w", "title": "W", "goal": "g", "kind": "implementation", "writes": true,
+        "verifier": {"focus": "f"}
+    }))
+    .unwrap();
+    for prompt in [
+        verifier_prompt("/p", &options, "report", None),
+        verifier_followup(&options, "report", None),
+    ] {
+        assert!(prompt.contains(SELECTION_VERIFICATION), "{prompt}");
+    }
+    assert!(!verifier_prompt("/p", &writer, "report", None).contains(SELECTION_VERIFICATION));
+}
