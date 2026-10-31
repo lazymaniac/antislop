@@ -92,8 +92,5 @@ fn stop_records_progress(status: &str) -> bool {
 }
 
 fn stop_releases_views(status: &str) -> bool {
-    matches!(
-        status,
-        status::APPROVED | status::CANCELLED | status::SKIPPED
-    )
+    matches!(status, status::CANCELLED | status::SKIPPED)
 }
