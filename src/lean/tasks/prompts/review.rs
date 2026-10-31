@@ -34,7 +34,7 @@ fn verifier_binding(task: &TaskContract) -> &'static str {
     } else if task.kind == crate::config::WorkKind::Options {
         SELECTION_VERIFICATION
     } else {
-        ""
+        REPORT_VERIFICATION
     }
 }
 

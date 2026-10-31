@@ -260,3 +260,19 @@ fn an_options_verifier_leaves_the_writers_tests_and_validation_to_the_writer() {
     }
     assert!(!verifier_prompt("/p", &writer, "report", None).contains(SELECTION_VERIFICATION));
 }
+
+#[test]
+fn a_report_verifier_names_every_concrete_gap_at_once_and_accepts_stated_residual_paths() {
+    let audit: TaskContract = serde_json::from_value(serde_json::json!({
+        "id": "audit", "title": "Audit", "goal": "g", "kind": "performance",
+        "verifier": {"focus": "f"}
+    }))
+    .unwrap();
+    for prompt in [
+        verifier_prompt("/p", &audit, "report", None),
+        verifier_followup(&audit, "report", None),
+    ] {
+        assert!(prompt.contains(REPORT_VERIFICATION), "{prompt}");
+        assert!(!prompt.contains(SELECTION_VERIFICATION), "{prompt}");
+    }
+}
