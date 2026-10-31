@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) struct Poller {
     pub(super) client: Client,
-    pub(super) updates: std::sync::mpsc::Sender<Update>,
+    pub(super) updates: UpdateSender,
     pub(super) conversation: String,
     pub(super) generation: u64,
     pub(super) stop: Arc<AtomicBool>,

@@ -51,6 +51,7 @@ mod state;
 pub mod taskinfo;
 pub mod theme;
 pub mod unblock;
+pub mod update_queue;
 pub mod view;
 pub mod workspace;
 
@@ -61,15 +62,15 @@ pub use editor::{InputBuffer, sanitize_paste, sanitize_single_line_paste, visual
 pub use graph::{GroupingMode, Relations, Scope};
 pub use palette::{Command, Help, Kind, Picker};
 pub use planview::{PlanAction, PlanView};
+#[cfg(test)]
+use render::transcript_cache::TranscriptLayout;
 pub use sanitize::{sanitize, sanitize_line};
 pub use shell::run;
 pub use state::App;
-#[cfg(test)]
-use state::TranscriptLayout;
-use state::TranscriptLayoutEntry;
 pub use theme::{
     CardProps, Glyphs, Row, Theme, Tone, card, draw_rows, scrollbar, section, split_row, tone,
 };
+pub use update_queue::{QueueClosed, QueueEmpty, UpdateReceiver, UpdateSender, update_channel};
 pub use view::{
     ConfirmationAction, ConfirmationCard, ConfirmationStatus, MessageEntry, TranscriptCard,
 };
@@ -88,8 +89,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 use serde_json::Value;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use view::{
     ORCHESTRATOR, PanelFocus, SIDE_BY_SIDE_BREAKPOINT, View, dim, draw_min_term_guard, target_name,

@@ -1,4 +1,5 @@
 use super::super::super::*;
+use crate::lean::tui::UpdateSender;
 
 struct TaskFetch {
     conversation: String,
@@ -11,12 +12,12 @@ struct TaskFetch {
     selected_round: Option<u64>,
     checks_only: bool,
     client: Client,
-    updates: std::sync::mpsc::Sender<Update>,
+    updates: UpdateSender,
 }
 
 struct RunFetch {
     client: Client,
-    updates: std::sync::mpsc::Sender<Update>,
+    updates: UpdateSender,
     conversation: String,
     plan: Option<String>,
     generation: u64,
@@ -205,7 +206,7 @@ fn run_task_fetch(fetch: TaskFetch) {
 fn task_fetch_update(
     fetch: TaskFetch,
     result: crate::Result<inspection::Snapshot>,
-) -> (std::sync::mpsc::Sender<Update>, Update) {
+) -> (UpdateSender, Update) {
     let update = match result {
         Ok(task) => Update::Task {
             conversation: fetch.conversation,

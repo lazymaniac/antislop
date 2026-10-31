@@ -3,7 +3,7 @@ use super::super::{
     daemon::{Client, Request},
 };
 use super::{
-    App, InputBuffer, Update, ascii_terminal, clipboard, in_ascii, theme, to_indexed_colors,
+    App, InputBuffer, ascii_terminal, clipboard, in_ascii, theme, to_indexed_colors,
     truecolor_terminal, without_color, workspace,
 };
 use crate::Result;
@@ -12,7 +12,7 @@ use crossterm::event::{
     Event, KeyEventKind,
 };
 use ratatui::{layout::Rect, style::Style};
-use std::sync::{atomic::Ordering, mpsc};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 pub fn run(options: &Options, client: Client) -> Result<()> {
@@ -43,9 +43,9 @@ impl Rendering {
     }
 }
 
-fn initialize(options: &Options, client: &Client) -> Result<(App, mpsc::Receiver<Update>)> {
+fn initialize(options: &Options, client: &Client) -> Result<(App, super::UpdateReceiver)> {
     let conversation = options.conversation(client)?;
-    let (updates, received) = mpsc::channel();
+    let (updates, received) = super::update_channel(256);
     let trust_prompt = trust_prompt(options, client);
     let mut app = App::bootstrap(client.clone(), updates);
     app.project = options
@@ -94,7 +94,7 @@ fn disable_capture() {
 fn run_loop(
     app: &mut App,
     terminal: &mut ratatui::DefaultTerminal,
-    received: &mpsc::Receiver<Update>,
+    received: &super::UpdateReceiver,
     rendering: Rendering,
 ) -> Result<()> {
     loop {
@@ -108,7 +108,7 @@ fn run_loop(
     }
 }
 
-fn apply_pending(app: &mut App, received: &mpsc::Receiver<Update>) {
+fn apply_pending(app: &mut App, received: &super::UpdateReceiver) {
     while let Ok(update) = received.try_recv() {
         app.apply_update(update);
     }

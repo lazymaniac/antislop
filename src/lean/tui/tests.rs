@@ -1192,15 +1192,14 @@ fn transcript_cache_reuses_rows_and_matches_fresh_layout() {
         term.backend().buffer().clone()
     };
     draw(&mut app, &mut term, &theme);
-    let original = app.transcript_layout.entries[0].rows.as_ptr();
     draw(&mut app, &mut term, &theme);
-    assert_eq!(original, app.transcript_layout.entries[0].rows.as_ptr());
+    assert!(app.transcript_layout.retained_rows() <= 4096);
     if let TranscriptCard::Message(msg) = &mut app.view.cards[39] {
         msg.text.push_str(" updated");
         msg.state = "answered".into();
     }
     draw(&mut app, &mut term, &theme);
-    assert_eq!(original, app.transcript_layout.entries[0].rows.as_ptr());
+    assert!(app.transcript_layout.retained_rows() <= 4096);
     for (scroll, found, theme) in [
         (0, None, theme),
         (15, None, theme),
@@ -1256,6 +1255,30 @@ fn transcript_cache_reuses_rows_and_matches_fresh_layout() {
     app.view.cards.clear();
     draw(&mut app, &mut term, &theme);
     assert!(app.transcript_layout.entries.is_empty());
+}
+
+#[test]
+fn transcript_row_cache_stays_bounded_while_history_keeps_growing() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut app = test_app();
+    for i in 0..1500 {
+        app.view.cards.push(TranscriptCard::Message(MessageEntry {
+            id: i.to_string(),
+            sender: "You".into(),
+            target: "orchestrator".into(),
+            text: format!("entry {i} {}", "wrapped text ".repeat(8)),
+            state: "sent".into(),
+            kind: "user".into(),
+        }));
+    }
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| app.draw_transcript(frame, frame.area(), &Theme::new(true, false)))
+        .unwrap();
+    assert_eq!(app.view.cards.len(), 1500);
+    assert_eq!(app.transcript_layout.entries.len(), 1500);
+    assert!(app.transcript_layout.retained_rows() <= 4096);
+    assert!(app.transcript_layout.cached_entries() <= 1024);
 }
 
 #[test]

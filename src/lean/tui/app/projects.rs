@@ -139,11 +139,7 @@ impl App {
     }
 }
 
-fn spawn_project_poller(
-    client: Client,
-    path: std::path::PathBuf,
-    updates: std::sync::mpsc::Sender<Update>,
-) {
+fn spawn_project_poller(client: Client, path: std::path::PathBuf, updates: UpdateSender) {
     std::thread::spawn(move || {
         loop {
             if let Ok(list) = client.call(&Request::Control(ControlRequest::Conversations)) {

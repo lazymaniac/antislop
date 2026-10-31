@@ -1,4 +1,5 @@
 use super::super::*;
+use super::transcript_cache::{TranscriptLayoutEntry, fingerprint};
 
 #[derive(Default)]
 struct TranscriptRows {
@@ -38,12 +39,15 @@ impl App {
     fn sync_transcript_context(&mut self, width: u16, theme: &Theme) {
         let context = (self.conversation.clone(), width, *theme);
         if self.transcript_layout.context.as_ref() != Some(&context) {
-            self.transcript_layout.entries.clear();
+            self.transcript_layout.clear();
             self.transcript_layout.context = Some(context);
         }
         self.transcript_layout
             .entries
             .truncate(self.view.cards.len());
+        self.transcript_layout
+            .entries
+            .resize_with(self.view.cards.len(), Default::default);
     }
 
     fn update_transcript_entry(
@@ -53,60 +57,44 @@ impl App {
         theme: &Theme,
         rows: &mut TranscriptRows,
     ) {
-        let card_entry = self.view.cards[index].clone();
         let found = self.found == Some(index);
         if found {
             rows.found_top = Some(rows.history_height);
         }
-        let comment = transcript_comment(self, &card_entry);
-        if self.reuse_transcript_entry(index, &card_entry, &comment, found, rows) {
-            return;
-        }
-        let card_rows = self.transcript_card_rows(&card_entry, found, width, theme);
-        self.store_transcript_entry(index, card_entry, comment, found, card_rows, rows);
+        let height = self.transcript_card_height(index, found, width, theme);
+        rows.history_height += height;
+        self.transcript_layout.entries[index].end = rows.history_height;
     }
 
-    fn store_transcript_entry(
+    fn transcript_card_height(
         &mut self,
         index: usize,
-        source: TranscriptCard,
-        comment: Option<(String, Option<String>)>,
         found: bool,
-        card_rows: Vec<Row>,
-        rows: &mut TranscriptRows,
-    ) {
-        rows.history_height += card_rows.len();
-        let entry = TranscriptLayoutEntry {
-            source,
-            comment,
-            found,
-            rows: card_rows,
-            end: rows.history_height,
-        };
-        if index < self.transcript_layout.entries.len() {
-            self.transcript_layout.entries[index] = entry;
+        width: u16,
+        theme: &Theme,
+    ) -> usize {
+        let card_entry = &self.view.cards[index];
+        let signature = fingerprint(card_entry, &transcript_comment(self, card_entry));
+        let cached_height = self
+            .transcript_layout
+            .rows(index, signature, found)
+            .map(<[Row]>::len);
+        let height = if let Some(height) = cached_height {
+            height
         } else {
-            self.transcript_layout.entries.push(entry);
-        }
-    }
-
-    fn reuse_transcript_entry(
-        &mut self,
-        index: usize,
-        source: &TranscriptCard,
-        comment: &Option<(String, Option<String>)>,
-        found: bool,
-        rows: &mut TranscriptRows,
-    ) -> bool {
-        let Some(cached) = self.transcript_layout.entries.get_mut(index) else {
-            return false;
+            let card_rows = self.transcript_card_rows(card_entry, found, width, theme);
+            let height = card_rows.len();
+            self.transcript_layout
+                .store(index, signature, found, card_rows);
+            height
         };
-        if cached.source != *source || cached.comment != *comment || cached.found != found {
-            return false;
-        }
-        rows.history_height += cached.rows.len();
-        cached.end = rows.history_height;
-        true
+        self.transcript_layout.entries[index] = TranscriptLayoutEntry {
+            fingerprint: signature,
+            found,
+            height,
+            end: 0,
+        };
+        height
     }
 
     fn add_workflow_card(&self, cards: &mut Vec<Row>, width: u16, theme: &Theme) {
@@ -186,7 +174,8 @@ impl App {
         let height = usize::from(area.height);
         self.position_transcript_scroll(total, height, rows.found_top);
         let (start, end) = visible_rows(total, self.scroll, height);
-        let visible = self.transcript_visible_rows(start, end, rows.history_height, &rows.extra);
+        let visible =
+            self.transcript_visible_rows(start, end, rows.history_height, &rows.extra, theme);
         let position = ViewportRows {
             total,
             start,
@@ -205,33 +194,6 @@ impl App {
             self.scroll = total.saturating_sub(top + height);
         }
         self.scroll = self.scroll.min(total.saturating_sub(height));
-    }
-
-    fn transcript_visible_rows(
-        &self,
-        start: usize,
-        end: usize,
-        history_height: usize,
-        extra: &[Row],
-    ) -> Vec<Row> {
-        let mut visible = Vec::with_capacity(end.saturating_sub(start));
-        let first = self
-            .transcript_layout
-            .entries
-            .partition_point(|entry| entry.end <= start);
-        for entry in &self.transcript_layout.entries[first..] {
-            let origin = entry.end - entry.rows.len();
-            if origin >= end {
-                break;
-            }
-            let from = start.saturating_sub(origin);
-            let to = end.saturating_sub(origin).min(entry.rows.len());
-            visible.extend_from_slice(&entry.rows[from..to]);
-        }
-        let from = start.saturating_sub(history_height).min(extra.len());
-        let to = end.saturating_sub(history_height).min(extra.len());
-        visible.extend_from_slice(&extra[from..to]);
-        visible
     }
 
     fn paint_transcript_rows(

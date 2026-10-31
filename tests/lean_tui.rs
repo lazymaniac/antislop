@@ -7,7 +7,7 @@ use antislop::lean::{
     tui::{
         App, CardProps, Command, ConfirmationAction, ConfirmationCard, ConfirmationStatus, Details,
         DiffView, Editor, Focus, Help, InputBuffer, Kind, Picker, Relations, Scope, Theme,
-        TranscriptCard, Update, card,
+        TranscriptCard, Update, UpdateReceiver, card,
         diffview::diff_header_with_reviewer,
         draw_rows,
         editor::{
@@ -5843,7 +5843,7 @@ mod config_editor_acceptance {
             thread::sleep(Duration::from_millis(10));
         }
     }
-    fn pump(app: &mut App, updates: &mpsc::Receiver<Update>) {
+    fn pump(app: &mut App, updates: &UpdateReceiver) {
         app.apply_update(updates.recv_timeout(Duration::from_secs(5)).unwrap());
     }
     fn edit(editor: &mut ConfigEditor, index: usize, text: &str, cycle: bool) {

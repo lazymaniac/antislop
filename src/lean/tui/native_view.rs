@@ -105,7 +105,7 @@ mod tests {
             "worker".into(),
             80,
             24,
-            mpsc::channel().0,
+            super::update_channel(256).0,
             "fixture".into(),
         );
         first.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -284,7 +284,7 @@ mod tests {
             "worker".into(),
             80,
             24,
-            mpsc::channel().0,
+            super::update_channel(256).0,
             "fixture".into(),
         );
         let deadline = Instant::now() + Duration::from_secs(3);

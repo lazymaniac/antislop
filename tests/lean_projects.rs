@@ -5,11 +5,10 @@ mod common;
 
 use antislop::lean::daemon::{Client, Request};
 use antislop::lean::tui::workspace::{self, ProjectConn};
-use antislop::lean::tui::{App, Update};
+use antislop::lean::tui::{App, UpdateReceiver, update_channel};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 fn write_executable(path: &Path, body: &str) {
@@ -104,7 +103,7 @@ impl Drop for Daemon {
     }
 }
 
-fn pump(app: &mut App, rx: &mpsc::Receiver<Update>, until: impl Fn(&App) -> bool) {
+fn pump(app: &mut App, rx: &UpdateReceiver, until: impl Fn(&App) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(120);
     while !until(app) {
         assert!(Instant::now() < deadline, "the screen never got there");
@@ -132,7 +131,7 @@ fn switching_projects_keeps_each_ones_conversation_draft_and_daemon() {
     let (path_a, path_b) = (project(&root, "alpha"), project(&root, "beta"));
     let (a, b) = (Daemon::start(&path_a), Daemon::start(&path_b));
 
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = update_channel(256);
     let mut app = App::test_app_with_client_and_updates(a.conn.client.clone(), tx);
     app.project = "alpha".into();
     let first = app.register_project(a.conn.clone());
@@ -219,7 +218,7 @@ fn an_untrusted_directory_is_asked_about_before_anything_is_created_there() {
     let a = Daemon::start(&path_a);
     let stranger = project(&root, "stranger");
 
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = update_channel(256);
     let mut app = App::test_app_with_client_and_updates(a.conn.client.clone(), tx);
     app.register_project(a.conn.clone());
     app.open_project(&stranger.to_string_lossy());

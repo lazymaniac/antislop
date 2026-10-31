@@ -1,23 +1,8 @@
 use super::contracts::*;
+use super::render::transcript_cache::TranscriptLayout;
 use super::*;
 
 mod update;
-
-/// Layout data for the active conversation, separate from the viewport buffer.
-/// Unchanged cards reuse wrapped rows; only visible rows are copied per frame.
-#[derive(Default)]
-pub(super) struct TranscriptLayout {
-    pub(super) context: Option<(String, u16, Theme)>,
-    pub(super) entries: Vec<TranscriptLayoutEntry>,
-}
-
-pub(super) struct TranscriptLayoutEntry {
-    pub(super) source: TranscriptCard,
-    pub(super) comment: Option<(String, Option<String>)>,
-    pub found: bool,
-    pub(super) rows: Vec<Row>,
-    pub(super) end: usize,
-}
 
 pub struct App {
     pub(super) native_views: std::collections::HashMap<String, native_view::View>,
@@ -50,7 +35,7 @@ pub struct App {
     /// until the next key.
     pub found: Option<usize>,
     pub notice: Option<String>,
-    pub updates: mpsc::Sender<Update>,
+    pub updates: UpdateSender,
     pub focus: Focus,
     /// The selected graph node, by key, so it survives new events.
     pub selected: String,
@@ -204,24 +189,24 @@ macro_rules! initial_app {
 }
 
 impl App {
-    pub(super) fn bootstrap(client: Client, updates: mpsc::Sender<Update>) -> App {
+    pub(super) fn bootstrap(client: Client, updates: UpdateSender) -> App {
         initial_app!(client, updates)
     }
 
     pub fn test_app() -> App {
-        let (updates, _rx) = mpsc::channel();
+        let (updates, _rx) = super::update_channel(256);
         Self::test_app_with_client_and_updates(
             Client::at(std::path::Path::new("/dev/null")),
             updates,
         )
     }
 
-    pub fn test_app_with_client(client: Client) -> (App, mpsc::Receiver<Update>) {
-        let (updates, rx) = mpsc::channel();
+    pub fn test_app_with_client(client: Client) -> (App, super::UpdateReceiver) {
+        let (updates, rx) = super::update_channel(256);
         (Self::test_app_with_client_and_updates(client, updates), rx)
     }
 
-    pub fn test_app_with_client_and_updates(client: Client, updates: mpsc::Sender<Update>) -> App {
+    pub fn test_app_with_client_and_updates(client: Client, updates: UpdateSender) -> App {
         Self::bootstrap(client, updates)
     }
 }

@@ -1,5 +1,5 @@
 use crate::lean::daemon::{Client, Request};
-use crate::lean::tui::{Update, ledger};
+use crate::lean::tui::{Update, UpdateSender, ledger};
 use serde_json::Value;
 
 pub(super) struct LedgerWork {
@@ -11,7 +11,7 @@ pub(super) struct LedgerWork {
 
 pub(super) fn spawn_ledger_work(
     client: Client,
-    updates: std::sync::mpsc::Sender<Update>,
+    updates: UpdateSender,
     work: LedgerWork,
     request_id: u64,
 ) {

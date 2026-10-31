@@ -28,7 +28,7 @@ struct Launch {
     conversation: String,
     role: String,
     dimensions: (u16, u16),
-    updates: mpsc::Sender<Update>,
+    updates: UpdateSender,
     identity: String,
 }
 
@@ -39,7 +39,7 @@ impl View {
         role: String,
         columns: u16,
         rows: u16,
-        updates: mpsc::Sender<Update>,
+        updates: UpdateSender,
         identity: String,
     ) -> Self {
         Self::launch(Launch {

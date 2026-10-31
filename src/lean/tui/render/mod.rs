@@ -9,4 +9,5 @@ mod specialized_details_layout;
 mod specialized_overview;
 mod specialized_screens;
 mod transcript;
+pub(super) mod transcript_cache;
 mod transcript_cards;

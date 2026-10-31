@@ -26,7 +26,7 @@ pub(super) fn comment_text(editor: &Editor, view: &view::View) -> String {
 
 pub(super) struct CommentSend {
     pub(super) client: Client,
-    pub(super) updates: std::sync::mpsc::Sender<Update>,
+    pub(super) updates: UpdateSender,
     pub(super) conversation: String,
     pub(super) plan: Option<String>,
     pub(super) generation: u64,
@@ -137,7 +137,7 @@ pub(super) struct AgentMessageTarget {
 
 pub(super) struct AgentMessageSend {
     pub(super) client: Client,
-    pub(super) updates: std::sync::mpsc::Sender<Update>,
+    pub(super) updates: UpdateSender,
     pub(super) target: AgentMessageTarget,
     pub(super) operation: String,
     pub(super) text: String,
