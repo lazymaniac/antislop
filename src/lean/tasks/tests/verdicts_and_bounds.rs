@@ -276,3 +276,24 @@ fn a_report_verifier_names_every_concrete_gap_at_once_and_accepts_stated_residua
         assert!(!prompt.contains(SELECTION_VERIFICATION), "{prompt}");
     }
 }
+
+#[test]
+fn a_later_report_round_blocks_only_on_unfixed_findings_and_changed_text() {
+    let audit: TaskContract = serde_json::from_value(serde_json::json!({
+        "id": "audit", "title": "Audit", "goal": "g", "kind": "security",
+        "verifier": {"focus": "f"}
+    }))
+    .unwrap();
+    let earlier =
+        [serde_json::json!({"id": "f1", "check": "R1", "severity": "medium", "issue": "x"})];
+    for fresh in [true, false] {
+        let first = verifier_turn_prompt("/p", &audit, "report", None, fresh, "", &[]);
+        assert!(!first.contains(REPORT_RECHECK), "{first}");
+        let later = verifier_turn_prompt("/p", &audit, "report", None, fresh, "", &earlier);
+        assert!(later.contains(REPORT_RECHECK), "{later}");
+    }
+    let mut writer = audit.clone();
+    writer.writes = true;
+    let prompt = verifier_turn_prompt("/p", &writer, "report", None, false, "", &earlier);
+    assert!(!prompt.contains(REPORT_RECHECK), "{prompt}");
+}

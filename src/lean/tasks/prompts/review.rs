@@ -70,7 +70,17 @@ pub fn verifier_turn_prompt(
     } else {
         verifier_followup(task, report, changes)
     };
-    prompt + &earlier_findings(earlier) + upstream
+    prompt + &earlier_findings(earlier) + &report_recheck(task, earlier) + upstream
+}
+
+/// Report tasks block a later round only on what that round changed.
+fn report_recheck(task: &TaskContract, earlier: &[Value]) -> String {
+    let report = verifier_binding(task) == REPORT_VERIFICATION;
+    if report && earlier.iter().any(crate::lean::progress::blocks) {
+        format!("\n\n{REPORT_RECHECK}")
+    } else {
+        String::new()
+    }
 }
 
 /// The blocking findings of the previous round, so the verifier can name
