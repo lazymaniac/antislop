@@ -145,6 +145,30 @@ pub(crate) fn resolve_evidence(
 ) -> Result<EvidenceProposal> {
     let entry = evidence_entry(entries, &item.criterion_id)?;
     let task = evidence_task(tasks, &item.task_id)?;
+    let covers = |task: &crate::lean::store::Task| {
+        task.spec["criterion_ids"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id == item.criterion_id.as_str()))
+    };
+    if !covers(task) {
+        let owners = audited_tasks(tasks)
+            .filter(|task| covers(task))
+            .filter_map(|task| task.spec["id"].as_str())
+            .collect::<Vec<_>>();
+        return Err(Error::Invalid(if owners.is_empty() {
+            format!(
+                "no task of this plan covers {}; report it as a finding instead of evidence",
+                item.criterion_id
+            )
+        } else {
+            format!(
+                "task {} does not cover {}; name a task that covers it: {}",
+                item.task_id,
+                item.criterion_id,
+                owners.join(", ")
+            )
+        }));
+    }
     require(
         !item.result.trim().is_empty(),
         "result: name the checks you made and what you observed",

@@ -66,7 +66,7 @@ impl Core {
         scope: &AuditScope,
         cancel: &AtomicBool,
     ) -> Result<(Audit, String)> {
-        let prompt = audit_prompt(scope)?;
+        let prompt = audit_prompt(&audit_tasks(&self.store, &scope.tasks)?, &scope.sources)?;
         let (answer, producer) =
             self.requirements_turn(conversation, &scope.run_id, "audit", false, prompt, cancel)?;
         let (findings, evidence) = decode_audit(&answer)?;
@@ -199,25 +199,34 @@ impl Core {
     }
 }
 
-fn audit_prompt(scope: &AuditScope) -> Result<String> {
+fn audit_prompt(tasks: &[serde_json::Value], sources: &str) -> Result<String> {
     Ok(format!(
-        "Audit the integrated project against every full source and the requirements and their task evidence. Search for obligations omitted in extraction. Inspect actual files and run relevant read-only checks. Do not change files. Tasks of the plan: {}.\n\nSubmit the audit with submit_audit: findings for each problem (severity, issue, where; critical, high and medium reject), and evidence for each acceptance criterion you checked (criterion_id, the task_id that delivered it, and result: the concrete checks you made and what you observed, never just done). Include user-prescribed methods and steps and composite integration criteria. Evidence must concern this integrated tree; the runtime records which tree you audited. Full sources:\n{}",
-        serde_json::to_string(&audit_tasks(&scope.tasks))?,
-        scope.sources,
+        "Audit the integrated project against every full source and the requirements and their task evidence. Search for obligations omitted in extraction. Inspect actual files and run relevant read-only checks. Do not change files. Tasks of the plan: {}. A summary says briefly what an approved task did; verify it in the files, it is not evidence by itself.\n\nSubmit the audit with submit_audit: findings for each problem (severity, issue, where; critical, high and medium reject), and evidence for each acceptance criterion you checked (criterion_id, the task_id that delivered it, and result: the concrete checks you made and what you observed, never just done). Include user-prescribed methods and steps and composite integration criteria. Evidence must concern this integrated tree; the runtime records which tree you audited. Full sources:\n{}",
+        serde_json::to_string(tasks)?,
+        sources,
     ))
 }
 
-/// What the auditor needs of each task to name it in evidence.
-fn audit_tasks(tasks: &[crate::lean::store::Task]) -> Vec<serde_json::Value> {
+/// What the auditor needs of each task to name it in evidence, and what it did.
+fn audit_tasks(
+    store: &crate::lean::store::Store,
+    tasks: &[crate::lean::store::Task],
+) -> Result<Vec<serde_json::Value>> {
     audited_tasks(tasks)
         .map(|task| {
-            serde_json::json!({
+            let summary = if task.status == crate::lean::tasks::status::APPROVED {
+                Some(store.task_summary(task)?)
+            } else {
+                None
+            };
+            Ok(serde_json::json!({
                 "task_id": task.spec["id"],
                 "title": task.spec["title"],
                 "goal": task.spec["goal"],
                 "covers": task.spec["criterion_ids"],
                 "status": task.status,
-            })
+                "summary": summary,
+            }))
         })
         .collect()
 }

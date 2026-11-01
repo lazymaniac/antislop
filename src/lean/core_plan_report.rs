@@ -178,11 +178,15 @@ fn invalidate_unearned_approval(verdict: &mut Verdict, tasks: &[Task], gaps: &[S
         return;
     }
     verdict.approved = false;
-    verdict.findings.push(json!({
-        "severity":"high",
-        "issue":format!("Tasks in plan were not approved: {}", unapproved_task_ids(tasks)),
-        "where":"plan"
-    }));
+    // Ledger gaps are already findings of their own.
+    let unapproved = unapproved_task_ids(tasks);
+    if !unapproved.is_empty() {
+        verdict.findings.push(json!({
+            "severity":"high",
+            "issue":format!("Tasks in plan were not approved: {unapproved}"),
+            "where":"plan"
+        }));
+    }
 }
 
 fn unapproved_task_ids(tasks: &[Task]) -> String {

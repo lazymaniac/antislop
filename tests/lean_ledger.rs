@@ -749,6 +749,7 @@ def block(tag,data):return '```'+tag+'\n'+json.dumps(data)+'\n```'
 if prompt.startswith('Audit the integrated project'):
     assert open('observed-result').read()=='delivered'
     tasks,_=json.JSONDecoder().raw_decode(prompt.split('Tasks of the plan: ',1)[1])
+    assert all(isinstance(t['summary'],str) for t in tasks if t['status']=='approved'),tasks
     lines=prompt.rsplit('Run and ledger inputs (stable identities; keep their versions):\n',1)[1].splitlines()
     entries=json.loads(lines[2].removeprefix('Entries: '))
     evidence=[]

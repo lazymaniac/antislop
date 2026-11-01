@@ -81,7 +81,7 @@ mod tests {
         .unwrap();
         let task = |id: &str, status: &str, round: u32| -> crate::lean::store::Task {
             serde_json::from_value(serde_json::json!({
-                "id": id, "plan_id": "p", "spec": {"id": "build"}, "status": status,
+                "id": id, "plan_id": "p", "spec": {"id": "build", "criterion_ids": ["R1.1"]}, "status": status,
                 "round": round, "report": null, "verdict": null, "base": null, "result": null
             }))
             .unwrap()
@@ -97,5 +97,47 @@ mod tests {
         let proposal = resolve_evidence(&item, &[entry], &tasks).unwrap();
         assert_eq!((proposal.task_id.as_str(), proposal.attempt), ("new", 1));
         assert_eq!(audited_tasks(&tasks).count(), 1);
+    }
+    #[test]
+    fn evidence_names_a_task_that_covers_the_criterion() {
+        let entry: LedgerEntry = serde_json::from_value(serde_json::json!({
+            "run_id": "run", "version": 1, "spec_revision": 1, "original": "Add sub",
+            "status": "active",
+            "spec": {"id": "R1", "interpretation": "Add sub", "mandatory": true,
+                "position": 0, "disposition": "active", "depends_on": [], "qualifiers": [],
+                "parent": null, "task_ids": [], "implementation_owners": [],
+                "verification_owners": [],
+                "source": {"source_id": "s1", "start": 0, "end": 7},
+                "criteria": [{"id": "R1.1", "text": "sub subtracts", "mandatory": true,
+                    "integration": false}]}
+        }))
+        .unwrap();
+        let task = |id: &str, covers: &[&str]| -> crate::lean::store::Task {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "plan_id": "p", "spec": {"id": id, "criterion_ids": covers},
+                "status": "approved", "round": 1, "report": null, "verdict": null,
+                "base": null, "result": null
+            }))
+            .unwrap()
+        };
+        let item = |task_id: &str| AuditEvidence {
+            criterion_id: "R1.1".into(),
+            task_id: task_id.into(),
+            result: "ran the tests".into(),
+            artifact: None,
+        };
+        let tasks = [task("scout", &[]), task("build", &["R1.1"])];
+        let error = resolve_evidence(&item("scout"), std::slice::from_ref(&entry), &tasks)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("name a task that covers it: build"),
+            "{error}"
+        );
+        let error = resolve_evidence(&item("scout"), std::slice::from_ref(&entry), &tasks[..1])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("report it as a finding"), "{error}");
+        assert!(resolve_evidence(&item("build"), &[entry], &tasks).is_ok());
     }
 }
