@@ -220,7 +220,7 @@ fn help_graph() -> &'static [&'static str] {
 
 fn help_details() -> &'static [&'static str] {
     &[
-        "1–7, Tab/Shift+Tab  tabs; Left/Right select round",
+        "1–4, Tab/Shift+Tab  tabs; Left/Right select round",
         "i / a            native CLI focus / message composer",
         "Ctrl+]           return from native CLI to antislop",
         "Ctrl+W           switch worker / verifier panel",

@@ -161,25 +161,6 @@ fn selected_run_snapshot(
     let turn = run["turn_id"].as_str().unwrap_or_default();
     let mut builder = document::Builder::new(client.state_dir())?;
     append_answers(client, conversation, turn, &mut builder)?;
-    let documents = run_documents(client, conversation, turn, builder.finish()?)?;
+    let documents = std::collections::HashMap::from([("review".into(), builder.finish()?)]);
     Ok(Snapshot { task, documents })
-}
-
-fn run_documents(
-    client: &Client,
-    conversation: &str,
-    turn: &str,
-    review: document::Document,
-) -> Result<std::collections::HashMap<String, document::Document>> {
-    let mut documents = std::collections::HashMap::new();
-    documents.insert("review".into(), review);
-    documents.insert(
-        "messages".into(),
-        super::message_document(
-            client,
-            conversation,
-            &super::super::super::store::HistoryScope::Session { turn: turn.into() },
-        )?,
-    );
-    Ok(documents)
 }

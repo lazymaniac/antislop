@@ -14,7 +14,7 @@ impl Details {
 
     pub fn switch_tab(&mut self, next: usize) {
         let next_tab = next % TABS.len();
-        if next_tab == self.tab {
+        if next_tab == self.tab || !tabs_for(&self.key).contains(&next_tab) {
             return;
         }
         self.save_current_tab();
@@ -26,6 +26,10 @@ impl Details {
     pub fn switch_key(&mut self, new_key: String) {
         self.save_current_tab();
         self.key = new_key;
+        let tabs = tabs_for(&self.key);
+        if !tabs.contains(&self.tab) {
+            self.tab = tabs[0];
+        }
         self.fetch_in_flight = false;
         self.show_info = false;
         self.selected_round = None;
@@ -46,6 +50,33 @@ impl Details {
         self.fetch_failures = 0;
         self.fetch_retry_after = None;
         self.fetch_error = None;
+        self.restore_current_tab();
+        self.searching = false;
+    }
+
+    pub fn switch_role(&mut self) {
+        let Some((role @ ("worker" | "verifier"), id)) = self.key.split_once(':') else {
+            return;
+        };
+        let other = if role == "worker" {
+            "verifier"
+        } else {
+            "worker"
+        };
+        let key = format!("{other}:{id}");
+        self.save_current_tab();
+        self.key = key;
+        self.tab = tabs_for(&self.key)[0];
+        // Replies for the previous role are ignored; let this role refetch.
+        self.fetch_in_flight = false;
+        self.fetched_round = None;
+        self.fetch_failures = 0;
+        self.fetch_retry_after = None;
+        self.fetch_error = None;
+        self.show_info = false;
+        self.active_panel = 0;
+        self.panel_scroll = [0; 2];
+        self.panel_expanded = [false; 2];
         self.restore_current_tab();
         self.searching = false;
     }

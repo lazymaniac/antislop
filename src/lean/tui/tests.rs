@@ -1279,6 +1279,12 @@ fn transcript_row_cache_stays_bounded_while_history_keeps_growing() {
     assert_eq!(app.transcript_layout.entries.len(), 1500);
     assert!(app.transcript_layout.retained_rows() <= 4096);
     assert!(app.transcript_layout.cached_entries() <= 1024);
+    let stored = app.transcript_layout.stores;
+    terminal
+        .draw(|frame| app.draw_transcript(frame, frame.area(), &Theme::new(true, false)))
+        .unwrap();
+    // Cards outside the viewport keep their heights and are not wrapped again.
+    assert!(app.transcript_layout.stores - stored <= 24);
 }
 
 #[test]

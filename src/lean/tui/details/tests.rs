@@ -228,12 +228,6 @@ fn details_empty_states() {
     let view = View::default();
     let mut details = Details::new("worker:t1".into());
 
-    // Messages empty state
-    details.tab = 1;
-    let lines = details.lines(&view);
-    assert!(lines.iter().any(|(_, text)| text.contains("No messages")));
-
-    // Tab 5: Comments empty state
     details.tab = COMMENTS;
     let lines = details.lines(&view);
     assert!(lines.iter().any(|(_, text)| text.contains("No comments")));
@@ -274,77 +268,84 @@ fn details_draw_on_tiny_terminals() {
 
 #[test]
 fn each_agent_has_only_the_tabs_that_mean_something_for_it() {
-    let names =
-        |key: &str| -> Vec<&str> { tabs_for(key).into_iter().map(|tab| TABS[tab]).collect() };
+    let names = |key: &str| -> Vec<&str> {
+        tabs_for(key)
+            .into_iter()
+            .map(|tab| tab_name(key, tab))
+            .collect()
+    };
     assert_eq!(
         names("worker:t1"),
-        [
-            "Overview",
-            "Messages",
-            "Result",
-            "Verifier",
-            "Checks",
-            "Comments",
-            "Requirements"
-        ]
+        ["Worker", "Result", "Comments", "Requirements"]
     );
     assert_eq!(
         names("verifier:t1"),
-        [
-            "Overview",
-            "Messages",
-            "Result",
-            "Verifier",
-            "Checks",
-            "Comments",
-            "Requirements"
-        ]
+        ["Verifier", "Checks", "Comments", "Requirements"]
     );
     assert_eq!(names("auditor"), ["Overview", "Review", "Comments"]);
     assert_eq!(names("plan-verifier"), ["Overview", "Review", "Comments"]);
-    assert_eq!(names("conversation"), ["Overview", "Messages", "Comments"]);
-    assert_eq!(
-        names("planner"),
-        ["Overview", "Plan", "Messages", "Comments"]
-    );
+    assert_eq!(names("conversation"), ["Overview", "Comments"]);
+    assert_eq!(names("planner"), ["Overview", "Plan", "Comments"]);
 
-    // Navigation skips what is not there and wraps around.
+    for key in ["worker:t1", "verifier:t1"] {
+        let mut details = Details::new(key.into());
+        let tabs = tabs_for(key);
+        assert_eq!(details.tab, tabs[0]);
+        assert_eq!(details.session_keys(), [key]);
+        for tab in tabs.iter().skip(1).chain(tabs.first()) {
+            details.switch_tab(details.neighbour_tab(1));
+            assert_eq!(details.tab, *tab);
+        }
+        details.switch_tab(details.neighbour_tab(-1));
+        assert_eq!(details.tab, REQUIREMENTS);
+        for (n, tab) in tabs.iter().enumerate() {
+            assert_eq!(details.nth_tab(n), Some(*tab));
+        }
+        assert_eq!(details.nth_tab(tabs.len()), None);
+        let hidden = if key.starts_with("worker:") {
+            CHECKS
+        } else {
+            RESULT
+        };
+        details.switch_tab(hidden);
+        assert_eq!(details.tab, REQUIREMENTS, "hidden tabs cannot be selected");
+        let rendered = format_tabs(key, tabs[0], 120)
+            .spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect::<String>();
+        assert!(!rendered.contains(if key.starts_with("worker:") {
+            "Verifier"
+        } else {
+            "Worker"
+        }));
+    }
+}
+
+#[test]
+fn switching_roles_preserves_round_and_each_roles_search() {
     let mut details = Details::new("worker:t1".into());
-    details.switch_tab(details.neighbour_tab(1));
-    assert_eq!(details.tab, 1);
-    details.switch_tab(RESULT);
-    details.switch_tab(details.neighbour_tab(1));
+    details.task_uuid = Some("uuid".into());
+    details.selected_round = Some(2);
+    details.query = "worker query".into();
+    details.scroll = 8;
+    details.fetch_in_flight = true;
+    details.switch_role();
+    assert!(!details.fetch_in_flight);
+    assert_eq!(details.key, "verifier:t1");
     assert_eq!(details.tab, VERIFIER);
-    details.switch_tab(details.neighbour_tab(1));
-    assert_eq!(details.tab, CHECKS);
-    details.switch_tab(details.neighbour_tab(1));
-    assert_eq!(details.tab, COMMENTS);
-    details.switch_tab(details.neighbour_tab(1));
-    assert_eq!(details.tab, REQUIREMENTS);
-    details.switch_tab(details.neighbour_tab(1));
+    assert_eq!(details.composer_key().1, "verifier:uuid");
+    assert_eq!(details.selected_round, Some(2));
+    assert!(details.query.is_empty());
+    details.query = "verifier query".into();
+    details.switch_role();
+    assert_eq!(details.key, "worker:t1");
     assert_eq!(details.tab, 0);
-    details.switch_tab(details.neighbour_tab(-1));
-    assert_eq!(details.tab, REQUIREMENTS);
-    // Number keys count the visible tabs equally for both task roles.
-    assert_eq!(details.nth_tab(2), Some(RESULT));
-    assert_eq!(details.nth_tab(3), Some(VERIFIER));
-    assert_eq!(details.nth_tab(4), Some(CHECKS));
-    assert_eq!(details.nth_tab(5), Some(COMMENTS));
-    assert_eq!(details.nth_tab(6), Some(REQUIREMENTS));
-    assert_eq!(details.nth_tab(7), None);
-    let verifier = Details::new("verifier:t1".into());
-    assert_eq!(verifier.nth_tab(4), Some(CHECKS));
-    // Each section opens on its own agent's terminal.
-    assert_eq!(details.session_keys(), ["worker:t1"]);
-    details.switch_tab(VERIFIER);
-    assert_eq!(details.session_keys(), ["verifier:t1"]);
-    // The sections are told apart by a divider and the first label.
-    let tabs = format_tabs("worker:t1", 0, 120)
-        .spans
-        .iter()
-        .map(|span| span.content.to_string())
-        .collect::<String>();
-    assert!(tabs.contains("Worker") && tabs.contains("│"), "{tabs}");
+    assert_eq!(details.query, "worker query");
+    assert_eq!(details.scroll, 8);
+    details.switch_key("verifier:t2".into());
+    assert_eq!(details.tab, VERIFIER);
+    assert_eq!(details.session_keys(), ["verifier:t2"]);
 }
 
 #[test]

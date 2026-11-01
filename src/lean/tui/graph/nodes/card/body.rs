@@ -22,7 +22,7 @@ impl Card<'_> {
     }
 
     fn paint_summary(&mut self, inner: usize, top: u16, max: usize) {
-        for (row, line) in summary_lines(self.view, &self.node.key, self.task, inner, max)
+        for (row, line) in card_lines(self.view, &self.node.key, inner, max)
             .iter()
             .enumerate()
         {

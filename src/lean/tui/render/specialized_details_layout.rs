@@ -95,7 +95,6 @@ pub(super) fn detail_block(details: &Details, body: Rect, theme: &Theme) -> Bloc
 
 pub(super) fn document_key(tab: usize) -> Option<&'static str> {
     match tab {
-        1 => Some("messages"),
         RESULT => Some("result"),
         REVIEW => Some("review"),
         _ => None,

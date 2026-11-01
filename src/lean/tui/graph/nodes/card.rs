@@ -3,9 +3,8 @@ mod content;
 mod identity;
 
 use super::super::super::view::TaskRow;
-use super::super::health::{activity_line, effect_lines};
+use super::super::health::{activity_line, card_lines, effect_lines};
 use super::super::*;
-use content::summary_lines;
 
 struct Card<'a> {
     view: &'a View,

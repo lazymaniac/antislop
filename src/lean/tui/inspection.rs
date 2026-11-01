@@ -2,7 +2,6 @@
 use super::*;
 mod history;
 mod session;
-pub(super) use history::message_document;
 pub(super) use history::task_snapshot;
 pub(super) use session::run_snapshot;
 

@@ -1,7 +1,7 @@
 use super::*;
 
 mod cards;
-pub(super) use cards::{activity_line, card_lines, effect_lines, fit_lines};
+pub(super) use cards::{activity_line, card_lines, effect_lines};
 
 /// How an agent is doing, which decides its icon and color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

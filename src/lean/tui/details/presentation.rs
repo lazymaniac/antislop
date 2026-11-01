@@ -108,15 +108,7 @@ impl<'a> TabStrip<'a> {
     fn full_width(&self) -> usize {
         self.agent.len()
             + (0..self.visible.len())
-                .map(|index| {
-                    self.name(index).len()
-                        + if index == self.active { 4 } else { 3 }
-                        + if section_starts(self.key, self.visible[index]) {
-                            2
-                        } else {
-                            0
-                        }
-                })
+                .map(|index| self.name(index).len() + if index == self.active { 4 } else { 3 })
                 .sum::<usize>()
     }
 
@@ -130,9 +122,6 @@ impl<'a> TabStrip<'a> {
     fn full(&self) -> Line<'static> {
         let mut spans = vec![self.agent_span()];
         for index in 0..self.visible.len() {
-            if section_starts(self.key, self.visible[index]) {
-                spans.push(Span::styled(" │", dim()));
-            }
             spans.push(Span::raw(" "));
             spans.push(self.tab_span(index, false));
         }

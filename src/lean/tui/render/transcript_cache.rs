@@ -13,6 +13,8 @@ pub(in crate::lean::tui) struct TranscriptLayout {
     cached: HashMap<usize, CachedRows>,
     order: VecDeque<usize>,
     retained_rows: usize,
+    #[cfg(test)]
+    pub stores: usize,
 }
 
 #[derive(Default)]
@@ -78,6 +80,10 @@ impl TranscriptLayout {
             }
         }
         self.retained_rows += height;
+        #[cfg(test)]
+        {
+            self.stores += 1;
+        }
         self.cached.insert(
             index,
             CachedRows {
@@ -109,7 +115,7 @@ impl TranscriptLayout {
 
 impl App {
     pub(super) fn transcript_visible_rows(
-        &self,
+        &mut self,
         start: usize,
         end: usize,
         history_height: usize,
@@ -125,55 +131,61 @@ impl App {
     }
 
     fn append_visible_history(
-        &self,
+        &mut self,
         visible: &mut Vec<Row>,
         start: usize,
         end: usize,
         theme: &Theme,
     ) {
-        let first = self
-            .transcript_layout
-            .entries
-            .partition_point(|entry| entry.end <= start);
-        for (index, entry) in self
-            .transcript_layout
-            .entries
+        let entries = &self.transcript_layout.entries;
+        let first = entries.partition_point(|entry| entry.end <= start);
+        let shown: Vec<_> = entries
             .iter()
             .enumerate()
             .skip(first)
-        {
-            let origin = entry.end - entry.height;
-            if origin >= end {
-                break;
-            }
-            let from = start.saturating_sub(origin);
-            let to = end.saturating_sub(origin).min(entry.height);
-            let slice = RowSlice { from, to };
-            self.append_card_rows(visible, index, entry, slice, theme);
+            .take_while(|(_, entry)| entry.end - entry.height < end)
+            .map(|(index, entry)| {
+                let origin = entry.end - entry.height;
+                let slice = RowSlice {
+                    from: start.saturating_sub(origin),
+                    to: end.saturating_sub(origin).min(entry.height),
+                };
+                (index, entry.fingerprint, entry.found, slice)
+            })
+            .collect();
+        for (index, fingerprint, found, slice) in shown {
+            self.append_card_rows(visible, index, fingerprint, found, slice, theme);
         }
     }
 
     fn append_card_rows(
-        &self,
+        &mut self,
         visible: &mut Vec<Row>,
         index: usize,
-        entry: &TranscriptLayoutEntry,
+        fingerprint: u64,
+        found: bool,
         slice: RowSlice,
         theme: &Theme,
     ) {
-        if let Some(rows) = self
+        if self
             .transcript_layout
-            .rows(index, entry.fingerprint, entry.found)
+            .rows(index, fingerprint, found)
+            .is_none()
         {
-            visible.extend_from_slice(&rows[slice.from..slice.to]);
-        } else {
             let width = self
                 .transcript_layout
                 .context
                 .as_ref()
                 .map_or(0, |ctx| ctx.1);
-            let rows =
-                self.transcript_card_rows(&self.view.cards[index], entry.found, width, theme);
+            let rows = self.transcript_card_rows(&self.view.cards[index], found, width, theme);
+            if rows.len() > ROW_BUDGET {
+                visible.extend_from_slice(&rows[slice.from..slice.to]);
+                return;
+            }
+            self.transcript_layout
+                .store(index, fingerprint, found, rows);
+        }
+        if let Some(rows) = self.transcript_layout.rows(index, fingerprint, found) {
             visible.extend_from_slice(&rows[slice.from..slice.to]);
         }
     }

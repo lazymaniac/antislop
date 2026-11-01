@@ -32,14 +32,7 @@ impl App {
             return false;
         };
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w') {
-            if details.task_id().is_some() {
-                let other = if details.tab == details::VERIFIER {
-                    0
-                } else {
-                    details::VERIFIER
-                };
-                details.switch_tab(other);
-            }
+            details.switch_role();
             return true;
         }
         match key.code {

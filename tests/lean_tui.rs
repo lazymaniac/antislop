@@ -786,7 +786,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
             Help::Details | Help::Diff | Help::Comment | Help::Picker
         ) {
             let mut details = Details::new("worker:t1".into());
-            details.tab = 2;
+            details.tab = antislop::lean::tui::details::RESULT;
             details.scroll = 3;
             app.details = Some(details);
         }
@@ -822,7 +822,7 @@ fn f1_help_follows_the_active_view_and_preserves_navigation() {
             matches!(help, Help::Diff | Help::Comment | Help::Picker)
         );
         if let Some(details) = &app.details {
-            assert_eq!(details.tab, 2);
+            assert_eq!(details.tab, antislop::lean::tui::details::RESULT);
             assert_eq!(Some(details.scroll), details_scroll);
         }
         assert_eq!(app.diff.as_ref().and_then(DiffView::target), diff_target);
@@ -3449,9 +3449,9 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     details.scroll = 15;
     details.query = "analysis".into();
 
-    // Switch to Tab 1
-    details.switch_tab(1);
-    assert_eq!(details.tab, 1);
+    // Switch to Comments
+    details.switch_tab(antislop::lean::tui::details::COMMENTS);
+    assert_eq!(details.tab, antislop::lean::tui::details::COMMENTS);
     assert_eq!(details.scroll, 0);
     assert_eq!(details.query, "");
     details.scroll = 8;
@@ -3465,7 +3465,7 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     details.scroll = 25;
     details.query = "dowody".into();
 
-    // Switch back to worker:t1: restores Tab 1 scroll 8 and query "logi"
+    // Switch back to worker:t1: restores Comments scroll 8 and query "logi"
     details.switch_key("worker:t1".into());
     assert_eq!(details.key, "worker:t1");
     assert_eq!(details.scroll, 8);
@@ -3481,14 +3481,14 @@ fn test_inspector_scroll_and_query_memory_per_agent_and_tab() {
     );
     assert_eq!(details.query, "analysis");
 
-    // Switch back to verifier:t1: active tab is 0 (never scrolled for verifier:t1)
+    // Switching from the worker Overview opens the verifier's own Overview.
     details.switch_key("verifier:t1".into());
     assert_eq!(details.key, "verifier:t1");
-    assert_eq!(details.tab, 0);
+    assert_eq!(details.tab, antislop::lean::tui::details::VERIFIER);
     assert_eq!(details.scroll, 0);
-    // Switch to tab 1 on verifier:t1: restores scroll 25 and query "dowody"
-    details.switch_tab(1);
-    assert_eq!(details.tab, 1);
+    // Switch to Comments on verifier:t1: restores scroll 25 and query "dowody"
+    details.switch_tab(antislop::lean::tui::details::COMMENTS);
+    assert_eq!(details.tab, antislop::lean::tui::details::COMMENTS);
     assert_eq!(details.scroll, 25);
     assert_eq!(details.query, "dowody");
 }
@@ -4211,15 +4211,16 @@ fn task_card_mouse_selection_selects_the_agent_and_folds_its_whole_task() {
     let details = app.details.as_ref().unwrap();
     assert_eq!(details.key, "worker:t2");
     assert_eq!(
-        details.tab,
-        antislop::lean::tui::details::VERIFIER,
-        "a task under verification opens on its verifier"
+        details.tab, 0,
+        "opening the worker keeps its role even during verification"
     );
     assert!(
-        antislop::lean::tui::details::tabs_for(&details.key)
+        !antislop::lean::tui::details::tabs_for(&details.key)
             .contains(&antislop::lean::tui::details::CHECKS)
     );
-    app.key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+    assert_eq!(app.details.as_ref().unwrap().key, "verifier:t2");
+    app.key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
     assert_eq!(
         app.details.as_ref().unwrap().tab,
         antislop::lean::tui::details::CHECKS
@@ -5387,7 +5388,7 @@ fn details_fetch_is_guarded_by_task_plan_round_and_refetches_once_per_new_round(
         app.details.as_ref().unwrap().task.as_ref().unwrap()["report"],
         "round two"
     );
-    app.details.as_mut().unwrap().tab = 3; // Checks (Overview and Session are merged)
+    app.details.as_mut().unwrap().tab = antislop::lean::tui::details::CHECKS;
     let issued = app.task_request_id;
     let check = |id: &str, task: &str, seq| Update::Events {
         conversation: "test-conv".into(),
@@ -6510,11 +6511,9 @@ mod text_selection_acceptance {
                         title: "Selection in the session card".into(),
                         ..Default::default()
                     });
-                    app.view
-                        .mailbox
-                        .insert("worker:t1".into(), vec!["sample café 👩‍👩‍👧‍👦".into()]);
                     let mut details = Details::new("worker:t1".into());
-                    details.switch_tab(1);
+                    details.task = Some(json!({"report": "sample café 👩‍👩‍👧‍👦"}));
+                    details.switch_tab(antislop::lean::tui::details::RESULT);
                     app.details = Some(details);
                 }
                 _ => {
@@ -7006,7 +7005,10 @@ fn vim_details_navigation_isolated_from_search_and_other_commands() {
         "gg must be consecutive"
     );
     // The session tab shows a terminal; records are searched on the others.
-    app.details.as_mut().unwrap().switch_tab(1);
+    app.details
+        .as_mut()
+        .unwrap()
+        .switch_tab(antislop::lean::tui::details::COMMENTS);
     app.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
     for c in ['g', 'g', 'G'] {
         app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
@@ -7550,7 +7552,12 @@ fn dashboard_screen(
             ..Agent::default()
         },
     );
-    let mut details = Details::new("verifier:t1".into());
+    let key = if tab == antislop::lean::tui::details::VERIFIER {
+        "verifier:t1"
+    } else {
+        "worker:t1"
+    };
+    let mut details = Details::new(key.into());
     details.tab = tab;
     details.task = Some(json!({
         "id": "u1", "round": 2, "report": "Wrapped writes in a transaction.",

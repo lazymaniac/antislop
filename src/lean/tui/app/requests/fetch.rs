@@ -141,7 +141,7 @@ impl App {
 
     pub fn open_details(&mut self, key: String) {
         self.restore_details(&key);
-        self.select_details_tab();
+        self.resolve_details_task();
         self.fetch_task();
     }
 
@@ -159,24 +159,14 @@ impl App {
         }
     }
 
-    fn select_details_tab(&mut self) {
+    fn resolve_details_task(&mut self) {
         if let Some(details) = &mut self.details {
             details.task_uuid = details
                 .task_id()
                 .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
                 .and_then(|task| task.uuid.clone());
-            // A task opens on whoever's turn it is: the verifier while it
-            // checks, the worker otherwise.
-            if let Some(row) = details
-                .task_id()
-                .and_then(|id| self.view.tasks.iter().find(|task| task.id == id))
-            {
-                let tab = if row.status == crate::lean::tasks::status::VERIFYING {
-                    details::VERIFIER
-                } else {
-                    0
-                };
-                details.switch_tab(tab);
+            if details.task_id().is_some() {
+                details.switch_tab(details::tabs_for(&details.key)[0]);
             }
         }
     }

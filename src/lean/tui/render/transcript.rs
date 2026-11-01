@@ -75,10 +75,16 @@ impl App {
     ) -> usize {
         let card_entry = &self.view.cards[index];
         let signature = fingerprint(card_entry, &transcript_comment(self, card_entry));
-        let cached_height = self
-            .transcript_layout
-            .rows(index, signature, found)
-            .map(<[Row]>::len);
+        // Heights outlive the bounded row cache: a history longer than its
+        // budget must not be wrapped again on every frame.
+        let known = &self.transcript_layout.entries[index];
+        let cached_height = (known.fingerprint == signature && known.found == found)
+            .then_some(known.height)
+            .or_else(|| {
+                self.transcript_layout
+                    .rows(index, signature, found)
+                    .map(<[Row]>::len)
+            });
         let height = if let Some(height) = cached_height {
             height
         } else {

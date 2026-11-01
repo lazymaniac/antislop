@@ -86,7 +86,7 @@ pub struct Details {
     pub dash_scroll: usize,
     pub panel_scroll: [usize; 2],
     pub panel_expanded: [bool; 2],
-    /// Disk-backed history documents of the fetched task: result, messages, review.
+    /// Disk-backed history documents of the fetched task: result, review.
     pub documents: HashMap<String, document::Document>,
     pub(super) panel_layout: [LayoutCache; 2],
     pub fetched_events: u64,

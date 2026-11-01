@@ -100,17 +100,6 @@ fn round_documents(
         "result".into(),
         result_document(client, conversation, uuid, round, task)?,
     );
-    documents.insert(
-        "messages".into(),
-        message_document(
-            client,
-            conversation,
-            &super::super::super::store::HistoryScope::Round {
-                task: uuid.into(),
-                round: round as u32,
-            },
-        )?,
-    );
     Ok(documents)
 }
 
@@ -220,76 +209,4 @@ fn read_content(
         crate::require(next > offset, "history content cursor did not advance")?;
         offset = next;
     }
-}
-
-pub(in crate::lean::tui) fn message_document(
-    client: &Client,
-    conversation: &str,
-    scope: &super::super::super::store::HistoryScope,
-) -> Result<document::Document> {
-    let mut builder = document::Builder::new(client.state_dir())?;
-    let mut after = 0;
-    loop {
-        let page = message_page(client, conversation, scope, after)?;
-        append_message_page(&mut builder, client, conversation, &page)?;
-        if page["has_more"] != true {
-            break;
-        }
-        after = next_message_cursor(&page, after)?;
-    }
-    builder.finish()
-}
-
-fn message_page(
-    client: &Client,
-    conversation: &str,
-    scope: &super::super::super::store::HistoryScope,
-    after: u64,
-) -> Result<Value> {
-    client.call(&Request::History(
-        crate::lean::daemon::HistoryRequest::HistoryMessages {
-            conversation: conversation.into(),
-            scope: scope.clone(),
-            after,
-            limit: Some(100),
-        },
-    ))
-}
-
-fn append_message_page(
-    builder: &mut document::Builder,
-    client: &Client,
-    conversation: &str,
-    page: &Value,
-) -> Result<()> {
-    for message in page["messages"].as_array().into_iter().flatten() {
-        append_message(builder, client, conversation, message)?;
-    }
-    Ok(())
-}
-
-fn append_message(
-    builder: &mut document::Builder,
-    client: &Client,
-    conversation: &str,
-    message: &Value,
-) -> Result<()> {
-    let header = format!(
-        "{} → {} · {}\n",
-        message["sender"].as_str().unwrap_or_default(),
-        message["recipient"].as_str().unwrap_or_default(),
-        message["state"].as_str().unwrap_or_default()
-    );
-    let owner = super::super::super::store::ContentOwner::Mail {
-        id: message["id"].as_u64().unwrap_or(0),
-    };
-    builder.append(&header, |sink| {
-        read_content(client, conversation, &owner, sink)
-    })
-}
-
-fn next_message_cursor(page: &Value, after: u64) -> Result<u64> {
-    let next = page["next_after"].as_u64().unwrap_or(0);
-    crate::require(next > after, "message cursor did not advance")?;
-    Ok(next)
 }

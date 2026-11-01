@@ -70,7 +70,7 @@ impl App {
     }
 
     fn session_is_stale(&self, details: &Details) -> bool {
-        matches!(details.tab, 0 | 1 | details::REVIEW | details::VERIFIER)
+        matches!(details.tab, 0 | details::REVIEW | details::VERIFIER)
             && details.selected_round.is_none()
             && details.fetched_events != self.view.after
     }

@@ -1,5 +1,5 @@
 //! Full-screen details of one agent or conversation: what it was asked,
-//! its session history, messages, deliverables, obligations, and comments.
+//! its session history, deliverables, obligations, and comments.
 
 use super::super::tasks::{TaskContract, obligations, status};
 use super::taskinfo;
@@ -24,9 +24,8 @@ pub use presentation::{
     CheckRow, check_rows, details_footer_hint, details_footer_hint_for, format_tabs,
 };
 
-pub const TABS: [&str; 9] = [
+pub const TABS: [&str; 8] = [
     "Overview",
-    "Messages",
     "Result",
     "Checks",
     "Comments",
@@ -35,20 +34,19 @@ pub const TABS: [&str; 9] = [
     "Verifier",
     "Plan",
 ];
-pub const RESULT: usize = 2;
-pub const CHECKS: usize = 3;
-pub const COMMENTS: usize = 4;
-pub const REVIEW: usize = 5;
-pub const REQUIREMENTS: usize = 6;
+pub const RESULT: usize = 1;
+pub const CHECKS: usize = 2;
+pub const COMMENTS: usize = 3;
+pub const REVIEW: usize = 4;
+pub const REQUIREMENTS: usize = 5;
 /// The verifier's own Overview: what it checks, and its terminal.
-pub const VERIFIER: usize = 7;
-pub const PLAN: usize = 8;
+pub const VERIFIER: usize = 6;
+pub const PLAN: usize = 7;
 
-/// The label of a tab for this address: the first tab of a task's worker
-/// section is the worker's Overview, the first of the verifier's is its own.
+/// The label of a tab for this agent.
 pub fn tab_name(key: &str, tab: usize) -> &'static str {
     match (tab, key.split_once(':').map(|(role, _)| role)) {
-        (0, Some("worker" | "verifier")) => "Worker",
+        (0, Some("worker")) => "Worker",
         _ => TABS[tab],
     }
 }
@@ -58,18 +56,14 @@ pub fn is_overview(tab: usize) -> bool {
     tab == 0 || tab == VERIFIER
 }
 
-/// Where the verifier's section starts in a task's tab list.
-pub fn section_starts(key: &str, tab: usize) -> bool {
-    tab == VERIFIER && tabs_for(key).contains(&VERIFIER)
-}
-
-/// Task addresses share one set of tabs, for both worker and verifier addresses.
+/// Each role exposes only its own tabs.
 pub fn tabs_for(key: &str) -> Vec<usize> {
     match key.split_once(':').map_or(key, |(role, _)| role) {
-        "worker" | "verifier" => vec![0, 1, RESULT, VERIFIER, CHECKS, COMMENTS, REQUIREMENTS],
-        "planner" => vec![0, PLAN, 1, COMMENTS],
+        "worker" => vec![0, RESULT, COMMENTS, REQUIREMENTS],
+        "verifier" => vec![VERIFIER, CHECKS, COMMENTS, REQUIREMENTS],
+        "planner" => vec![0, PLAN, COMMENTS],
         "plan-verifier" | "auditor" => vec![0, REVIEW, COMMENTS],
-        _ => vec![0, 1, COMMENTS],
+        _ => vec![0, COMMENTS],
     }
 }
 
@@ -117,6 +111,7 @@ impl Details {
 
     pub fn new(key: String) -> Self {
         Details {
+            tab: tabs_for(&key)[0],
             key,
             input_width: [1; 2],
             follow: true,
@@ -198,19 +193,9 @@ impl Details {
         self.overview() && (!self.show_info || self.split)
     }
 
-    /// The one agent the Overview in front shows: the worker's tab holds the
-    /// worker, the verifier's tab the verifier.
+    /// The terminal and composer always belong to the selected role.
     pub(super) fn session_keys(&self) -> Vec<String> {
-        match self.key.split_once(':') {
-            Some(("worker" | "verifier", id)) => {
-                vec![if self.tab == VERIFIER {
-                    format!("verifier:{id}")
-                } else {
-                    format!("worker:{id}")
-                }]
-            }
-            _ => vec![self.key.clone()],
-        }
+        vec![self.key.clone()]
     }
 
     fn render_records(records: &[Rc<DetailRecord>], query: &str) -> Vec<(Style, String)> {

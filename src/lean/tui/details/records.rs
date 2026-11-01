@@ -1,8 +1,6 @@
 use super::*;
 mod checks;
 mod comments;
-mod mailbox;
-mod messages;
 mod overview;
 mod plan;
 mod requirements;
@@ -15,8 +13,7 @@ impl Details {
         match self.tab {
             PLAN => plan::plan(self, view, &mut records),
             REQUIREMENTS => requirements::requirements(self, view, &mut records),
-            0 => overview::overview(self, view, &mut records),
-            1 => messages::messages(self, view, &mut records),
+            0 | VERIFIER => overview::overview(self, view, &mut records),
             REVIEW => review::review(self, view, &mut records),
             COMMENTS => comments::comments(self, view, &mut records),
             CHECKS => checks::checks(self, view, &mut records),
