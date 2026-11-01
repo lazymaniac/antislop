@@ -17,9 +17,21 @@ impl Core {
         )?;
         self.start_plan(conversation, plan_id, |store| {
             store.db().execute("DELETE FROM provider_blocks WHERE (provider,profile) IN (SELECT t.provider,r.profile FROM run_contexts r JOIN turns t ON t.id=r.turn_id WHERE t.conversation_id=?1 AND t.plan_id=?2)", rusqlite::params![conversation,plan_id])?;
+            if store.requeue_plan(conversation, plan_id)? > 0 {
+                return Ok(());
+            }
+            let waiting: bool = store.db().query_row(
+                "SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.conversation_id=?1 AND t.plan_id=?2
+                 AND (EXISTS(SELECT 1 FROM agent_questions q WHERE q.id=json_extract(t.feedback,'$.waiting_request') AND q.state IN ('pending','awaiting_user'))
+                  OR EXISTS(SELECT 1 FROM agent_answer_waits w WHERE w.request=json_extract(t.feedback,'$.waiting_request') AND w.released=0)))",
+                rusqlite::params![conversation,plan_id], |row| row.get(0))?;
             require(
-                store.requeue_plan(conversation, plan_id)? > 0,
-                "this plan has nothing to resume",
+                false,
+                if waiting {
+                    "this plan is waiting for agent answers or their revision/dependency; resolve its open questions before resuming"
+                } else {
+                    "this plan has nothing to resume"
+                },
             )
         })
     }

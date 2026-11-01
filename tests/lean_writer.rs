@@ -555,7 +555,7 @@ fn a_writer_integrates_over_the_local_changes_it_started_with() {
 }
 
 #[test]
-fn resuming_integrates_an_approved_change_once_the_user_is_done() {
+fn resuming_preserves_an_unanswered_choice_after_conflicting_edits_are_removed() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
@@ -569,34 +569,23 @@ fn resuming_integrates_an_approved_change_once_the_user_is_done() {
         .filter(|line| line.contains("accept-edits"))
         .count();
 
-    // The user drops their draft; resuming lands the approved change without
-    // asking the worker again.
+    // Editing the project does not answer the resolver's pending question.
     std::fs::remove_file(project.join("hello.txt")).unwrap();
-    core.resume_plan(&conversation, &task.plan_id).unwrap();
+    let error = core.resume_plan(&conversation, &task.plan_id).unwrap_err();
+    assert!(error.to_string().contains("open questions"), "{error}");
     wait_idle(&core, &conversation);
-
-    let task = &core
-        .store
-        .plan(&task.plan_id)
-        .unwrap()
-        .into_iter()
-        .find(|row| row.id == task.id)
-        .unwrap();
-    assert_eq!(task.status, "approved", "{:?}", task.report);
-    assert_eq!(
-        std::fs::read_to_string(project.join("hello.txt")).unwrap(),
-        "from worker\n"
-    );
+    let waiting = core.store.task_by_id(&task.id).unwrap().unwrap();
+    assert_eq!(waiting.status, "waiting");
+    assert!(!project.join("hello.txt").exists());
     let calls_after = std::fs::read_to_string(dir.path().join("calls.jsonl"))
         .unwrap()
         .lines()
         .filter(|line| line.contains("accept-edits"))
         .count();
-    assert!(
-        calls_after > calls_before,
-        "the worker resolves the choice and is verified again"
+    assert_eq!(
+        calls_after, calls_before,
+        "unanswered work is not restarted"
     );
-    assert!(core.resume_plan(&conversation, &task.plan_id).is_err());
 }
 
 #[test]
@@ -916,7 +905,7 @@ fn protected_user_edits_leave_their_file_and_the_reason_on_the_card() {
 }
 
 #[test]
-fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
+fn resuming_preserves_an_unanswered_choice_after_the_user_commits() {
     let dir = tempfile::tempdir().unwrap();
     let project = project(dir.path());
     let (codex, agy) = fake_clis_with_concurrent_edit(dir.path(), &project);
@@ -930,7 +919,8 @@ fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
     std::fs::write(project.join("hello.txt"), "another user version\n").unwrap();
     git(&project, &["add", "hello.txt"]);
     git(&project, &["commit", "--quiet", "-m", "user version"]);
-    core.resume_plan(&conversation, &task.plan_id).unwrap();
+    let error = core.resume_plan(&conversation, &task.plan_id).unwrap_err();
+    assert!(error.to_string().contains("open questions"), "{error}");
     wait_idle(&core, &conversation);
 
     let task = &core
@@ -942,7 +932,7 @@ fn a_resume_conflicting_with_the_users_commit_shows_the_conflict_on_the_card() {
         .unwrap();
     assert_eq!(task.status, "waiting", "{:?}", task.report);
     let (feedback, _) = card(&core, &conversation, "t1");
-    assert_eq!(feedback["integration"]["outcome"], "conflict");
+    assert_eq!(feedback["integration"]["outcome"], "user_edits");
     assert_eq!(
         feedback["integration"]["files"],
         serde_json::json!(["hello.txt"])
