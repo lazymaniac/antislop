@@ -546,7 +546,7 @@ fn a_task_requeued_while_others_run_starts_without_waiting_for_them() {
     let plan = propose(&core, &conversation, "requeue");
     core.accept_plan(&conversation, &plan).unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut failed = loop {
+    let failed = loop {
         let tasks = core.store.plan(&plan).unwrap();
         if let Some(task) = tasks
             .into_iter()
@@ -557,10 +557,20 @@ fn a_task_requeued_while_others_run_starts_without_waiting_for_them() {
         assert!(Instant::now() < deadline, "t1 never stopped");
         std::thread::sleep(Duration::from_millis(20));
     };
-    // What a revision does to a stopped task while the plan runs on.
+    // An explicit user retry lifts the login block while the plan runs on.
     std::fs::write(dir.path().join("logged-in"), "").unwrap();
-    failed.status = "queued".into();
-    core.store.update_task(&failed).unwrap();
+    core.recover_task(TaskRecoveryRequest {
+        conversation: conversation.clone(),
+        plan: plan.clone(),
+        task: failed.id.clone(),
+        action: RecoveryAction::RetryWithGuidance,
+        consent_files: None,
+        freshness_token: core
+            .task_freshness_token(&conversation, &plan, &failed.id)
+            .unwrap(),
+        message: Some("Retry after logging in".into()),
+    })
+    .unwrap();
     wait_idle(&core, &conversation);
 
     assert!(

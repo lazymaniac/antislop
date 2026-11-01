@@ -38,6 +38,7 @@ fn keep_branch(core: &Core, work: &mut RecoveryWork) -> Result<()> {
 }
 
 fn retry(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
+    unblock_user_retry(core, work)?;
     queue_guidance(core, work)?;
     work.task.status = status::QUEUED.into();
     work.task.verdict = None;
@@ -52,6 +53,7 @@ fn retry(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
 }
 
 fn restart(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
+    unblock_user_retry(core, work)?;
     core.store.forget_task_sessions(&work.task.id)?;
     queue_guidance(core, work)?;
     work.task.status = status::QUEUED.into();
@@ -63,6 +65,18 @@ fn restart(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
     restart_event(core, work)?;
     core.maybe_continue_plan(&work.req.conversation, &work.req.plan)?;
     work.notice = Some(notice);
+    Ok(())
+}
+
+fn unblock_user_retry(core: &Core, work: &RecoveryWork) -> Result<()> {
+    if work.actor == "user" {
+        core.store.db().execute(
+            "DELETE FROM provider_blocks WHERE (provider,profile) IN (
+                SELECT t.provider,r.profile FROM turns t JOIN run_contexts r ON r.turn_id=t.id
+                WHERE t.conversation_id=?1 AND t.role IN ('worker:'||?2,'verifier:'||?2))",
+            rusqlite::params![work.req.conversation, work.task.id],
+        )?;
+    }
     Ok(())
 }
 
