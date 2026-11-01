@@ -48,7 +48,15 @@ impl Store {
         Ok(Some(crate::lean::tasks::DependencyReport {
             id: dependency.to_owned(),
             title: task.spec["title"].as_str().unwrap_or(dependency).to_owned(),
-            report: crate::lean::tasks::bound(&summary, DEPENDENCY_SUMMARY_LIMIT),
+            report: format!(
+                "Summary (abridged); full result: {}. Read with read_dependency_result(dependency=\"{}\").\n{}",
+                task.feedback
+                    .as_ref()
+                    .and_then(|f| f["carried_from"].as_str())
+                    .unwrap_or(&task.id),
+                dependency,
+                crate::lean::tasks::bound(&summary, DEPENDENCY_SUMMARY_LIMIT)
+            ),
         }))
     }
 

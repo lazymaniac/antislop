@@ -2,7 +2,7 @@ use super::super::*;
 
 mod review;
 mod rounds;
-mod worker;
+pub(in crate::lean) mod worker;
 
 const MAX_ROUNDS_PER_RUN: u32 = 16;
 
@@ -51,6 +51,9 @@ impl Prepared {
         let project = PathBuf::from(core.store.conversation(conversation)?.project);
         let worktree = worker::writer_worktree(core, task, &spec, &project)?;
         let (workdir, add_dirs) = worker::task_directories(core, task, &spec, &project, &worktree)?;
+        if git::is_repository(&workdir) {
+            core.store.db().execute("INSERT OR IGNORE INTO task_source_revisions(task_id,generation,revision) VALUES(?1,?2,?3)",rusqlite::params![task.id,task.input_generation,git::head(&workdir)?])?;
+        }
         let upstream = core.upstream(&task.plan_id, &spec)?;
         Ok(Self {
             spec,

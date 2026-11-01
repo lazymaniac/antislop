@@ -238,13 +238,35 @@ impl Core {
             "there is no plan to replace; the planner drafts the first one itself",
         )?;
         let answered = self.store.last_orchestration_answered(conversation)?;
-        if self
+        if !self
             .store
             .messages_by(conversation, REPLAN, answered)?
             .is_empty()
         {
-            self.store.add_message(conversation, REPLAN, reason)?;
+            return Ok(json!({"state":"requested"}));
         }
+        let user_message: i64 = self.store.db().query_row(
+            "SELECT coalesce(max(seq),0) FROM messages WHERE conversation_id=?1 AND author='user'",
+            [conversation],
+            |r| r.get(0),
+        )?;
+        let run = self
+            .store
+            .planning_run(conversation)?
+            .map(|run| (run.id, run.spec_revision));
+        let reason_key = reason
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        let basis = crate::hash(serde_json::to_vec(&(user_message, run, reason_key))?);
+        let condition =
+            "new user input, changed requirements, or concrete new evidence resolving this blocker";
+        let fresh = self.store.db().execute("INSERT OR IGNORE INTO replan_blockers(conversation_id,basis,resume_condition) VALUES(?1,?2,?3)",rusqlite::params![conversation,basis,condition])?;
+        if fresh == 0 {
+            return Ok(json!({"state":"blocked","resume_condition":condition}));
+        }
+        self.store.add_message(conversation, REPLAN, reason)?;
         Ok(json!({"state": "requested"}))
     }
 }
@@ -347,5 +369,65 @@ mod tests {
             .unwrap()
             .expect("the request is pending");
         assert!(core.planner_owns_turn(&id, upto).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod replan_blocker_tests {
+    use super::*;
+    #[test]
+    fn identical_replans_leave_one_blocker_until_new_user_input() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = Config::from_toml(include_str!("../../examples/antislop.toml")).unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let conversation = core
+            .store
+            .create_conversation(directory.path().to_str().unwrap())
+            .unwrap()
+            .id;
+        core.store
+            .add_plan(
+                &conversation,
+                &[json!({"id":"analysis","title":"Analysis","goal":"Report","kind":"analysis"})],
+            )
+            .unwrap();
+        assert_eq!(
+            core.request_replan(&conversation, "Missing evidence")
+                .unwrap()["state"],
+            "requested"
+        );
+        let request = core
+            .store
+            .messages_by(&conversation, REPLAN, 0)
+            .unwrap()
+            .pop()
+            .unwrap();
+        let turn = core
+            .store
+            .start_turn(&conversation, PLANNER, "fixture", request.seq, None)
+            .unwrap();
+        core.store
+            .finish_turn(&turn.id, TurnStatus::Done, None)
+            .unwrap();
+        let blocked = core
+            .request_replan(&conversation, "Missing  evidence")
+            .unwrap();
+        assert_eq!(blocked["state"], "blocked");
+        assert!(blocked["resume_condition"].is_string());
+        assert_eq!(
+            core.store
+                .messages_by(&conversation, REPLAN, 0)
+                .unwrap()
+                .len(),
+            1
+        );
+        core.store
+            .add_message(&conversation, "user", "Here is the missing evidence")
+            .unwrap();
+        assert_eq!(
+            core.request_replan(&conversation, "Missing evidence")
+                .unwrap()["state"],
+            "requested"
+        );
     }
 }

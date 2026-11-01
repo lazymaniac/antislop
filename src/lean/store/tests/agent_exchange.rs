@@ -223,7 +223,13 @@ fn a_dependent_receives_the_summary_of_its_dependency_not_its_report() {
     let inputs = store.dependency_inputs(&producer.plan_id, &spec).unwrap();
     assert_eq!(inputs.len(), 1);
     assert_eq!(inputs[0].id, "local");
-    assert_eq!(inputs[0].report, "Defined Result<T, Error> in src/api.rs");
+    assert!(
+        inputs[0]
+            .report
+            .ends_with("Defined Result<T, Error> in src/api.rs")
+    );
+    assert!(inputs[0].report.contains("read_dependency_result"));
+    assert!(inputs[0].report.contains(&producer.id));
     assert!(!inputs[0].report.contains("PRIVATE"));
     assert_eq!(
         store
@@ -242,7 +248,7 @@ fn a_dependency_without_a_summary_hands_over_the_opening_line_of_its_report() {
     store.update_task(&producer).unwrap();
     let spec: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"consumer","title":"Use API","goal":"Use API","kind":"implementation","depends_on":["local"]})).unwrap();
     let inputs = store.dependency_inputs(&producer.plan_id, &spec).unwrap();
-    assert_eq!(inputs[0].report, "Defined the API");
+    assert!(inputs[0].report.ends_with("Defined the API"));
 }
 
 #[test]
@@ -473,5 +479,83 @@ fn a_closing_task_also_receives_the_summaries_of_earlier_checks() {
     assert_eq!(
         ids(task("consumer", "implementation", &["audit"])),
         ["audit"]
+    );
+}
+
+#[test]
+fn answered_question_waits_for_its_specific_dependency_before_queueing_once() {
+    let (_dir, store, conversation, mut task, turn) = fixture();
+    let dependency = crate::id();
+    store.db().execute("INSERT INTO tasks(id,conversation_id,plan_id,position,spec,status,created_ms) VALUES(?1,?2,?3,1,'{\"id\":\"dependency\"}','working',0)",params![dependency,conversation,task.plan_id]).unwrap();
+    let request = store
+        .ask_agent_question(
+            &conversation,
+            &turn.id,
+            "dependency",
+            "Need dependency output",
+        )
+        .unwrap();
+    task.feedback = Some(json!({"waiting_request":request}));
+    store.update_task(&task).unwrap();
+    let answer = store
+        .answer_agent_with_disposition(
+            &conversation,
+            &request,
+            "Wait for the result",
+            "wait_for_dependency",
+            &dependency,
+        )
+        .unwrap();
+    assert_eq!(answer["disposition"], "wait_for_dependency");
+    assert_eq!(answer["released"], false);
+    assert_eq!(
+        store.park_task_for_question(&task, &request).unwrap(),
+        "waiting"
+    );
+    store.refresh_answer_waits(&conversation).unwrap();
+    assert_eq!(
+        store.requeue_plan(&conversation, &task.plan_id).unwrap(),
+        1,
+        "only the independent dependency can be queued"
+    );
+    store
+        .requeue_after_restart(&conversation, &task.plan_id)
+        .unwrap();
+    assert_eq!(
+        store.task_by_id(&task.id).unwrap().unwrap().status,
+        "waiting"
+    );
+    assert!(
+        store
+            .answer_agent_with_disposition(
+                &conversation,
+                &request,
+                "Wait for the result",
+                "continue",
+                ""
+            )
+            .is_err()
+    );
+    store
+        .db()
+        .execute(
+            "UPDATE tasks SET status='approved' WHERE id=?1",
+            [&dependency],
+        )
+        .unwrap();
+    store.refresh_answer_waits(&conversation).unwrap();
+    assert_eq!(
+        store.task_by_id(&task.id).unwrap().unwrap().status,
+        "queued"
+    );
+    store
+        .db()
+        .execute("UPDATE tasks SET status='waiting' WHERE id=?1", [&task.id])
+        .unwrap();
+    store.refresh_answer_waits(&conversation).unwrap();
+    assert_eq!(
+        store.task_by_id(&task.id).unwrap().unwrap().status,
+        "waiting",
+        "a consumed release never requeues again"
     );
 }

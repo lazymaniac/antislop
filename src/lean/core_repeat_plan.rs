@@ -15,6 +15,9 @@ impl Core {
                 spec.goal.clone(),
                 spec.kind,
                 spec.writes,
+                spec.change_kind(),
+                spec.outputs.clone(),
+                spec.delivery,
             )
         };
         let Some(earlier) = self.store.last_plan_that_ran(conversation, plan_id)? else {

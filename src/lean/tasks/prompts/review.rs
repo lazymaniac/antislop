@@ -20,8 +20,10 @@ pub fn verifier_prompt(
          the catalog risks of this kind of work). \
          Assess each from files and recorded evidence only; do not execute or edit:\n{obligations}\n{risks}\n\n\
          Command results are recorded evidence: judge them by the command and the output \
-         the report quotes. Files the worker left under paths git ignores (such as \
-         .antislop/ or target/) never reach your checkout; their absence is not a finding. \
+         the report quotes. Explicit artifact outputs listed in the contract are available \
+         in your checkout even under .antislop/; inspect those documents. Other files the \
+         worker left under paths git ignores (such as .antislop/ or target/) never reach \
+         your checkout; their absence is not a finding. \
          Raise one only when the report itself lacks the command or output a check needs.\n\n\
          The worker's report:\n<<<\n{report}\n>>>\n\n{}End with review: your report, checks with a status and note for every obligation id above, and findings, each naming the check it breaks, its severity, the issue and where. The runtime approves only when every check is ok or n/a and no finding is critical, high or medium. Suggestions outside this contract belong in the report, not in findings. {COVERAGE_FORMAT}\n\n{blocker}",
         change_note(changes),
@@ -29,7 +31,7 @@ pub fn verifier_prompt(
 }
 
 fn verifier_binding(task: &TaskContract) -> &'static str {
-    if task.writes {
+    if task.changes_code() {
         OPTIONS_VERIFICATION
     } else if task.kind == crate::config::WorkKind::Options {
         SELECTION_VERIFICATION
@@ -46,10 +48,15 @@ fn change_note(changes: Option<&str>) -> String {
 
 fn verifier_task_context(task: &TaskContract) -> String {
     format!(
-        "Task: {}\nGoal: {}\nScope: {}",
+        "Task: {}\nGoal: {}\nScope: {}\nArtifact outputs: {}",
         task.title,
         task.goal,
         scope_text(&task.scope),
+        if task.change_kind() == ChangeKind::Artifact {
+            task.outputs.join(", ")
+        } else {
+            "none".into()
+        },
     )
 }
 

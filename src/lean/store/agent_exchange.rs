@@ -16,6 +16,12 @@ impl Store {
         crate::require(question.len() <= 16384, "question exceeds 16 KiB")?;
         let mut db = self.db();
         let tx = db.transaction()?;
+        let owns: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND conversation_id=?2)",
+            params![turn, conversation],
+            |r| r.get(0),
+        )?;
+        crate::require(owns, "question turn belongs to another conversation")?;
         if let Some(id) = previous_question(&tx, turn, key, question)? {
             return Ok(id);
         }
@@ -58,7 +64,18 @@ impl Store {
                 "question belongs to another task, role or input version",
             )?;
         }
-        Ok(serde_json::json!({"request":request,"state":state,"answer":answer}))
+        let wait: Option<(String, String, bool)> = db
+            .query_row(
+                "SELECT disposition,target,released FROM agent_answer_waits WHERE request=?1",
+                [request],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let (disposition, target, released) =
+            wait.unwrap_or(("continue".into(), String::new(), true));
+        Ok(
+            serde_json::json!({"request":request,"state":state,"answer":answer,"disposition":disposition,"target":target,"released":released}),
+        )
     }
 
     pub(in crate::lean) fn answer_agent_question(
@@ -180,7 +197,7 @@ fn insert_agent_question(
     Ok(id)
 }
 
-fn answer_question_tx(
+pub(super) fn answer_question_tx(
     tx: &rusqlite::Transaction<'_>,
     conversation: &str,
     request: &str,
@@ -222,7 +239,7 @@ fn record_question_answer(
     request: &str,
     answer: &str,
 ) -> Result<()> {
-    tx.execute("UPDATE tasks SET status='queued' WHERE id IN (SELECT task_id FROM turn_scopes WHERE turn_id=(SELECT turn_id FROM agent_questions WHERE id=?1)) AND status='waiting' AND json_extract(feedback,'$.waiting_request')=?1", [request])?;
+    tx.execute("UPDATE tasks SET status='queued' WHERE id IN (SELECT task_id FROM turn_scopes WHERE turn_id=(SELECT turn_id FROM agent_questions WHERE id=?1)) AND status='waiting' AND json_extract(feedback,'$.waiting_request')=?1 AND NOT EXISTS(SELECT 1 FROM agent_answer_waits WHERE request=?1 AND released=0)", [request])?;
     tx.execute(
         "UPDATE agent_questions SET state='answered',answer=?3 WHERE conversation_id=?1 AND id=?2",
         params![conversation, request, answer],
@@ -278,13 +295,24 @@ impl Store {
             matches!(question.as_str(), "pending" | "awaiting_user" | "answered"),
             "question was invalidated",
         )?;
-        let state = if question == "answered" {
+        let blocked: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_answer_waits WHERE request=?1 AND released=0)",
+            [request],
+            |r| r.get(0),
+        )?;
+        let state = if question == "answered" && !blocked {
             "queued"
         } else {
             "waiting"
         };
         let changed = tx.execute("UPDATE tasks SET status=?2 WHERE id=?1 AND coalesce((SELECT generation FROM task_inputs WHERE task_id=?1),0)=?3",params![task.id,state,task.input_generation])?;
         crate::require(changed == 1, "task inputs changed while saving checkpoint")?;
+        if state == "queued" {
+            tx.execute(
+                "UPDATE agent_answer_waits SET released=2 WHERE request=?1 AND released=1",
+                [request],
+            )?;
+        }
         tx.commit()?;
         Ok(state.into())
     }

@@ -25,7 +25,7 @@ max_parallel = 4
 # Turn it off for mechanical work where the comparison decides nothing.
 local_options = true
 # Most tasks a plan is drafted with; a larger one is sent back to be grouped.
-max_tasks = 24
+max_tasks = 100
 
 [providers.codex]
 binary = "codex"

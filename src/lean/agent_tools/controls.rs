@@ -29,12 +29,28 @@ impl Core {
         conversation: &str,
         args: &Value,
     ) -> Result<Value> {
+        if args["disposition"] == "escalate_to_user" {
+            return self.defer_question_tool(conversation, &json!({"request":required_text(args,"request")?,"explanation":required_text(args,"answer")?}));
+        }
         let _graph = self.graph_updates.lock().expect("graph update mutex");
         let _integration = self.integrating.lock().expect("integration mutex");
-        let reply = self.store.answer_agent_question(
+        let request = required_text(args, "request")?;
+        let answer = required_text(args, "answer")?;
+        let disposition = match args.get("disposition").filter(|value| !value.is_null()) {
+            None => "continue",
+            Some(value) => value.as_str().ok_or_else(|| Error::Invalid("disposition: expected continue, wait_for_revision, wait_for_dependency or escalate_to_user".into()))?,
+        };
+        if disposition == "escalate_to_user" {
+            return self
+                .store
+                .defer_question_to_user(conversation, &request, &answer);
+        }
+        let reply = self.store.answer_agent_with_disposition(
             conversation,
-            &required_text(args, "request")?,
-            &required_text(args, "answer")?,
+            &request,
+            &answer,
+            disposition,
+            args["target"].as_str().unwrap_or_default(),
         )?;
         if let Some(task) = self.store.latest_plan(conversation)?.first() {
             self.maybe_continue_plan(conversation, &task.plan_id)?;
@@ -152,8 +168,10 @@ impl Core {
                 base_revision,
                 reason: required_text(args, "reason")?,
                 tasks,
-                retire: serde_json::from_value(args["retire"].clone())?,
-                redo: serde_json::from_value(args.get("redo").cloned().unwrap_or(json!([])))?,
+                retire: serde_json::from_value(args["retire"].clone())
+                    .map_err(|error| Error::Invalid(format!("retire: {error}")))?,
+                redo: serde_json::from_value(args.get("redo").cloned().unwrap_or(json!([])))
+                    .map_err(|error| Error::Invalid(format!("redo: {error}")))?,
             },
         ))
     }

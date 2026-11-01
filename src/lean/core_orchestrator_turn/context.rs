@@ -143,13 +143,14 @@ pub(super) fn ask(
     context: &OrchestrationContext<'_>,
     cancel: &AtomicBool,
 ) -> Result<Option<String>> {
-    let setup = turn_setup(
+    let mut setup = turn_setup(
         context.conversation,
         context.upto,
         &context.project,
         &context.config,
         context.is_comment,
     );
+    setup.plan_id = context.graph.first().map(|task| task.plan_id.clone());
     core.turn(setup, cancel, |first, fresh| {
         render_prompt(context, first, fresh)
     })

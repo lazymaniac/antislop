@@ -11,7 +11,7 @@ pub(super) fn apply(core: &Arc<Core>, work: &mut RecoveryWork) -> Result<()> {
     let (base, change) = integration_commits(work)?;
     let all_changed = git::changed_files(&work.project, &base, &change)?;
     validate_consent(work, &all_changed)?;
-    let (notice, card) = integrate_changes(work, &base, &change)?;
+    let (notice, card) = integrate_changes(core, work, &base, &change)?;
     work.integrated_files = work.req.consent_files.take().unwrap_or(all_changed.clone());
     mark_remaining_changes(work, &change, &all_changed)?;
     cleanup_approved(core, work)?;
@@ -86,10 +86,18 @@ fn validate_consent_file(work: &RecoveryWork, file: &str, changed: &[String]) ->
 }
 
 fn integrate_changes(
+    core: &Core,
     work: &mut RecoveryWork,
     base: &str,
     change: &str,
 ) -> Result<(String, (Outcome, Option<String>))> {
+    work.spec
+        .validate_change_paths(&git::changed_files(&work.project, base, change)?)?;
+    if work.spec.delivery == Some(tasks::DeliveryMode::Untracked) {
+        let result =
+            core.deliver_artifact_change(&work.task, &work.spec, &work.project, base, change)?;
+        return integration_result(work, result);
+    }
     let result = git::integrate_scoped(
         &work.project,
         base,

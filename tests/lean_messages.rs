@@ -1356,6 +1356,8 @@ else:
         response=call('ask',question='Which encoding should this local report use?')
     assert response['state']=='answered',response
     assert response['answer']=='Use UTF-8',response
+    late=call('wait_for_answer')
+    assert late['state']=='answered' and late['answer']=='Use UTF-8',late
     answer='Inspected encoding: UTF-8'"#,
         1,
     );

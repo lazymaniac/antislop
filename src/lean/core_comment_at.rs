@@ -138,6 +138,7 @@ impl Core {
     /// Cancels only orchestration; task workers keep their own cancellation flags.
     pub fn restart_orchestrator(self: &Arc<Self>, conversation: &str) -> Result<()> {
         self.store.conversation(conversation)?;
+        self.store.db().execute("DELETE FROM provider_blocks WHERE (provider,profile) IN (SELECT t.provider,r.profile FROM run_contexts r JOIN turns t ON t.id=r.turn_id WHERE t.conversation_id=?1 AND t.role IN ('orchestrator','comment-orchestrator','planner'))",[conversation])?;
         let running = self.running.lock().expect("running mutex");
         self.store.add_message(conversation, RUNTIME,
             "Restart the current orchestration round in a fresh session. Continue the user's request using the conversation history and durable project state.")?;

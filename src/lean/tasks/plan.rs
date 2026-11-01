@@ -19,6 +19,12 @@ pub struct PlannedTask {
     #[serde(default)]
     pub writes: Option<bool>,
     #[serde(default)]
+    pub change_kind: Option<ChangeKind>,
+    #[serde(default)]
+    pub outputs: Vec<String>,
+    #[serde(default)]
+    pub delivery: Option<DeliveryMode>,
+    #[serde(default)]
     pub covers: Vec<String>,
     #[serde(default)]
     pub section: Option<String>,
@@ -44,6 +50,9 @@ impl PlannedTask {
             section: self.section,
             scope: self.scope,
             writes,
+            change_kind: self.change_kind,
+            outputs: self.outputs,
+            delivery: self.delivery,
             depends_on: self.depends_on,
             kind: self.kind,
             covers: self.covers,
@@ -154,6 +163,7 @@ pub(crate) fn validate(tasks: &[TaskContract]) -> Result<()> {
     let mut seen = std::collections::BTreeSet::new();
     for task in tasks {
         validate_task_id(&task.id)?;
+        validate_change(task)?;
         validate_dependencies(task, &seen)?;
         crate::require(
             !task.title.trim().is_empty() && !task.goal.trim().is_empty(),
@@ -195,4 +205,85 @@ fn validate_dependencies(
         )?;
     }
     Ok(())
+}
+
+fn validate_change(task: &TaskContract) -> Result<()> {
+    crate::require(
+        task.change_kind() == ChangeKind::None || task.writes,
+        &format!("task {}: change_kind requires writes=true", task.id),
+    )?;
+    crate::require(
+        task.change_kind() != ChangeKind::Artifact || !task.outputs.is_empty(),
+        &format!("task {}: artifact requires explicit outputs", task.id),
+    )?;
+    crate::require(
+        task.delivery.is_none() || task.change_kind() == ChangeKind::Artifact,
+        &format!("task {}: untracked delivery requires artifact", task.id),
+    )?;
+    if task.change_kind() != ChangeKind::Artifact {
+        return Ok(());
+    }
+    for output in &task.outputs {
+        validate_artifact_output(output)
+            .map_err(|error| Error::Invalid(format!("task {}: {error}", task.id)))?;
+        crate::require(
+            !output
+                .split('/')
+                .next()
+                .is_some_and(|part| part.eq_ignore_ascii_case(".antislop"))
+                || task.delivery == Some(DeliveryMode::Untracked),
+            &format!(
+                "task {}: outputs under .antislop require delivery=untracked",
+                task.id
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+/// Explicit documents can live in ignored directories, including runtime state.
+/// Hidden names are valid; traversal, repository metadata and runtime internals are not.
+pub(crate) fn validate_artifact_output(output: &str) -> Result<()> {
+    let path = std::path::Path::new(output);
+    let parts: Vec<_> = output.split('/').collect();
+    crate::require(
+        !output.is_empty()
+            && path
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && !matches!(*part, "." | ".."))
+            && !output.contains(['*', '?', '['])
+            && !output.chars().any(char::is_control),
+        &format!("outputs must be explicit relative file paths: {output}"),
+    )?;
+    crate::require(
+        !parts.iter().any(|part| {
+            [".git", ".hg", ".svn"]
+                .iter()
+                .any(|name| part.eq_ignore_ascii_case(name))
+        }) && !(parts
+            .first()
+            .is_some_and(|part| part.eq_ignore_ascii_case(".antislop"))
+            && parts.get(1).is_some_and(|part| {
+                ["worktrees", "sessions", "content", "sources", "locks"]
+                    .iter()
+                    .any(|name| part.eq_ignore_ascii_case(name))
+            })),
+        &format!(
+            "artifact output cannot replace repository metadata or runtime internals: {output}"
+        ),
+    )?;
+    crate::require(
+        matches!(
+            path.extension().and_then(|s| s.to_str()),
+            Some("md" | "txt" | "rst" | "pdf" | "csv" | "html")
+        ) && !parts
+            .iter()
+            .any(|part| matches!(*part, "src" | "tests" | "test" | "config")),
+        &format!(
+            "artifact output must be a report/document, not code, tests or configuration: {output}"
+        ),
+    )
 }

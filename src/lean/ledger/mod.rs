@@ -1,6 +1,8 @@
 //! Versioned obligations. Sources and history are immutable; completion is derived
 //! from independent evidence about the integrated result, never task approval.
+mod constraints;
 mod model;
+pub(crate) use constraints::validate_runtime_constraints;
 mod runtime;
 mod storage;
 mod task_links;

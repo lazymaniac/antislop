@@ -548,3 +548,88 @@ fn approved_work_answered_other_requirements_runs_again() {
         "a run again: the requirements changed since their approval"
     );
 }
+
+#[test]
+fn changed_requirements_recheck_the_original_report_without_repeating_the_worker() {
+    let (_dir, store, conversation, _, mut first) = fixture();
+    store.queue_plan(&conversation, &first[0].plan_id).unwrap();
+    first[0].status = "approved".into();
+    first[0].report = Some("All sixteen findings and evidence".into());
+    first[0].round = 2;
+    store.update_task(&first[0]).unwrap();
+    let other = store
+        .create_run(&conversation, "Assess extra acceptance criteria")
+        .unwrap();
+    let second = store
+        .add_plan(&conversation, &[first[0].spec.clone()])
+        .unwrap();
+    store
+        .link_plan_run(&conversation, &second[0].plan_id, &other.id)
+        .unwrap();
+    store.queue_plan(&conversation, &second[0].plan_id).unwrap();
+    let task = store.task_by_id(&second[0].id).unwrap().unwrap();
+    assert_eq!(task.status, "queued");
+    assert!(task.verdict.is_none());
+    assert_eq!(task.feedback.as_ref().unwrap()["resume_role"], "verifier");
+    assert_eq!(
+        store.completed_task_output(&task).unwrap()["report"],
+        "All sixteen findings and evidence"
+    );
+    assert_eq!(
+        store
+            .task_by_id(&first[0].id)
+            .unwrap()
+            .unwrap()
+            .report
+            .as_deref(),
+        Some("All sixteen findings and evidence")
+    );
+}
+
+#[test]
+fn a_changed_scoped_source_invalidates_an_otherwise_matching_report() {
+    let (directory, store, conversation, run, mut first) = fixture();
+    let project = directory.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(project.join("input.txt"), "initial source").unwrap();
+    let revision = crate::lean::git::commit_all(&project, "base").unwrap();
+    store
+        .db()
+        .execute(
+            "UPDATE conversations SET project=?2 WHERE id=?1",
+            params![conversation, project.to_str().unwrap()],
+        )
+        .unwrap();
+    store.queue_plan(&conversation, &first[0].plan_id).unwrap();
+    first[0].spec["scope"] = json!(["input.txt"]);
+    first[0].status = "approved".into();
+    first[0].report = Some("Existing source was inspected".into());
+    store.update_task(&first[0]).unwrap();
+    store
+        .db()
+        .execute(
+            "INSERT INTO task_source_revisions VALUES(?1,0,?2)",
+            params![first[0].id, revision],
+        )
+        .unwrap();
+    std::fs::write(project.join("input.txt"), "changed source").unwrap();
+    let second = store
+        .add_plan(&conversation, &[first[0].spec.clone()])
+        .unwrap();
+    store
+        .link_plan_run(&conversation, &second[0].plan_id, &run)
+        .unwrap();
+    store.queue_plan(&conversation, &second[0].plan_id).unwrap();
+    let task = store.task_by_id(&second[0].id).unwrap().unwrap();
+    assert_eq!(task.status, "queued");
+    assert!(task.feedback.is_none());
+    assert_eq!(crate::lean::git::head(&project).unwrap(), revision);
+}

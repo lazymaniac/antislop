@@ -53,6 +53,18 @@ impl Core {
         args: &Value,
     ) -> Result<Value> {
         let question = required_text(args, "question")?;
+        if let Some(previous) = self
+            .store
+            .local_questions(turn)?
+            .into_iter()
+            .find(|q| q["question"] == question && q["state"] == "answered")
+        {
+            return self.store.agent_question(
+                conversation,
+                previous["request"].as_str().unwrap_or_default(),
+                Some(turn),
+            );
+        }
         let key = crate::hash(question.as_bytes())[..32].to_owned();
         let request = self
             .store
@@ -68,9 +80,53 @@ impl Core {
         turn: &str,
         args: &Value,
     ) -> Result<Value> {
-        let request = self.store.open_question_of_turn(turn)?.ok_or_else(|| Error::Invalid(
-            "no question of this turn is waiting for an answer; ask one with ask, or continue with the answers you have".into(),
-        ))?;
+        let request = match self.store.open_question_of_turn(turn)? {
+            Some(request) => request,
+            None => {
+                if let Some(answer) = self
+                    .store
+                    .local_questions(turn)?
+                    .into_iter()
+                    .find(|q| q["state"] == "answered")
+                {
+                    let request = answer["request"].as_str().unwrap_or_default();
+                    let answer = self
+                        .store
+                        .agent_question(conversation, request, Some(turn))?;
+                    if answer["released"] != false {
+                        return Ok(answer);
+                    }
+                    let mut response = self.record_task_result(
+                        conversation,
+                        role,
+                        turn,
+                        TurnResult::NeedsInput {
+                            request: request.into(),
+                            checkpoint: args["note"]
+                                .as_str()
+                                .unwrap_or(
+                                    "Waiting for the revision or dependency named in the answer.",
+                                )
+                                .into(),
+                        },
+                    )?;
+                    for key in [
+                        "request",
+                        "state",
+                        "answer",
+                        "disposition",
+                        "target",
+                        "released",
+                    ] {
+                        response[key] = answer[key].clone();
+                    }
+                    return Ok(response);
+                }
+                return Err(Error::Invalid(
+                    "no question of this turn is waiting for an answer; ask one with ask".into(),
+                ));
+            }
+        };
         let checkpoint = args["note"]
             .as_str()
             .filter(|note| !note.trim().is_empty())

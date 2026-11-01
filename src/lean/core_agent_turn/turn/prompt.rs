@@ -48,6 +48,19 @@ fn append_task_context(
             git::head(&spec.cwd)?
         ));
     }
+    if let Some(run) = core.store.plan_run(&task.plan_id)? {
+        let entries = core.store.ledger_entries(state.conversation, &run, None)?;
+        let contract: TaskContract = serde_json::from_value(task.spec.clone())?;
+        crate::lean::ledger::validate_runtime_constraints(
+            std::slice::from_ref(&contract),
+            &entries,
+        )?;
+        for entry in entries {
+            if !entry.spec.constraints.is_empty() {
+                text.push_str(&format!("Run constraints from requirement {}: {:?}. These apply to this task and any tool command. NoNewExecutions forbids builds/tests/benchmarks/migrations/launching the inspected project; file inspection remains allowed. NoExistingFileChanges permits only the named new untracked documents; never edit or overwrite existing files, including existing output files. Failing inspected checks are report evidence, not a repair obligation.\n", entry.spec.id, entry.spec.constraints));
+            }
+        }
+    }
     append_questions(core, &state.turn.id, text)?;
     append_local_checks(&task.spec, text)?;
     text.push_str(if verifier {

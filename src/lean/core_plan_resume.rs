@@ -16,6 +16,7 @@ impl Core {
             "integrity error: plan has no requirements run",
         )?;
         self.start_plan(conversation, plan_id, |store| {
+            store.db().execute("DELETE FROM provider_blocks WHERE (provider,profile) IN (SELECT t.provider,r.profile FROM run_contexts r JOIN turns t ON t.id=r.turn_id WHERE t.conversation_id=?1 AND t.plan_id=?2)", rusqlite::params![conversation,plan_id])?;
             require(
                 store.requeue_plan(conversation, plan_id)? > 0,
                 "this plan has nothing to resume",

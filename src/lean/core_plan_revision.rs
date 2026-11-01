@@ -185,6 +185,12 @@ impl Core {
     ) -> Result<PreparedRevision> {
         let baseline = self.store.plan(&revision.plan)?;
         let specs = self.revised_specs(revision, &baseline)?;
+        if let Some(run) = self.store.plan_run(&revision.plan)? {
+            super::ledger::validate_runtime_constraints(
+                &specs,
+                &self.store.ledger_entries(conversation, &run, None)?,
+            )?;
+        }
         self.ensure_revision_scope(conversation, revision, &specs)?;
         self.prepared_revision(conversation, request, revision, baseline, specs)
     }

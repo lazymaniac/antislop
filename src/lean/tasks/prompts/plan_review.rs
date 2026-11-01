@@ -40,8 +40,8 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      semantic summary (about 60–80 characters) in the user's language, rather than the \
      first sentence of the goal; standard descriptions of built-in roles and automatically \
      added quality gates may use the interface language; scope names the places that matter, \
-     including related projects or services; tasks that change files are marked `writes`; key quality and \
-     verification agents from the predefined pool are included so touched code \
+     including related projects or services; tasks that change files are marked `writes`; only change_kind=code requires quality and \
+     verification agents from the predefined pool; none/artifact must not acquire code gates. Analysis results describe failing project checks without requiring repairs. Touched code \
      is left in a better state; each goal's result can be checked by its verifier from \
      the files and the worker's recorded evidence, without the verifier executing or editing \
      anything. This limits verifiers, not workers: a task whose kind writes (implementation, \

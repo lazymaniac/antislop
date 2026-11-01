@@ -95,7 +95,7 @@ fn upstream_tasks(
 fn writer_ids(tasks: &[TaskContract]) -> Vec<String> {
     tasks
         .iter()
-        .filter(|task| task.writes)
+        .filter(|task| task.changes_code())
         .map(|task| task.id.clone())
         .collect()
 }
@@ -104,7 +104,7 @@ fn writer_scope(tasks: &[TaskContract]) -> Vec<String> {
     let mut scope = Vec::new();
     for path in tasks
         .iter()
-        .filter(|task| task.writes)
+        .filter(|task| task.changes_code())
         .flat_map(|task| &task.scope)
     {
         if !scope.contains(path) {
@@ -185,6 +185,9 @@ fn gate_task(
     description: GateDescription,
 ) -> TaskContract {
     TaskContract {
+        change_kind: None,
+        outputs: Vec::new(),
+        delivery: None,
         quality_gate: true,
         options_for: None,
         requirement_ids: requirement_ids.to_vec(),

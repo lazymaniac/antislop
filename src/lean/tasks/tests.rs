@@ -1,6 +1,9 @@
 use super::*;
 use serde_json::json;
 
+#[path = "tests/artifact_paths.rs"]
+mod artifact_paths;
+
 fn verdict_with(coverage: serde_json::Map<String, serde_json::Value>) -> Verdict {
     Verdict {
         resolved: Vec::new(),

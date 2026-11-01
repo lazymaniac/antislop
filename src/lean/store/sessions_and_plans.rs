@@ -110,9 +110,13 @@ impl Store {
     /// Queues again every task of a plan that ended without approval, keeping
     /// its rounds, report, verdict and work. Returns how many.
     pub fn requeue_plan(&self, conversation: &str, plan_id: &str) -> Result<usize> {
+        self.refresh_answer_waits(conversation)?;
         Ok(self.db().execute(
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2
-               AND (status IN ('coordinating','cancelled','failed','needs_user','skipped','waiting','queued','working','verifying'))",
+               AND (status IN ('coordinating','cancelled','failed','needs_user','skipped','waiting','queued','working','verifying'))
+               AND NOT EXISTS(SELECT 1 FROM agent_questions q WHERE q.id=json_extract(tasks.feedback,'$.waiting_request') AND q.state IN ('pending','awaiting_user'))
+               AND NOT EXISTS(SELECT 1 FROM agent_answer_waits w WHERE w.request=json_extract(tasks.feedback,'$.waiting_request') AND w.released=0)
+               AND NOT EXISTS(SELECT 1 FROM turn_scopes s JOIN turns t ON t.id=s.turn_id JOIN run_contexts r ON r.turn_id=t.id JOIN provider_blocks b ON b.provider=t.provider AND b.profile=r.profile WHERE s.task_id=tasks.id)",
             params![conversation, plan_id],
         )?)
     }
@@ -126,7 +130,9 @@ impl Store {
         Ok(self.db().execute(
             "UPDATE tasks SET status='queued' WHERE conversation_id=?1 AND plan_id=?2 AND status='waiting'
                AND NOT EXISTS (SELECT 1 FROM agent_questions q
-                 WHERE q.id=json_extract(tasks.feedback,'$.waiting_request') AND q.state IN ('pending','awaiting_user'))",
+                 WHERE q.id=json_extract(tasks.feedback,'$.waiting_request') AND q.state IN ('pending','awaiting_user'))
+               AND NOT EXISTS(SELECT 1 FROM agent_answer_waits w WHERE w.request=json_extract(tasks.feedback,'$.waiting_request') AND w.released=0)
+               AND NOT EXISTS(SELECT 1 FROM turn_scopes s JOIN turns t ON t.id=s.turn_id JOIN run_contexts r ON r.turn_id=t.id JOIN provider_blocks b ON b.provider=t.provider AND b.profile=r.profile WHERE s.task_id=tasks.id)",
             params![conversation, plan_id],
         )?)
     }

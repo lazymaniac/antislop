@@ -27,6 +27,7 @@ pub(in crate::lean::ledger::storage) fn impact(
 pub(in crate::lean::ledger::storage) fn same_meaning(old: &EntrySpec, new: &EntrySpec) -> bool {
     old.interpretation == new.interpretation
         && old.qualifiers == new.qualifiers
+        && old.constraints == new.constraints
         && old.parent == new.parent
         && old.depends_on == new.depends_on
         && old.mandatory == new.mandatory

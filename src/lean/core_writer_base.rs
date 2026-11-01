@@ -84,6 +84,14 @@ impl Core {
         self.save_plan_base_record(plan_id, &record)
     }
 
+    pub(in crate::lean) fn artifact_landing(&self, task: &Task) -> Option<String> {
+        self.plan_base_record(&task.plan_id)
+            .landed
+            .into_iter()
+            .find(|(id, _)| id == &task.id)
+            .map(|(_, commit)| commit)
+    }
+
     fn plan_base_path(&self, plan_id: &str) -> PathBuf {
         self.state
             .join("plan-bases")

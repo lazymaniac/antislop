@@ -210,7 +210,7 @@ A revision review that has rejected twice in a row no longer blocks on findings
 that are only medium or low; they travel with the plan as a notice. A high or
 critical finding always blocks, and a review turn that ended without `review`
 fails with that reason.
-`policy.max_tasks` (default 24)
+`policy.max_tasks` (default 100)
 bounds the tasks a plan is drafted with, and `policy.local_options = false`
 leaves out the per-writer options tasks for mechanical work.
 

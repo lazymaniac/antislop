@@ -61,6 +61,7 @@ impl Core {
                 return Ok(None);
             }
         }
+        crate::lean::ledger::validate_runtime_constraints(&resolved, &entries)?;
         Ok(Some(resolved))
     }
 

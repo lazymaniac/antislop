@@ -24,6 +24,13 @@ use std::sync::Mutex;
 
 #[path = "store/agent_exchange.rs"]
 mod agent_exchange;
+#[path = "store/artifacts.rs"]
+mod artifacts;
+#[path = "store/dependency_results.rs"]
+mod dependency_results;
+pub(in crate::lean) use artifacts::ArtifactReceipt;
+#[path = "store/answer_waits.rs"]
+mod answer_waits;
 #[path = "store/plan_reviews.rs"]
 mod plan_reviews;
 #[path = "store/revision_jobs.rs"]

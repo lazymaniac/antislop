@@ -29,7 +29,10 @@ pub(super) fn approve(
 }
 
 fn commit_manual_fixes(work: &RecoveryWork, fixed: &[String]) -> Result<(Outcome, Option<String>)> {
-    if work.config.policy.local_commits && !fixed.is_empty() {
+    if work.config.policy.local_commits
+        && work.spec.delivery != Some(tasks::DeliveryMode::Untracked)
+        && !fixed.is_empty()
+    {
         Ok((
             Outcome::Committed,
             Some(git::commit_paths(&work.project, fixed, &work.spec.title)?),

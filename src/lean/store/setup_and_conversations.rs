@@ -24,6 +24,8 @@ impl Store {
         if found == 0 {
             Self::initialize(&connection)?;
         }
+        // Additive runtime tables; no existing session is repaired or resumed.
+        connection.execute_batch(include_str!("runtime_policy.sql"))?;
         connection.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;

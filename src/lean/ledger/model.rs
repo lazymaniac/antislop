@@ -76,6 +76,18 @@ fn yes() -> bool {
     true
 }
 
+/// Run-wide limits audited against the requirement's immutable source span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeConstraint {
+    NoNewExecutions,
+    NoFileChanges,
+    /// Existing files are immutable; named new untracked documents are allowed.
+    NoExistingFileChanges,
+    ArtifactOnly,
+    UntrackedDelivery,
+}
+
 /// One small record; collections are stored as normalized rows, not run snapshots.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,6 +97,8 @@ pub struct EntrySpec {
     pub interpretation: String,
     #[serde(default)]
     pub qualifiers: Vec<String>,
+    #[serde(default)]
+    pub constraints: Vec<RuntimeConstraint>,
     #[serde(default)]
     pub parent: Option<String>,
     #[serde(default)]

@@ -1,6 +1,6 @@
 use super::*;
 
-mod task_execution;
+pub(in crate::lean) mod task_execution;
 pub(in crate::lean) mod verifier_setup;
 
 impl Core {

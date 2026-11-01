@@ -5,13 +5,22 @@
 #[path = "git/recovery.rs"]
 mod recovery;
 pub use recovery::recovery_fingerprint;
+mod artifact_update;
+mod artifacts;
+pub(crate) use artifact_update::{
+    artifact_was_created, deliver_owned_artifacts, require_owned_outputs,
+};
 mod changes;
 mod integration;
 mod snapshots;
+mod untracked;
 mod worktree;
+pub(crate) use artifacts::commit_artifacts;
 pub use changes::*;
 pub use integration::*;
 pub use snapshots::*;
+pub use untracked::deliver_untracked;
+pub(crate) use untracked::require_added_files;
 pub use worktree::*;
 
 use crate::{Error, Result};
@@ -24,6 +33,7 @@ pub(super) fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
         .arg(dir)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()?)
 }
 

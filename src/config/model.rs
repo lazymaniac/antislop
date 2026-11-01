@@ -188,7 +188,7 @@ fn default_local_options() -> bool {
 }
 
 fn default_max_tasks() -> usize {
-    24
+    100
 }
 
 fn default_required_gates() -> bool {

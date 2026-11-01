@@ -1,6 +1,6 @@
 use super::*;
 
-const OPTIONS_NOTE: &str = "Do not compare implementation options during orchestration or before planning. Plan the work from the requirements; options are compared by worker tasks during execution, before their dependent writers begin. The runtime adds a dedicated read-only options task before every writer, after adding optional quality gates and even when required gates are disabled. Every writer has its own local options. Shared architecture decisions are context and never substitute for local options. The selected variant binds implementation; departures require explicit evidence and independent verification.";
+const OPTIONS_NOTE: &str = "Do not compare implementation options during orchestration or before planning. Plan the work from the requirements; options are compared by worker tasks during execution, before their dependent writers begin. The runtime adds a dedicated read-only options task before every task with change_kind=code, after adding optional quality gates and even when required gates are disabled. Every code writer has its own local options; report artifacts do not get code options or gates. Shared architecture decisions are context and never substitute for local options. The selected variant binds implementation; departures require explicit evidence and independent verification.";
 
 const NO_PINNING: &str = "Never write commit hashes, tree hashes, branch names or checkout paths into a task contract or acceptance criterion. Tasks work on the allocated checkout in its current state, even when its scoped files differ from an earlier report or adopted snapshot. Do not require snapshot adoption, revision alignment, a clean tree, unchanged scoped paths or proof of a particular commit before implementation, measurements or validation. Describe what to inspect or achieve (paths, symbols, behaviour), not a required repository identity. Historical revision references in existing contracts and reports are context, not execution gates; tell agents to continue on the files they received. A concrete missing or unusable input may need a question; a revision or changed-file mismatch alone never does. Do not add provenance, identity-attestation, receipt or handoff-proof requirements or tasks: a verifier reads the files and the recorded result, and cannot confirm who produced them.";
 
@@ -23,7 +23,7 @@ const PLAN_FORMAT: &str = "Submit the plan with the submit_plan tool; it ends yo
          `document` is the plan for the user in Markdown, divided into clear `#` / `##` / `###` \
          sections. `tasks` lists the tasks; each has `id`, `title`, `goal` and `kind`, and \
          optionally `section` (the heading it belongs to), `summary`, `scope`, `depends_on`, \
-         `writes` and `covers`. The runtime checks the plan at once: when submit_plan is \
+         `writes`, `change_kind`, `outputs`, `delivery` and `covers`. Use change_kind=none for analysis in the MCP report; use change_kind=artifact with writes=true and explicit output files for a document such as report.md. Use change_kind=code only for code/test/configuration changes. writes controls filesystem access independently; artifact analysis never requires code quality agents, and failing inspected project checks are findings to describe, not a request to repair the project. Set delivery=untracked when the user wants a new report without a project commit; this overrides local_commits. Reports may use explicit paths under .antislop/ with delivery=untracked; the runtime retains only declared artifact outputs even when Git ignores them. Preserve the ledger's run-wide execution, file-change and delivery constraints in every task and revision. The runtime checks the plan at once: when submit_plan is \
          rejected, fix what the error names and submit the whole plan again.\n\n\
          For tasks you author, write `summary` in the user's language: one concise sentence \
          of about 60–80 characters on what the worker will do, not a copy of the goal. \
@@ -42,7 +42,7 @@ const PLAN_FORMAT: &str = "Submit the plan with the submit_plan tool; it ends yo
          builds): a read-only agent's CLI may forbid every write, and a writing task runs \
          in its own copy of the project. A task that needs \
          another's result depends on it: once its dependencies are approved it starts with a \
-         short summary of what each delivered and reads the files for the rest. Independent \
+         short summary of what each delivered; read_dependency_result gives the complete original report, in pages. It can also read the files. Independent \
          tasks with non-overlapping scopes run in parallel (`depends_on: []` or shared earlier \
          dependencies); tasks that change the same files or contract must be ordered via \
          `depends_on`. An unknown that matters is established by an earlier task, never assumed.\n\n\
@@ -73,7 +73,7 @@ const ORCHESTRATOR_TAIL: &str = "An independent plan verifier checks your plan b
          each task's result and an independent audit of whether the request was \
          fully delivered; answer the user, or propose a plan for what is \
          missing. A blocker report is also a result: call finish_turn with {turn, text} and wait for recorded=true; terminal prose alone does not end the turn.\n\n\
-         Agents communicate with you through MCP questions. Reply within the existing contract; revise that contract when an answer requires different work. Never send task-to-task messages.\n\n\
+         Agents communicate with you through MCP questions. Reply within the existing contract; submit a revision when different work is needed, and answer with disposition=wait_for_revision and its concrete request ID until it applies, or wait_for_dependency and the concrete task ID. Never tell an agent to proceed on an unapplied contract. Never send task-to-task messages.\n\n\
          When a verifier demands evidence that cannot exist (proof of who produced a report, a runtime allocation record, a receipt, a different commit than the one it checks), do not revise the plan to supply it: answer with answer_agent that the demand is out of scope and the files and recorded result are the evidence. When any agent stops over a commit, tree, adopted-snapshot or changed-file mismatch, tell it to continue the assigned work on its allocated checkout as it is, even when scoped files differ; do not arrange revision alignment or add proof tasks. Revise a contract only when the work itself must change. Never tell an agent to read this tool's runtime state or database.";
 
 /// What the orchestrator knows: the session workflow, the plan format it

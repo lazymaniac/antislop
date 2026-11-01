@@ -6,6 +6,7 @@ use rusqlite::OptionalExtension;
 use serde_json::Value;
 
 mod controls;
+mod dependencies;
 mod questions;
 mod results;
 
@@ -46,6 +47,7 @@ impl Core {
     ) -> Result<Value> {
         self.require_open_agent_turn(conversation, role, turn)?;
         match tool {
+            "read_dependency_result" => self.read_dependency_result(conversation, role, turn, args),
             "ask" | "wait_for_answer" => self.question_tool(conversation, role, turn, tool, args),
             "complete" | "select" | "review" if task_role(role).is_some() => {
                 self.task_result_tool(conversation, role, turn, tool, args)

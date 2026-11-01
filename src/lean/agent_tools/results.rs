@@ -38,6 +38,7 @@ impl Core {
         let mut specs = self.submitted_graph(conversation, tasks, keep)?;
         if let Some(run) = self.store.planning_run(conversation)? {
             let entries = self.store.ledger_entries(conversation, &run.id, None)?;
+            super::ledger::validate_runtime_constraints(&specs, &entries)?;
             if !entries.is_empty() {
                 for spec in &mut specs {
                     super::ledger::resolve_covers(spec, &entries)?;

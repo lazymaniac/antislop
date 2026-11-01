@@ -33,3 +33,6 @@ impl Core {
         .run(lock)
     }
 }
+
+#[cfg(test)]
+mod tests;

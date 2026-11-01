@@ -47,6 +47,13 @@ impl Execution<'_> {
             &report,
             &summary.0,
         )?;
+        if let Some(path) = self.worktree.as_deref() {
+            self.core
+                .validate_artifact_delta(self.task, &self.spec, path)?;
+        }
+        if let Some(result) = &self.task.result {
+            self.core.store.db().execute("INSERT INTO task_source_revisions(task_id,generation,revision) VALUES(?1,?2,?3) ON CONFLICT(task_id,generation) DO UPDATE SET revision=excluded.revision",rusqlite::params![self.task.id,self.task.input_generation,result])?;
+        }
         Ok(Some(FinishedWorker {
             report,
             summary,
@@ -84,7 +91,15 @@ impl Execution<'_> {
         if !recheck {
             self.task.report = None;
         }
-        self.task.feedback = None;
+        self.task.feedback = if recheck {
+            self.task
+                .feedback
+                .as_ref()
+                .and_then(|f| f["carried_from"].as_str())
+                .map(|source| json!({"round": self.task.round,"carried_from":source}))
+        } else {
+            None
+        };
         self.core.set_status(
             self.conversation,
             self.task,

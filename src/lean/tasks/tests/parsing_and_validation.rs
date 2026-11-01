@@ -31,6 +31,9 @@ fn task_ids_reject_paths_and_empty_fragments() {
     let generated = with_options(vec![
         task.clone(),
         TaskContract {
+            change_kind: None,
+            outputs: Vec::new(),
+            delivery: None,
             quality_gate: false,
             options_for: None,
             id: format!("{}-2", "x".repeat(254)),
@@ -104,13 +107,7 @@ fn plan_summaries_are_optional_roundtrip_and_keep_the_strict_schema() {
             serde_json::from_value(serde_json::to_value(&tasks[0]).unwrap()).unwrap();
         assert_eq!(roundtrip, tasks[0]);
     }
-    for field in [
-        "summery",
-        "inputs",
-        "outputs",
-        "verifier",
-        "requirement_ids",
-    ] {
+    for field in ["summery", "inputs", "verifier", "requirement_ids"] {
         let mut unknown = base.clone();
         unknown[field] = json!([]);
         assert!(parse(&unknown).is_err(), "{field}");

@@ -270,6 +270,9 @@ mod tests {
 
     fn task(id: &str, kind: WorkKind, writes: bool, depends_on: &[&str]) -> TaskContract {
         TaskContract {
+            change_kind: None,
+            outputs: Vec::new(),
+            delivery: None,
             quality_gate: false,
             options_for: None,
             id: id.into(),

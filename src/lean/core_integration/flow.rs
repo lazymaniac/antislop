@@ -119,6 +119,17 @@ impl<'a> Integration<'a> {
 
     fn apply_change(&self, base: &str, change: &str) -> Result<git::Integration> {
         self.core.store.assert_task_inputs(self.task)?;
+        self.spec
+            .validate_change_paths(&git::changed_files(self.worktree, base, change)?)?;
+        if self.spec.delivery == Some(tasks::DeliveryMode::Untracked) {
+            return self.core.deliver_artifact_change(
+                self.task,
+                self.spec,
+                self.project,
+                base,
+                change,
+            );
+        }
         git::integrate(self.project, base, change, self.config.policy.local_commits)
     }
 
@@ -151,6 +162,9 @@ impl<'a> Integration<'a> {
         change: &str,
         outcome: &git::Integration,
     ) -> Result<Option<(Outcome, Vec<String>, String)>> {
+        if self.spec.delivery == Some(tasks::DeliveryMode::Untracked) {
+            return Ok(None);
+        }
         let Some((kind, files)) = conflict_with_files(outcome) else {
             return Ok(None);
         };

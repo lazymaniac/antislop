@@ -98,6 +98,7 @@ fn entry_spec(
         disposition: serde_json::from_value(row.disposition.clone().into())?,
         criteria: entry_criteria(db, run, &row.id, row.version)?,
         qualifiers: relations.qualifiers,
+        constraints: entry_constraints(db, run, &row.id, row.version)?,
         parent: relations.parent,
         depends_on: relations.dependencies,
         task_ids: relations.tasks,
@@ -142,4 +143,20 @@ fn entry_criteria(db: &Connection, run: &str, id: &str, version: i64) -> Result<
     Ok(db.prepare("SELECT id,text,mandatory,integration FROM ledger_criteria WHERE run_id=?1 AND entry_id=?2 AND version=?3 ORDER BY id")?
         .query_map(params![run,id,version], |row| Ok(Criterion { id: row.get(0)?, text: row.get(1)?, mandatory: row.get(2)?, integration: row.get(3)? }))?
         .collect::<std::result::Result<_, _>>()?)
+}
+
+fn entry_constraints(
+    db: &Connection,
+    run: &str,
+    id: &str,
+    version: i64,
+) -> Result<Vec<RuntimeConstraint>> {
+    let mut query = db.prepare("SELECT constraint_kind FROM ledger_runtime_constraints WHERE run_id=?1 AND entry_id=?2 AND version=?3 ORDER BY constraint_kind")?;
+    let names = query
+        .query_map(params![run, id, version], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    names
+        .into_iter()
+        .map(|s| serde_json::from_value(s.into()).map_err(Into::into))
+        .collect()
 }

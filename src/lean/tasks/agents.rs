@@ -100,9 +100,9 @@ pub const GATE_KINDS: [WorkKind; 6] = [
 ];
 
 /// Returns the required quality gates from `PREDEFINED_AGENT_POOL` that a plan
-/// modifying code (`writes == true`) lacks: no task of the gate's kind exists.
+/// modifying code (`change_kind == code`) lacks: no task of the gate's kind exists.
 pub fn missing_quality_agents(tasks: &[TaskContract]) -> Vec<&'static PredefinedAgent> {
-    if !tasks.iter().any(|t| t.writes) {
+    if !tasks.iter().any(|t| t.changes_code()) {
         return Vec::new();
     }
     PREDEFINED_AGENT_POOL
@@ -194,6 +194,16 @@ pub fn with_required_agents(mut tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     for task in &mut tasks {
         task.depends_on.retain(|id| !generated.contains(id));
     }
+    if !tasks.iter().any(TaskContract::changes_code) {
+        let gates: BTreeSet<_> = PREDEFINED_AGENT_POOL
+            .iter()
+            .filter(|agent| GATE_KINDS.contains(&agent.kind))
+            .map(|agent| agent.id)
+            .collect();
+        for task in &mut tasks {
+            task.depends_on.retain(|id| !gates.contains(id.as_str()));
+        }
+    }
     resolve_gate_dependencies(&mut tasks);
     let missing = missing_quality_agents(&tasks);
     if missing.is_empty() {
@@ -238,8 +248,8 @@ pub fn with_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
     let mut ids: BTreeSet<_> = tasks.iter().map(|task| task.id.clone()).collect();
     let mut result = Vec::new();
     for mut task in tasks.into_iter().filter(|t| t.options_for.is_none()) {
-        if task.writes {
-            task.depends_on.retain(|id| !old_ids.contains(id));
+        task.depends_on.retain(|id| !old_ids.contains(id));
+        if task.changes_code() {
             let mut prerequisite = options_task(&task, &mut ids);
             if let Some(id) = previous.get(&task.id) {
                 prerequisite.id = id.clone();
@@ -255,6 +265,9 @@ pub fn with_options(tasks: Vec<TaskContract>) -> Vec<TaskContract> {
 fn options_task(task: &TaskContract, ids: &mut BTreeSet<String>) -> TaskContract {
     let id = reserve_task_id(&format!("{}-options", task.id), ids);
     TaskContract {
+        change_kind: None,
+        outputs: Vec::new(),
+        delivery: None,
         quality_gate: false,
         options_for: Some(task.id.clone()),
         id,

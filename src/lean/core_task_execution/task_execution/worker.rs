@@ -4,7 +4,7 @@ use super::RoundState;
 mod completion;
 pub(super) use completion::{commit_round, complete_report};
 
-pub(super) fn writer_worktree(
+pub(in crate::lean) fn writer_worktree(
     core: &Core,
     task: &mut Task,
     spec: &TaskContract,
@@ -17,10 +17,16 @@ pub(super) fn writer_worktree(
         git::is_repository(project),
         "tasks that change files need the project to be a git repository: run `git init` and commit first",
     )?;
+    let artifacts = if spec.delivery == Some(tasks::DeliveryMode::Untracked) {
+        core.prepare_artifact_outputs(task, spec, project)?
+    } else {
+        Default::default()
+    };
     let base = match &task.base {
         Some(base) => base.clone(),
         None => core.writer_base(&task.plan_id, spec, project)?,
     };
+    let base = git::base_with_artifacts(project, &base, &artifacts)?;
     let path = worktree_path(&core.state, task)?;
     let start = task.result.clone().unwrap_or_else(|| base.clone());
     git::add_worktree(project, &path, &worktree_branch(&core.state, task)?, &start)?;

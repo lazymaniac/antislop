@@ -19,7 +19,7 @@ impl Core {
         if keep.is_empty() {
             return Ok(Vec::new());
         }
-        let plan = self.store.last_plan_with_approvals(conversation, None)?;
+        let plan = self.store.approved_task_history(conversation)?;
         let generated: Vec<&str> = plan
             .iter()
             .filter(|task| !authored(task))
@@ -50,7 +50,7 @@ impl Core {
         &self,
         conversation: &str,
     ) -> Result<Option<String>> {
-        let plan = self.store.last_plan_with_approvals(conversation, None)?;
+        let plan = self.store.approved_task_history(conversation)?;
         let lines: Vec<String> = plan
             .iter()
             .filter(|task| keepable(task))

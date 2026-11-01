@@ -259,3 +259,34 @@ fn a_worker_is_told_to_finish_the_whole_goal_before_it_reports() {
     assert!(worker.contains("Do not stop after one part to hand in progress."));
     assert!(worker.contains("ask the orchestrator instead of handing in partial work"));
 }
+
+#[test]
+fn artifact_analysis_never_grows_code_gates_on_refinalization() {
+    for (change, writes, outputs) in [
+        ("none", false, serde_json::json!([])),
+        ("artifact", true, serde_json::json!(["report.md"])),
+    ] {
+        let task: PlannedTask = serde_json::from_value(serde_json::json!({"id":"analyze","title":"Analyze","goal":"Report problems without repairing the project","kind":"analysis","writes":writes,"change_kind":change,"outputs":outputs})).unwrap();
+        let mut plan = planned_graph(vec![task]).unwrap();
+        for _ in 0..3 {
+            plan = with_options(with_required_agents(plan));
+            assert_eq!(plan.len(), 1);
+            assert_eq!(plan[0].id, "analyze");
+        }
+        if writes {
+            assert!(plan[0].validate_change_paths(&["report.md".into()]).is_ok());
+            assert!(
+                plan[0]
+                    .validate_change_paths(&["src/main.rs".into()])
+                    .is_err()
+            );
+        }
+    }
+    let legacy = options_test_task("code", true);
+    assert_eq!(legacy.change_kind(), ChangeKind::Code);
+    assert!(with_required_agents(vec![legacy]).len() > 1);
+    assert_eq!(
+        options_test_task("read", false).change_kind(),
+        ChangeKind::None
+    );
+}

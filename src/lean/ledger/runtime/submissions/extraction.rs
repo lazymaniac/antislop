@@ -14,6 +14,8 @@ struct SubmittedEntry {
     #[serde(default)]
     qualifiers: Vec<String>,
     #[serde(default)]
+    constraints: Vec<RuntimeConstraint>,
+    #[serde(default)]
     parent: Option<String>,
     #[serde(default)]
     depends_on: Vec<String>,
@@ -96,6 +98,7 @@ fn extraction_entry(
         id: entry.id,
         interpretation: entry.interpretation,
         qualifiers: entry.qualifiers,
+        constraints: entry.constraints,
         parent: entry.parent,
         depends_on: entry.depends_on,
         mandatory: entry.mandatory,

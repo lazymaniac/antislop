@@ -7,6 +7,7 @@ impl Core {
         plan_id: &str,
         approved_task_id: &str,
     ) -> Result<()> {
+        self.store.refresh_answer_waits(conversation)?;
         let tasks = self.store.plan(plan_id)?;
         for mut task in tasks_to_unblock(&tasks, approved_task_id) {
             task.status = status::QUEUED.to_string();
@@ -50,6 +51,7 @@ impl Core {
         conversation: &str,
         plan_id: &str,
     ) -> Result<()> {
+        self.store.refresh_answer_waits(conversation)?;
         let tasks = self.store.plan(plan_id)?;
         let has_queued = tasks.iter().any(|t| t.status == status::QUEUED);
         let all_approved = !tasks.is_empty() && tasks.iter().all(|t| t.status == status::APPROVED);

@@ -69,6 +69,23 @@ impl Store {
         plan_id.map_or_else(|| Ok(Vec::new()), |plan_id| self.plan(&plan_id))
     }
 
+    /// Latest approved result per authored id across this conversation's runs.
+    pub(in crate::lean) fn approved_task_history(&self, conversation: &str) -> Result<Vec<Task>> {
+        let ids = {
+            let db = self.db();
+            let mut query = db.prepare("SELECT id FROM (SELECT id,created_ms,position,row_number() OVER(PARTITION BY json_extract(spec,'$.id') ORDER BY created_ms DESC,rowid DESC) AS rank FROM tasks WHERE conversation_id=?1 AND status='approved') WHERE rank=1 ORDER BY created_ms DESC,position")?;
+            query
+                .query_map([conversation], |r| r.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        ids.iter()
+            .map(|id| {
+                self.task_by_id(id)?
+                    .ok_or_else(|| Error::Invalid("approved result disappeared".into()))
+            })
+            .collect()
+    }
+
     /// Compact task instructions, without opening report or verdict contents.
     pub(in crate::lean) fn plan_specs(&self, plan: &str) -> Result<Vec<Value>> {
         let db = self.db();
@@ -84,17 +101,71 @@ impl Store {
             .collect()
     }
 
+    /// What a dependency delivered, in brief: its worker's summary, or the
+    /// opening line of its report when it was approved without one (a plan
+    /// stored before summaries, or an approval recorded by hand).
+    /// A short account of what the task's accepted execution did.
+    pub(in crate::lean) fn task_summary(&self, task: &Task) -> Result<String> {
+        let summary = self
+            .completed_task_output(task)
+            .map(Some)
+            .or_else(|error| match error {
+                Error::Sql(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                error => Err(error),
+            })?
+            .and_then(|result| result["summary"].as_str().map(str::to_owned));
+        let summary = summary.unwrap_or_else(|| {
+            task.report
+                .as_deref()
+                .and_then(|report| report.lines().find(|line| !line.trim().is_empty()))
+                .unwrap_or_default()
+                .to_owned()
+        });
+        Ok(crate::lean::tasks::bound(&summary, 2_000))
+    }
+
     pub(in crate::lean) fn completed_task_output(&self, task: &Task) -> Result<Value> {
-        // A kept result was produced by the turns of the task it came from.
-        let carried = task
-            .feedback
-            .as_ref()
-            .and_then(|f| f["carried_from"].as_str());
-        if let Some(source) = carried.and_then(|id| self.task_by_id(id).transpose()) {
-            return self.completed_task_output(&source?);
+        self.completed_task_result(task).map(|(_, result)| result)
+    }
+
+    pub(in crate::lean) fn completed_task_result(&self, task: &Task) -> Result<(String, Value)> {
+        let conversation = self.plan_conversation(&task.plan_id)?;
+        let mut current = task.clone();
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            crate::require(
+                visited.insert(current.id.clone()),
+                "carried result contains a cycle",
+            )?;
+            let text: Option<String> = self.db().query_row("SELECT r.result FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE s.task_id=?1 AND s.round<=?2 AND x.generation=?3 AND json_extract(r.result,'$.type')='completed' AND t.role='worker:'||?1 ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",params![current.id,current.round,current.input_generation], |r|r.get(0)).optional()?;
+            if let Some(text) = text {
+                return Ok((current.id, serde_json::from_str(&text)?));
+            }
+            let recorded: Option<String> = self.db().query_row("SELECT producer_task_id FROM task_result_sources WHERE task_id=?1 AND generation=?2",params![current.id,current.input_generation],|r|r.get(0)).optional()?;
+            if let Some(source) = recorded.as_deref().or_else(|| {
+                current
+                    .feedback
+                    .as_ref()
+                    .and_then(|f| f["carried_from"].as_str())
+            }) {
+                let source = self.task_by_id(source)?.ok_or_else(|| {
+                    Error::Invalid("carried result producer no longer exists".into())
+                })?;
+                crate::require(
+                    self.plan_conversation(&source.plan_id)? == conversation,
+                    "carried result belongs to another conversation",
+                )?;
+                current = source;
+                continue;
+            }
+            if let Some(report) = current.report {
+                return Ok((
+                    current.id,
+                    serde_json::json!({"type":"completed","summary":report.lines().find(|line| !line.trim().is_empty()).unwrap_or_default(),"report":report}),
+                ));
+            }
+            return Err(Error::Sql(rusqlite::Error::QueryReturnedNoRows));
         }
-        let text: String = self.db().query_row("SELECT r.result FROM agent_results r JOIN turns t ON t.id=r.turn_id JOIN turn_scopes s ON s.turn_id=t.id JOIN turn_inputs x ON x.turn_id=t.id WHERE s.task_id=?1 AND s.round<=?2 AND x.generation=?3 AND json_extract(r.result,'$.type')='completed' AND t.role='worker:'||?1 ORDER BY t.started_ms DESC,t.rowid DESC LIMIT 1",params![task.id,task.round,task.input_generation], |r|r.get(0))?;
-        Ok(serde_json::from_str(&text)?)
     }
 
     /// Tasks of one plan, in the orchestrator's order.

@@ -7,6 +7,7 @@ pub mod content;
 mod core;
 mod core_agent_review;
 mod core_agent_turn;
+mod core_artifacts;
 mod core_change_review;
 mod core_comment_at;
 mod core_comment_helpers;

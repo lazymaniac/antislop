@@ -1,10 +1,21 @@
 use super::*;
 pub fn snapshot(dir: &Path, message: &str) -> Result<String> {
+    snapshot_with_artifacts(dir, &[], message)
+}
+
+/// Include explicit artifact outputs in a scratch index, keeping the user's
+/// real index untouched even when those documents are ignored.
+pub(crate) fn snapshot_with_artifacts(
+    dir: &Path,
+    outputs: &[String],
+    message: &str,
+) -> Result<String> {
+    let files = super::artifacts::artifact_files(dir, outputs, false)?;
     let subject = commit_subject(message);
     let index = PathBuf::from(ok(dir, &["rev-parse", "--git-path", "index"])?);
     let index = absolute_index(dir, index);
     let scratch = snapshot_index(&index);
-    let result = write_snapshot(dir, &index, &scratch, &subject);
+    let result = write_snapshot(dir, &index, &scratch, &subject, &files);
     let _ = std::fs::remove_file(scratch);
     result
 }
@@ -25,11 +36,22 @@ fn snapshot_index(index: &Path) -> PathBuf {
     ))
 }
 
-fn write_snapshot(dir: &Path, index: &Path, scratch: &Path, message: &str) -> Result<String> {
+fn write_snapshot(
+    dir: &Path,
+    index: &Path,
+    scratch: &Path,
+    message: &str,
+    outputs: &[String],
+) -> Result<String> {
     if index.exists() {
         std::fs::copy(index, scratch)?;
     }
     with_index(dir, scratch, &["add", "--all", "--", "."])?;
+    if !outputs.is_empty() {
+        let mut args = vec!["--literal-pathspecs", "add", "--force", "--"];
+        args.extend(outputs.iter().map(String::as_str));
+        with_index(dir, scratch, &args)?;
+    }
     let tree = with_index(dir, scratch, &["write-tree"])?;
     ok(
         dir,
@@ -140,4 +162,66 @@ pub fn uncommitted(dir: &Path) -> Result<Vec<String>> {
 pub fn integrated_fingerprint(project: &Path) -> Result<String> {
     let snapshot = snapshot(project, "requirements integrated snapshot")?;
     ok(project, &["rev-parse", &format!("{snapshot}^{{tree}}")])
+}
+
+/// Overlay only proven artifact inputs onto an isolated starting tree. Never
+/// touch the primary index/HEAD or pull unrelated changes from a producer.
+pub(crate) fn base_with_artifacts(
+    dir: &Path,
+    base: &str,
+    artifacts: &std::collections::BTreeMap<String, String>,
+) -> Result<String> {
+    if artifacts.is_empty() {
+        return Ok(base.into());
+    }
+    let index = absolute_index(
+        dir,
+        PathBuf::from(ok(dir, &["rev-parse", "--git-path", "index"])?),
+    );
+    let scratch = snapshot_index(&index);
+    let result = (|| {
+        with_index(dir, &scratch, &["read-tree", base])?;
+        for (path, commit) in artifacts {
+            crate::lean::tasks::validate_artifact_output(path)?;
+            let entry = ok(dir, &["--literal-pathspecs", "ls-tree", commit, "--", path])?;
+            let (info, _) = entry
+                .split_once('\t')
+                .ok_or_else(|| Error::Invalid("missing artifact tree entry".into()))?;
+            let fields = info.split_whitespace().collect::<Vec<_>>();
+            crate::require(
+                fields.len() == 3 && matches!(fields[0], "100644" | "100755"),
+                "artifact input must be a regular blob",
+            )?;
+            with_index(
+                dir,
+                &scratch,
+                &[
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    fields[0],
+                    fields[2],
+                    path,
+                ],
+            )?;
+        }
+        let tree = with_index(dir, &scratch, &["write-tree"])?;
+        ok(
+            dir,
+            &[
+                "-c",
+                "user.name=antislop",
+                "-c",
+                "user.email=antislop@localhost",
+                "commit-tree",
+                &tree,
+                "-p",
+                base,
+                "-m",
+                "chore: prepare artifact inputs",
+            ],
+        )
+    })();
+    let _ = std::fs::remove_file(scratch);
+    result
 }

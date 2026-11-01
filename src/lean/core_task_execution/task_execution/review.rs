@@ -245,10 +245,18 @@ fn set_feedback(
         .or_else(|| changes.map(|change| (change.to_owned(), false)))
         .or_else(|| (!spec.writes).then(|| tasks::report_effect(report)));
     let (effect, effect_cut) = tasks::effect_keys(&effect);
+    let carried = task
+        .feedback
+        .as_ref()
+        .and_then(|f| f["carried_from"].as_str())
+        .map(str::to_owned);
     task.feedback = Some(
         json!({"round":task.round,"effect":effect,"effect_cut":effect_cut,
         "coverage":tasks::coverage(verdict, &obligations)}),
     );
+    if let Some(source) = carried {
+        task.feedback.as_mut().unwrap()["carried_from"] = source.into();
+    }
     if repairs > 0 {
         task.feedback.as_mut().expect("round feedback")["integration_repairs"] = json!(repairs);
     }

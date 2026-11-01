@@ -320,6 +320,7 @@ mod tests {
             spec_revision: 1,
             original: id.into(),
             spec: EntrySpec {
+                constraints: Vec::new(),
                 id: id.into(),
                 source: SourceSpan {
                     source_id: "source".into(),
