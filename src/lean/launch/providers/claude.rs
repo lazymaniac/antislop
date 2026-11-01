@@ -42,9 +42,8 @@ fn append_permission_policy(command: &mut CommandBuilder, spec: &Spec, read_only
         // it from writing where the agent works.
         let settings = read_only_settings(spec);
         command.args(["--settings", &settings.to_string()]);
-    } else {
-        command.args(["--permission-mode", "acceptEdits"]);
     }
+    command.arg("--dangerously-skip-permissions");
     command.args(["--allowedTools", &allowed.join(",")]);
     command.args(["--disallowedTools", &denied.join(",")]);
 }

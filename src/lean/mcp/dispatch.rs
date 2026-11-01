@@ -1,7 +1,7 @@
 use super::gateway::{
     ASK, Finish, Shared, TOOL, TOOLS, is_terminal, receipt_payload, terminal_result,
 };
-use super::tools::allowed_tools;
+use super::tools::scoped_tools;
 use crate::Result;
 use crate::lean::native::invalid;
 use serde_json::{Value, json};
@@ -9,24 +9,37 @@ use std::time::Instant;
 
 /// Validate the open lease before dispatch; never hold the gateway lock during work.
 pub(super) fn call(shared: &Shared, params: &Value) -> Value {
+    let expected = shared.state.lock().ok().and_then(|s| s.expected.clone());
     let outcome = dispatch(shared, params);
     match outcome {
         Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}]}),
         Err(error) => {
+            let mut reason = error.to_string();
             if is_terminal(params["name"].as_str().unwrap_or_default())
                 && let Ok(mut state) = shared.state.lock()
-                && state.expected.as_deref() == params["arguments"]["turn"].as_str()
+                && state.expected == expected
                 && state.expected.is_some()
                 && state.finished.is_none()
             {
+                let name = params["name"].as_str().unwrap_or_default();
+                if state.expected.as_deref() != params["arguments"]["turn"].as_str()
+                    || !scoped_tools(&state.role, state.contract.as_ref()).contains(&name)
+                {
+                    state.protocol_rejected_at.get_or_insert_with(Instant::now);
+                    reason.push_str(&format!(
+                        "; role {} requires turn = {:?} and one of {:?}; correct the call within 60 s of the first protocol rejection",
+                        state.role, state.expected.as_deref().unwrap(),
+                        scoped_tools(&state.role, state.contract.as_ref())
+                    ));
+                }
                 let at = state
                     .rejected_finish
                     .as_ref()
                     .map_or_else(Instant::now, |(at, _)| *at);
-                state.rejected_finish = Some((at, error.to_string()));
+                state.rejected_finish = Some((at, reason.clone()));
                 shared.changed.notify_all();
             }
-            json!({"isError":true,"content":[{"type":"text","text":error.to_string()}]})
+            json!({"isError":true,"content":[{"type":"text","text":reason}]})
         }
     }
 }
@@ -60,7 +73,7 @@ fn prepare_dispatch(
 ) -> Result<Prepared> {
     let mut state = shared.state.lock().map_err(invalid)?;
     crate::require(
-        allowed_tools(&state.role).contains(&name),
+        scoped_tools(&state.role, state.contract.as_ref()).contains(&name),
         "tool is unavailable for this role",
     )?;
     remember_session(&mut state, params);
@@ -68,6 +81,11 @@ fn prepare_dispatch(
         return Ok(Prepared::Replay);
     }
     require_open_turn(&mut state, name, turn)?;
+    // A correctly scoped result is progress. Semantic validation can still
+    // reject its contents without using the protocol correction deadline.
+    if is_terminal(name) {
+        state.protocol_rejected_at = None;
+    }
     Ok(Prepared::Invoke(state.handler.clone()))
 }
 
@@ -146,7 +164,11 @@ fn finish_dispatch(
         state.expected.as_deref() == Some(turn),
         "turn closed while the tool was executing",
     )?;
-    if is_terminal(name) {
+    if is_terminal(name)
+        && !(name == "wait_for_answer"
+            && response["state"] == "answered"
+            && response["recorded"] != true)
+    {
         finish_terminal(shared, &mut state, name, turn, args, &mut response)?;
     }
     Ok(response)

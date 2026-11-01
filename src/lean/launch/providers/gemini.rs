@@ -10,6 +10,18 @@ pub(super) fn gemini(
 ) -> Result<tempfile::NamedTempFile> {
     let directory = spec.cwd.join(".antislop").join("sessions");
     std::fs::create_dir_all(&directory)?;
+    // Session settings must never become part of a writer's checkpoint,
+    // including in projects that do not ignore .antislop yet.
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(directory.join(".gitignore"))
+    {
+        Ok(mut file) => file.write_all(b"*\n")?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
     let mut settings = tempfile::Builder::new()
         .prefix("gemini-")
         .suffix(".json")
@@ -54,7 +66,7 @@ fn settings_config(gateway: &Gateway, read_only: bool) -> Value {
 }
 
 fn append_gemini_options(command: &mut CommandBuilder, spec: &Spec) {
-    command.args(["--approval-mode", "auto_edit", "--extensions", "none"]);
+    command.args(["--approval-mode", "yolo", "--extensions", "none"]);
     command.args(["--allowed-mcp-server-names", SERVER]);
     if let Some(model) = &spec.model {
         command.args(["--model", model]);

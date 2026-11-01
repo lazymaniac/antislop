@@ -531,3 +531,205 @@ fn a_cli_that_prints_nothing_for_the_idle_limit_is_reported_hung_with_its_tail()
     session.check_active(Duration::from_secs(3600)).unwrap();
     core.native.shutdown().unwrap();
 }
+
+#[test]
+fn provider_limit_fails_immediately_with_raw_reset_message() {
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let binary = dir.path().join("limit-cli");
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\nprintf \"You've hit your 5-hour limit · resets 4pm\\n\"\nsleep 30\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let spec = agent::Spec {
+        provider: crate::config::ProviderKind::Claude,
+        binary,
+        args: vec![],
+        model: None,
+        effort: None,
+        cwd: dir.path().into(),
+        add_dirs: vec![],
+        access: agent::Access::ReadOnly,
+        resume: None,
+    };
+    let session = core
+        .native
+        .prepare_scoped(&core, "synthetic", "orchestrator", &spec, "")
+        .unwrap();
+    let started = Instant::now();
+    let error = session
+        .run(
+            &core.native,
+            "limit-turn",
+            "Report",
+            &AtomicBool::new(false),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(started.elapsed() < Duration::from_secs(5), "{error}");
+    assert!(error.contains("[provider_limit]"), "{error}");
+    assert!(error.contains("resets 4pm"), "{error}");
+}
+
+/// Opt-in live-provider acceptance probe. Uses only a synthetic directory.
+/// Run once per provider with ANTISLOP_REAL_CLI_PROVIDER and --ignored.
+#[test]
+#[ignore = "requires installed authenticated provider CLI and may consume provider quota"]
+fn real_cli_permission_policy_smoke() {
+    use crate::config::ProviderKind;
+    let provider = match std::env::var("ANTISLOP_REAL_CLI_PROVIDER")
+        .expect("set ANTISLOP_REAL_CLI_PROVIDER")
+        .as_str()
+    {
+        "claude" => ProviderKind::Claude,
+        "codex" => ProviderKind::Codex,
+        "agy" => ProviderKind::Agy,
+        "opencode" => ProviderKind::Opencode,
+        "gemini" => ProviderKind::Gemini,
+        _ => panic!("unsupported provider"),
+    };
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let project = dir.path().join("synthetic-project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("input.txt"), "synthetic input\n").unwrap();
+    for access in [agent::Access::Write, agent::Access::ReadOnly] {
+        let mut spec = agent::Spec {
+            provider,
+            binary: agent::name(provider).into(),
+            args: vec![],
+            model: None,
+            effort: None,
+            cwd: project.clone(),
+            add_dirs: vec![],
+            access,
+            resume: None,
+        };
+        for resumed in [false, true] {
+            let role = format!("smoke-{access:?}-{resumed}");
+            let session = core
+                .native
+                .prepare_scoped(&core, "synthetic", &role, &spec, "")
+                .unwrap();
+            let cancel = Arc::new(AtomicBool::new(false));
+            let timer_cancel = cancel.clone();
+            let timer = std::thread::spawn(move || {
+                for _ in 0..450 {
+                    if timer_cancel.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                timer_cancel.store(true, Ordering::SeqCst);
+            });
+            let instructions = if access == agent::Access::Write {
+                "Run this shell probe exactly: probe=runtime-policy; printf '%s\\n' \"$probe\"; ps -p $$ -o pid=; printf 'written\\n' > output.txt. Read output.txt and finish_turn with text='writer probe passed'. Do not ask for permission."
+            } else {
+                "Read input.txt. Attempt to write blocked.txt using an editing or shell tool; it must be refused by the configured read-only role. If it is refused, finish_turn with text='read-only probe passed'. If it succeeds, finish_turn with text='read-only probe FAILED'. Do not ask for permission."
+            };
+            let outcome = session.run(
+                &core.native,
+                &format!("smoke-{resumed}"),
+                instructions,
+                &cancel,
+            );
+            cancel.store(true, Ordering::SeqCst);
+            timer.join().unwrap();
+            let outcome = outcome.unwrap_or_else(|error| {
+                panic!(
+                    "{provider:?} {access:?} resume={resumed}: {error}; terminal: {}",
+                    agent::persisted_error(&terminal::tail(&session.screen, 40))
+                )
+            });
+            assert!(!outcome.text.contains("FAILED"), "{}", outcome.text);
+            if access == agent::Access::Write {
+                assert!(project.join("output.txt").exists());
+            } else {
+                assert!(!project.join("blocked.txt").exists());
+            }
+            if !resumed {
+                spec.resume = outcome.session;
+                assert!(
+                    spec.resume.is_some(),
+                    "provider did not expose a resumable identity"
+                );
+            }
+            core.native.shutdown().unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_provider_limit_blocks_new_launches_for_the_profile_across_restart() {
+    use crate::config::{ProviderConfig, ProviderKind, RoleKind, WorkKind};
+    let directory = test_tempdir();
+    let binary = directory.path().join("limited-provider");
+    let count = directory.path().join("launch-count");
+    std::fs::write(&binary,format!("#!/bin/sh\nprintf 'started\\n' >> '{}'\nprintf \"You've hit your 5-hour limit · resets 4pm\\n\"\nsleep 30\n",count.display())).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut config =
+        crate::config::Config::from_toml(include_str!("../../../examples/antislop.toml")).unwrap();
+    config.providers.insert(
+        ProviderKind::Claude,
+        ProviderConfig {
+            binary: binary.clone(),
+            args: vec![],
+            command: None,
+        },
+    );
+    let profile = config.profiles.get_mut("orchestrator").unwrap();
+    profile.provider = ProviderKind::Claude;
+    profile.binary = Some(binary);
+    profile.command = None;
+    profile.args.clear();
+    profile.model = None;
+    let state = directory.path().join("state");
+    let core = Core::open(&state, config.clone()).unwrap();
+    let conversation = core
+        .store
+        .create_conversation(directory.path().to_str().unwrap())
+        .unwrap()
+        .id;
+    let probe = |core: &Core, role: &str| {
+        let setup = crate::lean::TurnSetup {
+            session_policy: crate::lean::SessionPolicy::Independent,
+            conversation: &conversation,
+            plan_id: None,
+            role: role.into(),
+            profile: config.resolve(WorkKind::Orchestration, RoleKind::Orchestrator),
+            cwd: directory.path().into(),
+            add_dirs: vec![],
+            access: agent::Access::ReadOnly,
+            upto_message: 0,
+        };
+        assert!(
+            core.turn(setup, &AtomicBool::new(false), |_, _| {
+                "Synthetic limit probe".into()
+            })
+            .unwrap()
+            .is_none()
+        );
+        let error = core
+            .store
+            .last_turn(&conversation, role)
+            .unwrap()
+            .unwrap()
+            .error
+            .unwrap();
+        assert!(error.contains("[provider_limit]"), "{error}");
+        assert!(error.contains("resets 4pm"), "{error}");
+    };
+    probe(&core, "first-limit-probe");
+    probe(&core, "second-limit-probe");
+    core.native.shutdown().unwrap();
+    drop(core);
+    let reopened = Core::open(&state, config.clone()).unwrap();
+    probe(&reopened, "after-restart-limit-probe");
+    assert_eq!(
+        std::fs::read_to_string(count).unwrap().lines().count(),
+        1,
+        "no automatic retry or new process on the blocked profile"
+    );
+}

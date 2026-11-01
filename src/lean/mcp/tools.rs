@@ -24,11 +24,62 @@ pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
     }
 }
 
+pub(super) fn scoped_tools(
+    role: &str,
+    contract: Option<&crate::lean::tasks::TaskContract>,
+) -> Vec<&'static str> {
+    let mut names = allowed_tools(role);
+    if crate::lean::task_role(role).is_some_and(|(_, verifier)| !verifier)
+        && let Some(task) = contract
+    {
+        names.retain(|name| {
+            if task.kind == crate::config::WorkKind::Options {
+                *name != "complete"
+            } else {
+                *name != "select"
+            }
+        });
+    }
+    names
+}
+
+pub(super) fn scoped_tool_list(
+    role: &str,
+    contract: Option<&crate::lean::tasks::TaskContract>,
+) -> Vec<Value> {
+    let names = scoped_tools(role, contract);
+    let mut list = tool_list(role);
+    list.retain(|tool| {
+        tool["name"]
+            .as_str()
+            .is_some_and(|name| names.contains(&name))
+    });
+    if let Some(task) = contract
+        && let Some(review) = list.iter_mut().find(|tool| tool["name"] == "review")
+    {
+        let checks = &mut review["inputSchema"]["properties"]["checks"];
+        let check_schema = checks["additionalProperties"].clone();
+        let obligations = crate::lean::tasks::obligations(task);
+        checks["properties"] = obligations
+            .iter()
+            .map(|(id, text)| {
+                let mut schema = check_schema.clone();
+                schema["description"] = text.clone().into();
+                (id.clone(), schema)
+            })
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        checks["required"] = json!(obligations.iter().map(|(id, _)| id).collect::<Vec<_>>());
+        checks["additionalProperties"] = false.into();
+    }
+    list
+}
+
 fn task_tools(verifier: bool) -> Vec<&'static str> {
     if verifier {
-        vec![REVIEW, ASK, WAIT]
+        vec![REVIEW, ASK, WAIT, "read_dependency_result"]
     } else {
-        vec!["complete", "select", ASK, WAIT]
+        vec!["complete", "select", ASK, WAIT, "read_dependency_result"]
     }
 }
 
@@ -38,6 +89,7 @@ fn orchestrator_tools() -> Vec<&'static str> {
         ASK_USER,
         SUBMIT_REQUIREMENTS,
         SUBMIT_PLAN,
+        "read_dependency_result",
         "answer_agent",
         "defer_to_user",
         "retry_task",
@@ -46,7 +98,7 @@ fn orchestrator_tools() -> Vec<&'static str> {
     ]
 }
 
-const RETRY: &str = "Stop only after recorded=true; if rejected, fix what the error names and call again within the remaining turn time.";
+const RETRY: &str = "Use the exact turn UUID from the current prompt, never a session, task or plan id. Stop only after recorded=true; if rejected, fix what the error names and call again within the remaining turn time.";
 
 pub(crate) fn tool_list(role: &str) -> Vec<Value> {
     let orchestrator = matches!(role, "orchestrator" | "comment-orchestrator");
@@ -79,6 +131,7 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
 
 fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
+        "read_dependency_result" => ("Read the complete report of an approved dependency in pages of up to 16 KiB. This does not end the turn. Reuse the returned cursor and round for the next page. available_rounds lists completed same-input worker reports: if the latest is an amendment, read the earlier round it names with round. Earlier reports are historical; apply corrections from the latest result.".into(), json!({"dependency":{"type":"string","description":"Dependency name or full result id from the current handoff"},"round":{"type":"integer","minimum":0,"description":"Optional same-input worker round from available_rounds"},"cursor":{"type":"string"}}), vec!["turn", "dependency"]),
         "finish_turn" if orchestrator => (format!("End the turn with your answer to the user. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"},"addressed":schema::addressed()}), vec!["turn", "text"]),
         "finish_turn" if role == "planner" => (format!("Only after submit_plan refused a plan of this turn and you cannot correct what it names, for instance because the instructions demand what it refuses: end the turn without a plan and name the blocker; the user sees it at once. {RETRY}"), json!({"text":{"type":"string","description":"What blocks the plan and what would unblock it, in Markdown"}}), vec!["turn", "text"]),
         "finish_turn" => (format!("End the turn with your answer. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"}}), vec!["turn", "text"]),
@@ -110,7 +163,7 @@ fn control_contract(name: &str) -> ToolSpec {
         "submit_ledger" => (format!("Submit the requirements you extracted; this ends your turn. The runtime finds each quote in the sources and checks the requirements at once. {RETRY}"), json!({"entries":{"type":"array","items":schema::ledger_entry()}}), vec!["turn", "entries"]),
         "submit_audit" => (format!("Submit the audit; this ends your turn. It approves unless a finding is critical, high or medium. {RETRY}"), schema::audit(), vec!["turn", "findings", "evidence"]),
         "submit_audit_review" => (format!("Submit your review of the audit; this ends your turn. Assess every proposed evidence id. {RETRY}"), schema::audit_review(), vec!["turn", "note", "assessments"]),
-        "answer_agent" => ("Answer a task agent's pending question. Answers cannot change contracts or permissions.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"answer":{"type":"string"}}), vec!["turn", "request", "answer"]),
+        "answer_agent" => ("Answer a task agent's pending question. Answers cannot change contracts or permissions.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"answer":{"type":"string"},"disposition":{"enum":["continue","wait_for_revision","wait_for_dependency","escalate_to_user"]},"target":{"type":"string","description":"Full revision request or dependency task UUID required for waiting dispositions"}}), vec!["turn", "request", "answer"]),
         "defer_to_user" => ("Hand a task agent's question to the user when only the user can decide; the task waits and you pass the user's answer on with answer_agent.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"explanation":{"type":"string","description":"What the user must decide and why, for the user"}}), vec!["turn", "request", "explanation"]),
         "retry_task" => ("Run a failed task again in its own worktree, keeping its changes, when it failed for a reason outside its contract (a turn limit, a crashed CLI). A stalled task needs revise_plan instead. At most twice per task; then ask the user.".into(), json!({"task":{"type":"string","description":"The task id in the plan"},"guidance":{"type":"string","description":"What the worker should know, such as checking its worktree before starting over"}}), vec!["turn", "task", "guidance"]),
         "request_replan" => ("Ask the planner to redraft the whole plan when contract repairs are not enough. It is reviewed like any new plan.".into(), json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn", "reason"]),

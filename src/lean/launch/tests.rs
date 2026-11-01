@@ -83,10 +83,7 @@ fn claude_writers_edit_and_resume_the_given_session() {
     )
     .unwrap();
     let args = words(&launch);
-    assert!(
-        args.windows(2)
-            .any(|w| w == ["--permission-mode", "acceptEdits"])
-    );
+    assert!(args.contains(&"--dangerously-skip-permissions".to_owned()));
     assert!(args.windows(2).any(|w| w == ["--resume", "s-1"]));
     assert_eq!(launch.session.as_deref(), Some("s-1"));
 }
@@ -186,6 +183,14 @@ fn agy_gets_the_gateway_through_the_environment_of_its_bridge() {
 fn gemini_uses_private_session_settings_and_resumes() {
     let gateway = Gateway::start().unwrap();
     let cwd = tempfile::tempdir().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(cwd.path())
+            .status()
+            .unwrap()
+            .success()
+    );
     for access in [Access::ReadOnly, Access::Write] {
         let mut spec = spec(ProviderKind::Gemini, access, Some("g-1"));
         spec.cwd = cwd.path().to_owned();
@@ -212,8 +217,127 @@ fn gemini_uses_private_session_settings_and_resumes() {
         assert!(args.windows(2).any(|w| w == ["--model", "m1"]));
         assert!(!args.contains(&"--effort".to_owned()));
         assert_eq!(launch.session.as_deref(), Some("g-1"));
+        assert!(
+            crate::lean::git::uncommitted(cwd.path())
+                .unwrap()
+                .is_empty(),
+            "runtime settings must not enter a worker result"
+        );
         drop(launch);
         assert!(!path.exists());
     }
     assert!(!cwd.path().join(".gemini").exists());
+}
+
+#[test]
+fn runtime_policy_wins_for_every_provider_role_and_resume() {
+    unsafe { std::env::set_var("ANTISLOP_SKIP_AGY_BRIDGE_CHECK", "1") };
+    let gateway = Gateway::start().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    for provider in [
+        ProviderKind::Claude,
+        ProviderKind::Codex,
+        ProviderKind::Agy,
+        ProviderKind::Opencode,
+        ProviderKind::Gemini,
+    ] {
+        for access in [Access::ReadOnly, Access::Write] {
+            for resume in [None, Some("existing-session")] {
+                let mut spec = spec(provider, access, resume);
+                spec.cwd = directory.path().into();
+                spec.args = match provider {
+                    ProviderKind::Claude => [
+                        "--permission-mode",
+                        "default",
+                        "--permission-mode=acceptEdits",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                    ProviderKind::Codex => [
+                        "--ask-for-approval",
+                        "on-request",
+                        "--ask-for-approval=untrusted",
+                        "--sandbox=danger-full-access",
+                        "--full-auto",
+                        "-c",
+                        "approval_policy=\"on-request\"",
+                        "--config=sandbox_mode=\"workspace-write\"",
+                        "-c",
+                        "model=\"keep-me\"",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                    ProviderKind::Agy => ["--mode", "auto", "--mode=accept-edits"]
+                        .map(str::to_owned)
+                        .into(),
+                    ProviderKind::Gemini => [
+                        "--approval-mode",
+                        "default",
+                        "--approval-mode=auto_edit",
+                        "--yolo",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                    ProviderKind::Opencode => ["--agent", "user-agent", "--agent=other-agent"]
+                        .map(str::to_owned)
+                        .into(),
+                };
+                let launch = command(&spec, &gateway).unwrap();
+                let args = words(&launch);
+                match provider {
+                    ProviderKind::Claude | ProviderKind::Agy => assert_eq!(
+                        args.iter()
+                            .filter(|a| a.as_str() == "--dangerously-skip-permissions")
+                            .count(),
+                        1
+                    ),
+                    ProviderKind::Codex => {
+                        assert_eq!(
+                            args.iter()
+                                .filter(|a| a.starts_with("approval_policy="))
+                                .collect::<Vec<_>>(),
+                            [&"approval_policy=\"never\"".to_owned()]
+                        );
+                        assert!(args.contains(&"model=\"keep-me\"".into()));
+                        assert!(args.windows(2).any(|w| w
+                            == [
+                                "-s",
+                                crate::lean::agent::codex_sandbox(access == Access::ReadOnly)
+                            ]));
+                    }
+                    ProviderKind::Gemini => {
+                        assert!(args.windows(2).any(|w| w == ["--approval-mode", "yolo"]))
+                    }
+                    ProviderKind::Opencode => {
+                        let config: Value = serde_json::from_str(
+                            &launch
+                                .command
+                                .get_env("OPENCODE_CONFIG_CONTENT")
+                                .unwrap()
+                                .to_string_lossy(),
+                        )
+                        .unwrap();
+                        assert!(!config["permission"].to_string().contains(":\"ask\""));
+                        assert_eq!(config["permission"], config["agent"][SERVER]["permission"]);
+                    }
+                }
+                for forbidden in [
+                    "on-request",
+                    "untrusted",
+                    "default",
+                    "acceptEdits",
+                    "auto_edit",
+                    "user-agent",
+                    "other-agent",
+                ] {
+                    assert!(
+                        !args
+                            .iter()
+                            .any(|arg| arg == forbidden || arg.ends_with(&format!("={forbidden}"))),
+                        "{provider:?}: {args:?}"
+                    );
+                }
+            }
+        }
+    }
 }

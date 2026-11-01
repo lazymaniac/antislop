@@ -10,7 +10,9 @@ pub(super) fn opencode(
     install_agent(&mut config, permission)?;
     install_gateway(&mut config, gateway)?;
     command.env("OPENCODE_CONFIG_CONTENT", config.to_string());
-    command.args(["--agent", SERVER]);
+    // Auto mode also covers ask rules merged from on-disk user/project config;
+    // explicit role denials remain enforced by the provider.
+    command.args(["--auto", "--agent", SERVER]);
     append_resume_model(command, spec);
     Ok(())
 }
@@ -29,6 +31,11 @@ fn permissions(spec: &Spec, gateway: &Gateway, read_only: bool) -> Value {
         "*": if read_only { "deny" } else { "allow" },
         "read": "allow", "glob": "allow", "grep": "allow",
         "list": "allow", "webfetch": "allow", "websearch": "allow",
+        "bash": if read_only { "deny" } else { "allow" },
+        "edit": if read_only { "deny" } else { "allow" },
+        "write": if read_only { "deny" } else { "allow" },
+        "apply_patch": if read_only { "deny" } else { "allow" },
+        "doom_loop": "deny",
         "task": "deny", "question": "deny",
         "plan_enter": "deny", "plan_exit": "deny",
         format!("{SERVER}_{TOOL}"): "allow",
@@ -47,6 +54,7 @@ fn install_agent(config: &mut Value, permission: Value) -> Result<()> {
     let root = config
         .as_object_mut()
         .ok_or_else(|| Error::Invalid("OPENCODE_CONFIG_CONTENT must be a JSON object".into()))?;
+    root.insert("permission".into(), permission.clone());
     // A dedicated primary agent keeps user-defined agents from overriding
     // this turn's permissions.
     root.entry("agent")

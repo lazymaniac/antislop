@@ -1,9 +1,11 @@
 use super::*;
+use rusqlite::OptionalExtension;
 
 struct PreparedAgent {
     spec: agent::Spec,
     scope: String,
     native: Arc<native::Session>,
+    profile: String,
 }
 
 pub(super) fn execute(
@@ -42,6 +44,20 @@ fn prepare_agent(
     profile: ResolvedProfile,
 ) -> Result<PreparedAgent> {
     let (profile_name, effort, spec) = agent_spec(state, profile);
+    let blocked: Option<String> = core
+        .store
+        .db()
+        .query_row(
+            "SELECT reason FROM provider_blocks WHERE provider=?1 AND profile=?2",
+            rusqlite::params![agent::name(spec.provider), profile_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(reason) = blocked {
+        return Err(Error::Invalid(format!(
+            "{reason}; automatic launches blocked for this provider/profile; explicitly resume after resolving it"
+        )));
+    }
     let scope = session_scope(state, &profile_name, effort, &spec)?;
     let native =
         core.native
@@ -57,6 +73,7 @@ fn prepare_agent(
         spec,
         scope,
         native,
+        profile: profile_name,
     })
 }
 
@@ -217,6 +234,13 @@ fn run_cli(
         let result = prepared
             .native
             .run(&core.native, &state.turn.id, text, cancel);
+        if let Err(error) = &result {
+            let raw = error.to_string();
+            if raw.contains("[provider_limit]") || raw.contains("[login_required]") {
+                core.store.db().execute("INSERT INTO provider_blocks(provider,profile,reason,created_ms) VALUES(?1,?2,?3,?4) ON CONFLICT(provider,profile) DO UPDATE SET reason=excluded.reason,created_ms=excluded.created_ms",
+                    rusqlite::params![agent::name(prepared.spec.provider), prepared.profile, agent::persisted_error(&raw), store::now_ms()])?;
+            }
+        }
         if !should_retry(&prepared.native, &result, attempts, cancel) {
             return result;
         }
@@ -233,10 +257,19 @@ fn should_retry(
     attempts: u32,
     cancel: &AtomicBool,
 ) -> bool {
-    result
-        .as_ref()
-        .is_err_and(|error| !tasks::needs_user_action(&error.to_string()))
-        && native.failed_before_start()
+    result.as_ref().is_err_and(|error| {
+        !tasks::needs_user_action(&error.to_string())
+            && ![
+                "[unexpected_dialog]",
+                "unknown option",
+                "unknown flag",
+                "unrecognized option",
+                "unexpected argument",
+                "unrecognized arguments",
+            ]
+            .iter()
+            .any(|marker| error.to_string().to_ascii_lowercase().contains(marker))
+    }) && native.failed_before_start()
         && attempts < STARTUP_RETRIES
         && !cancel.load(Ordering::SeqCst)
 }

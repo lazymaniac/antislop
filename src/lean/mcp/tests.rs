@@ -179,9 +179,9 @@ mod role_tests {
         for (role, expected) in [
             (
                 "worker:task",
-                vec!["complete", "select", "ask", "wait_for_answer"],
+                vec!["complete", "select", "ask", "wait_for_answer", "read_dependency_result"],
             ),
-            ("verifier:task", vec!["review", "ask", "wait_for_answer"]),
+            ("verifier:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result"]),
         ] {
             let tools = tool_list(role);
             let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -205,6 +205,7 @@ mod role_tests {
                 "ask_user",
                 "submit_requirements",
                 "submit_plan",
+                "read_dependency_result",
                 "answer_agent",
                 "defer_to_user",
                 "retry_task",
@@ -259,7 +260,7 @@ mod role_tests {
         assert!(tool_list("auditor")[0]["inputSchema"]["properties"]["addressed"].is_null());
         let task = &schema::revision()["tasks"]["items"];
         assert_eq!(task["required"], json!(["id", "title", "goal", "kind"]));
-        for gone in ["inputs", "outputs", "verifier", "requirement_ids"] {
+        for gone in ["inputs", "verifier", "requirement_ids"] {
             assert!(task["properties"][gone].is_null(), "{gone}");
         }
         let planner = tool_list("planner");
@@ -353,8 +354,8 @@ mod rejection_tests {
                 .state
                 .lock()
                 .unwrap()
-                .rejected_finish
-                .is_none()
+                .protocol_rejected_at
+                .is_some()
         );
         assert_eq!(
             call(&gateway.shared, &submission("current"))["isError"],
@@ -504,4 +505,23 @@ mod rejection_tests {
             .to_string();
         assert!(error.contains("last rejected submission: bad checkpoint"));
     }
+}
+
+#[test]
+fn task_schema_exposes_only_its_completion_and_actual_checks() {
+    use crate::lean::mcp::tools::scoped_tool_list;
+    let mut task: crate::lean::tasks::TaskContract = serde_json::from_value(json!({"id":"t","title":"Task","goal":"Report","kind":"analysis","criterion_ids":["R1.1"]})).unwrap();
+    for (kind, tool, other) in [(crate::config::WorkKind::Analysis,"complete","select"),(crate::config::WorkKind::Options,"select","complete")] {
+        task.kind = kind;
+        let list = scoped_tool_list("worker:t",Some(&task));
+        assert!(list.iter().any(|entry|entry["name"]==tool));
+        assert!(!list.iter().any(|entry|entry["name"]==other));
+    }
+    let list = scoped_tool_list("verifier:t",Some(&task));
+    let review = list.iter().find(|entry|entry["name"]=="review").unwrap();
+    let schema = &review["inputSchema"]["properties"]["checks"];
+    assert_eq!(schema["additionalProperties"],false);
+    assert!(schema["properties"]["goal"].is_object());
+    assert!(schema["properties"]["R1.1"].is_object());
+    assert_eq!(schema["required"].as_array().unwrap().len(),crate::lean::tasks::obligations(&task).len());
 }

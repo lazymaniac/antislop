@@ -13,6 +13,11 @@ impl Session {
     fn build(core: &Core, spec: agent::Spec, signature: String, role: &str) -> Result<Self> {
         let gateway = mcp::Gateway::start()?;
         gateway.set_role(role)?;
+        if let Some((id, _)) = super::super::task_role(role)
+            && let Some(task) = core.store.task_by_id(id)?
+        {
+            gateway.set_task_contract(serde_json::from_value(task.spec)?)?;
+        }
         let launch = launch::command(&spec, &gateway)?;
         let weak = core.weak.get().expect("core weak").clone();
         let terminal =
@@ -50,14 +55,17 @@ impl Session {
     /// Fails with the CLI's exit status and last screen lines once it ended.
     pub(crate) fn check_alive(&self) -> Result<()> {
         if self.stop.load(Ordering::SeqCst) {
-            return Err(invalid("the agent session was stopped"));
+            return Err(StopCause::Cancelled.diagnostic("the agent session was stopped"));
+        }
+        let screen = terminal::tail(&self.screen, SCREEN_LINES);
+        if let Some(cause) = stops::screen_stop(self.spec.provider, &screen) {
+            return Err(cause.diagnostic(screen));
         }
         let mut terminal = self.terminal.lock().map_err(invalid)?;
         if let Some(status) = terminal.exited() {
-            return Err(invalid(format!(
-                "{} exited ({status}): {}",
-                agent::name(self.spec.provider),
-                terminal::tail(&self.screen, SCREEN_LINES)
+            return Err(StopCause::ProcessExit.diagnostic(format!(
+                "{} exited ({status}): {screen}",
+                agent::name(self.spec.provider)
             )));
         }
         Ok(())
@@ -70,7 +78,7 @@ impl Session {
         if quiet < idle || self.gateway.awaiting_answer() {
             return Ok(());
         }
-        Err(invalid(format!(
+        Err(StopCause::Timeout.diagnostic(format!(
             "{} printed nothing for {} s: {}",
             agent::name(self.spec.provider),
             quiet.as_secs(),
@@ -98,7 +106,7 @@ impl Session {
             }
             self.check_alive()?;
             if Instant::now() >= limit {
-                return Err(invalid(format!(
+                return Err(StopCause::Timeout.diagnostic(format!(
                     "{} did not connect to the antislop MCP gateway within {} s; the terminal shows:\n{}",
                     agent::name(self.spec.provider),
                     READY_LIMIT.as_secs(),
@@ -141,6 +149,13 @@ impl Session {
             "the agent session already has an executing turn",
         )?;
         let result = self.execute(registry, turn, prompt, cancel);
+        // A failed/cancelled turn must never spawn provider history queries.
+        if result.is_err()
+            && self.identity().is_none()
+            && let Some(id) = self.gateway.session()
+        {
+            *self.identity.lock().map_err(invalid)? = Some(id);
+        }
         self.executing.store(false, Ordering::SeqCst);
         self.touch();
         // No failover after the CLI accepted a prompt: a failed session is
@@ -240,13 +255,41 @@ impl Session {
     /// directory since the process started, and not owned by another live
     /// session, is ours; with several candidates none is guessed.
     fn opencode_session(&self, claimed: &[String]) -> Option<String> {
-        let output = std::process::Command::new(&self.spec.binary)
+        use std::io::{Read, Seek};
+        let directory = self.spec.cwd.join(".antislop/sessions");
+        std::fs::create_dir_all(&directory).ok()?;
+        let mut capture = tempfile::tempfile_in(directory).ok()?;
+        let mut child = std::process::Command::new(&self.spec.binary)
             .args(&self.spec.args)
             .args(["session", "list", "--format", "json", "-n", "40"])
             .current_dir(&self.spec.cwd)
-            .output()
+            .stdout(capture.try_clone().ok()?)
+            .stderr(std::process::Stdio::null())
+            .spawn()
             .ok()?;
-        let sessions: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => break,
+                Ok(Some(_)) => return None,
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                Ok(None) => {}
+            }
+            if Instant::now() >= deadline || self.stop.load(Ordering::SeqCst) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        capture.rewind().ok()?;
+        let mut output = Vec::new();
+        capture.take(256 * 1024).read_to_end(&mut output).ok()?;
+        let sessions: serde_json::Value = serde_json::from_slice(&output).ok()?;
         let cwd = self.spec.cwd.canonicalize().ok()?;
         let mut candidates = sessions.as_array()?.iter().filter(|session| {
             session["created"]

@@ -17,6 +17,7 @@ pub(super) fn agy(
     }
     command.env("ANTISLOP_MCP_URL", gateway.url());
     command.env("ANTISLOP_MCP_TOKEN", gateway.token());
+    command.arg("--dangerously-skip-permissions");
     command.args(["--disable-slash-commands", "--mode"]);
     command.arg(if read_only { "plan" } else { "accept-edits" });
     if !read_only {

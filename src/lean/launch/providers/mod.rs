@@ -12,7 +12,7 @@ mod codex;
 mod common;
 mod gemini;
 mod opencode;
-use common::strip_sandbox;
+use common::runtime_args;
 
 const TOKEN_ENV: &str = "ANTISLOP_MCP_TOKEN";
 const PARENT_SESSION_ENV: [&str; 7] = [
@@ -61,7 +61,7 @@ fn configure_claude(
     spec: &Spec,
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
-    command.args(&spec.args);
+    command.args(runtime_args(&spec.args, spec.provider));
     Ok((
         claude::claude(command, spec, gateway, is_read_only(spec)),
         None,
@@ -73,7 +73,7 @@ fn configure_codex(
     spec: &Spec,
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
-    command.args(strip_sandbox(&spec.args));
+    command.args(runtime_args(&spec.args, spec.provider));
     codex::codex(command, spec, gateway, is_read_only(spec));
     Ok((spec.resume.clone(), None))
 }
@@ -83,7 +83,7 @@ fn configure_opencode(
     spec: &Spec,
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
-    command.args(&spec.args);
+    command.args(runtime_args(&spec.args, spec.provider));
     opencode::opencode(command, spec, gateway, is_read_only(spec))?;
     Ok((spec.resume.clone(), None))
 }
@@ -93,7 +93,7 @@ fn configure_agy(
     spec: &Spec,
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
-    command.args(&spec.args);
+    command.args(runtime_args(&spec.args, spec.provider));
     agy::agy(command, spec, gateway, is_read_only(spec))?;
     Ok((spec.resume.clone(), None))
 }
@@ -103,7 +103,7 @@ fn configure_gemini(
     spec: &Spec,
     gateway: &Gateway,
 ) -> Result<(Option<String>, Option<tempfile::NamedTempFile>)> {
-    command.args(&spec.args);
+    command.args(runtime_args(&spec.args, spec.provider));
     Ok((
         spec.resume.clone(),
         Some(gemini::gemini(command, spec, gateway, is_read_only(spec))?),

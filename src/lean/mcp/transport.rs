@@ -1,6 +1,6 @@
 use super::dispatch::{call, error, result};
 use super::gateway::{BODY, SERVER, Shared};
-use super::tools::tool_list;
+use super::tools::scoped_tool_list;
 use crate::lean::native::invalid;
 use crate::{Error, Result};
 use serde_json::{Value, json};
@@ -160,6 +160,9 @@ fn list_tools(shared: &Shared, id: Value) -> Result<Value> {
     if let Ok(mut state) = shared.state.lock() {
         state.listed = true;
     }
-    let role = shared.state.lock().map_err(invalid)?.role.clone();
-    Ok(result(id, json!({"tools": tool_list(&role)})))
+    let state = shared.state.lock().map_err(invalid)?;
+    Ok(result(
+        id,
+        json!({"tools": scoped_tool_list(&state.role, state.contract.as_ref())}),
+    ))
 }

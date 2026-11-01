@@ -2,7 +2,6 @@
 // with role-scoped tools. The daemon types the prompt into the
 // agent's terminal; the agent ends the turn by calling the tool with the
 // turn's id and its final answer. Nothing is read from the terminal screen.
-use super::allowed_tools;
 use crate::lean::native::invalid;
 use crate::{Error, Result};
 use serde_json::{Value, json};
@@ -43,6 +42,7 @@ pub(crate) const TOOLS: &[&str] = &[
     REVIEW,
     ASK,
     WAIT,
+    "read_dependency_result",
     "answer_agent",
     "defer_to_user",
     "retry_task",
@@ -106,12 +106,16 @@ pub(super) struct State {
     pub(super) listed: bool,
     pub(super) handler: Option<Arc<Handler>>,
     pub(super) role: String,
+    pub(super) contract: Option<crate::lean::tasks::TaskContract>,
     /// The turn a terminal call ended and that call, so a repeat is
     /// acknowledged instead of refused.
     pub(super) receipt: Option<(String, Value)>,
     pub(super) waiting: Option<Instant>,
     pub(super) waited: Duration,
     pub(super) rejected_finish: Option<(Instant, String)>,
+    /// A malformed/stale result gets a bounded correction window, even if
+    /// the CLI keeps redrawing its idle prompt. Repeats never extend it.
+    pub(super) protocol_rejected_at: Option<Instant>,
 }
 
 pub(super) struct Shared {
@@ -163,6 +167,7 @@ impl Gateway {
         state.waited = Duration::ZERO;
         state.waiting = None;
         state.rejected_finish = None;
+        state.protocol_rejected_at = None;
         Ok(())
     }
 
@@ -173,11 +178,19 @@ impl Gateway {
         Ok(())
     }
 
+    pub(crate) fn set_task_contract(
+        &self,
+        contract: crate::lean::tasks::TaskContract,
+    ) -> Result<()> {
+        self.shared.state.lock().map_err(invalid)?.contract = Some(contract);
+        Ok(())
+    }
+
     pub(crate) fn tool_names(&self) -> Vec<&'static str> {
-        self.shared
-            .state
-            .lock()
-            .map_or_else(|_| vec![TOOL], |s| allowed_tools(&s.role))
+        self.shared.state.lock().map_or_else(
+            |_| vec![TOOL],
+            |s| super::tools::scoped_tools(&s.role, s.contract.as_ref()),
+        )
     }
 
     pub(crate) fn set_handler(&self, handler: Arc<Handler>) -> Result<()> {

@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 /// Makes a headless-style test script answer as an interactive agent CLI too
 /// (see `tests/support/fixture_cli.rs`).
 mod registry;
+mod stops;
+pub(crate) use stops::StopCause;
 mod session;
 
 #[cfg(test)]
