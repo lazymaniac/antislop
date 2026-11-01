@@ -469,7 +469,8 @@ fn exited_cli_error_contains_the_raw_terminal_tail() {
         .unwrap();
 
     let mut observed = None;
-    for _ in 0..40 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
         if let Err(error) = session.check_alive() {
             observed = Some(error.to_string());
             break;

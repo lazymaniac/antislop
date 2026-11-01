@@ -445,7 +445,9 @@ def finish_in_words(turn, text, thread, prompt, refused):
 
 
 def turn_of(prompt):
-    match = re.search(r'turn = "([^"]+)"', prompt)
+    # Earlier diagnostics in the conversation may quote a previous turn.
+    footer = prompt.rsplit("\n\n---\nWhen this turn is complete", 1)[-1]
+    match = re.search(r'turn = "([^"]+)"', footer)
     return match.group(1) if match else None
 
 
