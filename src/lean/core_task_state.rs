@@ -47,7 +47,7 @@ impl Core {
         record_stop_reason(task, reason);
         self.store.update_task(task)?;
         self.record_stop_progress(conversation, task, status)?;
-        self.release_finished_views(conversation, task, status);
+        self.queue_worktree_cleanup(&task.id);
         self.announce_task(conversation, task, reason);
         Ok(())
     }
@@ -57,21 +57,6 @@ impl Core {
             self.store.record_task_progress(conversation, task, None)?;
         }
         Ok(())
-    }
-
-    fn release_finished_views(&self, conversation: &str, task: &Task, status: &str) {
-        if !stop_releases_views(status) {
-            return;
-        }
-        if let Err(error) = super::core_path_helpers::release_views(&self.state, &task.id, None) {
-            self.notice(
-                conversation,
-                &format!(
-                    "the review checkouts of task {} were not removed: {error}",
-                    task.id
-                ),
-            );
-        }
     }
 }
 
@@ -89,8 +74,4 @@ fn stop_records_progress(status: &str) -> bool {
         status,
         status::COORDINATING | status::NEEDS_USER | status::FAILED | status::CANCELLED
     )
-}
-
-fn stop_releases_views(status: &str) -> bool {
-    matches!(status, status::CANCELLED | status::SKIPPED)
 }

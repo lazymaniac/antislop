@@ -11,6 +11,13 @@ fn explicit_ignored_reports_are_valid_without_code_gates() {
         ".antislop/reports/analysis.md",
         ".reports/analysis.md",
         "report.md",
+        "results/uniswap-fee-gas-beneficiaries-20261101-v1/final-validation.json",
+        "reports/audit.json",
+        "artifacts/measurements.json",
+        "report.json",
+        "results/next_economic_test_20261101/validation.log",
+        ".antislop/reports/validation.log",
+        ".antislop/reports/findings.json",
     ] {
         let mut tasks = submitted(plan(output, Some("untracked"))).unwrap();
         for _ in 0..3 {
@@ -47,6 +54,19 @@ fn artifact_paths_still_reject_traversal_metadata_and_runtime_internals() {
         ".antislop/*.md",
         "src/report.md",
         ".antislop/config.toml",
+        ".antislop/daemon.log",
+        ".antislop/core.db",
+        "src/test.log",
+        "config/validation.log",
+        "package.json",
+        "tsconfig.json",
+        "results/package.json",
+        "reports/tsconfig.build.json",
+        "results/compiler.config.json",
+        "config/validation.json",
+        "src/report.json",
+        "tests/report.json",
+        "settings.json",
     ] {
         assert!(
             submitted(plan(output, Some("untracked"))).is_err(),

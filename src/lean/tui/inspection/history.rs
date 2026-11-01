@@ -138,35 +138,16 @@ fn append_round_fields(
     round: u64,
     task: &Value,
 ) -> Result<()> {
-    for field in ["report", "verdict"] {
-        if !task[field].is_null() {
-            append_round_field(result, client, conversation, uuid, round, task, field)?;
-        }
+    if task["report"].is_null() {
+        return Ok(());
     }
-    Ok(())
-}
-
-fn append_round_field(
-    result: &mut document::Builder,
-    client: &Client,
-    conversation: &str,
-    uuid: &str,
-    round: u64,
-    task: &Value,
-    field: &str,
-) -> Result<()> {
     let owner = super::super::super::store::ContentOwner::Round {
         task: uuid.into(),
         round: round as u32,
-        field: field.into(),
+        field: "report".into(),
     };
-    let title = if field == "report" {
-        "Worker report\n"
-    } else {
-        "Verifier verdict\n"
-    };
-    result.append(title, |sink| {
-        append_field_content(client, conversation, &owner, &task[field], sink)
+    result.append("\nWorker report\n\n", |sink| {
+        append_field_content(client, conversation, &owner, &task["report"], sink)
     })
 }
 
@@ -177,12 +158,17 @@ fn append_field_content(
     value: &Value,
     sink: &mut dyn FnMut(&str) -> Result<()>,
 ) -> Result<()> {
+    use super::super::result_text::{ReportStream, worker_report};
     if value.get("session_content").is_some() {
-        read_content(client, conversation, owner, sink)
-    } else if let Some(text) = value.as_str() {
-        sink(text)
+        let mut formatter = ReportStream::default();
+        read_content(client, conversation, owner, &mut |chunk| {
+            formatter.push(chunk, sink)
+        })?;
+        formatter.finish(sink)
+    } else if let Some(report) = value.as_str() {
+        sink(&worker_report(report))
     } else {
-        sink(&value.to_string())
+        sink(&worker_report(&value.to_string()))
     }
 }
 
@@ -208,5 +194,54 @@ fn read_content(
         let next = chunk["next_offset"].as_u64().unwrap_or(0);
         crate::require(next > offset, "history content cursor did not advance")?;
         offset = next;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn historical_result_formats_options_and_omits_the_verdict() {
+        let state = tempfile::tempdir().unwrap();
+        let client = Client::at(state.path());
+        let selection = serde_json::from_value(json!({
+            "selected":"A", "rationale":"Smallest change.",
+            "alternatives":[
+                {"id":"A","approach":"Reuse the store","tradeoffs":"Existing constraints"},
+                {"id":"B","approach":"Replace the store","tradeoffs":"Migration"}
+            ]
+        }))
+        .unwrap();
+        let report =
+            crate::lean::turn_result::report_with_deliverables("Worker text", Some(&selection));
+        let task = json!({"status":"approved", "report":report,
+            "verdict":{"findings":[{"issue":"Verifier-only finding"}]}});
+        let document = result_document(&client, "conversation", "task", 1, &task).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let page = loop {
+            if let Some(page) = document.viewport(80, 100, 0, false).unwrap() {
+                break page;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let text = page
+            .lines
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("Selected option: A") && text.contains("Option B"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Verifier")
+                && !text.contains("```json")
+                && !text.contains("\"alternatives\""),
+            "{text}"
+        );
     }
 }

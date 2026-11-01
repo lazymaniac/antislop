@@ -1,0 +1,268 @@
+use super::*;
+
+fn fixture() -> (tempfile::TempDir, Arc<Core>, String, Vec<Task>, String) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet", "-b", "main"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(root.join(".gitignore"), ".antislop/\ncache/\n").unwrap();
+    std::fs::write(root.join("initial"), "initial").unwrap();
+    let commit = git::commit_all(&root, "Initial").unwrap();
+    let config = Config::from_toml(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/antislop.toml"
+    )))
+    .unwrap();
+    let core = Core::open(&root.join(".antislop"), config).unwrap();
+    let conversation = core
+        .store
+        .create_conversation(root.to_str().unwrap())
+        .unwrap()
+        .id;
+    let tasks = core
+        .store
+        .add_plan(
+            &conversation,
+            &[
+                json!({"id":"analysis","title":"Analysis","goal":"Report","kind":"analysis"}),
+                json!({"id":"other","title":"Other","goal":"Other","kind":"analysis"}),
+            ],
+        )
+        .unwrap();
+    (directory, core, conversation, tasks, commit)
+}
+
+fn drain_until(core: &Core, done: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        core.drain_worktree_cleanup();
+        if done() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "worktree cleanup did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+fn checkout(core: &Core, task: &Task, suffix: &str, commit: &str) -> PathBuf {
+    let root = PathBuf::from(
+        core.store
+            .conversation(&core.store.plan_conversation(&task.plan_id).unwrap())
+            .unwrap()
+            .project,
+    );
+    let name = format!("{}-{suffix}", task.id);
+    let path = core.state.join("worktrees").join(&name);
+    git::add_worktree(&root, &path, &format!("antislop/{name}"), commit).unwrap();
+    path
+}
+
+#[test]
+fn approved_tasks_release_clean_views_and_keep_dirty_and_other_task_views() {
+    let (_directory, core, conversation, tasks, commit) = fixture();
+    let root = PathBuf::from(core.store.conversation(&conversation).unwrap().project);
+    let mut task = tasks[0].clone();
+    let clean = checkout(&core, &task, "observation-g0", &commit);
+    let dirty = checkout(&core, &task, "review-g0-1", &commit);
+    let other = checkout(&core, &tasks[1], "observation-g0", &commit);
+    std::fs::create_dir(clean.join("cache")).unwrap();
+    std::fs::write(clean.join("cache/build-output"), "cache").unwrap();
+    std::fs::write(dirty.join("unsaved"), "preserve this work").unwrap();
+    let head = git::head(&root).unwrap();
+    let index = std::fs::read(root.join(".git/index")).unwrap();
+    let pin = core.pin_worktree(&clean);
+    core.set_status(&conversation, &mut task, status::APPROVED)
+        .unwrap();
+    core.drain_worktree_cleanup();
+    assert!(
+        clean.exists(),
+        "a restoring native session pins its checkout"
+    );
+    drop(pin);
+    drain_until(&core, || !clean.exists());
+    assert!(!clean.exists());
+    assert!(dirty.exists() && other.exists());
+    assert_eq!(
+        std::fs::read_to_string(dirty.join("unsaved")).unwrap(),
+        "preserve this work"
+    );
+    assert!(
+        !git::branches(&root, "antislop/")
+            .unwrap()
+            .contains(&format!("antislop/{}-observation-g0", task.id))
+    );
+    assert_eq!(git::head(&root).unwrap(), head);
+    assert_eq!(std::fs::read(root.join(".git/index")).unwrap(), index);
+    // The exact committed view survives cleanup and aggressive Git GC.
+    assert!(
+        std::process::Command::new("git")
+            .args(["gc", "--prune=now", "--quiet"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    git::restore_clean_view(&root, &clean).unwrap();
+    assert_eq!(git::head(&clean).unwrap(), commit);
+}
+
+#[test]
+fn old_generations_are_cleaned_after_execution_without_losing_writer_commits() {
+    let (_directory, core, conversation, tasks, commit) = fixture();
+    let task = &tasks[0];
+    let old = checkout(&core, task, "g0", &commit);
+    std::fs::write(old.join("result"), "unique result").unwrap();
+    let result = git::commit_all(&old, "Work retained on branch").unwrap();
+    let dirty = checkout(&core, task, "g1", &commit);
+    std::fs::write(dirty.join("unsaved"), "unsaved").unwrap();
+    let current = checkout(&core, task, "g2", &commit);
+    let old_view = checkout(&core, task, "review-g0-1", &commit);
+    let current_view = checkout(&core, task, "observation-g2", &commit);
+    let run = core
+        .store
+        .create_run(&conversation, "Changed inputs")
+        .unwrap();
+    core.store
+        .db()
+        .execute(
+            "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,2)",
+            rusqlite::params![task.id, run.id],
+        )
+        .unwrap();
+    core.task_cancels.lock().unwrap().insert(
+        task.id.clone(),
+        (conversation.clone(), Arc::new(AtomicBool::new(false))),
+    );
+    let after = core.store.task_by_id(&task.id).unwrap().unwrap();
+    core.cancel_changed_task_inputs(std::slice::from_ref(task), std::slice::from_ref(&after));
+    core.drain_worktree_cleanup();
+    assert!(
+        old.exists() && old_view.exists(),
+        "active task directories are retained"
+    );
+    core.task_cancels.lock().unwrap().remove(&task.id);
+    drain_until(&core, || !old.exists() && !old_view.exists());
+    assert!(!old.exists() && !old_view.exists());
+    assert!(dirty.exists() && current.exists() && current_view.exists());
+    let root = PathBuf::from(core.store.conversation(&conversation).unwrap().project);
+    let branch = format!("antislop/{}-g0", task.id);
+    let restored = core.state.join("restored-writer");
+    git::add_worktree(&root, &restored, &branch, &result).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(restored.join("result")).unwrap(),
+        "unique result"
+    );
+}
+
+#[test]
+fn cleanup_preserves_a_checkout_reassigned_to_a_user_branch() {
+    let (_directory, core, conversation, tasks, commit) = fixture();
+    let mut task = tasks[0].clone();
+    let path = checkout(&core, &task, "observation-g0", &commit);
+    assert!(
+        std::process::Command::new("git")
+            .args(["switch", "--quiet", "-c", "user-work"])
+            .current_dir(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    core.set_status(&conversation, &mut task, status::APPROVED)
+        .unwrap();
+    core.drain_worktree_cleanup();
+    assert!(path.exists());
+    assert_eq!(git::worktree_branch(&path).unwrap(), "user-work");
+}
+
+#[test]
+fn cleanup_does_not_follow_a_worktree_directory_symlink_into_another_repository() {
+    let (_directory, core, conversation, tasks, _commit) = fixture();
+    let external = tempfile::tempdir().unwrap();
+    let root = external.path().canonicalize().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet", "-b", "main"])
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::fs::write(root.join("precious"), "foreign data").unwrap();
+    let base = git::commit_all(&root, "Foreign data").unwrap();
+    let name = format!("{}-observation-g0", tasks[0].id);
+    let foreign = root.join("views").join(&name);
+    git::add_worktree(&root, &foreign, &format!("antislop/{name}"), &base).unwrap();
+    std::os::unix::fs::symlink(root.join("views"), core.state.join("worktrees")).unwrap();
+    let mut task = tasks[0].clone();
+    core.set_status(&conversation, &mut task, status::APPROVED)
+        .unwrap();
+    core.drain_worktree_cleanup();
+    assert!(foreign.exists());
+    assert_eq!(
+        std::fs::read_to_string(foreign.join("precious")).unwrap(),
+        "foreign data"
+    );
+}
+
+#[test]
+fn old_writer_contracts_protect_uncommitted_ignored_artifacts() {
+    let (_directory, core, conversation, tasks, commit) = fixture();
+    let task = &tasks[0];
+    let writer = checkout(&core, task, "g0", &commit);
+    std::fs::create_dir(writer.join(".antislop")).unwrap();
+    std::fs::write(writer.join(".antislop/report.md"), "uncommitted report").unwrap();
+    assert!(git::is_clean(&writer), "the report is ignored by Git");
+    let previous = json!({"id":"analysis","outputs":[".antislop/report.md"]});
+    core.store
+        .db()
+        .execute(
+            "INSERT INTO task_contracts(task_id,version,spec) VALUES(?1,17,?2)",
+            rusqlite::params![task.id, previous.to_string()],
+        )
+        .unwrap();
+    let run = core.store.create_run(&conversation, "New inputs").unwrap();
+    core.store
+        .db()
+        .execute(
+            "INSERT INTO task_inputs(task_id,run_id,generation) VALUES(?1,?2,1)",
+            rusqlite::params![task.id, run.id],
+        )
+        .unwrap();
+    core.queue_worktree_cleanup(&task.id);
+    core.drain_worktree_cleanup();
+    assert_eq!(
+        std::fs::read_to_string(writer.join(".antislop/report.md")).unwrap(),
+        "uncommitted report"
+    );
+}
+
+#[test]
+fn deferred_old_round_views_are_released_even_when_the_task_stalls() {
+    let (_directory, core, conversation, tasks, commit) = fixture();
+    let mut task = tasks[0].clone();
+    task.round = 2;
+    core.store.update_task(&task).unwrap();
+    let old = checkout(&core, &task, "review-g0-1", &commit);
+    let current = checkout(&core, &task, "review-g0-2", &commit);
+    let observation = checkout(&core, &task, "observation-g0", &commit);
+    let pin = core.pin_worktree(&old);
+    core.set_status(&conversation, &mut task, status::COORDINATING)
+        .unwrap();
+    core.drain_worktree_cleanup();
+    assert!(old.exists());
+    drop(pin);
+    drain_until(&core, || !old.exists());
+    assert!(
+        current.exists() && observation.exists(),
+        "a stalled task retains its current views"
+    );
+}

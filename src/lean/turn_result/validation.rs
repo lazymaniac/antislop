@@ -82,6 +82,16 @@ impl TurnResult {
                 report,
                 selection,
             } if !verifier => validate_completion(summary, report, selection.as_ref(), spec),
+            Self::Blocked {
+                report,
+                resume_condition,
+            } if !verifier && spec.kind == crate::config::WorkKind::Options => {
+                require(!report.trim().is_empty(), "report: required")?;
+                require(
+                    !resume_condition.trim().is_empty(),
+                    "resume_condition: required",
+                )
+            }
             Self::Review { report, verdict } if verifier => validate_review(report, verdict, spec),
             Self::NeedsInput {
                 request,
@@ -98,6 +108,10 @@ impl TurnResult {
             | Self::Plan { document: text, .. }
             | Self::Requirements { markdown: text } => text.clone(),
             Self::Completed { report, .. } | Self::Review { report, .. } => report.clone(),
+            Self::Blocked {
+                report,
+                resume_condition,
+            } => format!("{report}\n\nResume when: {resume_condition}"),
             Self::NeedsInput { checkpoint, .. } => checkpoint.clone(),
             Self::Question { question } => question.transcript(),
             Self::Ledger { extraction } => {
@@ -214,7 +228,7 @@ fn invalid_task_result(verifier: bool) -> Result<()> {
     let message = if verifier {
         "a verifier ends its turn with review or wait_for_answer"
     } else {
-        "a worker ends its turn with complete (select for an options task) or wait_for_answer"
+        "a worker ends its turn with complete (select or report_blocker for an options task) or wait_for_answer"
     };
     Err(crate::Error::Invalid(message.into()))
 }

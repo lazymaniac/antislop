@@ -1,18 +1,37 @@
 use super::*;
 
+pub(in crate::lean::ledger::runtime) struct RequirementsTurnScope<'a> {
+    pub conversation: &'a str,
+    pub run_id: &'a str,
+    pub phase: &'a str,
+    pub plan_id: Option<&'a str>,
+}
+
 impl Core {
     pub(in crate::lean::ledger::runtime) fn requirements_turn(
         self: &Arc<Self>,
-        conversation: &str,
-        run_id: &str,
-        phase: &str,
+        scope: RequirementsTurnScope<'_>,
         verifier: bool,
         prompt: String,
         cancel: &AtomicBool,
     ) -> Result<(String, String)> {
+        let RequirementsTurnScope {
+            conversation,
+            run_id,
+            phase,
+            plan_id,
+        } = scope;
+        if let Some(plan) = plan_id {
+            require(
+                self.store.plan_conversation(plan)? == conversation
+                    && self.store.plan_run(plan)?.as_deref() == Some(run_id),
+                "audit plan does not belong to this conversation and run",
+            )?;
+        }
         self.publish_requirements_progress(conversation, phase, verifier)?;
         let role = requirements_role(phase, verifier);
-        let setup = self.requirements_turn_setup(conversation, &role, phase, verifier)?;
+        let mut setup = self.requirements_turn_setup(conversation, &role, phase, verifier)?;
+        setup.plan_id = plan_id.map(str::to_owned);
         let (source_ids, revision) = self.requirements_turn_metadata(conversation, run_id)?;
         let context = self.ledger_context(conversation, run_id)?;
         let answer =

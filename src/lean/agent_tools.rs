@@ -49,7 +49,7 @@ impl Core {
         match tool {
             "read_dependency_result" => self.read_dependency_result(conversation, role, turn, args),
             "ask" | "wait_for_answer" => self.question_tool(conversation, role, turn, tool, args),
-            "complete" | "select" | "review" if task_role(role).is_some() => {
+            "complete" | "select" | "review" | "report_blocker" if task_role(role).is_some() => {
                 self.task_result_tool(conversation, role, turn, tool, args)
             }
             "review" | "finish_turn" => self.finish_tool(conversation, role, turn, tool, args),
@@ -57,7 +57,7 @@ impl Core {
                 self.interview_tool(conversation, role, turn, tool, args)
             }
             "answer_agent" | "defer_to_user" | "retry_task" => {
-                self.orchestrator_tool(conversation, role, tool, args)
+                self.orchestrator_tool(conversation, role, turn, tool, args)
             }
             "submit_plan" => self.submit_plan_tool(conversation, role, turn, args),
             "submit_ledger" | "submit_audit" | "submit_audit_review" => {

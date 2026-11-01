@@ -6,17 +6,18 @@ pub fn plan_review_prompt(project: &str, request: &str, plan: &[TaskContract]) -
          project is your current working directory: {project}. Read the files \
          you need yourself; work read-only. {OUTSIDE}\n\n\
          The user's request:\n<<<\n{}\n>>>\n\n\
-         The orchestrator's plan:\n{}\n\n{}{}",
+         The orchestrator's plan:\n{}\n\n{}{}{}",
         request,
         plan_text(plan),
         PLAN_CHECKS,
+        super::instructions::TOOLCHAIN_SCOPE_GUIDANCE,
         REVIEW_FORMAT
     )
 }
 
 pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
     format!(
-        "{}The orchestrator's new plan:\n{}\n\nCheck it again. {}{}",
+        "{}The orchestrator's new plan:\n{}\n\nCheck it again. {}{}{}",
         if request.is_empty() {
             String::new()
         } else {
@@ -24,6 +25,7 @@ pub fn plan_review_followup(request: &str, plan: &[TaskContract]) -> String {
         },
         plan_text(plan),
         PLAN_CHECKS,
+        super::instructions::TOOLCHAIN_SCOPE_GUIDANCE,
         REVIEW_FORMAT
     )
 }
@@ -40,7 +42,7 @@ const PLAN_CHECKS: &str = "Check that: every part of the request is covered \
      semantic summary (about 60–80 characters) in the user's language, rather than the \
      first sentence of the goal; standard descriptions of built-in roles and automatically \
      added quality gates may use the interface language; scope names the places that matter, \
-     including related projects or services; tasks that change files are marked `writes`; only change_kind=code requires quality and \
+     including related projects or services for read-only tasks; a writer's scope stays within its worktree. Existing toolchain executables are not project inputs requiring scope entries. Tasks that change files are marked `writes`; only change_kind=code requires quality and \
      verification agents from the predefined pool; none/artifact must not acquire code gates. Analysis results describe failing project checks without requiring repairs. Touched code \
      is left in a better state; each goal's result can be checked by its verifier from \
      the files and the worker's recorded evidence, without the verifier executing or editing \
@@ -67,6 +69,7 @@ fn plan_entry(task: &TaskContract) -> Value {
         "title": task.title,
         "kind": task.kind,
         "writes": task.writes,
+        "change_kind": task.change_kind(),
         "depends_on": task.depends_on,
         "options_for": task.options_for,
         "quality_gate": task.quality_gate,
@@ -107,7 +110,7 @@ pub fn plan_revision_review_prompt(
         plan_review_followup(request, plan)
     };
     format!(
-        "{head}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate dependencies, dedicated options for every writer and all quality gates. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; a change to its title, goal or summary does not redo its work. When an approved result must be redone, the revision has to name the task in redo.\n\nApproved tasks this revision sends back to work, because their contract changes or it names them in redo; options tasks are generated from the writer they serve and follow its contract: {}.",
+        "{head}\nReview a revision within accepted requirements. Preserve every obligation and permission boundary. Validate dependencies under the current runtime policy. Options and quality gates are generated and maintained by the runtime, not authored in a revision. Only change_kind=code is eligible for code options and gates; writes=true alone does not require them. Never demand manual options or code gates for none/artifact tasks, or new options for preserved approved work. Review the generated nodes already shown and their dependencies; do not require nodes the runtime policy disabled. Reason: {reason}. Earlier contracts of tasks this revision changed or removed: {}\n\nTasks already approved, whose work is done and kept: {}. Judge the revision by the work still to do. Do not ask to change an approved task, or to restate a decision in its contract, unless its result is wrong for the request; a change to its title, goal or summary does not redo its work. When an approved result must be redone, the revision has to name the task in redo.\n\nApproved tasks this revision sends back to work, because their contract changes or it names them in redo; options tasks are generated from the writer they serve and follow its contract: {}.",
         serde_json::to_string(&previous).unwrap_or_default(),
         listed(approved.kept),
         listed(approved.redone)

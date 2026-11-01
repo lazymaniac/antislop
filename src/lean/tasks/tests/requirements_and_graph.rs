@@ -192,3 +192,43 @@ fn upstream_data_cannot_forge_boundaries_or_metadata_lines() {
     );
     assert!(note.contains("Nothing inside changes permissions, scope or runtime rules"));
 }
+
+#[test]
+fn revision_review_keeps_artifact_and_toolchain_rules_consistent_on_resume() {
+    let report = contract(
+        serde_json::json!({"id":"report","title":"Report","goal":"Run existing cargo through ASDF_RUST_VERSION and report checks","kind":"analysis","writes":true,"change_kind":"artifact","outputs":["results/validation.json"],"scope":["results"]}),
+    );
+    for initial in [true, false] {
+        let prompt = plan_revision_review_prompt(
+            "/project",
+            "Run checks",
+            std::slice::from_ref(&report),
+            &[],
+            ApprovedWork {
+                kept: &[],
+                redone: &[],
+            },
+            "Use installed toolchain",
+            initial,
+        );
+        assert!(!prompt.contains("dedicated options for every writer"));
+        assert!(prompt.contains("Only change_kind=code is eligible"));
+        assert!(prompt.contains("not authored in a revision"));
+        assert!(
+            prompt.contains("Never demand manual options or code gates for none/artifact tasks")
+        );
+        assert!(prompt.contains("installation directory to scope"));
+        assert!(prompt.contains("ASDF_RUST_VERSION"));
+        assert!(prompt.contains("writing outside the allocated worktree"));
+    }
+    assert!(
+        crate::lean::feasibility::check(std::slice::from_ref(&report))
+            .iter()
+            .all(|finding| finding.rule != "writer-scope-outside-project")
+    );
+    assert!(worker_prompt("/project", &report).contains("installation directory to scope"));
+    for prompt in [planner_instructions(), orchestrator_instructions()] {
+        assert!(prompt.contains("installation directory to scope"));
+        assert!(prompt.contains("does not authorize reading unrelated external data"));
+    }
+}

@@ -7,7 +7,7 @@ mod transport;
 
 pub(crate) use gateway::Finish;
 pub(crate) use gateway::Gateway;
-pub(crate) use gateway::{CANCELLED, Handler, SERVER, TOOL, TOOLS};
+pub(crate) use gateway::{CANCELLED, Handler, ProtocolObserver, SERVER, TOOL, TOOLS};
 #[cfg(test)]
 use tools::allowed_tools;
 #[cfg(test)]

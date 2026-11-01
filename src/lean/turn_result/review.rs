@@ -26,6 +26,10 @@ pub fn task_tool_result(tool: &str, args: &serde_json::Value) -> Result<TurnResu
             selection: None,
         }),
         "select" => selection_tool(args),
+        "report_blocker" => Ok(TurnResult::Blocked {
+            report: super::tool_results::required_text(args, "report")?,
+            resume_condition: super::tool_results::required_text(args, "resume_condition")?,
+        }),
         "review" => review(optional_text(args, "report"), args),
         other => Err(crate::Error::Invalid(format!(
             "{other} is not a task result"

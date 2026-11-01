@@ -107,11 +107,8 @@ pub(in crate::lean::tui::graph) fn fit_lines(text: &str, width: usize, max: usiz
     lines
 }
 
-/// The worker's effect in its own fixed slot under the summary: never a
-/// substitute for a summary line, never a growth of the card. The card's
-/// shape of the shared reading (taskinfo) — text and fragment marker in
-/// front — wrapped to the slot; `None` keeps the slot empty until the
-/// round has something to report at all.
+/// The worker's effect, wrapped safely within the card's bounded line budget.
+/// No rows are reserved before the round has an effect to report.
 pub(in crate::lean::tui::graph) fn effect_lines(
     view: &View,
     key: &str,

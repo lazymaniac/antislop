@@ -31,6 +31,20 @@ fn finish_report(
             turn_result::report_with_deliverables(&report, selection.as_ref()),
             tasks::bound_cut(&summary, tasks::EFFECT_LIMIT),
         ))),
+        turn_result::TurnResult::Blocked {
+            report,
+            resume_condition,
+        } => {
+            save_checkpoint(task, spec, worktree)?;
+            task.report = Some(format!("{report}\n\nResume when: {resume_condition}"));
+            core.stop(
+                conversation,
+                task,
+                status::COORDINATING,
+                Some(&resume_condition),
+            )?;
+            Ok(None)
+        }
         turn_result::TurnResult::NeedsInput {
             request,
             checkpoint,

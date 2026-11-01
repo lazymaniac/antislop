@@ -9,9 +9,11 @@ impl Core {
             if before
                 .iter()
                 .any(|old| old.id == task.id && old.input_generation != task.input_generation)
-                && let Some((_, cancel)) = active.get(&task.id)
             {
-                cancel.store(true, Ordering::SeqCst);
+                self.queue_worktree_cleanup(&task.id);
+                if let Some((_, cancel)) = active.get(&task.id) {
+                    cancel.store(true, Ordering::SeqCst);
+                }
             }
         }
     }

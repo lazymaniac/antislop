@@ -105,13 +105,14 @@ fn worker_prompt_opening(
          the project's files is always allowed, also through shell commands that only \
          read; no wording of the task (such as \"no commands\" or \"use only received \
          sources\") takes that away.\n\n\
-         Task: {}\nTask id: {}\nKind: {}\nGoal: {}\nScope: {}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
+         Task: {}\nTask id: {}\nKind: {}\nGoal: {}\nScope: {}\n{}\n{checks}\n{binding}\n\n{}{PROJECT_RULES}\n\n\
          ",
         task.title,
         task.id,
         work_kind_name(task.kind),
         task.goal,
         scope_text(&task.scope),
+        super::instructions::TOOLCHAIN_SCOPE_GUIDANCE,
         change_rules
     )
 }
@@ -226,7 +227,7 @@ pub fn worker_followup(findings: &[Value]) -> String {
          updated report: for each finding what you changed and the evidence, without \
          restating the task or pasting file contents. {}",
         findings_text(findings),
-        "End with complete (select for an options task).",
+        "End with complete (select for viable options; report_blocker when no option satisfies the contract).",
     )
 }
 
@@ -248,7 +249,7 @@ fn worker_prompt_parts(
     String,
 ) {
     let team = "Ask the orchestrator through MCP when an input or decision is missing. You know only your task. Do not inspect runtime session state or contact other agents.\n";
-    let blocker = "For missing input use ask; if the answer has not come, end with wait_for_answer. Do not invent requirements or implement outside this contract.";
+    let blocker = "If no option satisfies an options task's contract, end with report_blocker and its resume condition; do not invent a choice or finish only in terminal prose. For missing input use ask; if the answer has not come, end with wait_for_answer. Do not invent requirements or implement outside this contract.";
     let binding = if task.changes_code() {
         OPTIONS_BINDING
     } else {

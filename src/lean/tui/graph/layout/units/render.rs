@@ -12,7 +12,7 @@ pub(super) fn push_admin(
     left: u16,
     room: u16,
 ) {
-    let (width, height) = (builder.size.admin_w, ADMIN_HEIGHT.min(builder.size.h));
+    let width = builder.size.admin_w;
     let mut shown = HashMap::<&str, (u16, u16)>::new();
     for (row, &y) in rows.iter().zip(tops) {
         let x = left + (room - admin_width(builder.size, row)) / 2;
@@ -28,7 +28,7 @@ pub(super) fn push_admin(
             x: spot.map_or(0, |(x, _)| x),
             y: spot.map_or(0, |(_, y)| y),
             width,
-            height,
+            height: card_content::height(builder.view, key, width, builder.size.h, false),
             visible: spot.is_some(),
             group: None,
             collapsed: false,
@@ -78,7 +78,7 @@ fn push_card(
         x,
         y,
         width: builder.size.w,
-        height: card_height(builder.size, folded),
+        height: card_height(builder, key, folded),
         visible: true,
         group: Some(group.to_owned()),
         collapsed: folded,

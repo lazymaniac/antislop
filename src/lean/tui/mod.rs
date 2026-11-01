@@ -44,6 +44,7 @@ mod paste;
 mod planhistory;
 pub mod planview;
 mod render;
+mod result_text;
 pub mod sanitize;
 pub mod selection;
 mod shell;

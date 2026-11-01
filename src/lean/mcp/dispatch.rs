@@ -9,7 +9,18 @@ use std::time::Instant;
 
 /// Validate the open lease before dispatch; never hold the gateway lock during work.
 pub(super) fn call(shared: &Shared, params: &Value) -> Value {
-    let expected = shared.state.lock().ok().and_then(|s| s.expected.clone());
+    let (expected, observer, role, allowed) = shared
+        .state
+        .lock()
+        .map(|state| {
+            (
+                state.expected.clone(),
+                state.protocol_observer.clone(),
+                state.role.clone(),
+                scoped_tools(&state.role, state.contract.as_ref()),
+            )
+        })
+        .unwrap_or_default();
     let outcome = dispatch(shared, params);
     match outcome {
         Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}]}),
@@ -31,6 +42,10 @@ pub(super) fn call(shared: &Shared, params: &Value) -> Value {
                         state.role, state.expected.as_deref().unwrap(),
                         scoped_tools(&state.role, state.contract.as_ref())
                     ));
+                    if scoped_tools(&state.role, state.contract.as_ref()).contains(&"current_turn")
+                    {
+                        reason.push_str("; call current_turn({}) and copy its active turn id exactly; never guess or reuse a previous id");
+                    }
                 }
                 let at = state
                     .rejected_finish
@@ -38,6 +53,23 @@ pub(super) fn call(shared: &Shared, params: &Value) -> Value {
                     .map_or_else(Instant::now, |(at, _)| *at);
                 state.rejected_finish = Some((at, reason.clone()));
                 shared.changed.notify_all();
+            }
+            let name = params["name"].as_str().unwrap_or_default();
+            let submitted = params["arguments"]["turn"].as_str();
+            let active_turn = shared
+                .state
+                .lock()
+                .ok()
+                .and_then(|state| state.expected.clone());
+            let protocol_error = active_turn != expected
+                || !allowed.contains(&name)
+                || (name != "current_turn" && submitted != expected.as_deref());
+            if protocol_error && let Some(observer) = observer {
+                let event = json!({"stage":"gateway","tool":name.chars().take(80).collect::<String>(),"error":reason,
+                    "expected_turn":expected,"active_turn":active_turn,"submitted_turn":submitted.map(|turn|turn.chars().take(128).collect::<String>()),"role":role});
+                if let Err(error) = observer(&event) {
+                    reason.push_str(&format!("; recording protocol rejection failed: {error}"));
+                }
             }
             json!({"isError":true,"content":[{"type":"text","text":reason}]})
         }
@@ -48,6 +80,9 @@ pub(super) fn dispatch(shared: &Shared, params: &Value) -> Result<Value> {
     let name = params["name"].as_str().unwrap_or_default();
     crate::require(TOOLS.contains(&name), "unknown tool")?;
     let args = &params["arguments"];
+    if name == "current_turn" {
+        return current_turn(shared, args);
+    }
     let turn = args["turn"]
         .as_str()
         .ok_or_else(|| invalid("turn: required"))?;
@@ -158,12 +193,12 @@ fn finish_dispatch(
     response: Result<Value>,
 ) -> Result<Value> {
     let mut state = shared.state.lock().map_err(invalid)?;
-    record_wait_time(&mut state, name);
-    let mut response = response?;
     crate::require(
         state.expected.as_deref() == Some(turn),
         "turn closed while the tool was executing",
     )?;
+    record_wait_time(&mut state, name);
+    let mut response = response?;
     if is_terminal(name)
         && !(name == "wait_for_answer"
             && response["state"] == "answered"
@@ -212,3 +247,22 @@ pub(super) fn result(id: Value, result: Value) -> Value {
 pub(super) fn error(id: Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
+
+fn current_turn(shared: &Shared, args: &Value) -> Result<Value> {
+    crate::require(
+        args.as_object().is_some_and(|args| args.is_empty()),
+        "current_turn: expected an empty object",
+    )?;
+    let state = shared.state.lock().map_err(invalid)?;
+    crate::require(
+        scoped_tools(&state.role, state.contract.as_ref()).contains(&"current_turn"),
+        "tool is unavailable for this role",
+    )?;
+    Ok(
+        json!({"turn":state.expected,"active":state.expected.is_some() && state.finished.is_none(),"role":state.role,
+        "tools":scoped_tools(&state.role, state.contract.as_ref()),"last_finished_turn":state.receipt.as_ref().map(|(turn,_)|turn)}),
+    )
+}
+
+#[cfg(test)]
+mod tests;

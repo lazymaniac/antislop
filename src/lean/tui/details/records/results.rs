@@ -1,4 +1,5 @@
 use super::*;
+use unicode_segmentation::UnicodeSegmentation;
 
 pub(super) fn results(details: &mut Details, view: &View, records: &mut Vec<Rc<DetailRecord>>) {
     let task = details
@@ -50,7 +51,6 @@ fn finding_line(finding: &Value) -> (Style, String) {
 fn worker_results(stored: &Value, records: &mut Vec<Rc<DetailRecord>>) {
     records.push(artifact_record(stored));
     records.push(report_record(stored));
-    records.push(evidence_record(stored));
 }
 
 fn artifact_record(stored: &Value) -> Rc<DetailRecord> {
@@ -67,47 +67,28 @@ fn artifact_record(stored: &Value) -> Rc<DetailRecord> {
             "Artifacts: no recorded git changes [historical data unavailable]".into(),
         ));
     }
+    lines.push(plain(String::new()));
     record(lines, " ")
 }
 
 fn short_hash(hash: &str) -> &str {
-    &hash[..hash.len().min(10)]
+    hash.grapheme_indices(true)
+        .nth(10)
+        .map_or(hash, |(end, _)| &hash[..end])
 }
 
 fn report_record(stored: &Value) -> Rc<DetailRecord> {
-    let report = stored["report"].as_str().map_or_else(
-        || (dim(), "Worker has not submitted a report yet (work in progress or waiting to start) [no historical report data].".into()),
-        |report| plain(report.to_owned()),
-    );
-    record(vec![label("Report"), report], " ")
-}
-
-fn evidence_record(stored: &Value) -> Rc<DetailRecord> {
-    let mut lines = vec![label("Evidence and findings")];
-    match stored.get("verdict").filter(|verdict| !verdict.is_null()) {
-        Some(verdict) => append_evidence_findings(&mut lines, verdict),
-        None => lines.push((
-            dim(),
-            "Evidence: [no attached evidence in history / awaiting verification]".into(),
-        )),
+    let mut lines = vec![label("Report"), plain(String::new())];
+    match stored["report"].as_str() {
+        Some(report) => lines.extend(
+            crate::lean::tui::result_text::worker_report(report)
+                .lines()
+                .map(|line| plain(line.to_owned())),
+        ),
+        None => lines.push((dim(), "Worker has not submitted a report yet (work in progress or waiting to start) [no historical report data].".into())),
     }
-    record(lines, " ")
-}
-
-fn append_evidence_findings(lines: &mut Vec<(Style, String)>, verdict: &Value) {
-    if let Some(findings) = verdict["findings"].as_array() {
-        if findings.is_empty() {
-            lines.push(plain("Findings: no issues.".into()));
-        } else {
-            lines.extend(findings.iter().map(|finding| {
-                plain(format!(
-                    "• [{}] {}",
-                    finding["severity"].as_str().unwrap_or("note"),
-                    finding["issue"].as_str().unwrap_or_default()
-                ))
-            }));
-        }
-    }
+    lines.push(plain(String::new()));
+    record(lines, "\n")
 }
 
 fn plain(text: String) -> (Style, String) {
@@ -118,4 +99,28 @@ fn label(text: &str) -> (Style, String) {
         Style::default().add_modifier(Modifier::BOLD),
         text.to_owned(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn worker_report_keeps_paragraphs_and_excludes_verifier_findings() {
+        let stored = json!({
+            "report":"First paragraph.\n\n- café 👩‍👩‍👧‍👦\n- Second item",
+            "verdict":{"findings":[{"severity":"high","issue":"Verifier-only finding"}]}
+        });
+        let mut records = Vec::new();
+        worker_results(&stored, &mut records);
+        let lines = Details::render_records(&records, "");
+        let text = lines
+            .iter()
+            .map(|(_, line)| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("First paragraph.\n\n- café 👩‍👩‍👧‍👦\n- Second item"));
+        assert!(!text.contains("Verifier-only finding") && !text.contains("Evidence"));
+    }
 }

@@ -63,32 +63,19 @@ impl Core {
                 },
             )?
             .map_err(Error::Invalid)?;
-        self.require_revision_review(context.conversation, context.revision, &review)
+        self.require_revision_review(context.revision, &review)
     }
 
-    fn require_revision_review(
-        &self,
-        conversation: &str,
-        revision: &PlanRevision,
-        review: &Verdict,
-    ) -> Result<()> {
-        if !review.approved
-            && tasks::only_minor_findings(review)
-            && self.store.rejected_revisions_in_a_row(&revision.plan)?
-                >= tasks::TOLERATED_PLAN_REJECTIONS
-        {
-            self.notice(conversation, &format!(
-                "revision applied with unresolved minor review findings after repeated rejections: {}",
-                tasks::findings_text(&review.findings)));
+    fn require_revision_review(&self, revision: &PlanRevision, review: &Verdict) -> Result<()> {
+        if review.approved {
             return Ok(());
         }
-        require(
-            review.approved,
-            &format!(
-                "revision review rejected: {}",
-                tasks::findings_text(&review.findings)
-            ),
-        )
+        let previous = self.store.rejected_revisions_in_a_row(&revision.plan)?;
+        Err(Error::Invalid(format!(
+            "revision review rejected: {} ({} prior rejected reviews; resolve the findings before resubmitting)",
+            tasks::findings_text(&review.findings),
+            previous,
+        )))
     }
 
     fn apply_after_review(
@@ -109,6 +96,9 @@ impl Core {
             &affected,
             lease,
         )?;
+        for id in affected {
+            self.queue_worktree_cleanup(&id);
+        }
         Ok(())
     }
 
@@ -249,4 +239,66 @@ fn previous_specs(context: &ReviewContext<'_>) -> Vec<serde_json::Value> {
         .iter()
         .map(|task| task.spec.clone())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn repeated_review_rejections_never_authorize_a_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let config =
+            crate::config::Config::from_toml(include_str!("../../../examples/antislop.toml"))
+                .unwrap();
+        let core = Core::open(&directory.path().join("state"), config).unwrap();
+        let conversation = core.store.create_conversation("fixture").unwrap();
+        let task = core
+            .store
+            .add_plan(
+                &conversation.id,
+                &[json!({"id":"analysis","title":"Analysis","goal":"Report","kind":"analysis"})],
+            )
+            .unwrap()
+            .remove(0);
+        let revision = PlanRevision {
+            plan: task.plan_id.clone(),
+            base_revision: 0,
+            reason: "Repair findings".into(),
+            tasks: vec![],
+            retire: vec![],
+            redo: vec![],
+        };
+        for attempt in 0..5 {
+            for severity in ["low", "medium", "high", "critical"] {
+                let review = Verdict {
+                    approved: false,
+                    resolved: vec![],
+                    findings: vec![
+                        json!({"severity":severity,"issue":"Explicit redo is missing","where":"revision"}),
+                    ],
+                    coverage: serde_json::Map::new(),
+                };
+                let error = core
+                    .require_revision_review(&revision, &review)
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("Explicit redo is missing"), "{error}");
+                assert!(
+                    error.contains(&format!("{attempt} prior rejected reviews")),
+                    "{error}"
+                );
+            }
+            core.store.db().execute("INSERT INTO plan_revision_jobs(id,conversation_id,plan_id,request_key,proposal,status,error) VALUES(?1,?2,?3,?4,'{}','rejected','revision review rejected: Explicit redo is missing')",rusqlite::params![crate::id(),conversation.id,task.plan_id,format!("attempt-{attempt}")]).unwrap();
+        }
+        assert_eq!(core.store.plan_revision(&task.plan_id).unwrap(), 0);
+        let approved = Verdict {
+            approved: true,
+            resolved: vec![],
+            findings: vec![],
+            coverage: serde_json::Map::new(),
+        };
+        core.require_revision_review(&revision, &approved).unwrap();
+    }
 }

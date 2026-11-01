@@ -81,6 +81,71 @@ pub fn remove_worktree(project: &Path, path: &Path, branch: &str) -> Result<()> 
     Ok(())
 }
 
+/// Keep an exact, lightweight history reference before deleting a clean view.
+/// Normal removal refuses tracked/untracked edits, including changes racing the check.
+pub(crate) fn remove_clean_view(project: &Path, path: &Path, branch: &str) -> Result<()> {
+    require_worktree_branch(path, branch)?;
+    crate::require(
+        is_clean(path),
+        &format!(
+            "worktree {} has uncommitted files; preserved",
+            path.display()
+        ),
+    )?;
+    let snapshot = view_snapshot_ref(path);
+    let commit = head(path)?;
+    ok(project, &["update-ref", &snapshot, &commit])?;
+    ok(project, &["worktree", "remove", &path.to_string_lossy()])?;
+    delete_branch(project, branch)
+}
+
+pub(crate) fn restore_clean_view(project: &Path, path: &Path) -> Result<()> {
+    let snapshot = view_snapshot_ref(path);
+    let commit = ok(project, &["rev-parse", "--verify", &snapshot])?;
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| Error::Invalid("invalid view path".into()))?;
+    add_worktree(project, path, &format!("antislop/{name}"), &commit)
+}
+
+fn view_snapshot_ref(path: &Path) -> String {
+    format!(
+        "refs/antislop/view-history/{}",
+        crate::hash(path.as_os_str().as_encoded_bytes())
+    )
+}
+
+/// Remove only the checkout of retired writer work; its branch retains all commits.
+pub(crate) fn remove_clean_writer(
+    project: &Path,
+    path: &Path,
+    branch: &str,
+    outputs: &[String],
+) -> Result<()> {
+    require_worktree_branch(path, branch)?;
+    for output in outputs {
+        crate::require(
+            !output.is_empty()
+                && Path::new(output)
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::Normal(_))),
+            "invalid artifact path; writer worktree preserved",
+        )?;
+        match path.join(output).symlink_metadata() {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        }
+        if ok(path, &["--literal-pathspecs", "ls-files", "--", output])?.is_empty() {
+            return Err(Error::Invalid(format!(
+                "uncommitted artifact {output} (possibly ignored); writer worktree preserved"
+            )));
+        }
+    }
+    ok(project, &["worktree", "remove", &path.to_string_lossy()]).map(|_| ())
+}
+
 /// The repository a linked worktree belongs to, read from the worktree itself.
 pub fn worktree_project(path: &Path) -> Result<PathBuf> {
     let common = PathBuf::from(ok(

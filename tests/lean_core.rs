@@ -63,6 +63,10 @@ fn comment_codex(dir: &std::path::Path) -> std::path::PathBuf {
         &script,
         format!(
             r#"#!/bin/sh
+python3 - "$@" <<'PYARGS' >> '{dir}/comment-argv.jsonl'
+import json, sys
+print(json.dumps(sys.argv[1:-1]))
+PYARGS
 session="session-$$"
 for arg; do
   case "$arg" in session-*) session="$arg" ;; esac
@@ -1275,7 +1279,13 @@ fn the_orchestrator_restarts_without_a_plan_and_preserves_history() {
     let calls = std::fs::read_to_string(dir.path().join("comment-calls.log")).unwrap();
     let last = calls.rsplit("---").nth(1).unwrap();
     assert!(last.contains("Original request"));
-    assert!(!last.contains("resume"));
+    let launches = std::fs::read_to_string(dir.path().join("comment-argv.jsonl")).unwrap();
+    let args: Vec<String> = serde_json::from_str(launches.lines().last().unwrap()).unwrap();
+    assert_eq!(args.first().map(String::as_str), Some("exec"));
+    assert!(
+        !args.iter().any(|arg| arg == "resume" || arg == "--resume"),
+        "{args:?}"
+    );
     core.restart_orchestrator(&conversation.id).unwrap();
     wait_idle(&core, &conversation.id);
     assert_eq!(

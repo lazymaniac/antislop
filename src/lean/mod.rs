@@ -34,6 +34,7 @@ mod core_task_recovery;
 mod core_task_state;
 mod core_unanswered;
 mod core_unblock_dependents;
+mod core_worktree_cleanup;
 mod core_writer_base;
 pub use core_comment_helpers::comment_label;
 mod agent_tools;
@@ -234,6 +235,9 @@ pub struct Core {
     /// Active task processes can be cancelled independently.
     task_cancels: Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,
     task_restarts: Mutex<HashMap<String, TaskRecoveryRequest>>,
+    worktree_cleanup: Mutex<std::collections::BTreeSet<String>>,
+    worktree_cleanup_notes: Mutex<HashMap<String, String>>,
+    worktree_pins: Mutex<HashMap<PathBuf, usize>>,
     orchestrator_restarts: Mutex<std::collections::HashSet<String>>,
     turn_locks: Mutex<mail::TurnLocks>,
     /// Conversations with an orchestrator loop running, and its cancel flag.

@@ -32,6 +32,29 @@ impl Store {
         Ok(plan)
     }
 
+    /// Compliance roles can read approved text results of the exact run bound at launch.
+    /// They cannot inherit access from a newer draft or a different conversation.
+    pub(in crate::lean) fn audit_dependency_scope(
+        &self,
+        conversation: &str,
+        role: &str,
+        turn: &str,
+    ) -> Result<(Vec<Task>, i64)> {
+        let bound: Option<(String, i64)> = self.db().query_row(
+            "SELECT p.run_id,r.spec_revision FROM turns t JOIN plans q ON q.id=t.plan_id JOIN plan_runs p ON p.plan_id=q.id JOIN runs r ON r.id=p.run_id WHERE t.id=?1 AND t.conversation_id=?2 AND q.conversation_id=?2 AND r.conversation_id=?2 AND t.role=?3 AND t.status='running'",
+            params![turn, conversation, role], |row| Ok((row.get(0)?, row.get(1)?))
+        ).optional()?;
+        let (run, revision) = bound.ok_or_else(|| {
+            Error::Invalid("audit turn has no plan bound to this conversation and run".into())
+        })?;
+        let tasks = self
+            .run_tasks(conversation, &run)?
+            .into_iter()
+            .filter(|task| task.status == "approved")
+            .collect();
+        Ok((tasks, revision))
+    }
+
     pub(in crate::lean) fn dependency_report_round(
         &self,
         task: &Task,

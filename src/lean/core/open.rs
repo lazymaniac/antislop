@@ -92,6 +92,9 @@ fn make_core(state: &Path, config: Config, store: Store, lock: std::fs::File) ->
         agent_reviews: Mutex::new(HashMap::new()),
         task_cancels: Mutex::new(HashMap::new()),
         task_restarts: Mutex::new(HashMap::new()),
+        worktree_cleanup: Mutex::new(std::collections::BTreeSet::new()),
+        worktree_cleanup_notes: Mutex::new(HashMap::new()),
+        worktree_pins: Mutex::new(HashMap::new()),
         orchestrator_restarts: Mutex::new(std::collections::HashSet::new()),
         opened_ms: store::now_ms(),
         turn_locks: Mutex::new(HashMap::new()),
@@ -112,6 +115,7 @@ fn spawn_native_reaper(core: &Arc<Core>) {
             std::thread::sleep(std::time::Duration::from_secs(1));
             let Some(core) = weak.upgrade() else { break };
             let _ = core.native.reap_idle();
+            core.drain_worktree_cleanup();
         }
     });
 }

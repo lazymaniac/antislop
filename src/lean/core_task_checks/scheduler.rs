@@ -266,6 +266,7 @@ fn execute_task(
 ) {
     fail_task(core, conversation, &mut task, &cancel);
     restart_agent(core, conversation, &task);
+    core.queue_worktree_cleanup(&task.id);
 }
 
 fn fail_task(core: &Arc<Core>, conversation: &str, task: &mut Task, cancel: &AtomicBool) {

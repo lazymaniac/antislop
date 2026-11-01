@@ -734,3 +734,45 @@ fn a_provider_limit_blocks_new_launches_for_the_profile_across_restart() {
         "no automatic retry or new process on the blocked profile"
     );
 }
+
+#[test]
+fn worktree_cleanup_defers_while_a_native_session_is_in_use() {
+    let dir = test_tempdir();
+    let core = core(dir.path());
+    let registry = core.native.sessions.lock().unwrap();
+    assert!(!core.native.retire_directory(dir.path()).unwrap());
+    drop(registry);
+    let spec = agent::Spec {
+        provider: crate::config::ProviderKind::Opencode,
+        binary: opencode(dir.path()),
+        args: vec![],
+        model: None,
+        effort: None,
+        cwd: dir.path().into(),
+        add_dirs: vec![],
+        access: agent::Access::ReadOnly,
+        resume: None,
+    };
+    let session = core
+        .native
+        .prepare_scoped(&core, "fixture", "orchestrator", &spec, "")
+        .unwrap();
+    assert!(!core.native.retire_directory(dir.path()).unwrap());
+    let screen = core
+        .terminal_open("fixture", "orchestrator", 80, 24, false)
+        .unwrap();
+    drop(session);
+    assert!(
+        !core.native.retire_directory(dir.path()).unwrap(),
+        "an attached terminal retains its directory"
+    );
+    core.terminal_detach("fixture", "orchestrator", &screen.handle)
+        .unwrap();
+    assert!(core.native.retire_directory(dir.path()).unwrap());
+    assert!(
+        core.native
+            .get("fixture", "orchestrator")
+            .unwrap()
+            .is_none()
+    );
+}

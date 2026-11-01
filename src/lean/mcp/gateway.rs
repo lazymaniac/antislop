@@ -31,7 +31,7 @@ pub(crate) const REVIEW: &str = "review";
 pub(crate) const LEDGER_RESULTS: [&str; 3] =
     ["submit_ledger", "submit_audit", "submit_audit_review"];
 /// The tools that end a task turn with its result.
-pub(crate) const TASK_RESULTS: [&str; 3] = ["complete", "select", REVIEW];
+pub(crate) const TASK_RESULTS: [&str; 4] = ["complete", "select", REVIEW, "report_blocker"];
 pub(crate) const TOOLS: &[&str] = &[
     TOOL,
     SUBMIT_PLAN,
@@ -43,6 +43,8 @@ pub(crate) const TOOLS: &[&str] = &[
     ASK,
     WAIT,
     "read_dependency_result",
+    "current_turn",
+    "report_blocker",
     "answer_agent",
     "defer_to_user",
     "retry_task",
@@ -83,6 +85,7 @@ pub(super) fn receipt_payload(name: &str, args: &Value) -> Value {
     }
     json!({"tool": name, "args": payload})
 }
+pub(crate) type ProtocolObserver = dyn Fn(&Value) -> Result<()> + Send + Sync;
 pub(crate) type Handler = dyn Fn(&str, &Value) -> Result<Value> + Send + Sync;
 /// The error of a turn the runtime cancelled while it waited.
 pub(crate) const CANCELLED: &str = "agent turn cancelled";
@@ -105,6 +108,7 @@ pub(super) struct State {
     /// The CLI asked for the tool list: it is running and can use the tool.
     pub(super) listed: bool,
     pub(super) handler: Option<Arc<Handler>>,
+    pub(super) protocol_observer: Option<Arc<ProtocolObserver>>,
     pub(super) role: String,
     pub(super) contract: Option<crate::lean::tasks::TaskContract>,
     /// The turn a terminal call ended and that call, so a repeat is
@@ -198,6 +202,11 @@ impl Gateway {
         Ok(())
     }
 
+    pub(crate) fn set_protocol_observer(&self, observer: Arc<ProtocolObserver>) -> Result<()> {
+        self.shared.state.lock().map_err(invalid)?.protocol_observer = Some(observer);
+        Ok(())
+    }
+
     pub(crate) fn connected(&self) -> bool {
         self.shared.state.lock().is_ok_and(|state| state.listed)
     }
@@ -245,7 +254,7 @@ fn wait_loop(
         }
         drop(state);
         if let Err(error) = alive() {
-            return agent_exited(shared, error);
+            return agent_exited(shared, turn, error);
         }
         state = shared.state.lock().map_err(invalid)?;
         if state.finished.is_none() {
@@ -258,8 +267,15 @@ fn wait_loop(
     }
 }
 
-fn agent_exited(shared: &Shared, error: Error) -> Result<Finish> {
+fn agent_exited(shared: &Shared, turn: &str, error: Error) -> Result<Finish> {
     let mut state = shared.state.lock().map_err(invalid)?;
+    crate::require(
+        state
+            .expected
+            .as_deref()
+            .is_none_or(|expected| expected == turn),
+        "the exited CLI belongs to a replaced turn; the active turn is unchanged",
+    )?;
     if let Some(finish) = take_finish(&mut state) {
         return Ok(finish);
     }

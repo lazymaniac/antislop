@@ -9,6 +9,23 @@ pub(in crate::lean) struct ArtifactReceipt {
 }
 
 impl Store {
+    /// Outputs from old contracts still protect unsaved, ignored reports after a revision.
+    pub(in crate::lean) fn artifact_output_history(&self, task: &Task) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut query = db.prepare("SELECT value FROM task_contracts c,json_each(c.spec,'$.outputs') WHERE c.task_id=?1 UNION SELECT path FROM task_artifact_inputs WHERE task_id=?1")?;
+        let mut outputs = query
+            .query_map([&task.id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
+        outputs.extend(
+            task.spec["outputs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str().map(str::to_owned)),
+        );
+        Ok(outputs.into_iter().collect())
+    }
+
     pub(in crate::lean) fn artifact_receipt(
         &self,
         conversation: &str,

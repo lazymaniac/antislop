@@ -1,4 +1,4 @@
-use super::super::super::health::{describe, provider_of};
+use super::super::super::health::describe;
 use super::content::{card_title, status_style};
 use super::*;
 
@@ -7,9 +7,7 @@ impl Card<'_> {
         let (icon, tone) = status_style(self.theme, self.health);
         self.paint_title();
         self.paint_open_comments();
-        self.paint_provider(self.inner_width());
         self.paint_status(self.inner_width(), &icon, tone);
-        self.paint_verifier(self.inner_width(), tone);
     }
 
     fn paint_title(&mut self) {
@@ -25,6 +23,12 @@ impl Card<'_> {
             Some(Role::Verifier) => "verifier".to_owned(),
             Some(Role::Pair) => "options".to_owned(),
             None => node_name(&self.node.key),
+        };
+        let name = match (self.role, self.task) {
+            (Some(Role::Worker), Some(task)) if !task.kind.is_empty() && task.kind != name => {
+                format!("{name} - {}", task.kind)
+            }
+            _ => name,
         };
         let title = card_title(&name, inner, self.node.collapsed);
         let (x, y) = (self.node.x, self.node.y);
@@ -60,28 +64,9 @@ impl Card<'_> {
         }
     }
 
-    fn paint_provider(&mut self, inner: usize) {
-        let kind = self.task.map_or("orchestration", |task| {
-            if self.role == Some(Role::Verifier) {
-                "verification"
-            } else if task.kind.is_empty() {
-                "unknown"
-            } else {
-                task.kind.as_str()
-            }
-        });
-        let provider = provider_of(self.view, &self.node.key).unwrap_or("-");
-        self.canvas.text(
-            self.node.x + 2,
-            self.node.y + 1,
-            &truncate(&format!("{provider} - {kind}"), inner),
-            self.fill.patch(self.accent),
-        );
-    }
-
     fn paint_status(&mut self, inner: usize, icon: &str, tone: Style) {
         let (x, y) = (self.node.x, self.node.y);
-        self.canvas.text(x + 2, y + 2, icon, self.fill.patch(tone));
+        self.canvas.text(x + 2, y + 1, icon, self.fill.patch(tone));
         let description = self.status_description();
         let icon_width = if icon.is_empty() { 0 } else { 2 };
         let style = if self.health == Health::Idle {
@@ -91,7 +76,7 @@ impl Card<'_> {
         };
         self.canvas.text(
             x + 2 + icon_width,
-            y + 2,
+            y + 1,
             &truncate(&description, inner.saturating_sub(usize::from(icon_width))),
             self.fill.patch(style),
         );
@@ -99,7 +84,13 @@ impl Card<'_> {
 
     fn status_description(&self) -> String {
         if self.health != Health::Working {
-            return describe(self.view, &self.node.key);
+            let mut description = describe(self.view, &self.node.key);
+            if self.pair_finished()
+                && let Some(task) = self.task.filter(|task| task.obligations.is_some())
+            {
+                description.push_str(&format!(" · {}", taskinfo::coverage_short(task)));
+            }
+            return description;
         }
         let round = self
             .task
@@ -120,31 +111,9 @@ impl Card<'_> {
         round.map_or_default(|round| format!("round {round}"))
     }
 
-    fn paint_verifier(&mut self, inner: usize, tone: Style) {
-        if let Some(text) = self.verifier_text() {
-            self.canvas.text(
-                self.node.x + 2,
-                self.node.y + 3,
-                &truncate(&text, inner),
-                self.fill.patch(tone),
-            );
-        }
-    }
-
-    pub(super) fn verifier_text(&self) -> Option<String> {
-        let task = self.task?;
-        let coverage = task
-            .obligations
-            .as_ref()
-            .map(|_| taskinfo::coverage_short(task));
-        match (self.role, coverage) {
-            (Some(Role::Pair), coverage) => Some(format!(
-                "V: {}{}",
-                taskinfo::verifier_status(task),
-                coverage.map_or_default(|coverage| format!(" · {coverage}"))
-            )),
-            (Some(Role::Verifier), Some(coverage)) => Some(format!("coverage {coverage}")),
-            _ => None,
-        }
+    fn pair_finished(&self) -> bool {
+        self.task
+            .zip(self.role)
+            .is_some_and(|(task, role)| card_content::pair_finished(task, role))
     }
 }

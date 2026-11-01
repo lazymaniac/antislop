@@ -55,42 +55,63 @@ const VIEWS: [&str; 2] = ["review", "observation"];
 /// that worked in one is replaced when its next turn needs another
 /// directory, while the worker still works in its observation checkout when
 /// the verifier gets a new review one.
+#[cfg(test)]
 pub(super) fn release_views(state: &Path, task_id: &str, keep: Option<&Path>) -> Result<()> {
-    let id = task_path_component(task_id)?;
-    let Ok(entries) = std::fs::read_dir(state.join("worktrees")) else {
-        return Ok(());
-    };
-    let prefix = |kind: &str| format!("{id}-{kind}-g");
-    let kept_kind = keep.and_then(|keep| {
-        let name = keep.file_name()?.to_string_lossy().into_owned();
-        VIEWS.iter().find(|kind| name.starts_with(&prefix(kind)))
-    });
-    let mut first_error = None;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let released = VIEWS.iter().any(|kind| {
-            name.starts_with(&prefix(kind)) && kept_kind.is_none_or(|kept| kept == kind)
-        });
-        if !released || keep == Some(path.as_path()) {
-            continue;
-        }
-        if let Err(error) = release_view(&path, &name) {
-            first_error.get_or_insert(error);
-        }
+    for path in task_view_paths(state, task_id, keep)? {
+        release_view(&path)?;
     }
-    first_error.map_or(Ok(()), Err)
+    Ok(())
 }
 
-fn release_view(path: &Path, name: &str) -> Result<()> {
+pub(super) fn task_view_paths(
+    state: &Path,
+    task_id: &str,
+    keep: Option<&Path>,
+) -> Result<Vec<PathBuf>> {
+    let id = task_path_component(task_id)?;
+    let directory = worktree_directory(state)?;
+    if !directory.exists() {
+        return Ok(vec![]);
+    }
+    let prefix = |kind: &str| format!("{id}-{kind}-g");
+    let kept_kind = keep.and_then(|path| {
+        let name = path.file_name()?.to_str()?;
+        VIEWS.iter().find(|kind| name.starts_with(&prefix(kind)))
+    });
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if keep != Some(path.as_path())
+            && VIEWS.iter().any(|kind| {
+                name.starts_with(&prefix(kind)) && kept_kind.is_none_or(|kept| kept == kind)
+            })
+        {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+pub(super) fn release_view(path: &Path) -> Result<()> {
+    require(
+        !std::fs::symlink_metadata(path)?.file_type().is_symlink(),
+        "task view path is a symlink; preserved",
+    )?;
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| Error::Invalid("invalid worktree name".into()))?;
     let project = git::worktree_project(path)?;
-    git::remove_worktree(&project, path, &format!("antislop/{name}"))
+    git::remove_clean_view(&project, path, &format!("antislop/{name}"))
 }
 
 /// Views a restart finds for tasks that are settled or gone, their branches
 /// left without a checkout, and the worktree records whose directories were
 /// removed by hand.
 pub(super) fn release_settled_views(store: &Store, state: &Path) -> Result<()> {
+    worktree_directory(state)?;
     let projects = release_settled_view_checkouts(store, state)?;
     release_writer_checkouts(store, state)?;
     prune_settled_view_branches(store, projects)
@@ -116,7 +137,7 @@ fn release_settled_view_checkouts(
                 projects.insert(project);
             }
             if settled(store, task)? {
-                let _ = release_view(&entry.path(), &name);
+                let _ = release_view(&entry.path());
             }
         }
     }
@@ -174,6 +195,9 @@ fn release_writer_checkouts(store: &Store, state: &Path) -> Result<()> {
 }
 
 fn release_writer_checkout(store: &Store, path: PathBuf) -> Result<()> {
+    if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+        return Ok(());
+    }
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let Some((id, generation)) = writer_checkout_id(&name) else {
         return Ok(());
@@ -187,7 +211,12 @@ fn release_writer_checkout(store: &Store, path: PathBuf) -> Result<()> {
         return Ok(());
     }
     if let Ok(project) = git::worktree_project(&path) {
-        let _ = git::remove_worktree_keep_branch(&project, &path);
+        git::remove_clean_writer(
+            &project,
+            &path,
+            &format!("antislop/{name}"),
+            &store.artifact_output_history(&task)?,
+        )?;
     }
     Ok(())
 }
@@ -203,4 +232,17 @@ fn writer_checkout_id(name: &str) -> Option<(&str, i64)> {
 fn writer_checkout_is_clean(path: &Path, name: &str) -> bool {
     git::worktree_branch(path).is_ok_and(|branch| branch == format!("antislop/{name}"))
         && git::is_clean(path)
+}
+
+pub(super) fn worktree_directory(state: &Path) -> Result<PathBuf> {
+    let directory = state.join("worktrees");
+    match std::fs::symlink_metadata(&directory) {
+        Ok(metadata) => require(
+            !metadata.file_type().is_symlink(),
+            "runtime worktree directory is a symlink; preserved",
+        )?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(directory)
 }

@@ -1,0 +1,169 @@
+use super::*;
+use crate::lean::core_task_execution::task_execution::worker::complete_report;
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
+
+#[test]
+fn options_blocker_ends_the_turn_without_approving_or_releasing_dependents() {
+    let (_directory, core, conversation) = core();
+    let tasks = options_tasks(&core, &conversation);
+    let mut consumer = tasks[1].clone();
+    consumer.status = status::QUEUED.into();
+    core.store.update_task(&consumer).unwrap();
+    let mut task = tasks[0].clone();
+    task.status = status::WORKING.into();
+    task.round = 1;
+    core.store.update_task(&task).unwrap();
+    let spec: TaskContract = serde_json::from_value(task.spec.clone()).unwrap();
+    let role = format!("worker:{}", task.id);
+    let turn = core
+        .store
+        .start_turn(&conversation, &role, "fixture", 1, Some(&task.plan_id))
+        .unwrap();
+    let gateway = mcp::Gateway::start().unwrap();
+    gateway.set_role(&role).unwrap();
+    gateway.set_task_contract(spec.clone()).unwrap();
+    gateway.begin(&turn.id).unwrap();
+    assert!(gateway.tool_names().contains(&"report_blocker"));
+    assert!(!gateway.tool_names().contains(&"complete"));
+    let bound_core = core.clone();
+    let bound_conversation = conversation.clone();
+    let bound_turn = turn.id.clone();
+    gateway
+        .set_handler(Arc::new(move |tool, args| {
+            bound_core.agent_tool(&bound_conversation, &role, &bound_turn, tool, args)
+        }))
+        .unwrap();
+    let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+        "name":"report_blocker","arguments":{"turn":turn.id,"report":"None of the candidates meets the required measurement threshold.","resume_condition":"Revise the consumer's threshold or supply a valid candidate."}
+    }});
+    for _ in 0..2 {
+        let mut response = ureq::post(gateway.url())
+            .header("authorization", format!("Bearer {}", gateway.token()))
+            .send_json(&request)
+            .unwrap();
+        let response: Value = response.body_mut().read_json().unwrap();
+        assert_ne!(response["result"]["isError"], true, "{response}");
+        let receipt: Value = serde_json::from_str(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .expect("MCP tool response"),
+        )
+        .unwrap();
+        assert_eq!(receipt["recorded"], true, "{response}");
+    }
+    let finish = gateway
+        .wait(
+            &turn.id,
+            &AtomicBool::new(false),
+            Duration::from_secs(2),
+            || Ok(()),
+        )
+        .unwrap();
+    let result: TurnResult = serde_json::from_str(&finish.text).unwrap();
+    assert!(matches!(result, TurnResult::Blocked { .. }));
+    assert!(
+        complete_report(&core, &conversation, &mut task, &spec, None, finish.text)
+            .unwrap()
+            .is_none()
+    );
+    let blocked = core.store.task_by_id(&task.id).unwrap().unwrap();
+    assert_eq!(blocked.status, status::COORDINATING);
+    assert!(blocked.report.unwrap().contains("None of the candidates"));
+    assert_eq!(
+        blocked.feedback.unwrap()["reason"],
+        "Revise the consumer's threshold or supply a valid candidate."
+    );
+    assert_eq!(
+        core.store.task_by_id(&tasks[1].id).unwrap().unwrap().status,
+        status::QUEUED
+    );
+}
+
+#[test]
+fn blockers_require_an_options_worker_and_a_concrete_resume_condition() {
+    let (_directory, core, conversation) = core();
+    let tasks = options_tasks(&core, &conversation);
+    for (task, verifier) in [(&tasks[0], true), (&tasks[1], false)] {
+        let role = format!(
+            "{}:{}",
+            if verifier { "verifier" } else { "worker" },
+            task.id
+        );
+        let turn = core
+            .store
+            .start_turn(&conversation, &role, "fixture", 0, Some(&task.plan_id))
+            .unwrap();
+        let error = core
+            .agent_tool(
+                &conversation,
+                &role,
+                &turn.id,
+                "report_blocker",
+                &json!({"report":"Blocked","resume_condition":"Revise"}),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(if verifier {
+                "a verifier ends"
+            } else {
+                "a worker ends"
+            }),
+            "{error}"
+        );
+        let gateway = mcp::Gateway::start().unwrap();
+        gateway.set_role(&role).unwrap();
+        gateway
+            .set_task_contract(serde_json::from_value(task.spec.clone()).unwrap())
+            .unwrap();
+        assert!(!gateway.tool_names().contains(&"report_blocker"));
+    }
+    let role = format!("worker:{}", tasks[0].id);
+    let turn = core
+        .store
+        .start_turn(&conversation, &role, "fixture", 0, Some(&tasks[0].plan_id))
+        .unwrap();
+    let error = core
+        .agent_tool(
+            &conversation,
+            &role,
+            &turn.id,
+            "report_blocker",
+            &json!({"report":"Blocked","resume_condition":"  "}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("resume_condition: required"), "{error}");
+}
+
+fn options_tasks(core: &Core, conversation: &str) -> Vec<Task> {
+    let message = core
+        .store
+        .add_message(
+            conversation,
+            "user",
+            "Select a viable approach before continuing.",
+        )
+        .unwrap();
+    let run = core.store.create_run(conversation, &message.text).unwrap();
+    let source = core
+        .store
+        .register_message_source(conversation, &run.id, message.seq)
+        .unwrap();
+    let change = serde_json::from_value(json!({"conversation":conversation,"run_id":run.id,"expected_spec_revision":0,"operation_id":"options-fixture","reason":"Synthetic options scope","entries":[{"id":"R1","source":{"source_id":source.id,"start":0,"end":message.text.len()},"interpretation":message.text,"criteria":[{"id":"R1.accept","text":"No dependent work until a viable choice is approved"}]}]})).unwrap();
+    core.store
+        .apply_ledger_change(&change, &core.state, true)
+        .unwrap();
+    let tasks = core.store.add_plan(conversation, &[
+        json!({"id":"options","title":"Options","goal":"Choose a viable approach","kind":"options","options_for":"consumer","requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
+        json!({"id":"consumer","title":"Consumer","goal":"Apply the approach","kind":"analysis","depends_on":["options"],"requirement_ids":["R1"],"criterion_ids":["R1.accept"]}),
+    ]).unwrap();
+    core.store
+        .link_plan_run(conversation, &tasks[0].plan_id, &run.id)
+        .unwrap();
+    core.store
+        .bind_task_ledger(conversation, &run.id, &tasks[0].plan_id)
+        .unwrap();
+    tasks
+}

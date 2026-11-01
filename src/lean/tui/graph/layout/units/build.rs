@@ -262,12 +262,8 @@ pub(super) fn unit_width(size: Size, unit: &Unit) -> u16 {
     2 * FRAME_X + cards * size.w + cards.saturating_sub(1) * GAP_X
 }
 
-pub(super) fn card_height(size: Size, folded: bool) -> u16 {
-    if folded {
-        size.h.min(FOLDED_HEIGHT)
-    } else {
-        size.h
-    }
+pub(super) fn card_height(builder: &Builder<'_>, key: &str, folded: bool) -> u16 {
+    card_content::height(builder.view, key, builder.size.w, builder.size.h, folded)
 }
 
 pub(super) fn measure(builder: &Builder<'_>, units: &[Unit], rows: &[Vec<usize>]) -> Vec<Placed> {
@@ -276,10 +272,10 @@ pub(super) fn measure(builder: &Builder<'_>, units: &[Unit], rows: &[Vec<usize>]
         let mut x = 0;
         for &unit in members {
             let width = unit_width(builder.size, &units[unit]);
-            let tallest = units[unit]
-                .folded
+            let tallest = member_keys(builder.view, &units[unit])
                 .iter()
-                .map(|folded| card_height(builder.size, *folded))
+                .zip(&units[unit].folded)
+                .map(|(key, folded)| card_height(builder, key, *folded))
                 .max()
                 .unwrap_or(builder.size.h);
             placed.push(Placed {

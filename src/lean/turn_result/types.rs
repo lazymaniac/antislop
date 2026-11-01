@@ -45,6 +45,10 @@ pub enum TurnResult {
         report: String,
         verdict: Verdict,
     },
+    Blocked {
+        report: String,
+        resume_condition: String,
+    },
     NeedsInput {
         request: String,
         checkpoint: String,

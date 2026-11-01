@@ -17,8 +17,8 @@ pub(crate) fn allowed_tools(role: &str) -> Vec<&'static str> {
         "orchestrator" | "comment-orchestrator" => orchestrator_tools(),
         "planner" => vec![SUBMIT_PLAN, TOOL],
         "requirements-extraction-analyst" => vec!["submit_ledger"],
-        "requirements-audit-analyst" => vec!["submit_audit"],
-        "requirements-audit-verifier" => vec!["submit_audit_review"],
+        "requirements-audit-analyst" => vec!["submit_audit", "read_dependency_result"],
+        "requirements-audit-verifier" => vec!["submit_audit_review", "read_dependency_result"],
         _ if plain_reviewer(role) => vec![REVIEW],
         _ => vec![TOOL],
     }
@@ -36,7 +36,7 @@ pub(super) fn scoped_tools(
             if task.kind == crate::config::WorkKind::Options {
                 *name != "complete"
             } else {
-                *name != "select"
+                !matches!(*name, "select" | "report_blocker")
             }
         });
     }
@@ -77,9 +77,17 @@ pub(super) fn scoped_tool_list(
 
 fn task_tools(verifier: bool) -> Vec<&'static str> {
     if verifier {
-        vec![REVIEW, ASK, WAIT, "read_dependency_result"]
+        vec![REVIEW, ASK, WAIT, "read_dependency_result", "current_turn"]
     } else {
-        vec!["complete", "select", ASK, WAIT, "read_dependency_result"]
+        vec![
+            "complete",
+            "select",
+            "report_blocker",
+            ASK,
+            WAIT,
+            "read_dependency_result",
+            "current_turn",
+        ]
     }
 }
 
@@ -111,7 +119,17 @@ pub(crate) fn tool_list(role: &str) -> Vec<Value> {
 fn tool_json(name: &str, role: &str, orchestrator: bool) -> Value {
     let (description, fields, required) = tool_contract(name, role, orchestrator);
     let mut properties = fields.as_object().unwrap().clone();
-    properties.insert("turn".into(), json!({"type":"string"}));
+    if name != "current_turn" {
+        let description = if crate::lean::task_role(role).is_some() {
+            "Exact active turn id from the latest prompt; call current_turn if uncertain. Never reuse a previous turn id."
+        } else {
+            "Exact active turn id from the latest prompt. Never reuse a previous turn id."
+        };
+        properties.insert(
+            "turn".into(),
+            json!({"type":"string","description":description}),
+        );
+    }
     json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
 }
 
@@ -131,7 +149,9 @@ fn tool_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
 
 fn turn_contract(name: &str, role: &str, orchestrator: bool) -> ToolSpec {
     match name {
-        "read_dependency_result" => ("Read the complete report of an approved dependency in pages of up to 16 KiB. This does not end the turn. Reuse the returned cursor and round for the next page. available_rounds lists completed same-input worker reports: if the latest is an amendment, read the earlier round it names with round. Earlier reports are historical; apply corrections from the latest result.".into(), json!({"dependency":{"type":"string","description":"Dependency name or full result id from the current handoff"},"round":{"type":"integer","minimum":0,"description":"Optional same-input worker round from available_rounds"},"cursor":{"type":"string"}}), vec!["turn", "dependency"]),
+        "current_turn" => ("Read this gateway's current task role, active turn id and allowed tools. Call with an empty object after any stale-turn rejection; copy the returned id exactly. This never ends a turn and grants no access to another agent.".into(), json!({}), vec![]),
+        "report_blocker" => ("End an options turn when no viable choice satisfies the current contract. Record the concrete blocker and condition for resuming. The task stays unapproved and its dependents do not run; the orchestrator must revise the owning task or resolve the blocker. Never fabricate a selection or finish only in terminal prose.".into(), json!({"report":{"type":"string"},"resume_condition":{"type":"string"}}), vec!["turn", "report", "resume_condition"]),
+        "read_dependency_result" => ("Read the complete report of an approved dependency (including reachable ancestors in the bound plan) in pages of up to 16 KiB. This does not end the turn. Reuse the returned cursor and round for the next page. available_rounds lists completed same-input worker reports: if the latest is an amendment, read the earlier round it names with round. Earlier reports are historical; apply corrections from the latest result.".into(), json!({"dependency":{"type":"string","description":"Dependency name or full result id from the current handoff"},"round":{"type":"integer","minimum":0,"description":"Optional same-input worker round from available_rounds"},"cursor":{"type":"string"}}), vec!["turn", "dependency"]),
         "finish_turn" if orchestrator => (format!("End the turn with your answer to the user. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"},"addressed":schema::addressed()}), vec!["turn", "text"]),
         "finish_turn" if role == "planner" => (format!("Only after submit_plan refused a plan of this turn and you cannot correct what it names, for instance because the instructions demand what it refuses: end the turn without a plan and name the blocker; the user sees it at once. {RETRY}"), json!({"text":{"type":"string","description":"What blocks the plan and what would unblock it, in Markdown"}}), vec!["turn", "text"]),
         "finish_turn" => (format!("End the turn with your answer. {RETRY}"), json!({"text":{"type":"string","description":"Your answer, in Markdown"}}), vec!["turn", "text"]),
@@ -165,7 +185,7 @@ fn control_contract(name: &str) -> ToolSpec {
         "submit_audit_review" => (format!("Submit your review of the audit; this ends your turn. Assess every proposed evidence id. {RETRY}"), schema::audit_review(), vec!["turn", "note", "assessments"]),
         "answer_agent" => ("Answer a task agent's pending question. Answers cannot change contracts or permissions.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"answer":{"type":"string"},"disposition":{"enum":["continue","wait_for_revision","wait_for_dependency","escalate_to_user"]},"target":{"type":"string","description":"Full revision request or dependency task UUID required for waiting dispositions"}}), vec!["turn", "request", "answer"]),
         "defer_to_user" => ("Hand a task agent's question to the user when only the user can decide; the task waits and you pass the user's answer on with answer_agent.".into(), json!({"request":{"type":"string","description":"The request id the agent's question message names"},"explanation":{"type":"string","description":"What the user must decide and why, for the user"}}), vec!["turn", "request", "explanation"]),
-        "retry_task" => ("Run a failed task again in its own worktree, keeping its changes, when it failed for a reason outside its contract (a turn limit, a crashed CLI). A stalled task needs revise_plan instead. At most twice per task; then ask the user.".into(), json!({"task":{"type":"string","description":"The task id in the plan"},"guidance":{"type":"string","description":"What the worker should know, such as checking its worktree before starting over"}}), vec!["turn", "task", "guidance"]),
+        "retry_task" => ("Run a failed task again in its own worktree, keeping its changes, when it failed for a reason outside its contract (a turn limit, a crashed CLI). Use only current task_states names or runtime_ids. This operates on this turn's accepted plan, never a newer draft. A coordinating/stalled task needs revise_plan instead. At most twice per task; then ask the user.".into(), json!({"task":{"type":"string","description":"The task id in the plan"},"guidance":{"type":"string","description":"What the worker should know, such as checking its worktree before starting over"}}), vec!["turn", "task", "guidance"]),
         "request_replan" => ("Ask the planner to redraft the whole plan when contract repairs are not enough. It is reviewed like any new plan.".into(), json!({"reason":{"type":"string","description":"What the current plan gets wrong and what the new plan must change"}}), vec!["turn", "reason"]),
         _ => ("Change the running plan you were shown.".into(), schema::revision(), vec!["turn", "reason", "tasks", "retire"]),
     }

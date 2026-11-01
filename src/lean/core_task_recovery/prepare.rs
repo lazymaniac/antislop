@@ -1,6 +1,12 @@
 use super::*;
 
 pub(super) fn load(core: &Core, req: TaskRecoveryRequest, actor: &str) -> Result<RecoveryWork> {
+    if actor == "orchestrator" {
+        require(
+            core.store.accepted_plan(&req.conversation)?.as_deref() == Some(&req.plan),
+            "retry_task plan was replaced; use a fresh orchestration turn",
+        )?;
+    }
     let config = core.config_snapshot();
     let conv = core.store.conversation(&req.conversation)?;
     let project = PathBuf::from(conv.project);

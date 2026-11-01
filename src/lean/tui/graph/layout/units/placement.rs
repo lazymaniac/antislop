@@ -70,10 +70,22 @@ pub(super) fn row_tops(
 }
 
 fn admin_tops(builder: &Builder<'_>, admin: &[Vec<&str>]) -> (Vec<u16>, u16) {
-    let height = ADMIN_HEIGHT.min(builder.size.h);
     let mut y = 0u16;
     let mut tops = Vec::new();
-    for index in 0..admin.len() {
+    for (index, row) in admin.iter().enumerate() {
+        let height = row
+            .iter()
+            .map(|key| {
+                card_content::height(
+                    builder.view,
+                    key,
+                    builder.size.admin_w,
+                    builder.size.h,
+                    false,
+                )
+            })
+            .max()
+            .unwrap_or(0);
         if index > 0 {
             y += GAP_Y;
         }

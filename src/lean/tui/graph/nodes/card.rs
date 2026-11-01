@@ -3,7 +3,6 @@ mod content;
 mod identity;
 
 use super::super::super::view::TaskRow;
-use super::super::health::{activity_line, card_lines, effect_lines};
 use super::super::*;
 
 struct Card<'a> {
@@ -70,24 +69,11 @@ impl Card<'_> {
         self.paint_background(selected);
         self.paint_progress(tick);
         self.paint_identity();
-        if !self.node.collapsed {
-            self.paint_contents();
-        }
+        self.paint_contents();
     }
 
     fn paint_contents(&mut self) {
-        if is_admin(&self.node.key) {
-            self.paint_body(ADMIN_BODY_ROW);
-            return;
-        }
-        let mut top = 3 + u16::from(self.verifier_text().is_some());
-        top += u16::from(self.paint_activity(top));
-        if let Some(branch) = self.branch() {
-            self.paint_branch_at(top, &branch);
-            top += 1;
-        }
-        self.paint_body(top);
-        self.paint_metadata();
+        self.paint_body();
     }
 
     fn paint_background(&mut self, selected: bool) {
@@ -138,64 +124,7 @@ impl Card<'_> {
         );
     }
 
-    fn paint_activity(&mut self, row: u16) -> bool {
-        let Some(line) = activity_line(self.view, &self.node.key) else {
-            return false;
-        };
-        let style = match self.health {
-            Health::Problem => self.theme.error(),
-            Health::Waiting => self.theme.warning(),
-            _ => self.theme.dim(),
-        };
-        self.canvas.text(
-            self.node.x + 2,
-            self.node.y + row,
-            &truncate(&line, self.inner_width()),
-            self.fill.patch(style),
-        );
-        true
-    }
-
-    fn branch(&self) -> Option<String> {
-        let branch_key = branch_key(self.view, self.node, self.task, self.role);
-        self.view
-            .agents
-            .get(&branch_key)
-            .and_then(|agent| agent.branch.clone())
-    }
-
-    fn paint_branch_at(&mut self, row: u16, branch: &str) {
-        self.canvas.text(
-            self.node.x + 2,
-            self.node.y + row,
-            &truncate(&format!("branch: {branch}"), self.inner_width()),
-            self.fill.patch(self.theme.dim()),
-        );
-    }
-
     fn inner_width(&self) -> usize {
-        usize::from(self.node.width - 4)
-    }
-}
-
-fn branch_key(view: &View, node: &Node, task: Option<&TaskRow>, role: Option<Role>) -> String {
-    if role != Some(Role::Pair) && task.is_some() {
-        return node.key.clone();
-    }
-    if let Some(task) = task {
-        format!(
-            "{}:{}",
-            if task.status == "verifying" {
-                "verifier"
-            } else {
-                "worker"
-            },
-            task.id
-        )
-    } else {
-        let members = card_members(view, &node.key);
-        current_round(view, &members)
-            .unwrap_or(&node.key)
-            .to_owned()
+        usize::from(self.node.width.saturating_sub(4))
     }
 }

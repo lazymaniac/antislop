@@ -127,7 +127,7 @@ fn scope_escape(spec: &TaskContract, out: &mut Vec<Finding>) {
                 spec,
                 "writer-scope-outside-project",
                 Severity::Block,
-                format!("writes but its scope {path:?} lies outside the project worktree"),
+                format!("writes but its scope {path:?} lies outside the project worktree. Scope covers project data and outputs; installed toolchain executables do not need scope entries. Select an existing tool with its executable path or per-process environment while keeping writes inside the worktree"),
             ));
         }
     }

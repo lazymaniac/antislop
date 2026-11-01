@@ -1,4 +1,4 @@
-use super::health::{card_lines, describe, effect_lines};
+use super::health::{card_lines, describe};
 use super::nodes::draw_node;
 use super::*;
 
@@ -373,13 +373,13 @@ fn names_and_work_kinds_remain_visible_on_collapsed_cards() {
             match node.key.as_str() {
                 "worker:t1" => {
                     assert!(rows[0].contains("worker"), "{rows:?}");
-                    assert!(rows[1].contains("- implementation"), "{rows:?}");
+                    assert!(rows[0].contains("worker - impl"), "{rows:?}");
                 }
                 "verifier:t1" => {
                     assert!(rows[0].contains("verifier"), "{rows:?}");
-                    assert!(rows[1].contains("- verification"), "{rows:?}");
+                    assert!(!rows.join(" ").contains("verification"), "{rows:?}");
                 }
-                _ => assert!(rows[1].contains("- orchestration"), "{rows:?}"),
+                _ => assert!(!rows.join(" ").contains("orchestration"), "{rows:?}"),
             }
         }
         // The task's name is the title of its frame.
@@ -396,8 +396,7 @@ fn compact_cards_with_effects_can_have_no_effect_rows() {
     row.effect = Some("Updated storage.".into());
     let view = view(vec![row]);
     let mut node = Node::new("worker:t1".into(), 0, 0);
-    node.height = MIN_HEIGHT;
-    assert_eq!(node.body_lines().1, 0);
+    node.height = 4;
     let mut canvas = Canvas::new_window(0, 0, node.width, node.height);
     draw_node(
         &view,
@@ -432,7 +431,10 @@ fn summaries_are_bounded_and_truncated_at_grapheme_boundaries() {
         );
     }
     let graph = Graph::new(&view);
-    assert_eq!(graph.node("worker:t1").unwrap().height, HEIGHT);
+    assert_eq!(
+        graph.node("worker:t1").unwrap().height,
+        3 + MAX_SUMMARY_LINES as u16
+    );
     let worker = graph.node("worker:t1").unwrap();
     let verifier = graph.node("verifier:t1").unwrap();
     assert_ne!(verifier.key, worker.key);
@@ -476,12 +478,7 @@ fn missing_or_cleaned_empty_summaries_use_short_legacy_fallbacks() {
             ),
             ["Verify Storage."]
         );
-        assert!(Graph::new(&view).nodes.iter().all(|node| node.height
-            == if is_admin(&node.key) {
-                ADMIN_HEIGHT
-            } else {
-                HEIGHT
-            }));
+        assert!(Graph::new(&view).nodes.iter().all(|node| node.height <= 4));
     }
     let mut row = task("t1", &[]);
     row.title.clear();
@@ -656,7 +653,7 @@ fn card_progress_bounces_on_the_stripe_and_stops_when_queued_or_done() {
                 assert!(text.contains("round 2"), "{text}");
                 assert!(!text.contains("working"), "{text}");
                 for spinner in theme.glyphs().spinner {
-                    assert!(!canvas.lines()[2].contains(spinner));
+                    assert!(!canvas.lines()[1].contains(spinner));
                 }
             }
             view.tasks[0].status = "queued".into();
@@ -695,7 +692,7 @@ fn finished_session_agent_has_no_progress_marker() {
         draw_node(view, &mut canvas, node, false, &theme, 0);
         canvas
     };
-    assert!(frame(&view).lines()[2].contains("round 3"));
+    assert!(frame(&view).lines()[1].contains("round 3"));
     let agent = view.agents.get_mut(ORCHESTRATOR).unwrap();
     agent.running = false;
     agent.turns = 3;
@@ -769,221 +766,95 @@ fn admin_above(graph: &Graph, top: u16) -> bool {
 }
 
 #[test]
-fn cards_are_fixed_and_no_event_moves_a_single_node() {
+fn cards_fit_content_and_frames_and_routes_follow_height_changes() {
     use super::super::view::Agent;
     use serde_json::json;
-    let mut worker = task("t1", &[]);
-    worker.title = "Store".into();
-    worker.summary = Some("Fix the storage path so writes survive a restart.".into());
-    let mut view = view(vec![worker, task("t2", &["t1"])]);
-    let geometry = |view: &View| -> Vec<(String, u16, u16, u16, bool)> {
-        open_cards(view)
-            .nodes
-            .iter()
-            .map(|node| (node.key.clone(), node.x, node.y, node.height, node.visible))
-            .collect()
-    };
-    let before = geometry(&view);
-    assert!(
-        before
-            .iter()
-            .all(|(key, _, _, height, _)| *height
-                == if is_admin(key) { ADMIN_HEIGHT } else { HEIGHT })
-    );
-
-    // Activity: the round starts and its agent runs — no geometry moves,
-    // and the worker's doing text lands on its own line, not behind
-    // the state.
-    view.tasks[0].status = "working".into();
-    view.tasks[0].round = 1;
-    view.agents.insert(
-        "worker:t1".into(),
-        Agent {
-            running: true,
-            provider: "codex".into(),
-            activity: "cargo check --workspace".into(),
-            ..Default::default()
-        },
-    );
-    assert_eq!(geometry(&view), before, "activity moves no card");
-    let graph = open_cards(&view);
-    let node = graph.node("worker:t1").unwrap();
-    let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-    graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
-    let rows = canvas.lines();
-    assert!(rows[2].contains("round 1"), "{}", rows[2]);
-    assert!(!rows[2].contains("cargo check"), "state alone: {}", rows[2]);
-    assert!(
-        rows[1].contains("codex - "),
-        "the provider has its own row: {}",
-        rows[1]
-    );
-    assert!(
-        !rows[3].contains("codex"),
-        "the activity line is independent of the provider: {}",
-        rows[3]
-    );
-    assert!(rows[3].contains("doing: cargo check"), "{}", rows[3]);
-
-    // Effect and verdict: the round's card data changes no geometry and
-    // takes its own slot without pushing the summary away.
-    view.tasks[0].status = "approved".into();
-    view.tasks[0].round = 1;
-    view.tasks[0].effect = Some("3 files changed — src/a.rs, src/b.rs, src/c.rs".into());
-    view.tasks[0].obligations = Some(json!({"total": 2, "ok": 2, "missing": 0}));
-    view.tasks[0].integration = Some(json!({"outcome": "committed", "detail": "as abc123"}));
-    assert_eq!(geometry(&view), before, "a verdict moves no card");
-    let graph = open_cards(&view);
-    let node = graph.node("worker:t1").unwrap();
-    let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-    graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
-    let rows = canvas.lines();
-    assert!(
-        rows[..BODY_ROW as usize + MAX_SUMMARY_LINES]
-            .iter()
-            .any(|row| row.contains("Fix the storage")),
-        "the summary keeps its slot: {rows:?}"
-    );
-    let effect_slot: String = rows[EFFECT_ROW as usize..rows.len() - 1].join(" ");
-    assert!(effect_slot.contains("effect: 3 files"), "{rows:?}");
-    assert!(
-        rows.last().unwrap().contains("committed"),
-        "meta at the bottom"
-    );
-    assert_eq!(rows.len(), usize::from(HEIGHT));
-
-    // A retry clears the round's card data and still moves no card.
-    view.tasks[0].status = "queued".into();
-    view.tasks[0].effect = None;
-    view.tasks[0].obligations = None;
-    view.tasks[0].integration = None;
-    assert_eq!(geometry(&view), before, "a retry moves no card");
-    // Neither role ever shows a summary line displaced by the other's
-    // data: every visible card keeps its fixed slot count.
-    for node in open_cards(&view)
-        .nodes
-        .iter()
-        .filter(|node| node.visible && !is_admin(&node.key))
-    {
-        assert_eq!(node.height, HEIGHT, "{}", node.key);
-        assert!(node.y.saturating_add(HEIGHT) >= HEIGHT);
-    }
-}
-
-#[test]
-fn every_card_block_stays_in_its_own_slot() {
-    use super::super::view::Agent;
-    use serde_json::json;
-    // Slots follow one arithmetic: the height ends where the last
-    // block ends, so no block can overrun the meta row.
-    assert_eq!(BRANCH_ROW, ACTIVITY_ROW + 1);
-    assert_eq!(BODY_ROW, BRANCH_ROW + 1);
-    assert_eq!(EFFECT_ROW, BODY_ROW + MAX_SUMMARY_LINES as u16);
-    assert_eq!(HEIGHT, EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1);
-    let mut row = task("t1", &["t0"]);
-    row.summary =
-        Some("Repair the storage engine so a restart never loses a queued write, at all.".into());
-    let mut view = view(vec![task("t0", &[]), row]);
-    let render = |view: &View| -> Vec<String> {
+    let mut row = task("t1", &[]);
+    row.summary = Some("Short summary.".into());
+    let mut view = view(vec![row, task("t2", &["t1"])]);
+    let render = |view: &View| {
         let graph = open_cards(view);
         let node = graph.node("worker:t1").unwrap();
-        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
+        let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
         graph.render(view, &mut canvas, Relations::all(), "worker:t1");
-        canvas.lines()
+        (graph, canvas.lines())
     };
-    // Working: the doing text sits on the activity row, alone, and no
-    // effect words appear anywhere while the round reported nothing.
-    view.tasks[1].status = "working".into();
-    view.tasks[1].round = 1;
+    let (short, rows) = render(&view);
+    assert_eq!(rows.len(), 4, "title, status, summary, metadata: {rows:?}");
+    assert!(
+        rows.iter()
+            .all(|row| !row.trim_matches(['▌', '█', ' ']).is_empty()),
+        "{rows:?}"
+    );
+    view.tasks[0].status = "working".into();
     view.agents.insert(
         "worker:t1".into(),
         Agent {
             running: true,
-            activity: "cargo  check".into(),
+            activity: "cargo check".into(),
+            branch: Some("task/repair".into()),
             ..Default::default()
         },
     );
-    let rows = render(&view);
-    assert_eq!(rows.len(), usize::from(HEIGHT));
-    assert!(rows[2].contains("round 1"), "{rows:?}");
-    assert!(!rows[2].contains("cargo"), "state alone: {}", rows[2]);
-    assert!(rows[3].contains("doing: cargo check"), "{rows:?}");
-    for (row, text) in rows.iter().enumerate() {
-        if row != 3 {
-            assert!(!text.contains("doing"), "{rows:?}");
+    let (_, working) = render(&view);
+    assert_eq!(working.len(), rows.len() + 2);
+    assert!(working[2].contains("doing: cargo check"));
+    assert!(working[3].contains("branch: task/repair"));
+    view.tasks[0].status = "approved".into();
+    view.tasks[0].summary = Some("Long café 👩‍💻 summary. ".repeat(40));
+    view.tasks[0].effect = Some("Updated storage".into());
+    view.tasks[0].integration = Some(json!({"outcome":"committed","detail":"as abc12"}));
+    let (long, rows) = render(&view);
+    assert!(long.node("worker:t1").unwrap().height > short.node("worker:t1").unwrap().height);
+    assert!(rows.join(" ").contains('…') && rows.join(" ").contains("effect: Updated storage"));
+    assert!(rows.last().unwrap().contains("committed"));
+    for graph in [short, long] {
+        assert!(graph.nodes.iter().all(|node| node.height <= HEIGHT));
+        for frame in &graph.frames {
+            let tallest = graph
+                .nodes
+                .iter()
+                .filter(|node| node.group.as_deref() == Some(&frame.key))
+                .map(|node| node.height)
+                .max()
+                .unwrap();
+            assert_eq!(frame.height, tallest + 2);
         }
-        assert!(!text.contains("effect"), "{rows:?}");
+        for (_, _, path) in graph.edge_routes(Relations::all()) {
+            assert!(
+                graph
+                    .nodes
+                    .iter()
+                    .filter(|node| node.visible)
+                    .all(|node| !Graph::route_intersects_card(&path, node))
+            );
+        }
     }
-    // A verdict: the card's shape of the shared effect reading takes
-    // its own slot — marker in front, text normalized once — and
-    // displaces no summary row and no meta row.
-    view.tasks[1].status = "approved".into();
-    view.tasks[1].round = 2;
-    view.tasks[1].effect = Some("two  files cut…".into());
-    view.tasks[1].effect_cut = Some(true);
-    view.tasks[1].integration = Some(json!({"outcome": "committed", "detail": "as abc12"}));
-    let rows = render(&view);
-    assert_eq!(
-        effect_lines(&view, "worker:t1", usize::from(WIDTH - 4), MAX_EFFECT_LINES).join(""),
-        "effect: [fragment] two files cut…",
-        "one normalized line, marker in front"
-    );
-    assert!(
-        rows[usize::from(EFFECT_ROW)].contains("effect: [fragment]"),
-        "{rows:?}"
-    );
-    for text in &rows[BODY_ROW as usize..usize::from(EFFECT_ROW)] {
-        assert!(!text.contains("effect"), "summary keeps its slot: {rows:?}");
-    }
-    assert!(rows[3].contains("Repair"), "{rows:?}");
-    let bottom = &rows[usize::from(HEIGHT) - 1];
-    assert!(bottom.contains("committed"), "meta at the bottom: {rows:?}");
-    assert!(!bottom.contains("effect"), "{rows:?}");
 }
 
 #[test]
-fn descriptions_reclaim_empty_header_rows_and_metadata_has_body_contrast() {
+fn compact_card_layout_is_identical_when_measuring_and_painting() {
     use serde_json::json;
-    let summary = "Describe the complete implementation and its validation in detail. ".repeat(12);
-    for (kind, key, top, coverage) in [
-        ("implementation", "worker:t1", 3, None),
-        ("implementation", "verifier:t1", 3, None),
-        (
-            "implementation",
-            "verifier:t1",
-            4,
-            Some(json!({"total": 2, "ok": 2})),
-        ),
-        ("options", "worker:t1", 4, None),
-    ] {
-        let mut row = task("t1", &[]);
-        row.kind = kind.into();
-        row.status = "approved".into();
-        row.summary = Some(summary.clone());
-        row.verifier_summary = Some(summary.clone());
-        row.obligations = coverage;
-        row.effect = Some("Updated implementation".into());
-        row.integration = Some(json!({"outcome": "committed", "detail": "as abc12"}));
-        let view = view(vec![row]);
-        let graph = open_cards(&view);
-        let node = graph.node(key).unwrap();
-        for theme in [Theme::new(true, false), Theme::new(false, true)] {
-            let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
-            draw_node(&view, &mut canvas, node, true, &theme, 0);
-            let rows = canvas.lines();
-            assert!(rows[top].contains("Describe"), "{rows:?}");
-            // A long description uses every reclaimed row up to the effect slot.
-            for row in &rows[top..usize::from(EFFECT_ROW)] {
-                assert!(row.chars().any(|ch| ch.is_alphabetic()), "{rows:?}");
-            }
-            let bottom = canvas.cell(node.x + 2, node.y + node.height - 1).unwrap();
-            assert_eq!(bottom.style, theme.raised().patch(theme.text()));
-            if key == "worker:t1" {
-                assert!(rows.last().unwrap().contains("committed"), "{rows:?}");
-                assert!(
-                    rows[usize::from(EFFECT_ROW)].contains("effect:"),
-                    "{rows:?}"
-                );
+    for width in [MIN_WIDTH, WIDTH] {
+        for limit in [MIN_HEIGHT, HEIGHT] {
+            for kind in ["implementation", "options"] {
+                for status in ["working", "verifying", "approved"] {
+                    let mut row = task("t1", &[]);
+                    row.kind = kind.into();
+                    row.status = status.into();
+                    row.summary = Some("café 👩‍👩‍👧‍👦 summary ".repeat(40));
+                    row.effect = Some("Changes ".repeat(40));
+                    row.obligations = Some(json!({"total":2,"ok":2}));
+                    let view = view(vec![row]);
+                    for key in ["worker:t1", "verifier:t1"] {
+                        for folded in [false, true] {
+                            let measured = card_content::height(&view, key, width, limit, folded);
+                            let painted = card_content::height(&view, key, width, measured, folded);
+                            assert_eq!(measured, painted);
+                            assert!(measured <= limit);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1049,7 +920,7 @@ fn edges_join_boxes_without_crossing_them() {
     assert!(lines[usize::from(bottom.y)].contains("Task t1"));
     // A message between them is counted beside the source.
     assert!(lines.join("\n").contains("✉2"));
-    assert!(lines[usize::from(worker.y + 2)].contains("proposed"));
+    assert!(lines[usize::from(worker.y + 1)].contains("proposed"));
 }
 
 #[test]
@@ -1121,12 +992,12 @@ fn finished_cards_fold_to_their_identity_and_their_row_shrinks() {
         graph.node("worker:t1").unwrap(),
         graph.node("worker:t2").unwrap(),
     );
-    assert!(done.collapsed && done.height == FOLDED_HEIGHT);
-    assert!(!next.collapsed && next.height > FOLDED_HEIGHT);
+    assert!(done.collapsed && done.height == 2);
+    assert!(!next.collapsed && next.height > 2);
     let (above, below) = (&graph.frames[0], &graph.frames[1]);
     assert_eq!(
         above.height,
-        FOLDED_HEIGHT + 2,
+        done.height + 2,
         "the folded row takes only its height"
     );
     assert_eq!(below.y, above.y + above.height + GAP_Y);
@@ -1141,4 +1012,52 @@ fn finished_cards_fold_to_their_identity_and_their_row_shrinks() {
     );
     assert!(!graph.node("worker:t1").unwrap().collapsed);
     assert!(graph.node("worker:t2").unwrap().collapsed);
+}
+
+#[test]
+fn options_card_finishes_with_one_result_line_and_no_cli() {
+    use super::super::view::Agent;
+    use serde_json::json;
+    let mut row = task("t1", &[]);
+    row.kind = "options".into();
+    row.status = "approved".into();
+    row.round = 2;
+    row.obligations = Some(json!({"total":21,"ok":21,"missing":0}));
+    let mut view = view(vec![row]);
+    for role in ["worker", "verifier"] {
+        view.agents.insert(
+            format!("{role}:t1"),
+            Agent {
+                provider: "codex".into(),
+                ..Default::default()
+            },
+        );
+    }
+    for collapsed in [
+        Default::default(),
+        std::collections::HashSet::from(["t1".into()]),
+    ] {
+        let graph = Graph::new_with_options(&view, None, &collapsed, GroupingMode::Dependency);
+        let node = graph.node("worker:t1").unwrap();
+        let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
+        graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
+        let rows = canvas.lines();
+        assert!(
+            rows[0].contains("options") && !rows[0].contains("options -"),
+            "{rows:?}"
+        );
+        assert!(
+            rows[1].contains("approved r2") && rows[1].contains("21/21"),
+            "{rows:?}"
+        );
+        assert_eq!(
+            rows.iter().filter(|line| line.contains("approved")).count(),
+            1,
+            "{rows:?}"
+        );
+        assert!(
+            !rows.join(" ").contains("codex") && !rows.join(" ").contains("V:"),
+            "{rows:?}"
+        );
+    }
 }

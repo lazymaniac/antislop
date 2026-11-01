@@ -1,4 +1,6 @@
 use super::*;
+mod history_view;
+use history_view::restore_view_directory;
 
 impl Registry {
     pub(crate) fn reap_idle(&self) -> Result<()> {
@@ -35,6 +37,7 @@ impl Registry {
         conversation: &str,
         role_key: &str,
     ) -> Result<Arc<Session>> {
+        let _graph = core.graph_updates.lock().expect("graph update mutex");
         let (role, round) = parse_role_key(role_key)?;
         let turn_id = recorded_turn(core, conversation, role, round)?;
         let context = recorded_context(core, conversation, &turn_id)?;
@@ -54,7 +57,45 @@ impl Registry {
                 )
             })
             .unwrap_or_default();
+        let _pin = core.pin_worktree(&context.cwd);
+        drop(_graph);
         self.prepare_scoped(core, conversation, role_key, &spec, &scope)
+    }
+
+    /// Releases completed, unattached CLIs before their directory is removed.
+    pub(crate) fn retire_directory(&self, path: &std::path::Path) -> Result<bool> {
+        let retired = {
+            let mut sessions = match self.sessions.try_lock() {
+                Ok(sessions) => sessions,
+                Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+                Err(error) => return Err(invalid(error)),
+            };
+            let matching = sessions
+                .iter()
+                .filter(|(_, session)| session.spec.cwd == path)
+                .collect::<Vec<_>>();
+            for (_, session) in &matching {
+                if Arc::strong_count(session) != 1
+                    || session.executing.load(Ordering::SeqCst)
+                    || match session.terminal.try_lock() {
+                        Ok(mut terminal) => terminal.attached(),
+                        Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+                        Err(error) => return Err(invalid(error)),
+                    }
+                {
+                    return Ok(false);
+                }
+            }
+            let keys = matching
+                .into_iter()
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| sessions.remove(&key))
+                .collect::<Vec<_>>()
+        };
+        drop(retired);
+        Ok(true)
     }
 
     pub(crate) fn shutdown(&self) -> Result<()> {
@@ -176,10 +217,9 @@ fn recorded_context(core: &Core, conversation: &str, turn: &str) -> Result<store
         .store
         .run_context(conversation, turn)?
         .ok_or_else(|| invalid("this run recorded no working directory to resume in"))?;
-    require(
-        context.cwd.is_dir(),
-        "the session's working directory no longer exists; start new work",
-    )?;
+    if !context.cwd.is_dir() {
+        restore_view_directory(core, &context)?;
+    }
     Ok(context)
 }
 

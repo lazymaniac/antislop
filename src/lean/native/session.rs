@@ -178,6 +178,10 @@ impl Session {
         self.gateway.set_handler(handler)
     }
 
+    pub(crate) fn set_protocol_observer(&self, observer: Arc<mcp::ProtocolObserver>) -> Result<()> {
+        self.gateway.set_protocol_observer(observer)
+    }
+
     fn execute(
         &self,
         registry: &Registry,

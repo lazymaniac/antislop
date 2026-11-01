@@ -18,6 +18,13 @@ pub(super) fn poll_wait(
     cancel: &AtomicBool,
     timeout: Duration,
 ) -> Result<Option<Finish>> {
+    crate::require(
+        state
+            .expected
+            .as_deref()
+            .is_none_or(|expected| expected == turn),
+        "this wait belongs to a replaced turn; the active turn is unchanged",
+    )?;
     if let Some(finish) = take_finish(state) {
         return Ok(Some(finish));
     }
@@ -176,5 +183,39 @@ mod tests {
         let state = foreign.state.lock().unwrap();
         assert_eq!(state.expected.as_deref(), Some("foreign-audit"));
         assert!(state.finished.is_none() && state.rejected_finish.is_none());
+    }
+
+    #[test]
+    fn an_old_waiter_cannot_consume_or_close_the_replacement_turn() {
+        let mut state = State {
+            expected: Some("next".into()),
+            finished: Some(Finish {
+                text: "next result".into(),
+            }),
+            ..State::default()
+        };
+        let cancel = AtomicBool::new(false);
+        let error = poll_wait(
+            &mut state,
+            Instant::now(),
+            "previous",
+            &cancel,
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("replaced turn"));
+        assert_eq!(state.expected.as_deref(), Some("next"));
+        assert!(state.finished.is_some());
+        let finish = poll_wait(
+            &mut state,
+            Instant::now(),
+            "next",
+            &cancel,
+            Duration::from_secs(1),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(finish.text, "next result");
+        assert!(state.expected.is_none());
     }
 }

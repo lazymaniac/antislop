@@ -5,6 +5,7 @@ impl Core {
         self: &Arc<Self>,
         conversation: &str,
         role: &str,
+        turn: &str,
         tool: &str,
         args: &Value,
     ) -> Result<Value> {
@@ -17,6 +18,8 @@ impl Core {
             "defer_to_user" => self.defer_question_tool(conversation, args),
             "retry_task" => self.retry_failed_task(
                 conversation,
+                role,
+                turn,
                 &required_text(args, "task")?,
                 &required_text(args, "guidance")?,
             ),

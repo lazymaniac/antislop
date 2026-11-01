@@ -193,6 +193,29 @@ fn tool_handler(core: &Core, state: &TurnState<'_>) -> Arc<crate::lean::mcp::Han
     })
 }
 
+fn protocol_observer(
+    core: &Core,
+    state: &TurnState<'_>,
+) -> Arc<crate::lean::mcp::ProtocolObserver> {
+    let weak = core.weak.get().expect("core weak reference").clone();
+    let conversation = state.conversation.to_owned();
+    let turn = state.turn.id.clone();
+    Arc::new(move |event| {
+        let core = weak
+            .upgrade()
+            .ok_or_else(|| Error::Invalid("daemon stopped".into()))?;
+        core.store
+            .append_event(
+                &conversation,
+                Some(&turn),
+                None,
+                "agent_tool_rejected",
+                event,
+            )
+            .map(|_| ())
+    })
+}
+
 fn record_rejected_tool(
     core: &Core,
     conversation: &str,
@@ -229,6 +252,9 @@ fn run_cli(
     events: &TurnEvents<'_>,
 ) -> Result<agent::Outcome> {
     prepared.native.set_tool_handler(handler.clone())?;
+    prepared
+        .native
+        .set_protocol_observer(protocol_observer(core, state))?;
     let mut attempts = 0;
     loop {
         let result = prepared
@@ -296,5 +322,8 @@ fn restart_native(
         &prepared.spec,
         &prepared.scope,
     )?;
-    prepared.native.set_tool_handler(handler.clone())
+    prepared.native.set_tool_handler(handler.clone())?;
+    prepared
+        .native
+        .set_protocol_observer(protocol_observer(core, state))
 }

@@ -35,6 +35,7 @@ impl Core {
         }
         drop(flags);
         for id in &result.affected_tasks {
+            self.queue_worktree_cleanup(id);
             if let Some(task) = self.store.task_by_id(id)? {
                 self.announce_task(
                     &change.conversation,

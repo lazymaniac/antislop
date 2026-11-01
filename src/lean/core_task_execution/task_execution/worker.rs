@@ -2,7 +2,8 @@ use super::super::super::core_path_helpers::{task_path_component, worktree_branc
 use super::super::super::*;
 use super::RoundState;
 mod completion;
-pub(super) use completion::{commit_round, complete_report};
+pub(super) use completion::commit_round;
+pub(in crate::lean) use completion::complete_report;
 
 pub(in crate::lean) fn writer_worktree(
     core: &Core,
@@ -69,7 +70,7 @@ fn observation_worktree(
         "antislop/{}-observation-g{}",
         task.id, task.input_generation
     );
-    let _ = crate::lean::core_path_helpers::release_views(&core.state, &task.id, Some(&path));
+    core.release_task_views(&task.id, Some(&path));
     git::add_worktree(project, &path, &branch, &base)?;
     Ok(Some(path))
 }

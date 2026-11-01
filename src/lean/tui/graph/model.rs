@@ -48,24 +48,6 @@ impl Node {
     pub(super) fn right(&self) -> u16 {
         self.x + self.width
     }
-
-    /// Summary and effect lines that fit between the header slots and the
-    /// meta line of a card this tall.
-    pub(super) fn body_lines(&self) -> (usize, usize) {
-        body_lines(self.height)
-    }
-}
-
-/// How a card's height is shared between summary and effect lines; the
-/// full-height card gets `MAX_SUMMARY_LINES` and `MAX_EFFECT_LINES`.
-pub(super) fn body_lines(height: u16) -> (usize, usize) {
-    let body = usize::from(height.saturating_sub(BODY_ROW + 1)).max(1);
-    let effect = match body {
-        7.. => MAX_EFFECT_LINES,
-        3..=6 => 1,
-        _ => 0,
-    };
-    ((body - effect).min(MAX_SUMMARY_LINES), effect)
 }
 
 /// The card size of one layout: full size, or smaller so that a unit's

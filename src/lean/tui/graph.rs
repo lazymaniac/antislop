@@ -1,6 +1,6 @@
 //! The team as a two-dimensional graph: one card per agent, a task's agents
 //! framed together, orthogonal edges for what relates them. The layout
-//! depends only on the plan's shape, so nodes stay put while events arrive.
+//! follows the visible content of each card and reroutes links as it changes.
 
 use super::taskinfo;
 use super::theme::Theme;
@@ -72,29 +72,10 @@ const MAX_EFFECT_LINES: usize = 2;
 /// Smallest card a small screen shrinks to: the header slots, one summary
 /// line and the meta line; narrower than this the text has no room left.
 const MIN_WIDTH: u16 = 16;
-/// Maximum header slots inside a card, counted from its top, each starting right
-/// where the previous block can end: title, agent and work kind, phase, verifier state, one activity
-/// line, the working branch, up to `MAX_SUMMARY_LINES` summary lines, up to `MAX_EFFECT_LINES`
-/// effect lines and the meta line at the bottom. The height is that same
-/// arithmetic's end, so frame and slots are one rule that cannot drift
-/// apart: heights and positions depend only on the plan's shape, filters,
-/// grouping and which cards are folded — never on activity, an effect, a
-/// verdict or a retry. Empty optional header rows are reclaimed for the summary.
-const ACTIVITY_ROW: u16 = 4;
-const BRANCH_ROW: u16 = ACTIVITY_ROW + 1;
-const BODY_ROW: u16 = BRANCH_ROW + 1;
-const EFFECT_ROW: u16 = BODY_ROW + MAX_SUMMARY_LINES as u16;
-pub const HEIGHT: u16 = EFFECT_ROW + MAX_EFFECT_LINES as u16 + 1;
-const MIN_HEIGHT: u16 = BODY_ROW + 2;
-/// Cards of the session's own agents (orchestrator, planner, verifiers of
-/// the plan, auditor, requirements) carry no task: their fixed one-sentence
-/// description follows the title, provider and state rows directly (a
-/// recorded branch takes its last line), and the card is only as tall as that.
-const ADMIN_BODY_ROW: u16 = 3;
+/// Upper bounds for compact cards; actual height follows visible content.
+pub const HEIGHT: u16 = 14;
+const MIN_HEIGHT: u16 = 8;
 const ADMIN_SUMMARY_LINES: usize = 2;
-const ADMIN_HEIGHT: u16 = ADMIN_BODY_ROW + ADMIN_SUMMARY_LINES as u16;
-/// A folded card keeps only the rows above its activity line.
-const FOLDED_HEIGHT: u16 = ACTIVITY_ROW;
 const GAP_X: u16 = 6;
 const GAP_Y: u16 = 3;
 /// Room left of the first column for edges entering it.
@@ -190,6 +171,7 @@ pub struct Graph {
 }
 
 mod cache;
+mod card_content;
 mod filters;
 pub use cache::LayoutCache;
 pub use filters::{RELATIONS, Relations, Scope};

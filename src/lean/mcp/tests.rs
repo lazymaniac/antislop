@@ -179,9 +179,9 @@ mod role_tests {
         for (role, expected) in [
             (
                 "worker:task",
-                vec!["complete", "select", "ask", "wait_for_answer", "read_dependency_result"],
+                vec!["complete", "select", "report_blocker", "ask", "wait_for_answer", "read_dependency_result", "current_turn"],
             ),
-            ("verifier:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result"]),
+            ("verifier:task", vec!["review", "ask", "wait_for_answer", "read_dependency_result", "current_turn"]),
         ] {
             let tools = tool_list(role);
             let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -225,7 +225,8 @@ mod role_tests {
             ("requirements-audit-analyst", "submit_audit"),
             ("requirements-audit-verifier", "submit_audit_review"),
         ] {
-            assert_eq!(allowed_tools(role), vec![tool], "{role}");
+            let expected = if role.starts_with("requirements-audit-") { vec![tool, "read_dependency_result"] } else { vec![tool] };
+            assert_eq!(allowed_tools(role), expected, "{role}");
             assert!(is_terminal(tool));
         }
         let entry = &tool_list("requirements-extraction-analyst")[0]["inputSchema"]["properties"]["entries"]

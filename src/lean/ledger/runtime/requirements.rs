@@ -4,6 +4,7 @@ use super::*;
 mod extraction;
 #[path = "requirements/turn.rs"]
 mod turn;
+pub(super) use turn::RequirementsTurnScope;
 
 impl Core {
     pub(in crate::lean) fn ensure_requirements(
@@ -114,9 +115,12 @@ impl Core {
     ) -> Result<(LedgerChange, String)> {
         extraction::ensure_not_cancelled(cancel)?;
         let (answer, producer) = self.requirements_turn(
-            conversation,
-            &run.id,
-            "extraction",
+            RequirementsTurnScope {
+                conversation,
+                run_id: &run.id,
+                phase: "extraction",
+                plan_id: None,
+            },
             false,
             prompt.to_owned(),
             cancel,

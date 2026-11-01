@@ -242,10 +242,7 @@ fn graph_cards_show_semantic_summaries_and_preserve_full_details() {
         assert_eq!(verifier.group, worker.group);
         for key in ["worker:t1", "verifier:t1"] {
             let node = graph.node(key).unwrap();
-            assert_eq!(
-                node.height, HEIGHT,
-                "every card is exactly as tall as the budget"
-            );
+            assert!(node.height <= HEIGHT, "card height stays bounded");
             let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
             graph.render(&view, &mut canvas, Relations::all(), key);
             let text = canvas.lines().join("\n");
@@ -354,7 +351,7 @@ fn graph_scrolls_through_many_short_cards() {
             .nodes
             .iter()
             .filter(|node| node.key.contains(':'))
-            .all(|node| node.height == HEIGHT)
+            .all(|node| node.height <= HEIGHT)
     );
     assert!(app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
     assert_eq!(app.focus, Focus::Chat);
@@ -3853,11 +3850,10 @@ fn count_whole_cards(
     inner_w: u16,
     inner_h: u16,
 ) -> usize {
-    use antislop::lean::tui::graph::{HEIGHT, WIDTH};
     graph
         .nodes
         .iter()
-        .filter(|n| n.visible && n.x + WIDTH <= inner_w && n.y + HEIGHT <= inner_h)
+        .filter(|n| n.visible && n.x + n.width <= inner_w && n.y + n.height <= inner_h)
         .count()
 }
 
@@ -4990,8 +4986,8 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     assert!(verifier_now.contains("round 1"), "{verifier_now}");
     assert!(verifier_now.contains("cargo test"), "{verifier_now}");
     assert!(
-        verifier_now.contains("agy - verification"),
-        "verifier shows its own agent: {verifier_now}"
+        verifier_now.contains("verifier") && !verifier_now.contains("agy"),
+        "verifier card omits the CLI: {verifier_now}"
     );
     assert!(
         !verifier_now.contains("codex"),
@@ -5014,11 +5010,11 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
     let (worker, worker_h) = card(&view, "worker:t1");
     assert!(worker.contains("effect: 2 files"), "{worker}");
     assert!(worker.contains("committed"), "{worker}");
-    assert_eq!(worker_h, HEIGHT, "the card keeps its fixed height budget");
+    assert!(worker_h <= HEIGHT, "card height stays bounded");
     let (verifier, verifier_h) = card(&view, "verifier:t1");
     assert!(verifier.contains("2/3"), "coverage counters: {verifier}");
     assert!(verifier.contains("committed"), "{verifier}");
-    assert_eq!(verifier_h, HEIGHT);
+    assert!(verifier_h <= HEIGHT);
     for (_, _, path) in Graph::new(&view).edge_routes(Relations::all()) {
         for node in Graph::new(&view).nodes.iter().filter(|n| n.visible) {
             assert!(!antislop::lean::tui::graph::Graph::route_intersects_card(
@@ -5115,176 +5111,71 @@ fn rich_cards_show_round_cause_effect_coverage_and_integration_within_budget() {
 }
 
 #[test]
-fn card_geometry_is_identical_across_activity_effect_verdict_retry_and_late_events() {
+fn card_height_tracks_visible_content_and_retry_removes_old_feedback() {
     use antislop::lean::tui::{
-        graph::{Canvas, Graph, GroupingMode, HEIGHT, Relations, WIDTH},
+        graph::{Canvas, Graph, HEIGHT, Relations},
         view::{Agent, View},
     };
-    let ev = |seq: u64, kind: &str, payload: Value| json!({"seq": seq, "kind": kind, "payload": payload});
+    let ev =
+        |seq: u64, kind: &str, payload: Value| json!({"seq":seq,"kind":kind,"payload":payload});
     let mut view = View::default();
-    view.apply(&ev(
-        1,
-        "plan_proposed",
-        json!({"plan": "p1", "tasks": [
-            {"id": "t1", "title": "Store", "summary": "Fix storage.",
-             "verifier": {"summary": "Check storage."}},
-            {"id": "t2", "title": "API", "depends_on": ["t1"],
-             "summary": "Expose the corrected storage behind a small HTTP surface a verifier can read in one pass, with careful unicode 👩‍💻 everywhere.",
-             "verifier": {"summary": "Verify the 👩‍💻 surface wrapped past every card edge twice over turtles e\u{301} until only an ellipsis ends the last visible line, which a card of its own still cannot hold. ".repeat(2)}},
-        ]}),
-    ));
-    let geometry = |view: &View, grouping: GroupingMode| -> Vec<(String, u16, u16, u16, bool)> {
-        open_cards(view, grouping)
-            .nodes
-            .iter()
-            .map(|node| (node.key.clone(), node.x, node.y, node.height, node.visible))
-            .collect()
-    };
-    let before = geometry(&view, GroupingMode::Dependency);
-    // Every task node starts at the fixed height, admin cards at their
-    // compact one, and all stay there through every event below.
-    assert!(
-        before
-            .iter()
-            .all(|(key, _, _, h, _)| (*h == HEIGHT) == key.contains(':'))
-    );
-
-    // Activity: the round starts and the agent runs.
+    view.apply(&ev(1,"plan_proposed",json!({"plan":"p1","tasks":[
+        {"id":"t1","title":"Store","summary":"Fix storage.","verifier":{"summary":"Check storage."}},
+        {"id":"t2","title":"API","depends_on":["t1"],"summary":"Long café 👩‍💻 description. ".repeat(30)}
+    ]})));
+    let height = |view: &View| Graph::new(view).node("worker:t1").unwrap().height;
+    let short = height(&view);
+    assert_eq!(short, 4);
     view.apply(&ev(
         2,
         "task",
-        json!({"id": "t1", "task": "u1", "status": "working", "round": 1, "feedback": null}),
+        json!({"id":"t1","task":"u1","status":"working","round":1,"feedback":null}),
     ));
     view.agents.insert(
         "worker:t1".into(),
         Agent {
             running: true,
-            provider: "codex".into(),
-            activity: "cargo check --workspace --all-targets".into(),
+            activity: "cargo check".into(),
             ..Default::default()
         },
     );
-    assert_eq!(
-        geometry(&view, GroupingMode::Dependency),
-        before,
-        "activity moves no card"
-    );
-    // Working on round 2 under Status grouping keeps its column too, and
-    // no card ever changes height there either.
-    let status_before = geometry(&view, GroupingMode::Status);
-    view.apply(&ev(
-        3,
-        "task",
-        json!({"id": "t1", "task": "u1", "status": "verifying", "round": 2, "feedback": null}),
-    ));
-    let status_now = geometry(&view, GroupingMode::Status);
-    assert_eq!(
-        status_now
-            .iter()
-            .map(|(key, _, _, height, _)| (key, height))
-            .collect::<Vec<_>>(),
-        status_before
-            .iter()
-            .map(|(key, _, _, height, _)| (key, height))
-            .collect::<Vec<_>>(),
-        "heights never move"
-    );
-    assert!(
-        status_now
-            .iter()
-            .all(|(key, _, _, h, _)| (*h == HEIGHT) == key.contains(':'))
-    );
-
-    // Effect + verdict: a cut (fragment) effect of the bounded kind.
-    let long_effect = format!("{}…", "fixed 👩‍💻 — src/store.rs ".repeat(12));
+    assert_eq!(height(&view), short + 1);
+    view.apply(&ev(3,"task",json!({"id":"t1","task":"u1","status":"failed","round":1,
+        "feedback":{"round":1,"effect":"Updated storage.","coverage":{"total":2,"ok":1,"issue":1}}})));
     view.apply(&ev(
         4,
-        "task",
-        json!({"id": "t1", "task": "u1", "status": "approved", "round": 2,
-               "feedback": {"round": 2, "effect": long_effect.clone(),
-                            "coverage": {"total": 4, "ok": 4, "missing": 0},
-                            "integration": {"outcome": "committed", "detail": "as 1234abc"}}}),
+        "task_recovery",
+        json!({"task":"u1","action":"unblock","status":"queued","detail":"retry"}),
     ));
-    assert_eq!(
-        geometry(&view, GroupingMode::Dependency),
-        before,
-        "an effect and a verdict move no card"
-    );
-    let graph = open_cards(&view, GroupingMode::Dependency);
-    let node = graph.node("worker:t1").unwrap();
-    let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-    graph.render(&view, &mut canvas, Relations::all(), "worker:t1");
-    let text = canvas.lines().join(" ");
-    assert!(
-        text.contains("effect: [fragment]"),
-        "a cut effect says it is a fragment, front-first: {text}"
-    );
-    assert!(text.contains("fixed"));
-
-    // Retry: the recovery clears the round's card data; geometry holds.
+    assert!(view.tasks[0].effect.is_none());
     view.apply(&ev(
         5,
-        "task_recovery",
-        json!({"task": "u1", "action": "unblock", "status": "queued",
-               "detail": "unblocked and queued again"}),
-    ));
-    assert!(view.tasks[0].effect.is_none() && view.tasks[0].integration.is_none());
-    assert_eq!(
-        geometry(&view, GroupingMode::Dependency),
-        before,
-        "a retry moves no card"
-    );
-
-    // Late events: feedback stamped for the finished round must not revive
-    // on the new round, and again no card moves.
-    view.apply(&ev(
-        6,
         "task",
-        json!({"id": "t1", "task": "u1", "status": "working", "round": 3,
-               "feedback": {"round": 2, "effect": "stale effect"}}),
+        json!({"id":"t1","task":"u1","status":"working","round":2,
+        "feedback":{"round":1,"effect":"stale effect"}}),
     ));
-    assert_eq!(view.tasks[0].effect, None, "stale feedback is not revived");
-    assert_eq!(
-        geometry(&view, GroupingMode::Dependency),
-        before,
-        "a late event moves no card"
-    );
-
-    // Short and long descriptions share the one fixed frame: the short
-    // card keeps empty slots, the long card cuts with the ellipsis, and
-    // both stand at the same height in the same places.
-    let (short_text, short_h) = {
-        let graph = Graph::new(&view);
-        let node = graph.node("verifier:t1").unwrap();
-        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-        graph.render(&view, &mut canvas, Relations::all(), "verifier:t1");
-        (canvas.lines().join("\n"), node.height)
-    };
-    let (long_text, long_h) = {
-        let graph = Graph::new(&view);
-        let node = graph.node("verifier:t2").unwrap();
-        let mut canvas = Canvas::new_window(node.x, node.y, WIDTH, node.height);
-        graph.render(&view, &mut canvas, Relations::all(), "verifier:t2");
-        (canvas.lines().join("\n"), node.height)
-    };
-    assert_eq!(short_h, HEIGHT);
-    assert_eq!(long_h, HEIGHT, "a long summary grows no card");
-    assert!(short_text.contains("Check storage."), "{short_text}");
-    assert!(
-        long_text.contains('…'),
-        "the long summary cuts: {long_text}"
-    );
-    assert!(
-        long_text.contains('👩'),
-        "emoji survive the cut: {long_text}"
-    );
-    for (_, _, path) in Graph::new(&view).edge_routes(Relations::all()) {
-        for node in Graph::new(&view).nodes.iter().filter(|n| n.visible) {
-            assert!(
-                !Graph::route_intersects_card(&path, node),
-                "fixed cards keep their gaps clear"
-            );
-        }
+    assert!(view.tasks[0].effect.is_none());
+    let graph = Graph::new(&view);
+    assert!(graph.node("worker:t2").unwrap().height > short);
+    for node in graph.nodes.iter().filter(|node| node.visible) {
+        assert!(node.height <= HEIGHT);
+        let mut canvas = Canvas::new_window(node.x, node.y, node.width, node.height);
+        graph.render(&view, &mut canvas, Relations::all(), &node.key);
+        assert!(
+            canvas
+                .lines()
+                .iter()
+                .all(|row| !row.trim_matches(['▌', '█', ' ']).is_empty())
+        );
+    }
+    for (_, _, path) in graph.edge_routes(Relations::all()) {
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.visible)
+                .all(|node| !Graph::route_intersects_card(&path, node))
+        );
     }
 }
 

@@ -195,18 +195,6 @@ fn findings_render_as_text() {
     assert_eq!(findings_text(&findings), "- Preserve Ctrl+O.");
 }
 
-#[test]
-fn only_medium_and_low_findings_are_minor() {
-    let rejected = |findings: serde_json::Value| verdict(false, findings);
-    assert!(only_minor_findings(&rejected(
-        json!([{"severity": "medium", "issue": "x"}, {"severity": "low", "issue": "y"}])
-    )));
-    assert!(!only_minor_findings(&rejected(
-        json!([{"severity": "medium", "issue": "x"}, {"severity": "high", "issue": "y"}])
-    )));
-    assert!(!only_minor_findings(&rejected(json!([]))));
-}
-
 fn verdict(approved: bool, findings: serde_json::Value) -> Verdict {
     Verdict {
         resolved: Vec::new(),
