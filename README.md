@@ -3,13 +3,13 @@
 A local team of AI agents that works on your project through the CLIs you
 already use (Codex, Antigravity `agy`, Claude Code, Gemini CLI, OpenCode). You talk to an
 orchestrator; it answers, or proposes a plan of tasks. Each task is done by a
-worker and checked by its own verifier, and approved changes land on your
+worker and checked by its own reviewer, and approved changes land on your
 branch. The product specification is [design.md](design.md); how the runtime
 works, what it guarantees and what is still open is in
 [docs/lean-core.md](docs/lean-core.md); how each acceptance scenario of the
 design is met, and which ones rest on agents' instructions rather than the
 runtime, is in [docs/acceptance.md](docs/acceptance.md); the full TUI parity
-matrix and verified contract evidence against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8`
+matrix and reviewed contract evidence against `main@7ad664d25fbeebd3e8906caf29e9fb9925f20fc8`
 is in [docs/parity.md](docs/parity.md).
 
 ## Use
@@ -45,7 +45,7 @@ Resolving a configuration creates nothing. The editor saves to the selected file
 when using a shared global file, saving also affects future starts of other projects.
 
 In the graph each task is a frame titled with the task, holding a card for its
-options agent (when the plan asks for options), its worker and its verifier,
+options agent (when the plan asks for options), its worker and its reviewer,
 left to right; an options task's two agents share one card. Frames stand in
 rows by dependency depth, and each dependency runs from the bottom of one frame
 to the top of another. Every agent's runtime session remains separate. Overview shows each agent's own terminal: the provider's CLI,
@@ -71,11 +71,15 @@ opens another by typing its path; each keeps its own configuration,
 1. The orchestrator works in the project directory, read-only, with its CLI's
    own tools. It interviews you and settles the requirements.
 2. A dedicated planner, in a session of its own, drafts the plan from those
-   requirements: tasks with a goal, the directories in scope, dependencies,
-   whether the task changes files, and what its verifier should focus on
+   requirements: tasks with a goal, dependencies,
+   whether the task changes files, and what its reviewer should focus on
    (including the risks of that task's domain). It runs with the executor
-   profile of `[routing.planning]`.
-3. An independent plan verifier checks the plan against your request and the
+   profile of `[routing.planning]`. Filesystem access follows the checkout and
+   CLI permissions supplied by the runtime; tasks do not declare path scopes.
+   Writers work in isolated worktrees. Independent tasks can run concurrently,
+   while `depends_on` orders work that needs another task's result. Actual diffs
+   are integrated in sequence with conflict and user-edit protection.
+3. An independent plan reviewer checks the plan against your request and the
    project before you see it; a flawed plan goes back to the orchestrator,
    which revises it and answers your comments.
 4. `supervised`: you accept the plan. `autonomous`: a checked plan starts by
@@ -86,8 +90,8 @@ opens another by typing its path; each keeps its own configuration,
    do not replace that local choice.
 6. Workers receive their local contract and named inputs, then read and edit files
    in isolated worktrees. They can ask the orchestrator through MCP while working.
-7. Independent verifiers inspect separate result checkouts and cover the task's
-   criteria and selected risks. Corrections continue while verification shows
+7. Independent reviewers inspect separate result checkouts and cover the task's
+   criteria and selected risks. Corrections continue while review shows
    progress; unchanged unresolved obligations return to the orchestrator.
 8. Approved changes are integrated into the project while preserving user edits.
    Plan revisions require independent review and stay within accepted permissions.

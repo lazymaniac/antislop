@@ -1,4 +1,4 @@
-# Local routing: Codex Sol 6.1 orchestrates; Codex Luna executes and verifies.
+# Local routing: Codex Sol 6.1 orchestrates; Codex Luna executes and reviews.
 schema_version = 2
 
 
@@ -42,66 +42,66 @@ provider = "codex"
 model = "gpt-6-luna"
 effort = "high"
 
-# Every task kind has a dedicated verifier assignment. Runtime creates separate
-# verifier agents/sessions; a shared profile never means a shared verifier agent.
+# Every task kind has a dedicated reviewer assignment. Runtime creates separate
+# reviewer agents/sessions; a shared profile never means a shared reviewer agent.
 [routing.context]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 [routing.requirements]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 [routing.options]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 [routing.planning]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 [routing.architecture]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 [routing.dependencies]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 [routing.implementation]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 [routing.refactoring]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 [routing.static_analysis]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 [routing.test_design]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 [routing.testing]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 [routing.security]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 [routing.performance]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 [routing.integration]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 [routing.research]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 [routing.writing]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 [routing.analysis]
 executor = "reasoning"
-verifier = "review"
+reviewer = "review"
 [routing.delivery]
 executor = "execution"
-verifier = "review"
+reviewer = "review"
 
 [orchestrator]
 profile = "orchestrator"
 
 [routing.orchestration]
 executor = "orchestrator"
-verifier = "review"
+reviewer = "review"
